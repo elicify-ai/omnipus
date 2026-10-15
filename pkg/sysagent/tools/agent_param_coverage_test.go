@@ -174,6 +174,7 @@ func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
+	before := wu3DurableInventory(t, deps.Home)
 	result := tool.Execute(context.Background(), map[string]any{
 		"name":                "Bad Bot",
 		"description":         "d",
@@ -190,9 +191,7 @@ func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
 	if errObj["code"] != "INVALID_INPUT" {
 		t.Errorf("error code = %v, want INVALID_INPUT", errObj["code"])
 	}
-	if _, err := agentstore.New(deps.Home).Get("bad-bot"); err == nil {
-		t.Error("agent should not have been created after validation failure")
-	}
+	requireNoDurableChange(t, deps.Home, before, "agent should not have been created after validation failure")
 }
 
 // TestAgentUpdate_AppliesProviderAndMaxToolIterations mirrors the create-side

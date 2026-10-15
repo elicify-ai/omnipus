@@ -150,3 +150,11 @@ func TestWU3RegistrySchemaEnvelopeControls(t *testing.T) {
 		"a read tool's refusal is not wrapped in a change verdict: %s", read.ForLLM)
 	assert.NotContains(t, read.ForLLM, "outcome")
 }
+
+// requireNoDurableChange fails when a refusal left any durable trace: with
+// generated UUID ids a lookup by a name-derived slug can no longer prove that
+// no agent was saved (WU-3 CHECK F03), so the whole inventory is compared.
+func requireNoDurableChange(t *testing.T, home string, before []string, msg string) {
+	t.Helper()
+	assert.Equal(t, before, wu3DurableInventory(t, home), msg)
+}

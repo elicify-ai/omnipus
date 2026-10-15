@@ -34,6 +34,7 @@ func TestCreateAgent_RejectsNonStringHeartbeatWithoutWrite(t *testing.T) {
 			deps, _ := newTestDeps(t)
 			args := createNativeArgs("Hb Type")
 			args["heartbeat"] = tc.value
+			before := wu3DurableInventory(t, deps.Home)
 			result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
 			if !result.IsError {
 				t.Fatalf("expected INVALID_INPUT, got success: %s", result.ForLLM)
@@ -45,9 +46,7 @@ func TestCreateAgent_RejectsNonStringHeartbeatWithoutWrite(t *testing.T) {
 			if !strings.Contains(msg, "heartbeat") {
 				t.Errorf("message=%q, want it to name heartbeat", msg)
 			}
-			if _, err := agentstore.New(deps.Home).Get("hb-type"); err == nil {
-				t.Error("wrong-type heartbeat must not create the agent")
-			}
+			requireNoDurableChange(t, deps.Home, before, "wrong-type heartbeat must not create the agent")
 		})
 	}
 }

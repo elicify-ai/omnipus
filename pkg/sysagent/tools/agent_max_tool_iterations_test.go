@@ -115,6 +115,7 @@ func TestSysagentAgentTools_MaxToolIterations_CreateWithOwnValue(t *testing.T) {
 func TestSysagentAgentTools_MaxToolIterations_CreateAboveGlobalRefused(t *testing.T) {
 	deps, cfg := newTestDeps(t)
 	cfg.Agents.Defaults.MaxToolIterations = 200
+	before := wu3DurableInventory(t, deps.Home)
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name":                "Lim Too High",
 		"description":         "d",
@@ -126,9 +127,7 @@ func TestSysagentAgentTools_MaxToolIterations_CreateAboveGlobalRefused(t *testin
 		t.Fatalf("create_agent with 500 over global 200 must fail; got success: %s", res.ForLLM)
 	}
 	assertInvalidInput(t, res.ForLLM, sysAboveGlobalMsg(500, 200))
-	if _, err := agentstore.New(deps.Home).Get("lim-too-high"); err == nil {
-		t.Error("a refused create must leave no agent record")
-	}
+	requireNoDurableChange(t, deps.Home, before, "a refused create must leave no agent record")
 }
 
 // Scenario "System agent clears an own value" (US-8 AS-3) — grill G2: a

@@ -158,6 +158,7 @@ func TestCreateAgent_RejectsCapabilityFieldsOnExternalCLI(t *testing.T) {
 	args["cli"] = "opencode"
 	args["skills"] = []any{"draft"}
 
+	before := wu3DurableInventory(t, deps.Home)
 	result := tool.Execute(context.Background(), args)
 	if !result.IsError {
 		t.Fatalf("expected INVALID_INPUT, got success: %s", result.ForLLM)
@@ -169,9 +170,7 @@ func TestCreateAgent_RejectsCapabilityFieldsOnExternalCLI(t *testing.T) {
 	if msg == "" {
 		t.Error("error message must name the rejected field")
 	}
-	if _, err := agentstore.New(deps.Home).Get("external-bot"); err == nil {
-		t.Error("external create with skills must not write an entity")
-	}
+	requireNoDurableChange(t, deps.Home, before, "external create with skills must not write an entity")
 }
 
 func TestCreateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
@@ -181,6 +180,7 @@ func TestCreateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
 
 	args := createNativeArgs("Unknown Skill Create")
 	args["skills"] = []any{"does-not-exist"}
+	before := wu3DurableInventory(t, deps.Home)
 	result := tool.Execute(context.Background(), args)
 	if !result.IsError {
 		t.Fatalf("expected error, got success: %s", result.ForLLM)
@@ -192,9 +192,7 @@ func TestCreateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
 	if !strings.Contains(msg, "does-not-exist") {
 		t.Errorf("message=%q, want it to name the unknown skill", msg)
 	}
-	if _, err := agentstore.New(deps.Home).Get("unknown-skill-create"); err == nil {
-		t.Error("unknown skill must not create the agent")
-	}
+	requireNoDurableChange(t, deps.Home, before, "unknown skill must not create the agent")
 }
 
 func TestUpdateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
@@ -614,6 +612,7 @@ func TestCreateAgent_KnownEmptySkillInventoryRejectsExplicitIDs(t *testing.T) {
 	deps.AgentConfigInventory = testInventory(nil, nil)
 	args := createNativeArgs("Fresh Skills")
 	args["skills"] = []any{"not-yet-indexed"}
+	before := wu3DurableInventory(t, deps.Home)
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
 	if !result.IsError {
 		t.Fatalf("known-empty inventory must reject unknown skill IDs, got: %s", result.ForLLM)
@@ -625,15 +624,14 @@ func TestCreateAgent_KnownEmptySkillInventoryRejectsExplicitIDs(t *testing.T) {
 	if !strings.Contains(msg, "not-yet-indexed") {
 		t.Errorf("message=%q, want the unknown skill id", msg)
 	}
-	if _, err := agentstore.New(deps.Home).Get("fresh-skills"); err == nil {
-		t.Error("unknown skill must not create the agent")
-	}
+	requireNoDurableChange(t, deps.Home, before, "unknown skill must not create the agent")
 }
 
 func TestCreateAgent_UnavailableSkillInventoryRejectsExplicitIDs(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	args := createNativeArgs("No Inventory")
 	args["skills"] = []any{"draft"}
+	before := wu3DurableInventory(t, deps.Home)
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
 	if !result.IsError {
 		t.Fatalf("unavailable inventory must reject explicit skill IDs, got: %s", result.ForLLM)
@@ -645,9 +643,7 @@ func TestCreateAgent_UnavailableSkillInventoryRejectsExplicitIDs(t *testing.T) {
 	if !strings.Contains(msg, "unavailable") {
 		t.Errorf("message=%q, want unavailable inventory", msg)
 	}
-	if _, err := agentstore.New(deps.Home).Get("no-inventory"); err == nil {
-		t.Error("unavailable inventory must not create the agent")
-	}
+	requireNoDurableChange(t, deps.Home, before, "unavailable inventory must not create the agent")
 }
 
 func TestCollectLiveMCPNames_IncludesPublicAndRemote(t *testing.T) {
