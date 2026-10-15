@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
+	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 	"github.com/elicify-ai/omnipus/pkg/providers/azure"
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 )
@@ -122,7 +122,9 @@ func cwR1Adapter(t *testing.T, family string) (*cwR1Recorder, providers.LLMProvi
 	case "openai":
 		p, err = providers.NewHTTPProviderWithTimeouts("r1-inert-fixture-key", r.server.URL, "", "max_tokens", 10, 0, nil)
 	case "anthropic":
-		p = anthropicmessages.NewProvider("r1-inert-fixture-key", r.server.URL)
+		// FR-004 / User Story 2: exercise the surviving official connector at
+		// the same HTTP boundary, retaining every call/result parity assertion.
+		p = anthropicprovider.NewProviderWithBaseURL("r1-inert-fixture-key", r.server.URL)
 	case "bedrock":
 		p, err = bedrock.NewProvider("r1-inert-fixture-key", bedrock.WithBaseEndpoint(r.server.URL))
 	case "responses":
