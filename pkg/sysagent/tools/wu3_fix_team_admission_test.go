@@ -22,7 +22,14 @@ import (
 func TestWU3TeamAdmissionRequiresExactAgentIdentity(t *testing.T) {
 	d, cfg := wu3Deps(t)
 	wu3Workspace(t, d, "default")
+	// A fixed, valid v4 UUID that contains letters, so its upper-case variant
+	// is a different id on every run (CHECK R2-05: a digits-only random id made
+	// the case-negative equal the valid id).
+	const memberID = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+	systools.SetAgentIDGeneratorForTest(t, func(string) string { return memberID })
 	member := wu3CreateAgent(t, d, cfg, "Real member")
+	require.Equal(t, memberID, member)
+	require.NotEqual(t, member, strings.ToUpper(member), "fixture: the case variant differs")
 	cfg.Agents.List = nil // only the entity store can vouch for members here
 	agentsDir := filepath.Join(d.Home, "entities", "agents")
 	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "impostor.json"), []byte(`{"id":"someone-else","name":"x"}`), 0o600))
