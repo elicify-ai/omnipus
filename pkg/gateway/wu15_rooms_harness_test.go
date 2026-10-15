@@ -72,7 +72,7 @@ func wu15NewHarness(t *testing.T) *wu15RoomHarness {
 		},
 	}
 	cfg.Sandbox.AuditLog = true
-	cfg.Sandbox.ToolPolicies = map[string]string{"send_message": "allow", "answer_request": "allow", "ask_user_question": "allow", "goal_claim": "allow"}
+	cfg.Sandbox.ToolPolicies = map[string]string{"send_message": "allow", "answer_request": "allow", tools.AskUserQuestionToolName: "allow", "goal_claim": "allow"}
 	require.NoError(t, os.MkdirAll(cfg.Agents.Defaults.Home, 0o700))
 	seedBindingWorkspace(t, home, wu15Workspace, "mia", "jim", "researcher2", "gp")
 	seedBindingWorkspace(t, home, "marketing", "ray")
@@ -137,7 +137,11 @@ func (h *wu15RoomHarness) shutdown() {
 
 func (h *wu15RoomHarness) startLoop() {
 	h.t.Helper()
-	require.Nil(h.t, h.runDone, "one real loop consumer per harness")
+	// Q-A: stopMain may already have started the one loop to prime a main.
+	// Reusing it must not add a second inbound consumer.
+	if h.runDone != nil {
+		return
+	}
 	h.runDone = make(chan error, 1)
 	go func() { h.runDone <- h.al.Run(h.ctx) }()
 }

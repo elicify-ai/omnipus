@@ -195,10 +195,52 @@ func (h *wu15RoomHarness) waitState(roomID, requestID, state string) gen.RoomSna
 	}
 }
 
+// Q-A: an unrun main has no lifecycle, while Stop skips a completed lifecycle.
+// Hold one genuine main turn at the paid-model edge, Stop it while running,
+// then observe its landed stopped state before any room admission is tested.
 func (h *wu15RoomHarness) stopMain(id string) {
 	h.t.Helper()
-	_, err := h.al.StopSession(context.Background(), agent.StopRequest{SessionID: h.main(id), By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "wu15-tester"}, Channel: "webchat"})
+	instance, ok := h.al.GetRegistry().GetAgent(id)
+	require.True(h.t, ok)
+	original := instance.Provider
+	prime := &wu15ScriptProvider{answer: "WU15 lifecycle warm-up", entered: make(chan struct{}), release: make(chan struct{})}
+	instance.Provider = prime
+	var released sync.Once
+	release := func() { released.Do(func() { close(prime.release) }) }
+	defer release()
+	h.startLoop()
+	conn := h.connect()
+	sid := h.main(id)
+	require.NoError(h.t, conn.WriteJSON(gen.AttachSessionFrame{Type: "attach_session", SessionId: sid}))
+	wu15ReadFrame(h.t, conn, "catch_up_complete")
+	h.sendMain(conn, id, "WU15 lifecycle fixture warm-up")
+	select {
+	case <-prime.entered:
+	case <-time.After(30 * time.Second):
+		h.t.Fatal("SETUP: genuine main warm-up did not enter its model edge")
+	}
+	lifecycle := h.al.GetSessionLifecycleStore()
+	require.NotNil(h.t, lifecycle)
+	record, err := lifecycle.Load(sid)
+	require.NoError(h.t, err, "SETUP: warm-up produced the receiver's real lifecycle")
+	require.Equal(h.t, session.LifecycleRunning, record.State, "SETUP: Stop must target a running, not already completed, turn")
+	scope := "agent:" + id + ":session:" + sid
+	require.NotNil(h.t, h.al.GetActiveTurnBySession(scope), "SETUP: the receiver's own main turn is active")
+	result, err := h.al.StopSession(context.Background(), agent.StopRequest{SessionID: sid, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "wu15-tester"}, Channel: "webchat"})
 	require.NoError(h.t, err, "SETUP: stop main through real Stop")
+	require.True(h.t, result.Durable)
+	require.NoError(h.t, result.RootErr)
+	require.Empty(h.t, result.Report.Unreachable)
+	require.Empty(h.t, result.Report.SkippedTerminal, "SETUP: a durable no-op is not a stopped fixture")
+	release()
+	var loadErr error
+	require.Eventually(h.t, func() bool {
+		landed, err := lifecycle.Load(sid)
+		loadErr = err
+		return err == nil && landed.State == session.LifecycleStopped && h.al.GetActiveTurnBySession(scope) == nil
+	}, 30*time.Second, 10*time.Millisecond, "SETUP: warm-up must fully land stopped, not merely emit a done frame")
+	require.NoError(h.t, loadErr)
+	instance.Provider = original
 }
 
 func (h *wu15RoomHarness) sendMain(conn *websocket.Conn, id, text string) {
