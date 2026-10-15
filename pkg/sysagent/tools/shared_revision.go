@@ -104,10 +104,13 @@ func effectiveProviderEndpoint(p *config.ModelConfig) (providers.EffectiveEndpoi
 	return providers.ResolveEndpoint(&row)
 }
 
-// providerRevision is the FR-088 token of provider id: a hash over the id and,
-// for each configured row, its effective endpoint, protocol, region, credential
-// reference name, auth method and custom flag. revisionAbsent when no row
-// names the provider. Never includes a credential value.
+// providerRevision is the FR-088 token of provider id: a hash over the id,
+// for each configured row its effective endpoint, protocol, region, credential
+// reference name, auth method and custom flag, and the same projection of the
+// representative row — the one list_providers describes and configure_provider
+// writes to — so reordering rows that changes which row that is changes the
+// token (type-design T2). revisionAbsent when no row names the provider.
+// Never includes a credential value.
 func providerRevision(cfg *config.Config, id string) string {
 	rows := providerRows(cfg, id)
 	if len(rows) == 0 {
@@ -115,21 +118,7 @@ func providerRevision(cfg *config.Config, id string) string {
 	}
 	proj := make([]providerRevisionRow, 0, len(rows))
 	for _, p := range rows {
-		r := providerRevisionRow{
-			Region:     strings.TrimSpace(p.Region),
-			Reference:  strings.TrimSpace(p.APIKeyRef),
-			AuthMethod: strings.TrimSpace(p.AuthMethod),
-			Custom:     p.Custom,
-		}
-		if ep, err := effectiveProviderEndpoint(p); err == nil {
-			r.Protocol, r.Endpoint = string(ep.Protocol), ep.API
-		} else {
-			// An unresolvable row still has a meaning to protect: its typed
-			// fields. Hash those plus a marker so the token changes when they do.
-			r.Protocol, r.Endpoint = strings.TrimSpace(p.Protocol), strings.TrimSpace(p.APIBase)
-			r.Unresolved = "unresolved"
-		}
-		proj = append(proj, r)
+		proj = append(proj, providerProjection(p))
 	}
 	sort.SliceStable(proj, func(i, j int) bool {
 		a, b := revisionHash(proj[i]), revisionHash(proj[j])
@@ -145,9 +134,29 @@ func providerRevision(cfg *config.Config, id string) string {
 		uniq = append(uniq, r)
 	}
 	return revisionHash(struct {
-		ID   string                `json:"id"`
-		Rows []providerRevisionRow `json:"rows"`
-	}{ID: id, Rows: uniq})
+		ID             string                `json:"id"`
+		Rows           []providerRevisionRow `json:"rows"`
+		Representative providerRevisionRow   `json:"representative"`
+	}{ID: id, Rows: uniq, Representative: providerProjection(representativeProviderRow(cfg, id))})
+}
+
+// providerProjection is one provider row's secret-free revision projection.
+func providerProjection(p *config.ModelConfig) providerRevisionRow {
+	r := providerRevisionRow{
+		Region:     strings.TrimSpace(p.Region),
+		Reference:  strings.TrimSpace(p.APIKeyRef),
+		AuthMethod: strings.TrimSpace(p.AuthMethod),
+		Custom:     p.Custom,
+	}
+	if ep, err := effectiveProviderEndpoint(p); err == nil {
+		r.Protocol, r.Endpoint = string(ep.Protocol), ep.API
+	} else {
+		// An unresolvable row still has a meaning to protect: its typed
+		// fields. Hash those plus a marker so the token changes when they do.
+		r.Protocol, r.Endpoint = strings.TrimSpace(p.Protocol), strings.TrimSpace(p.APIBase)
+		r.Unresolved = "unresolved"
+	}
+	return r
 }
 
 // mcpEffectiveTransport mirrors the MCP manager's inference: an explicit type,
