@@ -433,9 +433,9 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 		t.Fatalf("system prompt missing requested skill content:\n%s", systemPrompt)
 	}
 
-	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
+	lastMessage := requireConversationBeforeVolatileTail(t, provider.lastMessages)[len(provider.lastMessages)-2]
 	if lastMessage.Role != "user" || lastMessage.Content != "explain how to list files" {
-		t.Fatalf("last provider message = %+v, want rewritten user message", lastMessage)
+		t.Fatalf("last conversation message before FR-007 tail = %+v, want rewritten user message", lastMessage)
 	}
 }
 

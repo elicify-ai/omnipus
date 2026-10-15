@@ -260,10 +260,11 @@ func TestBuildMessages_ReplaysWindowNotEvicted(t *testing.T) {
 		t.Errorf("expected both window messages in output, found %d", found)
 	}
 
-	// Current user message must be last.
-	if msgs[len(msgs)-1].Role != "user" || msgs[len(msgs)-1].Content != "What else?" {
-		t.Errorf("last message should be the current user message, got role=%s content=%q",
-			msgs[len(msgs)-1].Role, msgs[len(msgs)-1].Content)
+	// FR-007: current user stays last in the conversation, before the tail.
+	conversation := requireConversationBeforeVolatileTail(t, msgs)
+	current := conversation[len(conversation)-1]
+	if current.Role != "user" || current.Content != "What else?" {
+		t.Errorf("current user before volatile tail = %+v, want unchanged %q", current, "What else?")
 	}
 }
 
@@ -330,9 +331,11 @@ func TestBuildMessages_NoEviction_FullWindow(t *testing.T) {
 		t.Error("history assistant message missing")
 	}
 
-	// Last message is the current user message.
-	if msgs[len(msgs)-1].Content != "How are you?" {
-		t.Errorf("last message should be current user message, got %q", msgs[len(msgs)-1].Content)
+	// FR-007: current user is immediately before the volatile note block.
+	conversation := requireConversationBeforeVolatileTail(t, msgs)
+	current := conversation[len(conversation)-1]
+	if current.Role != "user" || current.Content != "How are you?" {
+		t.Errorf("current user before volatile tail = %+v, want unchanged %q", current, "How are you?")
 	}
 }
 
@@ -341,7 +344,7 @@ func TestBuildMessages_NoEviction_FullWindow(t *testing.T) {
 // TestBuildMessages_SpanPlacedAfterBreadcrumbBeforeWindow verifies the exact
 // assembly order per FR-019:
 //
-//	[system(with breadcrumb)] → recallSpan → sliding window → current user msg
+//	[system(with breadcrumb)] → recallSpan → sliding window → current user msg → volatile tail (prompt-caching FR-007)
 //
 // The recalled (old) span precedes the window (recent).
 func TestBuildMessages_SpanPlacedAfterBreadcrumbBeforeWindow(t *testing.T) {
@@ -769,8 +772,10 @@ func TestBuildMessages_SpanOrphanToolCallDropped(t *testing.T) {
 		t.Errorf("expected both window messages to survive sanitization, found %d", found)
 	}
 
-	// Current user message is last.
-	if msgs[len(msgs)-1].Content != "Please try again" {
-		t.Errorf("last message should be current user message, got %q", msgs[len(msgs)-1].Content)
+	// Current user message is last in the conversation, before the FR-007 tail.
+	conversation := requireConversationBeforeVolatileTail(t, msgs)
+	current := conversation[len(conversation)-1]
+	if current.Role != "user" || current.Content != "Please try again" {
+		t.Errorf("current user before FR-007 tail = %+v, want unchanged %q", current, "Please try again")
 	}
 }

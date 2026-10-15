@@ -128,7 +128,7 @@ func (p *blockedToolProvider) Chat(
 	}
 
 	return &providers.LLMResponse{
-		Content: messages[len(messages)-1].Content,
+		Content: lastConversationMessageForFixture(messages).Content,
 	}, nil
 }
 

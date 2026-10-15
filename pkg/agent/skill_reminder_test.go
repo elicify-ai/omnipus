@@ -50,10 +50,9 @@ func TestReminder_WithinByteBudget(t *testing.T) {
 // TestTurnAssembly_MenuInsideCacheBoundaryReminderOutside (test 35, D3 part
 // 1+2) — the "# Skills" menu stays inside the CACHED static prompt block
 // (SystemParts[0], the block carrying CacheControl), while the D3 reminder
-// lands in the UN-CACHED dynamic block (SystemParts[1], no CacheControl).
-// This is the load-bearing placement claim: the menu is stable per-agent and
-// belongs inside the cache breakpoint (ADR-071 D5), while the reminder must
-// sit closer to the user's message on every single turn for recency.
+// lands in the uncached trailing user block after the conversation, alongside
+// the dynamic context (prompt-caching FR-007/009 and regression table).
+// The skill menu remains in the stable prefix; the reminder is never system-role.
 func TestTurnAssembly_MenuInsideCacheBoundaryReminderOutside(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": "# Agent\nTest agent.",
