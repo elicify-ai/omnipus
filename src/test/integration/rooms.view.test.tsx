@@ -329,6 +329,34 @@ describe('Send waits for a snapshot, never for the complete flag (ruling Q2; §6
     expect(messagePosts()).toEqual([])
     expect(composer()).toHaveValue(DRAFT)
   })
+
+  it('[ruling Q2] after a snapshot, a re-attach blocks non-empty Send until the next snapshot arrives', async () => {
+    const linked = await mountUnresolved()
+    await linked.emit(snapshot({ entries: [entry({ text: 'first window' })] }))
+    expect(await screen.findByText('first window', { exact: true })).toBeVisible()
+    const attachCount = () => linked.socket.sent.filter((frame) => frame.type === 'attach_room' && frame.room_id === ROOM_ID).length
+    const before = attachCount()
+
+    act(() => useConnectionStore.getState().setConnected(false))
+    expect(screen.getByText(/reconnecting/i)).toBeVisible()
+    act(() => useConnectionStore.getState().setConnected(true))
+    await waitFor(() => {
+      if (attachCount() <= before) throw new Error('re-attach did not send attach_room')
+      if (screen.queryByText(/reconnecting/i)) throw new Error('still disconnected')
+    })
+
+    const user = await typeDraft()
+    expect(sendButton()).toBeDisabled()
+    await user.keyboard('{Enter}')
+    expect(messagePosts()).toEqual([])
+    expect(composer()).toHaveValue(DRAFT)
+
+    await linked.emit(snapshot({ seq: 2, has_older: false }))
+    await waitFor(() => expect(sendButton()).toBeEnabled())
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(messagePosts()).toHaveLength(1))
+    expect(messagePosts()[0]?.body).toMatchObject({ text: DRAFT, mentions: [] })
+  })
 })
 
 describe('truncated snapshot note (ruling Q2)', () => {
