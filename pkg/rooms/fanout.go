@@ -16,16 +16,26 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 )
 
-// admitAll admits each delivery on its own goroutine: an approval wait for
-// one member never holds up another (§6.11).
+// admitAll admits each delivery on its own goroutine, so an approval wait for
+// one member never holds up another (§6.11), and returns once every delivery
+// has SETTLED: its admission finished (admitted, held, refused, unavailable,
+// cancelled) or it is waiting for the member's approval card. A caller (the
+// POST that recorded the message, the answer that named members) thus returns
+// with each member's state already decided, except for a pending approval.
 func (s *Service) admitAll(r *room, ws Workspace, ids []string) {
+	var settled sync.WaitGroup
 	for _, id := range ids {
 		s.inflight.Add(1)
+		settled.Add(1)
+		var once sync.Once
+		settle := func() { once.Do(settled.Done) }
 		go func(id string) {
 			defer s.inflight.Done()
-			s.admitDelivery(r, ws, id)
+			defer settle()
+			s.admitDelivery(r, ws, id, settle)
 		}(id)
 	}
+	settled.Wait()
 }
 
 // WaitIdleForTest waits until every background admission finished (tests).
@@ -46,15 +56,15 @@ func (s *Service) AdmitPendingForTest(roomID string) error {
 	}
 	r.mu.Unlock()
 	for _, id := range ids {
-		s.admitDelivery(r, ws, id)
+		s.admitDelivery(r, ws, id, func() {})
 	}
 	return nil
 }
 
 // admitDelivery runs one delivery through the agent loop's room admission
 // and records the outcome (§6.11 state machine).
-func (s *Service) admitDelivery(r *room, ws Workspace, requestID string) {
-	adm, ctx, ok := s.prepareAdmission(r, ws, requestID)
+func (s *Service) admitDelivery(r *room, ws Workspace, requestID string, settle func()) {
+	adm, ctx, ok := s.prepareAdmission(r, ws, requestID, settle)
 	if !ok {
 		return
 	}
@@ -81,7 +91,7 @@ func (s *Service) admitDelivery(r *room, ws Workspace, requestID string) {
 
 // prepareAdmission checks the delivery is still current and builds the
 // admission under the room lock.
-func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string) (Admission, context.Context, bool) {
+func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string, settle func()) (Admission, context.Context, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d := r.deliveries[requestID]
@@ -107,10 +117,11 @@ func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string) (Adm
 	adm := s.buildAdmission(r, ws, d)
 	adm.OnAwaitingApproval = func() {
 		r.mu.Lock()
-		defer r.mu.Unlock()
 		if d := r.deliveries[requestID]; d != nil && !terminal(d.State) && !d.Consumed {
 			s.updateState(r, d, StateAwaitingApproval, "")
 		}
+		r.mu.Unlock()
+		settle()
 	}
 	adm.BeforeCommit = func() error {
 		r.mu.Lock()

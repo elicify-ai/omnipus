@@ -13,6 +13,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // Tests for the room service (omnipus-system-agent US-17, §6.11, §6.13,
@@ -108,6 +109,7 @@ func (f *fakeDeps) Audit(e AuditEvent) {
 func (f *fakeDeps) SessionInWorkspace(sessionID, _ string) bool { return sessionID == "main-mia" }
 func (f *fakeDeps) Limits() (int, int)                          { return f.rate, 65536 }
 func (f *fakeDeps) AgentName(id string) (string, bool)          { n, ok := f.names[id]; return n, ok }
+func (f *fakeDeps) CancelApproval(string)                       {}
 
 func (f *fakeDeps) admittedTo() []string {
 	f.mu.Lock()
@@ -501,12 +503,14 @@ func TestAddTurnCost_AllocatesShareOncePerTurn(t *testing.T) {
 func TestCommands_SteeringRefused(t *testing.T) {
 	f := newFixture(t)
 	room := f.squad("mia", "jim")
+	miaMain, _ := session.MainSessionID("sales", "mia")
+	jimMain, _ := session.MainSessionID("sales", "jim")
 	err := f.post(room.Id, "x1", "/model gpt-x")
-	if StatusOf(err) != 422 || err.Error() != "Rooms don't steer agents — use Mia's or Jim's main chat" {
+	if StatusOf(err) != 422 || err.Error() != "Rooms don't steer agents — use Mia's or Jim's main chat: "+miaMain+", "+jimMain {
 		t.Fatalf("/model: %v", err)
 	}
 	err = f.post(room.Id, "x2", "/goal @Jim ship it")
-	if StatusOf(err) != 422 || err.Error() != "Rooms don't steer agents — use Jim's main chat" {
+	if StatusOf(err) != 422 || err.Error() != "Rooms don't steer agents — use Jim's main chat: "+jimMain {
 		t.Fatalf("/goal @Jim: %v", err)
 	}
 	if len(f.deps.admittedTo()) != 0 {

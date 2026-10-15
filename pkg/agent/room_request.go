@@ -386,7 +386,7 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 	al.claimWakeSlot(a.DeliveryID)
 	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := al.publishRoomRequestWake(pubCtx, capture); err != nil {
+	if err := al.publishRoomRequestWake(pubCtx, capture, true); err != nil {
 		al.heldRepublished.Delete(a.DeliveryID)
 		logger.WarnCF("agent", "room request recorded but the member's turn could not be started; held for its next turn",
 			map[string]any{"request_id": a.DeliveryID, "session_id": mainID, "error": err.Error()})
@@ -402,10 +402,18 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 }
 
 // publishRoomRequestWake is the owner wake of a room request: the ordinary
-// request wake plus the no-join marker and the room id.
-func (al *AgentLoop) publishRoomRequestWake(ctx context.Context, c addressing.Capture) error {
-	return al.publishRequestWake(ctx, c.Receiver, c.RequestID, c.ReceiverSessionID, c.Text,
-		map[string]string{roomRequestMetadataKey: "1", roomIDMetadataKey: c.Source.RoomID})
+// request wake plus the room id and, for the admission wake, the no-join
+// marker (FR-214: it never joins a running turn). A HELD request re-published
+// because its member runs again (deliverHeldRequests) carries no no-join
+// marker: like any held request it is put in front of the turn that revived
+// the member, behind the same room fence (trySteerIntoLiveTurn).
+func (al *AgentLoop) publishRoomRequestWake(ctx context.Context, c addressing.Capture, noJoin bool) error {
+	extra := map[string]string{roomIDMetadataKey: c.Source.RoomID}
+	if noJoin {
+		extra[roomRequestMetadataKey] = "1"
+	}
+	al.roomRequests.Store(c.RequestID, c.Source.RoomID)
+	return al.publishRequestWake(ctx, c.Receiver, c.RequestID, c.ReceiverSessionID, c.Text, extra)
 }
 
 // composeRoomRequestText is the server-composed envelope the member's model
@@ -427,7 +435,13 @@ func roomStorageRefusal(what string, cause error) error {
 
 // isRoomRequestWake reports whether msg is a room request's owner wake.
 func isRoomRequestWake(msg bus.InboundMessage) bool {
-	return msg.Metadata[roomRequestMetadataKey] != "" && msg.Metadata[ownerWakeMetadataKey] != ""
+	return msg.Metadata[roomIDMetadataKey] != "" && msg.Metadata[ownerWakeMetadataKey] != ""
+}
+
+// isNoJoinRoomWake reports whether msg is a room request's admission wake,
+// which never joins a running turn (FR-214).
+func isNoJoinRoomWake(msg bus.InboundMessage) bool {
+	return isRoomRequestWake(msg) && msg.Metadata[roomRequestMetadataKey] != ""
 }
 
 // replyIntoRoom is the Reply branch for a room capture (FR-215).
@@ -471,7 +485,6 @@ func (al *AgentLoop) MirrorRoomAnswer(mainSessionID, mirrorID string, author add
 type roomGate struct {
 	rt                RoomRuntime
 	roomID, requestID string
-	cost              *roomCostMeter
 }
 
 // gateRoomRequest is the FR-217 dequeue fence. It returns proceed=false when
@@ -489,8 +502,10 @@ func (al *AgentLoop) gateRoomRequest(msg bus.InboundMessage) (*roomGate, bool) {
 		return nil, false
 	}
 	g := &roomGate{rt: rt, roomID: msg.Metadata[roomIDMetadataKey], requestID: msg.TranscriptEntryID}
+	al.roomRequests.Store(g.requestID, g.roomID)
 	if !rt.BeginRoomConsume(g.roomID, g.requestID, msg.SessionID) {
 		al.heldRepublished.Delete(g.requestID)
+		al.roomRequests.Delete(g.requestID)
 		if err := al.DiscardRequest(msg.SessionID, g.requestID); err != nil {
 			logger.ErrorCF("agent", "a cancelled room request could not be discarded; it is refused again on its next delivery",
 				map[string]any{"session_id": msg.SessionID, "request_id": g.requestID, "error": err.Error()})
@@ -499,15 +514,7 @@ func (al *AgentLoop) gateRoomRequest(msg bus.InboundMessage) (*roomGate, bool) {
 			map[string]any{"session_id": msg.SessionID, "request_id": g.requestID, "room_id": g.roomID})
 		return nil, false
 	}
-	g.cost = &roomCostMeter{inputs: 1}
 	return g, true
-}
-
-func (g *roomGate) meter() *roomCostMeter {
-	if g == nil {
-		return nil
-	}
-	return g.cost
 }
 
 // prepared reports a failed turn admission to the room: a stopped member
@@ -523,20 +530,34 @@ func (g *roomGate) prepared(err error) {
 	g.rt.RoomConsumeEnded(g.roomID, g.requestID, err)
 }
 
-func (g *roomGate) reportCost(sessionID string) {
-	if g == nil || g.cost == nil {
+// newTurnRoomMeter is the cost meter of one ordinary turn: one input (the
+// message that started it), a room input when that message is a room
+// request; steered inputs are added as the turn consumes them.
+func (al *AgentLoop) newTurnRoomMeter(msg bus.InboundMessage) *roomCostMeter {
+	m := &roomCostMeter{al: al, inputs: 1, rooms: map[string]int{}}
+	if isRoomRequestWake(msg) {
+		m.rooms[msg.Metadata[roomIDMetadataKey]]++
+	}
+	return m
+}
+
+// reportRoomCost reports, at the end of a turn, its cost share to every room
+// whose requests it consumed (§6.14).
+func (al *AgentLoop) reportRoomCost(m *roomCostMeter, sessionID string) {
+	rt := al.loadRoomRuntime()
+	if rt == nil || m == nil {
 		return
 	}
-	turnID, cost, inputs := g.cost.snapshot()
-	if turnID == "" {
-		turnID = "room-request:" + g.requestID
+	turnID, cost, unpriced, inputs, rooms := m.snapshot()
+	if turnID == "" || len(rooms) == 0 {
+		return // no model call, or no room input: nothing to allocate
 	}
-	g.rt.RoomTurnCost(RoomTurnCost{
-		RoomID: g.roomID, RequestID: g.requestID, SessionID: sessionID, TurnID: turnID,
-		// Every model call is priced today (estimateLLMCallCost falls back to a
-		// default rate), so a turn's cost is always known.
-		CostUSD: cost, Priced: true, Inputs: inputs, RoomInputs: 1,
-	})
+	for roomID, n := range rooms {
+		rt.RoomTurnCost(RoomTurnCost{
+			RoomID: roomID, SessionID: sessionID, TurnID: turnID,
+			CostUSD: cost, Priced: !unpriced, Inputs: inputs, RoomInputs: n,
+		})
+	}
 }
 
 // roomTurnEnded runs when a worker turn's processMessage returned: a failed
@@ -555,12 +576,20 @@ func (al *AgentLoop) roomTurnEnded(msg bus.InboundMessage, err error) {
 	}
 }
 
+// steerRoomRequest is the fence for a held room request re-published into a
+// running turn (trySteerIntoLiveTurn): it reports whether the request may be
+// given to that turn. A refused request is discarded.
+func (al *AgentLoop) steerRoomRequest(msg bus.InboundMessage) bool {
+	_, proceed := al.gateRoomRequest(msg)
+	return proceed
+}
+
 // RoomCallPricer is the named deterministic pricing seam of the room cost
 // (§6.14, BDD-17.30): when installed, the cost the room allocation reads for
-// each model call of a room-request turn comes from it instead of the
-// built-in estimate. It changes nothing else: the turn's own stats, the done
-// frame and the transcript keep estimateLLMCallCost. Nil (production) uses
-// the built-in estimate.
+// each model call comes from it instead of the built-in estimate, and the
+// call counts as priced. It changes nothing else: the turn's own stats, the
+// done frame and the transcript keep estimateLLMCallCost. Nil (production)
+// uses the built-in estimate, priced only for a model in the rate table.
 type RoomCallPricer func(model string, usage providers.UsageInfo) float64
 
 // SetRoomCallPricer installs (or, with nil, removes) the room pricing seam.
@@ -572,25 +601,29 @@ func (al *AgentLoop) SetRoomCallPricer(p RoomCallPricer) {
 	al.roomPricer.Store(&p)
 }
 
-// roomCallCost is the cost of one model call as the room allocation reads it.
-func (al *AgentLoop) roomCallCost(model string, usage *providers.UsageInfo, estimate float64) float64 {
+// roomCallCost is the cost of one model call as the room allocation reads it,
+// and whether its price is known (the pricer, or a rate-table match).
+func (al *AgentLoop) roomCallCost(model string, usage *providers.UsageInfo, estimate float64) (float64, bool) {
 	if p := al.roomPricer.Load(); p != nil && usage != nil {
-		return (*p)(model, *usage)
+		return (*p)(model, *usage), true
 	}
-	return estimate
+	return estimate, llmModelPriced(model)
 }
 
-// roomCostMeter accumulates the cost and consumed inputs of the turn that
-// consumes a room request. Methods are nil-safe so the turn code can call
-// them unconditionally.
+// roomCostMeter accumulates the cost and consumed inputs of one ordinary turn
+// and which of those inputs were room requests (by room). Methods are
+// nil-safe so the turn code can call them unconditionally.
 type roomCostMeter struct {
-	mu     sync.Mutex
-	turnID string
-	cost   float64
-	inputs int
+	al       *AgentLoop
+	mu       sync.Mutex
+	turnID   string
+	cost     float64
+	unpriced bool
+	inputs   int
+	rooms    map[string]int
 }
 
-func (m *roomCostMeter) addCost(turnID string, cost float64) {
+func (m *roomCostMeter) addCost(turnID string, cost float64, priced bool) {
 	if m == nil {
 		return
 	}
@@ -599,20 +632,52 @@ func (m *roomCostMeter) addCost(turnID string, cost float64) {
 	if m.turnID == "" {
 		m.turnID = turnID
 	}
+	if !priced {
+		m.unpriced = true
+		return
+	}
 	m.cost += cost
 }
 
-func (m *roomCostMeter) addInputs(n int) {
+// addInputs counts n inputs the turn just consumed; ids are their entry ids
+// (request ids for requests), used to find the room inputs among them.
+func (m *roomCostMeter) addInputs(ids []string, n int) {
 	if m == nil || n <= 0 {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.inputs += n
+	if m.al == nil {
+		return
+	}
+	for _, id := range ids {
+		if roomID, ok := m.al.roomRequests.Load(id); ok {
+			if r, isString := roomID.(string); isString && r != "" {
+				m.rooms[r]++
+			}
+		}
+	}
 }
 
-func (m *roomCostMeter) snapshot() (turnID string, cost float64, inputs int) {
+func (m *roomCostMeter) snapshot() (turnID string, cost float64, unpriced bool, inputs int, rooms map[string]int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.turnID, m.cost, m.inputs
+	out := make(map[string]int, len(m.rooms))
+	for k, v := range m.rooms {
+		out[k] = v
+	}
+	return m.turnID, m.cost, m.unpriced, m.inputs, out
+}
+
+// llmModelPriced reports whether a model has a known price: a match in the
+// rate table. The fallback rate is a guess, not a price (§6.14 "unknown price").
+func llmModelPriced(model string) bool {
+	lower := strings.ToLower(model)
+	for _, entry := range llmRateTable {
+		if strings.HasPrefix(lower, entry.prefix) {
+			return true
+		}
+	}
+	return false
 }

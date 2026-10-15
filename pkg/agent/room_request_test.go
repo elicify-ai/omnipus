@@ -173,7 +173,7 @@ func TestTrySteerIntoLiveTurn_RoomRequestNeverJoinsARunningTurn(t *testing.T) {
 	plain := wake
 	plain.Metadata = map[string]string{}
 	for k, v := range wake.Metadata {
-		if k != roomRequestMetadataKey {
+		if k != roomRequestMetadataKey && k != roomIDMetadataKey {
 			plain.Metadata[k] = v
 		}
 	}
@@ -266,20 +266,26 @@ func TestGateRoomRequest_CancelledRequestIsDiscardedAndNotRun(t *testing.T) {
 // RoomCallPricer; the turn's own cost keeps the built-in estimate.
 func TestRoomCallPricer_FeedsOnlyTheRoomAllocation(t *testing.T) {
 	al, ts := newTestAgentLoopForRateLimit(t)
-	ts.opts.roomCost = &roomCostMeter{inputs: 1}
+	ts.opts.roomCost = &roomCostMeter{inputs: 1, rooms: map[string]int{}}
 	usage := &providers.UsageInfo{PromptTokens: 1000, CompletionTokens: 1000, TotalTokens: 2000}
 	estimate := estimateLLMCallCost("fixture-model", usage)
 	al.SetRoomCallPricer(func(string, providers.UsageInfo) float64 { return 0.03 })
 	al.debitLLMUsage(ts, "fixture-model", usage)
-	if _, cost, _ := ts.opts.roomCost.snapshot(); cost != 0.03 {
+	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); cost != 0.03 || unpriced {
 		t.Fatalf("room meter cost = %v, want the pricer's 0.03", cost)
 	}
 	if _, turnCost := ts.GetTurnStats(); turnCost != estimate || estimate == 0.03 {
 		t.Fatalf("turn cost = %v, want the unchanged estimate %v", turnCost, estimate)
 	}
 	al.SetRoomCallPricer(nil)
+	al.debitLLMUsage(ts, "gpt-4o", usage)
+	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); cost != 0.03+estimateLLMCallCost("gpt-4o", usage) || unpriced {
+		t.Fatalf("without the pricer a known model adds its estimate: %v unpriced=%v", cost, unpriced)
+	}
+	// A model with no known price marks the turn unpriced and adds nothing
+	// (§6.14 "plus unpriced turns").
 	al.debitLLMUsage(ts, "fixture-model", usage)
-	if _, cost, _ := ts.opts.roomCost.snapshot(); cost != 0.03+estimate {
-		t.Fatalf("without the pricer the meter must add the estimate: %v", cost)
+	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); cost != 0.03+estimateLLMCallCost("gpt-4o", usage) || !unpriced {
+		t.Fatalf("an unknown-priced call must mark unpriced and add nothing: %v unpriced=%v", cost, unpriced)
 	}
 }

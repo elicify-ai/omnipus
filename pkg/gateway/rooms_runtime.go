@@ -223,6 +223,18 @@ func (d *gatewayRoomDeps) SessionInWorkspace(sessionID, workspaceID string) bool
 	return false
 }
 
+// CancelApproval withdraws a room's pending pre-admission card (request id =
+// delivery id, FR-251) at once.
+func (d *gatewayRoomDeps) CancelApproval(requestID string) {
+	reg := d.h.approvalRegV2
+	if reg == nil || requestID == "" {
+		return
+	}
+	reg.cancelPendingMatching(func(e *approvalEntry) bool {
+		return e.RoomRef != nil && e.RoomRef.RequestId == requestID
+	}, "cancel")
+}
+
 // Limits returns the session messaging limits (FR-176).
 func (d *gatewayRoomDeps) Limits() (int, int) {
 	cfg := d.h.agentLoop.GetConfig()

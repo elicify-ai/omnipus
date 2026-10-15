@@ -20,7 +20,9 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -179,12 +181,13 @@ func (a *restAPI) updateRoomMembers(w http.ResponseWriter, r *http.Request, room
 }
 
 func (a *restAPI) postRoomMessage(w http.ResponseWriter, r *http.Request, roomID string) {
-	var req generated.RoomMessageRequest
-	if !decodeAndValidateStrict(w, r, "RoomMessageRequest", &req, a.agentLoop.GetConfig().Gateway.ValidateInbound) {
+	// A missing or null required field is a malformed body (400) in both
+	// validation modes; an empty text is a room rule refusal (422).
+	if !requirePresentNonNull(w, r, "client_message_id", "text", "mentions") {
 		return
 	}
-	if req.Mentions == nil {
-		jsonErr(w, http.StatusBadRequest, "mentions is required (an empty list addresses everyone)")
+	var req generated.RoomMessageRequest
+	if !decodeAndValidateStrict(w, r, "RoomMessageRequest", &req, a.agentLoop.GetConfig().Gateway.ValidateInbound) {
 		return
 	}
 	svc := a.roomService(w)
@@ -196,4 +199,28 @@ func (a *restAPI) postRoomMessage(w http.ResponseWriter, r *http.Request, roomID
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// requirePresentNonNull refuses (400) a JSON object body that lacks one of the
+// named fields or sets it to null, then restores the body for the decoder.
+// A body that is not a JSON object is left to the decoder's own 400.
+func requirePresentNonNull(w http.ResponseWriter, r *http.Request, fields ...string) bool {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return true
+	}
+	for _, f := range fields {
+		v, ok := obj[f]
+		if !ok || bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+			jsonErr(w, http.StatusBadRequest, f+" is required and must not be null")
+			return false
+		}
+	}
+	return true
 }

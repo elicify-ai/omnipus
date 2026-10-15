@@ -120,6 +120,14 @@ func (s *Service) workspaceRooms(ws Workspace) ([]*room, error) {
 		}
 	}
 	s.mu.Unlock()
+	// #1314: the list is answered from storage that can be read NOW. A room
+	// whose record cannot be read fails the list (500); it is never left out.
+	for _, r := range rs {
+		var probe roomRecord
+		if err := s.journal.ReadRecord(r.rec.ID, &probe); err != nil {
+			return nil, storageError("the group chats could not be read", err)
+		}
+	}
 	for _, r := range rs {
 		r.mu.Lock()
 		err := s.reconcile(r, ws)
@@ -214,7 +222,8 @@ func (s *Service) reconcile(r *room, ws Workspace) error {
 	removed, added := diff(r.rec.Members, next)
 	before := r.rec.clone()
 	r.rec.Members = nonNil(next)
-	r.rec.Muted = keep(r.rec.Muted, next)
+	// Mutes are kept for members who left: a hidden team room keeps its mute
+	// preferences and gets them back when the agent rejoins (FR-160).
 	if err := s.publishMeta(r, ws); err != nil {
 		r.rec = before
 		return err
@@ -275,6 +284,11 @@ func (s *Service) cancelDelivery(r *room, d *deliveryRecord, reason string) {
 	if cancel, ok := r.cancels[d.RequestID]; ok {
 		cancel()
 		delete(r.cancels, d.RequestID)
+	}
+	if d.State == StateAwaitingApproval {
+		// The member's card is withdrawn now, not when the waiting admission
+		// next runs: a late click finds nothing to approve (FR-251).
+		s.deps.CancelApproval(d.RequestID)
 	}
 	if d.SessionID != "" {
 		if err := s.deps.Discard(d.SessionID, d.RequestID); err != nil {

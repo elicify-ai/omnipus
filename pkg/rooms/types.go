@@ -84,6 +84,7 @@ const (
 	textMemberLeftRoom     = "you are no longer a member of this group; the answer was not posted"
 	auditEventRoomChange   = "room.changed"
 	maxRoomNameRunes       = 80
+	maxMembers             = 256
 	textNameLength         = "a group name must be 1 to 80 characters"
 	maxContextEntries      = 20
 	maxContextBytes        = 8192

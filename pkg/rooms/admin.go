@@ -25,6 +25,9 @@ func (s *Service) Create(workspaceID string, req generated.RoomCreateRequest, pr
 		return generated.Room{}, err
 	}
 	kind := string(req.Kind)
+	if len(req.AgentIds) > maxMembers {
+		return generated.Room{}, unprocessable("a room has at most %d agents", maxMembers)
+	}
 	if kind != KindSquad && kind != KindAdhoc {
 		return generated.Room{}, unprocessable("only a squad or an ad-hoc room can be created; the team room is the workspace's own")
 	}

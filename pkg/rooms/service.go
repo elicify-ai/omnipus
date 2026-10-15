@@ -98,6 +98,9 @@ type Deps interface {
 	Limits() (ratePerMinute, bodyBytes int)
 	// AgentName returns an agent's display name (any agent, member or not).
 	AgentName(agentID string) (string, bool)
+	// CancelApproval withdraws the member's pending pre-admission card for a
+	// delivery, if any (pause, removal, deletion).
+	CancelApproval(requestID string)
 }
 
 // Service is the rooms of one Omnipus home.
@@ -446,10 +449,9 @@ func latestByMember(r *room) map[string]*deliveryRecord {
 }
 
 func nonNil(in []string) []string {
-	if in == nil {
-		return []string{}
-	}
-	return append([]string(nil), in...)
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
 }
 
 // sortRooms orders a workspace's rooms: team room first, then squads, then

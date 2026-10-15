@@ -303,13 +303,18 @@ func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
 	// A group-chat room request is never steered into a running turn
 	// (omnipus-system-agent FR-214, the no-join intake): it waits in the
 	// inbox and runs as its own turn once the current one settles.
-	if msg.Channel == "system" || isRoomRequestWake(msg) {
+	if msg.Channel == "system" || isNoJoinRoomWake(msg) {
 		return false
 	}
 	w.steerMu.Lock()
 	defer w.steerMu.Unlock()
 	if !w.inTurn.Load() || w.systemTurn.Load() {
 		return false
+	}
+	// A held room request re-published for the turn that revived its member
+	// passes the room fence first; a cancelled one is discarded, not run.
+	if isRoomRequestWake(msg) && !w.parent.steerRoomRequest(msg) {
+		return true
 	}
 	if err := w.parent.enqueueSteeringFromMessage(msg); err != nil {
 		// A steering-rejected error here means the message was NOT accepted

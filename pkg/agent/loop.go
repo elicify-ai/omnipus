@@ -134,6 +134,8 @@ type AgentLoop struct {
 	roomRuntime atomic.Pointer[RoomRuntime]
 	roomWriter  atomic.Pointer[RoomReceiverWriter]
 	roomPricer  atomic.Pointer[RoomCallPricer]
+	// roomRequests maps a room request id to its room id (cost allocation).
+	roomRequests sync.Map
 	// mirrorFailHook is a test seam run just before the connector-reply mirror
 	// append (nil in production).
 	mirrorFailHook func()
@@ -674,7 +676,8 @@ func (al *AgentLoop) debitLLMUsage(ts *turnState, llmModel string, usage *provid
 	ts.SetLastUsage(usage)
 	cost := estimateLLMCallCost(llmModel, usage)
 	ts.AddTurnStats(int64(usage.TotalTokens), cost)
-	ts.opts.roomCost.addCost(ts.turnID, al.roomCallCost(llmModel, usage, cost))
+	roomCost, priced := al.roomCallCost(llmModel, usage, cost)
+	ts.opts.roomCost.addCost(ts.turnID, roomCost, priced)
 	ts.AddTurnCacheStats(usage.CacheReadTokens, usage.CacheWriteTokens)
 	ts.AddTurnIOStats(usage.PromptTokens, usage.CompletionTokens)
 }

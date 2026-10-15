@@ -289,8 +289,9 @@ func (al *AgentLoop) publishHeldRequestWake(c addressing.Capture) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if c.Source.Kind == addressing.SourceRoom {
-		// A held room request keeps its no-join marker and room id.
-		return al.publishRoomRequestWake(ctx, c)
+		// A held room request keeps its room id; it joins the turn that
+		// revived its member, behind the room fence (publishRoomRequestWake).
+		return al.publishRoomRequestWake(ctx, c, false)
 	}
 	return al.publishRequestWake(ctx, c.Receiver, c.RequestID, c.ReceiverSessionID, c.Text)
 }

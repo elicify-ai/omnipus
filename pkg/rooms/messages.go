@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // idSpace is the namespace of the deterministic ids (FR-216: entry,
@@ -305,7 +306,7 @@ func (s *Service) runCommand(r *room, ws Workspace, text string, req generated.R
 		// nothing is recorded or published; the SPA renders the list as a
 		// local notice from the room data it already holds.
 	default:
-		return unprocessable(textRoomsDontSteer, s.steerTargets(r, ws, text, req.Mentions))
+		return unprocessable("%s", s.steerRefusal(r, ws, text, req.Mentions))
 	}
 	if err == nil {
 		r.commands[req.ClientMessageId] = true
@@ -380,26 +381,37 @@ func (s *Service) muteCommand(r *room, ws Workspace, mute bool, text string, pic
 	return nil
 }
 
-// steerTargets names the main chats a refused command points to: the
-// @-named members, else every member (FR-205).
-func (s *Service) steerTargets(r *room, ws Workspace, text string, picked []string) string {
+// steerRefusal is FR-205's refusal: "Rooms don't steer agents — use <Agent>'s
+// main chat", naming the @-named members (else every member), followed by the
+// link target of each main chat (its main session id) so the client can link
+// to them.
+func (s *Service) steerRefusal(r *room, ws Workspace, text string, picked []string) string {
 	ids := slices.DeleteFunc(slices.Clone(picked), func(id string) bool { return !slices.Contains(r.rec.Members, id) })
 	if len(ids) == 0 {
 		ids = resolveTyped(text, memberAgents(r, ws)).ids
 	}
 	if len(ids) == 0 {
-		ids = r.rec.Members
+		ids = slices.Clone(r.rec.Members)
 	}
 	names := make([]string, 0, len(ids))
+	links := make([]string, 0, len(ids))
 	for _, id := range ids {
 		names = append(names, agentName(ws, id)+"'s")
+		if sid, err := session.MainSessionID(ws.ID, id); err == nil {
+			links = append(links, sid)
+		}
 	}
+	who := "each member's"
 	switch len(names) {
 	case 0:
-		return "each member's"
 	case 1:
-		return names[0]
+		who = names[0]
 	default:
-		return fmt.Sprintf("%s or %s", strings.Join(names[:len(names)-1], ", "), names[len(names)-1])
+		who = fmt.Sprintf("%s or %s", strings.Join(names[:len(names)-1], ", "), names[len(names)-1])
 	}
+	msg := fmt.Sprintf(textRoomsDontSteer, who)
+	if len(links) > 0 {
+		msg += ": " + strings.Join(links, ", ")
+	}
+	return msg
 }
