@@ -127,7 +127,7 @@ func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string, sett
 		s.cancelStale(r, d)
 		return Admission{}, nil, false
 	}
-	if facts, err := s.deps.Facts(s.receiver(r, d), d.RequestID); err == nil && facts.Found {
+	if facts, err := s.deps.Facts(s.receiver(r, d), d.RequestID); err == nil && facts.Found && !facts.Discarded {
 		// FR-216: the member already has it; record the acknowledgement only.
 		s.recordAdmission(r, d, AdmitResult{ReceiverSessionID: facts.SessionID, Held: facts.Held && !facts.Delivered, AlreadyAdmitted: true}, nil)
 		return Admission{}, nil, false
