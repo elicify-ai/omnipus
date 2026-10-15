@@ -37,6 +37,7 @@ function MainChatLink({ workspace, agentId, label }: { workspace: Workspace | un
   if (!sessionId) return null
   return (
     <Link
+      tabIndex={0}
       to="/sessions/$sessionId"
       params={{ sessionId }}
       className="text-[length:var(--type-caption-size)] text-[var(--color-accent)] underline-offset-2 hover:underline"

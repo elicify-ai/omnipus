@@ -74,7 +74,7 @@ function SendNotice({ send, members, workspace }: { send: RoomSend; members: Age
           {links.map((agent) => {
             const sessionId = memberMainSessionId(workspace, agent.id)
             return sessionId ? (
-              <Link key={agent.id} to="/sessions/$sessionId" params={{ sessionId }} className="text-[var(--color-accent)] underline-offset-2 hover:underline">
+              <Link key={agent.id} tabIndex={0} to="/sessions/$sessionId" params={{ sessionId }} className="text-[var(--color-accent)] underline-offset-2 hover:underline">
                 Open {agent.name}&apos;s main chat
               </Link>
             ) : null

@@ -9,6 +9,7 @@
  * W7 A manually opened full-page tab is not duplicated; the affordance shows.
  */
 import { expect, type Page, type TestInfo } from '@playwright/test'
+import type { WorkspaceCreateRequest } from '../../src/lib/api/generated/openapi-types'
 import { readDockSnapshot, dockViolations, toggleWorkspacePanel, type DockPanel } from './fixtures/side-panel-docking'
 import { test } from './fixtures/console-errors'
 import { newAdminApiContext } from './fixtures/admin-api'
@@ -18,7 +19,9 @@ async function createWorkspace(): Promise<string> {
   const ctx = await newAdminApiContext()
   try {
     const res = await ctx.post('/api/v1/workspaces', {
-      data: { name: `E2E expand ${Date.now()}` },
+      // FR-048: new workspaces have no implicit team. These docking cases
+      // require a real chat, not FR-107's correct EmptyTeamEntry screen.
+      data: { name: `E2E expand ${Date.now()}`, core_team: ['mia'] } satisfies WorkspaceCreateRequest,
     })
     if (!res.ok()) throw new Error(`createWorkspace ${res.status()}: ${await res.text()}`)
     return ((await res.json()) as { id: string }).id
