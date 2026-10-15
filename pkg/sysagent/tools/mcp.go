@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -227,8 +228,9 @@ func (mat *mcpAddToolExecute) prepareEntry() (*tools.ToolResult, bool) {
 	//
 	// Phase 1 (before the config write, same ordering configure_channel
 	// uses): store each value under mcp_<name>_<key>. A partial failure here
-	// (some keys stored, one fails) leaves orphaned but harmless credential
-	// entries and no config write — no dangling ref is possible.
+	// (some keys stored, one fails) leaves those credential entries stored and
+	// no config write — no dangling ref is possible — and the result reports
+	// them as "partly saved" (FR-030).
 
 	if len(envMap) > 0 {
 		if mat.t.deps.CredStore == nil {
@@ -240,11 +242,18 @@ func (mat *mcpAddToolExecute) prepareEntry() (*tools.ToolResult, bool) {
 		mat.envRefs = make(map[string]string, len(envMap))
 		for key, value := range envMap {
 			credKey := mcpEnvCredKey(mat.name, key)
-			if err := mat.t.deps.CredStore.Set(credKey, value); err != nil {
-				return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
-					fmt.Sprintf("Failed to store env credential %q: %s", key, err.Error()),
-					"Check that the credential store is unlocked",
-				)), true
+			if err := mcpCredentialSet(mat.t.deps.CredStore, credKey, value); err != nil {
+				msg := fmt.Sprintf("Failed to store env credential %q: %s", key, err.Error())
+				if len(mat.envRefs) == 0 {
+					return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED", msg,
+						"Check that the credential store is unlocked",
+					)), true
+				}
+				// Earlier env credentials of this call ARE stored: a durable
+				// side effect, so the result is "partly saved", naming them.
+				return mat.partialCredentialResult("CREDENTIAL_SAVE_FAILED", msg,
+					"some env credentials were stored before credential "+key+" failed; the server entry was not saved",
+					mat.storedCredentialRefs(), []string{"env credential " + key, "mcp server entry"}), true
 			}
 			mat.envRefs[key] = credKey
 		}
@@ -313,15 +322,9 @@ func (mat *mcpAddToolExecute) persistConfig() (*tools.ToolResult, bool) {
 		// them so the failure stores nothing and never hijacks the
 		// credentials of a same-named server.
 		if rollbackFailed := mat.rollbackEnvCredentials(); len(rollbackFailed) > 0 {
-			return changeErrorWithOutcome(map[string]any{
-				"success": false,
-				"error": map[string]any{
-					"code":    "SAVE_FAILED",
-					"message": "the server was not saved: " + err.Error(),
-				},
-				"name": mat.name,
-			}, partlySaved("the server entry was not saved, but stored env credentials could not be removed: "+
-				strings.Join(rollbackFailed, ", "), "", []string{"mcp server entry"})), true
+			return mat.partialCredentialResult("SAVE_FAILED", "the server was not saved: "+err.Error(),
+				"the server entry was not saved, but stored env credentials could not be removed: "+
+					strings.Join(rollbackFailed, ", "), rollbackFailed, []string{"mcp server entry"}), true
 		}
 		if strings.Contains(err.Error(), "already exists") {
 			return tools.ErrorResult(errorJSON("ALREADY_EXISTS", err.Error(),
@@ -330,6 +333,30 @@ func (mat *mcpAddToolExecute) persistConfig() (*tools.ToolResult, bool) {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), "")), true
 	}
 	return nil, false
+}
+
+// partialCredentialResult is the "partly saved" refusal of an add whose server
+// entry was not saved while env credentials (stored, named by reference, never
+// by value) remain durable.
+func (mat *mcpAddToolExecute) partialCredentialResult(code, msg, reason string, stored, missing []string) *tools.ToolResult {
+	return changeErrorWithOutcome(map[string]any{
+		"success":            false,
+		"error":              map[string]any{"code": code, "message": msg},
+		"name":               mat.name,
+		"changed_fields":     []string{"env_credentials"},
+		"stored_credentials": stored,
+	}, partlySaved(reason, "", missing))
+}
+
+// storedCredentialRefs lists, sorted, the credential references this call has
+// stored so far.
+func (mat *mcpAddToolExecute) storedCredentialRefs() []string {
+	refs := make([]string, 0, len(mat.envRefs))
+	for _, ref := range mat.envRefs {
+		refs = append(refs, ref)
+	}
+	sort.Strings(refs)
+	return refs
 }
 
 // rollbackEnvCredentials deletes the env credentials this call stored and
@@ -434,6 +461,13 @@ func (mat *mcpAddToolExecute) changedFields() []string {
 		fields = append(fields, "env_credentials")
 	}
 	return fields
+}
+
+// mcpCredentialSet stores one add_mcp_server env credential. A variable only so
+// a test can fail a later write after an earlier one succeeded
+// (FailMCPCredentialWriteAfterForTest); production never reassigns it.
+var mcpCredentialSet = func(store *credentials.Store, name, value string) error {
+	return store.Set(name, value)
 }
 
 // ---- system.mcp.remove ----

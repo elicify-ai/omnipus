@@ -5,8 +5,10 @@
 package systools
 
 import (
+	"errors"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -81,4 +83,20 @@ func UseNameKeyedAgentIDsForTest(t interface{ Cleanup(fn func()) }) {
 		}
 		return strings.TrimSuffix(b.String(), "-")
 	})
+}
+
+// FailMCPCredentialWriteAfterForTest makes add_mcp_server's env credential
+// writes succeed `ok` times and fail from then on, restoring the real writer
+// when t ends.
+func FailMCPCredentialWriteAfterForTest(t interface{ Cleanup(func()) }, ok int) {
+	prev := mcpCredentialSet
+	calls := 0
+	mcpCredentialSet = func(store *credentials.Store, name, value string) error {
+		calls++
+		if calls > ok {
+			return errors.New("injected credential write failure")
+		}
+		return prev(store, name, value)
+	}
+	t.Cleanup(func() { mcpCredentialSet = prev })
 }
