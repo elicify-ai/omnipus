@@ -1,5 +1,7 @@
 # ADR-091 — A sub-agent is a session steered by another session
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. The lifetime-limit prescriptions in D2/D5/D6/D9/D10/D12, their D3 delivery mapping and AC-6/AC-9 are **superseded only in that scope**, as marked beside them below. The session/edge model, authority, admission, depth, ownership, explicit cancel and completion delivery remain. Original incident evidence, founder ledgers and grill dispositions remain historical, not current timeout instructions. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/session/lifecycle_edge.go`::SteeredBy / StopCauseTimeout; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/steer/types.go`::LaunchRequest; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/steer_launcher.go`::runDispatchedSteeredTurn.
+
 ## Amended 2026-10-07 — session-core founder decisions
 
 **Dated correction of D1/D3/D5 task parentage, selective report wakes and external steering exclusion.** MAIN tasks are fresh real children of the assignee's main for every run, while retaining task/run/goal/plan ownership. ISOLATED/CONTINUE are independent. Every accepted helper report wakes an idle non-stopped parent; stopped parents hold. External control uses interrupt plus actual native-ID resume, with the accepted subprocess-kill Stop exception. Peer messages are not child edges.
@@ -133,6 +135,8 @@ The ephemeral ring is deleted. A steered session has **one** memory. *Founder de
 
 ### D2 — One steered-by edge, restored identically on every entry
 
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** the table's **creator-set limits / timeout** row has no current successor. `SteeredBy.Limits` and `LaunchRequest.Limits` are removed; no default lifetime is copied to the edge. Parentage, reporting target, authority, remaining depth, tool exclusions and Stop are unchanged. A saved old `limits` object is ignored on decode and omitted from the new persisted tail; old journal entries stay history.
+
 A steered session carries exactly one relationship to the session that steers it, persisted on its `LifecycleRecord`. The edge is the **canonical parent relationship**; `UnifiedMeta.ParentSessionID` and the inherited `Owner` stamp are derived from it at creation and kept in step, because existing readers depend on them (`askuser/registry.go::CreatePending` rejects children by `ParentSessionID`; `loop.go` installs ownership only when `meta.Owner` is set — ADR-057 D1). The edge carries:
 
 | Field | Purpose |
@@ -156,6 +160,8 @@ A steered session carries exactly one relationship to the session that steers it
 **The rule that fixes special case 3:** every path that starts a turn on a steered session — first run, wake-up, resume, boot — derives the turn's identity **from the edge**, never from the entry path's arguments. `processSystemMessage` (and any successor) reconstructs a steered session's turn from its record. A turn cannot come back "able to talk to the user" or "unreachable by Stop", because those are no longer per-turn choices.
 
 ### D3 — A steered session has no user audience; it reports upward through one operation
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the lifetime-timeout delivery obligation below is historical, not a new timer or completion outcome to generate. Saved timeout outcomes remain readable/recoverable through the existing upward delivery path. Provider-request failures and bounded Judge conclusions retain their own provenance; they must not masquerade as expiry of a working session. Durable-before-publication and exactly-once final ownership remain unchanged.
 
 A steered session **never publishes to a user-facing address** — at any depth, on any entry path. This is a property of the session, decided once, read by every delivery boundary through the injected `steer.AudienceResolver`, which classifies the record and its metadata together (landing order I-8) and answers "none" on any doubt; each boundary then calls the `steer.BoundaryObserver` before acting, so a test can prove the boundary was reached. The boundaries are enumerated, because rev 1 listed three and the code has eleven (the canonical list is landing order §6; every spec references it; the delegate-lifecycle notice is delivered upward through the I-5 operation, not a user-facing publication boundary):
 
@@ -203,6 +209,8 @@ Acceptance is a **real generated system prompt** with no await advertisement and
 
 ### D5 — Steering is a capability of a steered session; who may steer is stated per action
 
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the external follow-up sentence's **“preserving … limits”** no longer means a lifetime ceiling. External work and any retained-conversation continuation carry no run kill timer. Parentage, identity, workspace and explicit cancel remain, subject to the later external-worker steering qualifications already recorded above.
+
 `steer`, `respond`, `peek`, `inbox`, `inbox_ack`, `follow_up`, `cancel` and `status` operate on any steered session for which the caller holds authority. *Founder decision, round 2 Q3:* **any ancestor may act, and the human operator may steer directly.** This matches today's ancestor walk (`tools/delegate.go::verifyCallerOwnsSession` walks `ParentDurableKey`) and rev 1's "immediate parent only" is withdrawn. Two steering sources for one child are reconciled by the steering queue itself: messages are delivered in arrival order and all are delivered; the child treats them as sequential instructions. A human who opens a running steered session and writes to it **is steering it**; that does not change the edge. This needs no new UI: an inbound chat message to a session with a live turn already becomes a steering message (`steering.go::enqueueSteeringFromMessage`), exactly as it does for a task session today (*founder decision, round 4*). Siblings and unrelated roots are rejected (AC-5). `status` answers from the record and the inbox — lifecycle state, the last status line, the time of the last upward message — never from streaming progress, so a child on a non-streaming provider or an external CLI reads as "quiet for 40 s", not "hung". This closes #614 (*founder decision, round 7*).
 
 `delegate` survives as the agent-facing verb: `run` = launcher + start; the other actions are the generic ones under the name agents know. Sessions created with `create_task` expose the same actions — one primitive, two front doors (*round 1 Q1*).
@@ -210,6 +218,8 @@ Acceptance is a **real generated system prompt** with no await advertisement and
 **External command-line workers** (Claude Code, Codex, OpenCode) are steered sessions for identity, audience, workspace, cancel and completion wake, and **cannot be live-steered or ask questions** — `delegate_followup.go::executeSteer` and `message_parent.go` reject them because they never drain the steering queue. This ADR states the limit and does not close it (*round 2 Q8*). Corrective follow-up on an external session creates a new external run under the same edge, preserving parentage, limits and cancel scope.
 
 ### D6 — Completion: claim and Judge only when there is something to judge
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** **“timeout” as a newly generated session-lifetime completion outcome** below is retired. Work that passes an old duration remains running until its ordinary completion/failure or explicit Stop; old timeout outcomes stay readable. Criteria-free completion, quiet-subtree ownership, goal non-inheritance, admission-slot accounting and judged-work hand-back stay. A bounded Judge that cannot finish must publish an honest visible conclusion carrying the claimed work result, not discard it or invent a third criterion verdict.
 
 A steered session **with no acceptance criteria** completes when its turn ends with a **non-empty final answer and a quiet subtree** — no descendant `queued` or `running` (*round 2 Q6*). Parked (asked a question), interrupted/Stop, timeout, and "answered while a descendant still runs" are each a distinct outcome, persisted in one of the eight existing lifecycle states and delivered as one of the existing message kinds (landing order I-5's table) — never conflated with done. **An empty final answer is a failure** (*founder decision, round 10*): persisted `failed`, delivered as an `error` `empty_answer:`, so "done" and "gave nothing" can never look alike to the lifecycle or to the parent. A parent that answered while a child still runs stays `running` and is completed by the last such child's completion wake; a parked descendant does not block it — its question travels in the parent's `handback` as an open question. The claim → Judge protocol applies only when criteria or a Definition of Done are present. **A session holds an execution slot only while a turn is executing** (*founder decision, round 9*): a waiting parent holds none, so a parent at a cap of one cannot starve its own queued child.
 
@@ -252,6 +262,8 @@ A tree-scope stop at the root reaches every descendant by walking steered-by edg
 
 ### D9 — One limit surface, with a before/after table
 
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** the **Turn timeout** row below is retired, not a moved setting. No per-call `timeout_seconds`, edge `Limits.TimeoutSeconds`, `performance.delegation_timeout_minutes`, or 30-minute delegation default governs work. First dispatch, wake, follow-up and drain carry no lifetime deadline. Concurrency/depth precedence and queued admission remain their existing decisions; command/provider/Judge bounds are not replacements for the removed lifetime setting.
+
 | Setting | Today | After |
 |---|---|---|
 | Concurrency | `SubTurn.MaxConcurrent` if > 0, else `Performance.MaxParallelAgents` (`admission.go::ResolveRootDelegationCap`) | one key: `performance.max_parallel_agents`, read through the **existing** resolver `config_defaults_apply.go::EffectiveMaxParallelAgents` (environment override → positive configured value → the existing safety backstop for zero/unset; unchanged — a raw zero is never compared against); one counter of **executing turns** across steered sessions and tasks — a session whose turn has ended holds no slot (*founder decision, round 9*); `Dispatch` decides admission atomically under one lock; `MaxConcurrent` removed |
@@ -262,6 +274,8 @@ A tree-scope stop at the root reaches every descendant by walking steered-by edg
 Context handling is the normal path: window per ADR-066 D2; emptying on the real store. #803 is enabled, not decided; #807 (same day) decided to remove the absolute tool-result share cap and is the adjacent decision — not yet landed at this baseline (`midturn_budget.go::absoluteShareTokens` still exists).
 
 ### D10 — Deletions (with the correction)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the preserved external runner's **“deadlines … preserved intact”** wording below no longer preserves a lifetime/kill timer. Keep the runner, workspace/identity enforcement, explicit cancellation, transcript/events and count cap; agent-work `RunOptions.TimeoutSeconds` stays unset. Diagnostic and single-command bounds are separate, not a default for work.
 
 - `subturn.go::newEphemeralSession` and the ring (D1).
 - Borrowed `Channel`/`ChatID`/`SenderID`/`SenderDisplayName` in `prepareProcessOptions` (D1).
@@ -279,6 +293,8 @@ Context handling is the normal path: window per ADR-066 D2; emptying on the real
 - `turn.go::registerActiveTurn`'s plain store, replaced by the compare-and-set registration (WP-A).
 
 ### D12 — Interruption recovery is decided by the durable record, never by an in-memory pointer to another turn
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** item 2's **“own … D9's timeout”** is retired. A steered session is not age-bounded and still is not bounded by its parent's in-memory turn lifetime. Its own durable authority/Stop marker and registered cancel govern explicit stopping. Client disconnect still ends only viewing; transient provider-request guards/retry and ordinary permanent-failure completion remain separate.
 
 Work is interrupted in three ways, and rev 2 addressed only the first.
 
@@ -398,6 +414,8 @@ Production and test ownership are separate. Shared files have one named owner; o
 | **G — Test fixtures, classification, cross-package suites** | all ACs | the shared two- and three-level delegation fixtures; the retain/update/delete classification of existing tests; the integration and E2E suites that span packages. **Each WP writes its own unit tests with its code, using the `test-driven-development` skill** (*founder decision, round 4*) — WP-G never gates another WP. | runs alongside each WP |
 
 ## 10. Verification requirements
+
+> **Amended 2026-10-14 — acceptance supersession (founder; PR #1311 / #1306):** **AC-6's new lifetime-timeout outcome and AC-9's timeout-key/default/boundary assertions are superseded**. Assert deadline-free dispatch, wake, resume and drain, inert old saved budget fields, readable historical timeout outcomes, and retained explicit Stop instead. Keep AC-6's real completion/Judge/goal ownership and AC-9's surviving admission/depth controls. No timeout test may keep the retired field or deadline in production.
 
 | # | Requirement |
 |---|---|

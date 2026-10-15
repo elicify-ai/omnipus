@@ -28,9 +28,10 @@ import (
 
 // openAISignInElsewhereMsg is the refusal the spec of this hotfix asks for:
 // generic by catalog data (the OpenAI company's rows that really can sign
-// in, in-app sign-in first), never a hardcoded id.
+// in, in-app sign-in first), never a hardcoded id. WU-24 (Plan v2 §10,
+// founder 2026-10-14) retired the CLI model-provider alternative.
 const openAISignInElsewhereMsg = `sign-in is not available for "OpenAI"; ` +
-	`OpenAI sign-in lives on "ChatGPT (subscription)" or "Codex CLI"`
+	`OpenAI sign-in lives on "ChatGPT (subscription)"`
 
 // installEmbeddedCatalog serves the committed catalog document to both the
 // handler under test and the process-wide provider factory.

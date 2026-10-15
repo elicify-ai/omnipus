@@ -266,7 +266,7 @@ func TestU5b_N1_ContinuationToDifferentWorkspaceRefused(t *testing.T) {
 	defer restore()
 
 	// First run records the real workspace.
-	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "first", 30*time.Second); err != nil {
+	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "first"); err != nil {
 		t.Fatalf("first dispatch: %v", err)
 	}
 
@@ -278,7 +278,7 @@ func TestU5b_N1_ContinuationToDifferentWorkspaceRefused(t *testing.T) {
 	sess.mu.Unlock()
 
 	ts.opts.ExternalCLIResume = true
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "continuation", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "continuation")
 	require.Error(t, err)
 	require.ErrorIs(t, err, errExternalWorkspaceChanged, "the refusal must name the workspace mismatch")
 	require.Nil(t, res, "a refused continuation starts no process")
@@ -436,7 +436,7 @@ func TestU5b_N2_ProcessExitBarrier(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	firstDone := make(chan error, 1)
 	go func() {
-		_, err := runExternalCLISubTurn(ctx, al, ts, "first", 30*time.Second)
+		_, err := runExternalCLISubTurn(ctx, al, ts, "first")
 		firstDone <- err
 	}()
 
@@ -458,7 +458,7 @@ func TestU5b_N2_ProcessExitBarrier(t *testing.T) {
 
 	// The continuation now resumes with no "already active" error.
 	ts.opts.ExternalCLIResume = true
-	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "continuation", 30*time.Second); err != nil {
+	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "continuation"); err != nil {
 		t.Fatalf("continuation after interrupt failed: %v", err)
 	}
 }
@@ -528,7 +528,7 @@ func TestU5b_N7_SteeredSessionLaterEntryRefusesWithoutDriver_RealDispatch(t *tes
 	factory := withRecordingDriverFactory(t)
 
 	// First entry: a genuine first launch Runs fresh.
-	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "first", 30*time.Second); err != nil {
+	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "first"); err != nil {
 		t.Fatalf("first steered dispatch: %v", err)
 	}
 	if got := factory.count(); got != 1 {
@@ -544,7 +544,7 @@ func TestU5b_N7_SteeredSessionLaterEntryRefusesWithoutDriver_RealDispatch(t *tes
 	// production resume-only computation is dropped (the CHECK's
 	// n7-production-classification-unwired mutant), this call would start a
 	// second fresh Run, build a second driver and return nil error.
-	_, err := runExternalCLISubTurn(context.Background(), al, ts, "second", 30*time.Second)
+	_, err := runExternalCLISubTurn(context.Background(), al, ts, "second")
 	require.ErrorIs(t, err, errExternalResumeUnavailable,
 		"a later steered entry with no retained driver must refuse, never start fresh")
 	require.Equal(t, 1, factory.count(),

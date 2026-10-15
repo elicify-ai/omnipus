@@ -55,11 +55,12 @@ func seededRosterPolicies(t *testing.T) (map[string]map[string]config.ToolPolicy
 func TestEnvironmentSetup_EffectivePolicyPerRole(t *testing.T) {
 	policies, types, global := seededRosterPolicies(t)
 	want := map[string]string{
-		"mia":            "ask",
-		"worker":         "ask",
-		"admin":          "ask",
+		"mia":    "ask",
+		"worker": "ask",
+		// WU-2: spec OSA-1 / §6.5 / FR-022 replace Ava/Admin with
+		// Omnipus; it rides the Ask ceiling with no per-agent Ask.
+		"omnipus":        "ask",
 		"jim":            "deny",
-		"ava":            "deny",
 		"planner":        "deny",
 		"researcher":     "deny",
 		"judge":          "deny",
@@ -124,7 +125,8 @@ func TestEnvironmentSetup_CustomStoredAskHoldsUnderCeilingChanges(t *testing.T) 
 func TestEnvironmentSetup_RaisedCeilingLeavesStoredAsk(t *testing.T) {
 	policies, types, _ := seededRosterPolicies(t)
 	allowCeiling := map[string]config.ToolPolicy{"environment_setup": config.ToolPolicyAllow}
-	for _, id := range []string{"mia", "worker", "admin"} {
+	// WU-2 FR-022: only Mia/worker keep the both-levels Ask posture.
+	for _, id := range []string{"mia", "worker"} {
 		stored, ok := policies[id]
 		if !ok {
 			t.Fatalf("seeded roster missing agent %q", id)
@@ -135,7 +137,19 @@ func TestEnvironmentSetup_RaisedCeilingLeavesStoredAsk(t *testing.T) {
 			t.Errorf("%s under a raised allow ceiling = %q, want ask (the stored per-agent ask must hold)", id, got)
 		}
 	}
-	for _, id := range []string{"jim", "ava", "planner", "researcher"} {
+	// Omnipus rides the raised ceiling (spec §6.5 / FR-022), not a
+	// stored Ask. Pin both the stored absence and the resolved value.
+	omnipus, present := policies["omnipus"]
+	if !present {
+		t.Fatal("seeded roster missing Omnipus")
+	}
+	if stored, exists := omnipus["environment_setup"]; exists {
+		t.Fatalf("Omnipus must ride the ceiling, got per-agent environment_setup=%q", stored)
+	}
+	if got := EffectiveToolPolicy(&ToolPolicyCfg{Policies: omnipus, GlobalPolicies: allowCeiling}, ScopeGeneral, types["omnipus"], "environment_setup"); got != "allow" {
+		t.Errorf("Omnipus under a raised ceiling = %q, want allow", got)
+	}
+	for _, id := range []string{"jim", "planner", "researcher"} {
 		polCfg := &ToolPolicyCfg{Policies: policies[id], GlobalPolicies: allowCeiling}
 		got := EffectiveToolPolicy(polCfg, ScopeGeneral, types[id], "environment_setup")
 		if got != "deny" {

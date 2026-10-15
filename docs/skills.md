@@ -24,11 +24,23 @@ Skills reach your agents from four places.
 | Source | What it is | How it gets there |
 |---|---|---|
 | Your skills folder | Skills you install or write, grantable to any agent | Lives at `~/.omnipus/skills` in your data folder |
-| Shipped skills | Five examples that come with Omnipus | Seeded automatically on first boot |
+| Shipped skills | Built-in playbooks that come with Omnipus | Seeded automatically on first boot |
 | A mounted folder | Skills that belong to a repository and travel with it | Put them in `.omnipus/skills` or `.claude/skills` at the root, then [mount the folder](library.md) |
 | The ClawHub registry | Community-published skills | Search and install from the Skills & Tools screen |
 
-The five shipped skills are Daily Briefing, Define Goal, Plan, Skill Authoring, and Summarize.
+Omnipus ships 21 embedded skill packages covering setup, planning, research, and document workflows.
+
+## Omnipus's initial setup skills
+
+On a fresh install, Omnipus receives these existing setup playbooks automatically:
+
+| Purpose | Skill identifiers |
+|---|---|
+| Clarification and troubleshooting | `interview`, `doctor` |
+| Agents, skills and workspace teams | `agent-authoring`, `skill-authoring`, `tool-mapping`, `skill-mapping`, `delegation-graph`, `workspace-team` |
+| Connectors, providers and channels | `mcp-install`, `provider-setup`, `channel-setup` |
+
+Mia, Jim and the other built-in agents keep their existing skill assignments. Assigning a skill does not grant tool permissions: Omnipus's tools still follow the same global and per-agent permission rules. If you change or clear an agent's skill grants, a later restart does not restore the initial list.
 
 ## When you would use it
 

@@ -5,6 +5,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -153,12 +154,13 @@ func TestEnsureStarted_Concurrent_LosersDiscard(t *testing.T) {
 	// so it works even under the stripped PATH below (which contains only the
 	// fake google-chrome) — an external helper like mkdir would not be found.
 	probeDir := t.TempDir()
-	t.Setenv("BROWSER_TEST_PROBE_DIR", probeDir)
 	binDir := t.TempDir()
+	// FR-239 / WU-19 no longer passes arbitrary gateway environment keys
+	// into browser probes. Encode this private fixture path in the script.
 	writeExecutable(
 		t,
 		filepath.Join(binDir, "google-chrome"),
-		"#!/bin/sh\nsleep 0.3\necho $$ >> \"$BROWSER_TEST_PROBE_DIR/probes.log\"\necho 'Chromium 131.0.6778.108'\nexit 0\n",
+		fmt.Sprintf("#!/bin/sh\nsleep 0.3\necho $$ >> %q\necho 'Chromium 131.0.6778.108'\nexit 0\n", filepath.Join(probeDir, "probes.log")),
 	)
 	t.Setenv("PATH", binDir)
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "")
@@ -354,8 +356,8 @@ func TestResolveExecPath_CachesAfterFirstProbe(t *testing.T) {
 	}
 	binDir := t.TempDir()
 	counterFile := filepath.Join(t.TempDir(), "probe-count")
-	t.Setenv("BROWSER_TEST_PROBE_COUNTER", counterFile)
-	script := "#!/bin/sh\necho x >> \"$BROWSER_TEST_PROBE_COUNTER\"\necho 'Chromium 131.0.6778.108'\nexit 0\n"
+	// FR-239 / WU-19: probes must not inherit arbitrary fixture env keys.
+	script := fmt.Sprintf("#!/bin/sh\necho x >> %q\necho 'Chromium 131.0.6778.108'\nexit 0\n", counterFile)
 	candidatePath := filepath.Join(binDir, "google-chrome")
 	writeExecutable(t, candidatePath, script)
 

@@ -57,9 +57,10 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 		return false, fmt.Errorf("steer: complete: cannot determine goal state: %w", goalErr)
 	}
 	// Issue #1215: a final handback already delivered in THIS execution makes
-	// a later deadline a normal completion with that result — the helper has
-	// finished and reported, so it must not be stopped (and its parent sent a
-	// second, timeout notice). A goal-bearing session is excluded: the claim/
+	// a later deadline error (since #1306 only a provider request timeout —
+	// sessions have no lifetime limit) a normal completion with that result:
+	// the helper has finished and reported, so it must not be failed (and its
+	// parent sent a second notice). A goal-bearing session is excluded: the claim/
 	// Judge loop owns how it ends.
 	if activeGoal == nil && errors.Is(runErr, context.DeadlineExceeded) {
 		if handedBack, ok := rec.FinalHandbackThisExecution(); ok {
@@ -726,9 +727,11 @@ func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, rec *session.Lifecycle
 }
 
 func completionDisposition(result turnResult, runErr error, answer string) (steer.Outcome, session.LifecycleState, string) {
+	// No context.DeadlineExceeded arm (issue #1306): a steered session has no
+	// lifetime limit any more, so a deadline error here can only be a
+	// provider/network request timeout — an ordinary failure, reported with
+	// its real cause below, never "exceeded its lifetime limit".
 	switch {
-	case errors.Is(runErr, context.DeadlineExceeded):
-		return steer.OutcomeTimedOut, session.LifecycleStopped, "timed_out: the session exceeded its lifetime limit"
 	case errors.Is(runErr, context.Canceled), result.status == TurnEndStatusAborted:
 		return steer.OutcomeInterrupted, session.LifecycleStopped, "interrupted: the session was cancelled"
 	case runErr != nil:
@@ -847,6 +850,10 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 		if al.consumePostFinishRevival(rec.SessionID, rec.Generation) {
 			answer = postFinishRevivalPrefix + answer
 		}
+		// Issue #1306 (round 4): every final is bounded by the hand-back
+		// contract (50000 characters, truncation marked) — for every
+		// helper, goal or not.
+		answer = capHandbackResult(answer)
 		err := message.FromSessionMessageHandback(generated.SessionMessageHandback{
 			MessageId:      rec.SessionID,
 			SessionId:      rec.SessionID,

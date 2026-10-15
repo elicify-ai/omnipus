@@ -1035,12 +1035,10 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	// owes the SAME post-turn disposition (completeSteeredTurn/
 	// finishSteeredGoalTurn), or a successfully woken session ends its turn
 	// still marked `running` forever (nothing else ever calls completion for
-	// it), stalling its parent's quiet-subtree check indefinitely. Finding E
-	// (MEDIUM): the same shared helper applies the edge's configured
-	// timeout to THIS re-entry too — D9 scopes it to "the session's lifetime
-	// across re-entries", not just the first dispatch.
-	runCtx, cancel := steeredTurnRunContext(ctx, rec)
-	defer cancel()
+	// it), stalling its parent's quiet-subtree check indefinitely. No
+	// deadline is applied to this re-entry: a steered session has no time
+	// limit (issue #1306).
+	runCtx := ctx
 	// Same body dispatch as the first-run path: an external-CLI target is
 	// driven through the shared runner on a wake too, never the native loop.
 	result, err := al.runSteeredTurnBody(runCtx, rec, ts)

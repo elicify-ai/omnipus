@@ -3299,8 +3299,17 @@ components:
           message: "This turn was stopped before it finished."
           attribution: user
         turn_timed_out:
-          message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+          message: "The model provider didn’t answer this request in time. Retry — if it keeps happening, open Verbose chat for details."
           attribution: provider
+        judge_time_limit:
+          message: "The Judge reached its own check time limit before it finished checking this work. Raise judge.timeout_sec in config.json if checks need longer, then check again."
+          attribution: config
+        judge_conclusion_failed:
+          # Issue #1306 (SFH R2-3): an operational notice, not a turn exit — the
+          # Judge's conclusion could not be fully saved or delivered. It ends no
+          # turn. Not retryable; never a trusted provider message.
+          message: "Omnipus could not fully save or deliver the Judge's conclusion. Check disk space, file permissions and the chat's channel connection, then reload the chat. Open Verbose chat for details."
+          attribution: ambiguous
         delegated_task_limit:
           message: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed."
           attribution: config
@@ -3313,6 +3322,8 @@ components:
       properties:
         code:
           type: string
+          description: >-
+            Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
           enum:
             - media_unsupported
             - provider_rejected
@@ -3335,6 +3346,8 @@ components:
             - model_unassigned
             - turn_canceled
             - turn_timed_out
+            - judge_time_limit
+            - judge_conclusion_failed
             - delegated_task_limit
             - context_window_unknown
             - unknown
@@ -3534,8 +3547,17 @@ components:
           message: "This turn was stopped before it finished."
           attribution: user
         turn_timed_out:
-          message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+          message: "The model provider didn’t answer this request in time. Retry — if it keeps happening, open Verbose chat for details."
           attribution: provider
+        judge_time_limit:
+          message: "The Judge reached its own check time limit before it finished checking this work. Raise judge.timeout_sec in config.json if checks need longer, then check again."
+          attribution: config
+        judge_conclusion_failed:
+          # Issue #1306 (SFH R2-3): an operational notice, not a turn exit — the
+          # Judge's conclusion could not be fully saved or delivered. It ends no
+          # turn. Not retryable; never a trusted provider message.
+          message: "Omnipus could not fully save or deliver the Judge's conclusion. Check disk space, file permissions and the chat's channel connection, then reload the chat. Open Verbose chat for details."
+          attribution: ambiguous
         delegated_task_limit:
           message: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed."
           attribution: config
@@ -3548,6 +3570,8 @@ components:
       properties:
         code:
           type: string
+          description: >-
+            Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
           enum:
             - media_unsupported
             - provider_rejected
@@ -3570,6 +3594,8 @@ components:
             - model_unassigned
             - turn_canceled
             - turn_timed_out
+            - judge_time_limit
+            - judge_conclusion_failed
             - delegated_task_limit
             - context_window_unknown
             - unknown
@@ -5416,8 +5442,8 @@ components:
           maxLength: 255
           description: >
             L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
-            session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat
-            whose session id equals this value renders the inline approval.
+            session's chain (ParentSessionID walk, 16 hops, cycle guard). Identifies
+            the related root chat without prescribing the approval's UI placement.
             Omitted when equal to session_id.
         acting_agent_name:
           type: string
@@ -5477,10 +5503,9 @@ components:
           minLength: 1
           maxLength: 128
           description: >
-            Workspace the requesting session belongs to (resolved server-side
-            from session meta, walking up to the delegating parent). The SPA
-            shows the approval only while that workspace is active. Omitted
-            when the session belongs to no workspace (shown everywhere).
+            Workspace attribution for the requesting session, resolved server-side
+            from session metadata or its delegating parent when a delegated child
+            has none. Omitted when the session belongs to no workspace.
         segments:
           type: array
           items:

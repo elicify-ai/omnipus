@@ -48,8 +48,8 @@ func TestWU19_BackgroundChildEnvironment(t *testing.T) {
 			if err != nil {
 				t.Fatalf("real background child failed to start: %v", err)
 			}
-			if err := cmd.Wait(); err != nil {
-				t.Fatalf("real background child failed: %v", err)
+			if waitErr := cmd.Wait(); waitErr != nil {
+				t.Fatalf("real background child failed: %v", waitErr)
 			}
 			s, err := wu19envprobe.Read(path)
 			if err != nil {

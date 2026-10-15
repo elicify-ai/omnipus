@@ -2339,6 +2339,14 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 // point that keeps an unresolved D6 continuation. The call this function used
 // to make itself was one of the five hand-wired ones the defer replaced.
 func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string, cause error) (turnResult, TurnEndStatus, error) {
+	// Issue #1306: a deadline that came from the Judge's own check time limit
+	// (verifier_adjudication.go::dispatchTurn tags it with ErrJudgeTimeLimit)
+	// is NOT a provider timeout. The provider call only reports
+	// context.DeadlineExceeded; the turn context's Cause says which clock it
+	// was, so the exit is classified honestly as judge_time_limit.
+	if ts != nil {
+		cause = withDeadlineCause(ts.causeCtx, cause)
+	}
 	code, ok := typedExitCode(cause)
 	if !ok {
 		// Not a typed exit — callers only route context errors here; fall
@@ -2351,7 +2359,7 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 		level    = logger.WarnCF
 	)
 	switch code {
-	case CodeTurnTimedOut:
+	case CodeTurnTimedOut, CodeJudgeTimeLimit:
 		sentinel, status = ErrTurnTimedOut, TurnEndStatusError
 	}
 	llm := typedExitError(code, cause)

@@ -566,9 +566,11 @@ func (t *DelegateTool) Description() string {
 		"calls get no overlap check. Delegate directly for a single self-contained piece of work. " +
 		"action=\"run\" (default) launches a session. It returns at once with the child's session_id " +
 		"and whether it is running or queued (with its place in line). You get a message when the " +
-		"child finishes, asks a question, or hits a problem. Check on it with delegate status, " +
-		"redirect it with delegate redirect, stop it with delegate stop_all. A delegation is " +
-		"force-stopped after timeout_seconds (default 1800s / 30 min) if it has not finished by then. " +
+		"child finishes, asks a question, or hits a problem. Rely on these messages instead of polling: " +
+		"do other useful work, or end your turn stating what you are waiting for. Use status for a " +
+		"specific current-state check, redirect to change its instruction, or stop_all to stop it and " +
+		"its helpers. Consecutive status/peek/inbox reads of the same child without new information " +
+		"trigger warnings and can stop your turn, even when you alternate actions. " +
 		"A run has two modes. Without a goal (the default) the helper is done when it returns a non-empty " +
 		"final answer and none of its own helpers are still running; an empty answer is a failure. With a " +
 		"goal — pass criteria and dod together, one without the other is refused — the helper works toward " +
@@ -610,6 +612,8 @@ func (t *DelegateTool) Description() string {
 		"replace; use steer to instruct one with a CLI run in flight, stop_all to stop it, or resume under the " +
 		"conditions above; otherwise start a new delegation). " +
 		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
+		"action=\"result\" returns a finished child's final result again — use it when the hand-back " +
+		"was already delivered and you need its full text; status does not repeat a delivered result. " +
 		"action=\"run\" requires agent_id — the specific agent to delegate to, which must be in " +
 		"your delegation allowlist. There is no default target and no implicit substitution of " +
 		"your own id: a caller delegating to itself passes its own agent_id explicitly."
@@ -656,6 +660,12 @@ func delegateCriterionItemSchema() map[string]any {
 				"enum":        []string{"boolean", "quantitative", "artifact"},
 				"description": "How this criterion is scored. Optional, defaults to boolean.",
 			},
+			"provenance": map[string]any{
+				"type": "string",
+				"enum": []string{"stated", "workspace", "floor", "inferred"},
+				"description": "Optional authority layer, the same field set_goal uses on its dod items " +
+					"(stated, workspace, floor, inferred). Kept on the helper's goal; omit it if unsure.",
+			},
 		},
 		"required": []string{"text"},
 	}
@@ -683,8 +693,9 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"action": map[string]any{
 				"type": "string",
-				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek"},
-				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"inbox\" " +
+				"enum": []string{"run", "status", "result", "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek"},
+				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"result\" " +
+					"reads a finished child's final result again, even after it was delivered. \"inbox\" " +
 					"drains child->parent messages. \"inbox_ack\" acknowledges them. \"steer\" injects an " +
 					"instruction. \"respond\" answers one of the child's open questions. \"stop_all\" stops the " +
 					"child and every helper under it. \"resume\" continues a stopped child or starts its " +
@@ -695,7 +706,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"session_id": map[string]any{
 				"type": "string",
 				"description": "The durable child session to target — the only way to address a " +
-					"child. Required for status/inbox/inbox_ack/steer/respond/stop_all/resume/redirect/peek." +
+					"child. Required for status/result/inbox/inbox_ack/steer/respond/stop_all/resume/redirect/peek." +
 					delegateClearGoalSessionIDDescription,
 			},
 			"criteria": map[string]any{
@@ -739,10 +750,6 @@ func (t *DelegateTool) Parameters() map[string]any {
 					"whole delegation call fails instead of silently proceeding without it. Merely mentioning " +
 					"a skill by name inside \"task\" does not have this effect — it is only a hopeful hint " +
 					"the target's own judgement may or may not act on.",
-			},
-			"timeout_seconds": map[string]any{
-				"type":        "integer",
-				"description": "Optional (action=\"run\" only): max seconds before this delegation is force-cancelled. 0 = default (30 min).",
 			},
 			"critical": map[string]any{
 				"type":        "boolean",
@@ -833,9 +840,11 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any) *ToolRe
 		return t.executeRedirect(ctx, args)
 	case "peek":
 		return t.executePeek(ctx, args)
+	case "result":
+		return t.executeResult(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf(
-			"invalid action %q: must be one of run, status, inbox, inbox_ack, steer, respond, stop_all, clear_goal, resume, redirect, peek",
+			"invalid action %q: must be one of run, status, result, inbox, inbox_ack, steer, respond, stop_all, clear_goal, resume, redirect, peek",
 			action,
 		))
 	}

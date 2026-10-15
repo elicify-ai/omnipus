@@ -6,7 +6,7 @@ The turn engine every workspace tab sits on. No screen owns it.
 
 This is the largest Go package in the repo. Never run it whole; scope to one
 symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run
-'^TestLaunch_DefaultTimeoutIsThirtyMinutes' ./pkg/agent/`). CI is the
+'^TestNoTimeLimit_LaunchRecordsNoLifetimeLimit' ./pkg/agent/`). CI is the
 authority for full-suite results.
 
 Cite `file::symbol` in notes and reviews, never `file:line` — `loop.go`,

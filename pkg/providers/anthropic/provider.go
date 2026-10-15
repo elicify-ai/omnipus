@@ -39,6 +39,36 @@ type Provider struct {
 	tokenSource        func() (string, error)
 	baseURL            string
 	streamStallTimeout time.Duration // streaming silence limit; 0 = common.DefaultStreamStallTimeout
+
+	// streamHTTPClient is the streaming request's HTTP client: the default
+	// transport plus a response-header CONNECTION guard (issue #1306 — with
+	// no turn timeout, a provider that accepts the request but never sends
+	// headers must still fail, retryably). It bounds only the wait for
+	// headers; the stream body is governed by the stall watcher alone. Nil
+	// for a provider built around a caller-supplied client
+	// (NewProviderWithClient), which owns its own transport.
+	streamHTTPClient *http.Client
+}
+
+// newStreamHTTPClient builds the guarded streaming client.
+func newStreamHTTPClient(headerTimeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.ResponseHeaderTimeout = headerTimeout
+	return &http.Client{Transport: transport}
+}
+
+// WithConnectionGuardTimeout overrides the streaming response-header guard
+// (default common.DefaultRequestTimeout). A non-positive value is ignored.
+func (p *Provider) WithConnectionGuardTimeout(d time.Duration) *Provider {
+	if d > 0 && p.streamHTTPClient != nil {
+		p.streamHTTPClient = newStreamHTTPClient(d)
+	}
+	return p
 }
 
 // SupportsThinking implements providers.ThinkingCapable.
@@ -62,8 +92,9 @@ func NewProviderWithBaseURL(token, apiBase string) *Provider {
 		option.WithMaxRetries(0),
 	)
 	return &Provider{
-		client:  &client,
-		baseURL: baseURL,
+		client:           &client,
+		baseURL:          baseURL,
+		streamHTTPClient: newStreamHTTPClient(common.DefaultRequestTimeout),
 	}
 }
 
@@ -216,8 +247,11 @@ func (p *Provider) streamWithCallbacks(
 	// re-arms the clock. Reads that race the fill simply skip one arm.
 	var armer stallBodyArmer
 	streamOpts := opts
+	if p.streamHTTPClient != nil {
+		streamOpts = append(append([]option.RequestOption{}, streamOpts...), option.WithHTTPClient(p.streamHTTPClient))
+	}
 	if stall > 0 {
-		streamOpts = append(append([]option.RequestOption{}, opts...),
+		streamOpts = append(append([]option.RequestOption{}, streamOpts...),
 			option.WithMiddleware(func(req *http.Request, next func(*http.Request) (*http.Response, error)) (*http.Response, error) {
 				resp, err := next(req)
 				if err != nil || resp == nil || resp.Body == nil {

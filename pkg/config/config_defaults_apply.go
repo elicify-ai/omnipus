@@ -178,8 +178,6 @@ func (c SessionConfig) EffectiveStatsFlushInterval() time.Duration {
 const (
 	// DefaultSchedulesMaxConcurrentRuns is the fallback parallel-lane capacity.
 	DefaultSchedulesMaxConcurrentRuns = 8
-	// DefaultSchedulesRunTimeoutSeconds is the fallback per-run deadline.
-	DefaultSchedulesRunTimeoutSeconds = 300
 )
 
 // DefaultSchedulesRetryBackoffMs is the fallback transient-error retry backoff
@@ -192,9 +190,6 @@ var DefaultSchedulesRetryBackoffMs = []int64{60000, 120000, 300000}
 func (s *SchedulesConfig) ApplyDefaults() {
 	if s.MaxConcurrentRuns <= 0 {
 		s.MaxConcurrentRuns = DefaultSchedulesMaxConcurrentRuns
-	}
-	if s.RunTimeoutSeconds <= 0 {
-		s.RunTimeoutSeconds = DefaultSchedulesRunTimeoutSeconds
 	}
 	if len(s.RetryBackoffMs) == 0 {
 		s.RetryBackoffMs = append([]int64(nil), DefaultSchedulesRetryBackoffMs...)

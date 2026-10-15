@@ -506,8 +506,11 @@ func (te *TaskExecutor) adjudicateRunClaim(
 
 	if needsJudgeAgent(judged) {
 		if _, ok := te.agentLoop.GetRegistry().GetAgent(string(coreagent.IDJudge)); !ok {
+			// Issue #1306 (founder): the Judge must conclude WITH the work
+			// result — every terminal Judge failure keeps the worker's evidence.
 			te.endTaskWithoutAttempt(t, taskSessionID,
-				"The Judge could not run: the Judge agent is not registered, so this claim cannot be checked.", run)
+				"The Judge could not run: the Judge agent is not registered, so this claim cannot be checked."+
+					"\n\n"+notVerifiedConclusion("the Judge agent is not registered", "Register the Judge, then re-run the task.", evidence), run)
 			return runStepEnded, "", ""
 		}
 	}
@@ -522,7 +525,9 @@ func (te *TaskExecutor) adjudicateRunClaim(
 
 	var result JudgeCriteriaResult
 	for judgeTry := 1; ; judgeTry++ {
-		judgeCtx, cancel := context.WithTimeout(ctx, goalJudgeRoundTimeout)
+		// Issue #1306 R2-4: the outer round clock is the Judge's own check
+		// time limit, so its expiry is never reported as a provider timeout.
+		judgeCtx, cancel := context.WithTimeoutCause(ctx, goalJudgeRoundTimeout, ErrJudgeTimeLimit)
 		result = te.agentLoop.JudgeCriteria(judgeCtx, JudgeCriteriaInput{
 			Scope:           task.VerdictScopeTask,
 			TaskID:          t.ID,
@@ -556,15 +561,19 @@ func (te *TaskExecutor) adjudicateRunClaim(
 		if judgeUnavailableNeedsOperator(result.Reason) {
 			logger.ErrorCF("task_executor", "goal: the Judge cannot run until an operator fixes it — failing the task, no attempt used",
 				map[string]any{"task_id": t.ID, "reason": result.Reason})
-			te.endTaskWithoutAttempt(t, taskSessionID, "The Judge could not run: "+judgeOperatorFix(result.Reason), run)
+			te.endTaskWithoutAttempt(t, taskSessionID, "The Judge could not run: "+judgeOperatorFix(result.Reason)+
+				"\n\n"+notVerifiedConclusion("the Judge cannot run until its settings are fixed", "Fix the Judge settings named above, then re-run the task.", evidence), run)
 			return runStepEnded, "", ""
 		}
 		logger.WarnCF("task_executor", "goal: the Judge is unavailable — retrying the same claim, no try used",
 			map[string]any{"task_id": t.ID, "judge_try": judgeTry, "reason": result.Reason})
 		if judgeTry >= judgeUnavailableRetryBound {
+			// Issue #1306 (founder): the Judge must conclude, and the worker's
+			// result must survive it — the task's Result carries the verdict
+			// AND the evidence the worker claimed completion with.
 			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf(
 				"The Judge could not check this task's work after %d tries (%s). Re-run the task once the Judge is available.",
-				judgeTry, result.Reason), run)
+				judgeTry, result.Reason)+"\n\n"+notVerifiedConclusion("the Judge was unavailable", "", evidence), run)
 			return runStepEnded, "", ""
 		}
 		te.writeTaskReason(t, fmt.Sprintf(

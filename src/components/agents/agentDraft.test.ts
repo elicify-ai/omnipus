@@ -11,7 +11,6 @@ const baseline = {
   locked: true,
   status: 'idle',
   soul: '',
-  timeout_seconds: 300,
   max_tool_iterations: 50,
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,

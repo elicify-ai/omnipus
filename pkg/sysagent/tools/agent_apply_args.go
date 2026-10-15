@@ -2,6 +2,8 @@ package systools
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
@@ -324,6 +326,13 @@ func applyModelParams(a *config.AgentConfig, raw any) error {
 func jsonInt(raw any, field string) (int, error) {
 	f, ok := raw.(float64)
 	if !ok {
+		return 0, fieldErr(field, field+" must be an integer")
+	}
+	// Check the signed-int range BEFORE conversion: an out-of-range float
+	// converts implementation-dependently, and ARM64 can saturate to MaxInt.
+	// float64(MaxInt64) rounds up to 2^63, so a round-trip alone misses it.
+	limit := math.Ldexp(1, strconv.IntSize-1)
+	if f < -limit || f >= limit {
 		return 0, fieldErr(field, field+" must be an integer")
 	}
 	n := int(f)

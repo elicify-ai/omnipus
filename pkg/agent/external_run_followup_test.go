@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -146,7 +145,7 @@ func TestExternalRunFollowup_ContinuationResumesNativeConversation(t *testing.T)
 	// refuses outright because it never Ran.
 	factory := withRecordingDriverFactory(t)
 
-	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "first instruction", 30*time.Second); err != nil {
+	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "first instruction"); err != nil {
 		t.Fatalf("first dispatch: %v", err)
 	}
 	if got := factory.count(); got != 1 {
@@ -160,7 +159,7 @@ func TestExternalRunFollowup_ContinuationResumesNativeConversation(t *testing.T)
 	// The post-turn drain (steer_turn_drain.go::continueSteeredTurn) marks the
 	// reconstructed turn with ExternalCLIResume before re-entering the body.
 	ts.opts.ExternalCLIResume = true
-	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "follow-up instruction S", 30*time.Second); err != nil {
+	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "follow-up instruction S"); err != nil {
 		t.Fatalf("FR-043 continuation: %v", err)
 	}
 
@@ -189,7 +188,7 @@ func TestExternalRunFollowup_ResumeFailureIsVisibleNotAFreshRun(t *testing.T) {
 	drv, restore := withRecordingDriver(t)
 	defer restore()
 
-	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "first instruction", 30*time.Second); err != nil {
+	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "first instruction"); err != nil {
 		t.Fatalf("first dispatch: %v", err)
 	}
 
@@ -198,7 +197,7 @@ func TestExternalRunFollowup_ResumeFailureIsVisibleNotAFreshRun(t *testing.T) {
 	drv.mu.Unlock()
 
 	ts.opts.ExternalCLIResume = true
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "follow-up instruction S", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "follow-up instruction S")
 	if err == nil {
 		t.Fatalf("BDD-05.6: a failed resume must be a visible failure, got success (result=%v)", res)
 	}

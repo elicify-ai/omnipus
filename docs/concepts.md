@@ -7,7 +7,7 @@ Omnipus is a team of AI agents that runs on your own machine. This page introduc
 Everything in Omnipus hangs together in one shape:
 
 - All your work lives in a **workspace**. Chats, tasks, the calendar, files, and the team of agents belong to it.
-- **Agents** do the work. Four ship built in, and you can create your own.
+- **Agents** do the work. Three chat colleagues ship built in, alongside workers and internal engine agents. You can create your own agents too.
 - Agents act through **tools**: reading and writing files, searching the web, running commands.
 - Work takes three shapes: **tasks**, **plans**, and **goals**.
 - **Connectors** carry your messages in from chat platforms such as Telegram or Discord.
@@ -35,7 +35,7 @@ A workspace is the container your work happens in. Every chat, task, plan, file,
 
 ## The agents
 
-Agents are who does the work. Three chat agents ship with Omnipus, and Mia is the default on a fresh install:
+Agents are who does the work. Three chat colleagues ship with Omnipus. There is no global default agent: each conversation names its agent, and a new conversation without one is refused.
 
 | Agent | Role | Reach for them when |
 |---|---|---|
@@ -67,7 +67,7 @@ A tool is one capability an agent can call while it works: reading a file, searc
 
 ## Limits and things to watch
 
-- The four built-in agents are locked. They ship as they are; you add capacity by creating your own agents, not by editing the built-ins.
+- The built-in chat colleagues and workers keep their identity and base instructions. Their supported model, tool and skill settings remain editable; Judge and Plan Supervisor keep fixed capabilities. See [agents](agents.md).
 - Who may hand work to whom is set inside each workspace, not on an agent. The same agent can be trusted to receive work in one workspace and not in another.
 - A task with no agent assigned cannot run. It stays on the board as a to-do for you.
 

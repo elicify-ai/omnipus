@@ -125,9 +125,9 @@ type AgentInstance struct {
 	SkillsFilter []string
 	Candidates   []providers.FallbackCandidate
 
-	// TimeoutSeconds is the per-turn hard timeout. 0 = disabled.
-	// Populated from AgentDefaults.TimeoutSeconds; per-agent override if available.
-	TimeoutSeconds int
+	// There is no per-turn timeout: an agent turn runs until it finishes or
+	// is explicitly stopped (issue #1306). Provider HTTP request timeouts
+	// still bound each individual network call.
 
 	// AgentType is the resolved type string ("core", "custom", "system") used by
 	// FilterToolsByPolicy at LLM-call assembly time (FR-003, FR-041). Set once at
@@ -195,7 +195,6 @@ type newAgentInstance struct {
 	router              *routing.Router
 	lightCandidates     []providers.FallbackCandidate
 	lightProvider       providers.LLMProvider
-	timeoutSeconds      int
 	documentRuntime     *documentruntime.Layout
 }
 
@@ -543,14 +542,6 @@ func (nai *newAgentInstance) configureRouting() {
 				map[string]any{"light_model": rc.LightModel, "agent_id": nai.agentID})
 		}
 	}
-
-	// Per-turn timeout from agent defaults (0 = disabled).
-	// Clamp negative values to 0 (disabled) — a negative timeout is meaningless
-	// and would cause context.WithTimeout to fire immediately.
-	nai.timeoutSeconds = nai.defaults.TimeoutSeconds
-	if nai.timeoutSeconds < 0 {
-		nai.timeoutSeconds = 0
-	}
 }
 
 // assembleInstance derives the agent type, builds the instance, and publishes runtime policy snapshots.
@@ -600,7 +591,6 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 		LightCandidates:     nai.lightCandidates,
 		LightProvider:       nai.lightProvider,
 		DocumentRuntime:     nai.documentRuntime,
-		TimeoutSeconds:      nai.timeoutSeconds,
 		AgentType:           resolvedAgentType,
 	}
 	if nai.agentCfg != nil {
@@ -796,7 +786,6 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 		Subagents:       a.Subagents,
 		SkillsFilter:    a.SkillsFilter,
 		Candidates:      candidates,
-		TimeoutSeconds:  a.TimeoutSeconds,
 		AgentType:       a.AgentType,
 		Router:          a.Router,
 		LightCandidates: a.LightCandidates,

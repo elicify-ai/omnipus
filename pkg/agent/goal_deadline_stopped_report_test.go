@@ -57,10 +57,10 @@ func TestGoalDeadlineRepro_StoppedGoalChildReportsUpward(t *testing.T) {
 		runErr error
 		result turnResult
 	}{
-		{
-			name:   "goal child times out (context.DeadlineExceeded)",
-			runErr: context.DeadlineExceeded,
-		},
+		// The former "goal child times out (context.DeadlineExceeded)" case
+		// is gone with the lifetime budget (issue #1306): a deadline error
+		// is now an ordinary failure (terminal `failed`, reported upward
+		// through the terminal branch), not a non-terminal stop.
 		{
 			name:   "goal child is cancelled (context.Canceled)",
 			runErr: context.Canceled,

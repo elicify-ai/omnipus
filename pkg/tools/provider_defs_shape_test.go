@@ -65,6 +65,10 @@ func goldenFilePath(t *testing.T) string {
 //
 // Traces to: FR-053 (provider defs format), SC-008 (shape guard).
 func TestProviderDefs_ShapeUnchanged(t *testing.T) {
+	// L1 accepted delta: WU-1/WU-2 retire Ava/Admin and the default agent,
+	// split permissions into set_agent_permissions (FR-024); #1274 removes
+	// soul from external-worker creation (HANDOFFS 2026-10-13T19:33:46Z).
+	// Keep the full byte-for-byte guard, including every unchanged entry.
 	reg := buildTestBuiltinRegistry()
 	entries := reg.Describe()
 
