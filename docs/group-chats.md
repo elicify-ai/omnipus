@@ -1,8 +1,8 @@
 # Group chats
 
-A group chat (also called a room) is one conversation between you and two or more agents of the same workspace. You write once, and every addressed agent answers. Agents can also talk to each other there.
+A group chat (also called a room) is one conversation between you and two or more conversation agents of the same workspace. You write once, and Omnipus creates a request for each addressed member, subject to that member's permissions and availability. Agents answer from their own main chats and can address other members in their answers. Addressing an agent does not guarantee an answer; the member states below show what happened.
 
-> **Status in this version: the group-chat screens are switched off.** The server part of group chats is built. The screens are not shown yet (issue #1314): there is no "Group chats" section in the sidebar, no "Add participant" button and no room page, and a direct room link opens the workspace's chat instead. Sections marked **(screen switched off)** describe what those screens do once they are turned on. Until then, group chats can only be used through the web app's REST API ([API summary](#api-summary) at the end).
+> **Status in this version: the group-chat screens are switched off.** The server part of group chats is built. The screens are not shown yet (issue #1314): there is no "Group chats" section in the sidebar, no "Add participant" button and no room page, and a direct room link opens the workspace's chat instead. Sections marked **(screen switched off)** describe the existing, disabled screens. Features marked **not implemented** still need more work; turning the screens on does not supply them. Until the screens are on, group chats can only be used through the web app's REST API ([API summary](#api-summary) at the end).
 
 **Glossary.** A group-chat room is not a memory room. The *shared* and *private* memory rooms of the `remember` and `recall_memory` tools are where agents keep notes ([memory](memory.md)). They have nothing to do with group chats.
 
@@ -14,15 +14,15 @@ A group chat (also called a room) is one conversation between you and two or mor
 | **Squad** | You. You give it a name (1 to 80 characters) | Two or more agents you choose | Yes |
 | **Ad-hoc room** | You. No name needed: it is named after its members, for example "Mia, Jim" | Two or more agents you choose | Yes |
 
-A conversation agent is an agent you can chat with directly. Workers, system agents and Omnipus never join a group chat. A group has at most 256 agents. The workspace lists its team room first, then squads, then ad-hoc rooms, each oldest first.
+A conversation agent is an agent you can chat with directly. Workers, system agents and Omnipus never join a group chat. A squad or ad-hoc room has at most 256 agents: creating one and adding members both refuse a larger group, and one membership change names at most 256 agents. The team room's member list is not capped separately: it is always the workspace's whole team. The workspace lists its team room first, then squads, then ad-hoc rooms, each oldest first.
 
 ### At least two agents
 
-Every group chat needs at least two agents.
+Every group chat needs at least two different agents.
 
 | Situation | What happens |
 |---|---|
-| You create a group with fewer than two different agents | Refused: "a room needs at least two agents" |
+| You create a group with fewer than two different agents | Refused. The server's room-rule text is "a room needs at least two agents". With inbound schema validation switched on, a list with fewer than two entries can instead be rejected earlier with a 400 validation error. The same agent listed twice does not count as two |
 | You remove a member and fewer than two would be left | Refused: "a room needs at least two agents — delete the room instead". Muted members count toward the two |
 | An agent leaves the workspace, and a squad or ad-hoc room is left with one agent | The group becomes read-only: "This group has fewer than two agents — add another agent to continue." Nothing is deleted |
 | The workspace drops below two conversation agents | The team room is hidden and read-only: "The team room needs at least two conversation agents in this workspace." Its history, mutes and cost are kept, and it comes back with all of them when a second agent joins |
@@ -32,6 +32,8 @@ You cannot add or remove team-room members directly. Change the workspace's team
 ### One workspace only
 
 A group chat holds agents of exactly one workspace. Adding any other agent is refused with "<Agent> is not in <Workspace>". When an agent is removed from a workspace, it leaves every group chat of that workspace, and its requests that have not started yet are cancelled ("cancelled — removed"). This happens when the workspace's team is saved, and again whenever a group is next opened.
+
+Removing a member from a squad or ad-hoc room, or taking that agent off the workspace team, does not stop work it already started in its main chat. If it later tries to answer the group, that answer is refused because the agent is no longer a member. It is not posted under a former member's name.
 
 ## Who receives your message
 
@@ -46,19 +48,21 @@ How a typed @-name is matched:
 
 - It must match a member's full current name. Upper or lower case does not matter. When several names fit, the longest one wins.
 - A name that several members share is refused: "Several members are called <name> — pick from the list".
-- An @-name that matches no member stays plain text. If none of the message's @-names matched anyone, nobody was picked and there is no `@all`, the message is saved in the group but sent to no one.
+- An @-name that matches no member stays plain text. If none of the message's @-names matched anyone and there is no `@all`, the message is saved in the group but sent to no one.
 - `@all` is reserved. A member actually named "all" can only be picked from the @-picker (screen switched off).
 
-A message can be up to 65,536 bytes long. Your operator can change this with `session_messaging.steer_body`, the same limit that applies to messages between sessions.
+**Picked members win.** When members are picked (in the @-picker, or in the API's `mentions` list), exactly those members receive the message, and the text is not read for names at all. A picked member that shares its name with another member is therefore addressed, not refused, and a renamed member is still reached by its pick.
+
+Your message can be up to 65,536 bytes long by default. Your operator can change this with `session_messaging.steer_body`, the same limit that applies to messages between sessions. The same limit applies to an agent's answer in a group: a longer answer is refused, and nothing of it is posted, copied or passed on.
 
 ## How agents answer: from their own main chat
 
 No agent works inside a group chat. Each agent's main chat is its one-to-one chat with you in that workspace, and that is where it answers.
 
 1. Each addressed member gets your message as a request in its own main chat. The request says who wrote it and quotes the group messages that member has not seen since its previous request (at most 20 messages and 8,192 bytes). The quoted messages are marked as quotes, not instructions.
-2. The agent works on it there, with its own tools, permissions and settings. A new request never joins a turn that is already running. It waits for the agent's next turn. A held request is delivered with the turn that starts the agent again.
-3. The agent answers with its `answer_request` tool. The answer is posted in the group under the agent's name and copied once into its main chat. A plain reply in its main chat does not reach the group.
-4. If a turn ends without an answer, the agent gets one reminder. If it still does not answer, the group shows the member as "failed: no answer".
+2. The agent works on it there, with its own tools, permissions and settings. A new request never joins a turn that is already running. It waits for the agent's next turn. A request that waited (the agent was stopped, or its turn could not be started) is handed to the turn that starts the agent again, as one of that turn's first inputs.
+3. The agent answers with its `answer_request` tool. The server first saves the answer in the group under the agent's name, then copies it into the agent's main chat, then passes on any @-names in it. The copy is written once. A plain reply in the main chat does not post an answer to the group. If copying fails after the answer was saved, the answer stays in the group and the tool reports the error; see "Storage failures" below.
+4. If a turn ends without an answer, the agent gets one reminder. If it still does not answer, the group shows the member as "failed: no answer". If the turn itself fails, every request it was handed fails with it ("failed: turn failed"), so a member is never left "working" after its turn.
 
 **In the main chat (screen switched off).** Once the screens are on, the request and the answer each appear in the agent's main chat as a collapsed entry, "From group <name>: <first line>". Expanding one shows the full text and a link to the group. In this version they appear as ordinary messages.
 
@@ -71,6 +75,19 @@ No agent works inside a group chat. Each agent's main chat is its one-to-one cha
 
 An agent's message in a group is only ever text for the other members. It can never approve anything, answer a question card or run a command.
 
+### Storage failures
+
+| What failed | What you see | What to do |
+|---|---|---|
+| Saving the request in a member's main chat | The member shows "unavailable: storage". No request was recorded there and no turn started | Once storage works again, retry the message with its original `client_message_id` |
+| Starting the member's turn after the request was recorded | The member shows "queued". The request is not lost: it is handed to the member's next turn | Retry the message, or write to the agent; either starts it |
+| Checking the group, or saving "working", just before the member's turn takes the request | The request is not run on an unchecked group. It stays queued | Same as above. It runs once the group can be checked |
+| Copying an answer into the main chat, or recording that copy | The answer stays in the group. The agent gets an error saying the main-chat copy is missing, and the answer's @-names are not passed on yet | The agent calls `answer_request` again with the same request and the same text. That repairs the copy without posting a second answer, and then passes the @-names on once. Loading the group again after a restart also repairs it and passes them on |
+| Saving a pause, a removal or a deletion | The change is refused with an error and nothing is cancelled | Try again |
+| Marking requests cancelled after a pause or removal was saved | You get an error. The requests are fenced off and will not run, but they may still show their old state | Send `/pause` again (or open the group again); the labels are repaired |
+
+The `answer_request` tool's error starts with "reply refused, nothing was sent". For a failed main-chat copy that prefix is not accurate: the answer is already in the group. Do not treat a tool error at this stage as proof that nothing was posted.
+
 ### Member states
 
 The group shows one state per member: its most recent request. The labels in this table are the ones the room screen uses (screen switched off). The server sends the state names in brackets.
@@ -79,7 +96,7 @@ The group shows one state per member: its most recent request. The labels in thi
 |---|---|
 | sending… (`recorded`) | Saved in the group, on its way to the agent |
 | queued (`admitted`) | In the agent's main chat, waiting for its next turn |
-| held — <Agent> is stopped (`held`) | The agent's main chat is stopped. The request waits and is delivered when the agent runs again |
+| held — <Agent> is stopped (`held`) | The request is kept for when the agent runs again. Usually its main chat is stopped. The server also reports `held` when it cannot read that chat's run state, so the label does not prove the agent was explicitly stopped |
 | awaiting your approval — in <Agent>'s main chat (`awaiting_approval`) | The agent's Ask permission needs your decision first |
 | working (`working`) | The agent's turn is working on it |
 | waiting for you in <Agent>'s main chat (`waiting_on_user`) | The agent asked you something, or needs an approval, while working on it |
@@ -91,39 +108,43 @@ The group shows one state per member: its most recent request. The labels in thi
 | cancelled | Cancelled by `/pause`, by removing the member, or by deleting the group |
 | unknown | After a restart, Omnipus could not prove what happened |
 
+A group needs your attention while any of its requests waits for your approval or your answer, even if a newer request of the same member has already finished.
+
 ## Agents talking to each other
 
 - An agent's answer goes only to the members it @-names.
 - `@all` in an agent's answer goes to every other member that is not muted, never back to the agent itself.
 - An answer with no @-names reaches no other agent.
-- There is **no limit** on how many times agents can reply to each other. This is a deliberate choice. You stay in control with `/pause`, and the cost is always visible.
+- There is **no limit** on how many times agents can reply to each other. This is a deliberate choice. You can stop further passing-on with `/pause`. The server reports an allocated cost for every group; its visible header is switched off with the room screen.
 
-**A rate limit slows things down; it does not cap them.** Each sender and member pair gets at most 60 requests a minute. You count as one sender, and each agent counts as one sender. Your operator can change the number with `session_messaging.steer_rate`. A request over that pace is not delivered, and the member shows "unavailable: rate limit". The limit does not cap how many replies a conversation can have in total. Sending the same message again (Retry) delivers it to the members that did not get it.
+**A rate limit controls the pace; it does not cap the total conversation.** By default, each sender-and-member pair can make at most 60 room delivery attempts a minute. Your messages share one sender identity; each sending agent has its own. The allowance is shared across that pair's groups, not reset for each group. Your operator can change the number with `session_messaging.steer_rate`. An attempt over the limit is not delivered automatically later: the member shows "unavailable: rate limit". Once the minute has passed, retrying the message delivers it.
+
+**Retries must reuse the original `client_message_id`.** Re-post the same request with the same ID after the limiting or storage problem is resolved. A new ID creates a new message and can ask members who already got it to work again. A retry acts only on that message and on the @-names its answers passed on: members who did not get it are sent it again (or woken, if it is recorded but their turn never started), and members removed since show "cancelled — removed". Other messages of the group are not touched. Requests already taken by a turn, or answered, are never run again. Interrupted work is different: ask again with a new message and a new ID. Two overlapping retries of the same message deliver it once. The room screen's Retry control (screen switched off) re-sends a message whose save was not confirmed, with its original ID.
 
 ### Allocated cost
 
-Each group shows an allocated cost: what its members' turns spent on the group. The header shows it once the screen is on (screen switched off). The server sends it with every group.
+Each group has an allocated cost: what its members' turns spent on it. The server sends it with every group; the room header that shows it is switched off with the screens.
 
-- **How it is shared.** A turn's cost is split by how much of that turn's input came from this group. A turn that worked on one group message and one direct message counts half to the group.
-- **Each turn counts once.** Shares are rounded to the nearest millionth of a dollar.
-- **Missing prices.** A turn on a model with no known price adds nothing, and the cost is marked as incomplete ("unpriced").
+- **How it is shared.** For each member turn, the group receives the turn's cost multiplied by the number of requests from this group that the turn newly consumed, divided by the number of all inputs it newly consumed. This counts inputs, not their length or token size. One group input and one direct input give the group half of that turn's cost.
+- **Each turn counts once per group.** Each share is rounded to the nearest millionth of a dollar. Exact halves round up: half of a millionth becomes one millionth, and one and a half millionths become two. The header (screen switched off) shows the total rounded to cents. The counted shares are kept on disk turn by turn, so a share survives a restart even if the group's summary could not be saved at the time.
+- **Missing prices.** A turn on a model with no known price adds no money and marks the total incomplete; the header labels this "plus unpriced turns". The same mark is set if a turn's share could not be recorded.
 
 ## Room commands
 
 Only you can use commands in a group. An agent's text is never a command.
 
-| Command | What it does |
+| Command | What it does in this version |
 |---|---|
 | `/pause` | Stops the group from sending to agents (see below) |
 | `/resume` | Starts sending new messages again |
 | `/mute @Agent` | The agent no longer receives your default or `@all` messages. It still answers when @-named, stays a member and still counts toward the two-agent minimum |
 | `/unmute @Agent` | Undoes `/mute` |
-| `/members` | Lists the members with their state and mute status |
-| `/help` | Lists these six commands |
+| `/members` | Accepted by the server without returning or saving a list. The planned on-screen member list is **not implemented** yet |
+| `/help` | Accepted by the server without returning or saving help. The planned on-screen list of these six commands is **not implemented** yet |
 
-The server accepts `/members` and `/help` and changes nothing. The room screen shows the list itself (screen switched off).
+`/members` and `/help` return 202 without changing the group, adding a transcript entry or publishing a reply. Until their on-screen notices exist, use the room metadata and the live member-state frames to see membership, mutes and request states.
 
-**Why steering commands are refused.** Any other command, such as `/model`, `/stop` or `/goal`, is refused with "Rooms don't steer agents — use <Agent>'s main chat". The refusal names the @-named members, or every member if you named none, and links to their main chats. A group chat is a conversation, not a control panel. Steering commands change how one agent works, so they belong in that agent's main chat, where they affect only that agent.
+**Why steering commands are refused.** Any other command, such as `/model`, `/stop` or `/goal`, is refused with "Rooms don't steer agents — use <Agent>'s main chat". The server names the @-named members, or every member if none is named, and includes their main-chat IDs. The disabled room screen turns those into links; the API error itself is plain text. A group chat is a conversation, not a control panel. Steering commands change how one agent works, so they belong in that agent's main chat, where they affect only that agent.
 
 ### /pause and /resume
 
@@ -131,6 +152,7 @@ The server accepts `/members` and `/help` and changes nothing. The room screen s
 - Work already running in an agent's main chat is not touched. It finishes, and its answer is posted in the group marked **after pause**. Any @-names in that answer are not passed on.
 - Messages you write while the group is paused are saved in the group but not sent. `/resume` does not send them either; it only affects new messages.
 - After `/resume`, an answer to work started before the pause is still marked "after pause".
+- If the pause is saved but some requests could not be marked cancelled, `/pause` reports an error. Those requests will not run. Send `/pause` again to mark them.
 
 ## Add participant (screen switched off)
 
@@ -149,21 +171,27 @@ The server checks that a room started this way really comes from a main chat of 
 
 You can delete squads and ad-hoc rooms. The team room cannot be deleted. When you delete a group:
 
-- Its requests that have not started yet are cancelled.
+- The deletion is saved first. If it cannot be saved, you get an error and nothing changes.
+- Its requests that have not started yet are then cancelled, and their pending approvals are withdrawn.
 - Work already running finishes in the agents' main chats. Its answer is not posted, and the agent is told that the group is no longer available.
+- If the group's files cannot be removed right away, the group is still deleted and never shown again; the files are removed the next time the server loads its groups.
 
 ## Opening a group: "Earlier messages aren't shown"
 
-When a group is opened or reconnects, the server sends at most the newest 10,000 messages. If there are older ones, it says so. The room screen is meant to show a quiet line, "Earlier messages aren't shown". That line is not built yet, and there is no scrolling back to older messages. The full history stays saved on the server.
+When a group is opened or reconnects, the server sends at most the newest 10,000 messages after the last received position. A reconnect normally adds those messages to the ones already on screen, in order and without duplicates. If the server leaves out earlier messages, the returned messages replace the displayed list so it contains no hidden gap. Once the group-chat screens are switched on, the room shows a quiet line, "Earlier messages aren't shown", above that list. The line does not block sending. Sending waits only for the first live snapshot (the server's current view of the group) after each opening or reconnect, unless the connection is down or the group is read-only. There is no scrolling back to older messages. The full history stays saved on the server.
+
+The snapshot always includes every request that is still open. When there are more than 10,000 member states, older finished ones give way first; an open request is never left out.
+
+**Group list refresh (screen switched off).** If refreshing the Group chats list fails after it has loaded, the last loaded groups stay available. The list says "Could not refresh group chats — showing cached, out-of-date groups" and offers Retry. The hint stays after another failed retry and disappears when Retry loads a fresh list. A first-load failure says "Could not load group chats" with Retry; a successful empty list says "No group chats yet".
 
 ## Audit
 
-Group changes are written to the audit log as `room.changed` events. Each event records the room, the workspace, the action, the agents involved and, for changes you made, your user name.
+Group changes are written to the audit log as `room.changed` events. Each event records the room, the workspace, the action, the agents involved and who made the change: your user name for changes you made (including a change to a workspace's team that moved agents in or out of its groups), or `system` for the server's own updates (for example, a group brought up to date with its workspace's team when it is opened or listed, rather than during your team change).
 
 | Action | When |
 |---|---|
-| `created` / `deleted` | You created or deleted a squad or ad-hoc room |
-| `members_add` / `members_remove` | You added or removed members |
+| `created` / `deleted` | A squad or ad-hoc room was created or deleted |
+| `members_add` / `members_remove` | Members were added or removed |
 | `members_mute` / `members_unmute` | Someone was muted or unmuted, through the API or with `/mute` and `/unmute` |
 | `team_room_created` | The workspace got its team room |
 | `members_joined_workspace` / `members_left_workspace` | Group membership followed a change to the workspace's team |
@@ -173,25 +201,32 @@ Group changes are written to the audit log as `room.changed` events. Each event 
 | Limit | Detail |
 |---|---|
 | Screens switched off | No sidebar section, room page, "Add participant" or collapsed main-chat entries yet (#1314) |
-| No older history | Only the newest 10,000 messages are sent when a group opens |
+| No older history | Only the newest 10,000 messages are sent when a group opens; there is no scrolling back |
+| Informational commands | `/members` and `/help` are accepted no-ops. Their on-screen notices are not implemented yet |
 | Approvals | Shown in the app-wide approval dialog, without the "for group" label |
 | Secret requests | Not handled for group work |
-| Deleting a workspace | Does not delete its group chats yet |
+| Deleting a workspace | Does not remove its separately stored group-chat files yet. The missing workspace makes those groups unavailable through the room API; the retained files are not a promise that the groups can still be opened |
 
 ## API summary
 
-For developers. Every route needs a signed-in web user.
+For developers. These routes use gateway authentication: a signed-in browser uses its session cookie, and programmatic clients use an accepted bearer token, including the CLI token. The gateway's development-bypass setting is an explicit exception to authentication and is not a production access guarantee.
 
 | Route | What it does |
 |---|---|
 | `GET /api/v1/workspaces/{id}/rooms` | Lists the workspace's groups (team room first) |
 | `POST /api/v1/workspaces/{id}/rooms` | Creates a squad or an ad-hoc room |
-| `GET /api/v1/rooms/{id}` | Reads one group |
+| `GET /api/v1/rooms/{id}` | Reads one group's metadata |
 | `DELETE /api/v1/rooms/{id}` | Deletes a squad or an ad-hoc room |
 | `PATCH /api/v1/rooms/{id}/members` | Adds, removes, mutes or unmutes members |
-| `POST /api/v1/rooms/{id}/messages` | Sends a message or a room command (answers 202 once saved) |
+| `POST /api/v1/rooms/{id}/messages` | Accepts a message or one of the six room commands; returns an empty 202 on acceptance. A normal message has been saved, but individual members can still be held, refused or unavailable. Commands need not create transcript entries |
 
-Live updates arrive over the web app's WebSocket after an `attach_room` frame. The exact request and response shapes are in `contracts/openapi.yaml` and `contracts/asyncapi.yaml`.
+A message request needs `client_message_id`, `text` and `mentions`, all present and not null. Use an empty array for `mentions` to rely on typed names or the default. Ids in `mentions` select current members (the reserved value `all` selects every unmuted member); when any are given, the text is not read for names. Keep the original id and payload when retrying (see the retry rules above). Missing fields are rejected with 400, room-rule refusals generally use 422, missing groups or workspaces use 404, and server or storage failures return a 500 error rather than an invented empty list.
+
+The workspace room list includes a hidden team room with `hidden: true` and a read-only reason when its team is too small. Hidden does not mean deleted. A room GET returns its metadata; use the WebSocket for its messages and current request states.
+
+To read live traffic, attach the web app's WebSocket to the room with `type: "attach_room"`, `room_id` and a non-negative `after_seq` (`0` for the first load). The server answers with a snapshot, then sends live room-entry, member-state and metadata frames. The snapshot holds at most the newest 10,000 entries after the cursor, in order. `has_older: true` means entries after that cursor were left out; `complete` is always true and reserved, not evidence of full history. There is no older-history paging endpoint in this version.
+
+The exact request and response shapes are in `contracts/openapi.yaml` and `contracts/asyncapi.yaml`.
 
 ## See also
 
