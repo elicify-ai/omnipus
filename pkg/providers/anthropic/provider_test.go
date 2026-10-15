@@ -13,23 +13,29 @@ import (
 )
 
 func TestBuildParams_BasicMessage(t *testing.T) {
-	messages := []Message{
-		{Role: "user", Content: "Hello"},
-	}
-	params, err := buildParams(messages, nil, "claude-sonnet-4.6", map[string]any{
-		"max_tokens": 1024,
-	})
-	if err != nil {
-		t.Fatalf("buildParams() error: %v", err)
-	}
-	if params.Model != "claude-sonnet-4-6" {
-		t.Errorf("Model = %q, want %q", params.Model, "claude-sonnet-4-6")
-	}
-	if params.MaxTokens != 1024 {
-		t.Errorf("MaxTokens = %d, want 1024", params.MaxTokens)
-	}
-	if len(params.Messages) != 1 {
-		t.Fatalf("len(Messages) = %d, want 1", len(params.Messages))
+	// Prompt-caching spec FR-004, US-2 and TDD row 23: catalog model IDs go
+	// on the wire verbatim, including dots. A hyphenated ID stays unchanged too.
+	for _, model := range []string{"claude-sonnet-4.6", "MiniMax-M2.7", "claude-sonnet-4-6"} {
+		t.Run(model, func(t *testing.T) {
+			messages := []Message{
+				{Role: "user", Content: "Hello"},
+			}
+			params, err := buildParams(messages, nil, model, map[string]any{
+				"max_tokens": 1024,
+			})
+			if err != nil {
+				t.Fatalf("buildParams() error: %v", err)
+			}
+			if string(params.Model) != model {
+				t.Errorf("Model = %q, want verbatim catalog ID %q (FR-004)", params.Model, model)
+			}
+			if params.MaxTokens != 1024 {
+				t.Errorf("MaxTokens = %d, want 1024", params.MaxTokens)
+			}
+			if len(params.Messages) != 1 {
+				t.Fatalf("len(Messages) = %d, want 1", len(params.Messages))
+			}
+		})
 	}
 }
 
