@@ -56,30 +56,28 @@ func (s *Service) snapshot(r *room, ws Workspace, afterSeq int64) generated.Room
 	return out
 }
 
-// memberStates is every non-terminal delivery state plus the latest terminal
-// state of each member, in first-seen order. Over max, the OLDEST terminal
-// states are dropped; a live (non-terminal) state never is.
+// memberStates is every non-terminal delivery state plus, per member, its
+// latest TERMINAL state (architect ruling 2026-10-14), in first-seen order.
+// Over limit, the OLDEST terminal states are dropped; a live (non-terminal)
+// state never is.
 func memberStates(r *room, limit int) []generated.RoomDeliveryState {
-	latest := latestByMember(r)
-	terminalKept := 0
-	for _, id := range r.order {
-		if d := r.deliveries[id]; terminal(d.State) && latest[d.AgentID] == d {
-			terminalKept++
-		}
-	}
+	latestTerminal := map[string]*deliveryRecord{}
 	liveCount := 0
 	for _, id := range r.order {
-		if !terminal(r.deliveries[id].State) {
+		d := r.deliveries[id]
+		if terminal(d.State) {
+			latestTerminal[d.AgentID] = d
+		} else {
 			liveCount++
 		}
 	}
-	dropTerminal := liveCount + terminalKept - limit
-	out := make([]generated.RoomDeliveryState, 0, liveCount+terminalKept)
+	dropTerminal := liveCount + len(latestTerminal) - limit
+	out := make([]generated.RoomDeliveryState, 0, liveCount+len(latestTerminal))
 	for _, id := range r.order {
 		d := r.deliveries[id]
 		switch {
 		case !terminal(d.State):
-		case latest[d.AgentID] != d:
+		case latestTerminal[d.AgentID] != d:
 			continue
 		case dropTerminal > 0:
 			dropTerminal--
