@@ -744,6 +744,10 @@ func (u *workspaceUpdate) planDelegation() *tools.ToolResult {
 func (u *workspaceUpdate) commit() *tools.ToolResult {
 	home := u.t.deps.Home
 	changed := workspaceChangedFields(u.state.Workspace, u.w)
+	if u.pendingDelegation != nil && sameDelegationGraph(u.pendingDelegation, u.state.Delegation) {
+		// Re-sending the saved graph is not a change (#1057 F5, architect M01).
+		u.pendingDelegation = nil
+	}
 	if u.pendingDelegation != nil {
 		changed = append(changed, "delegation")
 	}
@@ -774,6 +778,32 @@ func (u *workspaceUpdate) commit() *tools.ToolResult {
 		changed: changed, seedNote: u.seedNote, setupNote: u.setupNote,
 		beforeEdges: u.state.Delegation, ceiling: workspaceDelegationDepthCeiling(u.t.deps),
 	})
+}
+
+// sameDelegationGraph reports whether two delegation graphs hold the same
+// edges, in any order.
+func sameDelegationGraph(a, b []workspacepkg.DelegationEdge) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	key := func(edges []workspacepkg.DelegationEdge) []string {
+		out := make([]string, 0, len(edges))
+		for _, e := range edges {
+			modes := make([]string, 0, len(e.Modes))
+			for _, m := range e.Modes {
+				modes = append(modes, string(m))
+			}
+			sort.Strings(modes)
+			depth := "-"
+			if e.Depth != nil {
+				depth = fmt.Sprint(*e.Depth)
+			}
+			out = append(out, e.FromAgent+"\x00"+e.ToAgent+"\x00"+strings.Join(modes, ",")+"\x00"+depth)
+		}
+		sort.Strings(out)
+		return out
+	}
+	return slices.Equal(key(a), key(b))
 }
 
 // updateWorkspaceFields applies optional record fields in input order.
