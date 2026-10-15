@@ -67,8 +67,12 @@ func (t *SkillCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Full SKILL.md content including YAML frontmatter.",
 			},
-			workspaceIDParam: workspaceIDProperty("whose project shelf gets the new skill (it needs exactly one mounted " +
-				"project folder); omit it to create a user skill available to every workspace"),
+			workspaceIDParam: map[string]any{
+				"type": "string",
+				"description": "Optional. The workspace whose project shelf gets the new skill (it needs exactly one " +
+					"mounted project folder). Omit it to create a user skill available to every workspace. Only " +
+					"Omnipus may name a workspace other than its own.",
+			},
 		},
 		"required": []string{"name", "content"},
 	}

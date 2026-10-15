@@ -249,7 +249,7 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", "Provide a name for the agent")), true
 	}
 	if coreagent.AgentNameTooLong(ac.name) {
-		// #1075: refused before the slug is derived, so a long name never
+		// #1075: refused before anything is stored, so a long name never
 		// reaches the store as an opaque SAVE_FAILED.
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", coreagent.AgentNameTooLongRefusal,
 			"Choose a shorter name")), true
