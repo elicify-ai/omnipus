@@ -58,10 +58,10 @@ func systemSecretHome(t *testing.T) (home, agentHome, auditPath string) {
 	require.NoError(t, os.WriteFile(filepath.Join(systemDir, "audit-2026-08-01.jsonl"),
 		[]byte(`{"event":"tool_call","decision":"deny"}`+"\n"), 0o600))
 
-	// The controls: ordinary, non-secret files in the same parents. If these
-	// stopped being reachable, the tests below would be proving "the home is
-	// unreachable" rather than "system/ specifically is".
+	// L1-AMENDMENTS-20261013.md §2 D1 / §2.4 retires open reads of
+	// unlisted home files. Keep that negative and an external positive control.
 	require.NoError(t, os.WriteFile(filepath.Join(home, "notes.txt"), []byte("ORDINARY-HOME-FILE"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(home), "outside.txt"), []byte("ORDINARY-EXTERNAL-FILE"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(agentHome, "own.txt"), []byte("OWN-WORKDIR-FILE"), 0o600))
 
 	t.Setenv(config.EnvHome, home)
@@ -86,7 +86,8 @@ func TestSecretSet_ReadFileToolCannotReachAuditLog(t *testing.T) {
 		{"audit.jsonl", auditPath, true, "tool_call"},
 		{"rotated audit-2026-08-01.jsonl", filepath.Join(home, "system", "audit-2026-08-01.jsonl"), true, "deny"},
 		{"system directory itself", filepath.Join(home, "system"), true, ""},
-		{"control: ordinary file in $OMNIPUS_HOME", filepath.Join(home, "notes.txt"), false, "ORDINARY-HOME-FILE"},
+		{"unlisted home file is protected (WU-23 D1)", filepath.Join(home, "notes.txt"), true, "ORDINARY-HOME-FILE"},
+		{"control: ordinary file outside $OMNIPUS_HOME", filepath.Join(filepath.Dir(home), "outside.txt"), false, "ORDINARY-EXTERNAL-FILE"},
 		{"control: file in the agent's own work dir", filepath.Join(agentHome, "own.txt"), false, "OWN-WORKDIR-FILE"},
 	}
 

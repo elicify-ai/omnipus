@@ -140,7 +140,9 @@ func TestKnowledgeToolPolicy_CatalogueUnchangedByEmbedOp(t *testing.T) {
 	}
 	expectedKnowledgeSeed := map[string]map[string]config.ToolPolicy{
 		"mia": knowledgeWriteAsk, "jim": knowledgeWriteAsk, "worker": knowledgeWriteAsk,
-		"ava": knowledgeWriteDeny, "admin": knowledgeWriteDeny,
+		// WU-2 (spec OSA-1 / §6.5): Omnipus replaces Ava/Admin;
+		// knowledge reads ride the ceiling, all four writes remain denied.
+		"omnipus": knowledgeWriteDeny,
 		"planner": knowledgeWriteDeny, "researcher": knowledgeWriteDeny,
 		"judge": knowledgeFullDeny, "plansupervisor": knowledgeFullDeny,
 	}
