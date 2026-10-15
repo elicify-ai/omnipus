@@ -39,7 +39,7 @@ export interface TrackedDelivery { // not-wire-format: a generated RoomDeliveryS
 export interface RoomLiveState { // not-wire-format: in-browser projection of the generated room frames
   /** Highest room sequence applied — the reconnect cursor. */
   seq: number
-  /** Ordered by seq; one entry per id. */
+  /** Ordered by seq; one entry per room sequence. */
   entries: RoomEntry[]
   members: string[]
   muted: string[]
@@ -48,8 +48,10 @@ export interface RoomLiveState { // not-wire-format: in-browser projection of th
   readOnlyReason?: string
   allocatedCostMicroUsd: number
   allocatedCostUnpriced: boolean
-  /** False until a complete snapshot arrived (§6.3: nothing is sendable before). */
-  complete: boolean
+  /** A snapshot has arrived since the latest attach; complete is reserved (ruling Q2). */
+  snapshotReceived: boolean
+  /** Older history was omitted from the displayed snapshot. */
+  hasOlder: boolean
   deliveries: Record<string, TrackedDelivery>
 }
 
@@ -65,7 +67,7 @@ interface RoomStore {
 function emptyRoom(): RoomLiveState {
   return {
     seq: 0, entries: [], members: [], muted: [], paused: false, generation: 0,
-    allocatedCostMicroUsd: 0, allocatedCostUnpriced: false, complete: false, deliveries: {},
+    allocatedCostMicroUsd: 0, allocatedCostUnpriced: false, snapshotReceived: false, hasOlder: false, deliveries: {},
   }
 }
 
@@ -92,9 +94,9 @@ function track(
 }
 
 function mergeEntries(current: RoomEntry[], incoming: RoomEntry[]): RoomEntry[] {
-  const byId = new Map(current.map((entry) => [entry.id, entry]))
-  for (const entry of incoming) byId.set(entry.id, entry)
-  return [...byId.values()].sort((a, b) => a.seq - b.seq)
+  const bySeq = new Map(current.map((entry) => [entry.seq, entry]))
+  for (const entry of incoming) bySeq.set(entry.seq, entry)
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq)
 }
 
 function trackEntryDeliveries(deliveries: Record<string, TrackedDelivery>, entries: RoomEntry[]): void {
@@ -119,8 +121,10 @@ function reduce(room: RoomLiveState, frame: RoomFrame): RoomLiveState {
       for (const delivery of frame.member_states) track(deliveries, delivery, frame.seq, true)
       return {
         ...room, ...metaOf(frame), seq, deliveries,
-        entries: mergeEntries(room.entries, frame.entries),
-        complete: room.complete || frame.complete,
+        // A cursor snapshot extends the list; truncation starts a new, gap-free window (Q2).
+        entries: mergeEntries(frame.has_older ? [] : room.entries, frame.entries),
+        snapshotReceived: true,
+        hasOlder: frame.has_older === true,
       }
     }
     case 'room_entry': {
@@ -141,6 +145,10 @@ export const useRoomStore = create<RoomStore>()((set, get) => ({
   attachRoom: (roomId) => {
     const connection = useConnectionStore.getState().connection
     if (!connection) return false
+    // Keep cached entries/cursor, but wait for this attach's first snapshot before sending.
+    set((state) => ({
+      rooms: { ...state.rooms, [roomId]: { ...(state.rooms[roomId] ?? emptyRoom()), snapshotReceived: false } },
+    }))
     return connection.send({ type: 'attach_room', room_id: roomId, after_seq: get().rooms[roomId]?.seq ?? 0 })
   },
   applyRoomFrame: (frame) => {

@@ -7,10 +7,16 @@
 // "after pause" mark, also after /resume (FR-170, FR-217).
 
 import type { RoomEntry } from '@/lib/api/generated/asyncapi-types'
+import { Badge } from '@/components/ui/badge'
 
-export function RoomTranscript({ entries, agentName }: { entries: RoomEntry[]; agentName: (agentId: string) => string }) {
+export function RoomTranscript({ entries, agentName, hasOlder = false }: { entries: RoomEntry[]; agentName: (agentId: string) => string; hasOlder?: boolean }) {
   return (
     <div role="log" aria-label="Group conversation" className="flex flex-1 flex-col gap-[var(--space-3)] overflow-y-auto px-[var(--space-3)] py-[var(--space-3)]">
+      {hasOlder && (
+        <Badge variant="muted" className="self-center font-[var(--font-weight-regular)]">
+          Earlier messages aren&apos;t shown
+        </Badge>
+      )}
       {entries.length === 0 && (
         <p className="m-auto text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           No messages yet. Write to everyone, or type @ to address members.
