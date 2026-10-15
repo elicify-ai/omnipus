@@ -464,7 +464,7 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	}
 	return workspaceWrittenResult(t.deps, w.ID, workspaceWrite{
 		changed: []string{"workspace"}, seedNote: delegationSeedNote, ceiling: workspaceDelegationDepthCeiling(t.deps),
-		teamChanged: len(w.CoreTeam) > 0, toolName: "create_workspace",
+		provision: len(w.CoreTeam) > 0, team: w.CoreTeam, toolName: "create_workspace",
 	})
 }
 
@@ -475,10 +475,11 @@ type workspaceWrite struct {
 	setupNote   string
 	beforeEdges []workspacepkg.DelegationEdge // the graph before this call (nil on create)
 	ceiling     int
-	// teamChanged asks for the members' main chats to be provisioned after
-	// the write (provisionMemberMains); toolName names the caller in its log.
-	teamChanged bool
-	toolName    string
+	// provision asks for the main chats of team (the saved core team) to be
+	// prepared after the write (memberMainsWarning); toolName names the caller.
+	provision bool
+	team      []string
+	toolName  string
 }
 
 // workspaceWrittenResult re-reads a just-written workspace and renders the
@@ -491,10 +492,23 @@ func workspaceWrittenResult(deps *Deps, id string, wr workspaceWrite) *tools.Too
 	home := deps.Home
 	const scope = "workspace record and delegation graph re-read from disk; graph validity and new edges' membership checked"
 	notTested := []string{"a delegation between the members"}
-	state, err := workspacepkg.ReadStateLocked(home, id)
+	// After a team change every member gets its main chat (FR-002). This runs
+	// before, and independently of, the read-back: the team is saved either
+	// way, and a provisioning problem never undoes it — it is reported.
+	var problems []string
+	mainWarning := ""
+	if wr.provision && len(wr.team) > 0 {
+		mainWarning = memberMainsWarning(deps, wr.toolName, id, wr.team)
+	}
+	state, err := readWorkspaceStateBack(home, id)
 	if err != nil {
-		return changeSuccess(map[string]any{"id": id, "changed_fields": wr.changed},
-			savedNotWorking("the saved workspace could not be read back: "+err.Error(), scope, notTested...))
+		resp := map[string]any{"id": id, "changed_fields": wr.changed}
+		problems = append(problems, "the saved workspace could not be read back: "+err.Error())
+		if mainWarning != "" {
+			resp["main_chat_warning"] = mainWarning
+			problems = append(problems, mainWarning)
+		}
+		return changeSuccess(resp, savedNotWorking(strings.Join(problems, " "), scope, notTested...))
 	}
 	resp := workspaceView(state.Workspace, state.Delegation, state.Revision, computeWorkspaceTaskCount(home, id))
 	resp["changed_fields"] = wr.changed
@@ -504,14 +518,9 @@ func workspaceWrittenResult(deps *Deps, id string, wr workspaceWrite) *tools.Too
 	if wr.setupNote != "" {
 		resp["setup_completed"] = wr.setupNote
 	}
-	// After a team change every member gets its main chat (FR-002); a
-	// provisioning failure does not undo the saved team, it is reported.
-	var problems []string
-	if wr.teamChanged && len(state.Workspace.CoreTeam) > 0 {
-		if warning := provisionMemberMains(deps, wr.toolName, id); warning != "" {
-			resp["main_chat_warning"] = warning
-			problems = append(problems, warning)
-		}
+	if mainWarning != "" {
+		resp["main_chat_warning"] = mainWarning
+		problems = append(problems, mainWarning)
 	}
 	if graph := workspaceGraphProblems(state, wr.beforeEdges, wr.ceiling); len(graph) > 0 {
 		problems = append(problems, "the saved delegation graph is not valid: "+strings.Join(graph, "; "))
@@ -521,6 +530,10 @@ func workspaceWrittenResult(deps *Deps, id string, wr workspaceWrite) *tools.Too
 	}
 	return changeSuccess(resp, working(scope, notTested...))
 }
+
+// readWorkspaceStateBack is the post-write read-back. A variable only so a
+// test can fail it (FailWorkspaceReadBackForTest); production never reassigns it.
+var readWorkspaceStateBack = workspacepkg.ReadStateLocked
 
 // workspaceGraphProblems checks a saved state's delegation graph (FR-032 /
 // OSA-4): every edge passes the shared validation against the runtime team
@@ -577,6 +590,45 @@ func provisionMemberMains(deps *Deps, toolName, workspaceID string) string {
 			". It is retried when that chat is opened."
 	}
 	return ""
+}
+
+// memberMainsWarning prepares the main chats of team's members
+// (provisionMemberMains) and returns "" when every member that should have one
+// can get it, or the warning to report. The main provisioner only sees agents
+// in the live roster, so a native chat-target agent that is saved but not
+// active (its activation failed or is pending) is skipped without an error;
+// that skip is named here instead of being reported as success (W-R2-01).
+func memberMainsWarning(deps *Deps, toolName, workspaceID string, team []string) string {
+	var parts []string
+	if w := provisionMemberMains(deps, toolName, workspaceID); w != "" {
+		parts = append(parts, w)
+	}
+	if inactive := inactiveNativeMembers(deps, team); len(inactive) > 0 {
+		parts = append(parts, fmt.Sprintf("Agent(s) %s are saved but not active, so their main chat could not be "+
+			"prepared; it is prepared when the agent is active and its chat is opened.", strings.Join(inactive, ", ")))
+	}
+	return strings.Join(parts, " ")
+}
+
+// inactiveNativeMembers lists the members that are saved native chat-target
+// agents but missing from the live roster. Nothing is listed when the live
+// roster cannot be read (nothing to compare against).
+func inactiveNativeMembers(deps *Deps, team []string) []string {
+	if !liveConfigAvailable(deps) || strings.TrimSpace(deps.Home) == "" || deps.EnsureWorkspaceMains == nil {
+		return nil
+	}
+	live := configAgentPresenceSet(deps)
+	store := agentstore.New(deps.Home)
+	var out []string
+	for _, id := range team {
+		if live[id] {
+			continue
+		}
+		if a, err := store.Get(id); err == nil && a.IsChatTarget() {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // ---- system.workspace.update ----
@@ -794,11 +846,21 @@ func (u *workspaceUpdate) commit() *tools.ToolResult {
 	if u.pendingDelegation != nil {
 		changed = append(changed, "delegation")
 	}
+	_, teamSupplied := u.args["core_team"]
 	if len(changed) == 0 {
+		const noOpScope = "no field differs from the saved workspace; nothing was written"
 		resp := workspaceView(u.state.Workspace, u.state.Delegation, u.state.Revision, computeWorkspaceTaskCount(home, u.id))
 		resp["changed"] = false
 		resp["changed_fields"] = []string{}
-		return changeSuccess(resp, working("no field differs from the saved workspace; nothing was written"))
+		// Re-sending the team repairs a member main chat a previous change
+		// could not prepare (code-reviewer R2-02); nothing else is written.
+		if teamSupplied && len(u.w.CoreTeam) > 0 {
+			if warning := memberMainsWarning(u.t.deps, "update_workspace", u.id, u.w.CoreTeam); warning != "" {
+				resp["main_chat_warning"] = warning
+				return changeSuccess(resp, savedNotWorking(warning, noOpScope))
+			}
+		}
+		return changeSuccess(resp, working(noOpScope))
 	}
 	u.w.UpdatedAt = nowISO()
 	if err := writeEntity(workspacesDir(home), u.id, u.w); err != nil {
@@ -820,7 +882,7 @@ func (u *workspaceUpdate) commit() *tools.ToolResult {
 	return workspaceWrittenResult(u.t.deps, u.id, workspaceWrite{
 		changed: changed, seedNote: u.seedNote, setupNote: u.setupNote,
 		beforeEdges: u.state.Delegation, ceiling: workspaceDelegationDepthCeiling(u.t.deps),
-		teamChanged: u.coreTeamChanged, toolName: "update_workspace",
+		provision: u.coreTeamChanged || teamSupplied, team: u.w.CoreTeam, toolName: "update_workspace",
 	})
 }
 

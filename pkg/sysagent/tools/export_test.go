@@ -10,6 +10,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // WithCurrentRevisionForTest returns a copy of args carrying the live
@@ -108,3 +109,16 @@ func FailAgentMetadataReadBackForTest(t interface{ Cleanup(f func()) }) {
 	readAgentMetadataBack = func(string) ([]byte, error) { return nil, errors.New("injected read-back failure") }
 	t.Cleanup(func() { readAgentMetadataBack = prev })
 }
+
+// FailWorkspaceReadBackForTest makes the workspace tools' post-write read-back
+// fail (the write itself still happens) until RestoreWorkspaceReadBackForTest
+// or the end of t.
+func FailWorkspaceReadBackForTest(t interface{ Cleanup(f func()) }) {
+	readWorkspaceStateBack = func(string, string) (workspacepkg.State, error) {
+		return workspacepkg.State{}, errors.New("injected read-back failure")
+	}
+	t.Cleanup(RestoreWorkspaceReadBackForTest)
+}
+
+// RestoreWorkspaceReadBackForTest restores the real read-back.
+func RestoreWorkspaceReadBackForTest() { readWorkspaceStateBack = workspacepkg.ReadStateLocked }
