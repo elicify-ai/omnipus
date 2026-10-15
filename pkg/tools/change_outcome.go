@@ -32,6 +32,15 @@ const (
 	OutcomeFailedNothingSaved = "failed: nothing saved"
 )
 
+// ChangeTool marks a change tool: every result it returns carries the FR-030
+// verdict. The registry relies on it to give its own argument-schema refusal —
+// returned before Execute runs, so nothing was saved — the same
+// "failed: nothing saved" envelope the tool gives its own refusals.
+type ChangeTool interface {
+	Tool
+	ReportsChangeOutcome()
+}
+
 // ChangeOutcome is one FR-030 verdict.
 type ChangeOutcome struct {
 	Outcome      string
@@ -116,8 +125,7 @@ func FinalizeChangeResult(tool string, res *ToolResult) *ToolResult {
 	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(res.ForLLM), &m); err != nil || m == nil {
-		// A plain-text result keeps its text verbatim; the verdict follows it
-		// as a JSON object on an "Outcome:" line.
+		// Normalize the plain text into the structured result object.
 		return finalizePlainText(tool, res)
 	}
 	if dry, _ := m["dry_run"].(bool); dry {
@@ -188,3 +196,15 @@ func changeErrorMessage(m map[string]any) string {
 	}
 	return ""
 }
+
+// The two change tools that live in this package.
+var (
+	_ ChangeTool = (*InstallSkillTool)(nil)
+	_ ChangeTool = (*EnvironmentSetupTool)(nil)
+)
+
+// ReportsChangeOutcome marks install_skill as a change tool (ChangeTool).
+func (t *InstallSkillTool) ReportsChangeOutcome() {}
+
+// ReportsChangeOutcome marks environment_setup as a change tool (ChangeTool).
+func (t *EnvironmentSetupTool) ReportsChangeOutcome() {}
