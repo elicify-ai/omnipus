@@ -4,7 +4,7 @@
 **Status**: Draft
 **Input**: Founder interview decisions D1–D12 in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/designs/prompt-caching-interview-decisions-20261015.md`, architect analysis `prompt-caching-analysis-20261015.md`, provider research `prompt-caching-research/` (top50.md, research-1.md through research-5.md), issues #750, #980, #1307, #654. Code verified on this worktree at `8ba69a673` (branch `work/prompt-caching-spec`). Catalog repo `elicify-ai/omnipus-provider-catalog` read via the GitHub API. models.dev cost shape read from `sst/models.dev` `packages/core/src/schema.ts` and a fetch of `https://models.dev/api.json` on 2026-10-15.
 
-D1–D12 are the interview. D13–D18 close the questions this draft first left open. D19 and D20 close the two questions from grill round 1. No requirement is blocked. There is no remaining open question. No round-1 finding is rejected.
+D1–D12 are the interview. D13–D18 close the questions this draft first left open. D19 and D20 close grill round 1. D21 and D22 close grill round 2. No requirement is blocked. There is no remaining open question. No round-1 or round-2 finding is rejected. D1–D20 are not reopened. D22 replaces only the live-proof population in D9 and D17.
 
 The evening correction: the interview line that "the cost limit would stop protecting you" was wrong. Omnipus has no cost limit. ADR-053 D12 retired the SEC-26 daily USD cap (`pkg/security/ratelimit.go`). The 2026-09-14 update on that ADR deleted the app-level token budget. D8's token-limit sentence is void (D13).
 
@@ -14,132 +14,12 @@ The evening correction: the interview line that "the cost limit would stop prote
 | D14 | Q-SUB | ChatGPT sign-in calls are marked `subscription`: cached and uncached tokens only, no dollar figure. |
 | D15 | Q-UI, Q-LOG | No new screen. The existing Usage screen adds a cache-hit percent beside the cache totals it already shows. The per-call line is at info. The shipped log level is warn, so that line is hidden until the level is info. Per-area levels stay #1324. |
 | D16 | Q-KEY | The cache key is the session id (one conversation), not the agent id. |
-| D17 | Q-LIVE | Before the Anthropic connector switch lands, live-check DeepSeek, MiniMax, Moonshot, and Z.AI, in addition to D9's list. |
+| D17 | Q-LIVE | Superseded for who is called live, by D22. DeepSeek is not a live gate. |
 | D18 | Q-TTLPRICE | Store 5-minute and 1-hour writes separately. Price 5-minute writes from catalog `cache_write`. Until the catalog carries `cache_write_1h`, price 1-hour writes at that provider's documented 1-hour multiplier times the catalog input price. Anthropic's published multiplier is 2. A provider with no documented 1-hour multiplier leaves that portion `unpriced`. The multiplier is a documented factor, not a dollar price list. `cache_write_1h`, when published, replaces the multiplier. |
+| D21 | Fireworks | Read only `usage.prompt_tokens_details.cached_tokens`, the same field as every other OpenAI-style host. No header. No performance-metrics fallback. No metrics opt-in. |
+| D22 | Live proof | Live proof uses only accounts we have: OpenRouter, the Z.AI/GLM coding plan, the MiniMax coding plan, the Moonshot coding plan, and OpenAI through the ChatGPT subscription. Each check sends the same conversation twice. The second call must report cached tokens greater than zero. A subscription route records tokens and no dollars (D14). Every other provider is a fixture taken from that provider's documented example, not a live call. |
 
-D19 and D20 close grill round 1. D19: each provider uses its own documented cache rules inside the one connector. D6's 1-hour / 5-minute split applies to native Anthropic and to endpoints and models that support it. Moonshot and MiniMax use their own documented modes. The differences are listed below and must appear in the live-check evidence. D20: the log carries bounded numeric usage counters from documented fields only. It never carries an arbitrary string or the rest of the response. D20 replaces the earlier "raw usage object" wording.
-
-## Round-1 corrections
-
-These rules are normative. Where an earlier sentence disagrees, this section wins. No finding is rejected.
-
-### The volatile tail survives the send path (MAJ-001)
-
-D4 still moves the clock, the tool-summary note, the scratchpad note, and the goal-checklist note to after the conversation. They are not system-role messages. A system-role message is gathered to the front before the adapters run (`pkg/agent/window_normalize.go::normalizeWindowMessages`), and both the Anthropic adapter and the Responses adapter lift system role into their instruction field. A test of the intermediate message list is not proof.
-
-The tail is one trailing user-role text block, after history and after any completed tool-call group. It is not inserted between a tool call and its result, including when several results belong to one call and when the request ends on a tool result. The history cache mark sits on the last history content before this block. The web-display note and the workspace instructions stay in the front instruction text.
-
-`TestPrefixStable_ClockAndScratchpadMove` captures the request after normalization and after adapter conversion. The bytes through prior history match. The tail text is after that history on the wire.
-
-### The surviving connector keeps the old guarantees (MAJ-002)
-
-The hand-written Anthropic connector is still deleted, and there is still one connector (D3). Before that package and its tests are deleted, the surviving connector must already pass equivalent checks for every non-cache behavior the old package guaranteed:
-
-| Guarantee | What must still be true |
-|---|---|
-| Reconstructed tool calls | A stored tool call that has a function name only in the canonical JSON, with no convenience name field, is sent with that name, its arguments, and its id. Its paired result is sent with it. |
-| Model id | The catalog model id is sent verbatim. A period in the id is not rewritten. `MiniMax-M2.7` stays `MiniMax-M2.7`. |
-| Media | Image and other media parts the old connector sent are still sent. |
-| Parallel results | Several tool results that belong to one assistant call stay correlated with that call. |
-
-The factory-to-wire test is the proof. Deleting the old tests without these replacements is not allowed.
-
-### One connector, each host's own cache rules (MAJ-003, D19)
-
-FR-005's 1-hour / 5-minute marks apply only where that host's documentation supports them. They are not sent to every Anthropic-protocol row.
-
-| Host | What the one connector sends |
-|---|---|
-| Native Anthropic, and any endpoint or model whose documentation supports the same marks | Tool list and stable instructions at 1 hour. Conversation tail at 5 minutes. 1-hour marks before 5-minute marks. At most four marks. |
-| Moonshot, both regions | No cache field. The host's default 5-minute behavior stands. Do not send a 1-hour option. Do not send a mark inside a message. A top-level mark is not required. |
-| MiniMax, both regions | That model's documented mode only. Automatic where the model documents automatic. Explicit 5-minute marks where the model documents explicit. No 1-hour mark. |
-| Any other Anthropic-protocol host | The marks that host documents. If it documents the Anthropic lifetimes, use D6. If it documents neither a 1-hour mark nor a 5-minute mark, send no mark and record that in the live-check evidence. |
-
-A separate tool-list mark, where the host allows it, exists so a later change to the instruction text can still reuse the tool prefix. The instruction mark already covers the tools when the instructions are stable. Both marks stay, because D6 named both. This is the answer to the round-1 observation, not a removal.
-
-Fake-body tests assert each of these dialects. A later live rejection is not how a documented mismatch is discovered.
-
-### Provider identity is stored with the call (MAJ-004)
-
-A response-level bucket is not enough. One turn can call two providers, or fall back from one to the other, for the same model id. Today's stored totals have model buckets and one final model string.
-
-Each accounted call, including a billed error, writes onto the existing assistant transcript entry:
-
-| Field | Meaning |
-|---|---|
-| `provider_id` | The catalog provider id that actually served the call. Not the agent's current setting read later. |
-| `model_id` | The model id sent. |
-| `billing_class` | `priced`, `unpriced`, or `subscription`. |
-| Token split | Uncached input, cache read, cache write, and when reported, 5-minute write and 1-hour write. |
-
-Session statistics sum those entries into `by_provider`, using the same cell shape as `by_model`, plus `cache_hit_ratio`. Provider totals reconcile with the session total and with the agent total on the usage report. Reload reads the stored entries. It does not infer the provider from the agent's configuration at read time. No new store and no migration.
-
-The screen reads the aggregates, not the transcript line. Wire carriers, regenerated, not hand-written: `SessionStats.yaml` and `TokenUsageSummary.yaml`, each with `by_provider`. The producer fields named in the contract section stay on `TranscriptEntry`. Tests cover the same model id on two providers, a fallback, a subscription call beside an API call, streaming and non-streaming, and a reload.
-
-### A retained tool stays callable, and only in that session (MAJ-005)
-
-Keeping a schema in the request is not enough. For the session that loaded a non-core tool, including an MCP tool:
-
-- The schema stays in that session's tool list until the session ends.
-- The tool still executes in that session after the registry lifetime that would previously have dropped it.
-- A second session of the same agent, open at the same time, does not list it and cannot run it.
-- A live Deny, a removed assignment, a removed server, or a disconnect removes it from the list and from execution even though the prefix then changes. Authorization is not frozen to keep a cache hit.
-
-`TestLoadedTool_SurvivesTime` uses a non-core MCP fixture, advances the real expiry, invokes the tool, and checks the second session and a revocation. A static builtin that already never expires does not satisfy this test.
-
-### The price tier sees the whole input (MAJ-006)
-
-The length tier is chosen from uncached input plus cache read plus cache write. Output is not included. Ten thousand uncached tokens plus 120,000 cache-read tokens is a 130,000-token input, not a 10,000-token input.
-
-When the catalog has canonical `tiers` and also a legacy `context_over_200k` alias, the canonical tiers decide. The alias is not evidence of a threshold above 200,000. When only the alias is present, it applies at 200,000 input tokens and not at a higher number. Tests include a cache-heavy input below, at, and above a tier, and a canonical tier at 512,000 that is also accompanied by the legacy alias.
-
-### The log carries numbers, not an object (MAJ-007, D20, MIN-002)
-
-The line does not include a raw usage object. It includes the documented numeric counters only: uncached input, cache read, cache write, 5-minute write, 1-hour write, and output, plus provider id, model id, acting agent id, session id, and a turn or call id so two sessions of one agent can be told apart. The session id is the same non-secret value used as the cache key.
-
-Unknown fields are dropped. A string, an array, or a nested object that is not one of those counters is dropped, including a field named like a counter whose value is text. At most 32 counters are written. Nesting deeper than the documented counter paths is dropped, not flattened into the log. Existing credential scrubbing still runs. A successful fixture whose usage object contains private prompt text and an oversized extension must not put that text or that extension in the log. The provider error is still surfaced when the call fails.
-
-### The live check hits the connector being replaced (MAJ-008)
-
-DeepSeek, Moonshot, and Z.AI have an OpenAI-compatible primary. A check against that primary does not exercise the Anthropic connector. D17 requires the Anthropic-protocol configuration for those three, and MiniMax's Anthropic path. Each saved transcript records the model, the resolved endpoint, the protocol, the connector, and the candidate commit. OpenAI-format checks of those hosts, if run, are separate and do not satisfy D17.
-
-The moved-note behavior check is done by a tester and an independent validator on that same commit. A transcript from an earlier commit does not count.
-
-### A history hit has to include history (MAJ-009)
-
-A cache read larger than the static instructions is not proof. The proof compares the read with the full rendered prefix before history: tools plus every instruction block that sits in front of history. The read must be greater than that prefix. A static-only read, with no history tokens in it, fails the assertion. The fake server returns a hit only when the captured prefix matches and the history mark is before the volatile tail. A canned large number on the second call, regardless of the body, is not a passing fake.
-
-### The Usage screen contract (MAJ-010)
-
-No new screen, tile, or control. The existing Usage screen (`src/components/screens/UsageScreen.tsx`, route `src/routes/_app/usage.tsx`) gains:
-
-| State | What the person sees |
-|---|---|
-| Loaded | The existing agent, model, and session breakdowns, plus a provider breakdown on the same tab control (`Tabs` from the catalog). Beside the cache totals already shown, a text label "Cache hit" and the percent. `0.8` is shown as `80%`, not `0.8%`. |
-| Null ratio | No percent and not `0%`. |
-| Loading, empty, error, partial | The screen's existing states. Partial data stays marked partial. An error is not shown as an empty list. |
-| Period change | The same breakdowns for the new period. Focus stays on the selected tab. |
-| Keyboard | The new provider tab is the existing tab control. No custom widget. It is reachable and selectable from the keyboard the same way the current tabs are. |
-| Narrow screen | The new column wraps like the existing breakdowns. It does not require a horizontal scroll that hides the percent. |
-
-Mounted screen tests, not only the handler test: `0.8` renders as `80%`; null renders no percent; the provider rows render; changing period updates them; loading, empty, error, and partial still behave as they do now. `npm run typecheck` is the type gate. The design-system catalog check applies because the screen reuses catalogued tabs and does not add a control.
-
-### Documentation (MAJ-011)
-
-Same change, two user-facing pages:
-
-| Page | What the draft must add |
-|---|---|
-| `docs/settings.md` | The Usage paragraph: hit percent, provider breakdown, `80%` versus a missing percent, no new page. |
-| `docs/operations/observability.md` | The existing way to raise the log level from warn to info. The accounting line's fields and one example. The hit-ratio formula. What `priced`, `unpriced`, and `subscription` mean, including a mixed call. The line is hidden at warn. |
-
-The implementing lead drafts both. The docs verifier checks them. This does not add per-area log levels and does not raise the line to warn.
-
-### Mixed prices and the stored split (MIN-001)
-
-`unpriced_tokens` counts only the tokens in the unpriced portion, not the whole call. A call with priced output and an unpriced 1-hour write stores the output dollars in `cost` and only the 1-hour tokens in `unpriced_tokens`. FR-016's "missing cache price uses the input price" does not apply to a 1-hour write that FR-027 marks unpriced because the provider documents no multiplier. The 5-minute and 1-hour counts are on the same durable per-call record as `provider_id`, not only in the log. A reload still shows them.
-
----
+D19: each provider uses its own documented cache rules inside the one connector. D6's 1-hour / 5-minute split applies only where that host documents those marks. Moonshot sends no mark. MiniMax uses its documented 5-minute or automatic mode and no 1-hour mark. D20: the log carries bounded numeric usage counters and the correlation ids only. It never carries an arbitrary string or the rest of the response.
 
 ## Available Reference Patterns
 
@@ -217,12 +97,12 @@ Anthropic does not cache unless the request carries a cache marker. Omnipus buil
 
 **Why this priority**: D3 and D6. This is the only way those hosts cache at all.
 
-**Independent Test**: A fake Anthropic server records the request body. The body carries the markers and lifetimes below. No second Anthropic connector remains in the tree.
+**Independent Test**: A fake Anthropic server records the request body after the official connector builds it. Native Anthropic carries the marks below. Moonshot and MiniMax carry only their own documented marks. Before the hand-written connector and its tests are deleted, the official connector already passes the old guarantees: a reconstructed tool call whose name exists only in the canonical JSON is sent with that name, its arguments, its id, and its paired result; the model id is verbatim (`MiniMax-M2.7` is not rewritten); media parts are still sent; parallel results stay correlated. The factory-to-wire body is the proof.
 
 **Acceptance Scenarios**:
 
 1. **Given** an Anthropic-protocol provider, **When** a call is sent, **Then** the request is built by the official Anthropic connector, and the hand-written connector is gone.
-2. **Given** a call with tools, stable instructions, and a conversation, **When** the body is sent, **Then** it marks the tool list and the stable instructions for a 1-hour cache, and the conversation tail for a 5-minute cache, and every 1-hour mark sits before every 5-minute mark, and there are at most four marks.
+2. **Given** a native Anthropic call with tools, stable instructions, and a conversation, **When** the body is sent, **Then** it marks the tool list and the stable instructions for a 1-hour cache and the conversation tail for a 5-minute cache, every 1-hour mark sits before every 5-minute mark, and there are at most four marks. The tool-list mark stays so an instruction change can still reuse the tool prefix. Moonshot sends no mark and no 1-hour option. MiniMax uses its documented 5-minute or automatic mode and no 1-hour mark. Any other Anthropic-protocol host gets only the marks it documents.
 3. **Given** a streamed Anthropic-protocol call, **When** the stream ends, **Then** cache-read and cache-write tokens are still recorded.
 4. **Given** a third-party Anthropic-protocol host that rejects the official body during the live check, **When** the connector is adjusted, **Then** there is still exactly one connector, not a second package kept beside it.
 
@@ -238,9 +118,9 @@ A cache hit needs the start of the next request to be byte-for-byte the same as 
 
 **Acceptance Scenarios**:
 
-1. **Given** a session, **When** the next request is built, **Then** the clock, the tool-summary note, the scratchpad note, and the goal-checklist note sit after the conversation, and the web-display note and the workspace instructions stay in front of the conversation.
-2. **Given** a tool loaded earlier in the session, **When** later turns are built, **Then** that tool's definition is still in the tool list, the list is not dropped because time passed, and the same set of tools is serialized in the same order every time.
-3. **Given** the skill list advertised at the start of the session, **When** later turns are built, **Then** that advertised list is unchanged, the per-turn skill reminder sits with the other volatile notes after the conversation, and the size of the tool list and of the skill text is recorded for that agent. The product does not start sending every allowed tool from the first turn.
+1. **Given** a session, **When** the next request leaves the normalizer and the adapter, **Then** the clock, the tool-summary note, the scratchpad note, and the goal-checklist note are one trailing user-role text block after history and after any completed tool-call group. They are not a system-role message, and they are not inserted between a tool call and its results. The history cache mark sits on the last history content before that block. The web-display note and the workspace instructions stay in front.
+2. **Given** a non-core tool, including an MCP tool, loaded earlier in the session, **When** later turns are built and the tool is invoked, **Then** its definition is still advertised, it still runs, a second session of the same agent does not list it and cannot run it, and a Deny, a removed assignment, or a disconnect removes it even though the prefix then changes. The same set of tools is serialized in the same order every time. A static builtin that never expires does not satisfy this.
+3. **Given** the skill list advertised at the start of the session, **When** later turns are built, **Then** that advertised list is unchanged, the per-turn skill reminder sits with the other volatile notes after the conversation, and a labelled token count or token estimate of the tool list and of the skill text is recorded for that agent. The record names the estimator. A byte or character count alone does not count. The product does not start sending every allowed tool from the first turn.
 4. **Given** a turn that must narrow the tool list to the goal-setting tools, **When** that turn is sent, **Then** the narrowing still happens, and that turn is allowed to miss the cache. The following ordinary turn uses the session's tool list again.
 
 ---
@@ -275,23 +155,23 @@ The hand-kept rate table does not contain current models and does not price cach
 1. **Given** a catalog row with input, output, and cache prices, **When** a call is accounted, **Then** the cost uses those prices and the hand-kept rate table is not consulted, because it has been removed.
 2. **Given** a model with no input price, **When** the call is accounted, **Then** tokens are stored and the call is unpriced. The stored cost does not become zero in a way that looks free.
 3. **Given** an input price and no cache price, **When** cache tokens are accounted, **Then** those tokens use the input price. **Given** a published cache price of zero, **When** cache tokens are accounted, **Then** the price is zero, not the input price.
-4. **Given** a model whose catalog price changes with input length, **When** the call is accounted, **Then** the price is the highest published length band that the call's input size has reached, and the base price when the call is below the first band.
+4. **Given** a model whose catalog price changes with input length, **When** the call is accounted, **Then** the input size is uncached input plus cache read plus cache write, and output is not included. The boundary follows that source's own wording. Where the source says "up to N" at the base rate and "over N" at the high rate, exactly N is the base rate. A different source that includes N in the high band is priced that way. One inclusive rule is not applied to every `tier.size`.
 
 ---
 
-### User Story 6 — Prove it with fakes, then one recorded live run (Priority: P0)
+### User Story 6 — Prove it with fakes, then five live runs (Priority: P0)
 
-A unit test can prove the bytes and the arithmetic. Only a live call proves the provider cached them. A live miss is not an error: providers return success with zero cached tokens.
+A unit test can prove the bytes and the arithmetic. A live call is used only where we already have an account. A live miss is not an error: providers return success with zero cached tokens.
 
-**Why this priority**: D9. #654 was deferred because the proof needed a funded account. The fake tests land in CI. The live runs are a landing gate, not a CI job.
+**Why this priority**: D9, narrowed by D22. The fake tests land in CI. The five live runs are a landing gate, not a CI job. No other provider is called live.
 
-**Independent Test**: CI runs the fake-provider suite with no network. The landing notes include one saved transcript per named provider showing a cache read on the second call that is larger than the full pre-history prefix, so some of the read is history.
+**Independent Test**: CI runs the fake-provider suite with no network, including fixtures copied from provider documentation. The landing notes contain five saved runs, one per account in D22. Each run sent the same conversation twice, and the second call reports cached tokens greater than zero.
 
 **Acceptance Scenarios**:
 
-1. **Given** CI with no provider credentials, **When** the suite runs, **Then** it checks the request bytes, the stable prefix, every usage shape, and the cost arithmetic, including that a cache-heavy second call costs less than the first and does not cost nothing.
-2. **Given** a landing candidate, **When** the Anthropic connector switch is proposed to land, **Then** a recorded live run exists for Anthropic, OpenAI, ChatGPT sign-in, and OpenRouter with a Claude model, a live check exists for Gemini and for Qwen, a live check exists for DeepSeek, MiniMax, Moonshot, and Z.AI, and one of those runs shows the moved notes did not break the goal and scratchpad behaviour. The connector switch does not land before those four third-party checks pass.
-3. **Given** a live second call that returns success and zero cached tokens, **When** the proof is judged, **Then** the run fails the cache assertion. Success of the HTTP call is not a pass.
+1. **Given** CI with no provider credentials, **When** the suite runs, **Then** it checks the request bytes, the stable prefix, every usage shape taken from the documented examples, and the cost arithmetic, including that a cache-heavy second call costs less than the first and does not cost nothing.
+2. **Given** a landing candidate, **When** the evidence is checked, **Then** it contains one recorded run each for OpenRouter, the Z.AI/GLM coding plan, the MiniMax coding plan, the Moonshot coding plan, and OpenAI through the ChatGPT subscription. Each run sent the same conversation twice, and the second call reports cached tokens greater than zero. The ChatGPT subscription run records tokens and no dollars. No other provider was called live.
+3. **Given** a live second call that returns success and zero cached tokens, **When** the proof is judged, **Then** the run fails. Success of the HTTP call is not a pass.
 
 ---
 
@@ -301,7 +181,7 @@ Primary flows:
 
 - When a model call completes, the system records uncached input, cache read, cache write, and output as four separate counts, and writes one log line.
 - When the operator opens the usage report, the system shows cache-hit percent per agent and per provider.
-- When the provider speaks Anthropic's protocol, the system sends cache marks on the tool list (1 hour), the stable instructions (1 hour), and the conversation tail (5 minutes).
+- When the host documents Anthropic's lifetimes, the system sends cache marks on the tool list (1 hour), the stable instructions (1 hour), and the conversation tail (5 minutes), with the tool mark kept so an instruction change can still reuse the tool prefix. Moonshot gets no mark. MiniMax gets its documented 5-minute or automatic mode and no 1-hour mark.
 - When the next turn is built, the system places the clock and the volatile notes after the conversation, and keeps the web-display note and the workspace instructions before it.
 - When a tool was loaded earlier in the session, the system keeps it in the tool list until the session ends.
 - When the catalog has a price, the system uses it. When it does not, the system says unpriced. When the call is ChatGPT sign-in, the system says subscription and records no dollars.
@@ -346,7 +226,7 @@ Boundary conditions:
 - The system must not send Bedrock cache checkpoints, because D2 postpones Bedrock (#1323).
 - The system must not change how skill `allowed-tools` is parsed, because D11 puts that outside this feature.
 - The system must not add per-area log levels, because that is #1324.
-- The system must not send every allowed tool from the first turn. D5 says to measure tool and skill sizes and decide that later.
+- The system must not send every allowed tool from the first turn. D5 says to record token counts or token estimates and decide that later. A byte count is not that record.
 - The system must not turn on OpenAI's explicit breakpoint mode. Implicit caching plus a stable prefix is the OpenAI behaviour. Explicit mode adds a write charge on current models and is not in D6 (D6 is the Anthropic lifetime).
 - The system must not reintroduce a USD daily cap or the deleted app-level token budget, because D13 forbids a new limit and both were removed on purpose (ADR-053 D12 and the 2026-09-14 update).
 - The system must not put message text, tool arguments, credentials, or a raw usage object in the per-call log. The line carries the documented numeric counters and the correlation ids only (D20).
@@ -363,7 +243,8 @@ Boundary conditions:
 - `cache_hit_ratio` equals `tokens_cache_read / (tokens_in + tokens_cache_read + tokens_cache_write)` on rows where the denominator is positive. `tokens_in` is uncached input, which is what the assistant-turn write path already stores.
 - A new `by_provider` object uses the same cell shape as `by_model`. Keys are catalog provider ids.
 - `SessionStats` gains optional `unpriced_tokens` and optional `subscription_tokens` (each an integer, minimum 0). `unpriced_tokens` counts only the unpriced portion of a call, not the whole call. `cost` remains the sum of priced portions only. A session with `cost` 0 and `unpriced_tokens` greater than 0 is unpriced, not free. A session with `subscription_tokens` greater than 0 recorded no dollars for those tokens.
-- Each stored assistant accounting entry gains `provider_id`, `model_id`, and `billing_class` (`priced`, `unpriced`, or `subscription`), plus the 5-minute and 1-hour write counts when the provider reported them. `by_provider` is summed from those entries.
+- Each stored assistant accounting entry gains `provider_id`, `model_id`, `billing_class` (`priced`, `unpriced`, or `subscription`), `unpriced_tokens`, and the 5-minute and 1-hour write counts when the provider reported them. `unpriced_tokens` is the unpriced portion only. A mixed call stays `priced` and stores that portion here. `subscription` stores tokens and no dollars. Reload reads these fields. It does not reclassify them from a newer catalog. `by_provider` is summed from those entries.
+- A usage object that reports input 0, output 0, cache read 800, and cache write 200, with total 1,000, is a known split. Session, model, and provider totals stay 0 / 0 / 800 / 200 / 1,000 after reload. An all-read case (0 / 0 / 1,000 / 0 / 1,000) is the same kind of split. A missing usage object is not a known zero split and is not backfilled.
 
 **Log line:**
 
@@ -396,7 +277,7 @@ Do not add a new nominal type for a token count or a dollar amount. A count is a
 - **Required runtimes**: The repository's existing Go and Node toolchains. No new runtime.
 - **Required services**: None for CI. Live runs need outbound HTTPS to the named providers and a credential the operator already uses.
 - **Network assumptions**: CI tests use a local fake server. Live runs are manual and recorded.
-- **Accounts / credentials**: The landing live runs need Anthropic, OpenAI, ChatGPT sign-in, OpenRouter, Gemini, Qwen, DeepSeek, MiniMax, Moonshot, and Z.AI credentials. The last four must pass before the Anthropic connector switch lands (D17).
+- **Accounts / credentials**: The five D22 accounts only: OpenRouter, the Z.AI/GLM coding plan, the MiniMax coding plan, the Moonshot coding plan, and OpenAI through the ChatGPT subscription. No other provider account is required.
 
 ---
 
@@ -418,7 +299,7 @@ No new local setup. Implementers use the existing worktree, the existing contrac
 | Catalog pipeline | The existing TypeScript assemble in `elicify-ai/omnipus-provider-catalog` | schema 2.0.0, extended with cost | Catalog `src/schema.ts` |
 | Price source | models.dev primary, LiteLLM cross-check | USD per 1 million tokens | D7; models.dev `Cost` object |
 | Anthropic connector | Official `anthropic-sdk-go` already in `go.mod` | The version already required | D3 |
-| Test framework | `go test` for the fake-provider suite; the existing Usage screen tests if the screen shows the percent | — | D9 |
+| Test framework | `go test` for the fake-provider suite; the existing Usage screen tests if the screen shows the percent | — | D9, D22 |
 | Datastore | Existing session files | — | No new store |
 
 ---
@@ -438,7 +319,7 @@ No new local setup. Implementers use the existing worktree, the existing contrac
 
 ### Catalog repository (`elicify-ai/omnipus-provider-catalog`)
 
-- **Data in**: models.dev `cost` on each model (`input`, `output`, optional `reasoning`, `cache_read`, `cache_write`, optional `tiers[]` with `tier.type = context` and `tier.size`, optional `context_over_200k`). LiteLLM's per-token prices, converted to per million before compare. Optional follow-up field `cache_write_1h`, same unit, for a 1-hour write. The first publication that adds prices does not have to include `cache_write_1h`. When it is present, Omnipus uses it. When it is absent, Omnipus multiplies the catalog input price by the provider's documented 1-hour factor (Anthropic: 2) and does not store that factor as a dollar rate. A provider with no documented factor leaves the 1-hour tokens unpriced.
+- **Data in**: models.dev `cost` on each model (`input`, `output`, optional `reasoning`, `cache_read`, `cache_write`, optional `tiers[]` with `tier.type = context` and `tier.size`, optional `context_over_200k`). A tier boundary keeps the source's own meaning: Anthropic "up to N / over N" prices exactly N at the lower rate even when `tier.size` is N. A source that includes N in the higher band keeps that meaning. The catalog does not flatten every `tier.size` to one inclusive or exclusive rule. LiteLLM's per-token prices, converted to per million before compare. Optional follow-up field `cache_write_1h`, same unit, for a 1-hour write. The first publication that adds prices does not have to include `cache_write_1h`. When it is present, Omnipus uses it. When it is absent, Omnipus multiplies the catalog input price by the provider's documented 1-hour factor (Anthropic: 2) and does not store that factor as a dollar rate. A provider with no documented factor leaves the 1-hour tokens unpriced.
 - **Data out**: The published catalog gains those fields on each model. The embedded snapshot in this repository is updated from that publication. This repository does not type prices in by hand.
 - **Contract**: The catalog schema is strict. Adding fields means extending `Model` in the catalog schema and the Go `Model` struct together. A model with no `cost` in models.dev is published without a price, not with zeros.
 - **On failure**: If models.dev and LiteLLM disagree by more than the catalog's existing 5 percent relative tolerance, the row is disputed under the catalog's existing dispute rule. The 4,096 absolute tolerance is for token counts and is not applied to dollars. If LiteLLM has no price, models.dev wins. If models.dev has no price and LiteLLM has one, that is a fill, same as a missing context window today.
@@ -448,7 +329,7 @@ No new local setup. Implementers use the existing worktree, the existing contrac
 
 - **Data in**: Official Messages request. Cache marks as in User Story 2. Base URL and timeout of the catalog row are passed through, which the official constructor does not do today and must grow to do.
 - **Data out**: `cache_read_input_tokens`, `cache_creation_input_tokens`, and when present `cache_creation.ephemeral_5m_input_tokens` and `cache_creation.ephemeral_1h_input_tokens`. `input_tokens` excludes cache tokens.
-- **On failure**: HTTP errors stay errors. A 200 with zero cache fields is a miss. If DeepSeek, MiniMax, Moonshot, or Z.AI rejects the official body in the live check, this one connector is adjusted before the switch lands. A second connector is not added.
+- **On failure**: HTTP errors stay errors. A 200 with zero cache fields is a miss. If a MiniMax, Moonshot, or Z.AI coding-plan call rejects the official body, this one connector is adjusted. DeepSeek is a documented fixture, not a live gate. A second connector is not added.
 - **Development**: Fake HTTP server in CI. One recorded live run at landing.
 
 ### OpenAI-compatible hosts, including the ChatGPT sign-in path and the Gemini and Ollama rows
@@ -496,19 +377,19 @@ Hosts the factory cannot call today (unsupported tier, or a blank protocol) are 
 | `llama` | The caching page describes `api.meta.ai`, not the catalog host `api.llama.com`. | Nothing. | Unknown for this host. | Unknown. | Unknown. | Unknown. | Catalog if present, else unpriced. |
 | `nova` | Direct host: no contract found. Bedrock Nova is a different API and is postponed. | Nothing. | Unknown on the direct host. | Unknown. | Unknown. | Unknown. | Catalog if present, else unpriced. |
 | `deepseek` | Automatic disk cache. `prompt_cache_key` is ignored. | Nothing. | Chat: `prompt_cache_hit_tokens`, `prompt_cache_miss_tokens`, and `prompt_tokens_details.cached_tokens` (same number as the hit). Do not add them. | Yes. Hit plus miss equals `prompt_tokens`. | Not stated. | Hours to days, not fixed. | Catalog |
-| `alibaba` | Implicit by default. Explicit marker turns implicit off and is the cheaper read. | `cache_control` `ephemeral` on content blocks, at most four. This is the Qwen path D9 checks. | `prompt_tokens_details.cached_tokens` and `cache_creation_input_tokens`. | OpenAI-compatible samples include both inside `prompt_tokens`. | 1,024. | Explicit 5 minutes. | Catalog. Do not hard-code the vendor's 10% or 20%. |
-| `alibaba-cn` | Same as `alibaba`. | Same marker. | Same fields. | Same include rule. | 1,024; 512 for some partner models. | Explicit 5 minutes. | Catalog |
+| `alibaba` | Implicit by default. Explicit marker turns implicit off and is the cheaper read. | `cache_control` `ephemeral` on content blocks, at most four. Covered by a documented fixture, not a live call (D22). | Chat: `usage.prompt_tokens_details.cached_tokens` and `usage.prompt_tokens_details.cache_creation_input_tokens`. Messages: `usage.cache_creation_input_tokens`. The callable row is the chat path. | OpenAI-compatible samples include both inside `prompt_tokens`. | 1,024. | Explicit 5 minutes. | Catalog. Do not hard-code the vendor's 10% or 20%. |
+| `alibaba-cn` | Same as `alibaba`. | Same marker. | Same full paths as `alibaba`. | Same include rule. | 1,024; 512 for some partner models. | Explicit 5 minutes. | Catalog |
 | `zai` | Automatic. | Nothing. | `prompt_tokens_details.cached_tokens`. | Yes. | Not stated. | Not a number. | Catalog |
 | `zhipuai` | Automatic. | Nothing. | `prompt_tokens_details.cached_tokens`. | Yes in the published example. | A recommendation of about 500, not a hard floor. | Not a number. | Catalog |
 | `moonshotai` | Automatic. Sends a 5-minute write even when the request has no cache field. A breakpoint inside the message is rejected. | Nothing. Do not send `prompt_cache_breakpoint`. | Chat: `cached_tokens` and `cache_write_tokens` under `prompt_tokens_details`. | Yes. Read, write, and the rest sum to the prompt total. | One full block; block size not stated. | 5 minutes unless a top-level option asks for 1 hour. We do not send that option. | Catalog |
 | `moonshotai-cn` | Same as `moonshotai`. | Nothing. Same rejection rule. | Same chat fields, plus a top-level `cached_tokens` that repeats the read. | Yes. | Same. | Same. | Catalog |
-| `minimax` | Anthropic protocol. Automatic on some models, explicit marker on others. | The one official connector's markers. A live check of this row is required before that connector switch lands (D17). | Anthropic read, write, and `input_tokens`. | Anthropic: no. | Automatic: 512. | Explicit: 5 minutes. | Catalog |
+| `minimax` | Anthropic protocol. Automatic on some models, explicit marker on others. | That model's documented mode only. Automatic where documented. Explicit 5-minute marks where documented. No 1-hour mark. The coding-plan account is one of the five live runs (D22). | Anthropic read, write, and `input_tokens`. | Anthropic: no. | Automatic: 512. | Explicit: 5 minutes. | Catalog |
 | `minimax-cn` | Same family. The China guide's examples use a different host than the catalog base. | Same as `minimax`. | Same. | Same. | 512 for automatic. | 5 minutes for explicit. | Catalog |
 | `snowflake-cortex` | OpenAI models implicit; Claude needs a marker; other families none. | No call while the row is unsupported. | Chat: `prompt_tokens_details.cached_tokens` (reads only on OpenAI, reads plus writes on Claude). | Not stated. | 1,024 for OpenAI. | Claude 5 minutes. | Catalog, when callable. |
 | `databricks` | Claude needs a marker on an OpenAI-shaped body. | No call while the row is unsupported. | `usage.cache_read_input_tokens` and `usage.cache_creation_input_tokens` on the OpenAI-shaped body. | Not stated. | Not stated. | Not stated for Claude. | Catalog, when callable. |
 | `watsonx` | No contract found. | Nothing. | None. | Unknown. | Unknown. | Unknown. | Unpriced unless the catalog has a price. |
 | `sap-ai-core` | No contract found. | Nothing. | None. | Unknown. | Unknown. | Unknown. | Unpriced unless the catalog has a price. |
-| `fireworks-ai` | Automatic. | `prompt_cache_key`. | Header `fireworks-cached-prompt-tokens`, and the same name under performance metrics when present. Not an OpenAI usage field. | The header prompt count includes the cached count. | Not stated. | Minutes to hours. | Catalog |
+| `fireworks-ai` | Automatic. | `prompt_cache_key`. Do not send `perf_metrics_in_response`. | Only `usage.prompt_tokens_details.cached_tokens` (D21). Do not read a header and do not read `perf_metrics`. | Same include rule as other OpenAI-style hosts when that field is present. | Not stated. | Minutes to hours. | Catalog |
 | `togetherai` | Automatic. | `prompt_cache_key`. | `prompt_tokens_details.cached_tokens` or top-level `usage.cached_tokens`. Read whichever is present, not both if they repeat. | Yes. | Varies by model. | About an hour, best effort. | Catalog |
 | `groq` | Automatic. Cannot be turned off. Not every model. | Nothing. | `prompt_tokens_details.cached_tokens`. | Yes. | 128 to 1,024 by model. | 2 hours idle. | Catalog |
 | `cerebras` | Automatic. No discount. | `prompt_cache_key`, at most 1,024 characters. | `prompt_tokens_details.cached_tokens`. | Yes. | 128-token blocks. | At least 5 minutes, up to 1 hour. | Catalog. A cached token billed at the normal input price is correct when the catalog says so. |
@@ -528,11 +409,11 @@ Hosts the factory cannot call today (unsupported tier, or a blank protocol) are 
 | `stackit` | None documented. | Nothing. | None. | Unknown. | Unknown. | Unknown. | Unpriced unless the catalog has a price. |
 | `infomaniak` | None documented. | Nothing. | None. | Unknown. | Unknown. | Unknown. | Unpriced unless the catalog has a price. |
 | `poolside` | Hosted API: none. Self-managed metrics are the engine's, not a response field. | Nothing. | None on the hosted example. | Not stated. | Unknown. | Unknown. | Unpriced unless the catalog has a price. |
-| `vercel` | Router. Omitting its caching switch still passes the body through. | `prompt_cache_key` as a session pin. Do not send `caching: auto`, which rewrites the body and can add a write charge. | Whichever upstream field the gateway forwards: chat cached tokens, responses cached tokens, or Anthropic's read field. | Not stated. | The upstream's. | The pin is at most 1 hour. | Catalog, upstream rates. |
+| `vercel` | Router. With no `caching` field the gateway passes the body through. Implicit upstreams still cache. Claude does not, unless the body carries a manual mark. | Session pin `prompt_cache_key`. Do not send `caching: auto`. For a Claude model id, also send `cache_control` `{ "type": "ephemeral" }` on the last history message before the volatile tail. Implicit upstreams on this row (OpenAI, Google, DeepSeek) get no `cache_control`. No second connector. | Whichever upstream field the gateway forwards: chat cached tokens, responses cached tokens, or Anthropic's read field. | Not stated. | The upstream's. | The pin is at most 1 hour. The manual mark is Anthropic's ephemeral mark. | Catalog, upstream rates. |
 | `vllm` | Automatic prefix cache inside the process. | Nothing. Do not send `cache_salt`. | `prompt_tokens_details.cached_tokens` only when the server has details enabled. | `prompt_tokens` is the full prompt, counted separately. | One full block. | Process lifetime, LRU. | Not a bill. Unpriced unless a catalog price was published. |
 | `ollama` | Automatic inside the loaded runner. | Nothing. | OpenAI-compatible `prompt_tokens_details.cached_tokens` when the runner reports a cache count. | Yes. The prompt total includes the cached count. | Unknown. | Lives in the runner. Default model keep-alive is 5 minutes and is not a cache lifetime we set. | Not a bill. Unpriced unless a catalog price was published. |
 
-Every other catalog row that the factory already calls, and that is not in this table, is treated as OpenAI-compatible or Anthropic-protocol by the factory branch it already uses. Anthropic-protocol rows get User Story 2's markers. OpenAI-compatible rows get no extra field unless this table lists one. All of them are parsed with the full field list. A row the factory cannot construct is unchanged.
+Every other catalog row that the factory already calls, and that is not in this table, is treated as OpenAI-compatible or Anthropic-protocol by the factory branch it already uses. An Anthropic-protocol row gets a mark only when that host documents one: native Anthropic gets the 1-hour tool and instruction marks and the 5-minute history mark; Moonshot gets none; MiniMax gets its documented 5-minute or automatic mode and no 1-hour mark. OpenAI-compatible rows get no extra field unless this table lists one. All of them are parsed with the full field list. A row the factory cannot construct is unchanged.
 
 ---
 
@@ -546,15 +427,22 @@ A person can see caching without a new screen.
 | Usage screen, the screen `docs/settings.md` already describes | Cache-hit percent beside the cached and uncached totals it already shows, per agent and per provider. No new screen. Still no dollar total, matching the current sentence that usage counts tokens, not money. | Default install (D15). |
 | `GET /api/v1/stats/tokens` | The same percent, the provider breakdown, `unpriced_tokens`, and `subscription_tokens` | Existing route |
 
-The feature is not done when only the tests pass. It is done when a second call in a real session can show a non-zero cache read on the Usage screen, and the info log line exists for people who raise the log level. That is the D9 live run, plus the four D17 checks before the connector switch lands.
+The feature is not done when only the tests pass. It is done when one of the five D22 runs shows a second-call cached-token count greater than zero on the Usage screen, and the info log line exists for people who raise the log level.
 
-User-facing documentation in the same change: `docs/settings.md`, the Usage paragraph that already says cached and uncached tokens. Add the hit percent and the provider breakdown. Do not start showing dollars there. Say that a ChatGPT sign-in call is counted in tokens and is not given a dollar cost.
+The existing Usage screen (`src/components/screens/UsageScreen.tsx`, route `src/routes/_app/usage.tsx`) gains no new control. It adds a provider breakdown on the existing catalog `Tabs`, and a text label "Cache hit" beside the cache totals it already shows. `0.8` is shown as `80%`, not `0.8%`. A null ratio shows no percent, not `0%`. "Cached" stays the existing read-plus-write total. "Cache hit" is reads divided by full input. Loading, empty, error, and partial stay the screen's existing states. An error is not an empty list. Changing the period keeps focus on the selected tab. The provider tab uses the same keyboard behaviour as the current tabs. On a narrow screen the new column wraps like the existing breakdowns and does not hide the percent. Mounted tests cover `80%`, a null ratio, the provider rows, a period change, and the existing loading, empty, error, and partial states. `npm run typecheck` is the type gate. The design-system check applies because the screen reuses catalogued tabs and adds no control.
+
+User-facing documentation in the same change, drafted by the implementing lead and checked by the docs verifier:
+
+| Page | What the draft must add |
+|---|---|
+| `docs/settings.md` | The Usage paragraph: hit percent, provider breakdown, `80%` versus a missing percent, no new page, tokens not dollars. A ChatGPT sign-in call is counted in tokens and is not given a dollar cost. |
+| `docs/operations/observability.md` | How to raise the existing log level from warn to info. The accounting line's fields and one example. The hit-ratio formula. What `priced`, `unpriced`, and `subscription` mean, including a mixed call. The line stays hidden at warn. |
 
 ---
 
 ## Contract changes
 
-Constraint #8. The architect sets the shape. The backend lead edits `contracts/openapi.yaml` and the schema files and regenerates. No hand-written wire type.
+Constraint #8. The architect sets the shape. The backend lead edits the schema files, references them from `contracts/openapi.yaml`, runs `scripts/gen-contracts.sh`, and commits the generated diff with that schema change. Writers, the usage report, and the Usage screen use the generated types only, and only after that regeneration. No hand-written wire type. This step comes before those writers in the implementation order.
 
 | Schema | Change |
 |---|---|
@@ -567,7 +455,7 @@ No new route. No WebSocket frame change. No AsyncAPI change, unless a session sn
 
 Persisted session stats are JSON the Usage screen reads through these schemas, so the new fields are wire fields, not a private struct.
 
-The per-call producer is the existing assistant transcript entry (`pkg/session/daypartition.go::TranscriptEntry`). It gains `provider_id`, `model_id`, `billing_class` (`priced`, `unpriced`, or `subscription`), `cache_write_5m_tokens`, and `cache_write_1h_tokens`. `cache_write_tokens` stays the sum of those two when the provider reported the split. The screen does not read this entry: a search of `src/` and `contracts/` finds no `cache_write_tokens` or `prompt_tokens` consumer, so these fields are persisted accounting, not a new wire schema. `by_provider` on `SessionStats` and on the usage report is summed from them. Reload does not infer the provider from the agent's later configuration.
+The per-call producer is the existing assistant transcript entry (`pkg/session/daypartition.go::TranscriptEntry`). It gains `provider_id`, `model_id`, `billing_class` (`priced`, `unpriced`, or `subscription`), `unpriced_tokens`, `cache_write_5m_tokens`, and `cache_write_1h_tokens`. `unpriced_tokens` is the unpriced portion of that call, not the whole call. A mixed call is `priced` and still stores that portion. A fully unpriced call is `unpriced`. A ChatGPT sign-in call is `subscription`, with tokens and no dollars. `cache_write_tokens` stays the sum of the 5-minute and 1-hour counts when the provider reported the split. The screen does not read this entry: a search of `src/` and `contracts/` finds no `cache_write_tokens` or `prompt_tokens` consumer, so these fields are persisted accounting, not a new wire schema. `by_provider` on `SessionStats` and on the usage report is summed from them. Reload reads the stored provider and the stored `unpriced_tokens`. It does not infer the provider from the agent's later configuration, and it does not reprice the call from a newer catalog.
 
 ---
 
@@ -582,9 +470,9 @@ What the amendment must say:
 | §6 D5 puts a static tool catalog inside the cached system prefix and leaves a per-turn "already loaded" line in front of history. That work was deferred to #654. | Superseded for this feature. D4 of the founder decisions moves the tool-summary note behind the conversation. The catalog-inside-the-prefix split is not implemented. |
 | §1.1.1: static tools stay for the session; MCP tools expire by TTL and leave the tool list. | Loaded tools, including MCP tools that would have expired, stay in the provider tool list until the session ends. Expiry may still apply to discovery bookkeeping that does not change the bytes of the tool list. |
 | §6.4: tool order is already deterministic. | Unchanged. The amendment restates it as a requirement this feature locks with a test. |
-| §6.6: D5 ships behind a live cache-read gate. | That gate is not this feature's gate. This feature's gate is D9. |
+| §6.6: D5 ships behind a live cache-read gate. | That gate is not this feature's gate. This feature's live gate is the five D22 runs. |
 
-The amendment also records the non-decision: sending every allowed tool from the start of the session is not decided. The feature measures tool-list and skill-text sizes per agent and stops there.
+The amendment also records the non-decision: sending every allowed tool from the start of the session is not decided. The feature records a labelled token count or token estimate of the tool list and of the skill text per agent, names the estimator, and stops there. A byte count does not satisfy that record.
 
 D5 of the founder decisions is the authority for the amendment. ADR-071 is amended; it is not silently left describing the old TTL behaviour.
 
@@ -649,12 +537,14 @@ D5 of the founder decisions is the authority for the amendment. ADR-071 is amend
 **Traces to**: User Story 2, Acceptance Scenario 2
 **Category**: Happy Path
 
-- **Given** a request with a tool list, stable instructions, and a conversation
+- **Given** a native Anthropic request with a tool list, stable instructions, and a conversation
 - **When** the Anthropic body is produced
 - **Then** the tool list and the stable instructions are marked for 1 hour
 - **And** the conversation tail is marked for 5 minutes
 - **And** both 1-hour marks appear before the 5-minute mark
 - **And** there are at most four marks
+- **And** a Moonshot body has no cache mark and no 1-hour option
+- **And** a MiniMax body uses its documented 5-minute or automatic mode and no 1-hour mark
 
 #### Scenario: A streamed Anthropic call still reports cache tokens
 
@@ -681,8 +571,9 @@ D5 of the founder decisions is the authority for the amendment. ADR-071 is amend
 
 - **Given** a session whose scratchpad and clock differ from the previous turn
 - **When** the next request is built
-- **Then** the bytes before the end of the previous turn's history are unchanged
-- **And** the clock, tool-summary note, scratchpad note, and goal-checklist note appear after that history
+- **Then** the captured body, after normalization and after adapter conversion, matches through the previous turn's history
+- **And** the clock, tool-summary note, scratchpad note, and goal-checklist note are one user-role block after that history and after any completed tool-call group
+- **And** they are not a system-role message
 - **And** the web-display note and the workspace instructions appear before that history
 
 #### Scenario Outline: The same tool set always serializes the same way
@@ -710,7 +601,9 @@ D5 of the founder decisions is the authority for the amendment. ADR-071 is amend
 
 - **Given** a tool whose definition was added to the session tool list
 - **When** further turns pass that would previously have expired it
-- **Then** the definition is still in the list
+- **Then** the definition is still in the list and the tool still runs
+- **And** a second open session of the same agent does not list it and cannot run it
+- **And** a Deny, a removed assignment, or a disconnect removes it
 - **And** the list's bytes do not change merely because time passed
 
 #### Scenario: The advertised skill list stays fixed and the reminder moves to the tail
@@ -723,7 +616,7 @@ D5 of the founder decisions is the authority for the amendment. ADR-071 is amend
 - **When** the next request is built
 - **Then** the advertised list matches the first turn
 - **And** the per-turn skill reminder is after the conversation
-- **And** a measurement of the tool-list size and the skill-text size was recorded for the agent
+- **And** a labelled token count or token estimate of the tool list and of the skill text was recorded for the agent, naming the estimator
 
 #### Scenario: Goal-setting narrowing still replaces the tool list
 
@@ -766,14 +659,14 @@ D5 of the founder decisions is the authority for the amendment. ADR-071 is amend
 | OpenAI responses details, read and write inside input total | 100 | 700 | 200 |
 | DeepSeek hit and miss, nested cached tokens repeating the hit | 300 | 700 | 0 |
 | Moonshot chat, read and write inside prompt total | 100 | 800 | 100 |
-| Alibaba explicit, read and creation inside prompt total | 100 | 800 | 100 |
-| Fireworks header count inside the header prompt count | 100 | 900 | 0 |
+| Alibaba chat, nested `usage.prompt_tokens_details.cached_tokens` and `usage.prompt_tokens_details.cache_creation_input_tokens` | 100 | 800 | 100 |
+| Fireworks, only `usage.prompt_tokens_details.cached_tokens` | 100 | 900 | 0 |
 | Together top-level cached tokens repeating the nested field | 100 | 900 | 0 |
 | Gemini total cached tokens field, include rule unknown | recorded as read, prompt left as the provider reported it when the include rule is unknown | the reported cached count | 0 |
 | Ollama cached count inside prompt total | 100 | 50 | 0 |
 | Missing cache fields | the prompt total | 0 | 0 |
 
-The Gemini row is the one shape whose include rule is unknown. The parser must not subtract the cached count from the prompt total unless a later live check shows the total includes it. The recorded live check for Gemini writes down which field came back and whether it was inside the prompt total, and the parser is then fixed to that evidence. Until that evidence exists, subtracting would invent a rule.
+The Gemini row is the one shape whose include rule is not stated by the documented example. The parser must not subtract the cached count from the prompt total. Gemini is not a live check (D22). Subtracting would invent a rule. The Alibaba fixture is the nested chat JSON, not a top-level `cache_creation_input_tokens`. The Fireworks fixture does not include a header or a `perf_metrics` object.
 
 #### Scenario: A cache key is sent only to hosts that accept it
 
@@ -881,22 +774,24 @@ The Gemini row is the one shape whose include rule is unknown. The parser must n
 | 0 | 0 |
 | 0.2 | 0.0002 |
 
-#### Scenario Outline: A length band selects the matching catalog tier
+#### Scenario Outline: A length band follows the source boundary
 
 **Traces to**: User Story 5, Acceptance Scenario 4
 **Category**: Alternate Path
 
-- **Given** a base input price, a tier at 32,000 tokens, and a higher tier at 128,000 tokens
+- **Given** an Anthropic-style band whose source says "up to 100,000" at the base rate and "over 100,000" at the high rate, and a catalog `tier.size` of 100000
 - **When** a call is accounted whose input size is `<tokens>`
 - **Then** the price used is `<band>`
+
+Input size is uncached input plus cache read plus cache write. Output is not included. Exactly 100,000 is the base rate. A cache-heavy split is the same total: 100 uncached plus 99,900 read is base; 100 uncached plus 99,901 read is the high rate. Canonical tiers win over a legacy `context_over_200k` alias. The alias alone means over 200,000, so exactly 200,000 stays on the base rate, and it is not evidence of a 512,000 threshold. A source that documents the higher band as including its boundary token keeps that meaning. This scenario does not apply one exclusive rule to every provider.
 
 **Examples**:
 
 | tokens | band |
 |---|---|
-| 31999 | base |
-| 32000 | the 32,000 tier |
-| 128000 | the 128,000 tier |
+| 99999 | base |
+| 100000 | base |
+| 100001 | the over-100,000 rate |
 
 #### Scenario: Fake-provider tests do not need credentials
 
@@ -908,27 +803,49 @@ The Gemini row is the one shape whose include rule is unknown. The parser must n
 - **Then** it passes on a local fake server
 - **And** a second cache-heavy call costs less than the first and more than zero
 
-#### Scenario: Landing requires a recorded live cache read
+#### Scenario: Landing requires five live runs
 
 **Traces to**: User Story 6, Acceptance Scenario 2
 **Category**: Happy Path
 
 - **Given** a build proposed for landing
 - **When** the landing evidence is checked
-- **Then** it includes a saved live transcript for Anthropic, OpenAI, ChatGPT sign-in, and OpenRouter Claude, plus Gemini and Qwen checks, plus DeepSeek, MiniMax, Moonshot, and Z.AI
-- **And** the connector switch is not in the landed build unless those four third-party checks passed
-- **And** at least the Anthropic and OpenAI transcripts show a cache read larger than the full pre-history prefix
-- **And** the DeepSeek, Moonshot, Z.AI, and MiniMax transcripts record the Anthropic protocol, the endpoint, the connector, and the commit
-- **And** one transcript records the goal and scratchpad behaviour after the notes moved
+- **Then** it includes one saved run each for OpenRouter, the Z.AI/GLM coding plan, the MiniMax coding plan, the Moonshot coding plan, and OpenAI through the ChatGPT subscription
+- **And** each run sent the same conversation twice
+- **And** the second call reports cached tokens greater than zero
+- **And** the ChatGPT subscription run records tokens and no dollars
+- **And** no other provider was called live
 
 #### Scenario: A live HTTP success with zero cached tokens fails the proof
 
 **Traces to**: User Story 6, Acceptance Scenario 3
 **Category**: Error Path
 
-- **Given** a live second call that returns HTTP 200 and zero cache-read tokens
+- **Given** one of the five live runs whose second call returns HTTP 200 and zero cached tokens
 - **When** the proof is judged
 - **Then** it is not a pass
+
+#### Scenario: A cache-only call keeps a known zero split
+
+**Traces to**: User Story 4, Acceptance Scenario 1
+**Category**: Edge Case
+
+- **Given** a stored call whose usage object says 0 uncached input, 0 output, 800 cache read, 200 cache write, and total 1,000
+- **When** the entry is appended, aggregated, reported, and reloaded
+- **Then** session, model, and provider totals stay 0 input, 0 output, 800 read, 200 write, and total 1,000
+- **And** an all-read call of 0 input, 0 output, 1,000 read, 0 write, and total 1,000 stays that split
+- **And** a missing usage object is not treated as this known zero split
+
+#### Scenario: A Vercel Claude request carries a manual mark
+
+**Traces to**: User Story 4, Acceptance Scenario 3
+**Category**: Alternate Path
+
+- **Given** a Vercel model id `anthropic/claude-opus-4.5`
+- **When** the request is captured
+- **Then** the last history message before the volatile tail carries `cache_control` with type `ephemeral`
+- **And** the body does not contain `caching`
+- **And** an implicit upstream on the same row does not gain that mark
 
 #### Scenario: The log stays free of prompt text when the provider returns an error body
 
@@ -950,7 +867,7 @@ The Gemini row is the one shape whose include rule is unknown. The parser must n
 |---|---|---|
 | Unit | Parsers, price arithmetic, prefix comparison, key allow-list | Deterministic, no network |
 | Integration | One turn against a fake provider, then the usage report | The bytes, the stored stats, and the report agree |
-| E2E | Not a CI browser run | The D9 live transcripts are the end-to-end proof, recorded outside CI |
+| E2E | Not a CI browser run | The five D22 live runs are the end-to-end proof, recorded outside CI |
 
 ### Test implementation order
 
@@ -960,13 +877,13 @@ Write these before the production change they lock. Order inside a level is depe
 |---|---|---|---|---|
 | 1 | `TestUsageShapes_Normalize` | Unit | Each published usage shape | Table-driven. Expected counts are the Examples table, written from this spec, not read off the parser. |
 | 2 | `TestUsageShapes_DeepSeekHitNotDoubleCounted` | Unit | DeepSeek row | Hit field and nested cached tokens that repeat it produce one read. |
-| 3 | `TestUsageShapes_GeminiDoesNotSubtractUntilEvidence` | Unit | Gemini row | A `total_cached_tokens` value is stored as cache read and is not subtracted from prompt until a recorded rule says to. |
+| 3 | `TestUsageShapes_GeminiDoesNotSubtractUntilEvidence` | Unit | Gemini row | A `total_cached_tokens` value is stored as cache read and is not subtracted from prompt. The documented example does not state the include rule, and there is no live Gemini check. |
 | 4 | `TestPrice_CatalogArithmetic` | Unit | Priced call | The hand-computed $0.003 + $0.0024 + $0.0075 + $0.0075 case. |
 | 5 | `TestPrice_MissingInputIsUnpriced` | Unit | Missing input price | Not the old $3/$15 fallback. Tokens kept. Unpriced flag set. |
 | 6 | `TestPrice_MissingCacheUsesInput_ZeroCacheStaysZero` | Unit | Cache price outline | The three rows: absent, zero, and a real cache price. |
 | 6a | `TestPrice_SubscriptionRecordsNoDollars` | Unit | ChatGPT sign-in call | Tokens stored, log word `subscription`, cost unchanged. |
 | 6b | `TestPrice_OneHourWriteUsesDocumentedMultiplier` | Unit | One-hour write | Anthropic: 5-minute write at `cache_write`; 1-hour write at 2× catalog input when `cache_write_1h` is absent, and at `cache_write_1h` when present. A provider with no documented 1-hour factor leaves that portion unpriced. |
-| 7 | `TestPrice_ContextTier` | Unit | Length band | Below the band, at the band, and at a higher band. |
+| 7 | `TestPrice_ContextTier` | Unit | Length band | Anthropic up-to-100,000: 99,999 and 100,000 are base; 100,001 is the high rate. |
 | 8 | `TestPrice_NoRateTable` | Unit | Priced call | The hand-kept table symbol is gone. |
 | 9 | `TestCacheKeyAllowList_SendsAndSuppresses` | Unit | Cache key scenario | Mistral and OpenAI receive a key whose value is the session id, not the agent id. Scaleway and OVHcloud do not. Groq receives neither key nor marker. |
 | 10 | `TestToolOrder_IndependentOfInputOrder` | Unit | Tool-set outline | Three input orders, one byte string. |
@@ -976,7 +893,7 @@ Write these before the production change they lock. Order inside a level is depe
 | 12b | `TestLoadedTool_NotInheritedByNextSession` | Integration | New session does not inherit loaded tools | A tool loaded in a finished session is absent from the next session's first tool list. |
 | 13 | `TestPrefixStable_ClockAndScratchpadMove` | Integration | Volatile notes | Two built requests. Clock advanced. Scratchpad changed. Shared history bytes match. Mutation note: putting the seconds clock back in front must fail this test. |
 | 14 | `TestLoadedTool_SurvivesTime` | Integration | Loaded tool | A tool that would have expired is still in the second request's tool list. |
-| 15 | `TestSkillList_FrozenForSession` | Integration | Skill list | Disk change between turns does not change the advertised list. Reminder is after history. |
+| 15 | `TestSkillList_FrozenForSession` | Integration | Skill list | Disk change between turns does not change the advertised list. Reminder is after history. The size record is a token count or token estimate. |
 | 16 | `TestGoalNarrowing_RestoresListNextTurn` | Integration | Goal narrowing | Narrow list on the goal turn, session list on the next. |
 | 17 | `TestLogLine_UsageOnly` | Integration | Accounting line, and the error-body scenario | One line, required fields, no prompt text, including when the provider errors. |
 | 18 | `TestUsageReport_HitRatioAndProvider` | Integration | Hit percent, and the empty-percent scenario | 0.8 on the fixture. Null when the denominator is 0. Provider breakdown present. |
@@ -986,14 +903,19 @@ Write these before the production change they lock. Order inside a level is depe
 | 22 | `TestPrefixStable_AfterNormalizeAndAdapter` | Integration | Volatile notes | Captures the body after normalization and adapter conversion. Tail is user-role and after history. Tool results stay grouped. |
 | 23 | `TestConnector_ReconstructedCallAndVerbatimModel` | Unit | Official connector | Canonical tool call with no convenience name is sent intact. `MiniMax-M2.7` is not rewritten. |
 | 24 | `TestDialectBodies_MoonshotAndMiniMax` | Unit | Anthropic marks | Moonshot body has no in-message mark and no 1-hour option. MiniMax uses its documented mode and no 1-hour mark. |
-| 25 | `TestProviderId_SurvivesReload` | Integration | Hit percent | Same model id on two providers stays split after reload. Fallback and subscription are separate. |
+| 25 | `TestProviderId_SurvivesReload` | Integration | Hit percent | Same model id on two providers stays split after reload. Fallback and subscription are separate. A mixed call keeps its stored `unpriced_tokens` after the catalog later gains a price. |
 | 26 | `TestLoadedMcpTool_ExecutesOnlyInThatSession` | Integration | Loaded tool | Non-core MCP tool survives expiry, runs, is absent from a second session, and disappears on revocation. |
-| 27 | `TestPrice_TierUsesCacheHeavyInput` | Unit | Length band | 10,000 uncached plus 120,000 read selects the 130,000 tier. A 512,000 canonical tier wins over the legacy alias. |
+| 27 | `TestPrice_TierUsesCacheHeavyInput` | Unit | Length band | 100 uncached plus 99,900 read is the base rate. 100 plus 99,901 is the high rate. A canonical 512,000 tier plus the legacy alias does not price 200,001 as the 512,000 band. Exactly 200,000 on the alias alone stays base. |
 | 28 | `TestLogLine_DropsTextInsideUsage` | Unit | Accounting line | Private text and an oversized extension inside usage are absent. Counters and session id remain. |
 | 29 | `TestHistoryHit_StaticOnlyFails` | Integration | Fake-provider suite | A read equal to the pre-history prefix fails. A read beyond it, from a matching captured prefix, passes. |
 | 30 | `TestUsageScreen_HitPercentAndProviderTab` | E2E | Hit percent; no new screen | Mounted screen: `0.8` shows `80%`, null shows no percent, provider tab is the existing tabs control, error and partial states stay. |
+| 31 | `TestCacheOnlyZeroOutput_ReconcilesThroughReload` | Integration | Cache-only known split | 0 input, 0 output, 800 read, 200 write, total 1,000 through entry, session, model, provider, report, and reload. Plus the all-read case. A missing usage object is a separate control. |
+| 32 | `TestVercelClaude_ManualCacheControl` | Unit | Vercel Claude mark | Captured request for `anthropic/claude-opus-4.5` has `cache_control` type `ephemeral` before the volatile tail and no `caching` field. An implicit upstream has no mark. |
+| 33 | `TestFireworks_StandardCachedTokensOnly` | Unit | Fireworks row | Reads `usage.prompt_tokens_details.cached_tokens` only. No header and no `perf_metrics` are consulted, and `perf_metrics_in_response` is not sent. |
+| 34 | `TestAlibaba_NestedWritePath` | Unit | Alibaba row | The fixture JSON nests `cache_creation_input_tokens` under `usage.prompt_tokens_details`. A top-level-only parse fails this test. |
+| 35 | `TestSkillAndToolSizes_AreTokenCounts` | Integration | Skill list | The recorded sizes are labelled token counts or token estimates and name the estimator. A byte-only record fails. |
 
-Live transcripts are not rows in this table. They are the holdout-adjacent landing gate in User Story 6 and are not automated in CI.
+The five live runs are not rows in this table. They are the landing gate in User Story 6 and are not automated in CI.
 
 ### Test datasets
 
@@ -1042,33 +964,33 @@ This feature changes existing behaviour. These tests must be rewritten to the ne
 ## Functional Requirements
 
 - **FR-001**: The system MUST write one info log line per completed model call with provider id, model id, acting agent id, session id, turn or call id, uncached input, cache read, cache write, and when reported the 5-minute and 1-hour write counts. The line MUST NOT contain a raw usage object, an arbitrary string from the provider, prompt text, tool arguments, or credentials (D20). Unknown fields and non-numeric values are dropped, at most 32 counters are written, and existing credential scrubbing still runs. A ChatGPT sign-in call MUST say `subscription` and MUST NOT include a dollar cost. Any other call MUST include the dollar cost of its priced portions. An unpriced portion MUST be marked `unpriced` without erasing that dollar cost. The line stays at info.
-- **FR-002**: The system MUST expose cache-hit percent per agent and per provider on the existing usage report, using the formula and the null rule in the machine-verifiable constraints. Provider totals MUST be summed from the stored per-call provider id, including after reload, and MUST reconcile with the session and agent totals. The existing Usage screen MUST show the percent and a provider breakdown as specified in the Round-1 Usage screen contract. `0.8` is shown as `80%`. A null ratio shows no percent. No new screen and no new control.
+- **FR-002**: The system MUST expose cache-hit percent per agent and per provider on the existing usage report, using the formula and the null rule in the machine-verifiable constraints. Provider totals MUST be summed from the stored per-call provider id, including after reload, and MUST reconcile with the session and agent totals, including a known zero split of 0 input, 0 output, 800 read, and 200 write. The existing Usage screen MUST show the percent and a provider breakdown on the existing catalog tabs, as specified under Reachability. `0.8` is shown as `80%`. A null ratio shows no percent. No new screen and no new control.
 - **FR-003**: The system MUST NOT add a caching screen, tile, or setting.
-- **FR-004**: The system MUST send Anthropic-protocol calls through the official Anthropic connector, and MUST delete the hand-written Anthropic connector only after the surviving connector passes the parity checks in the Round-1 connector section. The official constructor MUST keep the catalog row's base URL and the configured timeout, and MUST send the catalog model id verbatim.
-- **FR-005**: Where the host documents Anthropic's lifetimes, the system MUST mark the tool list and the stable instructions for a 1-hour cache and the conversation tail for a 5-minute cache, with every 1-hour mark before every 5-minute mark, and with at most four marks. The tool-list mark exists so an instruction change can still reuse the tool prefix. Moonshot and MiniMax follow the dialect table in the Round-1 section, not this lifetime. The history mark sits before the volatile tail.
+- **FR-004**: The system MUST send Anthropic-protocol calls through the official Anthropic connector, and MUST delete the hand-written Anthropic connector only after the surviving connector passes the parity checks in User Story 2: reconstructed canonical tool calls, verbatim model ids, media, and correlated parallel results. The official constructor MUST keep the catalog row's base URL and the configured timeout, and MUST send the catalog model id verbatim.
+- **FR-005**: Where the host documents Anthropic's lifetimes, the system MUST mark the tool list and the stable instructions for a 1-hour cache and the conversation tail for a 5-minute cache, with every 1-hour mark before every 5-minute mark, and with at most four marks. The tool-list mark exists so an instruction change can still reuse the tool prefix. Moonshot MUST receive no cache field and no 1-hour option. MiniMax MUST use its documented 5-minute or automatic mode and MUST NOT receive a 1-hour mark. Any other Anthropic-protocol host gets only the marks it documents. The history mark sits before the volatile tail.
 - **FR-006**: The system MUST NOT keep a second Anthropic-protocol connector if a third-party host rejects the official body. The adjustment stays inside the one connector.
-- **FR-007**: The system MUST place the clock, the tool-summary note, the scratchpad note, and the goal-checklist note after the conversation as the trailing user-role block defined in the Round-1 tail section, including on the request that leaves the normalizer and the adapter. It MUST keep the web-display note and the workspace instructions before the conversation. It MUST NOT place those four notes in a system-role message.
+- **FR-007**: The system MUST place the clock, the tool-summary note, the scratchpad note, and the goal-checklist note in one trailing user-role text block after history and after any completed tool-call group, on the request that leaves the normalizer and the adapter. It MUST NOT insert that block between a tool call and its results. It MUST keep the web-display note and the workspace instructions before the conversation. It MUST NOT place those four notes in a system-role message. The history cache mark sits on the last history content before the tail.
 - **FR-008**: The system MUST keep a tool that has been added to a session both advertised and executable in that session until the session ends, MUST NOT expose it to another session of the same agent, MUST remove it when authorization, assignment, or the server is revoked, and MUST serialize a given tool set in one deterministic order.
-- **FR-009**: The system MUST keep the advertised skill list unchanged for the session, MUST place the per-turn skill reminder after the conversation, MUST record tool-list size and skill-text size per agent, and MUST NOT start sending every allowed tool from the first turn.
+- **FR-009**: The system MUST keep the advertised skill list unchanged for the session, MUST place the per-turn skill reminder after the conversation, MUST record a labelled token count or token estimate of the tool list and of the skill text per agent, and MUST name the estimator. A byte or character count alone does not satisfy this. Bytes MAY be stored separately under their own name. The system MUST NOT start sending every allowed tool from the first turn.
 - **FR-010**: The system MUST still narrow the tool list on a goal-setting turn, and MUST restore the session tool list on the next ordinary turn.
-- **FR-011**: The system MUST parse every usage field named in the provider table and MUST normalize to uncached prompt, cache read, and cache write without double-counting a repeated field. The Gemini include rule MUST NOT be invented before the live check records it.
+- **FR-011**: The system MUST parse every usage field named in the provider table and MUST normalize to uncached prompt, cache read, and cache write without double-counting a repeated field. Fireworks MUST be read only from `usage.prompt_tokens_details.cached_tokens` (D21). Alibaba's chat path MUST be read from the nested `usage.prompt_tokens_details` paths, not from a top-level creation field. The Gemini include rule MUST NOT be invented: the documented example does not say to subtract, so the parser does not subtract. A known usage object with input 0 and output 0 and a positive cache count is a real split, distinct from a missing usage object.
 - **FR-012**: The system MUST send a cache key or header only where the provider table says to send one, and MUST NOT send a field the table marks as rejected. The value MUST be the session id, not the agent id, and MUST NOT be a secret.
 - **FR-013**: The system MUST NOT add Bedrock cache checkpoints or Bedrock cache-field parsing in this feature.
 - **FR-014**: The catalog repository MUST publish models.dev cost fields, in USD per 1 million tokens, with a LiteLLM cross-check at the existing 5 percent relative tolerance. Omnipus MUST price from that snapshot and MUST delete the hand-kept rate table.
 - **FR-015**: The system MUST record tokens for a model with no input price, MUST report the call as unpriced, and MUST NOT apply the old fallback rate.
 - **FR-016**: The system MUST price cache-read tokens, and 5-minute write tokens, at the input price when that cache price is absent, and MUST price them at zero when the catalog publishes zero. This fallback MUST NOT price a 1-hour write that FR-027 marks unpriced.
 - **FR-017**: The system MUST NOT add a token-limit brake or a USD spend cap. D13 voids D8's token-limit sentence. Pricing honesty does not include a new limit.
-- **FR-018**: The system MUST choose the length tier from uncached input plus cache read plus cache write, excluding output. It MUST apply the highest canonical tier whose size that total has reached, and the base price below the first tier. Canonical tiers MUST win over a legacy `context_over_200k` alias. The alias alone applies at 200,000 and MUST NOT be read as a higher threshold.
+- **FR-018**: The system MUST choose the length tier from uncached input plus cache read plus cache write, excluding output. It MUST follow the source's own boundary. Where the source says "up to N" at the base rate and "over N" at the high rate, exactly N MUST use the base rate, including when the catalog `tier.size` is N. A source that includes N in the high band MUST be priced that way. The system MUST NOT apply one inclusive or exclusive rule to every `tier.size`. Canonical tiers MUST win over a legacy `context_over_200k` alias. The alias alone means over 200,000: exactly 200,000 stays on the base rate, and the alias MUST NOT be read as a higher threshold such as 512,000.
 - **FR-019**: The system MUST have fake-provider CI tests for request bytes, prefix stability, every usage shape in the dataset, cost arithmetic, and the second-call cost being lower but not zero.
-- **FR-020**: Landing MUST include one recorded live run for Anthropic, OpenAI, ChatGPT sign-in, and OpenRouter Claude, plus live checks for Gemini and Qwen, including one behaviour check of the moved notes by a tester and an independent validator on that commit. Before the Anthropic connector switch lands, recorded Anthropic-protocol checks MUST also exist for DeepSeek, Moonshot, Z.AI, and MiniMax's Anthropic path, each naming model, endpoint, protocol, connector, and commit. An OpenAI-compatible check of those hosts does not satisfy this requirement.
-- **FR-021**: A live HTTP 200 with zero cache-read tokens MUST NOT pass the cache proof.
+- **FR-020**: Landing MUST include the five recorded live runs in D22, and no others. Each run MUST send the same conversation twice, and the second call MUST report cached tokens greater than zero. The ChatGPT subscription run MUST record tokens and no dollars (D14). Every other provider MUST be covered by a fixture taken from that provider's documented example response, not by a live call. One of the five runs MUST also be checked, on that same commit, by a tester and an independent validator, that the moved notes are still followed.
+- **FR-021**: A live second call that returns success with zero cached tokens MUST NOT pass the cache proof. The live proof is cached tokens greater than zero. It is not a requirement that the live read exceed the pre-history prefix. That stronger comparison stays in the fake Anthropic suite.
 - **FR-022**: The system MUST NOT change skill `allowed-tools` parsing.
 - **FR-023**: The system MUST NOT add per-area log levels.
 - **FR-024**: The system MUST allow a cache miss when history is trimmed or the model changes, and MUST NOT freeze history or pin the model to prevent it.
 - **FR-025**: The per-call log MUST NOT include prompt text, tool arguments, credentials, or any string, array, or object taken from the provider usage payload. Provider id, model id, agent id, session id, and turn or call id are correlation ids this system writes, not provider strings, and they stay. A successful usage object that contains private text MUST NOT put that text in the log.
 - **FR-026**: A ChatGPT sign-in call MUST be marked `subscription`, MUST record cached and uncached tokens, and MUST NOT record a dollar cost even when the catalog has an API price for that model.
 - **FR-027**: The system MUST store 5-minute and 1-hour write counts separately when the provider reports the split. 5-minute writes MUST use catalog `cache_write` when that field is present. 1-hour writes MUST use catalog `cache_write_1h` when that field is present. When it is absent, 1-hour writes MUST be priced at the provider's documented 1-hour multiplier times the catalog input price. Anthropic's documented multiplier is 2. The system MUST NOT keep a dollar price for that multiplier. A provider that documents no 1-hour multiplier MUST leave that portion `unpriced` and MUST still store its tokens. The log MUST say which rule priced the 1-hour portion. The catalog's first price publication is not required to include `cache_write_1h`; the field is the tracked extension.
-- **FR-028**: The system MUST NOT enable OpenAI explicit breakpoint mode, Moonshot's 1-hour option, DeepInfra retention, or the Vercel `caching: auto` rewrite.
+- **FR-028**: The system MUST NOT enable OpenAI explicit breakpoint mode, Moonshot's 1-hour option, DeepInfra retention, or the Vercel `caching: auto` rewrite. A Vercel Claude model MUST still receive the documented manual `cache_control` mark. That mark is not a second connector and is not the automatic rewrite.
 - **FR-029**: The system MUST NOT promote an unsupported catalog row to a callable provider as part of this feature.
 
 ---
@@ -1079,7 +1001,7 @@ This feature changes existing behaviour. These tests must be rewritten to the ne
 - **SC-002**: The usage report hit ratio for a fixture of 100 uncached, 800 read, and 100 write equals 0.8, and a fixture with a zero denominator returns null.
 - **SC-003**: A fixture call priced as in the priced-call scenario costs $0.0204. A model with no catalog price does not cost $0.003 per 1,000 input tokens.
 - **SC-004**: Searching the tree finds no hand-kept rate table and no hand-written Anthropic connector package.
-- **SC-005**: Landing evidence contains the ten recorded live checks named in FR-020. The four third-party checks name the Anthropic protocol, endpoint, connector, and commit. The connector switch is absent unless those four passed. The Anthropic and OpenAI second calls show a cache read larger than the full pre-history prefix. A zero read, or a read of only the prefix, is a failed proof even when the call succeeded.
+- **SC-005**: Landing evidence contains the five D22 runs and no others. Each names the account, the model, the commit, and a second-call cached-token count greater than zero. The ChatGPT subscription run has tokens and no dollars. A zero cached-token count fails that run.
 - **SC-006**: `docs/settings.md` describes the hit percent on the existing Usage screen and does not add a caching page. `docs/operations/observability.md` describes the info accounting line, how to raise the existing log level, and priced, unpriced, and subscription.
 
 ---
@@ -1096,9 +1018,9 @@ This feature changes existing behaviour. These tests must be rewritten to the ne
 | FR-006 | US-2 | No second connector | `TestConnector_OneAnthropicPackage` |
 | FR-007 | US-3 | Volatile notes | `TestPrefixStable_ClockAndScratchpadMove`, `TestPrefixStable_AfterNormalizeAndAdapter` |
 | FR-008 | US-3 | Tool order; loaded tool; new session does not inherit | `TestToolOrder_IndependentOfInputOrder`, `TestLoadedTool_SurvivesTime`, `TestLoadedTool_NotInheritedByNextSession`, `TestLoadedMcpTool_ExecutesOnlyInThatSession` |
-| FR-009 | US-3 | Skill list | `TestSkillList_FrozenForSession` |
+| FR-009 | US-3 | Skill list | `TestSkillList_FrozenForSession`, `TestSkillAndToolSizes_AreTokenCounts` |
 | FR-010 | US-3 | Goal narrowing | `TestGoalNarrowing_RestoresListNextTurn` |
-| FR-011 | US-4 | Usage shapes; unknown usage field | `TestUsageShapes_Normalize`, `TestUsageShapes_DeepSeekHitNotDoubleCounted`, `TestUsageShapes_GeminiDoesNotSubtractUntilEvidence`, `TestUsageShapes_UnknownFieldDoesNotFail` |
+| FR-011 | US-4 | Usage shapes; unknown usage field | `TestUsageShapes_Normalize`, `TestUsageShapes_DeepSeekHitNotDoubleCounted`, `TestUsageShapes_GeminiDoesNotSubtractUntilEvidence`, `TestUsageShapes_UnknownFieldDoesNotFail`, `TestFireworks_StandardCachedTokensOnly`, `TestAlibaba_NestedWritePath`, `TestCacheOnlyZeroOutput_ReconcilesThroughReload` |
 | FR-012 | US-4 | Cache key | `TestCacheKeyAllowList_SendsAndSuppresses` |
 | FR-013 | US-4 | Bedrock unchanged | `TestBedrockBody_Unchanged` |
 | FR-014 | US-5 | Priced call | `TestPrice_CatalogArithmetic`, `TestPrice_NoRateTable` |
@@ -1115,7 +1037,7 @@ This feature changes existing behaviour. These tests must be rewritten to the ne
 | FR-025 | US-1 | Error body | `TestLogLine_UsageOnly`, `TestLogLine_DropsTextInsideUsage` |
 | FR-026 | US-5 | ChatGPT sign-in call | `TestPrice_SubscriptionRecordsNoDollars` |
 | FR-027 | US-4, US-5 | One-hour write; Anthropic split write row | `TestUsageShapes_Normalize`, `TestPrice_OneHourWriteUsesDocumentedMultiplier` |
-| FR-028 | US-4 | Implicit host; provider table | `TestCacheKeyAllowList_SendsAndSuppresses` extended to assert those bodies are absent |
+| FR-028 | US-4 | Implicit host; provider table | `TestCacheKeyAllowList_SendsAndSuppresses`, `TestVercelClaude_ManualCacheControl` |
 | FR-029 | US-4 | — | Factory tests: unsupported rows still fail construction as they do today |
 
 ---
@@ -1124,18 +1046,18 @@ This feature changes existing behaviour. These tests must be rewritten to the ne
 
 | Risk | What goes wrong | Mitigation |
 |---|---|---|
-| Third-party Anthropic hosts reject the official body | DeepSeek, MiniMax, Moonshot, or Z.AI calls start failing | D17. One connector is adjusted. The switch does not land on a failed live check. |
-| Moved notes change agent behaviour | Goal checklist or scratchpad is followed less well at the end of the prompt | D9 behaviour check on the existing goal and scratchpad scenarios. A note that fails that check is moved back in front, and the spec is corrected. It is not left behind a green test. |
+| Third-party hosts reject the official body | MiniMax, Moonshot, or Z.AI coding-plan calls start failing | D3 and D22. One connector is adjusted. Those three runs are part of the five. DeepSeek is a documented fixture, not a live gate. |
+| Moved notes change agent behaviour | Goal checklist or scratchpad is followed less well at the end of the prompt | One of the five live runs is checked by a tester and an independent validator. A note that fails that check is moved back in front, and the spec is corrected. It is not left behind a green test. |
 | Prices land after markers | Displayed session cost falls toward zero while cache reads are real | Catalog snapshot with prices lands in the same change as the marker, or before it. The second-call test fails if the second cost is zero. |
 | 1-hour writes priced at 1× input, or at the 5-minute `cache_write` | An Anthropic 1-hour write is understated. The published 1-hour write is 2× input, and `cache_write` on Haiku 4.5 is the 1.25× 5-minute rate. | Corrected D18. Until `cache_write_1h` exists, Anthropic 1-hour writes cost 2× the catalog input price. A provider with no documented 1-hour multiplier does not get a guessed factor: that portion is unpriced. The log names the rule. |
 | Cache key sent to a host that rejects it | The turn fails with 400 or 422 | Allow-list. Scaleway and OVHcloud are explicit denials. A new host is not added because a neighbour accepts the field. |
 | Default log level hides the line | An operator at `warn` sees nothing per call | Accepted (D15). The Usage screen is the default-install surface. The line stays at info. |
 | No spend brake | Honest prices do not stop a runaway loop | Accepted (D13). This feature does not add a cap and does not pretend the deleted one still exists. |
-| Gemini include rule guessed | Prompt tokens go negative or double | Parser does not subtract until the live check records the rule. |
+| Gemini include rule guessed | Prompt tokens go negative or double | Parser does not subtract. The documented example does not state the rule, and Gemini is not called live. |
 
 Rollout is one change on the feature branch: catalog publication, embedded snapshot, connector switch, prefix order, parsers, report fields, tests. No flag. A flag that can turn the marker off while leaving the prefix move on is a second behaviour to test, and D1 does not ask for one. If a live check fails, the branch does not land; it is not half-enabled in production.
 
-User-facing doc: `docs/settings.md` Usage section, as in Reachability.
+User-facing docs: `docs/settings.md` and `docs/operations/observability.md`, as in Reachability.
 
 ---
 
@@ -1144,51 +1066,56 @@ User-facing doc: `docs/settings.md` Usage section, as in Reachability.
 ```
 catalog cost fields ──► embedded snapshot ──► price from catalog ──► delete rate table
                                                           │
-official connector ──► Anthropic marks and stream        │
-        │                                                 │
-prefix order (notes, clock) ──► sticky tools + skill freeze ──► ADR-071 amendment (before the tool change)
-        │                                                 │
-usage parsers (all shapes) ──► log line ──► usage report fields + contract regen
-        │                                                 │
-        └──────── fake-provider CI suite ◄───────────────┘
+contract schemas ──► regenerate ──► persisted-stat writers, report, screen
+        │
+official connector ──► Anthropic marks and stream
+        │
+prefix order (notes, clock) ──► sticky tools + skill token estimates
+        │
+usage parsers (all shapes) ──► log line
+        │
+        └──────── fake-provider CI suite
                               │
-                    recorded live runs (landing gate)
+                    five live runs (landing gate)
 ```
 
 | Step | Work | Depends on | Landing note |
 |---|---|---|---|
 | 1 | Dated ADR-071 amendment, as specified above | This spec | Before the tool-list change |
-| 2 | Catalog schema and assemble publish cost fields, including optional `cache_write_1h`; dispute rule for prices | D7, D18 | First publication may omit `cache_write_1h` |
+| 2 | Catalog schema and assemble publish cost fields, including optional `cache_write_1h` and the source's tier-boundary meaning; dispute rule for prices | D7, D18, FR-018 | First publication may omit `cache_write_1h` |
 | 3 | Embed the new snapshot; extend the Go model struct | Step 2 | — |
-| 4 | Usage-shape parser and its tests, including the 5-minute / 1-hour split | Nothing | Gemini subtraction stays off until the live check |
-| 5 | Official Anthropic connector, delete the hand-written one, marks and lifetimes | Step 4 for the stream assertion | Does not land until the D17 checks pass |
-| 6 | Move the volatile notes and the clock | Nothing | — |
-| 7 | Sticky tool list, frozen skill list, size measurement | Step 1 | — |
-| 8 | Cache-key allow-list; value is the session id | Nothing | — |
-| 9 | Catalog pricing, delete the rate table, unpriced stats, subscription marking, 1-hour write rule | Step 3 | — |
-| 10 | Contract fields, regenerate, usage report, Usage screen hit percent, `docs/settings.md` | Steps 4 and 9 | — |
-| 11 | Info log line, including `unpriced` and `subscription` | Steps 4 and 9 | Stays at info |
-| 12 | Fake-provider suite green in CI | Steps 4–11 | — |
-| 13 | Recorded live runs: D9's six, plus DeepSeek, MiniMax, Moonshot, and Z.AI | Step 12 | The four third-party checks gate step 5's landing |
+| 4 | Contract schemas, then `scripts/gen-contracts.sh` | This spec | Before any writer, report, or screen that uses the new fields. Five steps: schema file, OpenAPI reference, regenerate, commit the generated diff with the schema, then use only the generated types |
+| 5 | Usage-shape parser and its tests, including the 5-minute / 1-hour split, the Fireworks standard field, the nested Alibaba write, and the cache-only zero split | Step 4 for anything the parser persists onto session stats | Gemini is not subtracted |
+| 6 | Official Anthropic connector, delete the hand-written one, marks and lifetimes, Vercel manual Claude mark | Step 5 for the stream assertion | Parity tests pass before the old package is deleted. Not gated on a DeepSeek live call |
+| 7 | Move the volatile notes and the clock | Nothing | — |
+| 8 | Sticky tool list, frozen skill list, token estimates | Step 1 | — |
+| 9 | Cache-key allow-list; value is the session id | Nothing | — |
+| 10 | Catalog pricing, delete the rate table, unpriced stats, subscription marking, 1-hour write rule | Steps 3 and 4 | Writers use the regenerated types |
+| 11 | Usage report, Usage screen hit percent, both doc pages | Steps 4 and 10 | — |
+| 12 | Info log line, including `unpriced` and `subscription` | Steps 5 and 10 | Stays at info |
+| 13 | Fake-provider suite green in CI | Steps 5–12 | Includes the documented-example fixtures |
+| 14 | Five recorded live runs (D22) | Step 13 | No other provider is called live |
 
-Steps 2, 4, and 6 touch different trees and can run together. Step 7 must not start until the ADR amendment is written, so the code does not contradict a live ADR. Step 5 and step 6 meet at the request body and should be integrated before the prefix-stability test is claimed green.
+Steps 2, 5's in-memory parser, and 7 touch different trees and can run together. Step 8 must not start until the ADR amendment is written. Step 4 is finished before step 10 and step 11. Step 6 and step 7 meet at the request body and should be integrated before the prefix-stability test is claimed green.
 
 ---
 
 ## Ambiguity Warnings
 
-No open question remains. The seven items this draft first listed were closed by D13–D18.
+No open question remains. D13–D20 closed the earlier questions. D21 and D22 closed grill round 2. D22 replaces the live-proof population in D9 and D17.
 
 | # | Was ambiguous | Decision |
 |---|---|---|
 | 1 | D8's token-limit sentence | D13. No new limit. The sentence is void. |
 | 2 | ChatGPT subscription dollars | D14. Mark `subscription`. Tokens only. No dollars. |
 | 3 | Cache key value | D16. Session id. Not the agent id. |
-| 4 | Extra live hosts | D17. DeepSeek, MiniMax, Moonshot, and Z.AI before the connector switch lands. |
+| 4 | Which providers are called live | D22. Five accounts only. Everyone else is a documented fixture. D17's extra live list is not the gate. |
 | 5 | Log line versus default `warn` | D15. Stay at info. The Usage screen is what the default install shows. |
 | 6 | One `cache_write` versus a 1-hour lifetime | Corrected D18. Separate counts. 5-minute writes at `cache_write`. 1-hour writes at the documented multiplier times catalog input (Anthropic: 2) until `cache_write_1h` exists. No documented multiplier: that portion is unpriced. |
 | 7 | "No UI" versus the usage report | D15. No new screen. The existing Usage screen shows the hit percent. |
-| 8 | Gemini prompt total include rule | FR-011. Do not subtract until the live check records the rule. |
+| 8 | Gemini prompt total include rule | FR-011. Do not subtract. There is no live Gemini check. |
+| 9 | Fireworks metrics versus the standard field | D21. Standard `usage.prompt_tokens_details.cached_tokens` only. |
+| 10 | How strict the live cache proof is | D22. Second call, cached tokens greater than zero, on the five accounts. The fake suite still requires a history-covering read. |
 
 ---
 
@@ -1200,7 +1127,7 @@ These are for a person checking the landed build. They are not part of the test 
 
 - **Setup**: One session, one Anthropic model, a prefix long enough for that model's minimum.
 - **Action**: Ask for a task that takes several tool steps without changing tools after the first step.
-- **Expected outcome**: The log's cache-read count on the later steps is larger than the instruction block alone, and the usage report hit percent for that agent is above zero.
+- **Expected outcome**: On one of the five live accounts, a later step reports cached tokens greater than zero, and the usage report hit percent for that agent is above zero. The fake suite, not this check, proves the read includes history.
 - **Category**: Happy Path
 
 ### Scenario: The usage screen matches the log
@@ -1249,7 +1176,7 @@ These are for a person checking the landed build. They are not part of the test 
 
 ## Assumptions
 
-- D1 through D20 are binding. D13 voids D8's token-limit sentence. There is no cost cap to extend, and none is added. D19 narrows D6 to hosts that document those lifetimes. D20 replaces every "raw usage object" sentence.
+- D1 through D22 are binding. D13 voids D8's token-limit sentence. There is no cost cap to extend, and none is added. D19 narrows D6 to hosts that document those lifetimes. D20 replaces every "raw usage object" sentence. D21 drops the Fireworks metrics fallback. D22 replaces the live-proof population in D9 and D17 and does not reopen the rest of those decisions.
 - "The two formats" means the Anthropic protocol and the OpenAI-compatible protocol the factory already speaks, including Gemini's and Ollama's rows on that client. It does not mean adding Bedrock, Vertex, or Azure.
 - The embedded catalog snapshot is updated from a catalog release. Prices are not typed into Go.
 - A published models.dev cost is USD per 1 million tokens. Checked against `claude-haiku-4-5` on 2026-10-15 (`input` 1, `cache_write` 1.25).
@@ -1268,9 +1195,10 @@ These are for a person checking the landed build. They are not part of the test 
 - Q: What lifetimes? -> A: D6, as narrowed by D19. 1 hour on instructions and tools, and 5 minutes on the conversation tail, only where that host documents those marks. Moonshot sends no mark. MiniMax uses its documented 5-minute or automatic mode and no 1-hour mark.
 - Q: Who keeps the price list? -> A: D7. The catalog's sources. Delete the hand-kept table.
 - Q: What if there is no price? -> A: D8, as narrowed by D13. Unpriced, tokens still counted. A missing cache price uses the input price. No token limit is added.
-- Q: Subscription calls, the cache-key identity, the Usage screen, the log level, the extra live hosts, and the 1-hour write price? -> A: D14 marks ChatGPT sign-in as `subscription` with tokens and no dollars. D16 sets the cache key to the session id. D15 puts the hit percent on the existing Usage screen and the per-call line at info. D17 adds DeepSeek, MiniMax, Moonshot, and Z.AI before the connector switch lands, on the Anthropic protocol. D18 stores 5-minute and 1-hour writes separately and prices them as specified in FR-027.
+- Q: Subscription calls, the cache-key identity, the Usage screen, the log level, the extra live hosts, and the 1-hour write price? -> A: D14 marks ChatGPT sign-in as `subscription` with tokens and no dollars. D16 sets the cache key to the session id. D15 puts the hit percent on the existing Usage screen and the per-call line at info. D17's extra live list is replaced by D22. D18 stores 5-minute and 1-hour writes separately and prices them as specified in FR-027.
 - Q: One caching dialect for every Anthropic-protocol host, and may the log carry the raw usage object? -> A: D19 and D20. One connector, each host's documented marks. The log carries bounded numeric counters and correlation ids only. No finding from grill round 1 is rejected.
-- Q: What proves it? -> A: D9. Fake-provider CI, plus one recorded live run per named provider.
+- Q: What proves it? -> A: D9, as narrowed by D22. Fake-provider CI for every provider, using documented examples where we have no account. Live proof is the five accounts only.
+- Q: Fireworks performance metrics, and which live routes must prove a history-sized read? -> A: D21 and D22. Fireworks reads only `usage.prompt_tokens_details.cached_tokens`. Live proof is OpenRouter, Z.AI/GLM, MiniMax, Moonshot, and ChatGPT subscription: the same conversation twice, cached tokens greater than zero. No other live provider. No finding from grill round 2 is rejected.
 - Q: What does the operator see? -> A: D10. One log line, and hit percent per agent and per provider on the existing report. No new log-level feature.
 - Q: Skill allowed-tools? -> A: D11. Out of scope.
 - Q: A red-team pass in the interview? -> A: D12. No. Two grill rounds on this spec instead.
