@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,18 +23,69 @@ import (
 // makes two turns differ. Putting that clock back in front must fail.
 var secondsInPrefix = regexp.MustCompile(`\d{2}:\d{2}:\d{2}Z`)
 
-func prefixThrough(messages []providers.Message, lastContent string) string {
-	var b strings.Builder
-	for _, msg := range messages {
-		b.WriteString(msg.Role)
-		b.WriteByte('\n')
-		b.WriteString(msg.Content)
-		b.WriteByte('\n')
-		if msg.Content == lastContent {
-			break
+// historyBoundary must identify the SAME history item in both captures. A
+// missing sentinel is an error, never permission to include the volatile tail.
+func historyBoundary(messages []providers.Message, role, content string) (int, error) {
+	found := -1
+	for i, msg := range messages {
+		if msg.Role == role && msg.Content == content {
+			if found >= 0 {
+				return -1, fmt.Errorf("history boundary %s %q is ambiguous", role, content)
+			}
+			found = i
 		}
 	}
-	return b.String()
+	if found < 0 {
+		return -1, fmt.Errorf("history boundary %s %q is missing", role, content)
+	}
+	return found, nil
+}
+
+func prefixThrough(messages []providers.Message, role, content string) (string, error) {
+	end, err := historyBoundary(messages, role, content)
+	if err != nil {
+		return "", err
+	}
+	return prefixBytes(messages[:end+1])
+}
+
+func mustPrefixThrough(t *testing.T, messages []providers.Message, role, content string) string {
+	t.Helper()
+	prefix, err := prefixThrough(messages, role, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prefix
+}
+
+func prefixBytes(messages []providers.Message) (string, error) {
+	// Compare all serialized message fields, not just Role/Content. Moving cache
+	// breakpoints are metadata, not rendered prompt bytes (Anthropic caching
+	// guide, "Verifying cache hits"). Do not mutate the captured request.
+	// ToolCall.Name/Arguments have json:"-" in the shared type but adapters
+	// consume them. Include those fields explicitly so their mutations count.
+	type prefixCall struct {
+		providers.ToolCall
+		Name      string         `json:"name,omitempty"`
+		Arguments map[string]any `json:"arguments,omitempty"`
+	}
+	type prefixMessage struct {
+		providers.Message
+		ToolCalls []prefixCall `json:"tool_calls,omitempty"`
+	}
+	copyMessages := make([]prefixMessage, len(messages))
+	for i, msg := range messages {
+		copyMessages[i].Message = msg
+		copyMessages[i].SystemParts = append([]providers.ContentBlock(nil), msg.SystemParts...)
+		for j := range copyMessages[i].SystemParts {
+			copyMessages[i].SystemParts[j].CacheControl = nil
+		}
+		for _, call := range msg.ToolCalls {
+			copyMessages[i].ToolCalls = append(copyMessages[i].ToolCalls, prefixCall{call, call.Name, call.Arguments})
+		}
+	}
+	raw, err := json.Marshal(copyMessages)
+	return string(raw), err
 }
 
 func messageTexts(messages []providers.Message) string {
@@ -111,19 +164,15 @@ func TestPrefixStable_ClockAndScratchpadMove(t *testing.T) {
 	send("TURN-TWO")
 	second := append([]providers.Message(nil), provider.last...)
 
-	// Dataset row 1: clock plus about a second. Bytes through the prior turn match.
-	before := prefixThrough(first, "TURN-ONE")
-	after := prefixThrough(second, "Mock response")
-	// The second request's prefix through the first assistant reply must equal
-	// the first request through the same history. The clock moving is not allowed
-	// to change those bytes.
-	firstHistory := prefixThrough(first, "Mock response")
-	if firstHistory != after {
-		t.Errorf("bytes through prior history differ after the clock advanced\nfirst:\n%s\nsecond:\n%s", firstHistory, after)
+	// TURN-ONE is the last history item actually SENT in the first capture.
+	// Its assistant response did not exist yet. Cut BOTH requests at TURN-ONE.
+	before := mustPrefixThrough(t, first, "user", "TURN-ONE")
+	after := mustPrefixThrough(t, second, "user", "TURN-ONE")
+	if before != after {
+		t.Errorf("bytes through shared history differ after the clock advanced\nfirst:\n%s\nsecond:\n%s", before, after)
 	}
-	_ = before
 
-	assertVolatileTail(t, second, "SCRATCH-ONE")
+	assertVolatileTail(t, second, "TURN-TWO", "SCRATCH-ONE")
 
 	// Change the scratchpad and build again. Dataset row 2.
 	tasks, err := al.taskStore.List(task.Filter{AgentID: "mia"})
@@ -141,107 +190,110 @@ func TestPrefixStable_ClockAndScratchpadMove(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 	send("TURN-THREE")
 	third := append([]providers.Message(nil), provider.last...)
-	if prefixThrough(second, "Mock response") != prefixThrough(third, "TURN-TWO") &&
-		!strings.Contains(messageTexts(third), "SCRATCH-TWO") {
-		t.Errorf("scratchpad change was not confined to the tail\n%s", messageTexts(third))
+	before = mustPrefixThrough(t, second, "user", "TURN-TWO")
+	after = mustPrefixThrough(t, third, "user", "TURN-TWO")
+	if before != after {
+		t.Errorf("bytes through shared history differ after the scratchpad changed\nsecond:\n%s\nthird:\n%s", before, after)
 	}
-	assertVolatileTail(t, third, "SCRATCH-TWO")
+	assertVolatileTail(t, third, "TURN-THREE", "SCRATCH-TWO")
 }
 
-func assertVolatileTail(t *testing.T, messages []providers.Message, scratch string) {
+func assertVolatileTail(t *testing.T, messages []providers.Message, history, scratch string) {
 	t.Helper()
-	var historyEnd int
-	for i, msg := range messages {
-		if msg.Role == "user" && (msg.Content == "TURN-ONE" || msg.Content == "TURN-TWO" || msg.Content == "TURN-THREE") {
-			historyEnd = i
-		}
-	}
-	for i, msg := range messages {
-		if msg.Role == "system" && (secondsInPrefix.MatchString(msg.Content) || strings.Contains(msg.Content, "Current Time") || strings.Contains(msg.Content, scratch) || strings.Contains(msg.Content, skillReminderNote)) {
-			t.Errorf("system message %d holds a volatile note (clock, scratchpad, or skill reminder); those sit in one user-role block after history", i)
-		}
-	}
-	if historyEnd == 0 {
-		t.Fatalf("history not found in:\n%s", messageTexts(messages))
-	}
-	var tail string
-	for _, msg := range messages[historyEnd+1:] {
-		if msg.Role == "user" {
-			tail += msg.Content
-		}
-	}
-	if !strings.Contains(tail, "Current Time") && !secondsInPrefix.MatchString(tail) {
-		t.Errorf("clock is not in the user-role tail after history\n%s", messageTexts(messages))
-	}
-	if scratch != "" && !strings.Contains(tail, scratch) {
-		t.Errorf("scratchpad %q is not in the user-role tail after history\n%s", scratch, messageTexts(messages))
-	}
-	for i, msg := range messages {
-		if strings.Contains(msg.Content, "Rendering (web chat)") && i > historyEnd {
-			t.Errorf("web-display note is after history; it stays in front")
-		}
+	if err := volatileTailError(messages, history, scratch); err != nil {
+		t.Errorf("%v\n%s", err, messageTexts(messages))
 	}
 }
 
-// TestPrefixStable_AfterNormalizeAndAdapter is TDD row 22. The body that
-// leaves the normalizer is what the provider receives. The tail is user-role
-// and after history. A completed tool-call group is not split by that tail.
+func volatileTailError(messages []providers.Message, history, scratch string) error {
+	end, err := historyBoundary(messages, "user", history)
+	if err != nil {
+		return err
+	}
+	for i, msg := range messages[:end+1] {
+		text := msg.Content
+		for _, part := range msg.SystemParts {
+			text += part.Text
+		}
+		if secondsInPrefix.MatchString(text) || strings.Contains(text, "Current Time") ||
+			(scratch != "" && strings.Contains(text, scratch)) || strings.Contains(text, skillReminderNote) {
+			return fmt.Errorf("volatile note at message %d before the history boundary", i)
+		}
+	}
+	if len(messages[end+1:]) != 1 {
+		return fmt.Errorf("volatile tail has %d messages, want one user-role block", len(messages[end+1:]))
+	}
+	tail := messages[end+1]
+	if tail.Role != "user" || len(tail.ToolCalls) != 0 || tail.ToolCallID != "" {
+		return fmt.Errorf("volatile tail is not a user-role text block")
+	}
+	if !strings.Contains(tail.Content, "Current Time") && !secondsInPrefix.MatchString(tail.Content) {
+		return fmt.Errorf("clock is not in the user-role tail after history")
+	}
+	if scratch != "" && !strings.Contains(tail.Content, scratch) {
+		return fmt.Errorf("scratchpad %q is not in the user-role tail after history", scratch)
+	}
+	if strings.Contains(tail.Content, "Rendering (web chat)") {
+		return fmt.Errorf("web-display note is after history; it stays in front")
+	}
+	return nil
+}
+
+// TestPrefixStable_AfterNormalizeAndAdapter is TDD row 22. Capture real HTTP
+// bytes after BOTH the window normalizer and the official Anthropic adapter.
 func TestPrefixStable_AfterNormalizeAndAdapter(t *testing.T) {
-	tmp := setupWorkspace(t, map[string]string{"AGENT.md": "# Agent\nTest agent."})
+	tmp := setupWorkspace(t, map[string]string{"AGENT.md": "# Agent\nWORKSPACE-INSTRUCTIONS-STAY-IN-FRONT"})
 	t.Cleanup(func() { os.RemoveAll(tmp) })
 	cb := NewContextBuilder(tmp)
 	history := []providers.Message{
 		{Role: "user", Content: "PRIOR-USER"},
-		{
-			Role: "assistant",
-			ToolCalls: []providers.ToolCall{{
-				ID:   "call_1",
-				Name: "read",
-				Arguments: map[string]any{
-					"path": "a.txt",
-				},
-			}},
-		},
-		{Role: "tool", ToolCallID: "call_1", Content: "file-body"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{
+			{ID: "call_1", Name: "read", Arguments: map[string]any{"path": "a.txt"}},
+			{ID: "call_2", Name: "read", Arguments: map[string]any{"path": "b.txt"}},
+		}},
+		{Role: "tool", ToolCallID: "call_1", Content: "file-body-a"},
+		{Role: "tool", ToolCallID: "call_2", Content: "file-body-b"},
+		{Role: "assistant", Content: "PRIOR-ASSISTANT"},
 	}
-	msgs := cb.BuildMessages(0, history, "current question", nil, "", "webchat", "chat-1", "user-1", "Alice", "", nil)
-	assertToolGroupIntact(t, msgs)
-	for _, msg := range msgs {
-		if msg.Role == "system" && (secondsInPrefix.MatchString(msg.Content) || strings.Contains(msg.Content, "Current Time")) {
-			t.Errorf("after BuildMessages the clock is still a system message in front of history")
+	capture := func(current string) cacheWireBody {
+		t.Helper()
+		msgs := cb.BuildMessages(0, history, current, nil, "", "webchat", "chat-1", "user-1", "Alice", "", nil)
+		msgs = normalizeWindowMessages(&turnState{userMessage: current}, msgs)
+		return captureCacheWire(t, msgs)
+	}
+	first := capture("current question one")
+	time.Sleep(1100 * time.Millisecond)
+	second := capture("current question two")
+	before := cacheWirePrefix(t, first, "PRIOR-ASSISTANT")
+	after := cacheWirePrefix(t, second, "PRIOR-ASSISTANT")
+	if before != after {
+		t.Errorf("adapter bytes through shared history differ after the clock advanced\nfirst:\n%s\nsecond:\n%s", before, after)
+	}
+	for i, body := range []cacheWireBody{first, second} {
+		if err := cacheWireTailError(body); err != nil {
+			t.Error(err)
+		}
+		wantCurrent := []string{"current question one", "current question two"}[i]
+		currentCount := 0
+		for _, msg := range body.Messages {
+			for _, block := range msg.Content {
+				if msg.Role == "user" && block.Type == "text" && block.Text == wantCurrent {
+					currentCount++
+				}
+			}
+		}
+		if currentCount != 1 {
+			t.Errorf("adapted current question %q occurs %d times, want exactly once before the tail", wantCurrent, currentCount)
+		}
+		assertCacheWireToolResults(t, body, map[string]string{"call_1": "file-body-a", "call_2": "file-body-b"})
+		var front strings.Builder
+		for _, block := range body.System {
+			front.WriteString(block.Text)
+		}
+		if !strings.Contains(front.String(), "WORKSPACE-INSTRUCTIONS-STAY-IN-FRONT") {
+			t.Error("workspace instructions are absent from the front of the adapted request")
 		}
 	}
-	var tail string
-	seenCurrent := false
-	for _, msg := range msgs {
-		if msg.Content == "current question" {
-			seenCurrent = true
-			continue
-		}
-		if seenCurrent && msg.Role == "user" {
-			tail += msg.Content
-		}
-	}
-	if !seenCurrent || !strings.Contains(tail, "Current Time") {
-		t.Errorf("clock is not a user-role block after the conversation\n%s", messageTexts(msgs))
-	}
-}
-
-func assertToolGroupIntact(t *testing.T, messages []providers.Message) {
-	t.Helper()
-	for i, msg := range messages {
-		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
-			continue
-		}
-		if i+1 >= len(messages) || messages[i+1].Role != "tool" {
-			t.Fatalf("tool call at %d is not followed by its result", i)
-		}
-		if strings.Contains(messages[i+1].Content, "Current Time") {
-			t.Fatalf("volatile note inserted between a tool call and its result")
-		}
-		return
-	}
-	t.Fatal("history tool-call group was dropped")
 }
 
 // TestHistoryHit_StaticOnlyFails is TDD row 29. A cache read that covers only
@@ -257,38 +309,45 @@ func TestHistoryHit_StaticOnlyFails(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 	second := cb.BuildMessages(0, history, "two", nil, "", "test", "c", "u", "A", "", nil)
 
-	pre := prefixBeforeHistory(first, "PRIOR-USER")
-	matched := pre == prefixBeforeHistory(second, "PRIOR-USER")
+	pre, err := prefixBeforeHistory(first, "PRIOR-USER")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A matching static front alone is not a matching history prefix.
+	before := mustPrefixThrough(t, first, "assistant", "PRIOR-ASSISTANT")
+	after := mustPrefixThrough(t, second, "assistant", "PRIOR-ASSISTANT")
+	matched := before == after
 	if !matched {
-		t.Fatalf("captured prefixes differ after the clock advanced, so a history hit cannot pass\n%s", pre)
+		t.Errorf("captured shared-history prefixes differ after the clock advanced\nfirst:\n%s\nsecond:\n%s", before, after)
 	}
 	prefixTokens := tokenCountOfPrefix(pre)
-	if historyHitPasses(prefixTokens, prefixTokens, matched) {
-		t.Fatal("a cache read equal to the pre-history prefix was accepted; SC-001 says that read fails")
-	}
-	if !matched && historyHitPasses(prefixTokens+1, prefixTokens, matched) {
-		t.Fatal("a read beyond the prefix passed even though the captured prefixes differ")
-	}
-	if matched && !historyHitPasses(prefixTokens+1, prefixTokens, matched) {
-		t.Fatal("a read beyond a matching captured prefix was rejected")
+	for _, tc := range []struct {
+		name    string
+		read    int
+		matched bool
+		want    bool
+	}{
+		{"no read", 0, true, false},
+		{"below static", prefixTokens - 1, true, false},
+		{"static only", prefixTokens, true, false},
+		{"beyond matching history", prefixTokens + 1, matched, true},
+		{"beyond mismatched history", prefixTokens + 1, false, false},
+	} {
+		if got := historyHitPasses(tc.read, prefixTokens, tc.matched); got != tc.want {
+			t.Errorf("%s: historyHitPasses(%d, %d, %v) = %v, want %v (SC-001)", tc.name, tc.read, prefixTokens, tc.matched, got, tc.want)
+		}
 	}
 	if secondsInPrefix.MatchString(pre) {
-		t.Fatalf("pre-history prefix still contains a seconds clock, so a history hit is impossible:\n%s", pre)
+		t.Errorf("pre-history prefix still contains a seconds clock, so a history hit is impossible:\n%s", pre)
 	}
 }
 
-func prefixBeforeHistory(messages []providers.Message, historyContent string) string {
-	var b strings.Builder
-	for _, msg := range messages {
-		if strings.Contains(msg.Content, historyContent) {
-			break
-		}
-		b.WriteString(msg.Role)
-		b.WriteByte('\n')
-		b.WriteString(msg.Content)
-		b.WriteByte('\n')
+func prefixBeforeHistory(messages []providers.Message, historyContent string) (string, error) {
+	end, err := historyBoundary(messages, "user", historyContent)
+	if err != nil {
+		return "", err
 	}
-	return b.String()
+	return prefixBytes(messages[:end])
 }
 
 // tokenCountOfPrefix is the pre-history size the fake proof compares against.
