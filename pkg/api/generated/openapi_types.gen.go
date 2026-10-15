@@ -15106,7 +15106,7 @@ type AgentTokenEntry struct {
 	// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 	ByModel *map[string]struct {
 		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
@@ -15125,7 +15125,7 @@ type AgentTokenEntry struct {
 	} `json:"by_model,omitempty"`
 
 	// CacheHitRatio Cache-hit ratio for this agent: tokens_cache_read / (tokens_in + tokens_cache_read + tokens_cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. tokens_in is uncached input.
-	CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+	CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 	// TokensCacheRead Total cache-read tokens for this agent in the period.
 	TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -21688,7 +21688,7 @@ type MessageParentResponse struct {
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {
 	// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-	CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+	CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 	// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 	CacheRead *int `json:"cache_read,omitempty"`
@@ -24687,7 +24687,7 @@ type Session struct {
 		// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 		ByModel *map[string]struct {
 			// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-			CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+			CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
@@ -24708,7 +24708,7 @@ type Session struct {
 		// ByProvider Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions.
 		ByProvider *map[string]struct {
 			// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-			CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+			CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
@@ -25340,7 +25340,7 @@ type SessionDetail struct {
 			// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 			ByModel *map[string]struct {
 				// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-				CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+				CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 				// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 				CacheRead *int `json:"cache_read,omitempty"`
@@ -25361,7 +25361,7 @@ type SessionDetail struct {
 			// ByProvider Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions.
 			ByProvider *map[string]struct {
 				// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-				CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+				CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 				// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 				CacheRead *int `json:"cache_read,omitempty"`
@@ -26141,7 +26141,7 @@ type SessionStats struct {
 	// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 	ByModel *map[string]struct {
 		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
@@ -26162,7 +26162,7 @@ type SessionStats struct {
 	// ByProvider Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions.
 	ByProvider *map[string]struct {
 		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
@@ -27576,7 +27576,7 @@ type TokenUsageSummary struct {
 		// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 		ByModel *map[string]struct {
 			// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-			CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+			CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
@@ -27595,7 +27595,7 @@ type TokenUsageSummary struct {
 		} `json:"by_model,omitempty"`
 
 		// CacheHitRatio Cache-hit ratio for this agent: tokens_cache_read / (tokens_in + tokens_cache_read + tokens_cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. tokens_in is uncached input.
-		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 		// TokensCacheRead Total cache-read tokens for this agent in the period.
 		TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -27610,7 +27610,7 @@ type TokenUsageSummary struct {
 	// ByModel Cross-agent per-model breakdown for the period. Keys are model name strings. Absent when no model data is available.
 	ByModel *map[string]struct {
 		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
@@ -27631,7 +27631,7 @@ type TokenUsageSummary struct {
 	// ByProvider Per-provider token breakdown for the period. Same cell shape as by_model. Keys are catalog provider ids. Absent when no provider data is available.
 	ByProvider *map[string]struct {
 		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
-		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`

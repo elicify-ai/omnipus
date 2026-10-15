@@ -38,6 +38,7 @@ properties:
     minimum: 0
     maximum: 1
     nullable: true
+    x-omitempty: false
     description: >
       Cache-hit ratio for this agent: tokens_cache_read / (tokens_in +
       tokens_cache_read + tokens_cache_write) when that denominator is greater
