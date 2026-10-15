@@ -309,10 +309,11 @@ func stderrSuccessChild(t *testing.T) {
 	StartTestGateway(t)
 }
 
-// stderrSuccessRunner serves /health and writes gateway.port, then returns nil
-// when the harness cancels. InitPanic steals stderr the way a real boot does;
-// the marker reaches the pipe only if StartTestGateway's cleanup puts it back.
-func stderrSuccessRunner(ctx context.Context, _ bool, home, configPath string, _ bool) error {
+// stderrSuccessRunner serves /health and writes gateway.port, then shuts down
+// when the harness cancels, reporting any serve or cleanup error. InitPanic
+// steals stderr the way a real boot does; the marker reaches the pipe only if
+// StartTestGateway's cleanup puts it back.
+func stderrSuccessRunner(ctx context.Context, _ bool, home, configPath string, _ bool) (result error) {
 	cleanup, err := logger.InitPanic(filepath.Join(home, "panic.log"))
 	if err != nil {
 		return err
@@ -332,15 +333,38 @@ func stderrSuccessRunner(ctx context.Context, _ bool, home, configPath string, _
 		}),
 		ReadHeaderTimeout: time.Second,
 	}
-	go func() { _ = srv.Serve(ln) }()
+	serveDone := make(chan struct{})
+	var serveErr error
+	go func() {
+		defer close(serveDone)
+		serveErr = srv.Serve(ln)
+		if serveErr == http.ErrServerClosed {
+			serveErr = nil
+		} else if serveErr != nil {
+			serveErr = fmt.Errorf("serve stderr-probe server: %w", serveErr)
+		}
+	}()
+	defer func() {
+		closeErr := srv.Close()
+		if closeErr != nil {
+			closeErr = fmt.Errorf("close stderr-probe server: %w", closeErr)
+		}
+		<-serveDone
+		result = errors.Join(result, closeErr, serveErr)
+	}()
 	if err := os.WriteFile(filepath.Join(home, gatewayPortFileName), []byte(strconv.Itoa(port)+"\n"), 0o600); err != nil {
-		_ = srv.Close()
-		return err
+		return fmt.Errorf("write stderr-probe port: %w", err)
 	}
-	<-ctx.Done()
+	select {
+	case <-serveDone:
+		return errors.New("stderr-probe server stopped before cancellation")
+	case <-ctx.Done():
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(shutdownCtx)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shutdown stderr-probe server: %w", err)
+	}
 	return nil
 }
 

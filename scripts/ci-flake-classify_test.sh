@@ -130,7 +130,7 @@ extract_guard_body() {
 
 run_extracted() {
 	local body="$1" input="$2" stublog="$3" outlog="$4"
-	local stubdir work runsh status
+	local stubdir work runsh status retry_path race_retry_path
 	stubdir=$(mktemp -d)
 	work=$(mktemp -d)
 	: >"$stublog"
@@ -140,6 +140,11 @@ printf '%s\n' "$*" >>"${GO_STUB_LOG:?}"
 exit 0
 EOF
 	chmod +x "$stubdir/go"
+	# Keep the workflow's retry evidence private to this extraction, too.
+	printf -v retry_path '%q' "$work/rr_gateway.log"
+	printf -v race_retry_path '%q' "$work/rr_gw_race.log"
+	body=${body//\/tmp\/rr_gateway.log/$retry_path}
+	body=${body//\/tmp\/rr_gw_race.log/$race_retry_path}
 	printf '%s\n' "$body" >"$work/body.sh"
 	printf '%s\n' "$input" >"$work/input.log"
 	runsh="$work/run.sh"
@@ -164,7 +169,6 @@ EOF
 	bash "$runsh" >"$outlog" 2>&1
 	status=$?
 	rm -rf "$stubdir" "$work"
-	rm -f /tmp/rr_gateway.log /tmp/rr_gw_race.log
 	return "$status"
 }
 
