@@ -92,7 +92,7 @@ func qaUATPollResult(t *testing.T, request []providers.Message) providers.Messag
 
 func qaUATLastUser(messages []providers.Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
+		if messages[i].Role == "user" && !messages[i].Volatile { // FR-007: the handback precedes the request-only tail.
 			return messages[i].Content
 		}
 	}

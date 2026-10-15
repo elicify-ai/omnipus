@@ -73,7 +73,7 @@ func (j *b6ScriptedJudge) Chat(
 ) (*providers.LLMResponse, error) {
 	var user string
 	for _, m := range messages {
-		if m.Role == "user" {
+		if m.Role == "user" && !m.Volatile { // FR-007: criteria are in the conversation, not the note tail.
 			user = m.Content
 		}
 	}

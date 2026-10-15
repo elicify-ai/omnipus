@@ -115,7 +115,7 @@ func newReplacementScenarioProvider(blockerTask string) *replacementScenarioProv
 func (p *replacementScenarioProvider) Chat(ctx context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
 	last := ""
 	for _, m := range messages {
-		if m.Role == "user" {
+		if m.Role == "user" && !m.Volatile { // FR-007: route the script by task, never by volatile metadata.
 			last = m.Content
 		}
 	}
