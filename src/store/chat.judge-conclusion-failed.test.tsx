@@ -68,7 +68,7 @@ beforeEach(() => {
       toolCalls: {}, toolCallOrder: [], textAtToolCallStart: {},
       sessionTokens: 0, sessionCost: 0, isReplaying: false,
       replayCompletedForSession: null, rateLimitEvent: null, providerRetryEvent: null,
-      pendingKickoff: null, outboundQueue: [], pendingDrainQueue: [],
+      outboundQueue: [], pendingDrainQueue: [],
       lastUserMessageAt: null, cancelStage: null, loopStatus: null,
     })
     useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'mia', activeAgentType: null, attachedSessionType: null })
