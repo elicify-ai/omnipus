@@ -46,7 +46,7 @@ An agent sees common tools directly and searches the rest when a task calls for 
 3. Optional: start from a preset — **Cautious**, **Balanced** or **Full access**. A preset sets the agent's requested policy values. The effective policy still combines them with the global ceiling: a preset cannot override a global Ask or Deny. Auto-approve and tool-specific checks can still affect whether an allowed call asks or is refused.
 4. Expand a group and click **Allow**, **Ask** or **Deny** on the tool you care about. Changes save on their own.
 
-You can also ask Omnipus in its chat to change an agent's permissions; it shows the change in its summary and asks for approval before it applies it.
+You can also ask Omnipus in its chat to change an agent's permissions. Outside God Mode, it is instructed to show one plan summary and ask **Go / Change / Cancel** before its first change. Go does not replace any tool approval required by the effective policy; `set_agent_permissions` is on the Auto-approve ask-list. In God Mode, Omnipus shows its summary as a message and skips approval questions and global tool-policy prompts. Stricter per-agent policies remain in force.
 
 **Omnipus itself.** Omnipus takes no per-agent **Ask**: setting one of its tools to Ask is refused with "Omnipus takes no per-agent Ask; set Ask globally or use Deny". **Deny** works for it like for any agent. Which of its tools always ask, and how God Mode changes that, are described in [security](security.md).
 
