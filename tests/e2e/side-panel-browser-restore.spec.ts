@@ -7,10 +7,22 @@
  * W9  a live Browser panel does not come back on reload (SP-28).
  * W10 Back then Forward follows the store, not a stale panel value (MAJ-206).
  */
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import type { WorkspaceCreateRequest } from '../../src/lib/api/generated/openapi-types'
 import { test } from './fixtures/console-errors'
 import { newAdminApiContext } from './fixtures/admin-api'
+
+// chat-input is not this signal. ChatScreen::OmnipusComposer renders it on the
+// first paint, before WorkspaceTabContainer's effect runs enterWorkspaceChat,
+// while session.ts's activeAgentId is still null. The attribute below is
+// written in the same update as the agent (session.ts::attachToSession), and
+// it stays empty until that update, so the header click cannot hit
+// ChatControls::handleOpenBrowser's no-agent return.
+async function waitForAttachedAgent(page: Page): Promise<void> {
+  await expect(
+    page.locator('[data-active-session-id]:not([data-active-session-id=""]):not([data-active-session-id="__pending"])'),
+  ).toBeVisible()
+}
 
 async function createWorkspace(): Promise<string> {
   const ctx = await newAdminApiContext()
@@ -52,6 +64,7 @@ test.afterAll(async () => {
 
 test('W9 — reload does not restore the Browser panel', async ({ page }) => {
   await page.goto(`/#/workspaces/${workspaceId}/chat`)
+  await waitForAttachedAgent(page)
   await page.getByRole('button', { name: /open browser|watch live/i }).click()
   await expect(page.getByTestId('side-panel-header')).toContainText('Browser')
   await page.reload()
@@ -61,6 +74,7 @@ test('W9 — reload does not restore the Browser panel', async ({ page }) => {
 
 test('W10 — Back then Forward follows the store, not a stale panel value', async ({ page }) => {
   await page.goto(`/#/workspaces/${workspaceId}/chat`)
+  await waitForAttachedAgent(page)
   await page.getByRole('button', { name: /open browser|watch live/i }).click()
   await expect(page.getByTestId('side-panel-header')).toContainText('Browser')
   const before = page.url()
