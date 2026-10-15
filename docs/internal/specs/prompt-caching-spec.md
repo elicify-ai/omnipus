@@ -15,7 +15,7 @@ The evening correction: the interview line that "the cost limit would stop prote
 | D15 | Q-UI, Q-LOG | No new screen. The existing Usage screen adds a cache-hit percent beside the cache totals it already shows. The per-call line is at info. The shipped log level is warn, so that line is hidden until the level is info. Per-area levels stay #1324. |
 | D16 | Q-KEY | The cache key is the session id (one conversation), not the agent id. |
 | D17 | Q-LIVE | Before the Anthropic connector switch lands, live-check DeepSeek, MiniMax, Moonshot, and Z.AI, in addition to D9's list. |
-| D18 | Q-TTLPRICE | Store 5-minute and 1-hour writes separately. Price 5-minute writes from catalog `cache_write`. Price 1-hour writes at the normal input price until the catalog carries `cache_write_1h`. The chief called this conservative. Against Anthropic's published 2× 1-hour write, 1× input is lower; the spec does not invent a 2× multiplier to close that gap. `cache_write_1h` is specified below and is not required in the first price publication. |
+| D18 | Q-TTLPRICE | Store 5-minute and 1-hour writes separately. Price 5-minute writes from catalog `cache_write`. Until the catalog carries `cache_write_1h`, price 1-hour writes at that provider's documented 1-hour multiplier times the catalog input price. Anthropic's published multiplier is 2. A provider with no documented 1-hour multiplier leaves that portion `unpriced`. The multiplier is a documented factor, not a dollar price list. `cache_write_1h`, when published, replaces the multiplier. |
 
 ---
 
@@ -206,7 +206,7 @@ Boundary conditions:
 - The raw usage object contains only zeros, or omits the cache fields. Expected: cache read and cache write are zero, and the prompt count is the provider's prompt total.
 - DeepSeek reports both a hit count and a nested cached-token count for the same tokens. Expected: one cache-read figure, not the sum of both.
 - Moonshot and Alibaba report a write count inside the prompt total. Expected: the normalized prompt count excludes it, and the write is stored on its own.
-- A 1-hour write and a 5-minute write arrive on the same Anthropic call. Expected: both counts are stored separately. The 5-minute write uses catalog `cache_write`. The 1-hour write uses the normal input price until the catalog publishes `cache_write_1h`, and then uses that. The log names which price was used for the 1-hour portion.
+- A 1-hour write and a 5-minute write arrive on the same Anthropic call. Expected: both counts are stored separately. The 5-minute write uses catalog `cache_write`. The 1-hour write uses 2 times the catalog input price until the catalog publishes `cache_write_1h`, and then uses that. The log names which rule priced the 1-hour portion. A provider that documents no 1-hour multiplier leaves that portion unpriced and still stores the token count.
 - Two sessions of one agent run at the same time. Expected: each request's cache key is that session's id, not the agent id.
 - The skill list on disk changes while a session is open. Expected: the advertised list for that session does not change.
 - An unsupported catalog row (blank protocol, or a tier the factory cannot construct) is not given a new connector by this feature.
@@ -245,7 +245,8 @@ Boundary conditions:
 **Log line:**
 
 - Exactly one line per completed model call, at info.
-- Fields present: provider id, model id, uncached input, cache read, cache write, and when the provider split them, 5-minute write and 1-hour write, plus exactly one of: a dollar cost, the word `unpriced`, or the word `subscription`.
+- Fields present: provider id, model id, uncached input, cache read, cache write, and when the provider split them, 5-minute write and 1-hour write.
+- The call's money result is a dollar cost of the priced portions, or the word `subscription` for a ChatGPT sign-in call (no dollars). A portion with no price is marked `unpriced` on its own and does not erase a dollar cost on the rest of the call. A call with no priced portion and no subscription mark is `unpriced` overall.
 - The line includes the raw usage object and no other part of the provider response.
 
 **Scope boundaries:**
@@ -314,7 +315,7 @@ No new local setup. Implementers use the existing worktree, the existing contrac
 
 ### Catalog repository (`elicify-ai/omnipus-provider-catalog`)
 
-- **Data in**: models.dev `cost` on each model (`input`, `output`, optional `reasoning`, `cache_read`, `cache_write`, optional `tiers[]` with `tier.type = context` and `tier.size`, optional `context_over_200k`). LiteLLM's per-token prices, converted to per million before compare. Optional follow-up field `cache_write_1h`, same unit, for the 1-hour Anthropic write. The first publication that adds prices does not have to include `cache_write_1h`. When it is absent, Omnipus prices 1-hour writes at `input` (D18). When it is present, Omnipus uses it.
+- **Data in**: models.dev `cost` on each model (`input`, `output`, optional `reasoning`, `cache_read`, `cache_write`, optional `tiers[]` with `tier.type = context` and `tier.size`, optional `context_over_200k`). LiteLLM's per-token prices, converted to per million before compare. Optional follow-up field `cache_write_1h`, same unit, for a 1-hour write. The first publication that adds prices does not have to include `cache_write_1h`. When it is present, Omnipus uses it. When it is absent, Omnipus multiplies the catalog input price by the provider's documented 1-hour factor (Anthropic: 2) and does not store that factor as a dollar rate. A provider with no documented factor leaves the 1-hour tokens unpriced.
 - **Data out**: The published catalog gains those fields on each model. The embedded snapshot in this repository is updated from that publication. This repository does not type prices in by hand.
 - **Contract**: The catalog schema is strict. Adding fields means extending `Model` in the catalog schema and the Go `Model` struct together. A model with no `cost` in models.dev is published without a price, not with zeros.
 - **On failure**: If models.dev and LiteLLM disagree by more than the catalog's existing 5 percent relative tolerance, the row is disputed under the catalog's existing dispute rule. The 4,096 absolute tolerance is for token counts and is not applied to dollars. If LiteLLM has no price, models.dev wins. If models.dev has no price and LiteLLM has one, that is a fill, same as a missing context window today.
@@ -358,7 +359,7 @@ Hosts the factory cannot call today (unsupported tier, or a blank protocol) are 
 | Catalog id | Mechanism | What we send | Usage fields to read | Prompt total includes cache? | Minimum prefix | Lifetime | Price source |
 |---|---|---|---|---|---|---|---|
 | `openai` | Implicit. Explicit breakpoints exist on the newest models and are not used. | `prompt_cache_key` (already sent). | Responses: `usage.input_tokens_details.cached_tokens` and `cache_write_tokens`. Chat field names were not in OpenAI's own caching guide. | Yes, on the documented responses formula. | 1,024 tokens on the newest models; varies earlier. | About 30 minutes on the newest; shorter or up to 24 hours earlier. | Catalog |
-| `anthropic` | Explicit marker. | Tool list and stable instructions at 1 hour; conversation tail at 5 minutes. | `cache_read_input_tokens`, `cache_creation_input_tokens`, `cache_creation.ephemeral_5m_input_tokens`, `cache_creation.ephemeral_1h_input_tokens`. | No. | 512, 1,024, 2,048, or 4,096 by model. Below that, success with zeros. | 5 minutes or 1 hour, as marked. | Catalog `cache_write` for 5-minute writes. Input price for 1-hour writes until `cache_write_1h` is published. |
+| `anthropic` | Explicit marker. | Tool list and stable instructions at 1 hour; conversation tail at 5 minutes. | `cache_read_input_tokens`, `cache_creation_input_tokens`, `cache_creation.ephemeral_5m_input_tokens`, `cache_creation.ephemeral_1h_input_tokens`. | No. | 512, 1,024, 2,048, or 4,096 by model. Below that, success with zeros. | 5 minutes or 1 hour, as marked. | Catalog `cache_write` for 5-minute writes. 2× catalog input for 1-hour writes until `cache_write_1h` is published. |
 | `azure` | Azure OpenAI caches; other families unknown. | No call. The catalog row is unsupported and the factory has no Azure branch. | If a response is ever parsed by the shared OpenAI parser: `prompt_tokens_details.cached_tokens` and `cache_write_tokens`. | The published example puts the read inside `prompt_tokens`. Writes not shown. | 1,024. | 5–10 minutes, or up to 24 hours. | Catalog, when the row is callable. |
 | `google-vertex` | Implicit and explicit resource. | No call. Unsupported, blank protocol. | Native field `cachedContentTokenCount`. Not our wire. | Not stated. | 2,048 to 6,144. | Implicit up to 24 hours. | Catalog, when callable. |
 | `amazon-bedrock` | Explicit checkpoint and implicit. | Nothing new. Postponed (#1323). | Not parsed by this feature. | Converse excludes. | Per model, 512 to 4,096. | 5 minutes or 1 hour. | Out of scope. |
@@ -730,12 +731,12 @@ The Gemini row is the one shape whose include rule is unknown. The parser must n
 **Category**: Edge Case
 
 - **Given** a catalog input price of $1 per million, a `cache_write` of $1.25 per million, and no `cache_write_1h`
-- **And** 1,000 tokens of 5-minute write and 1,000 tokens of 1-hour write
+- **And** 1,000 tokens of 5-minute write and 1,000 tokens of 1-hour write on Anthropic, whose documented 1-hour write is 2× input
 - **When** the cost is computed
 - **Then** the 5-minute portion costs $0.00125
-- **And** the 1-hour portion costs $0.001
+- **And** the 1-hour portion costs $0.002
 - **And** the two write counts are stored separately
-- **And** the log says the 1-hour portion used the input price
+- **And** the log says the 1-hour portion used 2× the catalog input price
 
 #### Scenario Outline: A missing cache price is not the same as a zero cache price
 
@@ -838,7 +839,7 @@ Write these before the production change they lock. Order inside a level is depe
 | 5 | `TestPrice_MissingInputIsUnpriced` | Unit | Missing input price | Not the old $3/$15 fallback. Tokens kept. Unpriced flag set. |
 | 6 | `TestPrice_MissingCacheUsesInput_ZeroCacheStaysZero` | Unit | Cache price outline | The three rows: absent, zero, and a real cache price. |
 | 6a | `TestPrice_SubscriptionRecordsNoDollars` | Unit | ChatGPT sign-in call | Tokens stored, log word `subscription`, cost unchanged. |
-| 6b | `TestPrice_OneHourWriteUsesInputUntilCatalogField` | Unit | One-hour write | 5-minute write at `cache_write`; 1-hour write at input price when `cache_write_1h` is absent, and at `cache_write_1h` when present. |
+| 6b | `TestPrice_OneHourWriteUsesDocumentedMultiplier` | Unit | One-hour write | Anthropic: 5-minute write at `cache_write`; 1-hour write at 2× catalog input when `cache_write_1h` is absent, and at `cache_write_1h` when present. A provider with no documented 1-hour factor leaves that portion unpriced. |
 | 7 | `TestPrice_ContextTier` | Unit | Length band | Below the band, at the band, and at a higher band. |
 | 8 | `TestPrice_NoRateTable` | Unit | Priced call | The hand-kept table symbol is gone. |
 | 9 | `TestCacheKeyAllowList_SendsAndSuppresses` | Unit | Cache key scenario | Mistral and OpenAI receive a key whose value is the session id, not the agent id. Scaleway and OVHcloud do not. Groq receives neither key nor marker. |
@@ -905,7 +906,7 @@ This feature changes existing behaviour. These tests must be rewritten to the ne
 
 ## Functional Requirements
 
-- **FR-001**: The system MUST write one info log line per completed model call with provider id, model id, uncached input tokens, cache-read tokens, cache-write tokens, the raw usage object only, and exactly one of a dollar cost, the word `unpriced`, or the word `subscription`. The line stays at info. It is not raised to warn to beat the shipped default.
+- **FR-001**: The system MUST write one info log line per completed model call with provider id, model id, uncached input tokens, cache-read tokens, cache-write tokens, and the raw usage object only. A ChatGPT sign-in call MUST say `subscription` and MUST NOT include a dollar cost. Any other call MUST include the dollar cost of its priced portions. A portion that has no price, including a 1-hour write with no documented multiplier and no `cache_write_1h`, MUST be marked `unpriced` on that line without erasing the dollar cost of the priced portions. A call with no priced portion MUST say `unpriced`. The line stays at info. It is not raised to warn to beat the shipped default.
 - **FR-002**: The system MUST expose cache-hit percent per agent and per provider on the existing usage report, using the formula and the null rule in the machine-verifiable constraints. The existing Usage screen MUST show that percent beside the cache totals it already shows. No new screen.
 - **FR-003**: The system MUST NOT add a caching screen, tile, or setting.
 - **FR-004**: The system MUST send Anthropic-protocol calls through the official Anthropic connector, and MUST delete the hand-written Anthropic connector. The official constructor MUST keep the catalog row's base URL and the configured timeout.
@@ -931,7 +932,7 @@ This feature changes existing behaviour. These tests must be rewritten to the ne
 - **FR-024**: The system MUST allow a cache miss when history is trimmed or the model changes, and MUST NOT freeze history or pin the model to prevent it.
 - **FR-025**: The per-call log MUST NOT include prompt text, tool arguments, or credentials.
 - **FR-026**: A ChatGPT sign-in call MUST be marked `subscription`, MUST record cached and uncached tokens, and MUST NOT record a dollar cost even when the catalog has an API price for that model.
-- **FR-027**: The system MUST store 5-minute and 1-hour write counts separately when the provider reports the split. 5-minute writes MUST use catalog `cache_write` when that field is present. 1-hour writes MUST use catalog `cache_write_1h` when that field is present, and MUST otherwise use the normal input price. The log MUST say which price the 1-hour portion used. The catalog's first price publication is not required to include `cache_write_1h`; the field is the tracked extension.
+- **FR-027**: The system MUST store 5-minute and 1-hour write counts separately when the provider reports the split. 5-minute writes MUST use catalog `cache_write` when that field is present. 1-hour writes MUST use catalog `cache_write_1h` when that field is present. When it is absent, 1-hour writes MUST be priced at the provider's documented 1-hour multiplier times the catalog input price. Anthropic's documented multiplier is 2. The system MUST NOT keep a dollar price for that multiplier. A provider that documents no 1-hour multiplier MUST leave that portion `unpriced` and MUST still store its tokens. The log MUST say which rule priced the 1-hour portion. The catalog's first price publication is not required to include `cache_write_1h`; the field is the tracked extension.
 - **FR-028**: The system MUST NOT enable OpenAI explicit breakpoint mode, Moonshot's 1-hour option, DeepInfra retention, or the Vercel `caching: auto` rewrite.
 - **FR-029**: The system MUST NOT promote an unsupported catalog row to a callable provider as part of this feature.
 
@@ -978,7 +979,7 @@ This feature changes existing behaviour. These tests must be rewritten to the ne
 | FR-024 | US-3 | Prefix dataset row 5 | `TestPrefixStable` does not assert a hit across a trim |
 | FR-025 | US-1 | Error body | `TestLogLine_UsageOnly` |
 | FR-026 | US-5 | ChatGPT sign-in call | `TestPrice_SubscriptionRecordsNoDollars` |
-| FR-027 | US-4, US-5 | One-hour write; Anthropic split write row | `TestUsageShapes_Normalize`, `TestPrice_OneHourWriteUsesInputUntilCatalogField` |
+| FR-027 | US-4, US-5 | One-hour write; Anthropic split write row | `TestUsageShapes_Normalize`, `TestPrice_OneHourWriteUsesDocumentedMultiplier` |
 | FR-028 | US-4 | Implicit host; provider table | `TestCacheKeyAllowList_SendsAndSuppresses` extended to assert those bodies are absent |
 | FR-029 | US-4 | — | Factory tests: unsupported rows still fail construction as they do today |
 
@@ -991,7 +992,7 @@ This feature changes existing behaviour. These tests must be rewritten to the ne
 | Third-party Anthropic hosts reject the official body | DeepSeek, MiniMax, Moonshot, or Z.AI calls start failing | D17. One connector is adjusted. The switch does not land on a failed live check. |
 | Moved notes change agent behaviour | Goal checklist or scratchpad is followed less well at the end of the prompt | D9 behaviour check on the existing goal and scratchpad scenarios. A note that fails that check is moved back in front, and the spec is corrected. It is not left behind a green test. |
 | Prices land after markers | Displayed session cost falls toward zero while cache reads are real | Catalog snapshot with prices lands in the same change as the marker, or before it. The second-call test fails if the second cost is zero. |
-| 1-hour writes priced as 5-minute writes | Instructions cached for an hour are underpriced | D18. 1-hour writes use the input price until `cache_write_1h` exists, and the log says so. Against Anthropic's published 2× write, 1× input is lower, not higher. The decision accepts that gap rather than inventing a 2× multiplier. The catalog field closes it when published. |
+| 1-hour writes priced at 1× input, or at the 5-minute `cache_write` | An Anthropic 1-hour write is understated. The published 1-hour write is 2× input, and `cache_write` on Haiku 4.5 is the 1.25× 5-minute rate. | Corrected D18. Until `cache_write_1h` exists, Anthropic 1-hour writes cost 2× the catalog input price. A provider with no documented 1-hour multiplier does not get a guessed factor: that portion is unpriced. The log names the rule. |
 | Cache key sent to a host that rejects it | The turn fails with 400 or 422 | Allow-list. Scaleway and OVHcloud are explicit denials. A new host is not added because a neighbour accepts the field. |
 | Default log level hides the line | An operator at `warn` sees nothing per call | Accepted (D15). The Usage screen is the default-install surface. The line stays at info. |
 | No spend brake | Honest prices do not stop a runaway loop | Accepted (D13). This feature does not add a cap and does not pretend the deleted one still exists. |
@@ -1050,7 +1051,7 @@ No open question remains. The seven items this draft first listed were closed by
 | 3 | Cache key value | D16. Session id. Not the agent id. |
 | 4 | Extra live hosts | D17. DeepSeek, MiniMax, Moonshot, and Z.AI before the connector switch lands. |
 | 5 | Log line versus default `warn` | D15. Stay at info. The Usage screen is what the default install shows. |
-| 6 | One `cache_write` versus a 1-hour lifetime | D18. Separate counts. 5-minute writes at `cache_write`. 1-hour writes at input price until `cache_write_1h` exists. |
+| 6 | One `cache_write` versus a 1-hour lifetime | Corrected D18. Separate counts. 5-minute writes at `cache_write`. 1-hour writes at the documented multiplier times catalog input (Anthropic: 2) until `cache_write_1h` exists. No documented multiplier: that portion is unpriced. |
 | 7 | "No UI" versus the usage report | D15. No new screen. The existing Usage screen shows the hit percent. |
 | 8 | Gemini prompt total include rule | FR-011. Do not subtract until the live check records the rule. |
 
