@@ -975,7 +975,7 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 // current ephemeral instruction messages. The window-group check is the only
 // tool-structure gate: a bad history is refused here, never repaired.
 func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
-	repairedHistory := rq.ri.messages
+	repairedHistory := withoutVolatileNotes(rq.ri.messages)
 	if err := validateWindowGroups(repairedHistory); err != nil {
 		rq.ri.rf.rt.ts.setContextWindowError(err)
 		rq.ri.rf.callMessages = repairedHistory
@@ -983,39 +983,20 @@ func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 	}
 
 	rq.ri.rf.callMessages = rq.ri.rf.rt.al.freezeSessionSkillMenu(rq.ri.rf.rt.ts, repairedHistory)
-	// Re-inject the acting agent's current scratchpad as an ephemeral system
-	// message so the checklist survives context compression and the agent
-	// always sees its plan at the top of the turn. The note is NOT persisted
+	// Rebuild the acting agent's scratchpad as request-only user-tail text,
+	// so its checklist survives context trimming without changing the prefix.
+	// The note is NOT persisted
 	// to history — it is rebuilt fresh each turn from the task store.
 	if rq.ri.rf.rt.ts.agent != nil {
 		if note := rq.ri.rf.rt.al.buildScratchpadNote(rq.ri.rf.rt.ts.agent.ID, rq.ri.rf.rt.ts.opts.TranscriptSessionID); note != "" && len(rq.ri.rf.callMessages) > 0 {
-			// Insert after callMessages[0] (the system prompt) so it immediately
-			// follows the agent's identity, before the conversation history.
-			injected := make([]providers.Message, 0, len(rq.ri.rf.callMessages)+1)
-			injected = append(injected, rq.ri.rf.callMessages[0])
-			injected = append(injected, providers.Message{Role: "system", Content: note})
-			injected = append(injected, rq.ri.rf.callMessages[1:]...)
-			rq.ri.rf.callMessages = injected
+			rq.ri.rf.callMessages = appendVolatileNote(rq.ri.rf.callMessages, note)
 		}
 		// Inject per-turn workspace instructions (AGENT.md) as an ephemeral
 		// system message immediately after the system prompt. Empty/absent
 		// instructions are a no-op — zero behavioral change.
 		//
-		// Ordering note (finding 10c, context-audit 2026-08 — ADR-088 D9
-		// retires the ADR-078 D2 goal-pending note that used to sit between
-		// this call and injectManifestNote below; buildGoalPendingNote/
-		// injectGoalPendingNote, pkg/agent/goal_pending_note.go, are deleted
-		// in full — instant activation leaves no pending state for a note to
-		// describe): the remaining injectors (this one, injectWebRenderingNote,
-		// injectManifestNote) insert at index 1 of the message array, so call
-		// order alone determines final position — the LAST call ends up
-		// CLOSEST to the system message. With every note present this turn,
-		// final order is: [0] system prompt · [1] manifest note · [2]
-		// web-rendering note · [3] workspace instructions · [4] scratchpad
-		// (spliced above, before this call) · [5+] history. See
-		// injectWorkspaceInstructions' own doc comment
-		// (workspace_instructions.go) for the authoritative, single-sourced
-		// version of this contract.
+		// Workspace and web-rendering instructions stay before history. The
+		// volatile note collectors are combined into one user message below.
 		rq.ri.rf.callMessages = injectWorkspaceInstructions(rq.ri.rf.callMessages, buildWorkspaceInstructionsNote(rq.ri.rf.rt.ts.opts.WorkspaceID))
 		// Web-only: encourage Mermaid diagrams when the turn comes from the web
 		// chat (the sole surface that renders them). Per-turn + surface-gated on
@@ -1037,8 +1018,8 @@ func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 		// does not hold, making this call a no-op on every non-goal turn.
 		rq.ri.rf.callMessages = injectGoalRubricNote(rq.ri.rf.callMessages,
 			buildGoalRubricInjectionNote(rq.goalForce.rubric, rq.goalForce.isWebchat))
-		// Re-inject the compressed manifest of unloaded lazy tools as an ephemeral
-		// system message. Like the scratchpad, it is rebuilt every turn (never
+		// Rebuild the compressed unloaded-tool summary as volatile user-tail
+		// text. Like the scratchpad, it is request-only (never
 		// persisted) so it is never stale and not double-counted in the cached
 		// system prompt. Injected only when Compressed is active and there are
 		// unloaded lazy tools to list.
@@ -1059,6 +1040,13 @@ func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 		rq.ri.rf.providerToolDefs = nil
 		rq.ri.rf.rt.ts.markGracefulTerminalUsed()
 	}
+	if agent := rq.ri.rf.rt.ts.agent; agent != nil {
+		ts := rq.ri.rf.rt.ts
+		note := agent.ContextBuilder.buildDynamicContext(ts.depth, ts.opts.WorkspaceID, ts.channel, ts.chatID, ts.opts.SenderID, ts.opts.SenderDisplayName)
+		rq.ri.rf.callMessages = appendVolatileNote(rq.ri.rf.callMessages, note)
+	}
+	rq.ri.rf.callMessages = consolidateVolatileNotes(rq.ri.rf.callMessages)
+
 }
 
 // prepareLLMRequest applies request options and hooks, then records the outgoing LLM request.

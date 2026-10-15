@@ -303,18 +303,11 @@ func (al *AgentLoop) buildToolManifestNote(ts *turnState, policyFiltered []tools
 	return tools.BuildCompressedManifest(policyFiltered, loaded)
 }
 
-// injectManifestNote inserts note as a "system" role message at index 1 of
-// msgs (immediately after the system prompt at index 0, before conversation
-// history). Returns msgs unchanged when note == "" or len(msgs) == 0.
-// This is a pure helper extracted from the runTurn injection site to allow
-// unit-testing the position and role invariants without driving a full turn.
+// injectManifestNote appends request-only user text. The send seam combines it
+// with the clock, scratchpad and goal note after all completed history groups.
 func injectManifestNote(msgs []providers.Message, note string) []providers.Message {
 	if note == "" || len(msgs) == 0 {
 		return msgs
 	}
-	out := make([]providers.Message, 0, len(msgs)+1)
-	out = append(out, msgs[0])
-	out = append(out, providers.Message{Role: "system", Content: note})
-	out = append(out, msgs[1:]...)
-	return out
+	return appendVolatileNote(msgs, note)
 }

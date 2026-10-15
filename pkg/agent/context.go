@@ -1377,12 +1377,12 @@ func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, 
 // BuildMessages assembles the provider message list for a single agent turn.
 //
 // Assembly order (FR-006/FR-019):
-//  1. Single system message: static cached prompt + dynamic context + skills +
-//     breadcrumb block (FR-007, when non-empty).
+//  1. Single system message: static cached prompt + active skills + breadcrumb.
 //  2. recallSpan messages (transient recalled turns, Design B), when non-nil — old
 //     recalled turns precede the recent window (FR-019 chronology).
 //  3. history messages (the Skip-trimmed sliding window, post-eviction).
 //  4. Current user message.
+//  5. One request-only user-role block for the dynamic context and skill reminder.
 //
 // delegationDepth is the turn's current delegation-chain depth (ts.depth, the
 // value the enforcement gate compares against its cap); it lets the
@@ -1417,8 +1417,8 @@ func (cb *ContextBuilder) BuildMessages(
 
 	// The static part (identity, bootstrap, skills, memory) is cached locally to
 	// avoid repeated file I/O and string building on every call (fixes issue #607).
-	// Dynamic parts (time, session, breadcrumb) are appended per request.
-	// Everything is sent as a single system message for provider compatibility:
+	// Dynamic context is appended after history as one request-only user block.
+	// Stable instructions remain a single system stream for provider compatibility:
 	// - Anthropic adapter extracts messages[0] (Role=="system") and maps its content
 	//   to the top-level "system" parameter in the Messages API request. A single
 	//   contiguous system block makes this extraction straightforward.
@@ -1436,20 +1436,19 @@ func (cb *ContextBuilder) BuildMessages(
 	// workspaceID is threaded so the delegation block reads the same graph the gate enforces.
 	dynamicCtx := cb.buildDynamicContext(delegationDepth, workspaceID, channel, chatID, senderID, senderDisplayName)
 
-	// Compose a single system message: static (cached) + dynamic + breadcrumb.
+	// Compose stable system instructions; volatile context is appended at the tail.
 	// Keeping all system content in one message ensures every provider adapter can
 	// extract it correctly (Anthropic adapter -> top-level system param,
 	// Codex -> instructions field).
 	//
 	// SystemParts carries the same content as structured blocks so that
 	// cache-aware adapters (Anthropic) can set per-block cache_control.
-	// The static block is marked "ephemeral" — its prefix hash is stable
-	// across requests, enabling LLM-side KV cache reuse.
-	stringParts := []string{staticPrompt, dynamicCtx}
+	// The static block is a cache-aware hint. Each adapter applies only the
+	// markers and lifetimes documented by its own endpoint.
+	stringParts := []string{staticPrompt}
 
 	contentBlocks := []providers.ContentBlock{
-		{Type: "text", Text: staticPrompt, CacheControl: &providers.CacheControl{Type: "ephemeral"}},
-		{Type: "text", Text: dynamicCtx},
+		{Type: "text", Text: staticPrompt, CacheControl: &providers.CacheControl{Type: "ephemeral", TTL: "1h"}},
 	}
 
 	if skillsText := cb.buildActiveSkillsContext(activeSkills); skillsText != "" {
@@ -1550,7 +1549,7 @@ func (cb *ContextBuilder) BuildMessages(
 		messages = append(messages, msg)
 	}
 
-	return messages
+	return appendVolatileNote(messages, dynamicCtx)
 }
 
 func sanitizeHistoryForProvider(history []providers.Message) []providers.Message {
