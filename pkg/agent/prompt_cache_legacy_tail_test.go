@@ -12,8 +12,8 @@ import (
 // whose real subject is the conversation immediately before the new note.
 // It does not filter arbitrary user messages: there must be exactly one final
 // user text block containing the clock and reminder, with neither in front.
-// Media placement is deliberately not inferred here; media tests await a spec
-// clarification rather than changing their oracle to match current output.
+// Squad-lead Q1=A clarifies that the original caption/media user message is
+// last in this returned conversation, immediately before the volatile tail.
 func requireConversationBeforeVolatileTail(t *testing.T, messages []providers.Message) []providers.Message {
 	t.Helper()
 	require.GreaterOrEqual(t, len(messages), 2, "FR-007: conversation plus a separate volatile tail must be present")
