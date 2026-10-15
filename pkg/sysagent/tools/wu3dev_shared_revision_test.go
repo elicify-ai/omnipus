@@ -15,9 +15,9 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// lockOrderDeps wires a Deps whose config lock and agent-loop lock record the
+// wu3devLockOrderDeps wires a Deps whose config lock and agent-loop lock record the
 // order they are taken in, so a test can prove the FR-085 lock order.
-func lockOrderDeps(t *testing.T, cfg *config.Config) (*Deps, *[]string) {
+func wu3devLockOrderDeps(t *testing.T, cfg *config.Config) (*Deps, *[]string) {
 	t.Helper()
 	deps, _, _ := newProviderTestDeps(t, cfg)
 	var mu sync.Mutex
@@ -48,9 +48,9 @@ func lockOrderDeps(t *testing.T, cfg *config.Config) (*Deps, *[]string) {
 	return deps, events
 }
 
-func TestWU3SharedWrite_ConfigLockBeforeLoopLock(t *testing.T) {
+func TestWU3Dev_SharedWrite_ConfigLockBeforeLoopLock(t *testing.T) {
 	cfg := &config.Config{}
-	deps, events := lockOrderDeps(t, cfg)
+	deps, events := wu3devLockOrderDeps(t, cfg)
 	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
 		"name": "ollama", expectedRevisionParam: revisionAbsent,
 	})
@@ -59,7 +59,7 @@ func TestWU3SharedWrite_ConfigLockBeforeLoopLock(t *testing.T) {
 		"the write must hold the config lock across the agent-loop mutation and release it after")
 }
 
-func TestWU3SharedWrite_StaleRevisionRefusedNothingSaved(t *testing.T) {
+func TestWU3Dev_SharedWrite_StaleRevisionRefusedNothingSaved(t *testing.T) {
 	cfg := &config.Config{Providers: []*config.ModelConfig{{Provider: "openai", Model: "gpt-4o"}}}
 	deps, store, _ := newProviderTestDeps(t, cfg)
 	planned := providerRevision(cfg, "openai")
@@ -91,7 +91,7 @@ func TestWU3SharedWrite_StaleRevisionRefusedNothingSaved(t *testing.T) {
 	require.False(t, res.IsError, "%s", res.ForLLM)
 }
 
-func TestWU3SharedWrite_MissingExpectedRevisionRefused(t *testing.T) {
+func TestWU3Dev_SharedWrite_MissingExpectedRevisionRefused(t *testing.T) {
 	cfg := &config.Config{}
 	deps, _, _ := newProviderTestDeps(t, cfg)
 	cases := map[string]func() string{
@@ -115,7 +115,7 @@ func TestWU3SharedWrite_MissingExpectedRevisionRefused(t *testing.T) {
 	require.Empty(t, cfg.Channels)
 }
 
-func TestWU3SharedRevision_SecretFreeAndStable(t *testing.T) {
+func TestWU3Dev_SharedRevision_SecretFreeAndStable(t *testing.T) {
 	cfg := &config.Config{Providers: []*config.ModelConfig{{Provider: "openai", Model: "gpt-4o", APIKeyRef: "openai_API_KEY"}}}
 	deps, store, _ := newProviderTestDeps(t, cfg)
 	require.NoError(t, store.Set("openai_API_KEY", "sk-secret-value-123"))

@@ -20,7 +20,7 @@ import (
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-func wu3WriteWorkspace(t *testing.T, home, id string) {
+func wu3devWriteWorkspace(t *testing.T, home, id string) {
 	t.Helper()
 	data, err := json.Marshal(workspacepkg.Workspace{ID: id, Name: id, Status: "active"})
 	require.NoError(t, err)
@@ -30,11 +30,11 @@ func wu3WriteWorkspace(t *testing.T, home, id string) {
 	require.NoError(t, workspacepkg.SaveDelegation(home, id, nil))
 }
 
-func wu3CreateArgs(name string) map[string]any {
+func wu3devCreateArgs(name string) map[string]any {
 	return map[string]any{"name": name, "description": "d", "soul": "s", "model": "m"}
 }
 
-func wu3Body(t *testing.T, res *tools.ToolResult) map[string]any {
+func wu3devBody(t *testing.T, res *tools.ToolResult) map[string]any {
 	t.Helper()
 	var m map[string]any
 	require.NoError(t, json.Unmarshal([]byte(res.ForLLM), &m), res.ForLLM)
@@ -43,14 +43,14 @@ func wu3Body(t *testing.T, res *tools.ToolResult) map[string]any {
 
 // Founder decision 2026-10-14: a new agent's id is a generated UUID and the
 // name is kept verbatim; two creates with one name give two agents.
-func TestWU3CreateAgent_UUIDIdsAndVerbatimNames(t *testing.T) {
+func TestWU3Dev_CreateAgent_UUIDIdsAndVerbatimNames(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 	ctx := tools.WithAgentID(context.Background(), "omnipus")
 	var ids []string
 	for i := 0; i < 2; i++ {
-		res := systools.NewAgentCreateTool(deps).Execute(ctx, wu3CreateArgs("Sales Lead  (EU)"))
+		res := systools.NewAgentCreateTool(deps).Execute(ctx, wu3devCreateArgs("Sales Lead  (EU)"))
 		require.False(t, res.IsError, res.ForLLM)
-		m := wu3Body(t, res)
+		m := wu3devBody(t, res)
 		id, _ := m["id"].(string)
 		_, err := uuid.Parse(id)
 		require.NoError(t, err, "id must be a UUID, got %q", id)
@@ -65,16 +65,16 @@ func TestWU3CreateAgent_UUIDIdsAndVerbatimNames(t *testing.T) {
 
 // FR-040, FR-041, FR-043: workspace_id picks the team the new agent joins,
 // is validated before any write, and only Omnipus may name a foreign one.
-func TestWU3CreateAgent_WorkspaceIDTarget(t *testing.T) {
+func TestWU3Dev_CreateAgent_WorkspaceIDTarget(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
-	wu3WriteWorkspace(t, home, "sales")
-	wu3WriteWorkspace(t, home, "default-ws")
+	wu3devWriteWorkspace(t, home, "sales")
+	wu3devWriteWorkspace(t, home, "default-ws")
 	omnipus := tools.WithWorkspaceID(tools.WithAgentID(context.Background(), "omnipus"), "default-ws")
 
 	res := systools.NewAgentCreateTool(deps).Execute(omnipus, map[string]any{
 		"name": "Rep", "description": "d", "soul": "s", "model": "m", "workspace_id": "sales"})
 	require.False(t, res.IsError, res.ForLLM)
-	m := wu3Body(t, res)
+	m := wu3devBody(t, res)
 	id, ok := m["id"].(string)
 	require.True(t, ok, res.ForLLM)
 	require.Equal(t, "joined_workspace", m["status"])
@@ -91,7 +91,7 @@ func TestWU3CreateAgent_WorkspaceIDTarget(t *testing.T) {
 	res = systools.NewAgentCreateTool(deps).Execute(omnipus, map[string]any{
 		"name": "Ghost", "description": "d", "soul": "s", "model": "m", "workspace_id": "no-such-ws"})
 	require.True(t, res.IsError)
-	m = wu3Body(t, res)
+	m = wu3devBody(t, res)
 	require.Equal(t, "failed: nothing saved", m["outcome"])
 	after, _, _ := agentstore.New(home).List()
 	require.Len(t, after, len(before), "an unknown target must save nothing")
@@ -101,7 +101,7 @@ func TestWU3CreateAgent_WorkspaceIDTarget(t *testing.T) {
 	res = systools.NewAgentCreateTool(deps).Execute(jim, map[string]any{
 		"name": "Sneaky", "description": "d", "soul": "s", "model": "m", "workspace_id": "sales"})
 	require.True(t, res.IsError, res.ForLLM)
-	errBlock, ok := wu3Body(t, res)["error"].(map[string]any)
+	errBlock, ok := wu3devBody(t, res)["error"].(map[string]any)
 	require.True(t, ok, res.ForLLM)
 	require.Equal(t, "WORKSPACE_NOT_AUTHORIZED", errBlock["code"])
 }
