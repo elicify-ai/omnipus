@@ -373,7 +373,40 @@ describe('truncated snapshot note (ruling Q2)', () => {
     await waitFor(() => expect(messagePosts()).toHaveLength(1))
   })
 
-  it('[ruling Q2] a snapshot replaces the list instead of keeping entries it does not contain', async () => {
+  it('[ruling Q2, chief 2026-10-15] a cursor re-attach with has_older false keeps earlier entries and adds new ones once', async () => {
+    const linked = await mountUnresolved()
+    const already = entry({ id: 'e1', seq: 1, text: 'already on screen' })
+    const second = entry({ id: 'e2', seq: 2, text: 'second line' })
+    await linked.emit(snapshot({ seq: 2, has_older: false, entries: [already, second] }))
+    expect(await screen.findByText('second line', { exact: true })).toBeVisible()
+
+    // The room's cursor is 2. Reconnecting asks only for entries after it.
+    act(() => useConnectionStore.getState().setConnected(false))
+    expect(screen.getByText(/reconnecting/i)).toBeVisible()
+    act(() => useConnectionStore.getState().setConnected(true))
+    await waitFor(() => {
+      const attaches = linked.socket.sent.filter((frame) => frame.type === 'attach_room' && frame.room_id === ROOM_ID)
+      const latest = attaches[attaches.length - 1]
+      if (latest?.type !== 'attach_room' || latest.after_seq !== 2) {
+        throw new Error(`cursor re-attach must resume after seq 2, got ${latest?.type === 'attach_room' ? latest.after_seq : 'no attach'}`)
+      }
+    })
+
+    await linked.emit(snapshot({
+      seq: 4, has_older: false,
+      entries: [second, entry({ id: 'e3', seq: 4, text: 'new line' })],
+    }))
+    const shown = within(screen.getByRole('log')).getAllByRole('article').map((article) => article.textContent)
+    expect(shown).toEqual([
+      expect.stringContaining('already on screen'),
+      expect.stringContaining('second line'),
+      expect.stringContaining('new line'),
+    ])
+    expect(screen.getAllByText('second line', { exact: true })).toHaveLength(1)
+    expect(screen.queryByText(EARLIER, { exact: true })).toBeNull()
+  })
+
+  it('[ruling Q2, chief 2026-10-15] a snapshot with has_older true drops local entries it does not contain and shows the row', async () => {
     const linked = await mountUnresolved()
     await linked.emit({
       type: 'room_entry', room_id: ROOM_ID, seq: 1,
