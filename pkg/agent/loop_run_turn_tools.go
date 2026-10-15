@@ -1984,6 +1984,7 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 	// dying. ASKUSER-FIX.
 	if !parked {
 		if steerMsgs, steerCorrelationIDs := ex.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+			ex.rx.rr.rq.ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 			ex.rx.rr.rq.ri.pendingMessages = append(ex.rx.rr.rq.ri.pendingMessages, steerMsgs...)
 			ex.rx.rr.rq.ri.pendingSteeringReceipts = append(ex.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}

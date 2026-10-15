@@ -647,8 +647,14 @@ func (m *roomCostMeter) addCost(turnID string, cost float64, priced bool) {
 	}
 }
 
-// addInputs counts n inputs the turn just consumed; ids are their entry ids
-// (request ids for requests), used to find the room inputs among them.
+// roomSteerCorrelationPrefix marks the steering correlation id of a room
+// request that joined a running turn (enqueueSteeringFromMessage).
+const roomSteerCorrelationPrefix = "room-request:"
+
+func roomSteerCorrelation(requestID string) string { return roomSteerCorrelationPrefix + requestID }
+
+// addInputs counts n inputs the turn just consumed; ids are their steering
+// correlation ids, used to find the room requests among them.
 func (m *roomCostMeter) addInputs(ids []string, n int) {
 	if m == nil || n <= 0 {
 		return
@@ -660,7 +666,11 @@ func (m *roomCostMeter) addInputs(ids []string, n int) {
 		return
 	}
 	for _, id := range ids {
-		if roomID, ok := m.al.roomRequests.Load(id); ok {
+		requestID, isRoom := strings.CutPrefix(id, roomSteerCorrelationPrefix)
+		if !isRoom {
+			continue
+		}
+		if roomID, ok := m.al.roomRequests.Load(requestID); ok {
 			if r, isString := roomID.(string); isString && r != "" {
 				m.rooms[r]++
 			}

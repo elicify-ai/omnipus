@@ -137,6 +137,13 @@ func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string, sett
 		s.updateState(r, d, StateUnavailable, ReasonRateLimit)
 		return Admission{}, nil, false
 	}
+	if d.State != StateRecorded {
+		// A Retry of a member that never received the message (unavailable,
+		// unknown) starts over as "sending…": the admission's wake can reach
+		// the dequeue fence before this admission returns, and the fence must
+		// not mistake the old terminal state for a cancellation (FR-216).
+		s.updateState(r, d, StateRecorded, "")
+	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	r.cancels[requestID] = cancel
 	adm := s.buildAdmission(r, ws, d)

@@ -551,6 +551,13 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Content: msg.Content,
 		Media:   append([]string(nil), msg.Media...),
 	}
+	if isRoomRequestWake(msg) {
+		// A held room request joining the turn that revived its member keeps
+		// its request id in the steering correlation, so the turn's cost
+		// meter can tell it is a room input (§6.14).
+		_, _, err = al.enqueueSteeringMessageEntry(route.SessionKey, ag.ID, pmsg, roomSteerCorrelation(msg.TranscriptEntryID), msg.TranscriptEntryID)
+		return err
+	}
 	_, _, err = al.enqueueHumanSteeringMessage(route.SessionKey, ag.ID, pmsg, msg.TranscriptEntryID)
 	return err
 }
