@@ -18,7 +18,9 @@ import (
 //
 // create_agent, create_skill, edit_skill, remove_skill and list_skills accept
 // an optional workspace_id. Omitted, it is the turn's contextual workspace
-// (tools.ToolWorkspaceID). Supplied, it is validated BEFORE any write: the id
+// (tools.ToolWorkspaceID) — except create_skill, where omitting it creates an
+// installation-wide user skill (chief ruling 2026-10-15 on WU-3 Q1: the only
+// path to a global skill). Supplied, it is validated BEFORE any write: the id
 // grammar, the workspace record's existence, and — for a workspace other than
 // the caller's own — the cross-workspace setup authority, which only Omnipus
 // holds (FR-006). Resolving a target never changes the caller's session

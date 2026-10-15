@@ -70,7 +70,8 @@ func (t *SkillCreateTool) Parameters() map[string]any {
 			workspaceIDParam: map[string]any{
 				"type": "string",
 				"description": "Optional. The workspace whose project shelf gets the new skill (it needs exactly one " +
-					"mounted project folder). Omit it to create a user skill available to every workspace. Only " +
+					"mounted project folder). Unlike the other skill tools, omitting it does NOT mean the current " +
+					"workspace: it creates an installation-wide user skill available in every workspace. Only " +
 					"Omnipus may name a workspace other than its own.",
 			},
 		},
@@ -100,6 +101,9 @@ func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) (res
 	if refusal != nil {
 		return refusal
 	}
+	// Ruling 2026-10-15 (WU-3 Q1): only an explicit workspace_id targets a
+	// project shelf; omitted, create_skill writes an installation-wide user
+	// skill — the documented exception to the contextual-workspace default.
 	if target.Explicit {
 		return t.createProjectSkill(ctx, target.ID, name, content)
 	}
