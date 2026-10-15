@@ -16,6 +16,7 @@ import (
 	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/providers/openai_compat"
 )
 
 // resolvedRow is everything the dispatch below needs, already decided: which
@@ -214,6 +215,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.RequestTimeout,
 			int(cfg.EffectiveStreamStallTimeout().Seconds()),
 			cfg.ExtraBody,
+			openai_compat.WithProviderID(cfg.Provider),
 		)
 		if err != nil {
 			return nil, "", err

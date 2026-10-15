@@ -34,14 +34,17 @@ func NewHTTPProviderWithTimeouts(
 	apiKey, apiBase, proxy, maxTokensField string,
 	requestTimeoutSeconds, streamStallSeconds int,
 	extraBody map[string]any,
+	opts ...openai_compat.Option,
 ) (*HTTPProvider, error) {
-	p, err := openai_compat.NewProvider(
-		apiKey, apiBase, proxy,
+	options := make([]openai_compat.Option, 0, 4+len(opts))
+	options = append(options,
 		openai_compat.WithMaxTokensField(maxTokensField),
 		openai_compat.WithRequestTimeout(time.Duration(requestTimeoutSeconds)*time.Second),
 		openai_compat.WithStreamStallTimeout(time.Duration(streamStallSeconds)*time.Second),
 		openai_compat.WithExtraBody(extraBody),
 	)
+	options = append(options, opts...)
+	p, err := openai_compat.NewProvider(apiKey, apiBase, proxy, options...)
 	if err != nil {
 		return nil, err
 	}

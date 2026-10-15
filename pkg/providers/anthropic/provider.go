@@ -16,6 +16,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -275,6 +276,7 @@ func (p *Provider) streamWithCallbacks(
 	}
 
 	var msg anthropic.Message
+	var openingUsage *anthropic.Usage
 	var lastTextLen int
 	var lastReasoningLen int
 	lastArgsLen := map[int]int{}
@@ -289,6 +291,10 @@ func (p *Provider) streamWithCallbacks(
 		}
 		if err := msg.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("claude streaming accumulate: %w", err)
+		}
+		if event.Type == "message_start" {
+			u := msg.Usage
+			openingUsage = &u
 		}
 		if onChunk == nil && onProgress == nil {
 			continue
@@ -394,6 +400,20 @@ func (p *Provider) streamWithCallbacks(
 		return nil, &common.StreamProviderError{Code: "incomplete_stream", Message: "the stream ended before message_stop"}
 	}
 
+	// Cache/input counters on message_start describe the input once. A
+	// terminal usage delta must not replace them with an incremental count.
+	if openingUsage != nil {
+		if openingUsage.JSON.InputTokens.Valid() {
+			msg.Usage.InputTokens = openingUsage.InputTokens
+		}
+		if openingUsage.JSON.CacheReadInputTokens.Valid() {
+			msg.Usage.CacheReadInputTokens = openingUsage.CacheReadInputTokens
+		}
+		if openingUsage.JSON.CacheCreationInputTokens.Valid() {
+			msg.Usage.CacheCreationInputTokens = openingUsage.CacheCreationInputTokens
+		}
+		msg.Usage.CacheCreation = openingUsage.CacheCreation
+	}
 	return parseResponse(&msg)
 }
 
@@ -724,23 +744,19 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	var reasoning strings.Builder
 	var toolCalls []ToolCall
 
-	// PromptTokens = plain (uncached) input; cache tokens are tracked separately.
-	// TotalTokens = plain input + cache_creation + cache_read + output.
-	// Computed up front (resp.Usage/resp.StopReason are top-level fields, not
-	// dependent on the content-block loop below) so a tool-call decode
-	// failure can attach this same evidence to the refusal (ADR-087 D3.9 /
-	// D5 / D7) instead of returning bare.
-	cacheWrite := int(resp.Usage.CacheCreationInputTokens)
-	cacheRead := int(resp.Usage.CacheReadInputTokens)
-	promptTokens := int(resp.Usage.InputTokens)
-	completionTokens := int(resp.Usage.OutputTokens)
-	total := promptTokens + cacheWrite + cacheRead + completionTokens
-	usage := &UsageInfo{
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		CacheWriteTokens: cacheWrite,
-		CacheReadTokens:  cacheRead,
-		TotalTokens:      total,
+	var usage *UsageInfo
+	if resp.JSON.Usage.Valid() || resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 ||
+		resp.Usage.CacheReadInputTokens > 0 || resp.Usage.CacheCreationInputTokens > 0 {
+		// Marshal the accumulated SDK fields, not RawJSON (which still
+		// describes message_start and therefore has stale output usage).
+		raw, err := json.Marshal(resp.Usage)
+		if err != nil {
+			return nil, err
+		}
+		usage, err = promptcache.ParseUsage("anthropic", raw)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	for _, block := range resp.Content {

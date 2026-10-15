@@ -34,6 +34,7 @@ type (
 type Provider struct {
 	apiKey             string
 	apiBase            string
+	providerID         string // catalog id, including when api_base is overridden
 	maxTokensField     string // Field name for max tokens (e.g., "max_completion_tokens" for o1/glm models)
 	httpClient         *http.Client
 	extraBody          map[string]any // Additional fields to inject into request body
@@ -48,6 +49,10 @@ type Provider struct {
 }
 
 type Option func(*Provider)
+
+func WithProviderID(id string) Option {
+	return func(p *Provider) { p.providerID = id }
+}
 
 const defaultRequestTimeout = common.DefaultRequestTimeout
 
@@ -226,7 +231,7 @@ func (p *Provider) Chat(
 		return nil, common.HandleErrorResponse(resp, p.apiBase)
 	}
 
-	return common.ReadAndParseResponse(resp, p.apiBase)
+	return common.ReadAndParseResponse(resp, p.apiBase, p.providerID)
 }
 
 // ChatStream implements streaming via OpenAI-compatible SSE (stream: true).
@@ -299,7 +304,7 @@ func (p *Provider) ChatStream(
 	watch := common.WatchStreamStall(ctx, func() { _ = resp.Body.Close() }, stall)
 	defer watch.Stop()
 
-	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch)
+	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch, p.providerID)
 }
 
 // streamingTransport returns the request client's transport with
@@ -346,6 +351,7 @@ func parseStreamResponse(
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
 	watch *common.StreamStallWatch,
+	providerID ...string,
 ) (*LLMResponse, error) {
 	var textContent strings.Builder
 	var finishReason string
@@ -418,7 +424,11 @@ func parseStreamResponse(
 		}
 
 		if chunk.Usage != nil {
-			usage = chunk.Usage.ToUsageInfo()
+			var err error
+			usage, err = chunk.Usage.ToUsageInfo(providerID...)
+			if err != nil {
+				return nil, fmt.Errorf("stream usage: %w", err)
+			}
 		}
 		if chunk.Error != nil && streamErr == nil {
 			streamErr = &common.StreamProviderError{
