@@ -433,26 +433,17 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 		pub := t.publishTarget(plan, plan.area, naturalExit, finalExitCode)
 
 		completion := backgroundCompletionResult(session.ID, effectiveStatus, finalExitCode, outputSoFar)
-		// The command's OWN failure (nonzero natural exit) is an error
-		// result: backgroundCompletionResult reports any natural exit as
-		// "finished", but the environment_setup contract is exit 0 = command
-		// success only — a nonzero exit must not fold into a clean result.
-		if effectiveStatus == StatusDone && finalExitCode != 0 {
-			completion.IsError = true
-		}
-		switch pub.outcome {
-		case "commit_failed", "abort_failed":
+		// One terminal verdict and error classification (setupTerminalVerdict),
+		// shared with every later poll/read/kill of this session: exit 0 is
+		// command success only, and a failed publication or cleanup is an
+		// error even after exit 0.
+		o, isError, done := setupTerminalVerdict(string(effectiveStatus), finalExitCode, pub.outcome)
+		if isError {
 			completion.IsError = true
 		}
 		notice := t.setupCompletionNotice(plan, pub)
 		completion.ForLLM += notice
-		if o, ok := environmentSetupOutcome(string(effectiveStatus), finalExitCode); ok {
-			switch pub.outcome {
-			case "commit_failed", "abort_failed":
-				o = ChangePartlySaved("the installer finished but the installation area could not be "+
-					"published or cleaned up; side effects not proven absent", o.CheckScope,
-					[]string{"published installation area"}, o.NotTested...)
-			}
+		if done {
 			completion.ForLLM += "\n\nOutcome: " + marshalResult(o.Into(map[string]any{}))
 		}
 		if completion.ForUser != "" {
@@ -536,6 +527,7 @@ func (t *EnvironmentSetupTool) persistCompletionOutcome(session *ProcessSession,
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	session.resultNote = t.setupPollNote(pub)
+	session.publication = pub.outcome
 	if !session.outputTruncated {
 		session.outputBuffer.WriteString(notice)
 	}
@@ -750,7 +742,7 @@ func (t *EnvironmentSetupTool) executePoll(ctx context.Context, args map[string]
 		Status:    session.GetStatus(),
 		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := marshalSetupStatus(resp)
+	data, marshalErr := marshalSetupStatus(resp, session.Publication())
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal poll response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -776,7 +768,7 @@ func (t *EnvironmentSetupTool) executeRead(ctx context.Context, args map[string]
 		Status:    session.GetStatus(),
 		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := marshalSetupStatus(resp)
+	data, marshalErr := marshalSetupStatus(resp, session.Publication())
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal read response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -822,7 +814,7 @@ func (t *EnvironmentSetupTool) sessionActionResult(sessionID string, session *Pr
 		Status:    status,
 		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := marshalSetupStatus(resp)
+	data, marshalErr := marshalSetupStatus(resp, session.Publication())
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal session action response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -860,10 +852,35 @@ func environmentSetupOutcome(status string, exitCode int) (ChangeOutcome, bool) 
 	return ChangeOutcome{}, false
 }
 
+// setupTerminalVerdict is THE terminal verdict of an installation and its
+// error classification, used by the completion and by every later
+// poll/read/kill so they never disagree (WU-3 IM-02/SF-06): the
+// exit-status verdict (environmentSetupOutcome), overridden to "partly saved"
+// when the installation area could not be published or cleaned up. A run that
+// has not finished has no verdict (done=false).
+func setupTerminalVerdict(status string, exitCode int, publication string) (o ChangeOutcome, isError, done bool) {
+	o, done = environmentSetupOutcome(status, exitCode)
+	if !done {
+		return ChangeOutcome{}, false, false
+	}
+	isError = SessionStatus(status) == StatusDone && exitCode != 0
+	switch publication {
+	case "commit_failed", "abort_failed":
+		o = ChangePartlySaved("the installer finished but the installation area could not be "+
+			"published or cleaned up; side effects not proven absent", o.CheckScope,
+			[]string{"published installation area"}, o.NotTested...)
+		isError = true
+	}
+	return o, isError, true
+}
+
 // marshalSetupStatus renders a poll/read/kill status; a finished session also
-// carries the FR-030 outcome fields.
-func marshalSetupStatus(resp ExecResponse) ([]byte, error) {
-	o, done := environmentSetupOutcome(resp.Status, resp.ExitCode)
+// carries the FR-030 outcome fields of setupTerminalVerdict — the same verdict
+// the completion gave. The status action itself succeeded, so its result is
+// not an error (IsError means the poll/read/kill failed); the installation's
+// verdict is in the outcome fields.
+func marshalSetupStatus(resp ExecResponse, publication string) ([]byte, error) {
+	o, _, done := setupTerminalVerdict(resp.Status, resp.ExitCode, publication)
 	if !done {
 		return json.Marshal(resp)
 	}
