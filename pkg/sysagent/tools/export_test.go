@@ -86,6 +86,14 @@ func UseNameKeyedAgentIDsForTest(t interface{ Cleanup(fn func()) }) {
 	})
 }
 
+// FailMCPCredentialRollbackForTest makes add_mcp_server's rollback delete of
+// a stored env credential fail, restoring the real delete when t ends.
+func FailMCPCredentialRollbackForTest(t interface{ Cleanup(f func()) }) {
+	prev := mcpCredentialDelete
+	mcpCredentialDelete = func(*credentials.Store, string) error { return errors.New("injected rollback delete failure") }
+	t.Cleanup(func() { mcpCredentialDelete = prev })
+}
+
 // FailMCPCredentialWriteAfterForTest makes add_mcp_server's env credential
 // writes succeed `ok` times and fail from then on, restoring the real writer
 // when t ends.

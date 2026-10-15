@@ -368,7 +368,7 @@ func (mat *mcpAddToolExecute) rollbackEnvCredentials() []string {
 			failed = append(failed, credKey)
 			continue
 		}
-		if delErr := mat.t.deps.CredStore.Delete(credKey); delErr != nil {
+		if delErr := mcpCredentialDelete(mat.t.deps.CredStore, credKey); delErr != nil {
 			slog.Warn("add_mcp_server: failed to roll back env credential",
 				"server", mat.name, "env_key", envKey, "cred_key", credKey, "error", delErr)
 			failed = append(failed, credKey)
@@ -468,6 +468,13 @@ func (mat *mcpAddToolExecute) changedFields() []string {
 // (FailMCPCredentialWriteAfterForTest); production never reassigns it.
 var mcpCredentialSet = func(store *credentials.Store, name, value string) error {
 	return store.Set(name, value)
+}
+
+// mcpCredentialDelete removes one env credential during add_mcp_server's
+// rollback. A variable only so a test can fail the rollback deterministically
+// (FailMCPCredentialRollbackForTest); production never reassigns it.
+var mcpCredentialDelete = func(store *credentials.Store, name string) error {
+	return store.Delete(name)
 }
 
 // ---- system.mcp.remove ----

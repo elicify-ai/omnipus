@@ -3,7 +3,6 @@ package systools_test
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -207,22 +206,16 @@ func TestWU3MCPAddFirstCredentialFailureSavesNothing(t *testing.T) {
 // and the rollback cannot delete it — the result names the durable credential
 // in changed_fields/stored_credentials, not only inside the reason text.
 func TestWU3MCPAddRollbackFailureNamesDurableCredentials(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("a read-only directory does not stop root; this fault needs an unprivileged user")
-	}
 	deps, cfg := newTestDepsWithCredStore(t)
-	deps.SaveConfigLocked = func(*config.Config) error {
-		// The save fails, and the store's folder turns read-only so the
-		// rollback's delete cannot be written either.
-		require.NoError(t, os.Chmod(deps.Home, 0o500))
-		return errors.New("injected config save failure")
-	}
-	t.Cleanup(func() { _ = os.Chmod(deps.Home, 0o700) })
+	// The config save fails, and the rollback's delete of the stored
+	// credential fails too (deterministic fault seams; no file permissions,
+	// so the test runs the same as root — CHECK R2-03).
+	deps.SaveConfigLocked = func(*config.Config) error { return errors.New("injected config save failure") }
+	systools.FailMCPCredentialRollbackForTest(t)
 	add := systools.NewMCPAddTool(deps)
 	res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{
 		"name": "rb", "command": "npx", "env": map[string]any{"TOKEN": "wu3-rollback-value"},
 	}))
-	require.NoError(t, os.Chmod(deps.Home, 0o700))
 	require.True(t, res.IsError, res.ForLLM)
 	body := wu3Outcome(t, res, "partly saved")
 	assert.Equal(t, []any{"env_credentials"}, body["changed_fields"])
