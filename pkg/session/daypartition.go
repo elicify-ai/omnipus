@@ -394,9 +394,6 @@ type TranscriptEntry struct {
 	// ProviderID is the catalog provider id for this call. Empty on entries
 	// written before prompt-caching accounting.
 	ProviderID string `json:"provider_id,omitempty"`
-	// ModelID is the catalog model id stored for accounting. Model (above) is
-	// the existing assistant model name; writers set both from the same id.
-	ModelID string `json:"model_id,omitempty"`
 	// BillingClass is "priced", "unpriced", or "subscription".
 	BillingClass string `json:"billing_class,omitempty"`
 	// UnpricedTokens is the unpriced portion of this call, not the whole call.
