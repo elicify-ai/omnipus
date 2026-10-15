@@ -55,7 +55,7 @@
 #
 # Exit code: 0 if every assertion passed, 1 if any failed.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LINT_SCRIPT="${SCRIPT_DIR}/check-adr-id-scheme.sh"
@@ -67,6 +67,30 @@ ERRORS=()
 
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/check-adr-id-scheme-test.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT
+TMP_DIR="$(cd "$TMP_DIR" && pwd -P)"
+# Child guards change cwd; give every child the same absolute scratch root.
+export TMPDIR="$TMP_DIR"
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+
+# Never let Git discover an enclosing checkout after fixture setup fails.
+fixture_git() {
+  local repo="$1" resolved
+  shift
+  if [[ "$repo" != /* ]]; then
+    printf 'fixture path must be absolute: %s\n' "$repo" >&2
+    return 1
+  fi
+  resolved="$(cd "$repo" && pwd -P)" || return
+  case "$resolved" in
+    "$TMP_DIR"/*) ;;
+    *) printf 'fixture path is outside temp root: %s\n' "$repo" >&2; return 1 ;;
+  esac
+  if [[ "$1" != init && ! -d "$resolved/.git" ]]; then
+    printf 'fixture has no own .git directory: %s\n' "$repo" >&2
+    return 1
+  fi
+  git -C "$resolved" "$@"
+}
 
 assert_exit_code() {
   local label="$1" expected="$2" actual="$3"
@@ -108,17 +132,20 @@ assert_output_not_contains() {
 # scheme; must never be flagged); a 'feature' branch is checked out on top
 # for the caller to add/modify files on.
 new_repo_with_feature_branch() {
-  REPO="$TMP_DIR/repo-$RANDOM"
-  mkdir -p "$REPO/docs/internal/architecture"
-  git -C "$REPO" init --quiet --initial-branch=main
-  git -C "$REPO" config user.email "test@example.invalid"
-  git -C "$REPO" config user.name "check-adr-id-scheme test"
+  local repo
+  repo="$(mktemp -d "$TMP_DIR/repo.XXXXXX")" || return
+  # Explicit returns also apply when a caller captures an expected error,
+  # where Bash disables errexit. Stdout publishes only the completed path.
+  fixture_git "$repo" init --quiet --initial-branch=main >&2 || return
+  mkdir -p "$repo/docs/internal/architecture" || return
+  fixture_git "$repo" config user.email "test@example.invalid" >&2 || return
+  fixture_git "$repo" config user.name "check-adr-id-scheme test" >&2 || return
   printf '# ADR-077 — two layers\n\nLegacy numbered ADR; never checked by the guard.\n' \
-    > "$REPO/docs/internal/architecture/ADR-077-two-layers.md"
-  git -C "$REPO" add -A
-  git -C "$REPO" commit --quiet -m "base: pre-existing legacy ADR"
-  git -C "$REPO" checkout --quiet -b feature
-  echo "$REPO"
+    > "$repo/docs/internal/architecture/ADR-077-two-layers.md" || return
+  fixture_git "$repo" add -A >&2 || return
+  fixture_git "$repo" commit --quiet -m "base: pre-existing legacy ADR" >&2 || return
+  fixture_git "$repo" checkout --quiet -b feature >&2 || return
+  printf '%s\n' "$repo"
 }
 
 echo "=== check-adr-id-scheme self-test ==="
@@ -127,6 +154,7 @@ echo "=== check-adr-id-scheme self-test ==="
 
 echo ""
 echo "Fixture isolation: identical random values must not reuse a repository"
+EXIT_CODE=0
 OUTPUT="$(
   # Unsetting RANDOM removes its special behaviour. Limit the fault to this
   # subshell: subsequent guard cases still run with their normal environment.
@@ -147,8 +175,7 @@ OUTPUT="$(
     printf 'first fixture sentinel changed\n' >&2
     exit 1
   fi
-)"
-EXIT_CODE=$?
+)" || EXIT_CODE=$?
 assert_exit_code "fixture-isolation" 0 "$EXIT_CODE"
 if [[ "$EXIT_CODE" -ne 0 ]]; then
   printf '%s\n' "$OUTPUT"
@@ -159,6 +186,7 @@ fi
 for SETUP_STAGE in commit checkout; do
   echo ""
   echo "Fixture setup: a failing git $SETUP_STAGE must stop setup"
+  EXIT_CODE=0
   OUTPUT="$(
     git() {
       if [[ "${3:-}" == "$SETUP_STAGE" ]]; then
@@ -168,8 +196,7 @@ for SETUP_STAGE in commit checkout; do
       command git "$@"
     }
     new_repo_with_feature_branch 2> "$TMP_DIR/setup-$SETUP_STAGE.err"
-  )"
-  EXIT_CODE=$?
+  )" || EXIT_CODE=$?
   assert_exit_code "fixture-$SETUP_STAGE-error" 73 "$EXIT_CODE"
   assert_exit_code "fixture-$SETUP_STAGE-no-path" 0 "${#OUTPUT}"
   assert_output_contains "fixture-$SETUP_STAGE-diagnostic" \
@@ -180,12 +207,12 @@ done
 
 echo ""
 echo "Test 1: an unchanged pre-existing legacy ADR is not flagged"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 echo "unrelated" > "$REPO/README.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "unrelated change"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "unrelated change"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "legacy-unchanged-exit" 0 "$EXIT_CODE"
 assert_output_not_contains "legacy-unchanged-no-finding" "ADR-077-two-layers.md" "$OUTPUT"
 
@@ -193,12 +220,12 @@ assert_output_not_contains "legacy-unchanged-no-finding" "ADR-077-two-layers.md"
 
 echo ""
 echo "Test 2: a new 3-digit ADR outside the grandfather range is caught"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf '# ADR-097\n' > "$REPO/docs/internal/architecture/ADR-097-some-new-thing.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add legacy-numbered ADR"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add legacy-numbered ADR"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "legacy-numbered-exit" 1 "$EXIT_CODE"
 assert_output_contains "legacy-numbered-finding" "ADR-097-some-new-thing.md" "$OUTPUT"
 assert_output_contains "legacy-numbered-reason" "retired 3-digit" "$OUTPUT"
@@ -207,13 +234,13 @@ assert_output_contains "legacy-numbered-reason" "retired 3-digit" "$OUTPUT"
 
 echo ""
 echo "Test 3: two new files with the same slug and different dates are caught"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf '# X\n' > "$REPO/docs/internal/architecture/ADR-20260927-my-feature.md"
 printf '# X\n' > "$REPO/docs/internal/architecture/ADR-20260928-my-feature.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add two same-slug ADRs"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add two same-slug ADRs"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "duplicate-new-pair-exit" 1 "$EXIT_CODE"
 assert_output_contains "duplicate-new-pair-a" "ADR-20260927-my-feature.md" "$OUTPUT"
 assert_output_contains "duplicate-new-pair-b" "ADR-20260928-my-feature.md" "$OUTPUT"
@@ -222,13 +249,13 @@ assert_output_contains "duplicate-new-pair-b" "ADR-20260928-my-feature.md" "$OUT
 
 echo ""
 echo "Test 4: grandfathered ADR-096 and its -review sibling are exempt"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf '# ADR-096\n' > "$REPO/docs/internal/architecture/ADR-096-something-new.md"
 printf '# ADR-096 review\n' > "$REPO/docs/internal/architecture/ADR-096-something-new-review.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add grandfathered ADR-096 pair"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add grandfathered ADR-096 pair"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "grandfather-exit" 0 "$EXIT_CODE"
 assert_output_not_contains "grandfather-not-flagged" "ADR-096-something-new" "$OUTPUT"
 
@@ -236,12 +263,12 @@ assert_output_not_contains "grandfather-not-flagged" "ADR-096-something-new" "$O
 
 echo ""
 echo "Test 5: a correct new date-slug ADR with a fresh slug is clean"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf '# New scheme\n' > "$REPO/docs/internal/architecture/ADR-20260927-unique-fresh-slug.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add correct new-scheme ADR"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add correct new-scheme ADR"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "new-scheme-exit" 0 "$EXIT_CODE"
 assert_output_not_contains "new-scheme-no-finding" "unique-fresh-slug.md" "$OUTPUT"
 assert_output_not_contains "legacy-still-unflagged" "ADR-077-two-layers.md" "$OUTPUT"
@@ -250,12 +277,12 @@ assert_output_not_contains "legacy-still-unflagged" "ADR-077-two-layers.md" "$OU
 
 echo ""
 echo "Test 6: a new file duplicating a legacy ADR's slug is caught"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf '# Dup\n' > "$REPO/docs/internal/architecture/ADR-20260927-two-layers.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add duplicate of legacy slug"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add duplicate of legacy slug"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "cross-scheme-duplicate-exit" 1 "$EXIT_CODE"
 assert_output_contains "cross-scheme-duplicate-pair" "ADR-20260927-two-layers.md" "$OUTPUT"
 assert_output_contains "cross-scheme-duplicate-legacy-named" "ADR-077-two-layers.md" "$OUTPUT"
@@ -264,15 +291,15 @@ assert_output_contains "cross-scheme-duplicate-legacy-named" "ADR-077-two-layers
 
 echo ""
 echo "Test 7: malformed new files are caught with specific reasons"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 LONG81="$(printf 'a%.0s' $(seq 1 81))"
 printf '# U\n' > "$REPO/docs/internal/architecture/ADR-20260927-My_Feature.md"
 printf '# D\n' > "$REPO/docs/internal/architecture/ADR-20260927-my--feature.md"
 printf '# L\n' > "$REPO/docs/internal/architecture/ADR-20260927-$LONG81.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add malformed ADR files"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add malformed ADR files"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "malformed-exit" 1 "$EXIT_CODE"
 assert_output_contains "malformed-uppercase-finding" "My_Feature" "$OUTPUT"
 assert_output_contains "malformed-uppercase-reason" "lowercase alnum" "$OUTPUT"
@@ -284,12 +311,12 @@ assert_output_contains "malformed-long-slug-finding" "max 80" "$OUTPUT"
 
 echo ""
 echo "Test 8: a modified (not added) legacy ADR is not flagged"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf 'Extra paragraph.\n' >> "$REPO/docs/internal/architecture/ADR-077-two-layers.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "modify the legacy ADR; the scheme never applies retroactively"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "modify the legacy ADR; the scheme never applies retroactively"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "modified-legacy-exit" 0 "$EXIT_CODE"
 assert_output_not_contains "modified-legacy-no-finding" "ADR-077-two-layers.md" "$OUTPUT"
 
@@ -297,12 +324,12 @@ assert_output_not_contains "modified-legacy-no-finding" "ADR-077-two-layers.md" 
 
 echo ""
 echo "Test 9: an unresolvable base ref warns and exits 0, never scans everything"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf '# New scheme, bad base\n' > "$REPO/docs/internal/architecture/ADR-20260927-orphan-slug.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add ADR with unresolvable base"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF="does-not-exist-anywhere" bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add ADR with unresolvable base"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF="does-not-exist-anywhere" bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "unresolvable-base-exit" 0 "$EXIT_CODE"
 assert_output_contains "unresolvable-base-warning" "cannot resolve integration branch" "$OUTPUT"
 assert_output_not_contains "unresolvable-base-no-finding" "orphan-slug" "$OUTPUT"
@@ -311,16 +338,16 @@ assert_output_not_contains "unresolvable-base-no-finding" "orphan-slug" "$OUTPUT
 
 echo ""
 echo "Test 10: a nonexistent REPO_ROOT exits 2"
-OUTPUT=$(REPO_ROOT="$TMP_DIR/does-not-exist" bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$TMP_DIR/does-not-exist" bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "bad-repo-root-exit" 2 "$EXIT_CODE"
 
 echo ""
 echo "Test 11: a REPO_ROOT with no .git exits 2"
 NOTAREPO="$TMP_DIR/not-a-repo"
 mkdir -p "$NOTAREPO"
-OUTPUT=$(REPO_ROOT="$NOTAREPO" bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$NOTAREPO" bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "not-a-repo-exit" 2 "$EXIT_CODE"
 
 # --- Test 16 (FIX 1, silent-failure-hunter CRITICAL) -------------------------
@@ -335,15 +362,15 @@ assert_exit_code "not-a-repo-exit" 2 "$EXIT_CODE"
 
 echo ""
 echo "Test 16: base resolves but the diff itself fails — visible WARNING, still exit 0"
-REPO="$(new_repo_with_feature_branch)"
-git -C "$REPO" checkout --quiet --orphan feature2
-git -C "$REPO" rm -qrf . 2>/dev/null
+REPO="$(new_repo_with_feature_branch)" || exit 1
+fixture_git "$REPO" checkout --quiet --orphan feature2
+fixture_git "$REPO" rm -qrf . 2>/dev/null
 mkdir -p "$REPO/docs/internal/architecture"
 printf '# bad\n' > "$REPO/docs/internal/architecture/ADR-097-bad.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "orphan root adds a non-conforming ADR"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "orphan root adds a non-conforming ADR"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "diff-fail-exit" 0 "$EXIT_CODE"
 assert_output_contains "diff-fail-warning" "WARNING" "$OUTPUT"
 assert_output_contains "diff-fail-git-error" "no merge base" "$OUTPUT"
@@ -357,12 +384,12 @@ assert_output_not_contains "diff-fail-no-false-clean" "0 new ADR files" "$OUTPUT
 
 echo ""
 echo "Test 17: GITHUB_BASE_REF drives a finding without the override"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf '# ADR-097\n' > "$REPO/docs/internal/architecture/ADR-097-some-new-thing.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add legacy-numbered ADR"
-OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH GITHUB_BASE_REF=main REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add legacy-numbered ADR"
+EXIT_CODE=0
+OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH GITHUB_BASE_REF=main REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "github-base-finding-exit" 1 "$EXIT_CODE"
 assert_output_contains "github-base-finding-name" "ADR-097-some-new-thing.md" "$OUTPUT"
 assert_output_contains "github-base-finding-reason" "retired 3-digit" "$OUTPUT"
@@ -371,12 +398,12 @@ assert_output_contains "github-base-finding-reason" "retired 3-digit" "$OUTPUT"
 
 echo ""
 echo "Test 18: GITHUB_BASE_REF resolves and reports a clean run"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf '# Fresh\n' > "$REPO/docs/internal/architecture/ADR-20260927-github-base-fresh.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add correct new-scheme ADR"
-OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH GITHUB_BASE_REF=main REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add correct new-scheme ADR"
+EXIT_CODE=0
+OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH GITHUB_BASE_REF=main REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "github-base-clean-exit" 0 "$EXIT_CODE"
 assert_output_contains "github-base-clean-resolved" "against main," "$OUTPUT"
 assert_output_not_contains "github-base-clean-no-tier1-warning" "no comparison base" "$OUTPUT"
@@ -392,17 +419,17 @@ assert_output_not_contains "github-base-clean-no-finding" "github-base-fresh" "$
 
 echo ""
 echo "Test 19: a new date-scheme file duplicating a grandfathered slug is caught"
-REPO="$(new_repo_with_feature_branch)"
-git -C "$REPO" checkout --quiet main
+REPO="$(new_repo_with_feature_branch)" || exit 1
+fixture_git "$REPO" checkout --quiet main
 printf '# ADR-095\n' > "$REPO/docs/internal/architecture/ADR-095-thinking-visibility-gate-and-signed-blocks.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "base: add grandfathered ADR-095"
-git -C "$REPO" checkout --quiet -b feature2 main
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "base: add grandfathered ADR-095"
+fixture_git "$REPO" checkout --quiet -b feature2 main
 printf '# dup of 095\n' > "$REPO/docs/internal/architecture/ADR-20260927-thinking-visibility-gate-and-signed-blocks.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add date-scheme duplicate of a grandfathered slug"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add date-scheme duplicate of a grandfathered slug"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "grandfather-slug-dup-exit" 1 "$EXIT_CODE"
 assert_output_contains "grandfather-slug-dup-new" "ADR-20260927-thinking-visibility-gate-and-signed-blocks.md" "$OUTPUT"
 assert_output_contains "grandfather-slug-dup-old" "ADR-095-thinking-visibility-gate-and-signed-blocks.md" "$OUTPUT"
@@ -415,15 +442,15 @@ assert_output_contains "grandfather-slug-dup-reason" "duplicate slug" "$OUTPUT"
 
 echo ""
 echo "Test 20: leading/trailing hyphens and bad ID tokens get their specific reasons"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf '# L\n' > "$REPO/docs/internal/architecture/ADR-20260927--leading.md"
 printf '# T\n' > "$REPO/docs/internal/architecture/ADR-20260927-trailing-.md"
 printf '# N\n' > "$REPO/docs/internal/architecture/ADR-1234567-short-id.md"
 printf '# M\n' > "$REPO/docs/internal/architecture/ADR-20260927-.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add hyphen/ID-token malformed ADRs"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add hyphen/ID-token malformed ADRs"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_ADR_ID_SCHEME_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "hyphen-token-exit" 1 "$EXIT_CODE"
 assert_output_contains "leading-hyphen-reason" "starts with a hyphen" "$OUTPUT"
 assert_output_contains "trailing-hyphen-reason" "ends with a hyphen" "$OUTPUT"
@@ -440,12 +467,12 @@ assert_output_contains "missing-slug-reason" "no slug after the 8-digit date" "$
 
 echo ""
 echo "Test 21: with no base source at all, the guard warns and exits 0"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 printf '# Bad\n' > "$REPO/docs/internal/architecture/ADR-097-never-checked.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add ADR that must NOT be checked without a base"
-OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u GITHUB_EVENT_NAME REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add ADR that must NOT be checked without a base"
+EXIT_CODE=0
+OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u GITHUB_EVENT_NAME REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "no-base-tier1-exit" 0 "$EXIT_CODE"
 assert_output_contains "no-base-tier1-warning" "no comparison base" "$OUTPUT"
 assert_output_not_contains "no-base-tier1-no-finding" "never-checked" "$OUTPUT"
@@ -461,9 +488,9 @@ echo ""
 echo "Test 12: a fresh title yields one clean stdout line with a valid ID"
 GEN_REPO="$TMP_DIR/gen-repo-empty"
 mkdir -p "$GEN_REPO/docs/internal/architecture"
-git -C "$GEN_REPO" init --quiet --initial-branch=main
-GEN_OUT=$(REPO_ROOT="$GEN_REPO" bash "$GEN_SCRIPT" "Web Search Provider Model" 2>/dev/null)
-GEN_EXIT=$?
+fixture_git "$GEN_REPO" init --quiet --initial-branch=main
+GEN_EXIT=0
+GEN_OUT=$(REPO_ROOT="$GEN_REPO" bash "$GEN_SCRIPT" "Web Search Provider Model" 2>/dev/null) || GEN_EXIT=$?
 assert_exit_code "gen-fresh-exit" 0 "$GEN_EXIT"
 GEN_LINES="$(printf '%s' "$GEN_OUT" | grep -c . || true)"
 assert_exit_code "gen-fresh-one-line" 1 "$GEN_LINES"
@@ -493,22 +520,24 @@ echo ""
 echo "Test 13: a colliding title is refused, naming the existing file"
 GEN_REPO2="$TMP_DIR/gen-repo-095"
 mkdir -p "$GEN_REPO2/docs/internal/architecture"
-git -C "$GEN_REPO2" init --quiet --initial-branch=main
+fixture_git "$GEN_REPO2" init --quiet --initial-branch=main
 printf '# ADR-095\n' > "$GEN_REPO2/docs/internal/architecture/ADR-095-thinking-visibility-gate-and-signed-blocks.md"
-GEN_ERR=$(REPO_ROOT="$GEN_REPO2" bash "$GEN_SCRIPT" "Thinking Visibility Gate And Signed Blocks" 2>&1 1>/dev/null)
-GEN_EXIT2=$?
+GEN_EXIT2=0
+GEN_ERR=$(REPO_ROOT="$GEN_REPO2" bash "$GEN_SCRIPT" "Thinking Visibility Gate And Signed Blocks" 2>&1 1>/dev/null) || GEN_EXIT2=$?
 assert_exit_code "gen-collision-exit-nonzero" 1 "$GEN_EXIT2"
 assert_output_contains "gen-collision-names-file" "ADR-095-thinking-visibility-gate-and-signed-blocks.md" "$GEN_ERR"
 assert_output_contains "gen-collision-says-collision" "COLLISION" "$GEN_ERR"
-GEN_OUT2=$(REPO_ROOT="$GEN_REPO2" bash "$GEN_SCRIPT" "Thinking Visibility Gate And Signed Blocks" 2>/dev/null)
+GEN_EXIT2=0
+GEN_OUT2=$(REPO_ROOT="$GEN_REPO2" bash "$GEN_SCRIPT" "Thinking Visibility Gate And Signed Blocks" 2>/dev/null) || GEN_EXIT2=$?
+assert_exit_code "gen-collision-repeat-exit" 1 "$GEN_EXIT2"
 assert_exit_code "gen-collision-stdout-empty" 0 "$([ -z "$GEN_OUT2" ] && echo 0 || echo 1)"
 
 # --- Test 14: all-punctuation title → refused, nothing on stdout ------------
 
 echo ""
 echo "Test 14: an all-punctuation title is refused with empty stdout"
-GEN_OUT3=$(REPO_ROOT="$GEN_REPO2" bash "$GEN_SCRIPT" "??? !!! ———" 2>/dev/null)
-GEN_EXIT3=$?
+GEN_EXIT3=0
+GEN_OUT3=$(REPO_ROOT="$GEN_REPO2" bash "$GEN_SCRIPT" "??? !!! ———" 2>/dev/null) || GEN_EXIT3=$?
 assert_exit_code "gen-empty-slug-exit-nonzero" 1 "$GEN_EXIT3"
 assert_exit_code "gen-empty-slug-stdout-empty" 0 "$([ -z "$GEN_OUT3" ] && echo 0 || echo 1)"
 
@@ -517,8 +546,8 @@ assert_exit_code "gen-empty-slug-stdout-empty" 0 "$([ -z "$GEN_OUT3" ] && echo 0
 echo ""
 echo "Test 15: a >80-char slug truncates; truncation-time trailing hyphen is re-trimmed"
 LONG_TITLE="$(printf 'a%.0s' $(seq 1 79)) b c"
-GEN_OUT4=$(REPO_ROOT="$GEN_REPO2" bash "$GEN_SCRIPT" "$LONG_TITLE" 2>/dev/null)
-GEN_EXIT4=$?
+GEN_EXIT4=0
+GEN_OUT4=$(REPO_ROOT="$GEN_REPO2" bash "$GEN_SCRIPT" "$LONG_TITLE" 2>/dev/null) || GEN_EXIT4=$?
 assert_exit_code "gen-trunc-exit" 0 "$GEN_EXIT4"
 GEN_SLUG="${GEN_OUT4#ADR-}"
 GEN_SLUG="${GEN_SLUG#*-}"
@@ -547,22 +576,22 @@ echo ""
 echo "Test 22: a resolvable ref with a failing ls-tree warns and falls back"
 CORRUPT_REPO="$TMP_DIR/gen-repo-corrupt-tree"
 mkdir -p "$CORRUPT_REPO/docs/internal/architecture"
-git -C "$CORRUPT_REPO" init --quiet --initial-branch=main
-git -C "$CORRUPT_REPO" config user.email "test@example.invalid"
-git -C "$CORRUPT_REPO" config user.name "check-adr-id-scheme test"
+fixture_git "$CORRUPT_REPO" init --quiet --initial-branch=main
+fixture_git "$CORRUPT_REPO" config user.email "test@example.invalid"
+fixture_git "$CORRUPT_REPO" config user.name "check-adr-id-scheme test"
 printf '# ADR-077\n' > "$CORRUPT_REPO/docs/internal/architecture/ADR-077-two-layers.md"
-git -C "$CORRUPT_REPO" add -A
-git -C "$CORRUPT_REPO" commit --quiet -m "base"
-git -C "$CORRUPT_REPO" update-ref refs/remotes/origin/release/v0.1.1 "$(git -C "$CORRUPT_REPO" rev-parse HEAD)"
-CORRUPT_TREE="$(git -C "$CORRUPT_REPO" rev-parse 'refs/remotes/origin/release/v0.1.1^{tree}')"
+fixture_git "$CORRUPT_REPO" add -A
+fixture_git "$CORRUPT_REPO" commit --quiet -m "base"
+fixture_git "$CORRUPT_REPO" update-ref refs/remotes/origin/release/v0.1.1 "$(fixture_git "$CORRUPT_REPO" rev-parse HEAD)"
+CORRUPT_TREE="$(fixture_git "$CORRUPT_REPO" rev-parse 'refs/remotes/origin/release/v0.1.1^{tree}')"
 rm -f "$CORRUPT_REPO/.git/objects/${CORRUPT_TREE:0:2}/${CORRUPT_TREE:2}"
-GEN_ERR3=$(REPO_ROOT="$CORRUPT_REPO" bash "$GEN_SCRIPT" "Some Fresh Title" 2>&1 1>/dev/null)
-GEN_EXIT5=$?
+GEN_EXIT5=0
+GEN_ERR3=$(REPO_ROOT="$CORRUPT_REPO" bash "$GEN_SCRIPT" "Some Fresh Title" 2>&1 1>/dev/null) || GEN_EXIT5=$?
 assert_exit_code "gen-lstree-fail-exit-zero" 0 "$GEN_EXIT5"
 assert_output_contains "gen-lstree-fail-warning" "ls-tree against origin/release/v0.1.1 failed" "$GEN_ERR3"
 assert_output_contains "gen-lstree-fail-fallback" "fell back to the working tree only" "$GEN_ERR3"
-GEN_OUT5=$(REPO_ROOT="$CORRUPT_REPO" bash "$GEN_SCRIPT" "Some Fresh Title" 2>/dev/null)
-GEN_EXIT6=$?
+GEN_EXIT6=0
+GEN_OUT5=$(REPO_ROOT="$CORRUPT_REPO" bash "$GEN_SCRIPT" "Some Fresh Title" 2>/dev/null) || GEN_EXIT6=$?
 assert_exit_code "gen-lstree-fail-still-mints" 0 "$GEN_EXIT6"
 assert_output_contains "gen-lstree-fail-still-mints-id" "-some-fresh-title" "$GEN_OUT5"
 

@@ -57,7 +57,8 @@ EOF
 
 check_companion() {
   local name="$1" fault="$2" expected_exit="$3" expected_error="$4"
-  local enclosing before_head before_branch before_refs before_index before_status rc=0
+  local enclosing before_head before_branch before_refs before_index before_status
+  local temp_parent="$WORK/tmp" rc=0
   enclosing="$(mktemp -d "$WORK/enclosing.XXXXXX")"
   git -C "$enclosing" init --quiet --initial-branch=main
   git -C "$enclosing" config user.email test@example.invalid
@@ -66,6 +67,10 @@ check_companion() {
   git -C "$enclosing" add -A
   git -C "$enclosing" commit --quiet -m 'enclosing repository baseline'
   git -C "$enclosing" checkout --quiet -b enclosing-work
+  if [[ "$fault" == relative-temp ]]; then
+    mkdir "$enclosing/tmp"
+    temp_parent=tmp
+  fi
   before_head="$(git -C "$enclosing" rev-parse HEAD)"
   before_branch="$(git -C "$enclosing" symbolic-ref HEAD)"
   before_refs="$(git -C "$enclosing" for-each-ref --format='%(refname) %(objectname)')"
@@ -75,7 +80,7 @@ check_companion() {
   printf '\nContainment: %s (%s)\n' "$name" "$fault"
   (
     cd "$enclosing"
-    BASH_ENV="$WORK/inject.bash" TMPDIR="$WORK/tmp" \
+    BASH_ENV="$WORK/inject.bash" TMPDIR="$temp_parent" \
       FIXTURE_FAULT="$fault" ENCLOSING_REPO="$enclosing" \
       bash "$SCRIPT_DIR/$name"
   ) > "$WORK/companion.log" 2>&1 || rc=$?
@@ -100,6 +105,7 @@ check_companion() {
 
 for companion in check-adr-id-scheme.test.sh check-spec-status.test.sh; do
   check_companion "$companion" random 0 ''
+  check_companion "$companion" relative-temp 0 ''
   check_companion "$companion" relative 1 'fixture path must be absolute'
   check_companion "$companion" enclosing 1 'fixture path is outside temp root'
   check_companion "$companion" setup 1 'injected git init failure'
