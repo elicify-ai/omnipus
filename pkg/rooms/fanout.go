@@ -25,12 +25,16 @@ import (
 func (s *Service) admitAll(r *room, ws Workspace, ids []string) {
 	var settled sync.WaitGroup
 	for _, id := range ids {
+		done := make(chan struct{})
+		if _, inFlight := s.admitting.LoadOrStore(id, done); inFlight {
+			// One admission per delivery at a time: an overlapping Retry of
+			// the same message never admits (or asks to approve) it twice.
+			continue
+		}
 		s.inflight.Add(1)
 		settled.Add(1)
 		var once sync.Once
 		settle := func() { once.Do(settled.Done) }
-		done := make(chan struct{})
-		s.admitting.Store(id, done)
 		go func(id string) {
 			defer s.inflight.Done()
 			defer settle()
@@ -120,24 +124,38 @@ func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string, sett
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d := r.deliveries[requestID]
-	if d == nil || r.deleted || (d.State != StateRecorded && d.State != StateUnknown && d.State != StateUnavailable) {
+	if d == nil || r.deleted || !admittable(d.State) {
+		return Admission{}, nil, false
+	}
+	if _, saved := r.byEntryID[d.EntryID]; !saved {
+		// The delivery was recorded but its message never was (a write cut
+		// between the two): there is nothing to deliver. Re-sending that same
+		// message completes it; nothing else ever admits it.
 		return Admission{}, nil, false
 	}
 	if !s.deliveryCurrent(r, d) {
 		s.cancelStale(r, d)
 		return Admission{}, nil, false
 	}
-	if facts, err := s.deps.Facts(s.receiver(r, d), d.RequestID); err == nil && facts.Found && !facts.Discarded {
-		// FR-216: the member already has it; record the acknowledgement only.
-		s.recordAdmission(r, d, AdmitResult{ReceiverSessionID: facts.SessionID, Held: facts.Held && !facts.Delivered, AlreadyAdmitted: true}, nil)
+	facts, factsErr := s.deps.Facts(s.receiver(r, d), d.RequestID)
+	known := factsErr == nil && facts.Found && !facts.Discarded
+	if known && facts.Delivered {
+		// FR-216: a turn of the member already took it; record the
+		// acknowledgement only.
+		s.recordAdmission(r, d, AdmitResult{ReceiverSessionID: facts.SessionID, AlreadyAdmitted: true}, nil)
 		return Admission{}, nil, false
 	}
-	rate, _ := s.deps.Limits()
-	if !s.rate.allow(d.SenderAgentID+"\x00"+d.AgentID, rate, s.now()) {
-		s.updateState(r, d, StateUnavailable, ReasonRateLimit)
-		return Admission{}, nil, false
+	// A capture the member has not been given yet goes through the admission
+	// again: it writes nothing twice and only makes sure the member is woken.
+	// That is not a new request, so it does not count against the pace.
+	if !known {
+		rate, _ := s.deps.Limits()
+		if !s.rate.allow(d.SenderAgentID+"\x00"+d.AgentID, rate, s.now()) {
+			s.updateState(r, d, StateUnavailable, ReasonRateLimit)
+			return Admission{}, nil, false
+		}
 	}
-	if d.State != StateRecorded {
+	if d.State != StateRecorded && d.State != StateAdmitted {
 		// A Retry of a member that never received the message (unavailable,
 		// unknown) starts over as "sending…": the admission's wake can reach
 		// the dequeue fence before this admission returns, and the fence must
@@ -166,6 +184,15 @@ func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string, sett
 	return adm, ctx, true
 }
 
+// admittable: the delivery has not started a turn and may be (re)admitted.
+func admittable(state string) bool {
+	switch state {
+	case StateRecorded, StateUnknown, StateUnavailable, StateAdmitted:
+		return true
+	}
+	return false
+}
+
 // deliveryCurrent: the room is not paused past it, and the member is still a
 // member (FR-217). The caller holds r.mu.
 func (s *Service) deliveryCurrent(r *room, d *deliveryRecord) bool {
@@ -178,7 +205,9 @@ func (s *Service) cancelStale(r *room, d *deliveryRecord) {
 	if !slices.Contains(r.rec.Members, d.AgentID) {
 		reason = ReasonRemoved
 	}
-	s.cancelDelivery(r, d, reason)
+	if err := s.cancelDelivery(r, d, reason); err != nil {
+		logRoomError("a fenced-off request could not be marked cancelled; it never runs", r.rec.ID, err)
+	}
 }
 
 func (s *Service) receiver(r *room, d *deliveryRecord) addressing.Pair {
@@ -205,6 +234,9 @@ func (s *Service) recordAdmission(r *room, d *deliveryRecord, res AdmitResult, e
 	state := StateAdmitted
 	if res.Held {
 		state = StateHeld
+	}
+	if d.State == state && d.Reason == "" {
+		return // a re-woken capture: nothing changed
 	}
 	s.updateState(r, d, state, "")
 }

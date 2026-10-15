@@ -93,23 +93,85 @@ func (s *Service) openRoom(roomID string) (*room, Workspace, error) {
 		return nil, Workspace{}, err
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.deleted {
+		r.mu.Unlock()
 		return nil, Workspace{}, notFound("no such group chat")
 	}
-	if err := s.reconcile(r, ws); err != nil {
+	if err := s.reconcile(r, ws, PrincipalSystem); err != nil {
+		r.mu.Unlock()
 		return nil, Workspace{}, err
 	}
+	s.sweepStale(r)
+	resume := s.unsentMentionsLocked(r)
+	r.mu.Unlock()
+	if len(resume) > 0 {
+		s.inflight.Add(1)
+		go func() {
+			defer s.inflight.Done()
+			s.admitAll(r, ws, resume)
+		}()
+	}
 	return r, ws, nil
+}
+
+// unsentMentionsLocked returns, once per loaded room, the mention deliveries
+// of mirrored answers that a crash left unsent (recorded after the answer was
+// copied to the main chat, before they were admitted): no person will retry
+// an agent's answer, so the room sends them itself (FR-216). The caller holds
+// r.mu.
+func (s *Service) unsentMentionsLocked(r *room) []string {
+	if r.resumed {
+		return nil
+	}
+	r.resumed = true
+	var out []string
+	for _, e := range r.entries {
+		if e.AnswersRequest == "" || !r.mirrored[e.Entry.Id] {
+			continue
+		}
+		for _, id := range r.byEntry[e.Entry.Id] {
+			if d := r.deliveries[id]; d.State == StateRecorded && d.Generation == r.rec.Generation {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
+// sweepStale repairs the labels of requests a pause or a member removal
+// already fenced off but could not mark cancelled when it ran (a failed
+// write is reported to the person who paused or removed; the dequeue fence
+// refuses those requests either way). The caller holds r.mu.
+func (s *Service) sweepStale(r *room) {
+	for _, id := range r.order {
+		d := r.deliveries[id]
+		member := slices.Contains(r.rec.Members, d.AgentID)
+		if !cancellable(d) || (member && d.Generation >= r.rec.Generation) {
+			continue
+		}
+		reason := ReasonPaused
+		if !member {
+			reason = ReasonRemoved
+		}
+		if err := s.cancelDelivery(r, d, reason); err != nil {
+			logRoomError("a fenced-off request could still not be marked cancelled; it never runs", r.rec.ID, err)
+		}
+	}
 }
 
 // workspaceRooms loads, reconciles and orders the workspace's rooms, making
 // sure its team room exists once two conversation agents do (FR-160).
 func (s *Service) workspaceRooms(ws Workspace) ([]*room, error) {
+	return s.workspaceRoomsAs(ws, PrincipalSystem)
+}
+
+// workspaceRoomsAs is workspaceRooms with the actor its membership changes
+// are audited under (the signed-in user of a workspace change, FR-172).
+func (s *Service) workspaceRoomsAs(ws Workspace, principal string) ([]*room, error) {
 	if err := s.loadAll(); err != nil {
 		return nil, err
 	}
-	if err := s.ensureTeamRoom(ws); err != nil {
+	if err := s.ensureTeamRoom(ws, principal); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -130,7 +192,10 @@ func (s *Service) workspaceRooms(ws Workspace) ([]*room, error) {
 	}
 	for _, r := range rs {
 		r.mu.Lock()
-		err := s.reconcile(r, ws)
+		err := s.reconcile(r, ws, principal)
+		if err == nil {
+			s.sweepStale(r)
+		}
 		r.mu.Unlock()
 		if err != nil {
 			return nil, err
@@ -143,7 +208,7 @@ func (s *Service) workspaceRooms(ws Workspace) ([]*room, error) {
 // SyncWorkspace brings the workspace's rooms up to date with its membership
 // now (called after a workspace's team changes). Errors are logged: the next
 // read reconciles again.
-func (s *Service) SyncWorkspace(workspaceID string) {
+func (s *Service) SyncWorkspace(workspaceID, principal string) {
 	ws, err := s.workspace(workspaceID)
 	if err != nil {
 		if StatusOf(err) != 404 {
@@ -151,7 +216,7 @@ func (s *Service) SyncWorkspace(workspaceID string) {
 		}
 		return
 	}
-	if _, err := s.workspaceRooms(ws); err != nil {
+	if _, err := s.workspaceRoomsAs(ws, principal); err != nil {
 		slog.Error("rooms: workspace sync failed; the next read retries", "workspace_id", workspaceID, "error", err)
 	}
 }
@@ -159,7 +224,7 @@ func (s *Service) SyncWorkspace(workspaceID string) {
 // ensureTeamRoom creates the workspace's one team room the first time it has
 // two conversation agents. Below two an existing team room stays (hidden,
 // read-only, history kept).
-func (s *Service) ensureTeamRoom(ws Workspace) error {
+func (s *Service) ensureTeamRoom(ws Workspace, principal string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rooms {
@@ -179,7 +244,7 @@ func (s *Service) ensureTeamRoom(ws Workspace) error {
 		return err
 	}
 	s.rooms[rec.ID] = r
-	s.deps.Audit(AuditEvent{RoomID: rec.ID, WorkspaceID: ws.ID, Action: "team_room_created", AgentIDs: rec.Members})
+	s.deps.Audit(AuditEvent{RoomID: rec.ID, WorkspaceID: ws.ID, Action: "team_room_created", AgentIDs: rec.Members, Principal: principal})
 	return nil
 }
 
@@ -190,6 +255,7 @@ func (s *Service) createRecord(rec roomRecord) (*room, error) {
 	}
 	r := newRoom()
 	r.rec = rec
+	r.resumed = true // a new room has nothing a crash left unsent
 	if err := s.persistRecord(r); err != nil {
 		if rmErr := s.journal.Remove(rec.ID); rmErr != nil {
 			slog.Error("rooms: a room whose record failed could not be removed", "room_id", rec.ID, "error", rmErr)
@@ -204,7 +270,7 @@ func (s *Service) createRecord(rec roomRecord) (*room, error) {
 // room loses members that left the workspace. Departures cancel their
 // not-yet-consumed requests ("cancelled — removed") and are audited. The
 // caller holds r.mu.
-func (s *Service) reconcile(r *room, ws Workspace) error {
+func (s *Service) reconcile(r *room, ws Workspace, principal string) error {
 	current := agentIDs(ws)
 	var next []string
 	if r.rec.Kind == KindTeam {
@@ -228,14 +294,17 @@ func (s *Service) reconcile(r *room, ws Workspace) error {
 		r.rec = before
 		return err
 	}
-	for _, id := range removed {
-		s.cancelMember(r, id, ReasonRemoved)
-	}
 	if len(removed) > 0 {
-		s.deps.Audit(AuditEvent{RoomID: r.rec.ID, WorkspaceID: ws.ID, Action: "members_left_workspace", AgentIDs: removed})
+		s.deps.Audit(AuditEvent{RoomID: r.rec.ID, WorkspaceID: ws.ID, Action: "members_left_workspace", AgentIDs: removed, Principal: principal})
 	}
 	if len(added) > 0 {
-		s.deps.Audit(AuditEvent{RoomID: r.rec.ID, WorkspaceID: ws.ID, Action: "members_joined_workspace", AgentIDs: added})
+		s.deps.Audit(AuditEvent{RoomID: r.rec.ID, WorkspaceID: ws.ID, Action: "members_joined_workspace", AgentIDs: added, Principal: principal})
+	}
+	// The membership change is saved: the departed members' pending requests
+	// are now cancelled (a failed label write is repaired by the next sweep;
+	// the dequeue fence refuses them either way).
+	if err := s.cancelMembers(r, removed, ReasonRemoved); err != nil {
+		logRoomError("a departed member's request could not be marked cancelled; it never runs", r.rec.ID, err)
 	}
 	return nil
 }
@@ -266,21 +335,26 @@ func keep(in, allowed []string) []string {
 	return out
 }
 
-// cancelMember cancels every not-yet-consumed request of one member. The
-// caller holds r.mu.
-func (s *Service) cancelMember(r *room, agentID, reason string) {
+// cancelMembers cancels every not-yet-consumed request of the given members.
+// It returns the first failure to record a cancellation. The caller holds
+// r.mu.
+func (s *Service) cancelMembers(r *room, agentIDs []string, reason string) error {
+	var first error
 	for _, id := range r.order {
-		if d := r.deliveries[id]; d.AgentID == agentID && cancellable(d) {
-			s.cancelDelivery(r, d, reason)
+		if d := r.deliveries[id]; slices.Contains(agentIDs, d.AgentID) && cancellable(d) {
+			if err := s.cancelDelivery(r, d, reason); err != nil && first == nil {
+				first = err
+			}
 		}
 	}
+	return first
 }
 
 // cancelDelivery cancels one not-yet-consumed request: its approval wait is
 // ended, an admitted request is discarded from the member's ledger (so it
 // can never be dequeued or answered), and the room shows it cancelled. The
 // caller holds r.mu.
-func (s *Service) cancelDelivery(r *room, d *deliveryRecord, reason string) {
+func (s *Service) cancelDelivery(r *room, d *deliveryRecord, reason string) error {
 	if cancel, ok := r.cancels[d.RequestID]; ok {
 		cancel()
 		delete(r.cancels, d.RequestID)
@@ -297,10 +371,10 @@ func (s *Service) cancelDelivery(r *room, d *deliveryRecord, reason string) {
 				"room_id", r.rec.ID, "request_id", d.RequestID, "error", err)
 		}
 	}
-	if err := s.setState(r, d, StateCancelled, reason); err != nil {
-		slog.Error("rooms: a cancellation could not be recorded; the dequeue fence still refuses the request",
-			"room_id", r.rec.ID, "request_id", d.RequestID, "error", err)
-	}
+	// A failed label write is returned to the caller: the request is fenced
+	// off (the dequeue fence re-checks pause, membership and deletion) but
+	// the room would still show its old state.
+	return s.setState(r, d, StateCancelled, reason)
 }
 
 // validateNewMembers checks agent ids against the workspace: known

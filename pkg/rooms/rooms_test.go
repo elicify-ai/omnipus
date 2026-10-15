@@ -36,6 +36,14 @@ type fakeDeps struct {
 	frames    []any
 	audits    []AuditEvent
 	rate      int
+	body      int
+	// rewakes counts admissions of a delivery the member already had (the
+	// real AdmitRoomRequest writes nothing then and only wakes the member).
+	rewakes []string
+	// gate, when set for an agent, blocks that agent's admission until it is
+	// closed; entered receives the delivery id as the admission starts.
+	gate    map[string]chan struct{}
+	entered chan string
 }
 
 func newFakeDeps() *fakeDeps {
@@ -43,6 +51,7 @@ func newFakeDeps() *fakeDeps {
 		ws:       Workspace{ID: "sales", Name: "Sales", Agents: []Agent{{"mia", "Mia"}, {"jim", "Jim"}, {"r2", "Researcher2"}}},
 		names:    map[string]string{"mia": "Mia", "jim": "Jim", "r2": "Researcher2", "ray": "Ray"},
 		admitErr: map[string]error{}, held: map[string]bool{}, facts: map[string]ReceiverFacts{}, factsErr: map[string]error{}, rate: 60,
+		body: 65536, gate: map[string]chan struct{}{},
 	}
 }
 
@@ -61,6 +70,15 @@ func (f *fakeDeps) Workspace(id string) (Workspace, bool, error) {
 }
 
 func (f *fakeDeps) Admit(_ context.Context, a Admission) (AdmitResult, error) {
+	f.mu.Lock()
+	gate, entered := f.gate[a.Receiver.AgentID], f.entered
+	f.mu.Unlock()
+	if entered != nil {
+		entered <- a.DeliveryID
+	}
+	if gate != nil {
+		<-gate
+	}
 	if a.BeforeCommit != nil {
 		if err := a.BeforeCommit(); err != nil {
 			return AdmitResult{}, err
@@ -70,6 +88,12 @@ func (f *fakeDeps) Admit(_ context.Context, a Admission) (AdmitResult, error) {
 	defer f.mu.Unlock()
 	if err := f.admitErr[a.Receiver.AgentID]; err != nil {
 		return AdmitResult{}, err
+	}
+	if prior := f.facts[a.DeliveryID]; prior.Found && !prior.Discarded {
+		// Like AdmitRoomRequest: a capture the member already has is
+		// acknowledged, never written or counted again.
+		f.rewakes = append(f.rewakes, a.DeliveryID)
+		return AdmitResult{ReceiverSessionID: prior.SessionID, Held: prior.Held, AlreadyAdmitted: true}, nil
 	}
 	f.admits = append(f.admits, a)
 	f.facts[a.DeliveryID] = ReceiverFacts{Found: true, SessionID: "main-" + a.Receiver.AgentID, Held: f.held[a.Receiver.AgentID]}
@@ -115,7 +139,7 @@ func (f *fakeDeps) Audit(e AuditEvent) {
 }
 
 func (f *fakeDeps) SessionInWorkspace(sessionID, _ string) bool { return sessionID == "main-mia" }
-func (f *fakeDeps) Limits() (int, int)                          { return f.rate, 65536 }
+func (f *fakeDeps) Limits() (int, int)                          { return f.rate, f.body }
 func (f *fakeDeps) AgentName(id string) (string, bool)          { n, ok := f.names[id]; return n, ok }
 func (f *fakeDeps) CancelApproval(string)                       {}
 

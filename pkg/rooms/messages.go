@@ -45,8 +45,8 @@ func (s *Service) PostMessage(roomID string, req generated.RoomMessageRequest, p
 		return s.runCommand(r, ws, trimmed, req, principal)
 	}
 	r.mu.Lock()
-	if _, retry := r.byClientID[req.ClientMessageId]; retry {
-		pending := s.retryLocked(r)
+	if idx, retry := r.byClientID[req.ClientMessageId]; retry {
+		pending := s.retryLocked(r, r.entries[idx].Entry.Id)
 		r.mu.Unlock()
 		s.admitAll(r, ws, pending)
 		return nil
@@ -116,15 +116,42 @@ func (s *Service) recordUserMessage(r *room, ws Workspace, req generated.RoomMes
 	return deliveryIDs(ds), nil
 }
 
-// userAddressees applies FR-164 and §6.13: picker mentions are
-// authoritative (each must be a current member; `all` = every unmuted
-// member); typed @Full Name resolves by exact unique match (ambiguity
+// userAddressees applies FR-164 and §6.13. Picker mentions are
+// authoritative: when the person picked members (or @all) in the picker, the
+// picked ids are the addressees and the text is not parsed again - a picked
+// duplicate name or a renamed member is never refused or retargeted by its
+// label (each must still be a current member; `all` = every unmuted member).
+// Without picks, typed @Full Name resolves by exact unique match (ambiguity
 // refused); no @-name addresses every unmuted member.
 func (s *Service) userAddressees(r *room, ws Workspace, req generated.RoomMessageRequest) ([]string, error) {
-	members := memberAgents(r, ws)
+	if len(req.Mentions) > 0 {
+		return s.pickedAddressees(r, req.Mentions)
+	}
+	typed := resolveTyped(req.Text, memberAgents(r, ws))
+	if typed.ambiguous != "" {
+		return nil, unprocessable(textAmbiguousMention, typed.ambiguous)
+	}
+	ids := slices.Clone(typed.ids)
+	if len(ids) == 0 && !typed.all && typed.unresolved {
+		// "@Jim go" where no member is called exactly Jim: the name stays
+		// text and the message addresses nobody (§6.13, BDD-17.31).
+		return []string{}, nil
+	}
+	if typed.all || len(ids) == 0 {
+		for _, id := range unmuted(r) {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids, nil
+}
+
+// pickedAddressees resolves the picker's ids (FR-164, §6.13).
+func (s *Service) pickedAddressees(r *room, picked []string) ([]string, error) {
 	var ids []string
 	all := false
-	for _, m := range req.Mentions {
+	for _, m := range picked {
 		if m == mentionAll {
 			all = true
 			continue
@@ -136,28 +163,14 @@ func (s *Service) userAddressees(r *room, ws Workspace, req generated.RoomMessag
 			ids = append(ids, m)
 		}
 	}
-	typed := resolveTyped(req.Text, members)
-	if typed.ambiguous != "" {
-		return nil, unprocessable(textAmbiguousMention, typed.ambiguous)
-	}
-	for _, id := range typed.ids {
-		if !slices.Contains(ids, id) {
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 && !typed.all && !all && typed.unresolved {
-		// "@Jim go" where no member is called exactly Jim: the name stays
-		// text and the message addresses nobody (§6.13, BDD-17.31).
-		return []string{}, nil
-	}
-	if typed.all || all || len(ids) == 0 {
+	if all {
 		for _, id := range unmuted(r) {
 			if !slices.Contains(ids, id) {
 				ids = append(ids, id)
 			}
 		}
 	}
-	return ids, nil
+	return nonNil(ids), nil
 }
 
 // agentAddressees applies FR-165 to an agent's answer: only the members it
@@ -265,27 +278,60 @@ func entryWire(r *room, se storedEntry) generated.RoomEntry {
 	return out
 }
 
-// retryLocked reconciles a repeated message (FR-216, FR-252): members
+// retryLocked reconciles a repeated message (FR-216, FR-252). It acts only
+// on the retried message and what depends on it: its own deliveries and the
+// mention deliveries of the answers they produced (transitively). Members
 // removed since are shown "cancelled — removed"; deliveries of the current
-// generation that never reached their member (recorded, unknown or
-// unavailable) are admitted again - after their receiver facts are read, so
-// nothing runs twice. The caller holds r.mu.
-func (s *Service) retryLocked(r *room) []string {
+// generation that never started a turn (recorded, unknown, unavailable, or
+// admitted but not yet consumed) are admitted again - after their receiver
+// facts are read, so nothing runs twice. Other messages of the room are never
+// touched. The caller holds r.mu.
+func (s *Service) retryLocked(r *room, entryID string) []string {
 	var pending []string
-	for _, id := range r.order {
+	for _, id := range s.dependentDeliveries(r, entryID) {
 		d := r.deliveries[id]
 		switch {
 		case d.Consumed || d.State == StateAnswered:
 			continue
 		case !slices.Contains(r.rec.Members, d.AgentID) && !terminal(d.State):
-			s.cancelDelivery(r, d, ReasonRemoved)
+			if err := s.cancelDelivery(r, d, ReasonRemoved); err != nil {
+				logRoomError("a retry could not mark a removed member's request cancelled", r.rec.ID, err)
+			}
 		case d.Generation != r.rec.Generation:
 			continue
-		case d.State == StateRecorded || d.State == StateUnknown || d.State == StateUnavailable:
+		case d.State == StateRecorded || d.State == StateUnknown || d.State == StateUnavailable || d.State == StateAdmitted:
 			pending = append(pending, id)
 		}
 	}
 	return pending
+}
+
+// dependentDeliveries lists, in first-seen order, the deliveries of entryID
+// and of every answer that (transitively) answers one of them. The caller
+// holds r.mu.
+func (s *Service) dependentDeliveries(r *room, entryID string) []string {
+	answersTo := map[string][]string{} // request id -> answer entry ids
+	for _, e := range r.entries {
+		if e.AnswersRequest != "" {
+			answersTo[e.AnswersRequest] = append(answersTo[e.AnswersRequest], e.Entry.Id)
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	queue := []string{entryID}
+	for len(queue) > 0 {
+		entry := queue[0]
+		queue = queue[1:]
+		for _, id := range r.byEntry[entry] {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			out = append(out, id)
+			queue = append(queue, answersTo[id]...)
+		}
+	}
+	return out
 }
 
 // runCommand applies a room command (FR-205, FR-206). Only the user's text
@@ -323,20 +369,27 @@ func (s *Service) runCommand(r *room, ws Workspace, text string, req generated.R
 // request of older generations under the room lock (FR-170, FR-217). Work a
 // member already took finishes; its answer is marked "after pause".
 func (s *Service) pause(r *room, ws Workspace) error {
-	if r.rec.Paused {
-		return nil
+	if !r.rec.Paused {
+		before := r.rec.clone()
+		r.rec.Paused = true
+		r.rec.Generation++
+		if err := s.publishMeta(r, ws); err != nil {
+			r.rec = before
+			return err
+		}
 	}
-	before := r.rec.clone()
-	r.rec.Paused = true
-	r.rec.Generation++
-	if err := s.publishMeta(r, ws); err != nil {
-		r.rec = before
-		return err
-	}
+	// Also on a repeated /pause: the requests a failed label write left
+	// showing their old state are marked cancelled now.
+	var failed error
 	for _, id := range r.order {
 		if d := r.deliveries[id]; d.Generation < r.rec.Generation && cancellable(d) {
-			s.cancelDelivery(r, d, ReasonPaused)
+			if err := s.cancelDelivery(r, d, ReasonPaused); err != nil && failed == nil {
+				failed = err
+			}
 		}
+	}
+	if failed != nil {
+		return storageError("The group is paused and its pending requests will not run, but some of them could not be marked cancelled. Send /pause again to retry", failed)
 	}
 	return nil
 }

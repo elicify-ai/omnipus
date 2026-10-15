@@ -253,8 +253,25 @@ type agentRoomRuntime struct{ svc *rooms.Service }
 
 var _ agent.RoomRuntime = agentRoomRuntime{}
 
+var _ agent.RoomFence = agentRoomRuntime{}
+
 func (rt agentRoomRuntime) BeginRoomConsume(roomID, requestID, sessionID string) bool {
 	return rt.svc.BeginConsume(roomID, requestID, sessionID)
+}
+
+func (rt agentRoomRuntime) DecideRoomConsume(roomID, requestID, sessionID string) agent.RoomConsumeDecision {
+	switch rt.svc.DecideConsume(roomID, requestID, sessionID) {
+	case rooms.ConsumeRun:
+		return agent.RoomConsumeRun
+	case rooms.ConsumeCancel:
+		return agent.RoomConsumeCancel
+	default:
+		return agent.RoomConsumeDefer
+	}
+}
+
+func (rt agentRoomRuntime) RoomConsumeReleased(roomID, requestID string) {
+	rt.svc.ReleaseConsume(roomID, requestID)
 }
 
 func (rt agentRoomRuntime) RoomConsumeHeld(roomID, requestID string) {

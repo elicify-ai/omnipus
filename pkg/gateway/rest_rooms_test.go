@@ -266,7 +266,10 @@ func TestRoomsREST_StorageFaultIs500OnEveryRoute(t *testing.T) {
 		{"createRoom", "create", http.MethodPost, "/api/v1/workspaces/sales/rooms", `{"kind":"adhoc","agent_ids":["mia","jim"]}`, rh.api.HandleWorkspaces},
 		{"updateRoomMembers", "write", http.MethodPatch, base + "/members", `{"action":"mute","agent_ids":["jim"]}`, rh.api.HandleRooms},
 		{"postRoomMessage", "append", http.MethodPost, base + "/messages", `{"client_message_id":"c1","text":"status?","mentions":[]}`, rh.api.HandleRooms},
-		{"deleteRoom", "remove", http.MethodDelete, base, "", rh.api.HandleRooms},
+		// The deletion is saved first (its intent on the record, F04): a
+		// failure to save it is the 500. A failure to remove the files after
+		// that is not - see the end of this test.
+		{"deleteRoom", "write", http.MethodDelete, base, "", rh.api.HandleRooms},
 	}
 	for _, c := range cases {
 		fj.fail = map[string]bool{c.fault: true}
@@ -281,6 +284,27 @@ func TestRoomsREST_StorageFaultIs500OnEveryRoute(t *testing.T) {
 	if err != nil || len(got.Muted) != 0 {
 		t.Fatalf("a failed members write changed the room: %+v %v", got, err)
 	}
+	// A deletion whose files cannot be removed is still a committed deletion
+	// (204, the group is gone); the next load finishes the removal.
+	gone := rh.do(http.MethodPost, "/api/v1/workspaces/sales/rooms", `{"kind":"adhoc","agent_ids":["mia","jim"]}`, rh.api.HandleWorkspaces)
+	var doomed generated.Room
+	_ = json.Unmarshal(gone.Body.Bytes(), &doomed)
+	fj.fail = map[string]bool{"remove": true}
+	if res := rh.do(http.MethodDelete, "/api/v1/rooms/"+doomed.Id, "", rh.api.HandleRooms); res.Code != http.StatusNoContent {
+		t.Fatalf("delete with a failing file removal: %d %q, want 204 (the deletion is saved)", res.Code, res.Body.String())
+	}
+	fj.fail = map[string]bool{}
+	if _, err := rh.hub.svc.Get(doomed.Id); rooms.StatusOf(err) != http.StatusNotFound {
+		t.Fatalf("a committed deletion still serves the group: %v", err)
+	}
+	rh.useJournal(rooms.NewFileJournal(rooms.DefaultDir(rh.api.homePath)))
+	if _, err := rh.hub.svc.Get(doomed.Id); rooms.StatusOf(err) != http.StatusNotFound {
+		t.Fatalf("after a restart the deleted group is served: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(rooms.DefaultDir(rh.api.homePath), doomed.Id)); !os.IsNotExist(statErr) {
+		t.Fatalf("the next load did not finish removing the deleted group's files: %v", statErr)
+	}
+	rh.useJournal(fj)
 	// getRoom: an unreadable record after a restart.
 	if err := os.WriteFile(filepath.Join(rooms.DefaultDir(rh.api.homePath), room.Id, "room.json"), []byte("{broken"), 0o600); err != nil {
 		t.Fatal(err)

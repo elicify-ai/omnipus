@@ -237,6 +237,10 @@ func (al *AgentLoop) deliverHeldRequests(sessionID string, skipRequestID ...stri
 			continue
 		}
 		al.pendingRequests.Store(c.RequestID, sessionID)
+		if c.Source.Kind == addressing.SourceRoom {
+			al.deliverHeldRoomRequest(sessionID, c)
+			continue
+		}
 		if c.Text == "" {
 			// No stored text (a connector capture, whose message already
 			// arrived as an inbound turn): nothing to republish.
@@ -288,11 +292,6 @@ func (al *AgentLoop) claimWakeSlot(requestID string) bool {
 func (al *AgentLoop) publishHeldRequestWake(c addressing.Capture) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if c.Source.Kind == addressing.SourceRoom {
-		// A held room request keeps its room id; it joins the turn that
-		// revived its member, behind the room fence (publishRoomRequestWake).
-		return al.publishRoomRequestWake(ctx, c, false)
-	}
 	return al.publishRequestWake(ctx, c.Receiver, c.RequestID, c.ReceiverSessionID, c.Text)
 }
 

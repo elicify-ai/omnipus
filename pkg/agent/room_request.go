@@ -69,12 +69,38 @@ var (
 	ErrRoomStorage = errors.New("room request storage failure")
 )
 
+// RoomConsumeDecision is the room's answer at the dequeue fence (FR-217).
+type RoomConsumeDecision int
+
+const (
+	// RoomConsumeRun: the request is current and now "working"; run it.
+	RoomConsumeRun RoomConsumeDecision = iota
+	// RoomConsumeCancel: the room cancelled it (or it is settled); discard
+	// it, never run it.
+	RoomConsumeCancel
+	// RoomConsumeDefer: the room could not decide or record now, or a turn
+	// already took the request: neither run nor discard it. It stays
+	// undelivered in the member's ledger and is offered again on the
+	// member's next turn or a Retry.
+	RoomConsumeDefer
+)
+
+// RoomFence is the full dequeue fence a room service may also provide (the
+// gateway's does): it tells "cancelled" from "could not decide now", and can
+// release a consume whose request never reached the turn. A RoomRuntime
+// without it is treated as answering run / cancel only.
+type RoomFence interface {
+	DecideRoomConsume(roomID, requestID, sessionID string) RoomConsumeDecision
+	RoomConsumeReleased(roomID, requestID string)
+}
+
 // RoomRuntime is the room service as the agent loop sees it. The gateway
 // installs it (SetRoomRuntime); every call is made without agent locks held.
 type RoomRuntime interface {
 	// BeginRoomConsume is the dequeue fence: under the room lock it reports
 	// whether the request may run now (still current, room and member still
-	// there) and, if so, marks it consumed ("working").
+	// there) and, if so, marks it consumed ("working"). A runtime that is
+	// also a RoomFence is asked through DecideRoomConsume instead.
 	BeginRoomConsume(roomID, requestID, sessionID string) bool
 	// RoomConsumeHeld reports that a consumed request met a stopped member:
 	// it is held again and delivered when the member runs.
@@ -223,7 +249,7 @@ func (al *AgentLoop) AdmitRoomRequest(ctx context.Context, a RoomRequestAdmissio
 		if prior.Discarded {
 			return RoomAdmission{}, fmt.Errorf("%w: the request was discarded", ErrRoomRequestCancelled)
 		}
-		return RoomAdmission{ReceiverSessionID: mainID, Held: prior.Held && !prior.Delivered, AlreadyAdmitted: true}, nil
+		return al.rewakeRoomRequest(ctx, prior, mainID), nil
 	}
 	if err := al.authorizeRoomRequest(ctx, a, mainID); err != nil {
 		return RoomAdmission{}, err
@@ -234,6 +260,34 @@ func (al *AgentLoop) AdmitRoomRequest(ctx context.Context, a RoomRequestAdmissio
 		}
 	}
 	return al.commitRoomRequest(ctx, a, mainID)
+}
+
+// rewakeRoomRequest handles a retry of a request the member already has
+// (FR-216): nothing is written again. A request no turn has taken yet is
+// woken again unless its member is stopped (then it is held and delivered
+// when the member runs) or a wake for it is already on its way; a duplicate
+// wake is harmless - the dequeue fence runs a request once.
+func (al *AgentLoop) rewakeRoomRequest(ctx context.Context, prior addressing.Capture, mainID string) RoomAdmission {
+	out := RoomAdmission{ReceiverSessionID: mainID, AlreadyAdmitted: true}
+	if prior.Delivered {
+		return out
+	}
+	if al.receiverStopped(mainID) {
+		out.Held = true
+		return out
+	}
+	if !al.claimWakeSlot(prior.RequestID) {
+		return out // its wake is already on its way
+	}
+	al.pendingRequests.Store(prior.RequestID, mainID)
+	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := al.publishRoomRequestWake(pubCtx, prior, true); err != nil {
+		al.heldRepublished.Delete(prior.RequestID)
+		logger.ErrorCF("agent", "a retried room request could not be woken; it stays queued for the member's next turn or the next Retry",
+			map[string]any{"request_id": prior.RequestID, "session_id": mainID, "error": err.Error()})
+	}
+	return out
 }
 
 func (a RoomRequestAdmission) validate() error {
@@ -382,30 +436,30 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 	if wrote {
 		al.publishUserEntry(mainID, entry)
 	}
+	if held {
+		// A stopped member: the request waits in its ledger and is delivered
+		// when the member runs again (FR-252). No wake.
+		return RoomAdmission{ReceiverSessionID: mainID, Held: true}, nil
+	}
 	al.claimWakeSlot(a.DeliveryID)
 	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := al.publishRoomRequestWake(pubCtx, capture, true); err != nil {
+		// The request is recorded and queued, but its turn did not start. It
+		// is NOT "held" (that means the member is stopped): it stays queued,
+		// is given to the member's next turn, and a Retry wakes it again.
 		al.heldRepublished.Delete(a.DeliveryID)
-		logger.WarnCF("agent", "room request recorded but the member's turn could not be started; held for its next turn",
+		logger.ErrorCF("agent", "room request recorded but the member's turn could not be started; it stays queued for the member's next turn or a Retry",
 			map[string]any{"request_id": a.DeliveryID, "session_id": mainID, "error": err.Error()})
-		marked, mErr := ledger.MarkHeld(mainID, a.DeliveryID)
-		if mErr != nil {
-			logger.ErrorCF("agent", "a room request whose wake failed could not be marked held",
-				map[string]any{"request_id": a.DeliveryID, "error": mErr.Error()})
-		} else {
-			held = marked
-		}
 	}
-	return RoomAdmission{ReceiverSessionID: mainID, Held: held}, nil
+	return RoomAdmission{ReceiverSessionID: mainID}, nil
 }
 
 // publishRoomRequestWake is the owner wake of a room request: the ordinary
 // request wake plus the room id and, for the admission wake, the no-join
-// marker (FR-214: it never joins a running turn). A HELD request re-published
-// because its member runs again (deliverHeldRequests) carries no no-join
-// marker: like any held request it is put in front of the turn that revived
-// the member, behind the same room fence (trySteerIntoLiveTurn).
+// marker (FR-214: it never joins a running turn). A held request is not
+// published: it is handed to the turn that revives its member, at that
+// turn's start (deliverHeldRoomRequest).
 func (al *AgentLoop) publishRoomRequestWake(ctx context.Context, c addressing.Capture, noJoin bool) error {
 	extra := map[string]string{roomIDMetadataKey: c.Source.RoomID}
 	if noJoin {
@@ -413,6 +467,45 @@ func (al *AgentLoop) publishRoomRequestWake(ctx context.Context, c addressing.Ca
 	}
 	al.roomRequests.Store(c.RequestID, c.Source.RoomID)
 	return al.publishRequestWake(ctx, c.Receiver, c.RequestID, c.ReceiverSessionID, c.Text, extra)
+}
+
+// deliverHeldRoomRequest hands a room request that waited (its member was
+// stopped, or its wake never ran) to the turn of its member that is being
+// admitted now - before that turn's first model call, so it is one of the
+// turn's starting inputs, never steered into a turn already under way
+// (FR-214, ruling A 2026-10-15; BDD-17.30 counts it in that turn's cost). It
+// passes the room fence first; the turn's end settles it (settleRoomInputs).
+func (al *AgentLoop) deliverHeldRoomRequest(sessionID string, c addressing.Capture) {
+	msg := roomWakeMessage(c)
+	al.roomRequests.Store(c.RequestID, c.Source.RoomID)
+	g, proceed := al.gateRoomRequest(msg)
+	if !proceed {
+		return
+	}
+	if err := al.enqueueSteeringFromMessage(msg); err != nil {
+		releaseRoomConsume(g.rt, g.roomID, g.requestID)
+		logger.ErrorCF("agent", "a waiting room request could not be handed to the member's turn; it stays queued for its next turn",
+			map[string]any{"session_id": sessionID, "request_id": c.RequestID, "error": err.Error()})
+		return
+	}
+	al.markRequestDelivered(sessionID, c.RequestID)
+}
+
+// roomWakeMessage is the inbound form of a room capture (the same message
+// publishRoomRequestWake sends, without the no-join marker).
+func roomWakeMessage(c addressing.Capture) bus.InboundMessage {
+	return bus.InboundMessage{
+		Channel:           "webchat",
+		ChatID:            "request:" + c.RequestID,
+		Sender:            bus.SenderInfo{CanonicalID: "request:" + c.RequestID},
+		Content:           c.Text,
+		SessionID:         c.ReceiverSessionID,
+		TranscriptEntryID: c.RequestID,
+		Metadata: map[string]string{
+			"agent_id": c.Receiver.AgentID, "workspace_id": c.Receiver.WorkspaceID,
+			ownerWakeMetadataKey: "1", roomIDMetadataKey: c.Source.RoomID,
+		},
+	}
 }
 
 // composeRoomRequestText is the server-composed envelope the member's model
@@ -511,7 +604,18 @@ func (al *AgentLoop) gateRoomRequest(msg bus.InboundMessage) (*roomGate, bool) {
 			map[string]any{"session_id": msg.SessionID, "request_id": g.requestID, "room_id": g.roomID})
 		return nil, false
 	}
-	if !rt.BeginRoomConsume(g.roomID, g.requestID, msg.SessionID) {
+	switch decideRoomConsume(rt, g.roomID, g.requestID, msg.SessionID) {
+	case RoomConsumeRun:
+		return g, true
+	case RoomConsumeDefer:
+		// Not run and not discarded: the request stays undelivered in the
+		// member's ledger and is offered again on its next turn or a Retry
+		// (the room logged why it deferred).
+		al.heldRepublished.Delete(g.requestID)
+		logger.WarnCF("agent", "room request not run now: its room could not confirm it; it stays queued",
+			map[string]any{"session_id": msg.SessionID, "request_id": g.requestID, "room_id": g.roomID})
+		return nil, false
+	default:
 		al.heldRepublished.Delete(g.requestID)
 		al.roomRequests.Delete(g.requestID)
 		if err := al.DiscardRequest(msg.SessionID, g.requestID); err != nil {
@@ -522,7 +626,22 @@ func (al *AgentLoop) gateRoomRequest(msg bus.InboundMessage) (*roomGate, bool) {
 			map[string]any{"session_id": msg.SessionID, "request_id": g.requestID, "room_id": g.roomID})
 		return nil, false
 	}
-	return g, true
+}
+
+func decideRoomConsume(rt RoomRuntime, roomID, requestID, sessionID string) RoomConsumeDecision {
+	if fence, ok := rt.(RoomFence); ok {
+		return fence.DecideRoomConsume(roomID, requestID, sessionID)
+	}
+	if rt.BeginRoomConsume(roomID, requestID, sessionID) {
+		return RoomConsumeRun
+	}
+	return RoomConsumeCancel
+}
+
+func releaseRoomConsume(rt RoomRuntime, roomID, requestID string) {
+	if fence, ok := rt.(RoomFence); ok {
+		fence.RoomConsumeReleased(roomID, requestID)
+	}
 }
 
 // prepared reports a failed turn admission to the room: a stopped member
@@ -565,6 +684,28 @@ func (al *AgentLoop) reportRoomCost(m *roomCostMeter, sessionID string) {
 			RoomID: roomID, SessionID: sessionID, TurnID: turnID,
 			CostUSD: cost, Priced: !unpriced, Inputs: inputs, RoomInputs: n,
 		})
+	}
+}
+
+// settleRoomInputs runs when a turn ended: a turn that failed fails (or, if
+// it was cancelled, interrupts) every room request it was handed besides its
+// own starting message (that one is settled by roomTurnEnded). A turn that
+// ended without an error leaves them to their answers and, for one still
+// unanswered, to the one reminder whose end fails it - a member is never left
+// "working" after its turn.
+func (al *AgentLoop) settleRoomInputs(m *roomCostMeter, turnErr error) {
+	rt := al.loadRoomRuntime()
+	if rt == nil || m == nil || turnErr == nil {
+		return
+	}
+	m.mu.Lock()
+	joined := make(map[string]string, len(m.joined))
+	for req, room := range m.joined {
+		joined[req] = room
+	}
+	m.mu.Unlock()
+	for req, room := range joined {
+		rt.RoomConsumeEnded(room, req, turnErr)
 	}
 }
 
@@ -630,6 +771,9 @@ type roomCostMeter struct {
 	unpriced  bool
 	inputs    int
 	rooms     map[string]int
+	// joined are the room requests handed to the turn besides the message
+	// that started it (request id -> room id); the turn's end settles them.
+	joined map[string]string
 }
 
 func (m *roomCostMeter) addCost(turnID string, cost float64, priced bool) {
@@ -682,6 +826,10 @@ func (m *roomCostMeter) addInputs(ids []string, n int) {
 		if roomID, ok := m.al.roomRequests.Load(requestID); ok {
 			if r, isString := roomID.(string); isString && r != "" {
 				m.rooms[r]++
+				if m.joined == nil {
+					m.joined = map[string]string{}
+				}
+				m.joined[requestID] = r
 			}
 		}
 	}

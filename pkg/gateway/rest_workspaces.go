@@ -1536,9 +1536,10 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 		return
 	}
 	// FR-160/FR-162: the workspace's group chats follow its team now (every
-	// room read reconciles again, so a failure here only delays it).
+	// room read reconciles again, so a failure here only delays it). The
+	// membership changes are audited under the signed-in user (FR-172).
 	if hub := rw.a.rooms.Load(); hub != nil && hub.svc != nil {
-		hub.svc.SyncWorkspace(rw.id)
+		hub.svc.SyncWorkspace(rw.id, requestUsername(rw.r))
 	}
 	if rw.delegationChanged {
 		rw.changedFields = append(rw.changedFields, "delegation")

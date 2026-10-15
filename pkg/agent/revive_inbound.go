@@ -206,5 +206,6 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	resp, runErr = al.runAgentLoop(ctx, agent, opts)
 	d.recordTurnOutcome(runErr)
 	al.reportRoomCost(opts.roomCost, msg.SessionID)
+	al.settleRoomInputs(opts.roomCost, runErr)
 	return resp, agent, runErr
 }

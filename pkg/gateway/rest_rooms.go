@@ -64,7 +64,9 @@ func writeRoomJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Debug("rest: write room response failed", "error", err)
+		// The status is already sent; this line is the only signal that the
+		// client got a broken body, so it is logged at a level that is kept.
+		slog.Error("rest: write room response failed; the client received an incomplete body", "status", status, "error", err)
 	}
 }
 
