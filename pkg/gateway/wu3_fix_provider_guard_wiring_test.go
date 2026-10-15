@@ -26,6 +26,14 @@ import (
 // wireSystemTools. Only the model edge is a stub.
 func wu3GuardedRunContext(t *testing.T) *runContextWithOptions {
 	t.Helper()
+	return wu3BootRunContext(t, func(cfg *config.Config) { cfg.Sandbox.SSRF.Enabled = true })
+}
+
+// wu3BootRunContext boots a loop from the shipped seed and ceiling, after
+// tweak adjusts the config, and runs the production wireSystemTools. Only the
+// model edge is a stub.
+func wu3BootRunContext(t *testing.T, tweak func(*config.Config)) *runContextWithOptions {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("OMNIPUS_HOME", home)
@@ -34,8 +42,8 @@ func wu3GuardedRunContext(t *testing.T) *runContextWithOptions {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Home = home
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "scripted-model"}
-	cfg.Sandbox.SSRF.Enabled = true
 	coreagent.SeedConfig(cfg)
+	tweak(cfg)
 	require.Empty(t, repairAndValidateToolPolicyCoverage(cfg))
 	seedSystemAgentEagerSouls(cfg)
 	require.NoError(t, workspace.SaveRecord(home, workspace.Workspace{
@@ -52,7 +60,6 @@ func wu3GuardedRunContext(t *testing.T) *runContextWithOptions {
 	al, err := agent.NewAgentLoop(cfg, bus.NewMessageBus(), &restMockProvider{})
 	require.NoError(t, err)
 	t.Cleanup(al.Close)
-	require.NotNil(t, agent.GetSSRFChecker(al), "control: the guard is on in this boot")
 	api := &restAPI{agentLoop: al, homePath: home}
 	credStore := credentials.NewStore(filepath.Join(home, "credentials.json"))
 	require.NoError(t, credentials.Unlock(credStore))
@@ -70,6 +77,7 @@ func wu3GuardedRunContext(t *testing.T) *runContextWithOptions {
 // wiring the check would dial the address instead.
 func TestWU3ProductionWiringGuardsProviderCheck(t *testing.T) {
 	rc := wu3GuardedRunContext(t)
+	require.NotNil(t, agent.GetSSRFChecker(rc.agentLoop), "control: the guard is on in this boot")
 	inst, ok := rc.agentLoop.GetRegistry().GetAgent("omnipus")
 	require.True(t, ok)
 	tool, ok := inst.Tools.Get("configure_provider")
