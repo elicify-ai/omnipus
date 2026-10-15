@@ -69,6 +69,12 @@ type restAPI struct {
 	// setupOfferPoster posts the workspace-setup offer into Omnipus's main
 	// (FR-047). nil means the real poster (workspace_setup_offer.go).
 	setupOfferPoster workspaceSetupOfferPoster
+	// sessionHubs is the chat WebSocket hub registry. The setup-offer poster
+	// publishes each saved offer line into Omnipus's main hub so an already
+	// attached chat receives it and an incremental re-attach replays it from
+	// the journal. Nil in tests and partial boots that have no WebSocket
+	// handler: the saved transcript line stays, and the miss is logged.
+	sessionHubs *hubRegistry
 	// stopSession, when set, replaces agentLoop.StopSession in the delete
 	// path (a test seam for outcomes a real Stop cannot be made to produce
 	// portably, such as a failed background-shell kill). Nil in production.
