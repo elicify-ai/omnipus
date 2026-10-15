@@ -34,7 +34,8 @@ import * as path from 'path';
 import { chatInput, assistantMessages } from './fixtures/selectors';
 import { freshChat, originOf } from './fixtures/session-setup';
 import { SessionDetail, Workspace } from '../../src/lib/api/generated/schemas';
-import type { WorkspaceCreateRequest } from '../../src/lib/api/generated/openapi-types';
+import type { WorkspaceCreateRequest, WorkspaceUpdateRequest } from '../../src/lib/api/generated/openapi-types';
+import { DoneFrame, ErrorFrame } from '../../src/lib/api/generated/ws-schemas';
 
 // Never default a filesystem-observing spec to the operator's real data home.
 const OMNIPUS_HOME = process.env.OMNIPUS_HOME;
@@ -131,7 +132,51 @@ async function readSessionDetail(page: Page, sessionId: string): Promise<ReturnT
   return SessionDetail.parse(await resp.json());
 }
 
-async function expectToolFreeTranscript(page: Page, sessionId: string): Promise<void> {
+/** Passive inbound-only capture, installed before navigation; never mocks a frame. */
+function recordRecapCompletions(page: Page) {
+  const done: ReturnType<typeof DoneFrame.parse>[] = [];
+  const errors: ReturnType<typeof ErrorFrame.parse>[] = [];
+  const malformed: string[] = [];
+  page.on('websocket', (socket) => {
+    if (new URL(socket.url()).pathname !== '/api/v1/chat/ws') return;
+    socket.on('framereceived', ({ payload }) => {
+      try {
+        const frame: unknown = JSON.parse(payload.toString());
+        if (typeof frame !== 'object' || frame === null || !('type' in frame)) {
+          throw new Error('Chat WebSocket frame must be an object with a type');
+        }
+        if (frame.type === 'done') done.push(DoneFrame.parse(frame));
+        if (frame.type === 'error') errors.push(ErrorFrame.parse(frame));
+      } catch (error) {
+        malformed.push(String(error)); // Asserted below, never logged-and-ignored.
+      }
+    });
+  });
+  return { done, errors, malformed, mark: () => ({ done: done.length, errors: errors.length }) };
+}
+
+type RecapTurnStart = ReturnType<ReturnType<typeof recordRecapCompletions>['mark']>;
+
+async function expectToolFreeTranscript(page: Page, sessionId: string, start: RecapTurnStart): Promise<void> {
+  // DoneFrame is the terminal signal, not optional Message.status. Ignore
+  // attach/replay completions captured before this send, and unrelated sessions.
+  // A real streamed reply has the turn/message ids specified by DoneFrame.
+  const completions = () => traffic.done.slice(start.done).filter((frame) =>
+    frame.session_id === sessionId && frame.turn_id !== undefined && frame.message_id !== undefined);
+  const errors = () => traffic.errors.slice(start.errors).filter((frame) =>
+    frame.session_id === undefined || frame.session_id === sessionId);
+  await expect.poll(() => completions().length > 0 || errors().length > 0 || traffic.malformed.length > 0, {
+    timeout: 90_000, message: `Session ${sessionId} must emit a live terminal frame for this send`,
+  }).toBe(true);
+  expect(traffic.malformed, 'Completion observer must decode the real gateway frames').toEqual([]);
+  expect(errors(), `Session ${sessionId} must not emit a turn/provider error`).toEqual([]);
+  const terminal = completions();
+  expect(terminal, `Session ${sessionId} must complete exactly one live reply`).toHaveLength(1);
+  // DoneStats contract: absent/false is normal; true means failed/truncated/replay error.
+  expect(terminal[0].stats?.turn_failed ?? false, `Session ${sessionId} must complete successfully`).toBe(false);
+  expect(terminal[0].stats?.truncated ?? false, `Session ${sessionId} must not end mid-reply`).toBe(false);
+  expect(terminal[0].stats?.replay_error ?? false, `Session ${sessionId} must not use a replay-error completion`).toBe(false);
+
   const { messages } = await readSessionDetail(page, sessionId);
   // Amendment 287–293: private notes still cross workspaces; rule out that
   // alternate path and tool-based recall, so only the prompt injection is tested.
@@ -139,20 +184,25 @@ async function expectToolFreeTranscript(page: Page, sessionId: string): Promise<
     messages.filter((message) => message.type === 'tool_call' || (message.tool_calls?.length ?? 0) > 0),
     `Session ${sessionId} must not use tools to store or retrieve the conversation-only fact`,
   ).toEqual([]);
-  // Amendment 501 requires a real reply: an error, blank or interrupted turn
-  // must not pass the isolation assertion just because it omits the nonce.
-  // Fixture oracle: contracts/components/schemas/Message.yaml::status/content.
+  // Amendment 501 and DoneFrame::message_id/turn_id: a real completed reply
+  // must be durable and must be the SAME reply as the successful live terminal.
   const replies = messages.filter((message) => message.role === 'assistant' && (message.type ?? 'message') === 'message');
   expect(replies, `Session ${sessionId} must persist exactly one assistant reply`).toHaveLength(1);
-  expect(replies[0].status, `Session ${sessionId} must complete successfully`).toBe('ok');
+  expect(replies[0].id, 'Live completion must name this durable assistant reply').toBe(terminal[0].message_id);
+  expect(replies[0].turn_id, 'Live completion must close this durable reply’s turn').toBe(terminal[0].turn_id);
+  // Message.status is optional; explicit error/interrupted values still fail.
+  expect(replies.filter((reply) => reply.status === 'error' || reply.status === 'interrupted'),
+    `Session ${sessionId} must not persist a failed or interrupted reply`).toEqual([]);
   expect((replies[0].content ?? '').trim(), `Session ${sessionId} must not return a blank reply`).not.toBe('');
   expect(replies[0].truncated ?? false, `Session ${sessionId} must not return a truncated reply`).toBe(false);
 }
 
 let baseline: MemorySettingsWire | null = null;
 let isolationWorkspaceId: string | null = null;
+let traffic: ReturnType<typeof recordRecapCompletions>;
 
 test.beforeEach(async ({ page }) => {
+  traffic = recordRecapCompletions(page);
   isolatedOmnipusHome();
   // PR #1260 (E2E ui-heavy): the hook read the gateway settings BEFORE any
   // navigation, so the page was still on about:blank and originOf() refused —
@@ -235,9 +285,10 @@ test(
       `For this conversation only, the launch codename is ${nonce}. ` +
       'Do not save this in memory and do not use any tools. Just acknowledge it.',
     );
+    const firstTurn = traffic.mark();
     await input.press('Enter');
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
-    await expectToolFreeTranscript(page, first.sessionId);
+    await expectToolFreeTranscript(page, first.sessionId, firstTurn);
 
     // Amendment 281–282 (§3.2 items 2–3): exact pair publication with the fact.
     await page.waitForTimeout(IDLE_WAIT_MS);
@@ -253,27 +304,44 @@ test(
     const question = 'What was the launch codename I told you about? Answer with just the codename if you know it; otherwise say UNKNOWN. Do not use any tools.';
     const fresh = chatInput(page);
     await fresh.fill(question);
+    const secondTurn = traffic.mark();
     await fresh.press('Enter');
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
     // Amendment 283 (§3.2 item 4): keep the original user-visible nonce oracle,
     // not just an existence check on the carry-forward file.
     await expect(assistantMessages(page).first()).toContainText(nonce, { timeout: 90_000 });
-    await expectToolFreeTranscript(page, second.sessionId);
+    await expectToolFreeTranscript(page, second.sessionId, secondTurn);
 
     // Existing REST createWorkspace + freshChat(workspace) provide isolation;
     // no new fixture system or shared-fixture change is needed.
     const workspaceName = `Recap isolation ${Date.now()}`;
     const created = await page.request.post(`${originOf(page)}/api/v1/workspaces`, {
       headers: await pageCsrfHeaders(page),
-      data: { name: workspaceName, core_team: [first.agentId] } satisfies WorkspaceCreateRequest,
+      data: { name: workspaceName } satisfies WorkspaceCreateRequest,
     });
     // Fixture oracle: contracts/openapi.yaml::createWorkspace (201 + Workspace).
     expect(created.status(), `POST isolation workspace: ${await created.text()}`).toBe(201);
     const otherWorkspace = Workspace.parse(await created.json());
     isolationWorkspaceId = otherWorkspace.id;
-    // Amendment 280, 289: the negative case is a DIFFERENT workspace, SAME agent.
+    // FR-048: a new workspace is empty. Explicitly join the existing agent
+    // through the ordinary membership PUT, rather than assuming a seeded team.
+    expect(otherWorkspace.core_team ?? [], 'FR-048: isolation workspace starts empty').toEqual([]);
+    const current = await page.request.get(`${originOf(page)}/api/v1/workspaces/${otherWorkspace.id}`, {
+      headers: await pageCsrfHeaders(page),
+    });
+    expect(current.status(), `GET isolation workspace before joining: ${await current.text()}`).toBe(200);
+    const currentWorkspace = Workspace.parse(await current.json());
+    const joined = await page.request.put(`${originOf(page)}/api/v1/workspaces/${otherWorkspace.id}`, {
+      headers: await pageCsrfHeaders(page),
+      data: { revision: currentWorkspace.revision, core_team: [first.agentId] } satisfies WorkspaceUpdateRequest,
+    });
+    // Fixture oracle: contracts/openapi.yaml::updateWorkspace (200 + Workspace).
+    expect(joined.status(), `Join isolation workspace: ${await joined.text()}`).toBe(200);
+    const joinedWorkspace = Workspace.parse(await joined.json());
+    // Amendment 280, 289; FR-049: different workspace, SAME agent reused unchanged.
     expect(otherWorkspace.id).not.toBe(workspaceId);
-    expect(otherWorkspace.core_team).toEqual([first.agentId]);
+    expect(joinedWorkspace.id).toBe(otherWorkspace.id);
+    expect(joinedWorkspace.core_team).toEqual([first.agentId]);
     // Amendment 297 (§3.4): a first session in a workspace has no summary.
     expect(fs.existsSync(carryForwardPath(first.agentId, otherWorkspace.id))).toBe(false);
 
@@ -287,9 +355,10 @@ test(
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 15_000 });
     const isolated = chatInput(page);
     await isolated.fill(question); // The question contains no nonce, in either workspace.
+    const thirdTurn = traffic.mark();
     await isolated.press('Enter');
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
-    await expectToolFreeTranscript(page, third.sessionId);
+    await expectToolFreeTranscript(page, third.sessionId, thirdTurn);
     // Amendment 280, 283–284, 289, 501: a real completed reply, not an empty
     // thread or a missing file, proves A's recap did not reach B's session.
     await expect(assistantMessages(page).first()).not.toContainText(nonce);
