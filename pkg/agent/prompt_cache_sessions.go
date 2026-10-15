@@ -25,7 +25,11 @@ func (al *AgentLoop) promptCacheSession(ts *turnState) *sessionPromptCache {
 		return initial
 	}
 	value, _ := al.promptCacheSessions.LoadOrStore(key, initial)
-	return value.(*sessionPromptCache)
+	state, ok := value.(*sessionPromptCache)
+	if !ok {
+		panic("invalid prompt-cache session state")
+	}
+	return state
 }
 
 func (al *AgentLoop) retainAdvertisedTools(ts *turnState, defs []providers.ToolDefinition) {

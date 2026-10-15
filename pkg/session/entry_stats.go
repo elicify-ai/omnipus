@@ -81,7 +81,6 @@ func accumulateEntryStats(stats *SessionStats, entry TranscriptEntry) {
 		if entry.BillingClass == "subscription" {
 			stats.SubscriptionTokens += entry.Tokens
 		}
-
 	} else {
 		stats.TokensIn += entry.Tokens
 	}

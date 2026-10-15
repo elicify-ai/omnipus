@@ -3,8 +3,9 @@
 package agent
 
 import (
-	"github.com/elicify-ai/omnipus/pkg/tools"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // markToolsLoaded records names as loaded for the given session (manifest

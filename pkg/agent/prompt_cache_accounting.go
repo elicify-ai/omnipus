@@ -41,9 +41,8 @@ func (al *AgentLoop) debitLLMUsage(ts *turnState, llmModel string, usage *provid
 	if producedModel != "" {
 		llmModel = producedModel
 	}
-	price := priceLLMUsage(providerID, llmModel, *usage)
 	ts.SetLastUsage(usage)
-	ts.AddTurnStats(int64(usage.TotalTokens), price.Cost)
+	ts.AddTurnStats(int64(usage.TotalTokens), estimateLLMCallCost(llmModel, usage, providerID))
 	ts.AddTurnCacheStats(usage.CacheReadTokens, usage.CacheWriteTokens)
 	ts.AddTurnIOStats(usage.PromptTokens, usage.CompletionTokens)
 }

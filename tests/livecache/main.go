@@ -81,9 +81,9 @@ func run() error {
 	}
 	cfg := &config.ModelConfig{Provider: providerID, Model: model, APIKeyRef: "LIVE_CACHE_API_KEY", APIBase: os.Getenv("LIVE_CACHE_BASE_URL")}
 	if providerID == "openai-chatgpt" {
-		closeStore, err := installSubscriptionCredential(secret)
-		if err != nil {
-			return err
+		closeStore, storeErr := installSubscriptionCredential(secret)
+		if storeErr != nil {
+			return storeErr
 		}
 		defer closeStore()
 		cfg.AuthMethod = config.AuthMethodSignIn
