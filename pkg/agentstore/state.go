@@ -119,6 +119,11 @@ func readStateFiles(entityPath, soulPath, id string) (*State, []byte, []byte, er
 	return &State{Agent: &agent, Soul: string(soulBytes), Revision: revisionFor(entityBytes, soulBytes)}, entityBytes, soulBytes, nil
 }
 
+// readStoreDir lists the agent entity directory for confirmExactAgentID. A
+// variable only so a test can present the listing a case-insensitive volume
+// would give on any filesystem; production never reassigns it.
+var readStoreDir = os.ReadDir
+
 // confirmExactAgentID returns entity.ErrNotFound unless the record at
 // entityPath is id's under exact comparison: its stored id equals id, or — for
 // a record that stores none — its file name is exactly id + ".json".
@@ -129,7 +134,7 @@ func confirmExactAgentID(entityPath, id, storedID string) error {
 		}
 		return nil
 	}
-	entries, err := os.ReadDir(filepath.Dir(entityPath))
+	entries, err := readStoreDir(filepath.Dir(entityPath))
 	if err != nil {
 		return fmt.Errorf("agentstore: read store directory: %w", err)
 	}
