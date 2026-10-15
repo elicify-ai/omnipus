@@ -230,6 +230,12 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 		`return workspaceMutationError(u.id, "save_delegation", "partial", actual.Revision, workspaceChangedFields(u.state.Workspace, actual.Workspace), workspaceActualState(actual))`:    true,
 		`return tools.NewToolResult(successJSON(workspaceView(state.Workspace, state.Delegation, state.Revision,`:                                                                          true,
 	},
+	// WU-3 RED real-registry tests: workspace.ReadState returns workspace.State.
+	"pkg/gateway/wu3_real_registry_test.go": {
+		`assert.Equal(t, []string{id}, target.Workspace.CoreTeam)`:                                                                                       true,
+		`assert.Equal(t, []string{"omnipus"}, anchor.Workspace.CoreTeam)`:                                                                                true,
+		`assert.Equal(t, "real WU3 turn write", after.Workspace.Description, "actual registered Execute must have committed, not returned model prose")`: true,
+	},
 	// WU-3 create_agent workspace_id test: ReadState returns workspace.State.
 	"pkg/sysagent/tools/wu3dev_create_agent_target_test.go": {
 		`require.Contains(t, sales.Workspace.CoreTeam, id, "the agent joins the target team")`:          true,
