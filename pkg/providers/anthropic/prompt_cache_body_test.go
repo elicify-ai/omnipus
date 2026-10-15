@@ -39,7 +39,9 @@ func captureBody(t *testing.T, catalogBase string, messages []Message, tools []T
 		option.WithHTTPClient(&http.Client{Transport: rewriteHost{base: base}}),
 	)
 	p.client = &client
-	_, _ = p.Chat(t.Context(), messages, tools, model, map[string]any{"max_tokens": 64})
+	if _, err := p.Chat(t.Context(), messages, tools, model, map[string]any{"max_tokens": 64}); err != nil {
+		t.Fatalf("official connector Chat: %v", err)
+	}
 	if len(raw) == 0 {
 		t.Fatal("official connector sent no body")
 	}
@@ -59,26 +61,29 @@ func (h rewriteHost) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(cloned)
 }
 
-func cacheMarks(v any) []map[string]any {
-	var out []map[string]any
-	var walk func(any)
-	walk = func(node any) {
-		switch n := node.(type) {
-		case map[string]any:
-			if cc, ok := n["cache_control"].(map[string]any); ok {
-				out = append(out, cc)
-			}
-			for _, child := range n {
-				walk(child)
-			}
-		case []any:
-			for _, child := range n {
-				walk(child)
-			}
+// cacheMarks walks Anthropic's documented render order, NOT JSON object-member
+// order (and never Go's randomized map order). Arrays retain their wire order.
+func cacheMarks(body cacheBody) []cacheMark {
+	var marks []cacheMark
+	add := func(section string, message, block int, cc *bodyCacheControl) {
+		if cc != nil {
+			marks = append(marks, cacheMark{section, message, block, *cc})
 		}
 	}
-	walk(v)
-	return out
+	for i, tool := range body.Tools {
+		add("tools", -1, i, tool.CacheControl)
+	}
+	for i, block := range body.System {
+		add("system", -1, i, block.CacheControl)
+	}
+	for i, msg := range body.Messages {
+		add("message", i, -1, msg.CacheControl) // illegal level, still counted
+		for j, block := range msg.Content {
+			add("messages", i, j, block.CacheControl)
+		}
+	}
+	add("request", -1, -1, body.CacheControl)
+	return marks
 }
 
 func nativeMessages() ([]Message, []ToolDefinition) {
@@ -93,8 +98,15 @@ func nativeMessages() ([]Message, []ToolDefinition) {
 	messages := []Message{
 		{Role: "system", SystemParts: []protocoltypes.ContentBlock{{Type: "text", Text: "STABLE-INSTRUCTIONS"}}},
 		{Role: "user", Content: "PRIOR-USER"},
+		{Role: "assistant", ToolCalls: []ToolCall{
+			{ID: "cache_call_1", Name: "read", Arguments: map[string]any{"path": "a.txt"}},
+			{ID: "cache_call_2", Name: "read", Arguments: map[string]any{"path": "b.txt"}},
+		}},
+		{Role: "tool", ToolCallID: "cache_call_1", Content: "result-a"},
+		{Role: "tool", ToolCallID: "cache_call_2", Content: "result-b"},
 		{Role: "assistant", Content: "PRIOR-ASSISTANT"},
 		{Role: "user", Content: "latest question"},
+		{Role: "user", Content: "## Current Time\n2026-10-16 12:00:00Z\nSCRATCHPAD-NOTE"},
 	}
 	return messages, tools
 }
@@ -102,32 +114,10 @@ func nativeMessages() ([]Message, []ToolDefinition) {
 // TestAnthropicBody_MarksAndLifetimes is TDD row 11.
 func TestAnthropicBody_MarksAndLifetimes(t *testing.T) {
 	messages, tools := nativeMessages()
-	body, _ := captureBody(t, "https://api.anthropic.com", messages, tools, "claude-sonnet-4-5")
-	marks := cacheMarks(body)
-	if len(marks) == 0 || len(marks) > 4 {
-		t.Fatalf("cache marks = %d (%v), want 1 to 4", len(marks), marks)
-	}
-	var saw5m bool
-	for _, mark := range marks {
-		ttl, _ := mark["ttl"].(string)
-		if ttl == "5m" {
-			saw5m = true
-			continue
-		}
-		if saw5m && ttl == "1h" {
-			t.Fatalf("a 1-hour mark appears after a 5-minute mark: %v", marks)
-		}
-		if ttl != "1h" {
-			t.Fatalf("mark = %v, want ttl 1h on tools and instructions, then 5m on the tail", mark)
-		}
-	}
-	raw, _ := json.Marshal(body)
-	text := string(raw)
-	if !strings.Contains(text, `"ttl":"1h"`) && !strings.Contains(text, `"ttl": "1h"`) {
-		t.Fatalf("body has no 1-hour mark:\n%s", text)
-	}
-	if !strings.Contains(text, `"ttl":"5m"`) && !strings.Contains(text, `"ttl": "5m"`) {
-		t.Fatalf("body has no 5-minute tail mark:\n%s", text)
+	_, raw := captureBody(t, "https://api.anthropic.com", messages, tools, "claude-sonnet-4-5")
+	body := parseCacheBody(t, raw)
+	if err := nativeCacheBodyError(body); err != nil {
+		t.Fatalf("FR-005/007: %v\nbody:\n%s", err, raw)
 	}
 }
 
@@ -139,19 +129,14 @@ func TestDialectBodies_MoonshotAndMiniMax(t *testing.T) {
 
 	t.Run("moonshot", func(t *testing.T) {
 		_, raw := captureBody(t, "https://api.moonshot.ai/anthropic", messages, tools, "kimi-k2")
-		text := string(raw)
-		if strings.Contains(text, "cache_control") || strings.Contains(text, `"1h"`) || strings.Contains(text, "ttl") {
-			t.Fatalf("Moonshot body has a cache mark or a 1-hour option:\n%s", text)
+		if err := moonshotCacheBodyError(parseCacheBody(t, raw)); err != nil {
+			t.Fatalf("Moonshot FR-005/028: %v\n%s", err, raw)
 		}
 	})
 	t.Run("minimax", func(t *testing.T) {
 		_, raw := captureBody(t, "https://api.minimax.io/anthropic/v1", messages, tools, "MiniMax-M2.7")
-		text := string(raw)
-		if strings.Contains(text, `"1h"`) {
-			t.Fatalf("MiniMax body has a 1-hour mark:\n%s", text)
-		}
-		if strings.Contains(text, "cache_control") && !strings.Contains(text, `"5m"`) {
-			t.Fatalf("MiniMax mark is not its documented 5-minute mode and not automatic (no mark):\n%s", text)
+		if err := miniMaxCacheBodyError(parseCacheBody(t, raw)); err != nil {
+			t.Fatalf("MiniMax FR-005: %v\n%s", err, raw)
 		}
 	})
 }
