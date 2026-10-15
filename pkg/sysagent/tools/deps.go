@@ -309,6 +309,10 @@ type Deps struct {
 	// ResolveToolPolicy returns the live compositor verdict for a registered
 	// caller. ok is false when the identity is absent or no longer registered.
 	ResolveToolPolicy func(agentID, toolName string) (policy string, ok bool)
+	// GodModeActive reports whether the God Mode override is in effect now
+	// (agent.GodModeActive), so a reported effective policy matches what the
+	// runtime compositor resolves. Nil means not active.
+	GodModeActive func() bool
 
 	// ListSessions returns all sessions across all stores (shared + legacy per-agent),
 	// deduplicating entries that appear in both. Errors are per-store and non-fatal;

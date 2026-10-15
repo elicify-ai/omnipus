@@ -119,7 +119,7 @@ func (t *AgentPermissionsTool) Execute(_ context.Context, args map[string]any) (
 		return (&AgentUpdateTool{deps: t.deps}).mutateErrorResult(id, result, mutateErr)
 	}
 	activation, message := publishAgentActivation(t.deps, id)
-	clamped := policyClamps(t.deps.globalToolPolicies(), requested)
+	clamped := policyClamps(t.deps.globalToolPolicies(), requested, t.deps.godModeActive())
 	if note := clampSentence(clamped); note != "" {
 		message = strings.TrimSpace(message + " " + note)
 	}
@@ -156,13 +156,24 @@ func (d *Deps) globalToolPolicies() map[string]string {
 	return cfg.Sandbox.ToolPolicies
 }
 
+// godModeActive reports whether the God Mode override is in effect now.
+func (d *Deps) godModeActive() bool {
+	return d != nil && d.GodModeActive != nil && d.GodModeActive()
+}
+
 // policyClamps lists, sorted by tool, every per-agent policy the ceiling
-// clamps — strictest-wins makes the effective policy differ from the stored
+// clamps — the runtime compositor (tools.ResolveEffectivePolicy, wildcards and
+// the God Mode floor included) resolves a policy different from the stored
 // one. Never nil (an empty list means nothing was clamped).
-func policyClamps(global map[string]string, policies map[string]config.ToolPolicy) []policyClamp {
+func policyClamps(global map[string]string, policies map[string]config.ToolPolicy, godMode bool) []policyClamp {
+	ceiling := make(map[string]config.ToolPolicy, len(global))
+	for tool, p := range global {
+		ceiling[tool] = config.ToolPolicy(p)
+	}
+	resolver := &tools.ToolPolicyCfg{Policies: policies, GlobalPolicies: ceiling, GodMode: godMode}
 	out := []policyClamp{}
 	for tool, requested := range policies {
-		effective := strictest(requested, config.ToolPolicy(global[tool]))
+		effective := tools.ResolveEffectivePolicy(resolver, tool)
 		if effective != string(requested) {
 			out = append(out, policyClamp{Tool: tool, Requested: string(requested), Effective: effective})
 		}

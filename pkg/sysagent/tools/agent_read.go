@@ -160,7 +160,7 @@ func (t *AgentGetToolsTool) Execute(_ context.Context, args map[string]any) *too
 		"stored_tool_overrides": storedOverrides(state.Agent), "mcp_servers": storedMCPBindings(state.Agent),
 		"effective_policies": effective, "static_catalog": sortedStringKeys(global),
 		// #1064 A5: every stored policy the global ceiling makes stricter.
-		"clamped":           policyClamps(global, storedOverrides(state.Agent)),
+		"clamped":           policyClamps(global, storedOverrides(state.Agent), t.deps.godModeActive()),
 		"connector_catalog": connectorCatalog,
 	}
 	if preview {

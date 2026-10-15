@@ -1438,6 +1438,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		SkillInstaller:    rc.sysSkillInstaller,
 		SkillWriter:       rc.sysSkillWriter,
 		ResolveToolPolicy: rc.agentLoop.ResolveRegisteredToolPolicy,
+		GodModeActive:     func() bool { return agent.GodModeActive(rc.agentLoop.GetConfig()) },
 		// ADR-057 U9 changed ListAllSessions' signature to
 		// (limit, offset int, parentSessionID string, flat bool), so it can no
 		// longer be assigned here as a bare method value — this field's type
