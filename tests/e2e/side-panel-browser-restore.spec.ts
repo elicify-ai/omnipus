@@ -8,6 +8,7 @@
  * W10 Back then Forward follows the store, not a stale panel value (MAJ-206).
  */
 import { expect } from '@playwright/test'
+import type { WorkspaceCreateRequest } from '../../src/lib/api/generated/openapi-types'
 import { test } from './fixtures/console-errors'
 import { newAdminApiContext } from './fixtures/admin-api'
 
@@ -15,7 +16,11 @@ async function createWorkspace(): Promise<string> {
   const ctx = await newAdminApiContext()
   try {
     const res = await ctx.post('/api/v1/workspaces', {
-      data: { name: `E2E browser restore ${Date.now()}` },
+      // FR-048: new workspaces have no implicit team. W9/W10 need a real chat
+      // with an active agent (ChatControls' Open browser requires one), not
+      // FR-107's correct EmptyTeamEntry screen. Mia holds the browser tools
+      // (pkg/coreagent/role_policies_adr090.go::ADR090RolePolicyInventory).
+      data: { name: `E2E browser restore ${Date.now()}`, core_team: ['mia'] } satisfies WorkspaceCreateRequest,
     })
     if (!res.ok()) throw new Error(`createWorkspace ${res.status()}: ${await res.text()}`)
     return ((await res.json()) as { id: string }).id
