@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -138,6 +139,14 @@ func TestWU15Rooms_MentionNamespaceIsExactAndAmbiguityRefuses(t *testing.T) {
 		config.AgentConfig{ID: "member-a", Name: "Mia", Type: config.AgentTypeCustom},
 		config.AgentConfig{ID: "member-b", Name: "Mia", Type: config.AgentTypeCustom},
 		config.AgentConfig{ID: "member-c", Name: "Jim Smith", Type: config.AgentTypeCustom})
+	// Q-E: rename persists through agentstore; config-only agents are not
+	// writable entities. Seed the same real entity API existing gateway tests
+	// use, including the original roster so write-triggered reload preserves it.
+	store := agentstore.New(h.home)
+	for _, configured := range h.cfg.Agents.List {
+		copyOfConfig := configured
+		require.NoError(t, store.Create(configured.ID, &copyOfConfig), "SETUP: real agentstore creation for %s", configured.ID)
+	}
 	seedBindingWorkspace(t, h.home, wu15Workspace, "member-a", "member-b", "member-c")
 	h = wu15Boot(t, h.home, h.cfg)
 	room := h.create("squad", "Launch", "member-a", "member-b", "member-c")

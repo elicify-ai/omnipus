@@ -195,10 +195,25 @@ func (h *wu15RoomHarness) waitState(roomID, requestID, state string) gen.RoomSna
 	}
 }
 
+// Q-A instrument correction: an eager main that has never run has no
+// lifecycle record. Run a genuine warm-up turn before using session-core Stop.
 func (h *wu15RoomHarness) stopMain(id string) {
 	h.t.Helper()
-	_, err := h.al.StopSession(context.Background(), agent.StopRequest{SessionID: h.main(id), By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "wu15-tester"}, Channel: "webchat"})
+	h.startLoop()
+	conn := h.connect()
+	sid := h.main(id)
+	require.NoError(h.t, conn.WriteJSON(gen.AttachSessionFrame{Type: "attach_session", SessionId: sid}))
+	wu15ReadFrame(h.t, conn, "catch_up_complete")
+	h.sendMain(conn, id, "WU15 lifecycle fixture warm-up")
+	done := wu15ReadTurnDone(h.t, conn)
+	require.Equal(h.t, sid, done.SessionId, "SETUP: the receiver's own main ran a real turn")
+	lifecycle := h.al.GetSessionLifecycleStore()
+	require.NotNil(h.t, lifecycle)
+	_, err := lifecycle.Load(sid)
+	require.NoError(h.t, err, "SETUP: warm-up produced a lifecycle record")
+	result, err := h.al.StopSession(context.Background(), agent.StopRequest{SessionID: sid, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "wu15-tester"}, Channel: "webchat"})
 	require.NoError(h.t, err, "SETUP: stop main through real Stop")
+	require.True(h.t, result.Durable, "SETUP: Stop is backed by the warmed lifecycle, not a no-op on an unrun main")
 }
 
 func (h *wu15RoomHarness) sendMain(conn *websocket.Conn, id, text string) {

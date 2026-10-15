@@ -15,47 +15,26 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 var errWU15WriterFailure = errors.New("wu15 injected persistence failure")
 
-// Wrap the existing error-returning writer only: readers, archive, turn loop and
-// room admission/reply remain real. No production-only room seam is invented.
+// Q-D: fault the exact named RoomReceiverWriter append, not inst.Sessions.
+// The underlying store remains real and every unrelated append is forwarded.
 type wu15FailingWriter struct {
 	*session.UnifiedStore
 	target, role string
 	attempts     atomic.Int64
 }
 
-func (w *wu15FailingWriter) AddMessage(key, role, content string) error {
-	if key == w.target && role == w.role {
+func (w *wu15FailingWriter) AppendTranscriptOnce(key string, entry session.TranscriptEntry) (bool, error) {
+	if key == w.target && entry.Role == w.role {
 		w.attempts.Add(1)
-		return errWU15WriterFailure
+		return false, errWU15WriterFailure
 	}
-	return w.UnifiedStore.AddMessage(key, role, content)
-}
-func (w *wu15FailingWriter) AddFullMessage(key string, msg providers.Message) error {
-	if key == w.target && msg.Role == w.role {
-		w.attempts.Add(1)
-		return errWU15WriterFailure
-	}
-	return w.UnifiedStore.AddFullMessage(key, msg)
-}
-func (w *wu15FailingWriter) AppendModelMessage(ctx context.Context, key string, in session.ModelAppend) (session.ModelSlot, session.WindowView, error) {
-	if key == w.target && in.Message.Role == w.role {
-		w.attempts.Add(1)
-		return session.ModelSlot{}, session.WindowView{}, errWU15WriterFailure
-	}
-	return w.UnifiedStore.AppendModelMessage(ctx, key, in)
-}
-func (w *wu15FailingWriter) PlaceSavedInput(ctx context.Context, key string, source session.ArchiveAddress) (session.ModelSlot, session.WindowView, error) {
-	if key == w.target && w.role == "user" {
-		w.attempts.Add(1)
-		return session.ModelSlot{}, session.WindowView{}, errWU15WriterFailure
-	}
-	return w.UnifiedStore.PlaceSavedInput(ctx, key, source)
+	return w.UnifiedStore.AppendTranscriptOnce(key, entry)
 }
 
 func TestWU15Rooms_FailedReceiverWriterNeverCountsAsSuccessfulAnswer(t *testing.T) {
@@ -63,48 +42,59 @@ func TestWU15Rooms_FailedReceiverWriterNeverCountsAsSuccessfulAnswer(t *testing.
 		t.Run(role, func(t *testing.T) {
 			h := wu15NewHarness(t)
 			room := h.create("squad", "Launch", "mia", "jim")
-			inst, ok := h.al.GetRegistry().GetAgent("mia")
-			require.True(t, ok)
-			original := inst.Sessions
 			fault := &wu15FailingWriter{UnifiedStore: h.al.GetSessionStore(), target: h.main("mia"), role: role}
-			inst.Sessions = fault
-			// No extra tool reply: final assistant append itself is the fault.
-			p := &wu15ScriptProvider{answer: "this uncommitted answer must not be accepted", autoReply: true}
-			h.provider("mia", p)
-			conn := h.connect()
-			require.NoError(t, conn.WriteJSON(gen.AttachSessionFrame{Type: "attach_session", SessionId: h.main("mia")}))
-			wu15ReadFrame(t, conn, "catch_up_complete")
-			h.startLoop()
-			h.post(room.Id, "writer-fault", "@Mia test durable write")
-			request := wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "writer-fault"), "mia")
-			snap := h.waitState(room.Id, request.RequestId, "failed")
-			require.Greater(t, fault.attempts.Load(), int64(0), "instrument: failed writer was actually invoked")
-			for _, entry := range snap.Entries {
-				require.NotEqual(t, p.answer, entry.Text, "FR-216/#1178: failed append is never inferred as committed answer")
+			if role == "user" {
+				h.roomWriter(fault)
+				p := &wu15ScriptProvider{answer: "healthy receiver answer", autoReply: true}
+				h.provider("mia", p)
+				h.startLoop()
+				h.post(room.Id, "writer-fault", "@Mia test durable write")
+				require.Greater(t, fault.attempts.Load(), int64(0), "instrument: actual receiver append fault invoked before outcome assertions")
+				request := wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "writer-fault"), "mia")
+				require.Equal(t, "unavailable", request.State, "Q-H A / §6.11: failure was before any receiver turn")
+				require.Empty(t, p.inputs(), "failed receiver append starts no model turn")
+				for _, message := range h.messages("mia") {
+					if message.RoomRef != nil {
+						require.NotEqual(t, request.RequestId, message.RoomRef.RequestId, "FR-216: no false committed receiver append")
+					}
+				}
+				h.roomWriter(nil)
+				h.post(room.Id, "writer-fault", "@Mia test durable write")
+				h.waitState(room.Id, request.RequestId, "answered")
+				wu15RequireMirrors(t, h.messages("mia"), room, request.RequestId, p.answer)
+				return
 			}
-			var errorFrame gen.ErrorFrame
-			require.NoError(t, json.Unmarshal(wu15ReadFrame(t, conn, "error"), &errorFrame))
-			require.Equal(t, "Sorry, I couldn't save your message — please try again later.", errorFrame.Message, "amendment §4.2: existing visible could-not-save notice")
-			var done gen.DoneFrame
-			require.NoError(t, json.Unmarshal(wu15ReadFrame(t, conn, "done"), &done))
-			require.NotNil(t, done.Stats)
-			require.NotNil(t, done.Stats.TurnFailed)
-			require.True(t, *done.Stats.TurnFailed)
-			inst.Sessions = original
-			h.post(room.Id, "healthy-control", "@Mia healthy writer")
-			healthy := wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "healthy-control"), "mia")
-			require.NotEqual(t, request.RequestId, healthy.RequestId)
-			// The healthy turn is driven through the same main and writer path.
-			wu15ReadFrame(t, conn, "done")
-			healthySnap := h.waitState(room.Id, healthy.RequestId, "answered")
-			var answers []gen.RoomEntry
-			for _, entry := range healthySnap.Entries {
-				if entry.Author.Kind == "agent" {
-					answers = append(answers, entry)
+			h.post(room.Id, "writer-fault", "@Mia test durable mirror")
+			request := wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "writer-fault"), "mia")
+			h.roomWriter(fault)
+			answer := "this answer committed to the room before its main mirror"
+			_, replyErr := h.al.NewAddressRouter().Reply(context.Background(), tools.ReplyRequest{
+				ReplyTo: request.RequestId, Content: answer, ResponderSessionID: h.main("mia"),
+				Author: tools.SendOrigin{WorkspaceID: wu15Workspace, AgentID: "mia"},
+			})
+			require.Greater(t, fault.attempts.Load(), int64(0), "instrument: actual mirror append fault invoked before outcome assertions")
+			// Q-H A: do not adapt to a service swallowing the writer error.
+			if !errors.Is(replyErr, errWU15WriterFailure) {
+				t.Errorf("FR-216 / chief Q-H A: mirror failure must be returned, not swallowed; got %v", replyErr)
+			}
+			var committed []gen.RoomEntry
+			for _, entry := range h.snapshot(room.Id).Entries {
+				if entry.Author.Kind == "agent" && entry.Text == answer {
+					committed = append(committed, entry)
 				}
 			}
-			require.Len(t, answers, 1, "only the healthy turn publishes a committed room answer")
-			require.Equal(t, p.answer, answers[0].Text, "positive control uses the same real writer path")
+			require.Len(t, committed, 1, "Q-H A: already committed room answer is retained")
+			for _, message := range h.messages("mia") {
+				if message.RoomRef != nil && message.RoomRef.RequestId == request.RequestId {
+					require.NotEqual(t, gen.MessageRoomRefRoleAnswer, message.RoomRef.Role, "failed mirror was not committed")
+				}
+			}
+			h.roomWriter(nil)
+			h = h.restart()
+			h.snapshot(room.Id) // actual reload reconciliation repairs the missing mirror
+			wu15RequireMirrors(t, h.messages("mia"), room, request.RequestId, answer)
+			h.snapshot(room.Id)
+			wu15RequireMirrors(t, h.messages("mia"), room, request.RequestId, answer)
 		})
 	}
 }
@@ -204,5 +194,4 @@ func TestWU15Rooms_Issue1314ListStorageFailureReturns500ContractError(t *testing
 	require.Equal(t, before, h.listRooms(wu15Workspace), "#1314: read failure never deletes cached/persisted room records")
 }
 
-var _ session.SessionWriter = (*wu15FailingWriter)(nil)
-var _ session.ContextWindowStore = (*wu15FailingWriter)(nil)
+var _ wu15RoomCommitWriter = (*wu15FailingWriter)(nil)
