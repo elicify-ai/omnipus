@@ -203,7 +203,7 @@ func (d *gatewayRoomDeps) Audit(e rooms.AuditEvent) {
 		return
 	}
 	audit.EmitEntry(logger, &audit.Entry{
-		Event: "room.changed", Decision: "allow", User: e.Principal,
+		Event: audit.EventRoomChanged, Decision: audit.DecisionAllow, User: e.Principal,
 		Details: map[string]any{"room_id": e.RoomID, "workspace_id": e.WorkspaceID, "action": e.Action, "agent_ids": e.AgentIDs},
 	})
 }
