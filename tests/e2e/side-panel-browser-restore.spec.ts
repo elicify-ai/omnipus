@@ -45,7 +45,9 @@ test.afterAll(async () => {
   if (workspaceId) await deleteWorkspace(workspaceId)
 })
 
-test('W9 — reload does not restore the Browser panel', async ({ page }) => {
+// Skipped: founder ruling 2026-10-15, #1325. Name-only workspace has no team under L1
+// (FR-048), so Open browser has no active agent; fixture fix re-enables this after landing.
+test.skip('W9 — reload does not restore the Browser panel', async ({ page }) => {
   await page.goto(`/#/workspaces/${workspaceId}/chat`)
   await page.getByRole('button', { name: /open browser|watch live/i }).click()
   await expect(page.getByTestId('side-panel-header')).toContainText('Browser')
@@ -54,7 +56,9 @@ test('W9 — reload does not restore the Browser panel', async ({ page }) => {
   await expect(page).not.toHaveURL(/panel=browser/)
 })
 
-test('W10 — Back then Forward follows the store, not a stale panel value', async ({ page }) => {
+// Skipped: founder ruling 2026-10-15, #1325. Name-only workspace has no team under L1
+// (FR-048), so Open browser has no active agent; fixture fix re-enables this after landing.
+test.skip('W10 — Back then Forward follows the store, not a stale panel value', async ({ page }) => {
   await page.goto(`/#/workspaces/${workspaceId}/chat`)
   await page.getByRole('button', { name: /open browser|watch live/i }).click()
   await expect(page.getByTestId('side-panel-header')).toContainText('Browser')
