@@ -231,6 +231,19 @@ one-hour tokens as `unpriced_tokens`. It does not discard the known cost or call
 the unpriced portion free. Native Anthropic's documented one-hour multiplier is
 2 times catalog input when the catalog does not supply `cache_write_1h`.
 
+### Stored accounting for each call
+
+Each completed provider call has its own assistant accounting entry in the
+session transcript. It stores the provider and model identifiers, billing
+classification, token portions, and the five-minute and one-hour write counts
+when reported. A call that returns no visible text still has an entry with empty
+content; that entry does not create an extra chat bubble.
+
+A turn can contain several calls. Its summary totals are not an additional
+charge, and a later engine-generated notice does not count those tokens again.
+Each call is priced once when it completes. Reloading a session uses the stored
+cost and classification; it does not reprice earlier calls from a newer catalog.
+
 A successful request with zero cache reads is an ordinary miss. For a live cache
 proof, however, send the same conversation twice: the second request must report
 more than zero cache-read tokens. HTTP success alone is not proof of caching.

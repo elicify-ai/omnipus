@@ -92,7 +92,7 @@ func (rt *agentLoopRunTurn) logCompletedCall(providerID, model string, response 
 	if response.Usage != nil {
 		usage = *response.Usage
 	}
-	if response.Content == "" && rt.ts.transcriptStore != nil && rt.ts.transcriptSessionID != "" {
+	if response.Content == "" && !rt.ts.abandoned.Load() && rt.ts.transcriptStore != nil && rt.ts.transcriptSessionID != "" {
 		// No-text calls own an invisible accounting entry immediately. A later
 		// synthetic terminal notice must not inherit their provider attribution.
 		if err := rt.ts.flushPendingCallAccounting(); err != nil {
