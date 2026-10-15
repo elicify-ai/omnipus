@@ -118,8 +118,42 @@ func TestProviderId_SurvivesReload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMeta: %v", err)
 	}
-	if got.Stats.ByProvider["openai"].In != 10 || got.Stats.ByProvider["anthropic"].In != 24 {
-		t.Fatalf("by_provider after reload = %#v, want openai and anthropic kept separate (openai in 10, anthropic in 24)", got.Stats.ByProvider)
+	// FR-002, FR-026/D14 (chief ruling 2026-10-15): subscription calls
+	// contribute tokens to their provider, but no dollars. OpenAI's two calls
+	// give in 10+30, read 0+40, out 5+10, and authoritative total 15+80.
+	openai := got.Stats.ByProvider["openai"]
+	if openai.In != 40 || openai.CacheRead != 40 || openai.CacheWrite != 0 || openai.Out != 15 || openai.Total != 95 {
+		t.Errorf("openai after reload = in %d out %d read %d write %d total %d, want 40 / 15 / 40 / 0 / 95 (priced + subscription)",
+			openai.In, openai.Out, openai.CacheRead, openai.CacheWrite, openai.Total)
+	}
+	if got.Stats.ByProvider["anthropic"].In != 24 {
+		t.Errorf("anthropic input after reload = %d, want 24 (20+4), separate from openai", got.Stats.ByProvider["anthropic"].In)
+	}
+	if len(got.Stats.ByProvider) != 2 {
+		t.Errorf("by_provider after reload = %#v, want exactly openai and anthropic", got.Stats.ByProvider)
+	}
+
+	// FR-002: all four calls count, including the mixed call's unpriced portion.
+	// In=10+20+30+4, out=5+5+10+1, read=40, write=0, total=15+25+80+12.
+	stats := got.Stats
+	sessionTotals := ModelTokens{
+		In: stats.TokensIn, Out: stats.TokensOut, CacheRead: stats.TokensCacheRead,
+		CacheWrite: stats.TokensCacheWrite, Total: stats.TokensTotal,
+	}
+	wantTotals := ModelTokens{In: 64, Out: 21, CacheRead: 40, CacheWrite: 0, Total: 132}
+	if sessionTotals != wantTotals {
+		t.Errorf("session tokens after reload = %+v, want %+v (all stored calls)", sessionTotals, wantTotals)
+	}
+	var providerTotals ModelTokens
+	for _, cell := range stats.ByProvider {
+		providerTotals.In += cell.In
+		providerTotals.Out += cell.Out
+		providerTotals.CacheRead += cell.CacheRead
+		providerTotals.CacheWrite += cell.CacheWrite
+		providerTotals.Total += cell.Total
+	}
+	if providerTotals != sessionTotals {
+		t.Errorf("by_provider token sum after reload = %+v, want session totals %+v", providerTotals, sessionTotals)
 	}
 	if got.Stats.ByModel["shared-model"].In == 0 {
 		t.Fatal("shared model lost its tokens")
