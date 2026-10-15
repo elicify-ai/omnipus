@@ -334,9 +334,16 @@ func agentIDByExactName(home string, raw any) (string, *tools.ToolResult) {
 	if !ok || strings.TrimSpace(name) == "" {
 		return "", tools.ErrorResult(errorJSON("INVALID_INPUT", "name must be a non-empty string", "Use a name from list_agents"))
 	}
-	agents, _, err := agentstore.New(home).List()
+	agents, skipped, err := agentstore.New(home).List()
 	if err != nil {
 		return "", tools.ErrorResult(errorJSON("READ_FAILED", fmt.Sprintf("the agent list could not be read: %v", err), "Retry list_agents"))
+	}
+	if len(skipped) > 0 {
+		// An unreadable record may carry this name: absence or uniqueness
+		// cannot be claimed from a partial list.
+		return "", tools.ErrorResult(errorJSON("READ_FAILED",
+			"agent names cannot be resolved reliably; unreadable agent records: "+strings.Join(skipped, ", "),
+			"Repair the listed records, or call get_agent_tools with the agent's exact id"))
 	}
 	var ids []string
 	for _, a := range agents {
