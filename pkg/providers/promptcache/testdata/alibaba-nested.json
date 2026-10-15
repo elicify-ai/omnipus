@@ -1,0 +1,9 @@
+{
+  "prompt_tokens": 1000,
+  "completion_tokens": 10,
+  "cache_creation_input_tokens": 1,
+  "prompt_tokens_details": {
+    "cached_tokens": 800,
+    "cache_creation_input_tokens": 100
+  }
+}
