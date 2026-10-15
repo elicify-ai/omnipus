@@ -16,6 +16,19 @@ func TestWU15Rooms_PauseCancelsQueuedHeldAndAwaitingApproval(t *testing.T) {
 	room := h.create("squad", "Launch", "mia", "jim", "researcher2")
 	h.stopMain("mia")
 	h.receiverPolicy("jim", "ask")
+	// Q-A starts the real loop to prime Mia. Keep Researcher2 genuinely busy
+	// so this case still exercises an unconsumed queued request, not an idle
+	// member that is free to finish before the pause reaches the server.
+	busy := &wu15ScriptProvider{answer: "ordinary busy main finished", entered: make(chan struct{}), release: make(chan struct{})}
+	h.provider("researcher2", busy)
+	mainConn := h.connect()
+	h.sendMain(mainConn, "researcher2", "hold this main while the room request queues")
+	defer close(busy.release)
+	select {
+	case <-busy.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("SETUP: the queued receiver's real busy turn never reached its model edge")
+	}
 	h.post(room.Id, "pending", "status?")
 	entry := wu15FindEntry(t, h.snapshot(room.Id), "pending")
 	before := h.room(room.Id)

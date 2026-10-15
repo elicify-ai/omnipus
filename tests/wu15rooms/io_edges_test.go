@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
-
 	"github.com/elicify-ai/omnipus/pkg/rooms"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )

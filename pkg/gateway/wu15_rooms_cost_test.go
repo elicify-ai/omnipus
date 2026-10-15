@@ -101,13 +101,14 @@ func TestWU15Rooms_MixedInputsAllocateByConsumedEndOfTurnWeights(t *testing.T) {
 	require.NotNil(t, done.Stats.Cost)
 	require.Greater(t, *done.Stats.Cost, float64(0))
 	monetaryInput := int64(math.Round(*done.Stats.Cost * 1_000_000))
-	require.Equal(t, int64(0), monetaryInput%3, "instrument: fixture avoids an unspecified fractional micro-dollar rounding rule")
+	require.Equal(t, int64(0), monetaryInput%3, "instrument: this fixture has an exact whole-micro-dollar third; Q-I fractional rounding is tested separately")
 	for _, id := range []string{aInput.RequestId, bInput.RequestId} {
 		capture, found, err := h.al.RequestLedger().Get(h.main("mia"), id)
 		require.NoError(t, err)
 		require.True(t, found)
 		require.True(t, capture.Delivered, "instrument: same real turn consumed both room inputs")
 	}
+	h.waitMainSettled("mia")
 	a, b := h.snapshot(roomA.Id), h.snapshot(roomB.Id)
 	require.Equal(t, monetaryInput/3, a.AllocatedCostMicroUsd, "§6.14: A consumed one of three inputs")
 	require.Equal(t, monetaryInput/3, b.AllocatedCostMicroUsd, "§6.14: B consumed one of three inputs")

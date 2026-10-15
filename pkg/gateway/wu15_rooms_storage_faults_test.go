@@ -53,6 +53,9 @@ func TestWU15Rooms_FailedReceiverWriterNeverCountsAsSuccessfulAnswer(t *testing.
 				request := wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "writer-fault"), "mia")
 				require.Equal(t, "unavailable", request.State, "Q-H A / §6.11: failure was before any receiver turn")
 				require.Empty(t, p.inputs(), "failed receiver append starts no model turn")
+				_, captured, captureErr := h.al.RequestLedger().Get(h.main("mia"), request.RequestId)
+				require.NoError(t, captureErr)
+				require.False(t, captured, "Q-H A: failed receiver append writes no capture, not even a discarded admission")
 				for _, message := range h.messages("mia") {
 					if message.RoomRef != nil {
 						require.NotEqual(t, request.RequestId, message.RoomRef.RequestId, "FR-216: no false committed receiver append")

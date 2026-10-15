@@ -81,7 +81,8 @@ func TestWU15Rooms_WebInputJoiningLiveTurnChangesAllocationAtTurnEnd(t *testing.
 	require.NotNil(t, done.Stats.Cost)
 	require.Greater(t, *done.Stats.Cost, float64(0))
 	inputCost := int64(math.Round(*done.Stats.Cost * 1_000_000))
-	require.Equal(t, int64(0), inputCost%2, "instrument: exact micro-dollar half, no unspecified rounding")
+	require.Equal(t, int64(0), inputCost%2, "instrument: this fixture has an exact whole-micro-dollar half; Q-I fractional rounding is tested separately")
+	h.waitMainSettled("mia")
 	require.Equal(t, inputCost/2, h.snapshot(room.Id).AllocatedCostMicroUsd,
 		"§6.14 / OR-MIN-006: weights are one room input out of two inputs consumed by turn end, not the full cost frozen at turn start")
 }

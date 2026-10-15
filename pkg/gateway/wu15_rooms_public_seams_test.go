@@ -5,7 +5,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -29,23 +28,6 @@ func (h *wu15RoomHarness) roomWriter(writer wu15RoomCommitWriter) {
 		value = reflect.Zero(setter.Type().In(0))
 	} else {
 		require.True(h.t, value.Type().AssignableTo(setter.Type().In(0)), "writer implements the supplied public RoomReceiverWriter interface")
-	}
-	setter.Call([]reflect.Value{value})
-}
-
-func (h *wu15RoomHarness) callPricer(pricer func(string, providers.UsageInfo) float64) {
-	h.t.Helper()
-	setter := reflect.ValueOf(h.al).MethodByName("SetRoomCallPricer")
-	if !setter.IsValid() {
-		h.t.Fatal("BLOCKED: agent.AgentLoop.SetRoomCallPricer not implemented — required by §6.14 / BDD-17.30")
-	}
-	require.Equal(h.t, 1, setter.Type().NumIn())
-	value := reflect.ValueOf(pricer)
-	if pricer == nil {
-		value = reflect.Zero(setter.Type().In(0))
-	} else {
-		require.True(h.t, value.Type().ConvertibleTo(setter.Type().In(0)), "public RoomCallPricer has the read model/usage signature")
-		value = value.Convert(setter.Type().In(0))
 	}
 	setter.Call([]reflect.Value{value})
 }
