@@ -71,8 +71,10 @@ func NormalizeUsage(providerID string, raw []byte) (protocoltypes.UsageInfo, err
 				u.CacheReadTokens = count("cached_tokens")
 			}
 			u.CacheWriteTokens = count(details, "cache_write_tokens")
-			if providerID == "alibaba" || providerID == "alibaba-cn" {
-				u.CacheWriteTokens = count(details, "cache_creation_input_tokens")
+			if nestedWrite := count(details, "cache_creation_input_tokens"); nestedWrite > 0 || providerID == "alibaba" || providerID == "alibaba-cn" {
+				// The same documented nested shape can arrive on a coding-plan
+				// or router row; its count does not depend on the catalog alias.
+				u.CacheWriteTokens = nestedWrite
 			}
 			if u.CacheWriteTokens == 0 && providerID != "alibaba" && providerID != "alibaba-cn" {
 				u.CacheWriteTokens = count("cache_write_tokens")
