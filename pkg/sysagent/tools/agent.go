@@ -823,6 +823,12 @@ func createSaveFailedResult(id string, mutation agentstore.MutationResult, err e
 		"revision":           mutation.Revision,
 	}
 	if mutation.PersistenceStatus == agentstore.PersistencePartial {
+		// The store's own list of what it published is the durable part.
+		changed := mutation.ChangedFields
+		if changed == nil {
+			changed = []string{}
+		}
+		body["changed_fields"] = changed
 		return changeErrorWithOutcome(body, partlySaved("the agent record was partly written: "+err.Error(), "",
 			[]string{"complete agent record"}))
 	}
