@@ -1,7 +1,7 @@
 # Feature Specification: Parent wake and visibility for helper events
 
 **Created**: 2026-10-15
-**Status**: Draft
+**Status**: Draft — final correction round 2 of 2 done, 2026-10-15. No review PASS is claimed. There is no third grill.
 **Input**: Founder interview 2026-10-15 (decisions D1–D4 below), root-cause matrix `coordination/designs/parent-wake-matrix-20261015.md`, Jarvis silent-stop investigation `coordination/designs/jarvis-silent-stops-20261015.md`, issue #1317, chief plan section 11 (`PLAN-omnipus-L1-v2-20261013.md`), and the R7 UAT packs. Verified against this branch at `a1eb083a4842886699740f1f2c5b93c6ba6b6974`, not against the matrix's cited tree.
 
 This document is the feature spec. No production code is changed by writing it. No new ADR is commissioned: the 2026-10-15 founder interview already settled the policy. Section 16 is the amendment map for the three existing decisions this spec narrows. Those dated ADR corrections are the architect's follow-up edit, not a second grill.
@@ -24,9 +24,9 @@ Source for PW-D1 through PW-D7: founder interview, 2026-10-15, chief plan sectio
 | **PW-D13** | A helper Stop never wakes and never auto-resumes. | Source: Interview, 2026-10-15. Whether the parent agent or a person pressed Stop, it is not a wake reason: no parent wake, no join into a live parent turn, no boot replay wake, no helper auto-resume. A visible stopped row in the parent chat may stay. Stopping the parent itself does not resume the parent and does not, by itself, cancel a helper the Stop did not select. Q-STOP is closed. |
 | **PW-D14** | A restart-stopped parent may be woken by the helper's fresh outcome. | Source: Interview, 2026-10-15, Q1 A. When the same gateway restart cut off both, the resumed helper's fresh outcome wakes that restart-stopped parent. The input is the helper event, not a replay of the parent's interrupted instruction. An intentional Stop is never overridden. |
 | **PW-D15** | A parked question card holds the outcome until the person answers. | Source: Interview, 2026-10-15, Q2 A. Show the helper row immediately and keep the report durable. Deliver it together with the person's correlated answer when the parent continues. The card stays valid. No extra outcome-only parent turn while the card is unanswered. A tool approval that is still inside a live turn is different: that outcome joins the live turn. |
-| **PW-D16** | The combined verdict input is durable before anyone marks the verdict read. | Architect, grill A1 A. The carrier is one addressed-archive transcript entry on the parent, written before the verdict inbox acknowledgement and before the consumed marker. A bus publish is not that write. |
-| **PW-D17** | One outcome has one identity and one wake owner. | Architect, grill A2 A. The canonical id is `<child session>:<generation>:outcome`. Verdict, hand-back, task completion, and poll consumption are correlated to it. A held or already-consumed outcome does not fall back into a second wake. |
-| **PW-D18** | A failed row write is repaired from the retained event, not from the wake. | Architect, grill A3 A. Helper and parent transcripts repair independently. Repair does not start a second turn. |
+| **PW-D16** | Save the input, then place it into model history only at the safe fence. | Round-2 correction. Two facts, one archive. **Save:** a chat-membership record (`archiveBackend` does not accept model membership on a transcript append). **Place:** `PlaceSavedInput` once, at the ordinary consumption fence, after any in-flight tool result. A held, stopped, or already-polled outcome is saved for the person and is not placed again. A bus publish is neither save nor placement. |
+| **PW-D17** | Each logical event has its own wake identity. | Round-2 correction. Consumption is per event, on the recipient. A met verdict, its hand-back, and a task completion share one ending id, the existing `<child>:<generation>:final`, which is what `recordPolledFinalConsumed` already consumes. A restart transition, a later finish, a question, a blocker, and a Judge round do not share that id. Generation alone is not an identity. |
+| **PW-D18** | Repair keeps its own payload after the inbox is acknowledged. | Round-2 correction. Inbox ack and `compactLocked` must not be the only copy. Each event family has a source that outlives acknowledgement. Repair does not start a second turn. |
 | **PW-D19** | Stop authority is the lasting state, not only the current marker. | In-flight Stop, accepted-but-unlanded Stop, and landed intentional Stop all refuse a wake. A cleared marker on a landed Stop is still a Stop. A restart stop is not an intentional Stop (PW-D14). |
 | **PW-D20** | Row identity is the source event, not generation alone. | Stop-family rows use the landed stop sequence. Verdict rows use goal id and round. Not-verified uses that conclusion's own id. |
 | **PW-D21** | A tool call is an occurrence, not a transcript-wide id. | Resume skips a historical invocation (issuing assistant occurrence plus call id). A later assistant occurrence may reuse the same provider call id. |
@@ -201,7 +201,7 @@ The person reads the parent chat, not the helper's chat. When the Judge rules, t
 **Acceptance Scenarios**:
 
 1. **Given** a helper's session goal ends met, **When** the result is delivered, **Then** the parent chat shows one "Goal met — …" row with the Judge summary, even if the parent model says nothing about it.
-2. **Given** that same ending, **When** the parent turn starts, **Then** its input contains the verdict condition and the Judge's reason, and the verdict is marked read only after that input has been durably handed to the wake.
+2. **Given** that same ending, **When** the parent turn starts, **Then** its input contains the verdict condition and the Judge's reason, and the verdict is marked read only after that exact text is saved as a chat record. Putting it into the model history happens later, once, at the safe point, and is not what marks the verdict read.
 3. **Given** the Judge rules unmet and the goal stays active, **When** the round finishes, **Then** the parent chat shows one notice row that the goal is not met yet and the helper continues, the parent is woken once, and no "Goal met" card appears.
 4. **Given** the Judge cannot complete the check, **When** the "Not verified — the check could not complete" conclusion is produced, **Then** the parent chat shows that conclusion as a row, the parent is woken once, and the goal stays active.
 5. **Given** any of those rulings, **When** the person opens the helper's own chat, **Then** the helper's existing outcome row is still there.
@@ -222,7 +222,7 @@ When a helper is cut off, the parent chat says so. A restart or an old timeout a
 3. **Given** the parent agent or the person stops the helper, **When** that stop lands, **Then** the parent chat shows one stopped row, the parent does not start a turn, the outcome does not join a live parent turn, and the helper does not resume. A later boot replay of that same notice still does not wake.
 4. **Given** the person presses Stop on the parent, **When** that stop lands, **Then** no new parent turn starts and neither the parent nor a helper that this Stop cancelled is auto-resumed.
 5. **Given** the parent already has a Stop marker for its current generation, **When** a helper outcome or notice arrives, **Then** it is stored and any required row is written, and no parent turn starts.
-6. **Given** the parent transcript cannot be written, **When** a restart notice is delivered, **Then** the product does not claim the notice was shown, and a later retry writes the row once.
+6. **Given** the parent transcript cannot be written, **When** a restart notice is delivered, **Then** the product does not claim the event row was shown, the parent chat shows a nonfatal line that the event could not be saved and will be retried, and a later retry writes that event row once. The pending line is not the same as an empty chat.
 
 ### User Story 4 — Wake only for something the parent must handle (Priority: P0)
 
@@ -243,7 +243,7 @@ Progress chatter is visible and does not spend a parent turn. A real ending, a f
 
 ### User Story 5 — Resume a helper a restart cut off, without repeating finished work (Priority: P0)
 
-A native helper that was running when the gateway died continues from the transcript. A tool that already succeeded is not called again by the runtime. The person sees that the interruption happened and that work resumed.
+A native helper that was running when the gateway died continues from the transcript. A tool that already succeeded is not called again by the runtime. The chat row records only that the interruption happened. Whether the helper is now waiting, running, or finished is the existing Activity panel, not a rewrite of that row.
 
 **Why this priority**: Founder rule, and the Jarvis cases where a restart left no chat explanation.
 
@@ -253,8 +253,8 @@ A native helper that was running when the gateway died continues from the transc
 
 1. **Given** a native helper was running or queued and the gateway restarts, **When** boot recovery finishes, **Then** the helper is dispatched again from its saved transcript and the parent is woken once.
 2. **Given** the helper's last tool call already has a successful result, **When** that resume runs, **Then** the runtime does not invoke that tool call again.
-3. **Given** that restart, **When** the person opens the helper chat, **Then** it shows one notice that the helper was interrupted and resumed.
-4. **Given** resume cannot be admitted, **When** boot finishes, **Then** the parent is still woken once and both rows say that resume did not start. The helper is not left looking running.
+3. **Given** that restart, **When** the person opens the helper chat, **Then** it shows one notice that the helper was interrupted by a restart. That notice does not change when the helper later waits, runs, or finishes.
+4. **Given** resume cannot be admitted, **When** boot finishes, **Then** the parent is still woken once. The restart notice stays. A second notice says resume did not start. The helper is not left looking running.
 5. **Given** the person had pressed Stop on that helper before the restart, **When** boot runs, **Then** the helper is not resumed and the parent is not woken.
 6. **Given** the helper is an external command-line worker whose conversation was not retained, **When** the gateway restarts, **Then** it is not auto-resumed and no new worker is created. The parent row and the one wake still happen.
 
@@ -286,7 +286,7 @@ A parent that is gone, never started, sitting in another workspace, or waiting o
 2. **Given** the parent session is gone, hidden, or removed, **When** a helper outcome arrives, **Then** no other session is created or woken. The miss is logged. A row is not written into a different chat.
 3. **Given** the person is viewing a different workspace, **When** the parent is woken, **Then** the row and the turn belong to the parent session's own chat only.
 4. **Given** the parent is waiting, **When** a helper outcome arrives, **Then** a tool approval still inside a live turn keeps its card and joins that turn, and a parked question card stays valid, shows the outcome row immediately, retains the report, and does not start an outcome-only turn until the person's correlated answer continues the parent.
-5. **Given** the process dies after the wake is published and before the verdict is marked read, **When** boot runs, **Then** at most one further parent turn starts, and a turn that already consumed the hand-back is not repeated.
+5. **Given** the process dies after the wake is published and before the verdict text is saved as a chat record, **When** boot runs, **Then** the verdict is not treated as read, the text is saved once, it is placed into model history at most once and only if a turn is still owed, and a turn that already placed it is not repeated.
 6. **Given** the parent already pulled the final result, **When** the completion wake arrives later, **Then** no second turn starts, and a verdict row that this spec requires is still present.
 7. **Given** two helpers finish while the first wake turn is still running, **When** the second finish arrives, **Then** the second joins that turn. Each finish still has its own row.
 
@@ -296,13 +296,13 @@ A parent that is gone, never started, sitting in another workspace, or waiting o
 
 Primary flows:
 
-- When a helper finishes, fails, asks, blocks, or receives a Judge ruling, the parent chat gains the required row and the parent runs one turn, streamed into the open web chat.
+- When a helper finishes, fails, asks, blocks, or receives a Judge ruling, the parent chat gains the required row and, unless a Stop or a parked question card says otherwise, the parent runs one turn, streamed into the open web chat.
 - When a native helper is cut off by a restart, it resumes from history, both chats show a notice, and the parent runs one turn.
 - When the person reloads the parent chat, the rows and the parent's reply are there.
 
 Error flows:
 
-- When resume cannot start, the parent is told once and the helper is not shown as running.
+- When resume cannot start, the restart row stays, a second row says resume did not start, the parent is woken once, and the helper is not shown as running.
 - When the parent session is gone, nothing is delivered to a stand-in.
 - When a progress line is over the inbox cap, it is refused visibly to the sender and does not wake anyone.
 
@@ -333,8 +333,9 @@ Boundary conditions:
 - Parent record missing, eligible main metadata present: create the ordinary record, then one wake.
 - Parent gone, hidden, or removed: no substitute, miss logged.
 - Person is in another workspace: no copy of the row into that workspace.
-- Approval or question card open on the parent: card stays, row appears, outcome joins the live turn.
-- Crash after wake publish and before ack: boot starts at most one turn, and not if the hand-back was already consumed.
+- Tool approval still inside a live turn: card stays, row appears, outcome joins that turn. It is not placed into model history ahead of the unfinished tool result.
+- Parked question card, no live turn: card stays valid, row appears, report is retained, no outcome-only turn until the person's answer. The saved input is not placed into model history while the card is unanswered.
+- Crash after a bus publish and before the chat-membership save: the verdict is not marked read, and boot saves it once. A turn that already placed that input is not started again.
 - Parent already polled the final: no second turn; required row still written.
 - Second helper finishes during the first wake turn: joins that turn; own row.
 - Stop marker on the parent's current generation: store and write the required row; no turn.
@@ -391,7 +392,7 @@ Boundary conditions:
 - An unmet continuing round writes one `helper_event` of kind `verdict_unmet` on the parent transcript and does not write `goal_outcome`.
 - A not-verified conclusion writes one `helper_event` of kind `not_verified` on the parent transcript.
 - An intentional helper Stop, by the parent agent or by a person, writes one `helper_event` of kind `stopped` and starts no parent turn and no resume.
-- A restart of a native helper writes one `helper_event` of kind `restarted` on the helper transcript and one on the parent transcript.
+- A restart of a native helper writes one immutable `helper_event` of kind `restarted` on the helper transcript and one on the parent transcript. Later queued, running, or finished status does not edit that row. A refused resume writes a second `resume_refused` row and does not replace the first.
 - A historical timeout writes one `helper_event` of kind `timed_out` on the parent transcript and does not resume the helper.
 - Reloading the parent messages returns each of those entries once.
 
@@ -598,8 +599,9 @@ No new setup. Use the repo's existing gateway and web build. Do not point tests 
 - **Given** a helper's session goal has just been ruled met
 - **When** the single parent wake is published
 - **Then** that wake's input contains the verdict condition and the Judge's reason as well as the hand-back
-- **And** the verdict is marked read only after that input is durable
-- **And** the parent starts one turn
+- **And** the verdict is marked read only after that exact text exists as a chat-membership save
+- **And** that save is not yet model history while a tool result is still unfinished, while a question card is unanswered, or while the parent is intentionally stopped
+- **And** the parent starts one turn only when a turn is allowed
 
 #### Scenario: An unmet round is a notice, not an ending
 
@@ -697,7 +699,8 @@ No new setup. Use the repo's existing gateway and web build. Do not point tests 
 
 - **Given** the parent transcript cannot accept a new entry
 - **When** a restart notice is delivered
-- **Then** the delivery is not reported as shown
+- **Then** the event row is not reported as shown
+- **And** the parent chat shows one nonfatal line that the event could not be saved and will be retried
 - **And** a later retry writes one restart row
 - **And** the parent is not woken twice for that same notice
 
@@ -793,14 +796,15 @@ No new setup. Use the repo's existing gateway and web build. Do not point tests 
 - **And** the runtime does not invoke that tool call again
 - **And** the parent starts one turn
 
-#### Scenario: The helper chat says it was interrupted and resumed
+#### Scenario: The helper chat says it was interrupted by a restart
 
 **Traces to**: User Story 5, Acceptance Scenario 3
 **Category**: Happy Path
 
 - **Given** a native helper was resumed after a restart
 - **When** the person opens that helper chat
-- **Then** one notice says the work was interrupted by a restart and resumed
+- **Then** one notice says the work was interrupted by a restart
+- **And** that notice does not change when the helper later waits, runs, or finishes
 
 #### Scenario: A failed resume still tells the parent once
 
@@ -810,7 +814,8 @@ No new setup. Use the repo's existing gateway and web build. Do not point tests 
 - **Given** a native helper was cut off by a restart
 - **And** resume cannot be admitted
 - **When** boot finishes
-- **Then** the parent chat says resume did not start
+- **Then** the restart notice stays unchanged
+- **And** a second notice says resume did not start
 - **And** the parent starts one turn
 - **And** the helper is not shown as running
 
@@ -910,6 +915,7 @@ No new setup. Use the repo's existing gateway and web build. Do not point tests 
 - **Then** the approval card stays
 - **And** the finish row appears in the parent chat
 - **And** the finish joins the live turn
+- **And** it is not placed into model history ahead of the unfinished tool result
 - **And** a second parent turn does not start
 
 #### Scenario: A parked question card does not start an outcome-only turn
@@ -923,6 +929,7 @@ No new setup. Use the repo's existing gateway and web build. Do not point tests 
 - **And** the finish row appears immediately
 - **And** the report is retained
 - **And** no outcome-only parent turn starts
+- **And** the saved report is not placed into model history while the card is unanswered
 - **And** when the person answers, that answer and the retained report are delivered together
 
 #### Scenario: A crash before the archive write does not drop the verdict
@@ -933,9 +940,10 @@ No new setup. Use the repo's existing gateway and web build. Do not point tests 
 - **Given** the combined verdict-and-hand-back text has not yet been appended to the parent archive
 - **When** the process dies, even if a bus publish already returned
 - **Then** boot does not treat the verdict as read
-- **And** boot appends that exact text once
+- **And** boot saves that exact text once as chat membership
+- **And** boot places it into model history at most once, and only if a turn is still owed
 - **And** at most one parent turn starts
-- **And** a turn whose consumed marker already points at that archive entry is not started again
+- **And** a turn that already placed that input is not started again
 
 #### Scenario: A result the parent already pulled does not start another turn
 
@@ -991,7 +999,7 @@ New schema `contracts/components/schemas/HelperEvent.yaml`.
 |---|---|---|
 | `helper_session_id` | yes | The helper session. Non-empty. |
 | `helper_title` | no | The helper's chat title when known. Omitted rather than blank. |
-| `kind` | yes | `verdict_unmet`, `not_verified`, `stopped`, `restarted`, `timed_out`, `finished`, `question`, `blocker`, `failed` |
+| `kind` | yes | `verdict_unmet`, `not_verified`, `stopped`, `restarted`, `resume_refused`, `timed_out`, `finished`, `question`, `blocker`, `failed` |
 | `text` | yes | The sentence the row shows. Non-empty. Sensitive-data filter applied before save, same filter the notifier already uses. |
 | `goal_id` | no | Present when a goal is involved. |
 | `created_at` | yes | RFC 3339 UTC. |
@@ -1016,7 +1024,8 @@ Sentence rules for `text` (the person reads these):
 | `verdict_unmet` | The Judge's reason, prefixed so it is clear the goal has not ended and the helper continues. |
 | `not_verified` | The existing conclusion from `notVerifiedConclusion`, unchanged. |
 | `stopped` | Who stopped the helper, and that it will not resume on its own. |
-| `restarted` | The helper was interrupted by a restart. If resume started: it is continuing from saved history. If resume failed: it did not resume. |
+| `restarted` | The helper was interrupted by a restart. This sentence does not change when resume later waits, runs, finishes, or is refused. |
+| `resume_refused` | Resume did not start. This is a second event. It does not replace the restart row. |
 | `timed_out` | The helper stopped because an old time limit was hit, and it was not resumed. |
 
 Kinds also include the chat rows promised for events that are not a goal ending and not a Stop-family notice: `finished`, `question`, `blocker`, `failed`. A question is not labelled as a goal ending. A goal-less finish is not a `goal_outcome`.
@@ -1026,6 +1035,7 @@ Message id, from the source event (PW-D20), plus the destination transcript id s
 | Kind | Identity |
 |---|---|
 | `stopped`, `restarted`, `timed_out` | Landed stop sequence, the same sequence `stoppedChildNoticeID` already uses. Generation alone is not enough: resume keeps the generation (`SteerCanceller.reviveWithExecution`). |
+| `resume_refused` | `resume-refused:` plus that same stop-sequence id. It is not the restart row's id, so the restart row cannot be overwritten by the refusal. |
 | `verdict_unmet` | Goal id and verdict round, the same pair `goalVerdictUpwardMessageID` uses. |
 | `not_verified` | That conclusion's own id. |
 | `finished`, `question`, `blocker`, `failed` | The inbox message id of that delivery. |
@@ -1058,26 +1068,45 @@ Channel for the idle wake and for the reconstructed ordinary-root turn:
 
 A helper's own turn is unchanged: it already forces `webchat`.
 
-Idempotency uses the canonical outcome id, not a bus publish. Dispositions, which must not be collapsed into one "did not wake" bucket: already consumed, joined a live turn, held for a parked card, deliberately suppressed, published only after the archive write below, or failed. A suppressed or already-consumed outcome does not become a fallback wake under a different id.
+Idempotency is per logical event, on the recipient. The ids are:
+
+| Logical event | Wake and consumption id | Shares a wake with |
+|---|---|---|
+| Met ending: verdict plus hand-back, including a task completion for that same ending | The existing final id `<child session>:<generation>:final`. `recordPolledFinalConsumed` already consumes this id. Poll semantics do not change. | The verdict and the task completion. Not a restart, not a later question. |
+| Restart cut-off | `stoppedChildNoticeID` for that landed transition (parent, child, generation, stop sequence) | Nothing else. A later finish in the same generation uses the final id above. A `resume_refused` row is not a second wake. |
+| Historical timeout | That transition's `stoppedChildNoticeID` | Nothing else. |
+| Intentional Stop | That transition's `stoppedChildNoticeID` | No wake. Ack of the notice is not a parent turn. |
+| Question, blocker, goal-less finish, fatal failure | That delivery's inbox message id, which already includes the helper | Nothing else. Two questions are two ids. |
+| Unmet Judge round that does not end the goal | `goalVerdictUpwardMessageID` (goal id and round) | Nothing else. Round 2 is not round 1. |
+| Not verified | That conclusion's own id | Nothing else. |
+| Creator notice | That closed run's id, as the scheduled-task spec defines the run | Not a helper event. |
+
+A consumed id starts no second turn. A different row in the table is not consumed by it. Dispositions stay distinct: already consumed, joined a live turn, held for a parked card, deliberately suppressed, saved but not yet placed, or failed. A suppressed or already-consumed event does not fall back under another id.
 
 `creator_notice` is accepted so the scheduled-task spec can call `WakeSession` instead of `WakeParentAlways` directly. The companion is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/internal/specs/sched-tasks-suspend-resume-spec.md` section 5.7, revision `80559308f` on `feat/sched-tasks-20261015` as read on 2026-10-15. This unit's test calls `WakeSession` with `creator_notice` and asserts one `webchat` turn. That spec still owns when a task sends a notice. `schedules-autonomy-spec.md` is not that companion.
 
-### 9.5 Durable combined input, then acknowledgement
+### 9.5 Save, then place, then acknowledge
 
-The exact parent input is one addressed-archive entry on the parent transcript: role user, view membership model, id `outcome-input-<canonical outcome id>`, content the verdict condition, the Judge reason, and the hand-back text. That entry is the carrier. `asyncNotifierImpl.Notify` only enqueues an in-process bus message (`MessageBus.PublishInbound`). It is not durable. `processSteeredSystemWake` today writes the consumed marker before the turn archives model input. This unit reverses that for this wake.
+Two facts, both in the existing archive. They are not the same write.
+
+**Save.** Append one chat-membership record on the parent (`AppendTranscriptStrict` / addressed chat append). View membership is chat, not model. A transcript append rejects model membership (`appendTranscriptLocked`). Id `saved-input-<event id>` from the table above. Content is the exact text the model will later see: verdict condition, Judge reason, and hand-back, or the row text for a non-ending event. This record is the durable address recovery reads. A bus publish (`PublishInbound`) is not this write.
+
+**Place.** Only at the ordinary safe consumption fence, after any assistant tool call that is still waiting on its result, call `archiveBackend.PlaceSavedInput` with that saved record's archive address. Placement appends a body-free model reference and takes its own ordinal. A second placement of the same source returns `ErrAlreadyConsumed`. Do not call `AppendModelMessage` for this input: that would assign model order immediately and can land between an assistant tool call and its later tool result (`TestOrdinals_PlacementOrderNotPhysicalOrder`). Do not describe the chat append as model membership. `PlaceSavedInput` rejects a source that is already a model member.
+
+**Who places.** The consumer that is allowed to run the parent turn: the live-turn join after the approval fence, or the idle wake's turn at its first safe boundary. A parked question card, an intentional Stop, and an already-polled final do not place. The person still has the chat row. Holding or polling must not create a second model copy.
 
 For a met session goal with a parent:
 
-1. Write the helper goal-outcome row and the parent goal-outcome row, or record a pending repair for whichever write failed (PW-D18). A failed write does not pretend the row was shown.
-2. Append the exact combined input entry. If this append fails, do not acknowledge the verdict and do not write the consumed marker. Boot retries from the unacknowledged verdict.
-3. Only after that append has succeeded, mark the verdict inbox entry read.
-4. Wake with the canonical outcome id. The consumer writes the consumed marker only after it has confirmed the combined input entry is the model input for this turn. A crash after the archive append and before the consumed marker re-reads that entry and starts at most one turn. A crash after the consumed marker does not start another turn and does not lose the verdict text, because the text is already in the archive.
+1. Write the helper and parent goal-outcome rows, or the repair payload in section 9.9 if a row write fails. Do not claim a missing row was shown.
+2. Save the chat-membership input. If that save fails, do not acknowledge the verdict, do not place, and do not write the consumed marker.
+3. After the save succeeds, acknowledge the verdict inbox entry. Acknowledgement is not placement.
+4. If a parent turn is allowed, place once at the fence, then write the consumed marker for `<child>:<generation>:final`. If the turn is not allowed, do not place and do not start a turn. The saved record and the chat row remain.
 
-`SuppressWake` stays on the met session-goal verdict. The hand-back delivery and the verdict share the canonical outcome id. If the hand-back was already consumed (the parent polled it), the verdict is acknowledged against that same id and does not start a second turn. The combined input entry is still written if it is missing, so the parent transcript holds the verdict even when no new turn runs.
+`SuppressWake` stays on the met session-goal verdict. The verdict does not have a second wake id. If the parent already polled the final, that poll has consumed `<child>:<generation>:final`. Acknowledge the verdict. Do not place again. The goal-outcome chat row is still written if it is missing; that row is chat membership, not a model placement.
 
-A task-owned met goal uses the same canonical id for the verdict and for `deliverTaskCompletionUpward`. The completion notice is the wake owner. The verdict is stored with wake suppressed and correlated to that id. Two producer paths must not start two turns.
+A task-owned met goal uses the same final id. `deliverTaskCompletionUpward` is the wake owner. The verdict is stored suppressed and correlated to that id.
 
-An unmet continuing round and a not-verified conclusion each have their own canonical id and one wake whose body is the row text. They do not write `goal_outcome`.
+An unmet round and a not-verified conclusion use their own ids from the table. They do not write `goal_outcome`. Their save/place rules are the same two steps.
 
 ### 9.6 Stop, restart, timeout
 
@@ -1099,7 +1128,7 @@ A notice for an intentional Stop that is already stored does not wake on replay.
 
 Resume is the next model decision over the saved transcript. A historical invocation is the issuing assistant occurrence plus its call id (`turnState.recordCallIssuers`). The runtime does not call the tool executor again for that pair. A later assistant occurrence that reuses the provider's call id, including `call_0`, is a new decision and runs. The automatic resume does not invent that later occurrence.
 
-The helper chat gets one `restarted` row. The parent chat gets one `restarted` row. Then one parent wake.
+The helper chat and the parent chat each get one immutable `restarted` row: "Interrupted by a restart." It does not change when the helper later waits, runs, or finishes. Current queued, running, or finished state is the existing Activity panel. If resume cannot be admitted, that failure is a second row, kind `resume_refused`, id `resume-refused:` plus the restart notice id, text "Resume did not start." The first row stays. One parent wake, the restart event. The refusal row does not wake again.
 
 A queued native helper that had not run a tool is dispatched. There is no successful tool call to skip.
 
@@ -1111,16 +1140,26 @@ A helper in `needs_input` is not resumed by this path.
 
 ### 9.9 Crash order and row repair
 
+Save happens before acknowledgement. Placement happens only if a turn is still owed. Boot does not place first and save later.
+
 | Crash point | After boot |
 |---|---|
-| Combined input entry missing, verdict not acknowledged | One wake whose body is that same text, then the entry, then the acknowledgement. Not two turns. |
-| Combined input entry present, consumed marker absent | Re-read the entry. At most one turn. Do not acknowledge the verdict before the entry exists. |
-| Combined input entry present, consumed marker present | No second turn. Acknowledge the verdict if it is still unread. |
-| Bus publish happened, archive entry never written | Treat as not delivered. The in-process queue is gone. Repair from the inbox verdict, once. |
+| Chat-membership save missing, verdict not acknowledged | Save once, then acknowledge. Place only if a turn is still owed. Not two turns. |
+| Save present, not placed, turn still owed | Place once at the fence. One turn. |
+| Save present, already placed (`ErrAlreadyConsumed`) | No second placement and no second turn. |
+| Bus publish happened, save never written | Not delivered. The in-process queue is gone. Do not treat the publish as a save. |
 | Resume admitted, process dies again | The same restart rule. Do not replay a historical invocation. |
-| One transcript write failed, the other succeeded, and the outcome was consumed | The repair driver in the next paragraph writes the missing row once. It does not start a turn. |
+| A required chat row is missing and the wake was consumed | Repair from the family source below. No new turn. |
 
-Repair driver: boot recovery and the next delivery pass read retained authoritative events (the goal-outcome payload, the landed stop transition, the inbox message). For each destination transcript that lacks the deterministic row id, append it. Helper and parent are independent. `recordGoalOutcome` must return success or failure to its caller. An already-acknowledged stop notice is not a reason to skip a missing chat row. The pending failure stays visible in the gateway log until the row exists. A test that calls the writer a second time by hand is not this driver. The test must reopen the stores and run the boot or delivery pass.
+Repair source, and how long it lives. Inbox acknowledgement and `MessageInboxStore.compactLocked` (acked retention 200, compaction trigger 400) drop acknowledged inbox bodies. They are not a repair source.
+
+| Family | Source that outlives inbox ack | Retired when |
+|---|---|---|
+| Stop, restart, historical timeout | The landed transition on the control ledger (`stoppedChildNoticeID`) | Never, for the ledger. The chat row is copied from it until the row id exists. |
+| Goal ending | The goal record's terminal payload, not the inbox verdict | The goal record stays. The row repair mark is cleared only when both transcripts contain the row id. |
+| Question, blocker, goal-less finish, fatal failure, unmet round, not verified | A chat-membership repair record on the child session's existing lifecycle journal, id `repair-<row id>`, holding the row payload. Written before the inbox acknowledgement. `compactLocked` does not read it. | Deleted only after every required destination transcript contains the row id. |
+
+`recordGoalOutcome` returns success or failure. A failed row write still leaves the family source in place. The driver is boot recovery and the next delivery pass, not a test that calls the writer again by hand. The test reopens the stores, forces acknowledged-inbox compaction, runs that pass, and sees one restored row and zero new turns. The question/blocker case is included, not only a stop.
 
 ### 9.10 What this does to cost
 
@@ -1134,8 +1173,10 @@ Each outcome wake is one model turn, on purpose. Several helpers finishing durin
 |---|---|
 | Open parent chat | Tokens, tool rows, and done for a wake turn whose stream channel is `webchat`, matched by session id. |
 | Goal met / not met ending | Existing goal-outcome row, now also inserted when the frame's session is the parent. |
-| Unmet, not verified, stopped, restarted, timed out, finished, question, blocker, failed | One `helper_event` row. Lasting. Not a toast. Not the side-panel span header. Visible even when the parent model does not repeat the text. |
-| Side panel | Unchanged. Progress still updates the worker line and does not add a verdict card. |
+| Unmet, not verified, stopped, restarted, resume refused, timed out, finished, question, blocker, failed | One `helper_event` row per event. Lasting and immutable. Not a toast. Not the side-panel span header. Visible even when the parent model does not repeat the text. |
+| Current helper status | The existing Activity panel. It may move from waiting to running to finished. That movement does not edit a `restarted` row. |
+| Row save failed | A nonfatal line, id `repair-pending-<row id>`, in both message renderers: "A helper event could not be saved in this chat. Omnipus will retry. This is not a failure of the helper's work." An empty thread does not show this line. |
+| Side panel | Unchanged for progress. Progress still updates the worker line and does not add a verdict card. |
 | Reload and replay | Same rows, once each, from the stored subtype. |
 | Tool approval | Stays until the person answers. The new row appears without dismissing it. The outcome joins the live turn. |
 | Parked question card | Stays valid, including its correlation and focus. The helper row appears immediately. No outcome-only turn until the person answers. Then both are delivered together. |
@@ -1190,7 +1231,7 @@ Write the failing tests before the production change. Unit, then integration, th
 | 3 | TestWakeSession_RejectsUnknownReason | Unit | Unknown wake reason | `idle_nudge` and empty reason return an error and do not call the notifier. |
 | 4 | TestHelperEventId_RepeatIsOneRow | Unit | Reload shows the parent verdict row once | Same id twice yields one append. |
 | 5 | TestResumeSkipsHistoricalInvocationNotCallId | Unit | A native helper resumes after restart without repeating a finished tool | The executor count for the historical occurrence-plus-call-id stays 1. A new assistant occurrence that reuses `call_0` is executed. A side effect outside the transcript is counted separately from a deduplicated row. |
-| 6 | TestDeliver_MetVerdictDurableBeforeAck | Integration | The parent is given the verdict before it is marked read; Met verdict and hand-back are one turn | Reopen the archive. The combined entry exists before the verdict ack and before the consumed marker. Killing after a bus publish but before the append leaves the verdict unread. One canonical outcome id. A task-owned met verdict plus completion starts one turn, not two. |
+| 6 | TestDeliver_MetVerdictSaveThenPlace | Integration | The parent is given the verdict before it is marked read; Met verdict and hand-back are one turn | Chat-membership save exists before the verdict ack. Model order is user, assistant tool call, tool result, then the placed input. Zero placements while an approval is open, while a question card is unanswered, while the parent is intentionally stopped, or after the final was polled. One placement across a crash. Restart wake then same-generation finish are two ids and two turns. A task-owned met verdict plus completion is one turn. |
 | 7 | TestDeliver_UnmetVerdictWakesOnceNoGoalOutcome | Integration | Unmet round is a notice | Parent transcript has `verdict_unmet` and no `goal_outcome`. One wake. |
 | 8 | TestDeliver_NotVerifiedRowAndOneWake | Integration | Not verified row | Parent transcript contains the existing conclusion sentence. Goal stays active. One wake. |
 | 9 | TestGoalOutcome_WrittenOnHelperAndParent | Integration | Goal met row; helper keeps its row | Two transcripts, two ids, one ending payload. |
@@ -1199,24 +1240,24 @@ Write the failing tests before the production change. Unit, then integration, th
 | 12 | TestStopNotice_LandedStopWithoutMarkerBlocksWake | Integration | A Stop marker on the parent blocks every wake | Landed intentional Stop with the marker already cleared, and an accepted Stop whose fence has not landed, both store the report and start no turn. The stopped-root receiver is not relaxed. A restart-stopped parent is woken once by the fresh helper outcome and is not fed its old instruction. |
 | 13 | TestStopNotice_HistoricalTimeoutWakesNoResume | Integration | Historical timeout | One wake. Resume dispatcher not called. |
 | 14 | TestBoot_NativeHelperResumesFromHistory | Integration | Native helper resumes | Running helper becomes a new dispatch. Last successful tool is not executed. Parent woken once. |
-| 15 | TestBoot_ResumeFailureStillWakesOnce | Integration | Failed resume | Both rows say resume did not start. One wake. State is not running. |
+| 15 | TestBoot_ResumeFailureStillWakesOnce | Integration | Failed resume | The restart row stays "Interrupted by a restart." A second `resume_refused` row says resume did not start. One wake. State is not running. Activity does not rewrite the first row. |
 | 16 | TestBoot_UserStopNotResumed | Integration | Person's Stop is not resumed by boot | No dispatch. No wake. |
 | 17 | TestBoot_ExternalHelperNotReplaced | Integration | External helper is not replaced | No new session. Parent row and one wake. |
 | 18 | TestWakeSession_NeverTurnedMain | Integration | Never-turned main | Ordinary record created, then one wake. A helper id is refused. |
 | 19 | TestWakeSession_GoneParentNoSubstitute | Integration | A gone parent is not replaced; Another workspace does not receive the row | No second session id is written or woken. A row addressed to workspace A's parent is absent from workspace B's transcript. |
-| 20 | TestWakeSession_ApprovalJoinsAndParkedCardHolds | Integration | An open approval stays open; A parked question card does not start an outcome-only turn; A second outcome joins a live parent turn | Approval: one live turn, card still pending. Parked AskUserQuestion with no active turn: row visible, zero new executions until the correlated answer, then one continuation carrying both. Completed-between-check-and-enqueue: one eventual idle wake. |
-| 21 | TestBoot_ArchiveCutRestoresCombinedInput | Integration | A crash before the archive write does not drop the verdict | Reopen real stores after bus publish, after archive append, and after the consumed marker. Assert the exact verdict and hand-back bytes once. No second turn after the consumed marker. |
-| 22 | TestPolledFinal_NoSecondTurnRowRemains | Integration | Result already pulled | No wake turn. Parent goal-outcome row present. |
+| 20 | TestWakeSession_ApprovalJoinsAndParkedCardHolds | Integration | An open approval stays open; A parked question card does not start an outcome-only turn; A second outcome joins a live parent turn | Approval: one live turn, card still pending, zero `PlaceSavedInput` calls before the tool result. Parked AskUserQuestion with no active turn: row visible, zero new executions and zero placements until the correlated answer, then one continuation carrying both. Completed-between-check-and-enqueue: one eventual idle wake. |
+| 21 | TestBoot_SaveThenPlaceOnce | Integration | A crash before the archive write does not drop the verdict | Reopen stores after bus publish (no save, verdict unread), after chat-membership save (no early placement), and after `PlaceSavedInput`. Exact bytes once. `ErrAlreadyConsumed` on a second placement. No second turn. |
+| 22 | TestPolledFinal_NoSecondTurnRowRemains | Integration | Result already pulled | No wake turn. Parent goal-outcome row present. Verdict acknowledged. `PlaceSavedInput` is not called again for that final id. |
 | 23 | TestProgress_DoesNotCallWakeParent | Integration | Chatter outline | Side-panel frame written. `WakeParentAlways` not called. |
-| 24 | TestChatStore_HelperEventInsertsOneRow | Unit (Vitest) | Reload shows the row once | Live frame and replay of the same id produce one message. |
+| 24 | TestChatStore_HelperEventInsertsOneRow | Unit (Vitest) | Reload shows the row once | Live frame and replay of the same id produce one message. Queued, then running, then finished does not change that row and does not add a second restart row. A `repair-pending` line is visible in both `SystemMessage` and `VirtualSystemMessageRow` when the event row is absent, and is distinct from an empty thread. |
 | 25 | TestChatStore_ParentGoalOutcomeRendersInParentBucket | Unit (Vitest) | Goal met in the parent chat | Frame session id is the parent. Headline starts with "Goal met". |
 | 26 | TestE2E_WokenReplyStreamsWithoutReload | E2E | Open parent chat shows the woken reply live; Reload shows the reply the live chat showed; Two browsers share one wake turn | Two browsers on one parent session. Hold the stream after the first partial token and before completion. Both show that token. One turn. A different workspace's bucket is unchanged. Reload then shows the finished reply. |
 | 27 | TestDeliver_QuestionBlockerFailureWakeOnce | Integration | Questions, blockers, and failures wake once | Each event publishes one wake and one parent-chat row. A second delivery of the same id does not. |
 | 28 | TestDeliver_OrdinaryNonFatalDoesNotWake | Integration | An ordinary non-fatal error does not wake | Stored. `WakeParentAlways` is not called. A `max_tool_iterations:` notice still wakes. A `stopped_child:` notice does not. |
-| 31 | TestHelperEvent_DistinctEventsDoNotCollide | Integration | Reload shows the parent verdict row once | Two restart stops in one generation are two rows. Two goals at round 1 are two rows. Redelivery of one event stays one row. |
+| 31 | TestWakeIdentity_DistinctEventsDoNotCollapse | Integration | Reload shows the parent verdict row once; Met verdict and hand-back are one turn | Two restart stops are two wake ids. A restart wake then a same-generation finish are two wake ids and two turns. Two questions and two verdict rounds each wake. Redelivery of one id is one turn. Row counts alone are not this proof. |
 | 32 | TestWakeSession_CreatorNoticeOneWebchatTurn | Integration | A creator notice uses the shared entry and streams on webchat | The test calls `WakeSession` with `creator_notice`. One turn, stream channel `webchat`, stored channel unchanged. |
 | 33 | TestGoalOutcome_ColdRestLiveReplayOneRow | Unit (Vitest) | Reload shows the parent verdict row once | `rawToMessage`, live frame, and replay of one id produce one row in both `SystemMessage` and `VirtualSystemMessageRow`. A parent model that does not echo the event still leaves the row. |
-| 34 | TestHelperEvent_RepairPassWritesMissingRow | Integration | A transcript write failure is not reported as a shown notice | Fail the parent append, consume the outcome, reopen the stores, run the boot repair pass. One parent row appears. Zero new turns. |
+| 34 | TestHelperEvent_RepairSurvivesInboxCompaction | Integration | A transcript write failure is not reported as a shown notice | Fail a question row, consume the wake, acknowledge the inbox message, force `compactLocked` past the acked retention, reopen the stores, run the boot repair pass. The lifecycle repair record restores one row. Zero new turns. A stop-only case is not this test. |
 | 29 | TestGetStreamer_MissingSessionDoesNotGuess | Integration | A wake with no session is not attached to another chat | An empty session id is refused. A different session that is open receives none of the turn's tokens. |
 | 30 | TestHelperEvent_WriteFailureIsNotShown | Integration | A transcript write failure is not reported as a shown notice | The first write fails and is not reported as shown. The retry writes one row and wakes once. |
 
@@ -1229,7 +1270,7 @@ Required on the exact commit being landed, by a tester and an independent valida
 | UAT-1 | Open the parent chat. Ask the parent to delegate a short task and not to poll. Wait until the parent's turn ends. Stay on the chat. | The parent's next reply appears live, without reload. |
 | UAT-2 | Delegate a goal the Judge can confirm. Stay on the parent chat. | A "Goal met" row is visible in the parent chat. The parent's reply does not say the verdict was missing. Composer is the parent. |
 | UAT-3 | Press Stop on the helper only, while the parent is idle. | Parent chat shows a stopped row. No new parent turn. Helper stays stopped. |
-| UAT-4 | Start a native helper that has already finished one tool successfully. Restart the gateway. | Helper continues. The finished tool does not run again (transcript shows one success, not two). Parent chat shows a restart row and a live parent turn. |
+| UAT-4 | Start a native helper whose tool appends one line to an append-only fixture file, correlated to that assistant occurrence and call id. Restart the gateway after that line exists. | The fixture file still has one line for that historical occurrence and call. A new model decision may append a different line. The transcript's single success row is supporting history, not the proof. Parent chat shows one immutable restart row and a live parent turn. Tester and validator both read the fixture on this commit. A unit-test receipt does not replace them. |
 | UAT-5 | Reload the parent chat after UAT-2 and UAT-4. | The verdict row, the restart row, and the parent replies are present once each. |
 | UAT-6 | A helper that emits progress while the parent is idle. | Side panel updates. The parent does not start a turn until a real ending. |
 
@@ -1287,7 +1328,7 @@ This is a behaviour change, not a new isolated capability. The regression column
 - **FR-002**: The system MUST leave a non-`main` stored channel with a peer on that channel. (PW-D1)
 - **FR-003**: The system MUST show that live turn to every browser subscribed to the session, as one turn. (PW-D1)
 - **FR-004**: The system MUST write one goal-outcome row on the parent transcript when a helper's goal ends, and MUST keep the helper's own row. (PW-D2)
-- **FR-005**: The system MUST append the exact combined verdict-and-hand-back input to the parent archive before acknowledging the verdict and before the consumed marker. A bus publish is not that write. (PW-D2, PW-D16)
+- **FR-005**: The system MUST save the exact combined input as a chat-membership archive record before acknowledging the verdict, and MUST place that record into model history at most once, at the safe consumption fence, never before an unfinished tool result, and never for a held, stopped, or already-polled outcome. A bus publish is not the save. (PW-D2, PW-D16)
 - **FR-006**: The system MUST write a `verdict_unmet` helper-event row and wake once when a Judge round is unmet and the goal continues, and MUST NOT write a goal-outcome ending for that round. (PW-D2)
 - **FR-007**: The system MUST write a `not_verified` helper-event row containing the existing conclusion and wake once, leaving the goal active. (PW-D2)
 - **FR-008**: The system MUST write a parent-chat row for helper user-Stop, restart, and historical timeout. (PW-D3)
@@ -1297,7 +1338,7 @@ This is a behaviour change, not a new isolated capability. The regression column
 - **FR-012**: The system MUST keep the inbox rate and unacked caps on progress, checkpoint, and artifact. (PW-D4)
 - **FR-013**: The system MUST start at most one parent turn for one helper ending, including met verdict plus hand-back, and including a task-owned met goal. (PW-D5)
 - **FR-014**: The system MUST resume a native helper cut off by restart from its transcript, and MUST NOT replay a historical tool invocation identified by issuing assistant occurrence plus call id. A new occurrence MAY reuse the provider call id. (PW-D6, PW-D21)
-- **FR-015**: The system MUST wake the parent once for that restart after resume has been admitted or has failed, and MUST say so in the row. (PW-D6)
+- **FR-015**: The system MUST wake the parent once for that restart after resume has been admitted or has failed, MUST keep the restart row as the immutable sentence "Interrupted by a restart.", and MUST write a separate `resume_refused` row only when admission fails. Current queued, running, or finished status MUST stay on the Activity panel and MUST NOT edit the restart row. (PW-D6)
 - **FR-016**: The system MUST NOT auto-resume an external command-line helper and MUST NOT create a replacement worker. (PW-D6)
 - **FR-017**: The system MUST expose one wake entry, `WakeSession`, with the closed reason list, the channel rules, the live-turn join, the never-turned-main record, and the Stop-marker refusal. (PW-D8)
 - **FR-018**: The system MUST refuse any wake reason outside that list. (PW-D8, PW-D10)
@@ -1342,7 +1383,7 @@ This is a behaviour change, not a new isolated capability. The regression column
 | FR-011 | US-4 | Scenario Outline: Chatter is stored and shown and does not wake | Tests 1, 23 |
 | FR-012 | US-4 | Scenario: A progress line over the inbox cap wakes nobody | Test 1 |
 | FR-013 | US-4 | Scenario: Met verdict and hand-back are one turn | Test 6 |
-| FR-014 | US-5 | Scenario: A native helper resumes after restart without repeating a finished tool; Scenario: The helper chat says it was interrupted and resumed | Tests 5, 14 |
+| FR-014 | US-5 | Scenario: A native helper resumes after restart without repeating a finished tool; Scenario: The helper chat says it was interrupted by a restart | Tests 5, 14 |
 | FR-015 | US-5 | Scenario: A failed resume still tells the parent once | Test 15 |
 | FR-016 | US-5 | Scenario: An external helper is not replaced after restart | Test 17 |
 | FR-017 | US-6, US-7 | Scenario: A creator notice uses the shared entry and streams on webchat; Scenario: A never-turned main is recorded and then woken; Scenario: A second outcome joins a live parent turn | Tests 18, 20, 32 |
@@ -1393,7 +1434,7 @@ Same change as the behaviour. Draft by the implementing lead. `docs-verifier` ch
 
 | ID | Page | What to change |
 |---|---|---|
-| DOC-1 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/parent-wake/docs/agents.md` | In "Workers and delegation": the parent chat shows the helper's finished result live, without a reload, including a question, a blocker, a failure, and a goal-less finish, not only when the model repeats them. A Judge ending also shows in the **parent** chat. Progress does not start a parent turn. A restart of a **native** helper continues it from saved history and does not redo a tool invocation that already finished; the parent chat says it was interrupted and resumed. If that same restart also cut off the parent, the parent is woken with the helper event and is not handed its old interrupted instruction again. A helper Stop, whether the parent agent or a person pressed it, writes a stopped row and does not wake or resume anyone. An intentional Stop of the parent is not overridden by a later helper event. A question card stays until the person answers; a helper result that arrives meanwhile is shown and is handled with that answer, not as a separate turn. Keep the external command-line rule. |
+| DOC-1 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/parent-wake/docs/agents.md` | In "Workers and delegation": the parent chat shows the helper's finished result live, without a reload, including a question, a blocker, a failure, and a goal-less finish, not only when the model repeats them. A Judge ending also shows in the **parent** chat. Progress does not start a parent turn. A restart of a **native** helper continues it from saved history and does not redo a tool invocation that already finished; the parent chat says it was interrupted by a restart, and that sentence does not change when the helper later waits, runs, or finishes. If resume cannot start, a second line says so. Current status stays in Activity. If that same restart also cut off the parent, the parent is woken with the helper event and is not handed its old interrupted instruction again. A helper Stop, whether the parent agent or a person pressed it, writes a stopped row and does not wake or resume anyone. An intentional Stop of the parent is not overridden by a later helper event. A question card stays until the person answers; a helper result that arrives meanwhile is shown and is handled with that answer, not as a separate turn. Keep the external command-line rule. |
 | DOC-2 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/parent-wake/docs/goals.md` | Where it says the parent agent receives the helper's conclusion: the **parent chat** shows that conclusion as a row (Goal met, not met yet, or Not verified). The helper chat still shows its own row. One ending wakes the parent once. |
 | DOC-3 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/parent-wake/docs/troubleshooting.md` | Add a short entry: if a delegated helper has finished and the open parent chat is blank, reload once after upgrading; on a current version the reply and the Judge row appear without a reload. If they appear only in the helper's chat, that is the old behaviour. Do not tell the person to restart as the fix. |
 
@@ -1505,7 +1546,7 @@ No new ADR. The founder interview of 2026-10-15 settled the policy. The architec
 |---|---|---|
 | The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume | A landed Stop is retained. Boot does not dispatch a session that was intentionally stopped. Selected-execution Stop still protects that execution. | A native helper whose landed cause is restart is dispatched again from history (PW-D6). That is the only boot dispatch this unit adds. |
 | Steering commands: no person question | A new instruction is not a replay of an old report. No helper person-question pause is reintroduced. | A restart-stopped parent's next input is the fresh helper event, not the parent's interrupted instruction (PW-D14). |
-| Session core with an agent address book: reuse one standing session, one archive and the existing execution paths | One archive. Tool results stay occurrence-scoped (D2). Ordinary admission is unchanged. | Progress, checkpoint, and artifact no longer wake (PW-D4). They remain accepted inbox messages when the caps allow. |
+| Session core with an agent address book: reuse one standing session, one archive and the existing execution paths | One archive. Tool results stay occurrence-scoped (D2). Placement into model history stays at the safe consumption fence (D2 / U2-ARCHSHAPE). Ordinary admission is unchanged. | Progress, checkpoint, and artifact no longer wake (PW-D4). They remain accepted inbox messages when the caps allow. The helper input is saved as chat membership and placed with `PlaceSavedInput` only at that fence (PW-D16). It is not appended as model membership early. |
 
 Also unchanged: parent-edge ownership, no external-worker replacement, and the two-layer tool policy. Broad viewing by any authenticated operator, as in **A sub-agent is a session steered by another session** (viewing authority), is accepted. This unit does not invent a per-account privacy rule.
 
@@ -1527,14 +1568,13 @@ No new screen. The existing parent chat and the helper chat are the surfaces. Lo
 
 | State | What the person sees |
 |---|---|
-| Nothing owed | No new row. An empty chat stays empty. |
-| Row durable, turn not started yet | The row is visible. The composer is idle. This is not "the helper is running" unless resume was admitted. |
-| Resume admitted but waiting for a slot | The restart row says the helper is waiting for a slot, not that it is running. |
-| Resume running | The restart row says it is continuing from saved history. The helper chat shows the same fact. |
-| Resume refused | Both rows say it did not resume. The helper is not shown as running. |
-| Parent row failed, helper row saved | The parent chat does not show a row and does not claim one. The repair pass adds it later. Until then the absence is a missing row, not "no event". |
-| Reconnect / catch-up | Replay draws stored rows once. It does not announce them again as new. |
-| Parked question | The card stays. The helper row is visible beside it. |
+| Nothing owed | No new row and no pending-save line. An empty chat stays empty. |
+| Event row | One immutable past-tense line, for example "Interrupted by a restart." A repeat of that event does not edit it and does not add a second copy. |
+| Queued, running, or finished after that event | The row text stays. Activity shows waiting, running, or finished. Promotion does not write another restart row. |
+| Resume refused | The first restart row stays. A second immutable row says "Resume did not start." Activity does not show the helper as running. |
+| Parent row failed, helper row saved | The parent chat shows a nonfatal system line, id `repair-pending-<row id>`: "A helper event could not be saved in this chat. Omnipus will retry. This is not a failure of the helper's work." This is not the same as nothing owed. When repair writes the event row, the pending line stays and the event row appears once. No extra wake. |
+| Reconnect / catch-up | Replay draws stored rows once, including a pending line that is still owed. It does not announce them again as new. |
+| Parked question | The card stays. The helper row is visible beside it. The saved input is not in model history yet. |
 | Very long text | The row truncates on a narrow or touch layout and expands. Expansion is the same control as section 19. |
 
 Journey: the person asks the parent to delegate and stays on that chat. The parent turn ends. The helper works. Progress updates the side panel only. When the helper finishes, fails, asks, or the Judge rules, a row appears in the parent chat and, unless a Stop or a parked card says otherwise, the parent's reply starts in that same chat. Activity still has Open for the helper. A reload shows the same rows once. A gateway restart of a native helper adds the restart row, continues the helper, and wakes the parent with that event.
@@ -1553,26 +1593,41 @@ The new row uses a native `details` / `summary` control, the same semantics as `
 
 ## 21. Round-1 disposition
 
-Grill round 1, `docs/internal/specs/parent-wake-visibility-spec-review.md`, verdict BLOCK. Every finding is fixed in this document. No finding is deferred. No new founder question is open.
+Grill round 1, `docs/internal/specs/parent-wake-visibility-spec-review.md`, verdict BLOCK. The rows below are that round's history. Where a row disagrees with section 22, section 22 is the correction. No finding is deferred. No new founder question is open.
 
 | Finding | Disposition |
 |---|---|
-| CRIT-001 | Fixed. PW-D16 and section 9.5. The combined input is an archive entry before acknowledgement and before the consumed marker. Bus publish is not durability. Test 6 and Test 21 reopen stores at each cut. |
+| CRIT-001 | Fixed, then narrowed by section 22 (NEW-MAJ-001). The durable fact is the chat-membership save, before acknowledgement. Placement into model history is a later step. |
 | MAJ-001 | Fixed. PW-D13. `stopped` is not a wake reason. Parent-agent and person Stops, first delivery, live join, and boot replay. Cause is the landed transition, not the `stopped_child:` prefix. Tool-iteration notices still wake. Q-STOP closed. DOC-1 updated. |
 | MAJ-002 | Fixed. PW-D19 and the section 9.4 state table. In-flight, accepted-but-unlanded, and landed Stop (marker cleared) refuse a wake. The stopped-root receiver is not relaxed. PW-D14 is the only restart-stopped exception. Self Stop does not cancel an unselected helper. |
 | MAJ-003 | Fixed. PW-D20. Stop sequence, goal id plus round, conclusion id. Test 31 covers two events that share a generation or a round. |
 | MAJ-004 | Fixed. Section 9.4. A normal completion between the live check and enqueue falls through to one idle wake. Test 20. |
-| MAJ-005 | Fixed. PW-D17. One canonical outcome id. Poll, verdict fallback, and task completion share it. Held or consumed does not fall back into a second wake. Test 6 includes the task-owned pair. |
+| MAJ-005 | Partially fixed in round 1, closed in section 22. The shared id is only the met ending's existing final id. A restart, a later finish, a question, and a Judge round do not share it. |
 | MAJ-006 | Fixed. Section 9.3 kinds `finished`, `question`, `blocker`, `failed`, plus the Stop-family and verdict kinds. Cold REST, live, and replay. Test 33 uses a parent model that does not echo the event. |
 | MAJ-007 | Fixed. PW-D21. Occurrence plus call id. Test 5 counts the executor separately and allows a new occurrence to reuse `call_0`. |
-| MAJ-008 | Fixed. PW-D18 and section 9.9. Boot and the next delivery pass repair each transcript from the retained event. Test 34 runs that pass after reopen. Test 30 alone is not the proof. |
-| MAJ-009 | Fixed. PW-D15. Approval joins a live turn. A parked card does not. Test 20 uses a real pending question with no active turn. |
-| MAJ-010 | Fixed. Sections 18 and 19. Loading and empty stay the existing chat. Partial save, queued resume, running, and refused are distinct sentences. |
+| MAJ-008 | Partially fixed in round 1, closed in section 22. The repair source is not the acknowledged inbox body. Test 34 compacts the inbox and still restores a question row. |
+| MAJ-009 | Closed as a minor in section 22. The edge-case list no longer says a parked question joins a live turn. |
+| MAJ-010 | Partially fixed in round 1, closed in section 22. Event rows are immutable. Activity holds current status. A failed parent save shows a pending line, which is not an empty chat. |
 | MAJ-011 | Fixed. Section 19. Native disclosure, one announcement, no replay announcement, focus preserved. |
-| MAJ-012 | Fixed. Test 26 is two browsers and a partial token before completion. Test 32 calls `creator_notice`. Test 1 performs a real cap refusal. Test 6 covers task-owned dedupe. Test 13 is the historical timeout, not UAT-3. SC-001 and SC-005 match those instruments. SC-008 no longer treats FR-024 as a behavioral test. Section 20 names `npm run typecheck` and the design-system gate. |
+| MAJ-012 | Partially fixed in round 1, closed in section 22. UAT-4's proof is an append-only fixture counted before and after restart, not a deduplicated transcript row. The earlier test-instrument fixes stay. |
 | MAJ-013 | Fixed. The opening states no new ADR, and section 16 is the amendment map by decision title. |
 | MIN-001 | Fixed. Section 8 no longer points at a missing section 6. The Stop warning is closed under PW-D13, not PW-D1. Section 9.8 describes the real stale comment: not wake-eligible, which becomes true again. |
 | MIN-002 | Fixed. Section 20 names `GoalOutcomeRow` and the catalogue entries, and states that no public component is added. |
 | OBS-001 | Fixed. `WakeSession` no longer takes a row-written flag. Section 9.4. |
 
-Author prompts from the review, decided here and not re-asked: A1 A (archive before ack), A2 A (one outcome id), A3 A (independent repair), A4 A (companion path and revision `80559308f` in section 9.4).
+Author prompts from round 1, decided there and not re-asked: A1 (durable before ack), A2 (one id per met ending only — section 22), A3 (repair that outlives inbox ack — section 22), A4 (companion path and revision `80559308f` in section 9.4).
+
+## 22. Round-2 disposition
+
+Grill round 2, `docs/internal/specs/parent-wake-visibility-spec-review-round2.md` at `a2b10f814`, verdict REVISE. Zero critical, five major, one minor. Every finding is fixed in this document. None is deferred. None needed a new founder choice: each fix is a contract or a test oracle inside the policy the founder already set. No review PASS is claimed. There is no third grill.
+
+| Finding | Disposition |
+|---|---|
+| MAJ-005 | Fixed. PW-D17 and the section 9.4 identity table. The met ending keeps the existing `<child session>:<generation>:final`, which poll already consumes. A restart uses `stoppedChildNoticeID`. A later finish in that same generation uses the final id, so the restart wake does not eat it. A question, a blocker, a goal-less finish, and a fatal failure use that delivery's inbox message id. An unmet round uses `goalVerdictUpwardMessageID`. Not verified uses the conclusion id. Test 31 asserts two restarts, a restart then a same-generation finish, two questions, and two verdict rounds are distinct wake ids, and one redelivered id is one turn. |
+| NEW-MAJ-001 | Fixed. PW-D16 and section 9.5. Save is a chat-membership append, id `saved-input-<event id>`. `appendTranscriptLocked` rejects model membership, so the save is not described as one. Place is `archiveBackend.PlaceSavedInput` once, at the fence, after an unfinished tool result. `AppendModelMessage` is not used. Ack follows the save, not the place. A parked card, an intentional Stop, and an already-polled final do not place. Tests 6, 20, 21, and 22 assert model order, zero early placements, one placement across a crash, and `ErrAlreadyConsumed` on a second place. |
+| MAJ-008 | Fixed. PW-D18 and section 9.9. Stop-family repair reads the landed control-ledger transition. A goal ending reads the goal record. A question, blocker, finish, failure, unmet round, or not-verified conclusion has a chat-membership repair record on the child lifecycle journal, id `repair-<row id>`, written before inbox ack. `compactLocked` does not read that journal. The record is deleted only after every destination has the row id. Test 34 fails a question row, acknowledges the inbox, forces compaction past the acked retention, reopens the stores, and runs the boot repair pass: one restored row, zero new turns. A stop-only case is not that test. |
+| MAJ-010 | Fixed. Sections 9.3, 9.7, 10, and 18. A `restarted` row is the immutable sentence "Interrupted by a restart." Queued, running, and finished stay on the Activity panel and do not edit the row. A refused resume is a second immutable row, kind `resume_refused`, id `resume-refused:` plus the restart notice id, and it does not wake a second time. A failed parent save shows `repair-pending-<row id>`: "A helper event could not be saved in this chat. Omnipus will retry. This is not a failure of the helper's work." That line is required in both `SystemMessage` and `VirtualSystemMessageRow`, and it is distinct from an empty thread. Test 15 and Test 24. |
+| MAJ-012 | Fixed. UAT-4. The helper's tool appends one line to an append-only fixture, correlated to that assistant occurrence and call id. After restart the fixture still has one line for that historical pair. A later new model decision may append a different line (PW-D21). The transcript row is supporting history, not the proof. Tester and validator both read the fixture on the exact commit. Test 5 counts the executor separately from a deduplicated transcript row. |
+| MAJ-009 | Fixed. The edge-case list, the behavioral contract, US-7 acceptance scenario 4, and the approval and parked-card scenarios split the two states. A live tool approval joins and is not placed ahead of the unfinished tool result. A parked question card holds, shows the row, and does not place into model history until the person's answer. Test 20. |
+
+No founder question is open.
