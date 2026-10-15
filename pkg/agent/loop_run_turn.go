@@ -1065,7 +1065,7 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 	rq.ri.rf.rt.llmOpts = map[string]any{
 		"max_tokens":       rq.ri.rf.rt.ts.agent.MaxTokens,
 		"temperature":      rq.ri.rf.rt.ts.agent.Temperature,
-		"prompt_cache_key": rq.ri.rf.rt.ts.agent.ID,
+		"prompt_cache_key": rq.ri.rf.rt.ts.cacheSessionID(),
 	}
 	if rq.useNativeSearch && !narrowingActive {
 		rq.ri.rf.rt.llmOpts["native_search"] = true

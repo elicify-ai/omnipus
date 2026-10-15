@@ -115,6 +115,9 @@ type ContentBlock struct {
 }
 
 type Message struct {
+	// Volatile marks the single request-only note after history. Adapters never
+	// serialize this flag and put cache boundaries before it.
+	Volatile         bool           `json:"-"`
 	Role             string         `json:"role"`
 	Content          string         `json:"content"`
 	Media            []string       `json:"media,omitempty"`

@@ -15,6 +15,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -174,13 +175,16 @@ func (p *Provider) buildRequestBody(
 		requestBody["seed"] = seed
 	}
 
-	// Prompt caching: pass a stable cache key so OpenAI can bucket requests
-	// with the same key and reuse prefix KV cache across calls.
-	// Prompt caching is only supported by OpenAI-native endpoints.
-	// Non-OpenAI providers reject unknown fields with 422 errors.
-	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" {
-		if supportsPromptCacheKey(p.apiBase) {
-			requestBody["prompt_cache_key"] = cacheKey
+	transport := p.cacheTransport(model)
+	if transport.SendEphemeralCacheControl {
+		requestBody["messages"] = common.SerializeCacheMessages(messages)
+	}
+	if sessionID, _ := options["prompt_cache_key"].(string); sessionID != "" {
+		if transport.SendPromptCacheKey {
+			requestBody["prompt_cache_key"] = sessionID
+		}
+		if transport.SendBodySessionID {
+			requestBody["session_id"] = sessionID
 		}
 	}
 
@@ -217,6 +221,11 @@ func (p *Provider) Chat(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if header := p.cacheTransport(model).SessionHeader; header != "" {
+		if sessionID, _ := options["prompt_cache_key"].(string); sessionID != "" {
+			req.Header.Set(header, sessionID)
+		}
+	}
 	if p.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
@@ -264,6 +273,11 @@ func (p *Provider) ChatStream(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if header := p.cacheTransport(model).SessionHeader; header != "" {
+		if sessionID, _ := options["prompt_cache_key"].(string); sessionID != "" {
+			req.Header.Set(header, sessionID)
+		}
+	}
 	req.Header.Set("Accept", "text/event-stream")
 	if p.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
@@ -689,17 +703,23 @@ func isNativeSearchHost(apiBase string) bool {
 	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
 }
 
-// supportsPromptCacheKey reports whether the given API base is known to
-// support the prompt_cache_key request field. Currently only OpenAI's own
-// API and Azure OpenAI support this. All other OpenAI-compatible providers
-// (Mistral, Gemini, DeepSeek, Groq, etc.) reject unknown fields with 422 errors.
+// cacheTransport uses the catalog identity even for an overridden base URL.
+// Legacy direct constructors recognize only the documented OpenAI/Mistral hosts.
+func (p *Provider) cacheTransport(model string) promptcache.CacheTransport {
+	if p.providerID != "" {
+		return promptcache.CacheTransportFor(p.providerID, model)
+	}
+	return promptcache.CacheTransport{SendPromptCacheKey: supportsPromptCacheKey(p.apiBase)}
+}
+
+// supportsPromptCacheKey checks the hostname, never a vendor name in a URL path.
 func supportsPromptCacheKey(apiBase string) bool {
 	u, err := url.Parse(apiBase)
 	if err != nil {
 		return false
 	}
-	host := u.Hostname()
-	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
+	host := strings.ToLower(u.Hostname())
+	return host == "api.openai.com" || host == "api.mistral.ai" || strings.HasSuffix(host, ".openai.azure.com")
 }
 
 // APIBase returns the resolved base URL this provider posts to (ADR-067

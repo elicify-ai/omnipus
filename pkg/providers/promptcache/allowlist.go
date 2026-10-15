@@ -1,27 +1,36 @@
 package promptcache
 
-// CacheTransport is what a catalog provider may be sent so the host can
-// cache. Every value that carries an identity is the session id, never the
-// agent id, and never a secret. The skeleton sends nothing.
+import "strings"
+
+// CacheTransport is the documented cache hint for a catalog provider. Every
+// identity it carries is a session id, never an agent id or a credential.
 type CacheTransport struct {
-	// SendPromptCacheKey adds the body field prompt_cache_key.
-	SendPromptCacheKey bool
-	// SessionHeader is a header name whose value is the session id
-	// (for example x-grok-conv-id or x-session-affinity). Empty means no header.
-	SessionHeader string
-	// SendBodySessionID adds OpenRouter's body field session_id.
-	SendBodySessionID bool
-	// SendEphemeralCacheControl adds a manual cache_control mark of type
-	// ephemeral. Used for a Vercel Claude model, OpenRouter, and Alibaba.
-	// It is not the Vercel caching:auto rewrite.
+	SendPromptCacheKey        bool
+	SessionHeader             string
+	SendBodySessionID         bool
 	SendEphemeralCacheControl bool
 }
 
-// CacheTransportFor decides which cache key, header, or manual mark a catalog
-// provider id may receive. modelID distinguishes a Vercel Claude model from
-// an implicit upstream on the same provider row. The skeleton returns the
-// zero decision, which sends nothing.
+// CacheTransportFor is an allow-list, not a best-effort probe. Unknown hosts
+// and implicit-only providers receive no additional request fields.
 func CacheTransportFor(providerID, modelID string) CacheTransport {
-	_, _ = providerID, modelID
-	return CacheTransport{}
+	var t CacheTransport
+	switch providerID {
+	case "openai", "mistral", "meta", "fireworks-ai", "togetherai", "cerebras", "deepinfra", "volcengine":
+		t.SendPromptCacheKey = true
+	case "vercel":
+		t.SendPromptCacheKey = true
+		m := strings.ToLower(modelID)
+		t.SendEphemeralCacheControl = strings.HasPrefix(m, "anthropic/claude") || strings.HasPrefix(m, "claude")
+	case "xai":
+		t.SessionHeader = "x-grok-conv-id"
+	case "baseten", "cloudflare-workers-ai", "sarvam":
+		t.SessionHeader = "x-session-affinity"
+	case "openrouter":
+		t.SendBodySessionID = true
+		t.SendEphemeralCacheControl = true
+	case "alibaba", "alibaba-cn":
+		t.SendEphemeralCacheControl = true
+	}
+	return t
 }
