@@ -480,6 +480,8 @@ The application's default-deny rule also covers new internal locations before th
 
 On Linux and macOS with the sandbox Off, Permissive or degraded/unavailable, the same no-kernel limitation applies: file-tool checks remain, but the command-text check alone does not contain arbitrary shell programs. Check the Security screen's actual enforcement and capabilities, not just the operating-system name or version.
 
+An authorized `environment_setup` run can create and read new files directly inside its selected installation folder, as well as use its selected cache and temporary folders. This does not authorize writes to sibling workspaces or unrelated operator-granted folders.
+
 ### Limits of the protection
 
 - **macOS:** a file the gateway creates in the data directory *after* a command started is not in that command's deny list, so a long-running command could reach it. The next command sees it denied. Omnipus names its lazily-created directories in the protected set, so this window is narrow in practice.
