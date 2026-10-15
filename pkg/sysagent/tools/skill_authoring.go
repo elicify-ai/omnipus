@@ -421,11 +421,11 @@ func resolveProjectShelfWithCollisions(deps *Deps, wsID string) (skills.ProjectS
 		wsID = def
 	}
 
-	mounts, ok := workspacepkg.LoadMounts(home, wsID)
-	if !ok {
+	mounts, ok, dropped := workspacepkg.LoadMountsWithDropStatus(home, wsID)
+	if !ok || dropped {
 		return nil, nil, tools.ErrorResult(errorJSON("READ_FAILED",
-			fmt.Sprintf("the project folders of workspace %q could not be read, so its project skills are unknown", wsID),
-			"Retry, or check the workspace's folders in the app"))
+			fmt.Sprintf("the project folders of workspace %q could not be read completely, so its project skills are unknown", wsID),
+			"Repair the workspace's folders in the app, then read the skill again before retrying"))
 	}
 	if len(mounts) == 0 {
 		return nil, nil, nil
@@ -435,7 +435,15 @@ func resolveProjectShelfWithCollisions(deps *Deps, wsID string) (skills.ProjectS
 	for _, m := range mounts {
 		pm = append(pm, skills.ProjectMount{Name: m.Name, Root: m.HostPath})
 	}
-	shelf, collisions := skills.MergeProjectSkills(pm)
+	// Only a complete scan may prove a slug absent: a recorded project that
+	// could not be inspected refuses instead of falling back to a global copy
+	// (silent-failure-hunter SF-01).
+	shelf, collisions, err := skills.MergeProjectSkillsChecked(pm)
+	if err != nil {
+		return nil, nil, tools.ErrorResult(errorJSON("READ_FAILED",
+			fmt.Sprintf("the project skills of workspace %q could not be inspected: %v", wsID, err),
+			"Restore access to the project folder, then read the skill again before retrying"))
+	}
 	return shelf, collisions, nil
 }
 
