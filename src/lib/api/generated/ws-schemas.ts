@@ -168,7 +168,7 @@ export const RoomSnapshotFrame = z
     entries: z.array(RoomEntry).max(10000),
     members: z.array(z.string().min(1).max(128)).max(256),
     muted: z.array(z.string().min(1).max(128)).max(256),
-    member_states: z.array(RoomDeliveryState).max(10000),
+    member_states: z.array(RoomDeliveryState),
     paused: z.boolean(),
     generation: z.number().int().min(0),
     read_only_reason: z.string().min(1).max(200).optional(),
