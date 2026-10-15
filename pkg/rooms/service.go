@@ -341,7 +341,10 @@ func (s *Service) recover(r *room) {
 	}
 	for _, e := range r.entries {
 		if e.AnswersRequest != "" && !r.mirrored[e.Entry.Id] {
-			s.mirrorAnswer(r, e)
+			if err := s.mirrorAnswer(r, e); err != nil {
+				slog.Error("rooms: an answer mirror could not be repaired on load; the same answer sent again repairs it",
+					"room_id", r.rec.ID, "answer_id", e.Entry.Id, "error", err)
+			}
 		}
 	}
 }

@@ -32,6 +32,7 @@ type fakeDeps struct {
 	factsErr  map[string]error
 	discarded []string
 	mirrors   []Mirror
+	mirrorErr error
 	frames    []any
 	audits    []AuditEvent
 	rate      int
@@ -94,6 +95,9 @@ func (f *fakeDeps) Discard(_, requestID string) error {
 func (f *fakeDeps) Mirror(m Mirror) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.mirrorErr != nil {
+		return f.mirrorErr
+	}
 	f.mirrors = append(f.mirrors, m)
 	return nil
 }
@@ -621,5 +625,76 @@ func TestSnapshot_MemberStatesNeverDropLiveStates(t *testing.T) {
 	if len(states) != maxSnapshotEntries || live != 20 || !newest || oldest {
 		t.Fatalf("%d states, %d live, newest terminal kept=%v, oldest kept=%v; want 10000, all 20 live, newest kept, oldest dropped",
 			len(states), live, newest, oldest)
+	}
+}
+
+// WU-15 ruling 06:00Z: a failed mirror keeps the committed room answer,
+// returns the error, writes no mirror and holds the mentions; the same answer
+// sent again repairs the mirror exactly once and then fans the mentions out.
+func TestAnswer_FailedMirrorIsReturnedAndRepairedOnce(t *testing.T) {
+	f := newFixture(t)
+	room := f.squad("mia", "jim", "r2")
+	if err := f.post(room.Id, "c1", "@Jim plan it"); err != nil {
+		t.Fatal(err)
+	}
+	jim := f.deliveryOf(room.Id, "jim")
+	f.svc.BeginConsume(room.Id, jim.RequestID, "main-jim")
+	answer := Answer{RoomID: room.Id, RequestID: jim.RequestID, Responder: addressing.Pair{WorkspaceID: "sales", AgentID: "jim"},
+		ResponderSessionID: "main-jim", Content: "done @Mia"}
+	f.deps.mirrorErr = errors.New("disk full")
+	if _, err := f.svc.DeliverAnswer(context.Background(), answer); !errors.Is(err, ErrMirrorFailed) {
+		t.Fatalf("err = %v, want ErrMirrorFailed (never swallowed)", err)
+	}
+	r, _ := f.svc.loadRoom(room.Id)
+	if n := countAnswers(r, jim.RequestID); n != 1 || len(f.deps.mirrors) != 0 {
+		t.Fatalf("after a failed mirror: %d answers, %d mirrors; want the answer kept and no mirror", n, len(f.deps.mirrors))
+	}
+	if got := f.deps.admittedTo(); slices.Contains(got, "mia") {
+		t.Fatal("mentions must wait for the mirror")
+	}
+	f.deps.mirrorErr = nil
+	if _, err := f.svc.DeliverAnswer(context.Background(), answer); err != nil {
+		t.Fatalf("repeat: %v", err)
+	}
+	f.drain(room.Id)
+	if n := countAnswers(r, jim.RequestID); n != 1 || len(f.deps.mirrors) != 1 {
+		t.Fatalf("after the repeat: %d answers, %d mirrors; want exactly one of each", n, len(f.deps.mirrors))
+	}
+	if got := f.deps.admittedTo(); countOf(got, "mia") != 1 {
+		t.Fatalf("the repaired answer's mention must reach Mia once: %v", got)
+	}
+	if _, err := f.svc.DeliverAnswer(context.Background(), answer); err != nil || countAnswers(r, jim.RequestID) != 2 {
+		t.Fatalf("a later answer with a mirrored predecessor is a new answer: err=%v answers=%d", err, countAnswers(r, jim.RequestID))
+	}
+}
+
+func countAnswers(r *room, requestID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, e := range r.entries {
+		if e.AnswersRequest == requestID {
+			n++
+		}
+	}
+	return n
+}
+
+// WU-15 ruling 06:00Z: shares round to the nearest micro-dollar, halves up.
+func TestAllocate_RoundsHalvesUp(t *testing.T) {
+	cases := []struct {
+		cost      float64
+		in, rooms int
+		want      int64
+	}{
+		{0.0000015, 1, 1, 2}, // 1.5 µ$ -> 2
+		{0.000001, 2, 1, 1},  // 0.5 µ$ -> 1
+		{0.0000004, 1, 1, 0}, // 0.4 µ$ -> 0
+		{0.03, 3, 1, 10000},  // BDD-17.30
+	}
+	for _, c := range cases {
+		if got := allocate(TurnCost{CostUSD: c.cost, Priced: true, Inputs: c.in, RoomInputs: c.rooms}); got != c.want {
+			t.Errorf("allocate(%v, %d/%d) = %d, want %d", c.cost, c.rooms, c.in, got, c.want)
+		}
 	}
 }

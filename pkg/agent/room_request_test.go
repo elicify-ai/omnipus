@@ -145,12 +145,20 @@ func TestAdmitRoomRequest_ReceiverAppendFaultLeavesNoAnswerableCapture(t *testin
 		t.Fatalf("err = %v, want ErrRoomStorage", err)
 	}
 	mainID, _ := session.MainSessionID(addrWS, addrReceiver)
-	c, found, gErr := f.al.RequestLedger().Get(mainID, roomTestDelivery)
-	if gErr != nil || (found && !c.Discarded) {
-		t.Fatalf("capture after a failed append: found=%v discarded=%v err=%v, want none or discarded", found, c.Discarded, gErr)
+	_, found, gErr := f.al.RequestLedger().Get(mainID, roomTestDelivery)
+	if gErr != nil || found {
+		t.Fatalf("capture after a failed append: found=%v err=%v, want no capture at all (WU-15 ruling 06:00Z)", found, gErr)
 	}
 	if _, ok := addrDrainInbound(t, f.bus); ok {
 		t.Fatal("a failed receiver append still woke the receiver")
+	}
+	// A Retry with a healthy writer admits it exactly once.
+	f.al.SetRoomReceiverWriter(nil)
+	if res, err := f.al.AdmitRoomRequest(context.Background(), roomAdmission()); err != nil || res.AlreadyAdmitted {
+		t.Fatalf("retry after the failed append: %+v %v, want a fresh admission", res, err)
+	}
+	if entries, _ := f.al.GetSessionStore().ReadTranscript(mainID); len(entries) != 1 {
+		t.Fatalf("receiver transcript has %d entries after the retry, want 1", len(entries))
 	}
 }
 

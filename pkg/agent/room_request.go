@@ -358,10 +358,6 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 		Text:              composeRoomRequestText(a.DeliveryID, a.SenderLabel, a.RoomName, a.ModelText),
 		Held:              held,
 	}
-	if err = ledger.Put(capture); err != nil {
-		return RoomAdmission{}, roomStorageRefusal("the request could not be recorded", err)
-	}
-	al.pendingRequests.Store(a.DeliveryID, mainID)
 	entry := session.TranscriptEntry{
 		ID:          a.DeliveryID,
 		Role:        "user",
@@ -371,15 +367,18 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 		Participant: participantFromSender(a.Sender, al.agentDisplayName),
 		RoomRef:     &generated.RoomRef{RoomId: a.RoomID, RoomName: a.RoomName, RequestId: a.DeliveryID, Role: "request"},
 	}
+	// The receiver append comes FIRST (WU-15 ruling 06:00Z): a failed append
+	// leaves no capture at all - the member shows "unavailable", no turn runs,
+	// and a Retry admits it cleanly. The append is idempotent by entry id, so
+	// a Retry after a failed capture write below appends nothing twice.
 	wrote, err := writer.AppendTranscriptOnce(mainID, entry)
 	if err != nil {
-		al.settleRequest(a.DeliveryID)
-		if dErr := ledger.Discard(mainID, a.DeliveryID); dErr != nil {
-			logger.ErrorCF("agent", "room request capture could not be discarded after a failed append",
-				map[string]any{"request_id": a.DeliveryID, "error": dErr.Error()})
-		}
 		return RoomAdmission{}, roomStorageRefusal("the request could not be recorded in the member's main chat", err)
 	}
+	if err = ledger.Put(capture); err != nil {
+		return RoomAdmission{}, roomStorageRefusal("the request could not be recorded", err)
+	}
+	al.pendingRequests.Store(a.DeliveryID, mainID)
 	if wrote {
 		al.publishUserEntry(mainID, entry)
 	}
