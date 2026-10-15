@@ -231,7 +231,7 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 		`return tools.NewToolResult(successJSON(workspaceView(state.Workspace, state.Delegation, state.Revision,`:                                                                          true,
 	},
 	// WU-3 create_agent workspace_id test: ReadState returns workspace.State.
-	"pkg/sysagent/tools/wu3_create_agent_target_test.go": {
+	"pkg/sysagent/tools/wu3dev_create_agent_target_test.go": {
 		`require.Contains(t, sales.Workspace.CoreTeam, id, "the agent joins the target team")`:          true,
 		`require.NotContains(t, other.Workspace.CoreTeam, id, "the caller's workspace is not touched")`: true,
 	},
