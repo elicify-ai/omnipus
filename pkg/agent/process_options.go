@@ -23,6 +23,9 @@ type processOptions struct {
 	ChatID            string // Target chat ID for tool execution
 	SenderID          string // Current sender ID for dynamic context
 	SenderDisplayName string // Current sender display name for dynamic context
+	// InputOrigin is who the turn's triggering input came from (§6.18):
+	// a channel person on a connection, or another agent's request.
+	InputOrigin inputOrigin
 	// UserID is the authenticated gateway principal that initiated this turn,
 	// threaded from the WS connection (websocket.go wc.userID) via the dedicated
 	// bus.InboundMessage.GatewayUserID carrier (FR-017). It is stamped onto

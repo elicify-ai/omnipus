@@ -130,6 +130,11 @@ type approvalEntry struct {
 	CreatedAt time.Time
 	ExpiresAt time.Time
 
+	// OriginLabel is the server-derived turn origin (§6.18, FR-240, K7
+	// origin_label): "while answering <person> on <connection>" or
+	// "asked by <Agent>"; empty for a web turn.
+	OriginLabel string
+
 	// Mutable — protected by the registry's mu.
 	state ApprovalState
 
@@ -404,6 +409,16 @@ func (r *approvalRegistryV2) requestApproval(
 	args map[string]any,
 	agentID, actingSessionID, turnID string,
 ) (*approvalEntry, bool) {
+	return r.requestApprovalWithOrigin(toolCallID, toolName, args, agentID, actingSessionID, turnID, "")
+}
+
+// requestApprovalWithOrigin is requestApproval for a request whose turn origin
+// label (FR-240) is known; the label is fixed on the entry at creation.
+func (r *approvalRegistryV2) requestApprovalWithOrigin(
+	toolCallID, toolName string,
+	args map[string]any,
+	agentID, actingSessionID, turnID, originLabel string,
+) (*approvalEntry, bool) {
 	if turnID == "" {
 		// Defense in depth (D-03, ADR-092, 2026-09-24 UAT tester t5): fail
 		// CLOSED, unlike the actingSessionID=="" branch below, which still
@@ -502,6 +517,8 @@ func (r *approvalRegistryV2) requestApproval(
 		ExpiresAt:  expiresAt,
 		state:      ApprovalStatePending,
 		resultCh:   make(chan ApprovalOutcome, 1),
+
+		OriginLabel: originLabel,
 	}
 
 	// Arm the timeout timer (FR-016, SC-006: default gateway.go::defaultToolApprovalTimeout).

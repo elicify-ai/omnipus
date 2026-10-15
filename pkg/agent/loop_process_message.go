@@ -112,6 +112,7 @@ func (pm *agentLoopProcessMessage) prepareTurn() {
 		ChatID:            pm.msg.ChatID,
 		SenderID:          pm.msg.Sender.CanonicalID,
 		SenderDisplayName: pm.msg.Sender.DisplayName,
+		InputOrigin:       inboundInputOrigin(pm.msg),
 		// FR-017: thread the authenticated gateway principal into the turn for
 		// audit attribution. Only the gateway webchat WS path sets
 		// msg.GatewayUserID (= wc.userID, the WS-authenticated identity, e.g.

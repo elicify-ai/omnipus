@@ -46,6 +46,22 @@ const approvalWorkspaceMaxHops = 16
 // longer value is omitted rather than emitted schema-invalid.
 const approvalWorkspaceIDMaxLen = 128
 
+// approvalOriginLabelMaxRunes mirrors the wire schema's maxLength for
+// origin_label (K7: ≤ 200).
+const approvalOriginLabelMaxRunes = 200
+
+// approvalOriginLabel is the wire value of an entry's origin label: nil for a
+// web turn (no label), else the label cut to the schema's bound.
+func approvalOriginLabel(label string) *string {
+	if label == "" {
+		return nil
+	}
+	if r := []rune(label); len(r) > approvalOriginLabelMaxRunes {
+		label = string(r[:approvalOriginLabelMaxRunes])
+	}
+	return &label
+}
+
 // approvalWorkspaceID resolves the workspace an approval belongs to from the
 // acting session's meta. A delegated child session may carry no workspace of
 // its own, so the walk follows ParentSessionID upward until a session with a
@@ -122,6 +138,7 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 	if ws := h.approvalWorkspaceID(entry.SessionID); ws != "" {
 		frame.WorkspaceId = &ws
 	}
+	frame.OriginLabel = approvalOriginLabel(entry.OriginLabel)
 	frame.Segments = h.bashApprovalSegments(entry)
 	raw, err := json.Marshal(frame)
 	if err != nil {
@@ -252,6 +269,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 			if ws := h.approvalWorkspaceID(e.SessionID); ws != "" {
 				entry.WorkspaceId = &ws
 			}
+			entry.OriginLabel = approvalOriginLabel(e.OriginLabel)
 			pendingApprovals = append(pendingApprovals, entry)
 		}
 	}
