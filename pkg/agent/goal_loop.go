@@ -19,6 +19,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -476,6 +477,19 @@ type goalDeferredAdjudicationWork struct {
 	// completion tail commits as that execution only (never a same-
 	// generation replacement). Empty for a turn with no admission.
 	producer executionClaim
+	// goalID / goalPrompt identify the goal and definition this claim was
+	// made against, and claimRecordedAt when the claim was put on its record
+	// (issue #1306 R2-2). A re-drive judges and concludes only that goal: a
+	// goal cleared, replaced or restated meanwhile — or a newer claim on it —
+	// is never painted with this claim's conclusion. Empty goalID (a caller
+	// that did not capture it) binds to the first goal the re-drive reads.
+	goalID          string
+	goalPrompt      string
+	claimRecordedAt time.Time
+	// answer is the claiming turn's work result for the parent (all its
+	// assistant text, goal_upward_answer.go). claimText stays what the
+	// Judge judges (JUDGE-FR-094); answer is only what travels upward.
+	answer string
 }
 
 // goalDeferredAdjudicationDoneFn is a TEST SEAM ONLY — production leaves it
@@ -941,6 +955,8 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		work := &goalDeferredAdjudicationWork{
 			agentInst: gl.agentInst, workspaceID: gl.opts.WorkspaceID,
 			sessionID: gl.sessionID, claimText: claimText,
+			goalID: gl.rec.GoalID, goalPrompt: gl.rec.Prompt, claimRecordedAt: time.Now().UTC(),
+			answer: goalTurnAnswer(gl.store, gl.sessionID, gl.result.turnID, gl.result.finalContent),
 		}
 		if d := gl.opts.executionDisposition; d != nil {
 			work.producer = d.claim
@@ -1237,6 +1253,15 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 					map[string]any{"goal_id": g.GoalID, "owner_kind": string(g.OwnerKind), "owner_id": g.OwnerID})
 				continue
 			}
+			// Issue #1306 (no clock ends work): a goal whose session — or any
+			// helper it delegated to — still has a live turn, or whose owning
+			// task is still running, is not idle, however old its last
+			// recorded activity is.
+			if busy, why := al.goalWorkInFlight(g, sessionID); busy {
+				logger.InfoCF("agent", "goal idle sweep: goal past its idle bound but work is in flight — not expiring",
+					map[string]any{"goal_id": g.GoalID, "session_id": sessionID, "work": why})
+				continue
+			}
 			reason := fmt.Sprintf("idle-expired after %d day(s)", maxDays)
 			// ADR-086 parity, same cause as goalQuietWindowSettle's resolution:
 			// a TASK goal's session is minted per-agent by
@@ -1326,9 +1351,50 @@ func effectiveGoalActivity(g *goal.Goal) time.Time {
 	return time.Time{}
 }
 
+// sessionHasLiveTurn reports whether sessionID, or any session it delegated
+// to, has a live registered turn (the same root-or-descendant match the goal
+// keeper uses).
+func (al *AgentLoop) sessionHasLiveTurn(sessionID string) bool {
+	live, _ := al.goalLiveTurnWorkFingerprint(sessionID)
+	return live
+}
+
+// goalWorkInFlight reports whether a goal still has agent work running or
+// waiting to run: anything sessionWorkInFlight finds on its session (its own
+// turn, a delegated descendant's turn, queued work), or — for a task-owned
+// goal — its task still in progress. Work that cannot be read counts as in
+// flight; the sweep must not end a goal it cannot see into.
+func (al *AgentLoop) goalWorkInFlight(g *goal.Goal, sessionID string) (bool, string) {
+	if busy, why := al.sessionWorkInFlight(sessionID); busy {
+		return true, why
+	}
+	if g.OwnerKind == generated.GoalOwnerKindTask && g.OwnerID != "" && al.taskStore != nil {
+		t, err := al.taskStore.Get(g.OwnerID)
+		if err != nil {
+			return true, "its task could not be read: " + err.Error()
+		}
+		if t != nil && t.Status == task.StatusInProgress {
+			return true, "its task is in progress"
+		}
+	}
+	return false, ""
+}
+
 // writeGoalSystemTranscript writes a plain system-entry note (used for the
 // round-bound-reached handover, SD-B9) to the session transcript.
 func (al *AgentLoop) writeGoalSystemTranscript(store *session.UnifiedStore, sessionID, agentID, content string) {
+	if err := al.writeGoalSystemTranscriptErr(store, sessionID, agentID, content); err != nil {
+		logger.WarnCF("agent", "goal loop: handover transcript write failed",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+	}
+}
+
+// writeGoalSystemTranscriptErr is writeGoalSystemTranscript for a caller that
+// must know whether the entry was saved (the Judge conclusion, SFH F4).
+func (al *AgentLoop) writeGoalSystemTranscriptErr(store *session.UnifiedStore, sessionID, agentID, content string) error {
+	if store == nil {
+		return errors.New("no session store")
+	}
 	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
 		ID:        fmt.Sprintf("goal-%s-handover-%d", sessionID, time.Now().UnixNano()),
 		Type:      session.EntryTypeSystem,
@@ -1338,7 +1404,7 @@ func (al *AgentLoop) writeGoalSystemTranscript(store *session.UnifiedStore, sess
 		Timestamp: time.Now().UTC(),
 	}); err != nil {
 		taskGoalTranscriptWriteFailures.Add(1)
-		logger.WarnCF("agent", "goal loop: handover transcript write failed",
-			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return err
 	}
+	return nil
 }

@@ -38,7 +38,11 @@ type FakeRunner struct {
 	inputsSent []string
 	testResult runner.ConnectionTestResult
 	runOpts    []runner.RunOptions
-	resumeIDs  []string
+	// runDeadlines records, per Run call, whether the run context carried a
+	// deadline — so a test can prove agent work is handed a context with no
+	// time limit (issue #1306).
+	runDeadlines []bool
+	resumeIDs    []string
 	// resumeInputs records the instruction delivered by each Resume call (empty
 	// for a bare continuation), so a delivery-path test can assert the new
 	// instruction S actually reached the runner (FR-043).
@@ -66,6 +70,8 @@ func NewFakeRunner() *FakeRunner {
 func (f *FakeRunner) Run(ctx context.Context, opts runner.RunOptions) (<-chan runner.RunEvent, error) {
 	f.mu.Lock()
 	f.runOpts = append(f.runOpts, opts)
+	_, hasDeadline := ctx.Deadline()
+	f.runDeadlines = append(f.runDeadlines, hasDeadline)
 	f.mu.Unlock()
 	f.watchCancel(ctx)
 	return f.eventCh, nil
@@ -223,6 +229,16 @@ func (f *FakeRunner) RecordedRunOpts() []runner.RunOptions {
 	defer f.mu.Unlock()
 	out := make([]runner.RunOptions, len(f.runOpts))
 	copy(out, f.runOpts)
+	return out
+}
+
+// RecordedRunDeadlines reports, per Run call, whether that run's context
+// carried a deadline (snapshot).
+func (f *FakeRunner) RecordedRunDeadlines() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]bool, len(f.runDeadlines))
+	copy(out, f.runDeadlines)
 	return out
 }
 

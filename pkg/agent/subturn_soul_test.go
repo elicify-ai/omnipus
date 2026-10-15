@@ -122,7 +122,7 @@ func TestSpawnSubTurn_ExternalCLI_WorkerEmptySoulDeliversTaskOnly(t *testing.T) 
 		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, composed, 30*1_000_000_000)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, composed)
 	if err != nil {
 		t.Fatalf("runExternalCLISubTurn: %v", err)
 	}

@@ -1,5 +1,7 @@
 # Feature Specification: The Judge as an active reviewer
 
+> **Correction 2026-10-14 — gated idle expiry ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311)::Decisions recorded, team-lead 2026-10-14, “Idle expiry is gated, not removed”; [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** The earlier FR-097/E-31/keeper idle-backstop retirement is superseded. Retain idle expiry, existing configuration and expiry outcomes for genuinely wedged/abandoned work, but never fire while the addressed session, its own turn, descendants, queued work or a pending cron-lane dispatch is in flight. A registered wedged turn remains busy; Stop is its exit. After all work settles, the original activity clock may already allow expiry on the first eligible sweep; gate suppression must not fabricate activity or reset that clock. Removed agent lifetime deadlines stay removed. The Judge retains its timers and must conclude visibly with the work result; FR-049/FR-082–83/FR-101–103 still require the correctly addressed, durable conclusion before live/replay delivery. “Not verified” is a check conclusion, not a third criterion state. Stop/applicability, contention stand-down, keeper pacing and count bounds remain. The shared builder at frozen `7c148ca00`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/judge_conclusion.go`::notVerifiedConclusion, and the earlier coverage/provenance gaps remain revision-specific observations; this correction requires idle-gate enforcement, not sweeper deletion, and certifies no runtime acceptance.
+
 > **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
 
 > **Update 2026-09-20 (issue #761): FR-057 and FR-057a are SUPERSEDED.** The Judge no longer refuses
@@ -1878,6 +1880,8 @@ under Explicit Non-Behaviors and tested by
 
 ### H. Budget and honest timeouts (D9)
 
+> **Amended 2026-10-14 — FR-049 clarification (founder; PR #1311 / #1306):** the Judge's configured verification/round timers and bounded unavailable retries **stay**; ordinary agent work has no lifetime deadline. Any silent or result-discarding exit implied by the old budget/failure text is superseded. The owning chat/helper/task/plan outcome path must durably publish a correctly addressed conclusion carrying the worker result when the check cannot complete, with reason/next action, and recover it on replay. Preserve revision 9's met/unmet criterion model and existing round/attempt classification—“Not verified” is not a new criterion state or evidence of successful work. Judge-owned elapsed-limit errors must use distinct `judge_time_limit` provenance, never the provider-request `turn_timed_out` meaning; backend-lead owns the contract definition, mirror updates and regeneration. Exact-runtime/publication certification remains separate from this amended requirement.
+
 - **FR-049**: The judge turn timeout MUST be operator-configurable, MUST default to 420 s, and MUST
   be clamped to a 900 s hard ceiling.
 - **FR-050**: Config load MUST reject (or clamp with a WARN) a judge timeout greater than
@@ -2343,6 +2347,9 @@ Five properties this change makes materially worse and which nothing above bound
     no impatient human to notice. FR-105's byte bounds and this ceiling are therefore load-bearing
     where, under revision 6, the 420 s timeout was doing part of the work. *(A-10, which asked
     whether artifact criteria should be short-circuited on later rounds, is retired with FR-035.)*
+
+> **Amended 2026-10-14 — FR-082/FR-083 clarification (founder; PR #1311 / #1306):** keep registered verifier cancellation and **no verdict from a cancelled turn**. “Discarded whole” does not waive the actual outcome owner's visible, durable cancellation/check-incomplete conclusion carrying the worker result, subject to Stop and producing-execution/goal applicability. Verification budgets remain per adjudication; no worker lifetime budget is restored on resume. A genuine registry compare-and-set loss is **already verifying**, not failed verification: preserve the winner, take no round/try, start no second Judge, and expose the status through the existing outcome surfaces. A held registry entry proves exclusivity, not eventual audience delivery; acceptance must observe the winner's applicable conclusion/result reaching that audience, including unavailable and cancelled outcomes.
+
 - **FR-082**: **Cancellation.** A tool-using verifier turn now runs up to 420 s **in the background,
   after delivery** (D13). The spec MUST state, and a test MUST assert, that a cancel against the
   adjudicating verifier session interrupts the turn **mid-tool-call**, and that **no verdict is
@@ -2578,6 +2585,9 @@ Five properties this change makes materially worse and which nothing above bound
 
   `goalQuietWindowSettle`, `goalIdleQuietWindow` and `maybeSettleGoalIdle` are **kept**. Only
   `settleGoalNormally`'s body changes.
+
+> **Correction 2026-10-14 — FR-097/E-31 gated retention ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311)::Decisions recorded, team-lead 2026-10-14, “Idle expiry is gated, not removed”; [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** Supersede the earlier **idle-backstop retirement**. Retain the multi-day idle sweep/configuration and expiry-positive cases for genuinely wedged/abandoned goals, but gate them on no addressed session, own turn, descendants, queued work or pending cron-lane dispatch being in flight. A registered wedged turn remains busy, never age-expired; explicit Stop is its exit. The gate does not re-arm activity for mere registration; once all work settles, an already-idle goal may expire at the next eligible sweep using the original activity clock. Pair that post-settlement oracle with own-helper-ID, descendant-queue and cron-lane-pending negative cases. Preserve the bounded continue-push/count behavior and absolute claimless-adjudication prohibition: honest expiry is not a Judge verdict and consumes no Judge round. Worker lifetime timers stay removed. This is the corrected requirement, not certification of the gate implementation.
+
 - **FR-097**: **A quiet or stalled goal is re-posted, not judged.** Where `settleGoalNormally`
   adjudicated, it MUST instead dispatch the keeper's existing continue-push:
   `al.dispatchGoalAsyncFollowUp(sessionID, goalContinuePushPrompt(s.GoalCondition))` — the same
@@ -2646,6 +2656,9 @@ Five properties this change makes materially worse and which nothing above bound
     back and not treated as an error. FR-006b's clause-count floor already forbids the shape that
     would make this exploitable (lowering a criterion's bar while a verdict for it exists).
   - If the new turn itself produces a `met` claim, FR-101 applies.
+
+> **Amended 2026-10-14 — FR-101–103 clarification (founder; PR #1311 / #1306):** **refuse rather than supersede stays**. A genuine duplicate receives “already verifying,” no second Judge, no try debit and no false “Not verified” outage; the winning applicable check owns its final result. FR-102's no-modal/no-toast/no-navigation rule stays, but its old lack of an operator-addressed message cannot prohibit the required result-bearing conclusion on the existing chat/channel/helper/task/plan outcome path. Persist before live/replay delivery; wrong audience or persistence failure is not a completed conclusion. FR-103 keeps registered Stop/cancel and **no verdict from cancellation**, but a silent abandon of the work result is superseded. Its accepted restart-loss clause does not waive visible recovery/disposition of an interrupted check. QA must observe winner+loser through real outcome application: one invocation, one applicable final conclusion with work result, correct audience, no duplicate/debit/false outage; also cover Stop, unavailable, stale producing execution and publication failure. A held-entry/rejecting-spy test alone proves only loser stand-down, not winner delivery.
+
 - **FR-101**: **A second claim arriving while an adjudication is in flight MUST be refused, not
   supersede** (ADR §8 open item 3, second half). Two shipped layers already implement exactly this
   and MUST be reused rather than replaced:
@@ -3796,6 +3809,8 @@ Traces to: FR-103, E-35
 ---
 
 ## Test Matrix
+
+> **Correction 2026-10-14 — Test Matrix gated retention ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311)::Decisions recorded, team-lead 2026-10-14, “Idle expiry is gated, not removed”; [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** Supersede only the earlier **idle-expiry-positive row retirement**; obsolete worker lifetime-timeout oracles remain retired. Keep expiry-positive tests for genuinely wedged/abandoned goals after work settles, paired with no expiry while the addressed session, its own turn, descendants, queued work or pending cron-lane dispatch is in flight. A registered wedged turn stays busy and stoppable; its mere registration does not re-arm activity, and the next eligible sweep may expire the goal using the original clock after all work settles. Preserve FR-049's bounded Judge and FR-082/103's no-cancelled-verdict plus result-bearing disposition oracles. FR-083/101 still require loser no-retry/no-debit/no-failure and independent winner-to-audience proof before claiming “always concludes.” Immediate refusal, timer, retry exhaustion, Stop/restart, stale applicability, store failure and live/replay coverage remain; no third criterion oracle is added.
 
 Every FR maps to at least one concretely named test. **This machine cannot run the full Go gateway
 suite (OOM — see CLAUDE.md).** Every Go test below is run scoped:

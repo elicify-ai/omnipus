@@ -681,6 +681,11 @@ type ErrorPayload struct {
 	Code          string
 	Message       string
 	ProviderError *ProviderError
+	// Detail is an optional controller-authored diagnostic for a curated
+	// Code whose Message is catalogue copy (e.g. judge_conclusion_failed):
+	// WireLLMError builds the Verbose-only wire detail from it (scrubbed,
+	// length-bounded) instead of from Message. Never shown as ordinary copy.
+	Detail string
 	// ChatID is needed so the WS event forwarder can route this event to the
 	// originating connection via matchesChatID.
 	ChatID string
@@ -692,11 +697,12 @@ type ErrorPayload struct {
 	SessionID string
 }
 
-// TurnTimeoutPayload describes a turn that exceeded its configured timeout.
+// TurnTimeoutPayload describes a provider request that timed out inside a
+// turn (classified FailoverTimeout or a transient stream reset) and is being
+// recovered. It is not a turn deadline — turns have none (issue #1306).
 type TurnTimeoutPayload struct {
-	TimeoutSeconds int
-	Compacted      bool
-	Retried        bool
+	Compacted bool
+	Retried   bool
 }
 
 // EmptyResponseRetryPayload describes a retry triggered by an empty LLM response.

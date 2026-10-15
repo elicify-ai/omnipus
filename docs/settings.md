@@ -115,7 +115,7 @@ Each tab and neighbor screen has one job.
 | Settings, Data | Session retention, storage numbers, backups, clearing sessions |
 | Settings, Memory | What the team remembers: recap and retrospective settings |
 | Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
-| Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, how deep delegation may go, and how long a delegation may run |
+| Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, and the goal completion budget |
 | Settings, Chat | Chat display, including the verbose view of tool calls; the **Verbose chat** toggle shows or hides the context-window retry notice, "Context window exceeded. Compressing history and retrying..." |
 | Settings, About | Version and build information |
 | Profile | Your name, timezone, font size, password, and workspace context |
@@ -205,7 +205,7 @@ Only Settings, Performance changes this limit, because it asks for your password
 
 ## Delegation limits
 
-Three numbers on the Performance tab govern how much work one agent can hand to another. Each is a separate setting, and each behaves sensibly when left blank.
+How much work one agent can hand to another is bounded in two ways: a Performance-tab setting for how many delegated sessions may run at once, and a chain-depth cap set by `performance.max_delegation_depth` in `config.json` (a workspace **Team** edge can set a tighter depth for a particular agent pair). Each behaves sensibly when left blank. There is no time limit: a delegated session runs until it finishes or someone stops it (see "How long a child may run" below).
 
 ### How deep delegation may go
 
@@ -222,7 +222,14 @@ Leave the field blank and live available memory governs each new turn, reported 
 
 ### How long a child may run
 
-`performance.delegation_timeout_minutes` caps how long a delegated session may run across its whole life — a follow-up that wakes the child does not restart the clock. The default is **30 minutes**. A delegating agent can override that for one call with `timeout_seconds`; leaving that at zero uses the default.
+There is no time limit. A delegated session — like a task, a scheduled run, a plan's supervision turn or an external CLI worker — runs until it finishes or someone stops it: **Stop** in the chat, `delegate` with `action: "stop_all"`, or stopping the task or plan. Long work is never cut off part-way by a timer.
+
+Older versions capped a delegated session at 30 minutes. An install that still has `performance.delegation_timeout_minutes`, `agents.defaults.timeout_seconds` or `schedules.run_timeout_seconds` in its `config.json`, or a `timeout_seconds` in an agent's settings file, keeps working: the values are ignored, and each is dropped the next time its file is saved. A `timeout_seconds` that an agent still passes to `delegate` is accepted and ignored.
+
+Two limits stay, because they protect against a broken connection or command rather than limiting work:
+
+- each request to a model provider has its own request timeout (`request_timeout` on the model, 120 seconds when unset); a provider that stops answering is retried or reported as **The model provider didn't answer this request in time** — the turn itself is not stopped by a clock. For a streamed reply the same limit applies only to waiting for the reply to start; once it is streaming, only a total silence (`stream_stall_timeout`, 300 seconds by default) ends it, so a long reply that keeps arriving is never cut off;
+- a shell command run by an agent has its own `timeout_seconds` (default 300 seconds), and the environment-setup tool has its own job timeout.
 
 ### Which new agents get a self-line
 

@@ -91,7 +91,6 @@ export interface AdvancedFields {
     max_cost_per_day?: number
   }
   // Runtime knobs (Main + Subagent only).
-  timeout_seconds?: number
   max_tool_iterations?: number
   // External-cli executor block (subagent_3p only). Mirrors the three
   // inputs rendered in Step 1 — kept here so the disclosure can edit them

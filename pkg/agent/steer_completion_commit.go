@@ -215,7 +215,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 				}
 				res.kind = steeredCommitStopped
 				res.landedStop = true
-				if err := landSteeredStopLocked(lifecycle, cur, outcome); err != nil {
+				if err := landSteeredStopLocked(lifecycle, cur); err != nil {
 					return err
 				}
 				res.landed = landedStopFromRecord(cur)
@@ -238,14 +238,14 @@ func (al *AgentLoop) commitSteeredCompletion(
 			return nil
 		}
 		if nextState == session.LifecycleStopped {
-			// A stop disposition with no fence: a legacy RequestCancel path or
-			// a lifetime-budget expiry. Same landing, synthesized note — and,
+			// A stop disposition with no fence: a legacy RequestCancel path
+			// (there is no lifetime-budget expiry any more). Same landing, synthesized note — and,
 			// in the same lock hold, the fence-less transition's ledger line
 			// (Correction C3): the ledger, not the note, is the notice's
 			// identity from here on.
 			res.kind = steeredCommitStopped
 			res.landedStop = true
-			if err := landSteeredStopLocked(lifecycle, cur, outcome); err != nil {
+			if err := landSteeredStopLocked(lifecycle, cur); err != nil {
 				return err
 			}
 			res.landed = landedStopFromRecord(cur)
@@ -359,17 +359,16 @@ func (al *AgentLoop) commitSteeredCompletion(
 // note-only, because the note-derived notice fallback is retired — an
 // unledgered fence-less stop's notice would be lost the moment a RESUME
 // cleared the note. The refused landing is retried by its caller.
-func landSteeredStopLocked(lifecycle *session.LifecycleStore, cur *session.LifecycleRecord, outcome steer.Outcome) error {
+func landSteeredStopLocked(lifecycle *session.LifecycleStore, cur *session.LifecycleRecord) error {
 	cur.State = session.LifecycleStopped
 	cur.NeedsInput = nil
 	if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
 		cur.Stop = nil
 	}
 	if cur.StopNote == nil {
+		// Always a plain stop: nothing lands StopCauseTimeout any more
+		// (issue #1306 removed the lifetime budget that produced it).
 		cause := session.StopCauseStop
-		if outcome == steer.OutcomeTimedOut {
-			cause = session.StopCauseTimeout
-		}
 		at := time.Now().UTC()
 		landed := session.LandedStop{
 			ParentSessionID: cur.SteeringSessionID(),
@@ -417,7 +416,10 @@ func (al *AgentLoop) publishCommittedFinal(ctx context.Context, rec *session.Lif
 		Outcome:        steer.Outcome(res.commit.Outcome),
 		Message:        res.message,
 	}
-	delivery, err := deliverer.Deliver(ctx, event)
+	// The completion tail is the system author of this final: its result
+	// is bounded by the hand-back contract, not by the child-send cap a
+	// child's own message_parent is held to (withSystemFinal).
+	delivery, err := deliverer.Deliver(withSystemFinal(ctx), event)
 	if err != nil {
 		return false, fmt.Errorf("steer: complete: publish committed final %q: %w", res.messageID, err)
 	}

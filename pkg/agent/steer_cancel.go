@@ -274,7 +274,7 @@ func (al *AgentLoop) landSteeredStopReportAtCut(ctx context.Context, sessionID s
 		if fencedAtEntry && (cur.Stop == nil || cur.Stop.Generation != cur.Generation) {
 			return errTerminalReportFenceSuperseded
 		}
-		if err := landSteeredStopLocked(lifecycle, cur, outcome); err != nil {
+		if err := landSteeredStopLocked(lifecycle, cur); err != nil {
 			return err
 		}
 		// Capture from the record AS PERSISTED: the note carries the
@@ -745,10 +745,6 @@ func (c *SteerCanceller) reviveWithExecution(ctx context.Context, sessionID stri
 				}
 			}
 		}
-		// Budget credit or a timeout reset reads the note before it is
-		// cleared, in this same mutation, before dispatch. No lock is held
-		// across that dispatch. A missing note does not invent a boundary.
-		session.ApplyExplicitResumeBudget(rec, time.Now().UTC())
 		rec.State = session.LifecycleQueued
 		rec.Stop = nil
 		rec.StopNote = nil

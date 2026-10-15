@@ -1,5 +1,7 @@
 # Feature Specification: Scheduled Agent Autonomy & Schedules (#264)
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. The **Timeout / timeout-abort / duration-field** prescriptions, including FR-003/FR-006/SC-002 and their acceptance/test/holdout mappings, are superseded below. Remove `schedules.run_timeout_seconds` (300-second default), per-schedule `timeout_seconds` and the deadline-abort/ownership-clear watcher; do not reuse `agents.defaults.timeout_seconds`. Scheduled task/heartbeat work is deadline-free. Concurrency, overlap prevention, unattended policy, transient retries, shutdown handling and completion cleanup stay separate. Historical saved job duration keys are ignored and dropped on save; historical timeout run statuses stay readable, not generated from a new work deadline. Source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/gateway/schedules.go`::RunScheduled; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/config/config.go`::SchedulesConfig. Other retired UI and historical migration claims are outside this scoped amendment.
+
 ## Amended 2026-10-06 — founder decision
 
 A recurring scheduled/heartbeat run is a **new system-principal admission**, not boot replay. It may revive a **completed** root into a new round; it **never revives a stopped root** or clears an in-flight Stop. A root final lands completed/done while the chat stays visible and usable, not archived/hidden. A human message continues that conversation.
@@ -32,6 +34,8 @@ This feature finishes that model: a scheduled job **wakes its owning agent** in 
 **Concurrency (C-4/C-5 fix).** Cron currently fires **sequentially** (`pkg/cron/service.go:209-212`). Build a **parallel autonomous lane**: a semaphore-bounded worker pool, **configurable `schedules.max_concurrent_runs` default 8**, with a bounded queue for excess due runs. Track lane goroutines so **shutdown drains/cancels them** (extend the #265 drain; `CronService.Stop()` must block on in-flight runs). On shutdown, in-flight scheduled runs are **cancelled** (shutdown budget ~70s wins over the 300s run timeout).
 
 **Timeout (M-1 fix).** Do NOT reuse `agents.defaults.timeout_seconds` (deliberately `0`/disabled due to OpenRouter queue delays). Add a **separate `schedules.run_timeout_seconds` (default 300s)** + per-schedule override, applied **only** to scheduled runs.
+
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** this Timeout decision and the following **timeout-triggered Abort primitive** are retired. Neither global/per-schedule work deadline nor deadline-abort watcher exists in the new design. Explicit Stop still reaches the scheduled session; cleanup follows actual completion/failure/Stop. The Concurrency/W-3 paragraphs' comparison to a **300-second run timeout**, and Ambiguity 3's configurable/warn-above-600s duration, are likewise superseded, not replacement settings. Shutdown drain is a distinct lifecycle guard.
 
 **Abort primitive (C-1 fix).** "Session-ownership clear" does not exist. The real abort path is `pkg/agent/cancel.go::RequestCancel(CancelScope{SessionID})` + `SetSessionInterrupted`; the drain primitive is `WaitForActiveRequests()`. On timeout: `RequestCancel` the run's session, allow a short cleanup window, then proceed. FR-006/SC-002 are re-expressed in these terms.
 
@@ -169,6 +173,8 @@ Different schedules need different memory behavior. A daily report should run in
 3. **Given** a schedule with `session_mode=main` and `wake=now`, **When** it fires, **Then** a system event is enqueued into the owning agent's main session immediately; with `wake=next-heartbeat` it defers to the next heartbeat tick.
 
 ### User Story 3 — Guardrails bound autonomous runs (Priority: P0)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the **300-second deadline / timeout-abort / ownership-clear** story, independent test and AS-1 below are retired; AS-6 no longer implies a timeout-triggered cleanup watcher. New acceptance holds real scheduled work beyond an old duration with no deadline and proves it still completes or can be explicitly stopped. Preserve AS-2–6's surviving overlap, concurrency, unattended tool policy, retry and completion-cleanup obligations. Old saved duration/status records remain readable without granting a new API duration property.
 
 A scheduled run has no human watching. It must be bounded: time out at 300s (configurable), never pile up (skip if the previous run of the same job is still going), respect a global concurrency cap (8), auto-deny any `ask`-gated tool (no one to approve), retry transient provider errors with backoff, and clean up child/browser processes.
 
@@ -380,6 +386,9 @@ Boundary conditions:
 ### Feature: Guardrails
 
 #### Scenario: Run exceeding timeout is aborted and session ownership cleared
+
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** this timeout-positive scenario is retired. Its replacement proves that scheduled work with no deadline remains live beyond an old saved limit and settles normally, or ends through an explicit Stop; no deadline watcher force-clears ownership. Corresponding timeout test-plan, dataset and traceability rows are historical, not execution obligations.
+
 **Traces to**: US3, AS1
 **Category**: Error Path
 - **Given** a schedule with `timeout_seconds=1` and a mock LLM that never returns
@@ -628,6 +637,8 @@ Write tests BEFORE implementation. Unit → Integration → E2E.
 
 ## Functional Requirements
 
+> **Amended 2026-10-14 — FR-003/FR-006 superseded (founder; PR #1311 / #1306):** the two timeout/deadline-abort requirements below are retired in full. Scheduled agent work runs without a work deadline; an old persisted global/per-job duration is inert. Do not install an ownership-clear watcher driven by age. Explicit Stop reaches the current session through the existing cancellation path, and cleanup/recording follow actual settlement. Preserve FR-007–012's separate concurrency, overlap, unattended policy, transient retry, process cleanup and outcome ownership.
+
 - **FR-001**: System MUST add an owning `AgentID` to `CronJob` and route a fired job to that agent, never falling back to the default agent.
 - **FR-002**: System MUST default a cron-tool-created job's owner to the creating agent when no owner is specified.
 - **FR-003**: System MUST run every scheduled agent turn under a context with a deadline derived from the schedule's `timeout_seconds` (default 300s, configurable; global default configurable).
@@ -652,6 +663,8 @@ Write tests BEFORE implementation. Unit → Integration → E2E.
 ---
 
 ## Success Criteria
+
+> **Amended 2026-10-14 — SC-002 superseded (founder; PR #1311 / #1306):** the **one-second abort / five-second cleanup timing oracle** below is retired. Replacement success is a scheduled runner with no work deadline, no age-triggered ownership clear, ordinary completion cleanup and a reachable explicit Stop. FR-003/FR-006/SC-002 timeout test-plan/traceability and upper-bound warning rows are historical only. Provider-request/check failures still have their own legitimate guards and honest outcomes.
 
 - **SC-001**: In `TestFire_RoutesToOwnerNotDefault`, the owning agent handles the run and the default agent's loop receives zero invocations.
 - **SC-002**: A run with `timeout_seconds=1` against a hanging mock LLM aborts and clears session ownership within ≤ (1s + cleanup window ≤ 5s); no session remains owned afterward.
@@ -733,6 +746,9 @@ Write tests BEFORE implementation. Unit → Integration → E2E.
 - **Category**: Happy Path
 
 ### Scenario: Hung run is bounded
+
+> **Amended 2026-10-14 — holdout superseded (founder; PR #1311 / #1306):** the **30-second run-end/timeout-alert expectation** below is historical, not a release oracle. Observe long work continuing with no lifetime deadline, truthful running state and a reachable explicit Stop; a genuine provider/check failure has its own bounded guard and visible cause. Do not restore the per-schedule duration to make this old scenario pass. The Assumptions/Clarifications sections' duration/configurable-300s clauses are likewise superseded, while their original dated interview evidence remains.
+
 - **Setup**: A schedule whose instruction induces a long/stuck tool loop, `timeout_seconds=30`.
 - **Action**: Run-now and wait.
 - **Expected outcome**: The run ends near the deadline; no session stays "processing"; an error/timeout is recorded and alerted.

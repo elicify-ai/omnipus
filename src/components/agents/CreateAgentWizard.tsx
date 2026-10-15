@@ -90,7 +90,6 @@ export interface WizardSubmitPayload {
     max_tool_calls_per_minute?: number
     max_cost_per_day?: number
   }
-  timeout_seconds?: number
   max_tool_iterations?: number
   // ── Inherit-from-caller toggles (UAT agent-form fix 4a) ──────────────
   // UI-only flags (NOT wire fields). A native (in-process) subagent is a
@@ -192,11 +191,9 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     soul: '',
     heartbeat_enabled: false,
     heartbeat_interval: 1800,
-    // Per the field matrix (docs/internal/architecture/agent-types-field-matrix.md)
-    // timeout_seconds is O for every user-creatable type, so it always seeds.
     // max_tool_iterations is NOT seeded (#904, US-3 AS-2): an empty field
     // means the agent rides the global limit, so the create request omits it.
-    timeout_seconds: 300,
+    // There is no timeout seed: agent work has no time limit (issue #1306).
     // Inherit-from-caller toggles default OFF so the corresponding editors
     // (model picker, tools, skills) render by default and the
     // operator makes an explicit choice. Inheritance stays an opt-in via the

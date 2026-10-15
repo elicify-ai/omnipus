@@ -32,10 +32,6 @@ properties:
       worker runs isolated once or continues its own chat when recurring. There
       is no other session-mode choice.
     example: false
-  timeout_seconds:
-    type: integer
-    minimum: 0
-    description: Per-run deadline; default 0 = use the global default.
   enabled:
     type: boolean
     description: Default true.

@@ -28,8 +28,7 @@ import (
 )
 
 type goalChildLaunchOptions struct {
-	live           bool
-	timeoutSeconds int
+	live bool
 }
 
 // launchGoalBearingChild uses real boot, Launch and Dispatch. Default callers
@@ -56,8 +55,8 @@ func launchGoalBearingChild(t *testing.T, al *AgentLoop, parentID, callID string
 	launcher := NewSteerLauncher(al)
 	res, err := launcher.Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: parentID, TargetAgentID: testDefaultAgentID, Task: "prove the goal",
-		Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: callID}, Limits: steer.Limits{TimeoutSeconds: opts.timeoutSeconds},
-		Goal: &steer.GoalSpec{Criteria: []steer.Criterion{{Text: "the work is complete"}}, DoD: []steer.Criterion{{Text: "the evidence is sufficient"}}},
+		Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: callID},
+		Goal:   &steer.GoalSpec{Criteria: []steer.Criterion{{Text: "the work is complete"}}, DoD: []steer.Criterion{{Text: "the evidence is sufficient"}}},
 	})
 	if err != nil {
 		t.Fatalf("Launch(goal child): %v", err)
@@ -229,7 +228,6 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 		state       session.LifecycleState
 	}{
 		{name: "provider_failure_commits_fatal_outbox_then_one_parent_message", providerErr: errors.New("downstream provider failure"), fatal: true, state: session.LifecycleFailed},
-		{name: "lifetime_timeout_is_nonfatal_stopped_and_resumable", cause: session.StopCauseTimeout, state: session.LifecycleStopped},
 		{name: "single_stop_is_nonfatal_stopped_and_resumable", cause: session.StopCauseStop, state: session.LifecycleStopped},
 	}
 	for _, tc := range cases {
@@ -245,9 +243,6 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 			}
 			parentID := newTestSteeringSession(t, al, "ws-goal-failure")
 			opts := goalChildLaunchOptions{live: true}
-			if tc.cause == session.StopCauseTimeout {
-				opts.timeoutSeconds = 1
-			}
 			rec := launchGoalBearingChild(t, al, parentID, "call-goal-outcome", opts)
 			beforeGoal := mustGoalRecord(t, rec.GoalRef)
 			if beforeGoal.State != generated.GoalStateActive {
@@ -267,7 +262,6 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 					t.Fatalf("real Stop report=%+v err=%v, want own child reached without error", report, err)
 				}
 			}
-			// Timeout is the real lifetime context's expiry, not a fabricated runErr.
 			joinGoalFixtureRuns(t, al)
 			got, err := al.GetSessionLifecycleStore().Load(rec.SessionID)
 			if err != nil {

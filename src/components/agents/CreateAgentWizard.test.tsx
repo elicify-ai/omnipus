@@ -499,7 +499,7 @@ describe('CreateAgentWizard — missing-field hint (B3 fix)', () => {
 
 describe('CreateAgentWizard — initialPayload gating (field-matrix)', () => {
   // #904 US-3 AS-2 / FR-004: no 200 seed — an untouched limit is absent.
-  it('Subagent payload omits steering_mode and an untouched max_tool_iterations, keeps timeout_seconds', async () => {
+  it('Subagent payload omits steering_mode, an untouched max_tool_iterations, and any timeout_seconds', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     renderWizard({ initialType: 'Subagent', onSubmit })
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Worker' } })
@@ -515,10 +515,10 @@ describe('CreateAgentWizard — initialPayload gating (field-matrix)', () => {
     // carry the key at all (not even as undefined via a seeded default).
     expect('steering_mode' in payload).toBe(false)
     expect('max_tool_iterations' in payload).toBe(false)
-    expect(payload.timeout_seconds).toBe(300)
+    expect('timeout_seconds' in payload).toBe(false)
   })
 
-  it('subagent_3p payload omits steering_mode AND max_tool_iterations but keeps timeout_seconds', async () => {
+  it('subagent_3p payload omits steering_mode, max_tool_iterations, and any timeout_seconds', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined)
     renderWizard({ initialType: 'subagent_3p', initialCli: 'claude-code', onSubmit })
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'External' } })
@@ -536,14 +536,14 @@ describe('CreateAgentWizard — initialPayload gating (field-matrix)', () => {
     // a worker in the first place.
     expect('steering_mode' in payload).toBe(false)
     expect('max_tool_iterations' in payload).toBe(false)
-    expect(payload.timeout_seconds).toBe(300)
+    expect('timeout_seconds' in payload).toBe(false)
   })
 })
 
 describe('CreateAgentWizard — Advanced disclosure (slim variant for subagent_3p, W2b)', () => {
   // #904 D14 (US-4 AS-3, FR-013) supersedes the field matrix's exclusion:
   // the external wizard now shows "Max tool calls per turn" too.
-  it('shows Timeout + Rate limits + Max tool calls per turn but NOT sampling/steering for an external wizard', async () => {
+  it('shows Rate limits + Max tool calls per turn but NOT a timeout, sampling or steering for an external wizard', async () => {
     renderWizard({ initialType: 'subagent_3p', initialCli: 'claude-code' })
     fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'External' } })
     fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'runs claude-code' } })
@@ -555,7 +555,7 @@ describe('CreateAgentWizard — Advanced disclosure (slim variant for subagent_3
     // Advanced mounts at the END of step 2 for the 2-step external flow —
     // there is no step 3 to host it.
     fireEvent.click(await screen.findByTestId('advanced-disclosure-trigger'))
-    expect(screen.getByText('Timeout (seconds)')).toBeInTheDocument()
+    expect(screen.queryByText('Timeout (seconds)')).toBeNull()
     expect(screen.getByText('Rate limits')).toBeInTheDocument()
     expect(screen.queryByText('Temperature')).toBeNull()
     expect(screen.queryByText('Max tokens')).toBeNull()

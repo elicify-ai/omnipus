@@ -34,7 +34,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -191,7 +190,7 @@ func (al *AgentLoop) runExternalCLISteeredTurn(ctx context.Context, rec *session
 	ts.agent = ts.agent.snapshotForExternalDispatch()
 
 	input := composeDelegateInput(al, steeredExternalCLIInput(ts), "", ts.agent.ID)
-	result, runErr := runExternalCLISubTurn(ctx, al, ts, input, steeredExternalCLITimeout(rec))
+	result, runErr := runExternalCLISubTurn(ctx, al, ts, input)
 	if result == nil {
 		// runExternalCLISubTurn's two return shapes are (nil, err) and
 		// (result, result.Err). A nil result with a nil error is a broken
@@ -239,23 +238,6 @@ func steeredExternalCLIInput(ts *turnState) string {
 		}
 	}
 	return strings.Join(parts, "\n\n")
-}
-
-// steeredExternalCLITimeout is the driver-level hint handed to
-// runExternalCLISubTurn (RunOptions.TimeoutSeconds / the defaultSubTurnTimeout
-// fallback). The run's real bound is the Go context the caller already
-// derived from this same record (steeredTurnRunContext), so this is the
-// remaining active-time budget — the honest value for the hint, and the same
-// budget the context enforces. No deadline (an unsteered/ordinary root record,
-// or an edge with no configured limit) falls back to the launcher's own
-// default rather than inventing one.
-func steeredExternalCLITimeout(rec *session.LifecycleRecord) time.Duration {
-	if deadline, ok := rec.ActiveBudgetDeadline(time.Now()); ok {
-		if remaining := time.Until(deadline); remaining > 0 {
-			return remaining
-		}
-	}
-	return defaultSteeredSessionTimeout
 }
 
 // withSteeredDelegationDepth seeds the delegation depth a steered DELEGATE

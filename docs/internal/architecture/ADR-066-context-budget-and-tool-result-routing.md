@@ -242,6 +242,8 @@ over_budget ⇔ total > B  OR  share > 160,000
 
 ## 8. D7 — No silent turn exits
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. The old **“turn timed out” lifetime meaning** below is superseded: ordinary work has no turn deadline. `turn_timed_out` describes a provider request guard, not expiry of the session's allocation; historical timeout records remain readable. A Judge's own limit must have distinct `judge_time_limit` provenance and a durable, correctly addressed conclusion carrying the claimed work result, not a silent return or false provider blame. Explicit Stop, context-failure reporting, bounded commands/checks and genuine provider guards stay. Sources at `7c148ca00`: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/loop_run_turn.go`::createTurnContext; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/judge_conclusion.go`::notVerifiedConclusion. Judge-limit contract/provenance and complete publication coverage are assigned PR round-1 work, not an implemented-field claim in this amendment.
+
 The four returns in §1.4 gain a typed code, a log line with the raw cause, and a transcript entry — matching the classified path beside them. `"turn timed out"`/`"turn canceled"` stop resolving to `CodeUnknown`; codes `turn_canceled` (attribution **`user`** — the Stop button is the common cause; `user` is added to `x-user-message-attributions` and rendered by the SPA as a neutral notice, not an error toast), `turn_timed_out` (attribution **`provider`**) and `context_unrecoverable` (attribution `product`, the thrash guard) are added to `contracts/components/schemas/LLMError.yaml` and regenerated (spec review MAJ-013). Remaining turn-fatal conditions: provider auth rejected, provider unreachable after retries, workspace unavailable. **Nothing size-related is turn-fatal** once D4–D6 are in.
 
 ## 9. D8 — Learn the window from the provider: NOT ADOPTED
@@ -261,6 +263,8 @@ D4 protects the window; it cannot protect the process — by the time a result i
 ---
 
 ## 12. Contract impact (Constraint #8)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** D7's **`turn_timed_out` lifetime attribution** is retired; it now describes the provider-request guard only. The Judge's own timer failure must be distinct `judge_time_limit` provenance with honest copy and a result-bearing visible conclusion. Define/mirror the distinction in `LLMError`, `LLMErrorReplay` and both inline AsyncAPI copies before regeneration; backend-lead alone edits/regenerates contracts. Historical timeout outcome decoding remains, without reintroducing a work-duration property or a third criterion state. This note specifies the assigned round-1 contract correction; no such generated-field implementation is claimed at `7c148ca00`.
 
 - The emptied-set in window meta is an internal file, not a wire type. It is keyed by **(tool_call_id, archive line index)** — ids are provider-generated and not unique across an archive (spec review MAJ-007); the mark carries both, and `recall_conversation` accepts an optional `archive_line` beside `tool_call_id` (most recent line wins when omitted).
 

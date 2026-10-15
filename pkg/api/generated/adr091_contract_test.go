@@ -64,9 +64,6 @@ func TestContract_ADR091_SessionLifecycleRecordSteeredBy(t *testing.T) {
 				"mode": "direct",
 				"remaining_depth": 2
 			},
-			"limits": {
-				"timeout_seconds": 300
-			},
 			"tool_exclusions": ["switch_agent"]
 		}
 	}`)

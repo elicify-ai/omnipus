@@ -1,20 +1,20 @@
 // Advanced — collapsible disclosure rendered ABOVE the footer (NOT a 4th
 // step in the stepper). Houses the wire-format fields that the operator
 // rarely touches on first-create: model_params, rate_limits,
-// timeout_seconds, max_tool_iterations, and the subagent_3p executor block.
+// max_tool_iterations, and the subagent_3p executor block. There is no
+// timeout field: agent work has no time limit (issue #1306).
 //
 // All fields are type-branched (per the field matrix in
 // docs/internal/architecture/agent-types-field-matrix.md):
-//   Main + Subagent: model_params, rate_limits,
-//                     timeout_seconds, max_tool_iterations
-//   subagent_3p:     timeout_seconds + rate_limits + max_tool_iterations —
+//   Main + Subagent: model_params, rate_limits, max_tool_iterations
+//   subagent_3p:     rate_limits + max_tool_iterations —
 //                     the CLI manages its own isolation/auth/retries, so
 //                     model_params is rejected 400 on the wire
 //                     (`AgentCreateRequestSubagent3p` never carries it —
 //                     see payloadToCreateRequest in CreateAgentModal.tsx).
 //                     max_tool_iterations becomes the CLI's turn cap (#904 D14).
 //                     Without this slim disclosure an external create had
-//                     NO way to set timeout or rate limits at all — the
+//                     NO way to set rate limits at all — the
 //                     executor block (cli_path / env / args) stays on
 //                     Step 1 / Step 3 (Step3Tools), NOT here, so there is
 //                     no duplicate `wizard-cli-args`.
@@ -67,7 +67,7 @@ export function Advanced({
 
 // ── subagent_3p fields ───────────────────────────────────────────────────────
 // Slim variant: the external CLI runner manages its own isolation and
-// sampling, so ONLY timeout_seconds, rate_limits and max_tool_iterations (the
+// sampling, so ONLY rate_limits and max_tool_iterations (the
 // CLI's turn cap, #904 D14) apply on the wire (`AgentCreateRequestSubagent3p`
 // — see the field matrix). No sampling (temperature/max_tokens) or shell
 // policy — those 400 on this variant. `steering_mode` is NOT variant-specific
@@ -89,7 +89,6 @@ function ExternalAdvancedFields({ payload, setField }: ExternalAdvancedFieldsPro
     <>
       <div className="space-y-[var(--space-2)]">
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Runtime</p>
-        <TimeoutField payload={payload} setField={setField} />
         <WizardToolIterationLimit payload={payload} setField={setField} />
       </div>
       <RateLimitsFields payload={payload} setField={setField} />
@@ -153,36 +152,10 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
       <div className="space-y-[var(--space-2)]">
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Runtime</p>
         <div className="space-y-[var(--space-1)]">
-          <TimeoutField payload={payload} setField={setField} />
           <WizardToolIterationLimit payload={payload} setField={setField} />
         </div>
       </div>
     </>
-  )
-}
-
-// ── Timeout (shared by the full and slim variants) ───────────────────────────
-// Every user-creatable type carries `timeout_seconds` on the wire (per the
-// field matrix — subagent_3p keeps it as a process-level kill for a hung
-// CLI), so the exact same NumberRow rendered identically in both
-// `ExternalAdvancedFields` and `MainAdvancedFields`'s Runtime block. Factored
-// out once so the two surfaces can't drift on markup (mirrors the
-// `RateLimitsFields` pattern below).
-
-interface TimeoutFieldProps {
-  payload: AdvancedProps['payload']
-  setField: AdvancedProps['setField']
-}
-
-function TimeoutField({ payload, setField }: TimeoutFieldProps) {
-  return (
-    <NumberRow
-      label="Timeout (seconds)"
-      caption="Maximum seconds a single agent turn may run. Default 300."
-      value={payload.timeout_seconds}
-      min={1}
-      onChange={(v) => setField('timeout_seconds', v)}
-    />
   )
 }
 
