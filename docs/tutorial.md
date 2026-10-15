@@ -52,7 +52,7 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
    **If it does not look like that:** If Omnipus says no model works, fix the provider in **Settings → Providers**, or Omnipus's own model in **Settings → System agents**, then try again. If the entry says **Omnipus unavailable**, select **Retry**. See [Omnipus](using-omnipus-ui.md#omnipus).
 
-7. **Or add an agent you already have.** In **Team**, select **Add agent**, then **Add an existing agent**, and choose one from the list. Agents that are in no workspace yet are marked **Not in any workspace**.
+7. **Or add an agent you already have.** In **Team**, select **Add agent**, then **Add an existing agent**, and choose one from the list. The **Not in any workspace** badge is based on the loaded active-workspace list; archived memberships can still exist. Check archived teams before relying on it as proof that an agent is unassigned.
 
    **What you see:** The agent appears on the **Team** list with a short "Added" notice and **Undo**. It also becomes available where the workspace asks you to choose an agent.
 

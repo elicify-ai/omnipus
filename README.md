@@ -1,7 +1,7 @@
 <div align="left">
 <p>Research. Code. Write. Automate. Browse. Analyze. — named agents that ask each other for help and remember what you discussed.</p>
 
-<p>Or have <b>Ava build entirely new agents</b> for tasks nobody's imagined yet. <b>You run the team. Ava grows the team.</b></p>
+<p>Ask <b>Omnipus, the system agent,</b> to help create custom agents for new jobs.</p>
 
 <p>It all runs on your own machine — no cloud account, no subscription, no data leaving your box except the calls to the AI model you choose.</p>
 
@@ -74,13 +74,13 @@ Use the web app, the terminal, or wire your agents into Telegram, Discord, Slack
 
 ### You stay in control
 
-Agents ask permission before running anything sensitive (Allow / Deny / Always), and every action is logged so you can see exactly what happened.
+Control tool access with Allow, Ask or Deny policies and review the approval requests that remain. God Mode removes global prompts; stricter per-agent policies remain in force. Use the audit log to review security activity.
 
 → [When an agent asks permission](docs/security.md#approve-a-request)
 
 ### Extend it
 
-Install reusable **skills**, connect **MCP** servers, and let Ava build brand-new custom agents for you on demand.
+Install reusable **skills**, connect **MCP** servers, and ask Omnipus to help create custom agents for new jobs.
 
 → [Skills quick start](docs/skills.md#how-to-add-a-skill-and-grant-it)
 
@@ -105,7 +105,7 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 
 **13 in-process chat channels and 35+ LLM providers** — with fallback chains, multi-key rotation, streaming, and vision. → [Connectors](docs/connectors.md) · [Providers](docs/providers-and-models.md)
 
-**Channel-to-agent routing** — binds inbound messages to specific agents by channel, account, guild, team, or peer. → [Inbound bindings](docs/connectors.md#choosing-which-agent-answers)
+**Channel-to-agent routing** — every channel instance binds to one workspace and an explicitly named chat-capable member agent. An unbound or invalid binding drops incoming messages; there is no fallback agent. → [Inbound bindings](docs/connectors.md#choosing-which-agent-answers)
 
 </details>
 
@@ -113,7 +113,7 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 
 ## Meet the team
 
-Four named colleagues ship with every install, plus three built-in workers (Planner, Researcher, General Purpose).
+Three chat colleagues ship with Omnipus — Mia, Jim and Omnipus — alongside the native workers Planner, Researcher and General Purpose.
 
 Their identity is locked — no silent knock-offs — but you control each one's model and tool policy.
 
@@ -121,10 +121,9 @@ Their identity is locked — no silent knock-offs — but you control each one's
 |---|---|---|
 | **Mia** | Assistant | Your everyday starting point; answers and connects you with the right specialist. |
 | **Jim** | Planner and Orchestrator | Turns a complex goal into tasks, delegates, tracks to completion. |
-| **Ava** | Builder | Interviews you, then creates a custom agent. |
-| **Admin** | Operator | Configures connectors, providers, channels, diagnostics and document dependencies. |
+| **Omnipus** | System agent | Sets up and changes agents, teams, skills, connectors, providers and channels from its one ongoing conversation. |
 
-Need more? Ava builds unlimited custom agents, and Omnipus runs them all in the same binary.
+Need more? Ask Omnipus to help create custom agents for new jobs.
 
 ---
 
