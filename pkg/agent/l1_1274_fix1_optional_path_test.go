@@ -24,8 +24,8 @@ func TestL11274OptionalCLIPathCreatesAndDelegatesEachWorker(t *testing.T) {
 					delete(args, "cli_path")
 				}
 				result := f.execute(t, "create_agent", args)
-				l11274AssertCreated(t, f, result, "created-"+cli, cli, "", "#6E8BA8")
-				l11274AssertExternalDelegate(t, f, "created-"+cli, cli, "")
+				id := l11274AssertCreated(t, f, result, cli, "", "#6E8BA8")
+				l11274AssertExternalDelegate(t, f, id, cli, "")
 			})
 		}
 	}

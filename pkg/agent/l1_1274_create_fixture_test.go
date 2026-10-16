@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -234,15 +235,47 @@ func l11274ResultObject(t *testing.T, result *tools.ToolResult) map[string]any {
 	return body
 }
 
-func l11274AssertAbsent(t *testing.T, f *l11274Fixture, id string) {
+// l11274AssertAbsent proves a refused create persisted and published nothing
+// for the named request. key is the request's name in the hyphenated
+// lowercase form these tests were written with; since new agents get
+// generated UUID ids (founder decision 2026-10-14, WU-3) the check looks for
+// any stored agent whose NAME has that form, rather than for an entity at a
+// name-derived id that could never exist.
+func l11274AssertAbsent(t *testing.T, f *l11274Fixture, key string) {
 	t.Helper()
-	_, err := agentstore.New(f.home).Get(id)
-	if !errors.Is(err, entity.ErrNotFound) {
-		t.Fatalf("refused create must leave no entity %q, got %v", id, err)
+	if _, err := agentstore.New(f.home).Get(key); !errors.Is(err, entity.ErrNotFound) {
+		t.Fatalf("refused create must leave no entity %q, got %v", key, err)
 	}
-	if _, ok := f.al.GetRegistry().GetAgent(id); ok {
-		t.Errorf("refused create published live agent %q", id)
+	agents, _, err := agentstore.New(f.home).List()
+	if err != nil {
+		t.Fatalf("list the real entity store: %v", err)
 	}
+	for _, a := range agents {
+		if l11274NameKey(a.Name) != key {
+			continue
+		}
+		t.Errorf("refused create persisted agent %q (name %q)", a.ID, a.Name)
+		if _, ok := f.al.GetRegistry().GetAgent(a.ID); ok {
+			t.Errorf("refused create published live agent %q (name %q)", a.ID, a.Name)
+		}
+	}
+}
+
+// l11274NameKey is the hyphenated lowercase form of a name the refusal tests
+// use as a request key (test-only; production never derives an id from it).
+func l11274NameKey(name string) string {
+	var b strings.Builder
+	hyphen := false
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			hyphen = false
+		} else if !hyphen && b.Len() > 0 {
+			b.WriteByte('-')
+			hyphen = true
+		}
+	}
+	return strings.TrimSuffix(b.String(), "-")
 }
 
 func l11274FailureDetails(t *testing.T, result *tools.ToolResult, wantCode string) string {

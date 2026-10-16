@@ -449,6 +449,23 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 
 	sg.t.Helper()
 
+	// logger.InitPanic dup2s fd 2 onto the panic log for the rest of the
+	// process. The cleanup RunContext defers does not put it back, so every
+	// later test and TestMain would lose stderr. Save the harness fd now —
+	// before boot — and restore it from cleanup. Registered before Close's
+	// cleanup, so LIFO runs Close first and this second: the gateway has
+	// already returned when fd 2 is put back. A boot failure before Close
+	// is registered still runs this cleanup.
+	if saved, err := saveProcessStderr(); err != nil {
+		sg.t.Logf("testutil.StartTestGateway: could not preserve stderr: %v", err)
+	} else {
+		sg.t.Cleanup(func() {
+			if restoreErr := restoreProcessStderr(saved); restoreErr != nil {
+				sg.t.Errorf("testutil.StartTestGateway: restore stderr: %v", restoreErr)
+			}
+		})
+	}
+
 	sg.prepare()
 
 	sg.bootUntilReady()

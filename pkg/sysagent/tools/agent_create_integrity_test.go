@@ -34,6 +34,7 @@ func TestCreateAgent_RejectsNonStringHeartbeatWithoutWrite(t *testing.T) {
 			deps, _ := newTestDeps(t)
 			args := createNativeArgs("Hb Type")
 			args["heartbeat"] = tc.value
+			before := wu3DurableInventory(t, deps.Home)
 			result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
 			if !result.IsError {
 				t.Fatalf("expected INVALID_INPUT, got success: %s", result.ForLLM)
@@ -45,14 +46,14 @@ func TestCreateAgent_RejectsNonStringHeartbeatWithoutWrite(t *testing.T) {
 			if !strings.Contains(msg, "heartbeat") {
 				t.Errorf("message=%q, want it to name heartbeat", msg)
 			}
-			if _, err := agentstore.New(deps.Home).Get("hb-type"); err == nil {
-				t.Error("wrong-type heartbeat must not create the agent")
-			}
+			requireNoDurableChange(t, deps.Home, before, "wrong-type heartbeat must not create the agent")
 		})
 	}
 }
 
 func TestCreateAgent_InitAgentHomeFailureReportsPartial(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	id := "home-fault"
 	sessions := filepath.Join(deps.Home, "agents", id, "sessions")
@@ -95,6 +96,8 @@ func TestCreateAgent_InitAgentHomeFailureReportsPartial(t *testing.T) {
 }
 
 func TestCreateAgent_HeartbeatWriteFailureReportsPartial(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	id := "hb-fault"
 	hbDir := filepath.Join(deps.Home, "agents", id, "HEARTBEAT.md")
@@ -123,6 +126,8 @@ func TestCreateAgent_HeartbeatWriteFailureReportsPartial(t *testing.T) {
 }
 
 func TestCreateAgent_HeartbeatFileModeIsPrivate(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	args := createNativeArgs("Hb Mode")
 	args["heartbeat"] = "stay brief"

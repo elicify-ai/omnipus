@@ -293,9 +293,9 @@ func TestEnvironmentSetup_CrossWorkspace_NonAdmin_Refused(t *testing.T) {
 	ctx := h.ctx("mia", "alpha", alphaDir, "t-x-1")
 
 	start := h.tool.Execute(ctx, map[string]any{
-		"command":          "echo nope",
-		"purpose":          "probe cross-workspace authority",
-		"target_workspace": "beta",
+		"command":      "echo nope",
+		"purpose":      "probe cross-workspace authority",
+		"workspace_id": "beta",
 	})
 	require.NotNil(t, start)
 	require.True(t, start.IsError, "non-Admin cross-workspace target must be refused")
@@ -323,9 +323,9 @@ func TestEnvironmentSetup_Admin_ExistingWorkspace_Targeted(t *testing.T) {
 	ctx := h.ctx("admin", "admin-home", adminDir, "t-a-1")
 
 	start, completion := h.startAndWait(t, ctx, map[string]any{
-		"command":          `echo targeted > "$OMNIPUS_ENV_PREFIX/where.txt"`,
-		"purpose":          "install into beta on behalf of a workspace member",
-		"target_workspace": "beta",
+		"command":      `echo targeted > "$OMNIPUS_ENV_PREFIX/where.txt"`,
+		"purpose":      "install into beta on behalf of a workspace member",
+		"workspace_id": "beta",
 	})
 	require.False(t, completion.IsError, "Admin targeting an existing workspace must succeed: %s", completion.ForLLM)
 	// The artifact must land in the area the tool REPORTED (the tool states
@@ -346,9 +346,9 @@ func TestEnvironmentSetup_Admin_NonexistentWorkspace_Refused(t *testing.T) {
 	ctx := h.ctx("admin", "admin-home", adminDir, "t-a-2")
 
 	start := h.tool.Execute(ctx, map[string]any{
-		"command":          "echo x",
-		"purpose":          "probe nonexistent workspace",
-		"target_workspace": "ghostws",
+		"command":      "echo x",
+		"purpose":      "probe nonexistent workspace",
+		"workspace_id": "ghostws",
 	})
 	require.NotNil(t, start)
 	require.True(t, start.IsError, "Admin targeting a workspace with no record must be refused")
@@ -356,7 +356,7 @@ func TestEnvironmentSetup_Admin_NonexistentWorkspace_Refused(t *testing.T) {
 }
 
 func TestEnvironmentSetup_HostPathTarget_Refused(t *testing.T) {
-	// Even Admin cannot smuggle a host path through target_workspace: the
+	// Even Admin cannot smuggle a host path through workspace_id: the
 	// strict identifier pattern refuses every path-shaped value.
 	h := newSetupHarness(t, true)
 	adminDir := filepath.Join(h.home, "workspaces", "admin-home")
@@ -365,9 +365,9 @@ func TestEnvironmentSetup_HostPathTarget_Refused(t *testing.T) {
 
 	for _, bad := range []string{"/etc", "../outside", "sub/dir", ".", "..", "ws name"} {
 		start := h.tool.Execute(ctx, map[string]any{
-			"command":          "echo x",
-			"purpose":          "probe path-shaped target",
-			"target_workspace": bad,
+			"command":      "echo x",
+			"purpose":      "probe path-shaped target",
+			"workspace_id": bad,
 		})
 		require.NotNil(t, start, bad)
 		require.True(t, start.IsError, "path-shaped target %q must be refused", bad)
@@ -397,7 +397,7 @@ func TestEnvironmentSetup_RunValidation_Refusals(t *testing.T) {
 		{"over-ceiling timeout", map[string]any{"command": "echo x", "purpose": "p", "timeout_seconds": float64(4000)}, "timeout_seconds must be between"},
 		{"non-integer timeout", map[string]any{"command": "echo x", "purpose": "p", "timeout_seconds": "soon"}, "timeout_seconds must be a number"},
 		{"invalid scope", map[string]any{"command": "echo x", "purpose": "p", "scope": "global"}, `scope must be "workspace" or "shared"`},
-		{"shared scope with workspace target", map[string]any{"command": "echo x", "purpose": "p", "scope": "shared", "target_workspace": "alpha"}, "target_workspace selects a workspace-scope destination"},
+		{"shared scope with workspace target", map[string]any{"command": "echo x", "purpose": "p", "scope": "shared", "workspace_id": "alpha"}, "workspace_id selects a workspace-scope destination"},
 		{"unknown action", map[string]any{"action": "deploy", "command": "echo x", "purpose": "p"}, "unknown action"},
 	}
 	for _, tc := range cases {
@@ -405,7 +405,7 @@ func TestEnvironmentSetup_RunValidation_Refusals(t *testing.T) {
 			start := h.tool.Execute(ctx, tc.args)
 			require.NotNil(t, start)
 			require.True(t, start.IsError, "expected refusal, got: %s", start.ForLLM)
-			assert.Contains(t, start.ForLLM, tc.wantErr)
+			assert.Contains(t, setupRefusalText(start), tc.wantErr)
 		})
 	}
 	// Nothing was started: no area exists under the workspace.
@@ -470,8 +470,8 @@ func TestEnvironmentSetup_DenyAudit_OversizedCommandBounded(t *testing.T) {
 }
 
 // TestEnvironmentSetup_DenyAudit_OversizedTargetBoundedEverywhere: on the
-// disallowed-target path the reason echoes the requested target_workspace, so
-// command, reason, and target_workspace must ALL ride the bound — no field of
+// disallowed-target path the reason echoes the requested workspace_id, so
+// command, reason, and workspace_id must ALL ride the bound — no field of
 // the serialized record carries the raw oversized string.
 func TestEnvironmentSetup_DenyAudit_OversizedTargetBoundedEverywhere(t *testing.T) {
 	h := newSetupHarness(t, false)
@@ -481,10 +481,10 @@ func TestEnvironmentSetup_DenyAudit_OversizedTargetBoundedEverywhere(t *testing.
 
 	bigTarget := strings.Repeat("t", 4096)
 	res := h.tool.Execute(ctx, map[string]any{
-		"command":          "echo ok",
-		"purpose":          "p",
-		"scope":            "workspace",
-		"target_workspace": bigTarget,
+		"command":      "echo ok",
+		"purpose":      "p",
+		"scope":        "workspace",
+		"workspace_id": bigTarget,
 	})
 	require.True(t, res.IsError, "invalid target must be refused")
 	assert.Contains(t, res.ForLLM, "not a valid workspace identifier")
@@ -737,4 +737,19 @@ func TestEnvironmentSetup_SharedScope_Aborts_OnFailure(t *testing.T) {
 				"no unpublished generation directory may remain (found %s)", e.Name())
 		}
 	}
+}
+
+// setupRefusalText is a refusal's own text: a run refused before launch is a
+// structured FR-030 result (WU-3) whose text sits in error.message; other
+// actions still answer in plain text.
+func setupRefusalText(res *ToolResult) string {
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(res.ForLLM), &body) == nil && body.Error.Message != "" {
+		return body.Error.Message
+	}
+	return res.ForLLM
 }

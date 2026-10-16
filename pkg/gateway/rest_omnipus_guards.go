@@ -20,12 +20,20 @@ const (
 	codeReservedAgentName  = "reserved_agent_name"
 	codeOmnipusPerAgentAsk = "omnipus_per_agent_ask"
 	codeOmnipusMembership  = "omnipus_default_workspace_only"
+	codeAgentNameTooLong   = "agent_name_too_long"
 )
 
-// refuseReservedAgentName answers 409 "the name Omnipus is reserved" when name
-// (trimmed, case-insensitive) is the system agent's name (FR-002, §6.2) and
+// refuseReservedAgentName answers 400 when name is longer than the contract's
+// 100 characters (#1075), else 409 "the name Omnipus is reserved" when name
+// (trimmed, case-insensitive) is the system agent's name (FR-002, §6.2), and
 // reports whether it did. A similar name such as "Omnipus Helper" passes.
 func refuseReservedAgentName(w http.ResponseWriter, name string) bool {
+	if coreagent.AgentNameTooLong(name) {
+		// #1075: the read schema caps the name at 100 characters; a longer one
+		// is refused here (validation on or off) so it is never stored.
+		jsonErrCode(w, http.StatusBadRequest, coreagent.AgentNameTooLongRefusal, codeAgentNameTooLong)
+		return true
+	}
 	if !coreagent.IsReservedAgentName(name) {
 		return false
 	}

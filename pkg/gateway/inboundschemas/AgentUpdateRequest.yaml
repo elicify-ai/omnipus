@@ -25,7 +25,8 @@ properties:
   name:
     type: string
     minLength: 1
-    description: New display name. Rejected on locked agents.
+    maxLength: 100
+    description: New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
     example: "My Renamed Agent"
   description:
     type: string

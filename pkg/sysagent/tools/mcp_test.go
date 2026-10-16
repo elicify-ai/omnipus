@@ -61,12 +61,12 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 	remove := systools.NewMCPRemoveTool(deps)
 
 	// --- add a stdio server ---
-	res := add.Execute(ctx, map[string]any{
+	res := add.Execute(ctx, systools.WithCurrentRevisionForTest(add, map[string]any{
 		"name":    "filesystem",
 		"command": "npx",
 		"args":    []any{"-y", "@modelcontextprotocol/server-filesystem"},
 		"env":     map[string]any{"ROOT": "/tmp"},
-	})
+	}))
 	m := resultJSON(t, res.ForLLM)
 	if m["success"] == false {
 		t.Fatalf("add returned error: %s", res.ForLLM)
@@ -118,20 +118,20 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 	}
 
 	// --- duplicate add is rejected ---
-	res = add.Execute(ctx, map[string]any{"name": "filesystem", "command": "npx"})
+	res = add.Execute(ctx, systools.WithCurrentRevisionForTest(add, map[string]any{"name": "filesystem", "command": "npx"}))
 	m = resultJSON(t, res.ForLLM)
 	if m["success"] != false {
 		t.Fatalf("duplicate add should fail, got: %s", res.ForLLM)
 	}
 
 	// --- remove without confirm is rejected ---
-	res = remove.Execute(ctx, map[string]any{"name": "filesystem"})
+	res = remove.Execute(ctx, systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "filesystem"}))
 	if m2 := resultJSON(t, res.ForLLM); m2["success"] != false {
 		t.Fatalf("remove without confirm should fail, got: %s", res.ForLLM)
 	}
 
 	// --- remove with confirm succeeds, persists, and cleans up the credential ---
-	res = remove.Execute(ctx, map[string]any{"name": "filesystem", "confirm": true})
+	res = remove.Execute(ctx, systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "filesystem", "confirm": true}))
 	if m2 := resultJSON(t, res.ForLLM); m2["success"] == false {
 		t.Fatalf("remove failed: %s", res.ForLLM)
 	}
@@ -143,7 +143,7 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 	}
 
 	// --- remove of unknown server returns NOT_FOUND ---
-	res = remove.Execute(ctx, map[string]any{"name": "ghost", "confirm": true})
+	res = remove.Execute(ctx, systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "ghost", "confirm": true}))
 	m = resultJSON(t, res.ForLLM)
 	if m["success"] != false {
 		t.Fatalf("removing unknown server should fail, got: %s", res.ForLLM)
@@ -157,11 +157,11 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 func TestMCPAdd_EnvRequiresCredentialStore(t *testing.T) {
 	deps, cfg := newTestDeps(t) // CredStore is nil
 	add := systools.NewMCPAddTool(deps)
-	res := add.Execute(context.Background(), map[string]any{
+	res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{
 		"name":    "no-cred-store",
 		"command": "npx",
 		"env":     map[string]any{"TOKEN": "sekrit"},
-	})
+	}))
 	m := resultJSON(t, res.ForLLM)
 	if m["success"] != false {
 		t.Fatalf("add with env and no credential store must fail, got: %s", res.ForLLM)
@@ -175,7 +175,7 @@ func TestMCPAdd_EnvRequiresCredentialStore(t *testing.T) {
 	}
 	// A server with NO env values at all must still succeed without a
 	// credential store — env is the only thing that requires one.
-	res = add.Execute(context.Background(), map[string]any{"name": "no-env-fine", "command": "npx"})
+	res = add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "no-env-fine", "command": "npx"}))
 	m = resultJSON(t, res.ForLLM)
 	if m["success"] == false {
 		t.Fatalf("add with no env values must succeed even without a credential store: %s", res.ForLLM)
@@ -202,11 +202,11 @@ func TestMCPAdd_NameCollisionDoesNotHijackExistingCredentials(t *testing.T) {
 	add := systools.NewMCPAddTool(deps)
 
 	// Seed an already-configured "github" server with a real token.
-	res := add.Execute(ctx, map[string]any{
+	res := add.Execute(ctx, systools.WithCurrentRevisionForTest(add, map[string]any{
 		"name":    "github",
 		"command": "npx",
 		"env":     map[string]any{"GITHUB_TOKEN": "real-token-value"},
-	})
+	}))
 	m := resultJSON(t, res.ForLLM)
 	if m["success"] == false {
 		t.Fatalf("seed add returned error: %s", res.ForLLM)
@@ -225,11 +225,11 @@ func TestMCPAdd_NameCollisionDoesNotHijackExistingCredentials(t *testing.T) {
 	}
 
 	// Attempt to add a server with the SAME name and a wrong token.
-	res = add.Execute(ctx, map[string]any{
+	res = add.Execute(ctx, systools.WithCurrentRevisionForTest(add, map[string]any{
 		"name":    "github",
 		"command": "npx",
 		"env":     map[string]any{"GITHUB_TOKEN": "wrong"},
-	})
+	}))
 	m = resultJSON(t, res.ForLLM)
 	if m["success"] != false {
 		t.Fatalf("colliding add must fail, got: %s", res.ForLLM)
@@ -269,7 +269,7 @@ func TestMCPRemove_OrphansCredentialsWhenStoreUnavailable(t *testing.T) {
 		"srv": {Enabled: true, Type: "stdio", Command: "npx", EnvRefs: map[string]string{"TOKEN": "mcp_srv_TOKEN"}},
 	}
 	remove := systools.NewMCPRemoveTool(deps)
-	res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+	res := remove.Execute(context.Background(), systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "srv", "confirm": true}))
 	m := resultJSON(t, res.ForLLM)
 	if m["success"] == false {
 		t.Fatalf("remove must still succeed (config removal does not depend on credential cleanup): %s", res.ForLLM)
@@ -350,7 +350,7 @@ func TestMCPAdd_TransportValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res := add.Execute(ctx, tc.args)
+			res := add.Execute(ctx, systools.WithCurrentRevisionForTest(add, tc.args))
 			m := resultJSON(t, res.ForLLM)
 			gotErr := m["success"] == false
 			if gotErr != tc.wantErr {
@@ -369,7 +369,7 @@ func TestMCPAdd_GlobalKillSwitchGating(t *testing.T) {
 	t.Run("flips when no other server is enabled", func(t *testing.T) {
 		deps, cfg := newTestDeps(t)
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "fresh-srv", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "fresh-srv", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add returned error: %s", res.ForLLM)
@@ -389,7 +389,7 @@ func TestMCPAdd_GlobalKillSwitchGating(t *testing.T) {
 			"existing-enabled": {Enabled: true, Type: "stdio", Command: "npx"},
 		}
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "gated-srv", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "gated-srv", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add returned error: %s", res.ForLLM)
@@ -432,7 +432,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 			return "connected", 3, ""
 		}
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "srv-connected", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "srv-connected", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add returned error: %s", res.ForLLM)
@@ -462,7 +462,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 			return "error", 0, "connection refused"
 		}
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "srv-error", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "srv-error", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		// The config write DID succeed — this must still be success=true.
 		if m["success"] == false {
@@ -487,7 +487,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 			return "disconnected", 0, ""
 		}
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "srv-disc", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "srv-disc", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add returned error: %s", res.ForLLM)
@@ -505,7 +505,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 		deps, _ := newTestDeps(t)
 		deps.ReconcileMCP = func(ctx context.Context) error { return fmt.Errorf("boom") }
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "srv-reconcile-err", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "srv-reconcile-err", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add should still succeed when reconcile itself errors (config write succeeded): %s", res.ForLLM)
@@ -534,7 +534,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 	t.Run("nil funcs use fallback note and no status field", func(t *testing.T) {
 		deps, _ := newTestDeps(t) // ReconcileMCP and MCPStatus left nil
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "srv-nil", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "srv-nil", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add returned error: %s", res.ForLLM)
@@ -567,7 +567,7 @@ func TestMCPRemove_Reconcile(t *testing.T) {
 			return nil
 		}
 		remove := systools.NewMCPRemoveTool(deps)
-		res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+		res := remove.Execute(context.Background(), systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "srv", "confirm": true}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("remove returned error: %s", res.ForLLM)
@@ -593,7 +593,7 @@ func TestMCPRemove_Reconcile(t *testing.T) {
 			"srv": {Enabled: true, Type: "stdio", Command: "npx"},
 		}
 		remove := systools.NewMCPRemoveTool(deps)
-		res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+		res := remove.Execute(context.Background(), systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "srv", "confirm": true}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("remove returned error: %s", res.ForLLM)
@@ -611,7 +611,7 @@ func TestMCPRemove_Reconcile(t *testing.T) {
 		}
 		deps.ReconcileMCP = func(ctx context.Context) error { return fmt.Errorf("boom") }
 		remove := systools.NewMCPRemoveTool(deps)
-		res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+		res := remove.Execute(context.Background(), systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "srv", "confirm": true}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf(

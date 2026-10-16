@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -347,6 +348,21 @@ const ReservedNameRefusal = "the name Omnipus is reserved"
 // such as "Omnipus Helper" is not reserved.
 func IsReservedAgentName(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), OmnipusName)
+}
+
+// AgentNameMaxChars is the longest agent display name, in characters —
+// contracts/components/schemas/Agent.yaml::name maxLength. Every write path
+// (REST create/update and the agent tools) refuses a longer name before any
+// write, so a stored agent always satisfies the read schema (#1075).
+const AgentNameMaxChars = 100
+
+// AgentNameTooLongRefusal is the refusal text for a name over the limit.
+var AgentNameTooLongRefusal = fmt.Sprintf("the agent name must be at most %d characters", AgentNameMaxChars)
+
+// AgentNameTooLong reports whether name has more than AgentNameMaxChars
+// characters (Unicode code points, the JSON Schema maxLength unit).
+func AgentNameTooLong(name string) bool {
+	return utf8.RuneCountInString(name) > AgentNameMaxChars
 }
 
 // HasCrossWorkspaceSetupAuthority reports whether the agent holds the
