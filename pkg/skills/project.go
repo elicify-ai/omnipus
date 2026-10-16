@@ -168,7 +168,13 @@ func discoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugC
 				Path:   skillFile,
 				Source: string(ShelfProject),
 			}
-			if meta := (&SkillsLoader{}).getSkillMetadata(skillFile); meta != nil {
+			meta, metadataErr := (&SkillsLoader{}).getSkillMetadataChecked(skillFile)
+			if metadataErr != nil {
+				incomplete = errors.Join(incomplete,
+					fmt.Errorf("mount %q: %s/%s/SKILL.md: %w", mountName, dirRel, slug, metadataErr))
+				continue
+			}
+			if meta != nil {
 				info.Description = meta.Description
 				if meta.Name != "" {
 					info.Name = meta.Name
