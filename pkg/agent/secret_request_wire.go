@@ -45,7 +45,7 @@ func (al *AgentLoop) SecretRequests() *secretrequest.Registry {
 		Audit: func(rec secretrequest.Record, event string) {
 			audit.Emit(context.Background(), al.AuditLogger(), "secret.request."+event, audit.SeverityInfo, map[string]any{
 				"request_id": rec.Card.RequestId, "session_id": rec.Card.SessionId, "agent_id": rec.Card.ActingAgentId,
-				"state": rec.Card.State,
+				"state": rec.Card.State, "reason_code": rec.ReasonCode,
 			})
 		},
 	})

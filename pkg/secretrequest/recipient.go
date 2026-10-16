@@ -22,13 +22,13 @@ import (
 
 // Input is D1-A's tool input, never a submitted value or a wire type.
 type Input struct {
-	Purpose  string
-	Endpoint string
-	Provider string
-	Server   string
-	EnvKey   string
-	Instance string
-	Field    string
+	Purpose  string `json:"purpose"`
+	Endpoint string `json:"endpoint,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Server   string `json:"server,omitempty"`
+	EnvKey   string `json:"env_key,omitempty"`
+	Instance string `json:"instance,omitempty"`
+	Field    string `json:"field,omitempty"`
 }
 
 var envKeyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
@@ -82,14 +82,14 @@ func ResolveRecipient(cfg *config.Config, in Input) ([]credentials.CardRecipient
 		}
 		// The fingerprint contains every non-credential setting. Changing an
 		// account, host or endpoint while the card is open invalidates consent.
-		copy := channel
-		rv := reflect.ValueOf(&copy).Elem()
+		projection := channel
+		rv := reflect.ValueOf(&projection).Elem()
 		for i := 0; i < rv.NumField(); i++ {
 			if strings.HasSuffix(rv.Type().Field(i).Name, "Ref") {
 				rv.Field(i).Set(reflect.Zero(rv.Field(i).Type()))
 			}
 		}
-		raw, err := json.Marshal(copy)
+		raw, err := json.Marshal(projection)
 		if err != nil {
 			return nil, nil, gen.SecretRecipientDisplay{}, errors.New("could not describe channel recipient")
 		}

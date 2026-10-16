@@ -36,11 +36,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
-// approvalWorkspaceMaxHops bounds approvalWorkspaceID's walk up the
-// delegation chain. Real chains are a handful of levels deep; the bound only
-// guarantees termination over corrupt or cyclic on-disk meta.
-const approvalWorkspaceMaxHops = 16
-
 // approvalWorkspaceIDMaxLen mirrors the wire schema's maxLength for
 // workspace_id (ToolApprovalRequiredFrame / SessionStatePendingApproval). A
 // longer value is omitted rather than emitted schema-invalid.

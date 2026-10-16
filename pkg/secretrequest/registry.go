@@ -8,7 +8,6 @@ package secretrequest
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"reflect"
@@ -34,6 +33,7 @@ type Record struct {
 	Recipients []credentials.CardRecipient   `json:"recipients"`
 	Owner      string                        `json:"owner"`
 	ChatID     string                        `json:"chat_id"`
+	ReasonCode string                        `json:"reason_code,omitempty"`
 }
 
 // Options supplies live dependencies; reload never leaves a stale config or
@@ -69,21 +69,21 @@ func (r *Registry) SetSink(sink func(Record)) {
 	r.mu.Unlock()
 }
 
-// Failure is a value-free HTTP refusal. State is supplied for a 409 so a
+// RequestError is a value-free HTTP refusal. State is supplied for a 409 so a
 // client never guesses whether a request was submitted.
-type Failure struct {
+type RequestError struct {
 	Status  int
 	Message string
 	State   *gen.SecretRequestState
 }
 
-func (e *Failure) Error() string { return e.Message }
+func (e *RequestError) Error() string { return e.Message }
 
-func failure(status int, text string) error { return &Failure{Status: status, Message: text} }
+func failure(status int, text string) error { return &RequestError{Status: status, Message: text} }
 
 func (r *Registry) conflict(rec Record, text string) error {
 	state := State(rec)
-	return &Failure{Status: http.StatusConflict, Message: text, State: &state}
+	return &RequestError{Status: http.StatusConflict, Message: text, State: &state}
 }
 
 // Create is called only from the authenticated turn context, not from REST.
@@ -99,6 +99,9 @@ func (r *Registry) Create(ctx context.Context, sessionID, agentID, chatID, origi
 	}
 	if r.opts.Sessions == nil || r.opts.Config == nil {
 		return Record{}, errors.New("secret request service is unavailable")
+	}
+	if cleanupErr := r.reconcilePendingLocked(); cleanupErr != nil {
+		return Record{}, errors.New("secret request state could not be reconciled")
 	}
 	meta, err := r.opts.Sessions.GetMeta(sessionID)
 	if err != nil || meta.AgentID != agentID {
@@ -188,6 +191,12 @@ func (r *Registry) Get(id, owner string) (Record, error) {
 }
 
 func (r *Registry) getLocked(id, owner string) (Record, error) {
+	if r.initErr != nil {
+		return Record{}, failure(http.StatusServiceUnavailable, "saved secret request state is unavailable")
+	}
+	if err := r.reconcilePendingLocked(); err != nil {
+		return Record{}, failure(http.StatusServiceUnavailable, "secret request state could not be reconciled")
+	}
 	rec, ok := r.entries[id]
 	if !ok || (rec.Owner != "" && rec.Owner != owner) {
 		return Record{}, failure(http.StatusNotFound, "secret request not found")
@@ -209,22 +218,27 @@ func (r *Registry) Submit(id, owner string, input gen.SecretSubmitRequest) (Reco
 	if rec.Card.State != "pending" {
 		return rec, r.conflict(rec, "secret request is not pending")
 	}
-	if err := r.checkRecipientLocked(rec); err != nil {
-		return r.refuseLocked(rec, err.Error())
+	if checkErr := r.checkRecipientLocked(rec); checkErr != nil {
+		return r.refuseLocked(rec, checkErr.Error())
 	}
 	if input.Cancel != nil && bool(*input.Cancel) && input.Values == nil {
 		return r.finishLocked(rec, "cancelled")
 	}
 	if input.Cancel != nil || input.Values == nil || len(*input.Values) != len(rec.Card.Fields) {
+		r.auditRefusalLocked(rec, "invalid_payload")
 		return rec, failure(http.StatusBadRequest, "submit exactly the requested fields, or cancel")
 	}
 	values := make([]credentials.CardValue, 0, len(rec.Card.Fields))
 	for i, field := range rec.Card.Fields {
 		value, ok := (*input.Values)[field.Key]
 		if !ok || len(value) < 4 || len(value) > 16384 || !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
+			r.auditRefusalLocked(rec, "invalid_value_shape")
 			return rec, failure(http.StatusBadRequest, "each requested value must be 4–16384 UTF-8 bytes without NUL")
 		}
 		values = append(values, credentials.CardValue{BaseName: ReferenceBase(rec.Recipients[i]), Recipient: rec.Recipients[i], Value: value})
+	}
+	if r.opts.Credentials == nil {
+		return rec, failure(http.StatusInternalServerError, "secret store is unavailable; request is still pending")
 	}
 	store, err := r.opts.Credentials()
 	if err != nil || store == nil {
@@ -243,7 +257,7 @@ func (r *Registry) Submit(id, owner string, input gen.SecretSubmitRequest) (Reco
 	r.notifyLocked(rec, "submitted")
 	resumeErr := r.resumeLocked(rec)
 	if persistErr != nil || resumeErr != nil {
-		return cloneRecord(rec), &Failure{Status: http.StatusServiceUnavailable, Message: "secret saved; continuation is not confirmed — check request state", State: statePointer(rec)}
+		return cloneRecord(rec), &RequestError{Status: http.StatusServiceUnavailable, Message: "secret saved; continuation is not confirmed — check request state", State: statePointer(rec)}
 	}
 	return cloneRecord(rec), nil
 }
@@ -316,10 +330,29 @@ func State(rec Record) gen.SecretRequestState {
 func statePointer(rec Record) *gen.SecretRequestState { state := State(rec); return &state }
 
 func cloneRecord(rec Record) Record {
-	// All metadata is value-free; JSON also copies the generated anonymous
-	// owner object and every slice, so callers never alias registry state.
-	raw, _ := json.Marshal(rec)
-	var copy Record
-	_ = json.Unmarshal(raw, &copy)
-	return copy
+	cloned := rec
+	cloned.Card.Fields = append([]gen.SecretRequestField(nil), rec.Card.Fields...)
+	cloned.Card.ReferenceNames = append([]string(nil), rec.Card.ReferenceNames...)
+	cloned.Card.Recipient.Lines = append([]string(nil), rec.Card.Recipient.Lines...)
+	cloned.Recipients = append([]credentials.CardRecipient(nil), rec.Recipients...)
+	for i := range cloned.Recipients {
+		cloned.Recipients[i].Args = append([]string(nil), rec.Recipients[i].Args...)
+	}
+	if rec.Card.Owner != nil {
+		owner := *rec.Card.Owner
+		cloned.Card.Owner = &owner
+	}
+	if rec.Card.RootSessionId != nil {
+		id := *rec.Card.RootSessionId
+		cloned.Card.RootSessionId = &id
+	}
+	if rec.Card.WorkspaceId != nil {
+		id := *rec.Card.WorkspaceId
+		cloned.Card.WorkspaceId = &id
+	}
+	if rec.Card.OriginLabel != nil {
+		label := *rec.Card.OriginLabel
+		cloned.Card.OriginLabel = &label
+	}
+	return cloned
 }
