@@ -591,6 +591,17 @@ test('UAT-09b a cookie set in one workspace is absent from the other', async ({}
     const inB = await pageText(fixture.agentB, fixture);
     await note(testInfo, 'workspace B cookie jar', inB);
     expect(inB, 'workspace B must actually be on the cookie page (so the absence means something)').toContain('cookies');
+    // Verify the literal managers too, not merely two apparently separate jars.
+    // Canonical paths handle macOS /var -> /private/var without hard-coding it.
+    const expectedProfiles = [fs.realpathSync(fixture.profileA), fs.realpathSync(fixture.profileB)];
+    const liveProfiles = [...new Set(execFileSync('/bin/ps', ['ax', '-o', 'command'], { encoding: 'utf8' })
+      .split('\n')
+      .flatMap((command) => /--user-data-dir=(\S+)/.exec(command)?.[1] ?? [])
+      .filter((dir) => fs.existsSync(dir))
+      .map((dir) => fs.realpathSync(dir)))];
+    await note(testInfo, 'workspace browser profile keys', JSON.stringify({ workspaceA: fixture.workspaceA, workspaceB: fixture.workspaceB, expectedProfiles, matchedLiveProfiles: liveProfiles.filter((dir) => expectedProfiles.includes(dir)) }));
+    expect(expectedProfiles[0], 'A/B workspace browser profiles must differ').not.toBe(expectedProfiles[1]);
+    expect(liveProfiles, 'the real managers must use each created ws-<workspace-id> profile').toEqual(expect.arrayContaining(expectedProfiles));
     expect(inB, "workspace B must not hold workspace A's cookie").not.toContain('ownA');
     expect(JSON.parse(inB), 'workspace B must have a genuine empty cookie echo').toEqual({ cookies: {} });
 
