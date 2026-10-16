@@ -209,8 +209,8 @@ func repairTornTail(path string) error {
 // journalRepairFile is the file edge of tail repair; tests can force a close
 // failure without mocking the repair algorithm or the journal.
 type journalRepairFile interface {
-	WriteAt([]byte, int64) (int, error)
-	Truncate(int64) error
+	WriteAt(data []byte, offset int64) (int, error)
+	Truncate(size int64) error
 	Sync() error
 	Close() error
 }
