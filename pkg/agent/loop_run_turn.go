@@ -818,6 +818,9 @@ const (
 
 // prepareToolSurface filters and validates the tool surface offered for this provider request.
 func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestFlow {
+	// Reload rebuilds registry entries, not session membership. Restore only
+	// still-authorized loaded names before visibility filtering/pruning.
+	rq.ri.rf.rt.al.restoreLoadedToolRetention(rq.ri.rf.rt.ts)
 	allAgentTools := rq.ri.rf.rt.ts.agent.Tools.GetAll()
 	rq.policyFilteredTools, rq.filterTimePolicyMap = tools.FilterToolsByPolicy(allAgentTools, rq.ri.rf.rt.ts.agent.AgentType, rq.ri.rf.rt.ts.agent.LoadToolPolicy())
 

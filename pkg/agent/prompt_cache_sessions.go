@@ -40,6 +40,28 @@ func (al *AgentLoop) retainAdvertisedTools(ts *turnState, defs []providers.ToolD
 	ts.agent.Tools.RetainLoadedTools(names)
 }
 
+// restoreLoadedToolRetention re-stamps a replacement registry from the session's
+// loaded names BEFORE GetAll can hide fresh deferred registrations. Registration,
+// current policy and MCP assignment still decide which names may be restored.
+func (al *AgentLoop) restoreLoadedToolRetention(ts *turnState) {
+	if ts == nil || ts.agent == nil || ts.agent.Tools == nil {
+		return
+	}
+	loaded := al.sessionLoadedTools(ts.manifestBucket())
+	candidates := make([]tools.Tool, 0, len(loaded))
+	for name := range loaded {
+		if tool, ok := ts.agent.Tools.GetIncludingHidden(name); ok {
+			candidates = append(candidates, tool)
+		}
+	}
+	allowed, _ := tools.FilterToolsByPolicy(candidates, ts.agent.AgentType, ts.agent.LoadToolPolicy())
+	names := make([]string, 0, len(allowed))
+	for _, tool := range allowed {
+		names = append(names, tool.Name())
+	}
+	ts.agent.Tools.RetainLoadedTools(names)
+}
+
 // pruneLoadedTools drops revoked memberships, even if a later turn grants them
 // again. Time passing alone never removes a loaded definition.
 func (al *AgentLoop) pruneLoadedTools(bucket string, allowed []tools.Tool) map[string]bool {
