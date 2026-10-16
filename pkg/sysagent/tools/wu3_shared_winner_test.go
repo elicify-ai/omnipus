@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,10 +45,11 @@ func TestWU3MCPAbsentTokenRejectsConcurrentAddWithoutTouchingCredentials(t *test
 	tool := systools.NewMCPAddTool(d)
 	wu3Success(t, tool.Execute(context.Background(), map[string]any{"name": "notion", "transport": "stdio", "command": "winner-command", "expected_revision": "absent"}))
 	before := wu3ReadFile(t, d.ConfigPath)
+	ref := systools.IssueCardReferencesForTest(t, d, secretrequest.Input{Server: "notion", EnvKey: "KEY"}, "wu3-loser-value")[0]
 	require.NoError(t, d.CredStore.Set("control-ref", "wu3-control-value"))
 	credPath := filepath.Join(d.Home, "credentials.json")
 	credsBefore := wu3ReadFile(t, credPath)
-	result := tool.Execute(context.Background(), map[string]any{"name": "notion", "transport": "stdio", "command": "loser-command", "env": map[string]any{"KEY": "wu3-loser-value"}, "expected_revision": "absent"})
+	result := tool.Execute(context.Background(), map[string]any{"name": "notion", "transport": "stdio", "command": "loser-command", "env_refs": map[string]any{"KEY": ref}, "expected_revision": "absent"})
 	body := wu3Error(t, result, "CONFLICT")
 	assert.Contains(t, body["message"], "notion")
 	assert.Equal(t, before, wu3ReadFile(t, d.ConfigPath))

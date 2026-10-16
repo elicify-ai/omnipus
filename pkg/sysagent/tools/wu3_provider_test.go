@@ -47,13 +47,18 @@ func TestWU3ConfigureProviderChecksSavedEndpointNotCatalogue(t *testing.T) {
 		catalogueCalls++
 		return wu3HTTPResponse(r, 200, `{"data":[{"id":"catalogue-only-model"}]}`), nil
 	})
-	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "openai", "api_key": "wu3-new-key", "expected_revision": wu3SharedRow(t, d, "provider", "openai")["revision"]})
+	ref := systools.IssueProviderReferenceForTest(t, d, "openai", "", "wu3-new-key")
+	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "openai", "api_key_ref": ref, "expected_revision": wu3SharedRow(t, d, "provider", "openai")["revision"]})
 	assert.Equal(t, 1, savedCalls, "FR-031: saved effective custom endpoint must actually be probed")
 	assert.Zero(t, catalogueCalls, "successful catalogue is not evidence about custom endpoint")
 	assert.Equal(t, "https://saved.wu3.invalid/v1", cfg.Providers[0].APIBase)
-	key, err := d.CredStore.Get("fixture-ref")
+	key, err := d.CredStore.Get(ref)
 	require.NoError(t, err)
 	assert.Equal(t, "wu3-new-key", key)
+	old, err := d.CredStore.Get("fixture-ref")
+	require.NoError(t, err)
+	assert.Equal(t, "wu3-old-key", old, "D2-A selection must not overwrite the old version")
+	assert.Equal(t, ref, cfg.Providers[0].APIKeyRef)
 	wu3Outcome(t, result, "saved but not working")
 }
 
@@ -89,7 +94,8 @@ func TestWU3ConfigureProviderUsesSavedNonOpenAIProtocol(t *testing.T) {
 		assert.NotEmpty(t, r.Header.Get("Anthropic-Version"), "protocol requires version header")
 		return wu3HTTPResponse(r, 200, `{"data":[{"id":"fixture-model"}]}`), nil
 	})
-	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "anthropic", "api_key": "wu3-new-key", "expected_revision": wu3SharedRow(t, d, "provider", "anthropic")["revision"]})
+	ref := systools.IssueProviderReferenceForTest(t, d, "anthropic", "", "wu3-new-key")
+	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "anthropic", "api_key_ref": ref, "expected_revision": wu3SharedRow(t, d, "provider", "anthropic")["revision"]})
 	assert.Equal(t, 1, calls, "saved non-OpenAI protocol must drive the live listing")
 	wu3Outcome(t, result, "working")
 }
@@ -106,7 +112,8 @@ func TestWU3ProviderWorkingOnlyProvesModelListing(t *testing.T) {
 		completionCalls++
 		return wu3HTTPResponse(r, 404, `{"error":"chosen model unavailable"}`), nil
 	})
-	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "openai", "api_key": "wu3-test-key", "api_base": "https://listing.wu3.invalid/v1", "expected_revision": "absent"})
+	ref := systools.IssueProviderReferenceForTest(t, d, "openai", "https://listing.wu3.invalid/v1", "wu3-test-key")
+	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "openai", "api_key_ref": ref, "api_base": "https://listing.wu3.invalid/v1", "expected_revision": "absent"})
 	assert.Equal(t, 1, listCalls)
 	assert.Zero(t, completionCalls, "configure_provider must not pretend to test model execution")
 	body := wu3Outcome(t, result, "working")
@@ -156,17 +163,18 @@ func TestWU3ConfigureProviderDryRunHasNoSideEffects(t *testing.T) {
 	for _, valid := range []bool{true, false} {
 		t.Run(fmt.Sprintf("valid_%t", valid), func(t *testing.T) {
 			d, cfg := wu3Deps(t)
+			base := "https://dry-run.wu3.invalid/v1"
+			if !valid {
+				base = "file:///etc/passwd"
+			}
+			ref := systools.IssueProviderReferenceForTest(t, d, "openai", base, "wu3-test-key")
 			configBefore := wu3ReadFile(t, d.ConfigPath)
 			credentialPath := d.Home + "/credentials.json"
 			require.NoError(t, d.CredStore.Set("fixture-control", "wu3-control-value"))
 			credsBefore := wu3ReadFile(t, credentialPath)
 			calls := 0
 			wu3Network(t, func(r *http.Request) (*http.Response, error) { calls++; return wu3HTTPResponse(r, 500, `{}`), nil })
-			base := "https://dry-run.wu3.invalid/v1"
-			if !valid {
-				base = "file:///etc/passwd"
-			}
-			result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "openai", "api_key": "wu3-test-key", "api_base": base, "dry_run": true, "expected_revision": "absent"})
+			result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "openai", "api_key_ref": ref, "api_base": base, "dry_run": true, "expected_revision": "absent"})
 			assert.Zero(t, calls, "dry_run never probes the upstream")
 			assert.Equal(t, configBefore, wu3ReadFile(t, d.ConfigPath), "dry_run never persists config")
 			assert.Equal(t, credsBefore, wu3ReadFile(t, credentialPath), "dry_run never persists credentials")
