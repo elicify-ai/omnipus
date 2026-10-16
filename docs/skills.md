@@ -76,6 +76,8 @@ A skill is one folder, one file. These are the parts the app reads.
 | `author`, `version` | No | Shown on the skill's card in Installed Skills. |
 | `argument-hint` | No | A hint shown next to the skill in the chat `/` menu, such as `<query>`. |
 
+The optional `allowed-tools` metadata accepts a space-separated scalar (`Read Grep Bash`), a comma-separated scalar (`Read,Grep,Bash`), or a YAML list (`[Read, Grep, Bash]`, or one item per line). Surrounding whitespace is removed; tool-name case and declaration order are kept. Empty declarations produce no tool entries. Declaring tools here does not grant permission to use them; the agent's configured tool permissions still apply.
+
 The description is the part that decides whether the skill is ever used. The agent picks a skill by matching the description against the task, so write it as a trigger: "Use when the user asks to cut a release or publish release notes" fires; "Release process documentation" does not. Name the phrases a task would actually contain.
 
 ## Skills in another workspace

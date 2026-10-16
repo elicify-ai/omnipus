@@ -139,8 +139,12 @@ func TestAgentRegistry_GetAgent_Normalize(t *testing.T) {
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
 
 	agent, ok := registry.GetAgent("My-Agent")
+	if ok || agent != nil {
+		t.Fatal("#1330: differently-cased agent ID must be unknown")
+	}
+	agent, ok = registry.GetAgent("my-agent")
 	if !ok || agent == nil {
-		t.Fatal("expected to find agent with normalized ID")
+		t.Fatal("expected to find agent with exact ID")
 	}
 	if agent.ID != "my-agent" {
 		t.Errorf("agent.ID = %q, want 'my-agent'", agent.ID)

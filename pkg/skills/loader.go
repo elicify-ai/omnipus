@@ -525,7 +525,7 @@ func (sl *SkillsLoader) getSkillMetadataChecked(skillPath string) (*SkillMetadat
 		metadata.ModelHint = mh
 	}
 	if tools := yamlMeta["allowed-tools"]; tools != "" {
-		metadata.AllowedTools = strings.Split(tools, ",")
+		metadata.AllowedTools = strings.Fields(strings.ReplaceAll(tools, ",", " "))
 	}
 	// Collect extra keys.
 	extra := make(map[string]string)

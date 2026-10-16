@@ -164,6 +164,20 @@ func agentHomeInternalDeny(cleanPath string, policy FSPolicy) bool {
 	return false
 }
 
+// VisibleDirectoryEntries omits protected child paths from a directory listing.
+// Use the resolved directory and its turn policy before pagination, so neither
+// names nor page totals disclose protected entries. Ordinary files with the
+// same basenames elsewhere remain visible because IsCarveOut is path-based.
+func VisibleDirectoryEntries(dir string, entries []os.DirEntry, policy FSPolicy) []os.DirEntry {
+	visible := make([]os.DirEntry, 0, len(entries))
+	for _, entry := range entries {
+		if !IsCarveOut(filepath.Join(dir, entry.Name()), policy) {
+			visible = append(visible, entry)
+		}
+	}
+	return visible
+}
+
 // isAgentHomeRoot reports whether workDir is an agent home — <home>/agents/<id>
 // or a directory strictly below one. Identity-based on the home coverage and
 // shape-based on the agents/ component, which is exactly the granularity the

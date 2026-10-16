@@ -13,6 +13,12 @@ Open **Agents** in the sidebar and the roster has four sections:
 
 A filter above the roster narrows the list to one [workspace](workspaces.md) team.
 
+When addressing an agent by its ID, use the exact letter case. For example, `Jim` does not address the built-in ID `jim`; it is an unknown ID. This rule applies to new chats, existing chats and bound channels. The one exception is addressing the system agent Omnipus in chat: its ID comparison ignores case, and an existing chat keeps its stored owner spelling. Display names are labels, not ID aliases.
+
+For an existing chat, a differently cased ordinary ID is refused before the message is saved or sent to the agent. Omitting the ID continues under that chat's stored owner; it does not choose another agent.
+
+For a new chat message, an unknown or differently cased ordinary ID is refused before a session is created or the message is saved. Requests for Omnipus in any letter case point to its canonical main chat rather than creating another conversation.
+
 ## When you would use it
 
 - You want a colleague with a fixed job and personality. Create a Main agent.
