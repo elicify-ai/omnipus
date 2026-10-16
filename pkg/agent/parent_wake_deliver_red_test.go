@@ -28,10 +28,9 @@ import (
 )
 
 func TestProgress_DoesNotCallWakeParent(t *testing.T) {
-	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	al, _, _, deliverer := newPWDeliverTestLoop(t)
 	const parentID, childID = "parent-pw-progress", "child-pw-progress"
-	seedParentAndChild(t, lifecycle, parentID, childID)
-	seedUnifiedSession(t, al, parentID)
+	pwSeedDeliverySessions(t, al, parentID, childID)
 
 	kinds := []struct {
 		name    string
@@ -69,10 +68,9 @@ func TestProgress_DoesNotCallWakeParent(t *testing.T) {
 }
 
 func TestDeliver_QuestionBlockerFailureWakeOnce(t *testing.T) {
-	al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
+	al, _, inbox, deliverer := newPWDeliverTestLoop(t)
 	const parentID, childID = "parent-pw-ask", "child-pw-ask"
-	seedParentAndChild(t, lifecycle, parentID, childID)
-	seedUnifiedSession(t, al, parentID)
+	pwSeedDeliverySessions(t, al, parentID, childID)
 
 	cases := []struct {
 		name    string
@@ -121,9 +119,11 @@ func TestDeliver_QuestionBlockerFailureWakeOnce(t *testing.T) {
 }
 
 func TestDeliver_OrdinaryNonFatalDoesNotWake(t *testing.T) {
-	_, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	al, _, _, deliverer := newPWDeliverTestLoop(t)
 	const parentID, childID = "parent-pw-err", "child-pw-err"
-	seedParentAndChild(t, lifecycle, parentID, childID)
+	// PW-D12 / §9.4: a positive wake control needs a real recipient's
+	// metadata. A missing parent is a refusal, not a tool-ceiling exception.
+	pwSeedDeliverySessions(t, al, parentID, childID)
 
 	ordinary, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
 		ChildSessionID: childID,
@@ -162,11 +162,39 @@ func TestDeliver_OrdinaryNonFatalDoesNotWake(t *testing.T) {
 	}
 }
 
+// PW-D12 / §9.4 (final spec, §22 keeps that refusal): a missing
+// recipient's metadata is never waived for a max_tool_iterations failure.
+func TestDeliver_ToolIterationMissingParentMetadataDoesNotWake(t *testing.T) {
+	al, _, _, deliverer := newPWDeliverTestLoop(t)
+	const parentID, childID = "parent-pw-missing-meta", "child-pw-missing-meta"
+	pwSeedDeliverySessions(t, al, parentID, childID)
+	if err := al.GetSessionStore().DeleteSession(parentID); err != nil {
+		t.Fatalf("SETUP: remove only the recipient metadata: %v", err)
+	}
+	if _, err := al.GetSessionStore().GetMeta(parentID); err == nil {
+		t.Fatal("SETUP: missing-metadata refusal needs an absent recipient")
+	}
+	wakes := pwObserveNotifier(t, al)
+	delivery, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
+		ChildSessionID: childID,
+		Outcome:        steer.OutcomeLifecycleNotice,
+		Message:        pwAgentError(t, childID, "ceiling-without-parent", false, session.LifecycleNoticeReasonPrefixToolIterations+" 10"),
+	})
+	if err != nil {
+		t.Fatalf("Deliver missing parent metadata: %v", err)
+	}
+	if delivery.Outcome != steer.DeliveryStoredNotWoken {
+		t.Errorf("tool-iteration failure with missing parent metadata outcome=%q, want stored_not_woken (PW-D12)", delivery.Outcome)
+	}
+	if got := wakes(); got != 0 {
+		t.Errorf("tool-iteration failure with missing parent metadata published %d wakes, want 0 (PW-D12)", got)
+	}
+}
+
 func TestStopNotice_LandedStopWithoutMarkerBlocksWake(t *testing.T) {
-	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	al, lifecycle, _, deliverer := newPWDeliverTestLoop(t)
 	const parentID, childID = "parent-pw-stopmark", "child-pw-stopmark"
-	seedParentAndChild(t, lifecycle, parentID, childID)
-	seedUnifiedSession(t, al, parentID)
+	pwSeedDeliverySessions(t, al, parentID, childID)
 
 	t.Run("landed intentional stop whose marker was cleared stores the report and starts no turn", func(t *testing.T) {
 		if err := lifecycle.Mutate(parentID, func(rec *session.LifecycleRecord) error {

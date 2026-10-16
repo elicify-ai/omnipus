@@ -66,7 +66,7 @@ func TestDeliver_MetVerdictSaveThenPlace(t *testing.T) {
 	lifecycle := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	al.SetSessionMessagingStores(inbox, lifecycle)
-	wireSteerCompletionDeps(t, al)
+	pwWireRuntime(t, al)
 
 	parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
 	if err != nil {
@@ -167,10 +167,19 @@ func pwStampParent(t *testing.T, g *goalClaimAwaitingJudge) string {
 		inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
 		g.al.SetSessionMessagingStores(inbox, ls)
 	}
+	// PW-D2/PW-D16: the real Judge/completion path needs the same upward
+	// deliverer, launcher, goal reference and producing execution as boot.
+	pwWireRuntime(t, g.al)
+	ws := testHarnessWorkspaceMembershipID
+	for _, id := range []string{parent.ID, g.sid} {
+		if err := g.store.SetMeta(id, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+			t.Fatalf("SETUP: goal-session workspace: %v", err)
+		}
+	}
 	if err := ls.Persist(&session.LifecycleRecord{
 		SessionID: parent.ID, Generation: 1, State: session.LifecycleCompleted,
 		Origin: &session.Origin{Kind: session.OriginKindChat}, OwnerScopeKind: session.OwnerScopeHuman,
-		WorkspaceID: "ws-pw-goal", AgentID: g.agent.ID,
+		WorkspaceID: ws, AgentID: g.agent.ID,
 	}); err != nil {
 		t.Fatalf("persist parent: %v", err)
 	}
@@ -178,7 +187,7 @@ func pwStampParent(t *testing.T, g *goalClaimAwaitingJudge) string {
 		SessionID: g.sid, Generation: 1, State: session.LifecycleRunning,
 		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: parent.ID,
-		WorkspaceID: "ws-pw-goal", AgentID: g.agent.ID,
+		WorkspaceID: ws, AgentID: g.agent.ID, ParentAgentID: g.agent.ID, GoalRef: g.goalID,
 		SteeredBy: &session.SteeredBy{
 			SteeringSessionID: parent.ID, RootSessionID: parent.ID,
 			ReportingTarget: session.ReportingTarget{Channel: "webchat", ChatID: parent.ID, SessionID: parent.ID},
@@ -186,6 +195,14 @@ func pwStampParent(t *testing.T, g *goalClaimAwaitingJudge) string {
 	}); err != nil {
 		t.Fatalf("persist helper edge: %v", err)
 	}
+	producing, err := ls.Load(g.sid)
+	if err != nil {
+		t.Fatalf("SETUP: load producing helper: %v", err)
+	}
+	producing = stampG5ExitedExecution(t, g.al, producing)
+	g.work.producer = executionClaim{SessionID: g.sid, Generation: producing.Generation,
+		RunID: producing.ExecutionID.RunID, BootSeq: producing.ExecutionID.BootSeq}
+	g.work.workspaceID = ws
 	return parent.ID
 }
 

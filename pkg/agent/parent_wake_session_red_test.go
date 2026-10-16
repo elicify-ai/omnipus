@@ -27,13 +27,14 @@ package agent
 import (
 	"context"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func TestWakeSession_RejectsUnknownReason(t *testing.T) {
-	al, cleanup := newSteerAL(t)
+	al, cleanup := newPWWakeTestLoop(t)
 	defer cleanup()
 	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "main", testDefaultAgentID)
 	if err != nil {
@@ -52,7 +53,7 @@ func TestWakeSession_RejectsUnknownReason(t *testing.T) {
 }
 
 func TestWakeSession_CreatorNoticeOneWebchatTurn(t *testing.T) {
-	al, cleanup := newSteerAL(t)
+	al, cleanup := newPWWakeTestLoop(t)
 	defer cleanup()
 	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "main", testDefaultAgentID)
 	if err != nil {
@@ -72,10 +73,11 @@ func TestWakeSession_CreatorNoticeOneWebchatTurn(t *testing.T) {
 	if got := wakes(); got != 1 {
 		t.Fatalf("webchat notifier events = %d, want 1 turn on webchat (PW-D8 / FR-017)", got)
 	}
+	pwDrivePublishedWake(t, al, meta.ID)
 }
 
 func TestWakeSession_NeverTurnedMain(t *testing.T) {
-	al, cleanup := newSteerAL(t)
+	al, cleanup := newPWWakeTestLoop(t)
 	defer cleanup()
 	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "main", testDefaultAgentID)
 	if err != nil {
@@ -95,6 +97,7 @@ func TestWakeSession_NeverTurnedMain(t *testing.T) {
 	if got := wakes(); got != 1 {
 		t.Fatalf("notifier events = %d, want 1", got)
 	}
+	pwDrivePublishedWake(t, al, meta.ID)
 
 	helper, err := al.GetSessionStore().NewSession(session.SessionTypeDelegate, "webchat", testDefaultAgentID)
 	if err != nil {
@@ -106,7 +109,7 @@ func TestWakeSession_NeverTurnedMain(t *testing.T) {
 }
 
 func TestWakeSession_GoneParentNoSubstitute(t *testing.T) {
-	al, cleanup := newSteerAL(t)
+	al, cleanup := newPWWakeTestLoop(t)
 	defer cleanup()
 	before, err := al.GetSessionStore().ListSessions()
 	if err != nil {
@@ -129,7 +132,7 @@ func TestWakeSession_GoneParentNoSubstitute(t *testing.T) {
 }
 
 func TestHelperEventId_RepeatIsOneRow(t *testing.T) {
-	al, cleanup := newSteerAL(t)
+	al, cleanup := newPWWakeTestLoop(t)
 	defer cleanup()
 	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "main", testDefaultAgentID)
 	if err != nil {
@@ -186,11 +189,11 @@ func pwObserveNotifier(t *testing.T, al *AgentLoop) func() int {
 	if al.asyncNotifier == nil {
 		t.Fatal("setup: async notifier is not wired")
 	}
-	var n int
+	var n atomic.Int64
 	al.asyncNotifier.registerObserver(func(ev AsyncNotifyEvent) {
 		if ev.Channel == "webchat" {
-			n++
+			n.Add(1)
 		}
 	})
-	return func() int { return n }
+	return func() int { return int(n.Load()) }
 }

@@ -18,19 +18,42 @@ package gateway
 import (
 	"context"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func TestGetStreamer_MissingSessionDoesNotGuess(t *testing.T) {
-	h := &WSHandler{}
-	const otherSession = "sess-other-pw"
+	h, _, al := newTestWSHandler(t)
+	t.Cleanup(h.Wait)
 	const otherChat = "chat-other-pw"
+	otherSession, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
+	if err != nil {
+		t.Fatalf("SETUP: other open session: %v", err)
+	}
+	conn := makeTestConn()
+	bindTestConnToSession(h, otherChat, otherSession.ID, conn)
+
+	// FR-003: test the instrument with a named, genuinely bound session.
+	// A bare handler cannot reveal an erroneous fallback into an open chat.
+	control, ok := h.GetStreamer(context.Background(), "webchat", otherChat, otherSession.ID)
+	if !ok || control == nil {
+		t.Fatal("SETUP: a named session must obtain its real streamer")
+	}
+	if err := control.Update(context.Background(), "named-session control"); err != nil {
+		t.Fatalf("SETUP: named-session token: %v", err)
+	}
+	if frame := readTokenFrame(t, conn.sendCh); frame.Content != "named-session control" {
+		t.Fatalf("SETUP: other chat token=%q, want the named-session control", frame.Content)
+	}
 
 	streamer, ok := h.GetStreamer(context.Background(), "webchat", otherChat, "")
 	if ok || streamer != nil {
 		t.Fatalf("GetStreamer(webchat, %q, empty session) = (%v, %v), want a refusal — a wake with no session id is not attached to whichever chat is open (FR-003 / Test 29)", otherChat, streamer, ok)
 	}
-	// A named session on this bare handler is not called: resolveSessionStore
-	// needs a loop. The refusal above is the whole observable. DEL-25 already
-	// returns false, so this test is a regression pin and can be green.
-	_ = otherSession
+	select {
+	case raw := <-conn.sendCh:
+		t.Fatalf("the other open session received a frame after a missing-session wake: %s", raw)
+	default:
+	}
+	// DEL-25 already refuses; this is a regression pin, not new RED proof.
 }

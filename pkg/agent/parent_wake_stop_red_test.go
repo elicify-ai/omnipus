@@ -32,10 +32,9 @@ import (
 func TestStopNotice_IntentionalStopNoWake(t *testing.T) {
 	for _, actor := range []string{"human:owner", "agent:parent"} {
 		t.Run(actor, func(t *testing.T) {
-			al, lifecycle, _, _ := newDeliverTestLoop(t)
+			al, lifecycle, _, _ := newPWDeliverTestLoop(t)
 			const parentID, childID = "parent-pw-userstop", "child-pw-userstop"
-			seedParentAndChild(t, lifecycle, parentID, childID)
-			seedUnifiedSession(t, al, parentID)
+			pwSeedDeliverySessions(t, al, parentID, childID)
 			pwLandFencelessStop(t, lifecycle, childID, parentID, session.StopCauseStop, actor)
 
 			wakes := w1hObserveWakes(t, al)
@@ -76,10 +75,9 @@ func TestStopNotice_IntentionalStopNoWake(t *testing.T) {
 }
 
 func TestStopNotice_RestartWakesIdleParent(t *testing.T) {
-	al, lifecycle, _, _ := newDeliverTestLoop(t)
+	al, lifecycle, _, _ := newPWDeliverTestLoop(t)
 	const parentID, childID = "parent-pw-restart", "child-pw-restart"
-	seedParentAndChild(t, lifecycle, parentID, childID)
-	seedUnifiedSession(t, al, parentID)
+	pwSeedDeliverySessions(t, al, parentID, childID)
 	if err := lifecycle.Mutate(parentID, func(rec *session.LifecycleRecord) error {
 		rec.State = session.LifecycleCompleted
 		rec.Stop = nil
@@ -115,10 +113,9 @@ func TestStopNotice_RestartWakesIdleParent(t *testing.T) {
 }
 
 func TestStopNotice_HistoricalTimeoutWakesNoResume(t *testing.T) {
-	al, lifecycle, _, _ := newDeliverTestLoop(t)
+	al, lifecycle, _, _ := newPWDeliverTestLoop(t)
 	const parentID, childID = "parent-pw-timeout", "child-pw-timeout"
-	seedParentAndChild(t, lifecycle, parentID, childID)
-	seedUnifiedSession(t, al, parentID)
+	pwSeedDeliverySessions(t, al, parentID, childID)
 	if err := lifecycle.Mutate(parentID, func(rec *session.LifecycleRecord) error {
 		rec.State = session.LifecycleCompleted
 		return nil

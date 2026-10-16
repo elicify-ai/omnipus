@@ -14,11 +14,10 @@
 // never runs. An external helper is not replaced. A refused resume keeps the
 // restart sentence and adds "Resume did not start."
 //
-// The historical executor counter is the side effect outside the transcript
-// (PW-D21 / UAT-4). This harness does not replay tools; the new occurrence's
-// count staying 0 is the failure. A later resume that re-invokes the
-// historical pair must move that count off 1 — the assertion is already here
-// so a dispatch-only change does not go green.
+// The runtime, roster, launcher, dispatch and stores are real. The provider is
+// held so a resumed helper cannot finish before its admission is observed.
+// These existing tests assert admission, not executor occurrence counts; full
+// PW-D21 side-effect proof remains a separate test/UAT obligation.
 //
 // Step 4 items 2–3 are deferred to CHECK.
 package agent
@@ -34,14 +33,14 @@ import (
 func TestResumeSkipsHistoricalInvocationNotCallId(t *testing.T) {
 	// The historical pair (assistant occurrence A, call id call_0) already
 	// succeeded once. Resume is the next model decision. A later occurrence B
-	// may reuse call_0 and must be allowed to run. Today's boot never
-	// dispatches, so occurrence B cannot run. The assertion is the dispatch
-	// itself: there is no executor hook on this harness, and a local counter
-	// the runtime cannot touch would stay red after a correct resume.
-	h := newBootRecoveryHarness(t)
+	// may reuse call_0 and must be allowed to run. This existing assertion
+	// observes dispatch, not an executor counter; the capable runtime below
+	// must let production boot, not the fixture, admit that next decision.
+	h := newPWBootRecoveryHarness(t)
 	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 	h.persist(t, h.steeredRecord(child, parent, session.LifecycleRunning))
+	h.seedCompletedToolHistory(t, child)
 	if err := h.recovery().Run(context.Background()); err != nil {
 		t.Fatalf("boot recovery Run: %v", err)
 	}
@@ -55,10 +54,11 @@ func TestResumeSkipsHistoricalInvocationNotCallId(t *testing.T) {
 }
 
 func TestBoot_NativeHelperResumesFromHistory(t *testing.T) {
-	h := newBootRecoveryHarness(t)
+	h := newPWBootRecoveryHarness(t)
 	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 	h.persist(t, h.steeredRecord(child, parent, session.LifecycleRunning))
+	h.seedCompletedToolHistory(t, child)
 	if err := h.recovery().Run(context.Background()); err != nil {
 		t.Fatalf("boot recovery Run: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestBoot_NativeHelperResumesFromHistory(t *testing.T) {
 }
 
 func TestBoot_ResumeFailureStillWakesOnce(t *testing.T) {
-	h := newBootRecoveryHarness(t)
+	h := newPWBootRecoveryHarness(t)
 	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 	rec := h.steeredRecord(child, parent, session.LifecycleRunning)
@@ -113,7 +113,7 @@ func TestBoot_ResumeFailureStillWakesOnce(t *testing.T) {
 }
 
 func TestBoot_UserStopNotResumed(t *testing.T) {
-	h := newBootRecoveryHarness(t)
+	h := newPWBootRecoveryHarness(t)
 	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 	rec := h.steeredRecord(child, parent, session.LifecycleStopped)
@@ -143,7 +143,7 @@ func TestBoot_UserStopNotResumed(t *testing.T) {
 }
 
 func TestBoot_ExternalHelperNotReplaced(t *testing.T) {
-	h := newBootRecoveryHarness(t)
+	h := newPWBootRecoveryHarness(t)
 	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 	rec := h.steeredRecord(child, parent, session.LifecycleRunning)
