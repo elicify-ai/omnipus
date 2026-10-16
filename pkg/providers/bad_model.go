@@ -2,6 +2,7 @@ package providers
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
@@ -11,6 +12,14 @@ var badModelPatterns = []errorPattern{
 	rxp("\\bmodel(?:\\s+[\"'`][-a-z0-9_./:@~+]+[\"'`])?\\s+(?:not found\\b|does not exist\\b)"),
 	rxp(`\bnot a valid model (?:id|identifier)\b`),
 }
+
+// Keep the model subject and its predicate in ONE matched span. A separate
+// message prefix/suffix check can incorrectly bind "image input" to the model.
+// The only capture is an unquoted identifier, which must equal the selected id.
+var modelAvailabilityAssertion = regexp.MustCompile(
+	"(?i)(?:^|[[:space:]:;,])model(?:[[:space:]]+(?:[\"'`][-a-z0-9_./:@~+]+[\"'`]|([-a-z0-9_./:@~+]+)))?" +
+		`[[:space:]]+is[[:space:]]+not[[:space:]]+(?:available|offered)(?:[[:space:]]+(?:on|by)[[:space:]]+this[[:space:]]+provider)?[.!]?[[:space:]]*$`,
+)
 
 // IsBadModelError requires positive wrong-model evidence on HTTP400. Input
 // capability restrictions, missing model inputs/responses and404 retain their
@@ -34,16 +43,12 @@ func IsBadModelError(status int, body, model string) bool {
 	if matchesAny(body, badModelPatterns) {
 		return true
 	}
-	lower := strings.ToLower(strings.TrimSpace(body))
-	// Availability with a capability qualifier is not an existence assertion.
-	// Anchor the allowed endings instead of RE2-unsupported negative lookahead.
-	for _, ending := range []string{" is not available", " is not offered"} {
-		for _, suffix := range []string{"", ".", "!", " on this provider", " on this provider."} {
-			if strings.HasSuffix(lower, ending+suffix) && modelMention(lower, model) {
-				return true
-			}
+	if assertion := modelAvailabilityAssertion.FindStringSubmatch(body); assertion != nil {
+		if assertion[1] == "" || (model != "" && strings.EqualFold(assertion[1], strings.TrimSpace(model))) {
+			return true
 		}
 	}
+	lower := strings.ToLower(strings.TrimSpace(body))
 	if model != "" {
 		prefix := "model " + strings.ToLower(model) + " "
 		for _, suffix := range []string{"not found", "does not exist"} {
@@ -53,11 +58,4 @@ func IsBadModelError(status int, body, model string) bool {
 		}
 	}
 	return false
-}
-
-func modelMention(body, model string) bool {
-	if strings.HasPrefix(body, "model '") || strings.HasPrefix(body, "model \"") || strings.HasPrefix(body, "model `") || strings.HasPrefix(body, "model is ") {
-		return true
-	}
-	return model != "" && strings.HasPrefix(body, "model "+strings.ToLower(model)+" ")
 }

@@ -121,7 +121,14 @@ For an HTTP 400 rejection, the failure notice distinguishes a wrong model from a
 | `bad_model`, naming the provider and model | The provider specifically reported that the model was not found or is not offered. Choose a model offered by that provider in the agent's settings. Omnipus does not try another provider for this failure. |
 | `HTTP 400: Bad Request; format`, naming the provider and model | The provider rejected the request, but did not identify a more specific cause. This does **not** prove the model is unavailable. Enable **Verbose chat** before reproducing it to inspect the available technical detail. |
 
-A confirmed wrong-model error stops all attachment recovery too: removing an image or converting a PDF cannot make a missing model exist. A message that only says the model is unavailable **for image input** is different; existing attachment recovery can still apply. A structured `model_not_found` code is authoritative even if its text also mentions attachments, authentication or rate limits.
+A confirmed wrong-model error stops all attachment recovery too: removing an image or converting a PDF cannot make a missing model exist. Availability wording must describe the **model itself**, not a separate input restriction:
+
+| Provider wording | How Omnipus treats it |
+|---|---|
+| `The model 'm' is not available.` or `Model 'm' is not offered by this provider.` | Positive model-unavailability evidence: `bad_model`, with no attachment retry. |
+| `Model 'm': image input is not available.` or `Model 'm' is not available for image input.` | An image-input restriction, not proof that the model is missing. Existing attachment recovery can still apply. |
+
+A structured `model_not_found` code is authoritative even if its text also mentions attachments, authentication or rate limits.
 
 The same safe explanation is saved in the conversation and remains after reopening it, including when an empty-response retry fails. Helper failure handbacks use translated explanations even for unfamiliar streaming error codes. Raw provider response text is not saved as that explanation. Technical detail is live-only and scrubbed for credentials; turning **Verbose chat** on after delivery or reopening history does not recover discarded detail. Existing attachment recovery, context-length handling, and authentication, billing and rate-limit classifications still take their own paths.
 

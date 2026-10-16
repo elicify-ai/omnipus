@@ -27,7 +27,7 @@ func TestRouting1340_TerminalMessageRequiresCompleteFacts(t *testing.T) {
 			Reason: providers.FailoverFormat, Status: 400, Provider: tc.provider, Model: tc.model,
 			Wrapped: &common.ProviderError{Status: 400},
 		})
-		const want = "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+		want := UserMessageForCode(CodeProviderRequestRejected)
 		wire := WireLLMError(ErrorPayload{Code: string(llm.Code), Message: llm.Message, ProviderError: &ProviderError{Status: 400, Provider: tc.provider, Model: tc.model}})
 		if llm.Code != LLMErrorCode("provider_request_rejected") || llm.Message != want || llm.ProviderMessage || (wire.ProviderMessage != nil && *wire.ProviderMessage) {
 			t.Errorf("partial facts must keep catalogue message without trust flag: llm=%+v wire=%+v", llm, wire)

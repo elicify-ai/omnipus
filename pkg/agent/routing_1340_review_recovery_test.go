@@ -38,6 +38,11 @@ func TestRouting1340_ReviewRecoveryDistinguishesModelAndCapability(t *testing.T)
 		wantBadModel bool
 	}{
 		{"capability_image_strip_retry", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Model 'm' is not available for image input"}}`}, 2, false},
+		{"colon_capability_subject", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Model 'm': image input is not available."}}`}, 2, false},
+		{"colon_capability_no_period", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Model 'm': image input is not available"}}`}, 2, false},
+		{"leading_article_model_absent", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"The model 'm' is not available."}}`}, 1, true},
+		{"model_not_offered_by_provider", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Model 'm' is not offered by this provider."}}`}, 1, true},
+		{"leading_article_not_offered", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"The model 'm' is not offered."}}`}, 1, true},
 		{"explicit_bad_model_image", false, &common.ProviderError{Status: 400, Body: `{"error":{"code":"model_not_found","message":"model not found"}}`}, 1, true},
 		{"explicit_bad_model_pdf", true, &common.ProviderError{Status: 400, Body: `{"error":{"code":"model_not_found","message":"model not found"}}`}, 1, true},
 		{"typed_bad_model_pdf_without_body", true, &providers.FailoverError{Reason: "bad_model", Provider: "openrouter", Model: "m", Status: 400}, 1, true},
@@ -66,8 +71,9 @@ func TestRouting1340_ReviewRecoveryDistinguishesModelAndCapability(t *testing.T)
 				if f.rf.err == nil || !errors.Is(f.rf.err, tc.err) {
 					t.Errorf("permanent model error was replaced: got=%v want original=%v", f.rf.err, tc.err)
 				}
-				if llm := TranslateTurnError(f.rf.err); llm.Code != LLMErrorCode("bad_model") {
-					t.Errorf("permanent model verdict lost: %+v", llm)
+				const wantMessage = "Model m is not offered by provider OpenRouter (bad_model). Pick a new model in the agent's settings."
+				if llm := TranslateTurnError(f.rf.err); llm.Code != LLMErrorCode("bad_model") || llm.Message != wantMessage || llm.Retryable || !llm.ProviderMessage {
+					t.Errorf("permanent model verdict lost: %+v; want non-retriable bad_model and safe message %q", llm, wantMessage)
 				}
 				if f.rt.ts.imageRetryDone.Load() || f.rt.ts.mediaRetryDone.Load() {
 					t.Error("bad_model consumed attachment recovery budget")

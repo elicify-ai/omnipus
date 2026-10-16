@@ -491,7 +491,8 @@ func TestGoalDelegation_DeadChildUnblocksTheWaitingParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("root handback: %v", err)
 	}
-	if !strings.Contains(handback.ResultSoFar, "failed:") || !strings.Contains(handback.ResultSoFar, "downstream provider failure") || strings.Contains(handback.ResultSoFar, "stale parent answer must not reach root") {
-		t.Errorf("root received %q, want real re-entry's child failure, never stale parent text", handback.ResultSoFar)
+	wantFailure := "failed: " + UserMessageForCode(CodeUnknown)
+	if !strings.Contains(handback.ResultSoFar, wantFailure) || strings.Contains(handback.ResultSoFar, "downstream provider failure") || strings.Contains(handback.ResultSoFar, "stale parent answer must not reach root") {
+		t.Errorf("root received %q, want the real re-entry's safe child failure %q, never raw provider or stale parent text", handback.ResultSoFar, wantFailure)
 	}
 }
