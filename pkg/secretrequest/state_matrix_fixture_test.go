@@ -151,8 +151,8 @@ func submitMatrix(t *testing.T, f *matrixEnv, rec secretrequest.Record) secretre
 func requireMatrixFailure(t *testing.T, err error, status int, state string) {
 	t.Helper()
 	require.Error(t, err, "expected a value-free refusal")
-	failure, ok := err.(*secretrequest.Failure)
-	require.True(t, ok, "refusal type = %T, want *secretrequest.Failure", err)
+	failure, ok := err.(*secretrequest.RequestError)
+	require.True(t, ok, "refusal type = %T, want *secretrequest.RequestError", err)
 	require.Equal(t, status, failure.Status)
 	if state != "" {
 		require.NotNil(t, failure.State, "409 must carry true current state (K5)")
