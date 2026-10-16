@@ -22,6 +22,9 @@ type sdkErrorBoundary struct {
 }
 
 func (b *sdkErrorBoundary) middleware(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	// A caller-supplied SDK client can retry internally. Only its final attempt
+	// may determine the returned error, never an earlier HTTP response.
+	b.failure = nil
 	resp, err := next(req)
 	if err != nil || resp == nil || (resp.StatusCode >= 200 && resp.StatusCode < 300) {
 		return resp, err
