@@ -489,6 +489,25 @@ An authorized `environment_setup` run can create and read new files directly ins
 - **Runtime paths are trusted.** The sandbox trusts toolchain and runtime folders by the path supplied to it. If that path is a shortcut (symbolic link), it does not recheck where the shortcut leads against the protected-file inventory, so only use locations you trust.
 - **External command-line workers are not covered.** A worker delegated to Claude Code, Codex or OpenCode runs outside Omnipus's sandbox and file policy entirely (see the God Mode section's external-worker note). Delegating to one is a decision to trust that tool with your account — Omnipus's internal-file protection does not follow it.
 
+## Entering a secret from a chat
+
+When an agent needs a provider key, an MCP server environment secret, or a channel credential, it can open a **secure secret card** in the web app. Type the value into that card, not into the chat. The card names the acting agent, explains why the secret is needed, and shows its destination. An Omnipus helper's card appears in Omnipus's main chat; other helpers must ask their parent.
+
+| Action or state | What happens |
+|---|---|
+| Submit | All requested fields are saved together in the encrypted vault, under new versioned reference names. The agent continues with those names, never the values. |
+| Replace an integration secret | The replacement is saved as a new version. Saving the card alone does not switch the integration to it. |
+| Cancel the card, or Stop before submitting | Nothing is stored. |
+| Stop after submitting | The saved version remains in the vault. Stop does not undo an integration change already completed. |
+| Gateway restarts before submission | The request becomes unavailable. Ask the agent for a new card. |
+| The destination changes while the card is open | Submission is refused. Ask for a new card showing the current destination. |
+
+The card does **not** ask you to re-type your account password: submitting that exact destination-bound card is consent for that write only. It cannot choose an arbitrary vault entry or delete one. Raw Credential Vault changes in Settings still require password confirmation where applicable.
+
+A turn that consumed a message from a channel person cannot open this card, even when that message arrived in an agent's main chat. The agent instead asks you to open the web app and ask it there. Unattended runs cannot open a card either.
+
+Submitted values are not included in card frames, the conversation, or the continuation message. Stored versions also join the sensitive-value filtering set, including versions an integration has not selected. Filtering remains best-effort and can be switched off; do not treat it as protection against a command you deliberately allow to reveal a secret.
+
 ## How to manage saved secrets
 
 1. Open **Settings**, then select **Security**.

@@ -193,7 +193,8 @@ type Config struct {
 	// RegisterSensitiveValues (e.g., resolved credential store values). These
 	// supplement the reflection-walked SecureString fields so that *Ref-based
 	// credentials are also scrubbed from LLM output and audit logs.
-	registeredSensitive []string
+	registeredSensitive   []string
+	storedSensitiveSource func() ([]string, error)
 }
 
 // OmnipusStorageConfig holds storage-related settings per Appendix E §E.5.4.
@@ -294,6 +295,7 @@ func (c *Config) Clone() (*Config, error) {
 	// so the next SensitiveDataReplacer rebuilds from this carried set.
 	c.sensitiveMu.RLock()
 	registered := append([]string(nil), c.registeredSensitive...)
+	clone.storedSensitiveSource = c.storedSensitiveSource
 	c.sensitiveMu.RUnlock()
 	if len(registered) > 0 {
 		clone.RegisterSensitiveValues(registered)
@@ -2403,7 +2405,7 @@ type CredentialStore interface {
 // documented credential boot contract, ADR-004: NewStore → Unlock →
 // LoadConfigWithStore → InjectFromConfig → ...).
 func LoadConfigWithStore(path string, store CredentialStore) (*Config, error) {
-	return loadConfigInternal(path, store, nil)
+	return loadConfigWithSensitiveSource(path, store, nil)
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -2445,7 +2447,7 @@ func LoadConfigWithStoreAndSelfHealHook(
 	store CredentialStore,
 	onSelfHeal SelfHealWriteHook,
 ) (*Config, error) {
-	return loadConfigInternal(path, store, onSelfHeal)
+	return loadConfigWithSensitiveSource(path, store, onSelfHeal)
 }
 
 // seedPublicURLFromEnv fills cfg.Gateway.PublicURL from $DEVPOD_PREVIEW_URL when

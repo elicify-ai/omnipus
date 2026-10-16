@@ -300,7 +300,7 @@ func (w *sessionWorker) enqueueOrRetry(msg bus.InboundMessage) (handled, retry b
 // (and drained) or sees inTurn=false (and goes to the inbox) — never in
 // between.
 func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
-	if msg.Channel == "system" {
+	if msg.Channel == "system" || inboundMetadata(msg, secretResumeMetadataKey) != "" {
 		return false
 	}
 	w.steerMu.Lock()

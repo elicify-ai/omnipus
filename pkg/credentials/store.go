@@ -138,9 +138,11 @@ func (e *NotFoundError) Error() string {
 
 // storeFile is the on-disk JSON structure.
 type storeFile struct {
-	Version     int                 `json:"version"`
-	Salt        string              `json:"salt"`
-	Credentials map[string]encEntry `json:"credentials"`
+	Version      int                    `json:"version"`
+	Salt         string                 `json:"salt"`
+	Credentials  map[string]encEntry    `json:"credentials"`
+	CardSecrets  map[string]CardSecret  `json:"card_secrets,omitempty"`
+	CardReceipts map[string]CardReceipt `json:"card_receipts,omitempty"`
 }
 
 type encEntry struct {

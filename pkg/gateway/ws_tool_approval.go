@@ -73,30 +73,15 @@ func (h *WSHandler) approvalWorkspaceID(sessionID string) string {
 	if h == nil || h.agentLoop == nil || sessionID == "" {
 		return ""
 	}
-	seen := make(map[string]struct{}, 4)
-	sid := sessionID
-	for hop := 0; hop < approvalWorkspaceMaxHops && sid != ""; hop++ {
-		if _, dup := seen[sid]; dup {
-			return ""
-		}
-		seen[sid] = struct{}{}
-		store := h.resolveSessionStore(sid)
-		if store == nil {
-			return ""
-		}
-		meta, err := store.GetMeta(sid)
-		if err != nil || meta == nil {
-			return ""
-		}
-		if meta.WorkspaceID != "" {
-			if len(meta.WorkspaceID) > approvalWorkspaceIDMaxLen {
-				return ""
-			}
-			return meta.WorkspaceID
-		}
-		sid = meta.ParentSessionID
+	store := h.resolveSessionStore(sessionID)
+	if store == nil {
+		return ""
 	}
-	return ""
+	context, _ := store.ResolveInteractionContext(sessionID)
+	if len(context.WorkspaceID) > approvalWorkspaceIDMaxLen {
+		return ""
+	}
+	return context.WorkspaceID
 }
 
 // broadcastToolApprovalRequired sends a tool_approval_required WS frame to
@@ -344,6 +329,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 	// may later echo back to acknowledge. 0 when the main has no outcome yet;
 	// omitted for a non-main, the connection-open emit, and an unreadable mark.
 	frame.AttentionBound = h.attentionBoundFor(sessionID)
+	frame.SecretRequests = h.secretRequestSnapshot(wc, sessionID)
 
 	raw, err := json.Marshal(frame)
 	if err != nil {
