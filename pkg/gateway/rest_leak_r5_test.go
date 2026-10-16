@@ -31,7 +31,9 @@ import (
 // body, an HTTP 200 diagnostic field, a WebSocket error frame - is fixed text.
 // The underlying cause (absolute paths, file names, session ids, OS errors)
 // goes to the server log only. An agent's own id or name may appear (founder
-// ruling); a session id or a storage file name may not.
+// ruling); storage file names and session ids stay out of message prose.
+// #1329 team-lead ruling (2026-10-17): the documented structured session_id
+// correlation field is allowed; it is not permission to expose the id elsewhere.
 
 // r5Leaks are the fragments no client body may contain.
 var r5OSFragments = []string{
@@ -246,24 +248,53 @@ func drainConnFrames(wc *wsConn) string {
 }
 
 // F1: a WebSocket Stop whose lifecycle journal cannot be opened answers the
-// ErrorFrame with fixed text - no session id, no path, no OS error.
+// ErrorFrame with fixed text, never storage paths, OS errors or journal contents.
+// #1329 team-lead ruling (2026-10-17): the submitted session id IS allowed in
+// the structured JSON session_id field, and ONLY there — never in message prose.
 func TestR5_F1_WebSocketStopFailureIsFixedText(t *testing.T) {
 	h := r5NewWSHandler(t)
 	lc := session.NewLifecycleStore(t.TempDir())
 	h.agentLoop.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lc)
 	const sid = "session_r5stopleak0001"
+	const journalSecret = "PRIVATE-LIFECYCLE-JOURNAL-CONTENT-1329"
 	require.NoError(t, lc.Persist(&session.LifecycleRecord{
 		SessionID: sid, Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeHuman,
-		WorkspaceID: "ws-1", AgentID: "ann",
+		WorkspaceID: "ws-1", AgentID: "ann", PendingUserMessages: []string{journalSecret},
 	}))
-	r5Block(t, filepath.Join(lc.Dir(), sid+".jsonl"))
+	journalPath := filepath.Join(lc.Dir(), sid+".jsonl")
+	journal, err := os.ReadFile(journalPath)
+	require.NoError(t, err)
+	require.Contains(t, string(journal), journalSecret, "instrument: real journal must contain the private sentinel")
+	r5Block(t, journalPath)
+	_, blockedErr := os.ReadFile(journalPath)
+	var pathErr *os.PathError
+	require.ErrorAs(t, blockedErr, &pathErr, "instrument: the journal must fail with a real filesystem error")
+	osCause := pathErr.Err.Error() // derive the OS wording on this platform, never assume a Unix message.
 	wc := makeTestConn()
 
 	h.handleCancelWithScope(wc, sid, false)
 
 	frames := drainConnFrames(wc)
 	require.Contains(t, frames, `"type":"error"`, "the Stop failure must still be reported: %s", frames)
-	r5AssertClean(t, frames, sid, lc.Dir())
+	// Retain the whole-response path/OS/journal exclusions. Only the exact,
+	// parsed correlation member is exempt from the session-id exclusion.
+	r5AssertClean(t, frames, lc.Dir(), journalPath, osCause, journalSecret, "pending_user_messages", "owner_scope_kind")
+	for _, raw := range strings.Split(strings.TrimSpace(frames), "\n") {
+		var fields map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(raw), &fields), "every response frame must be valid JSON: %s", raw)
+		var frame gen.ErrorFrame
+		require.NoError(t, json.Unmarshal([]byte(raw), &frame))
+		if frame.Type == "error" {
+			require.NotNil(t, frame.SessionId, "Stop failure must carry the structured correlation field")
+			assert.Equal(t, sid, *frame.SessionId, "session_id must equal the submitted id, not a journal-derived substitute")
+			assert.NotEmpty(t, frame.Message, "the failure must keep its human-readable message")
+			r5AssertClean(t, frame.Message, sid, lc.Dir(), osCause, journalSecret, "pending_user_messages", "owner_scope_kind")
+		}
+		delete(fields, "session_id")
+		withoutCorrelation, err := json.Marshal(fields)
+		require.NoError(t, err)
+		r5AssertClean(t, string(withoutCorrelation), sid, lc.Dir(), osCause, journalSecret, "pending_user_messages", "owner_scope_kind")
+	}
 }
 
 // F4: the settled-Stop failure notice names no session id.
