@@ -39,7 +39,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, X } from '@phosphor-icons/react'
 import type { AskUserAnswerFrame, AskUserQuestionCard as AskUserCard } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore } from '@/store/chat'
-import { askUserCardKey, subscribeAskUserAnswerRejection } from '@/store/askUserAnswerFeedback'
+import { useConnectionStore } from '@/store/connection'
+import { askUserCardKey, subscribeAskUserAnswerRejection, subscribeAskUserPendingReconciliation } from '@/store/askUserAnswerFeedback'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -80,20 +81,36 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
   const [now, setNow] = useState(() => Date.now())
   const lastInteraction = useRef(Date.now())
   const submitted = useRef(false)
+  const awaitingReconnectSnapshot = useRef(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const rejectSubmission = useCallback((message: string) => {
     submitted.current = false
+    awaitingReconnectSnapshot.current = false
     setSubmitting(false)
     setSubmitError(message)
     lastInteraction.current = Date.now()
   }, [])
   useEffect(() => {
     if (card.status !== 'pending') return
-    return subscribeAskUserAnswerRejection(
-      { session_id: card.session_id, card_id: card.card_id },
-      rejectSubmission,
-    )
+    const identity = { session_id: card.session_id, card_id: card.card_id }
+    const unsubscribeRejection = subscribeAskUserAnswerRejection(identity, rejectSubmission)
+    const unsubscribeConnection = useConnectionStore.subscribe((state, previous) => {
+      if (submitted.current && (!state.isConnected || state.connection !== previous.connection)) {
+        awaitingReconnectSnapshot.current = true
+      }
+    })
+    const unsubscribeReconciliation = subscribeAskUserPendingReconciliation(identity, () => {
+      // Connectivity alone cannot tell whether the server consumed the action.
+      // Only the exact pending card, after authoritative reconciliation, can.
+      if (!awaitingReconnectSnapshot.current || !submitted.current || !useConnectionStore.getState().isConnected) return
+      rejectSubmission('This question card is still waiting after reconnecting. Review your answers, then choose Answer or Cancel to retry.')
+    })
+    return () => {
+      unsubscribeRejection()
+      unsubscribeConnection()
+      unsubscribeReconciliation()
+    }
   }, [card.session_id, card.card_id, card.status, rejectSubmission])
   const optionsRef = useRef<HTMLDivElement | null>(null)
   // Set when a confirm moved to another question, so focus follows to its
@@ -227,6 +244,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
   function sendAnswer(answer: Omit<AskUserAnswerFrame, 'type'>) {
     if (submitted.current) return
     submitted.current = true
+    awaitingReconnectSnapshot.current = false
     setSubmitting(true)
     setSubmitError(null)
     const error = sendAskUserAnswer(answer)
