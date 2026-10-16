@@ -211,7 +211,7 @@ type SessionMessageDeliveryClass struct {
 	Fatal bool
 	// WakeEligible: an accepted report of this kind wakes an idle non-stopped
 	// parent, joins a live parent's safe boundary, or is retained for a stopped
-	// parent (FR-012). Every accepted helper report kind is eligible.
+	// parent. Progress, checkpoint, artifact and intentional Stop never wake.
 	WakeEligible bool
 	// CapExempt is the PRESERVED rate/unacked-cap exemption (ADR-091 FR-B-010,
 	// I-5), deliberately separate from WakeEligible: widening which kinds wake a
@@ -236,12 +236,14 @@ func classifyEnvelope(peek envelopePeek) SessionMessageDeliveryClass {
 		class.WakeEligible = true
 		class.CapExempt = true
 	case "error":
-		class.WakeEligible = peek.Fatal || isSteeringLifecycleNoticeText(peek.Text)
-		class.CapExempt = class.WakeEligible
+		// A stopped_child prefix authenticates neither the cause nor a wake.
+		// Only the landed stop transition can authorize restart/timeout wakes.
+		class.WakeEligible = peek.Fatal || strings.HasPrefix(peek.Text, LifecycleNoticeReasonPrefixToolIterations)
+		// Lifecycle notices retain their admission exemption, independently
+		// of whether this event is allowed to wake (PW-D4 / PW-D13).
+		class.CapExempt = peek.Fatal || isSteeringLifecycleNoticeText(peek.Text)
 	case "progress", "checkpoint", "artifact":
-		// FR-012: accepted report kinds wake too, but they stay subject to the
-		// rate and unacked caps (CapExempt stays false).
-		class.WakeEligible = true
+		// Stored and side-panelled, but neither wake-eligible nor cap-exempt.
 	}
 	return class
 }
@@ -256,8 +258,8 @@ const LifecycleNoticeReasonPrefixToolIterations = "max_tool_iterations:"
 
 // LifecycleNoticePrefixStoppedChild marks a machine-authored direct-parent
 // notice that a steered child landed stopped (sub-agent control plane D6).
-// kind stays error and Fatal stays false; this prefix is what makes the
-// notice wake-eligible. The text is not a final hand-back.
+// kind stays error and Fatal stays false. The prefix preserves inbox admission
+// only; wake authority comes from the landed cause, not this text.
 const LifecycleNoticePrefixStoppedChild = "stopped_child:"
 
 // steeringLifecycleNoticeTextPrefixes lists every machine-authored

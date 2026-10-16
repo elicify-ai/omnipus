@@ -77,6 +77,7 @@ export type WsFrameType =
   | "browser_input_control_ack"
   | "browser_handover_notice"
   | "goal_outcome"
+  | "helper_event"
   | "library_changed"
   | "session_snapshot"
   | "catch_up_complete"
@@ -1219,6 +1220,23 @@ export interface BrowserHandoverNoticeFrame {
   text: string;
 }
 
+export interface HelperEventFrameEvent {
+  helper_session_id: string;
+  helper_title?: string;
+  kind: "verdict_unmet" | "not_verified" | "stopped" | "restarted" | "resume_refused" | "timed_out" | "finished" | "question" | "blocker" | "failed";
+  text: string;
+  goal_id?: string;
+  created_at: string;
+}
+
+export interface HelperEventFrame {
+  type: "helper_event";
+  session_id: string;
+  message_id: string;
+  helper_event: HelperEventFrameEvent;
+  seq?: number;
+}
+
 export interface GoalOutcomeFrameOutcome {
   goal_id: string;
   goal_text: string;
@@ -1439,6 +1457,7 @@ export type WsFrame =
   | PlanStatusFrame
   | JudgeVerdictFrame
   | BrowserHandoverNoticeFrame
+  | HelperEventFrame
   | GoalOutcomeFrame
   | KnowledgeIndexProgressFrame
   | BrowserInputOfferFrame
@@ -1540,6 +1559,7 @@ export type ServerFrame =
   | PlanStatusFrame
   | JudgeVerdictFrame
   | BrowserHandoverNoticeFrame
+  | HelperEventFrame
   | GoalOutcomeFrame
   | KnowledgeIndexProgressFrame
   | BrowserInputAnswerFrame

@@ -89,19 +89,19 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 	// live view is a real webchat surface (ADR-091 D1: each child owns its
 	// own store-backed session, rendered through the identical ChatScreen/
 	// WS path a root session uses) — stamp it explicitly rather than
-	// inheriting the reporting-target's empty placeholder. An
-	// ordinary_root revival (rec.SteeredBy == nil) keeps meta.Channel
-	// untouched: that session's channel is real (webchat, whatsapp, ...)
-	// and must never be overwritten.
-	channel := meta.Channel
+	// inheriting the reporting-target's empty placeholder.
+	// Ordinary roots resolve their stream address without rewriting metadata.
+	// A main/empty address is the session's web chat (PW-D1).
+	channel, chatID := wakeStreamAddress(meta)
 	if rec.SteeredBy != nil {
 		channel = "webchat"
+		chatID = meta.PeerID
 	}
 
 	opts := processOptions{
 		SessionKey:          rec.SessionID,
 		Channel:             channel,
-		ChatID:              meta.PeerID,
+		ChatID:              chatID,
 		TranscriptSessionID: rec.SessionID,
 		TranscriptStore:     store,
 		// I-5: a steered session has no user audience — reconstruction
