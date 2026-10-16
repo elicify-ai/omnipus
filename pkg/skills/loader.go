@@ -427,7 +427,16 @@ func (sl *SkillsLoader) BuildSkillsSummaryFuncWithProject(allow func(name string
 	return strings.Join(lines, "\n")
 }
 
+// getSkillMetadata retains the best-effort reader used by runtime discovery.
+// Callers that must not act on an incomplete scan use getSkillMetadataChecked.
 func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
+	metadata, _ := sl.getSkillMetadataChecked(skillPath)
+	return metadata
+}
+
+// getSkillMetadataChecked preserves content-read failures separately from
+// readable metadata that a caller may reject through validation.
+func (sl *SkillsLoader) getSkillMetadataChecked(skillPath string) (*SkillMetadata, error) {
 	content, err := os.ReadFile(skillPath)
 	if err != nil {
 		logger.WarnCF("skills", "Failed to read skill metadata",
@@ -435,7 +444,7 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 				"skill_path": skillPath,
 				"error":      err.Error(),
 			})
-		return nil
+		return nil, err
 	}
 
 	frontmatter, bodyContent := splitFrontmatter(string(content))
@@ -452,7 +461,7 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 	}
 
 	if frontmatter == "" {
-		return metadata
+		return metadata, nil
 	}
 
 	// Try JSON first (for backward compatibility)
@@ -475,7 +484,7 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 		if jsonMeta.Version != "" {
 			metadata.Version = jsonMeta.Version
 		}
-		return metadata
+		return metadata, nil
 	}
 
 	// Agent Skills `metadata` is a nested string map, so parse it separately
@@ -516,7 +525,7 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 		metadata.ModelHint = mh
 	}
 	if tools := yamlMeta["allowed-tools"]; tools != "" {
-		metadata.AllowedTools = strings.Split(tools, ",")
+		metadata.AllowedTools = strings.Fields(strings.ReplaceAll(tools, ",", " "))
 	}
 	// Collect extra keys.
 	extra := make(map[string]string)
@@ -528,7 +537,7 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 	if len(extra) > 0 {
 		metadata.Extra = extra
 	}
-	return metadata
+	return metadata, nil
 }
 
 func extractMarkdownMetadata(content string) (title, description string) {

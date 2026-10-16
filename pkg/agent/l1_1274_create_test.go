@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -48,20 +50,27 @@ func TestL11274OmnipusCreatesEachSupportedExternalWorker(t *testing.T) {
 		t.Run(cli, func(t *testing.T) {
 			f := newL11274Fixture(t, "", false)
 			path := l11274Executable(t, f.home, cli, true)
-			id := "created-" + cli
 			args := l11274CreateArgs("Created "+cli, cli, path)
 			result := f.execute(t, "create_agent", args)
-			l11274AssertCreated(t, f, result, id, cli, path, "#6E8BA8")
+			l11274AssertCreated(t, f, result, cli, path, "#6E8BA8")
 		})
 	}
 }
 
-func l11274AssertCreated(t *testing.T, f *l11274Fixture, result *tools.ToolResult, id, cli, path, color string) {
+// l11274AssertCreated checks a successful external-worker create and returns
+// the created agent's id. Founder decision 2026-10-14 (WU-3): a new agent's id
+// is a generated UUID, never derived from its name, so the id is read from the
+// result and checked to be a UUID rather than predicted from the name.
+func l11274AssertCreated(t *testing.T, f *l11274Fixture, result *tools.ToolResult, cli, path, color string) string {
 	t.Helper()
 	if result == nil || result.IsError {
 		t.Fatalf("#1274: valid %s worker creation must succeed through Omnipus, got %+v", cli, result)
 	}
 	body := l11274ResultObject(t, result)
+	id, _ := body["id"].(string)
+	if _, err := uuid.Parse(id); err != nil {
+		t.Fatalf("created worker id %q must be a generated UUID: %v", id, err)
+	}
 	for key, want := range map[string]any{"id": id, "type": "subagent_3p", "cli": cli,
 		"cli_path": path, "model": l11274Model, "status": "joined_workspace",
 		// ConfigurationPersistenceStatus.yaml: all requested components saved.
@@ -115,6 +124,7 @@ func l11274AssertCreated(t *testing.T, f *l11274Fixture, result *tools.ToolResul
 	if err := json.Unmarshal(data, &saved); err != nil || saved.Sandbox.ToolPolicies["create_agent"] != "allow" {
 		t.Errorf("real saved config is unreadable or lost the ceiling: err=%v, create_agent=%q", err, saved.Sandbox.ToolPolicies["create_agent"])
 	}
+	return id
 }
 
 func TestL11274NativeCreateControlUsesSameStoreAndPublication(t *testing.T) {
@@ -126,14 +136,15 @@ func TestL11274NativeCreateControlUsesSameStoreAndPublication(t *testing.T) {
 		t.Fatalf("native control must succeed before attributing external failure: %s", result.ForLLM)
 	}
 	body := l11274ResultObject(t, result)
-	if body["id"] != "native-control" || body["status"] != "joined_workspace" || body["activation_status"] != "active" {
-		t.Errorf("native create did not really join and publish: %s", result.ForLLM)
+	id, _ := body["id"].(string)
+	if _, err := uuid.Parse(id); err != nil || body["status"] != "joined_workspace" || body["activation_status"] != "active" {
+		t.Errorf("native create did not really join and publish (generated id %q): %s", id, result.ForLLM)
 	}
-	stored, err := agentstore.New(f.home).Get("native-control")
+	stored, err := agentstore.New(f.home).Get(id)
 	if err != nil || stored == nil || stored.IsExternalCLIWorker() || stored.Model == nil || stored.Model.Primary != l11274Model {
 		t.Fatalf("native control entity readback: stored=%+v, err=%v", stored, err)
 	}
-	if _, ok := f.al.GetRegistry().GetAgent("native-control"); !ok {
+	if _, ok := f.al.GetRegistry().GetAgent(id); !ok {
 		t.Fatal("native control was not published")
 	}
 }
@@ -183,7 +194,8 @@ func TestL11274DescriptionColourExampleIsInContractAndAcceptedVerbatim(t *testin
 	if result.IsError {
 		t.Fatalf("copying colour %q from the description must be accepted: %s", example, result.ForLLM)
 	}
-	stored, err := agentstore.New(f.home).Get("example-copy")
+	exampleID, _ := l11274ResultObject(t, result)["id"].(string)
+	stored, err := agentstore.New(f.home).Get(exampleID)
 	if err != nil || stored.Color != strings.ToUpper(example) {
 		t.Fatalf("copied example colour was not persisted: stored=%+v, err=%v", stored, err)
 	}

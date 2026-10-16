@@ -59,6 +59,8 @@ func newPublishWarningDeps(t *testing.T, reloadFunc func() error, upsertFastFunc
 }
 
 func TestAgentCreate_UpsertFastFuncFailure_StillSucceeds_WithPublishWarning(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps := newPublishWarningDeps(t, nil, func(string) error {
 		return errors.New("registry busy")
 	})

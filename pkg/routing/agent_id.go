@@ -17,13 +17,16 @@ const (
 )
 
 var (
-	validIDRe      = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-	invalidCharsRe = regexp.MustCompile(`[^a-z0-9_-]+`)
-	leadingDashRe  = regexp.MustCompile(`^-+`)
-	trailingDashRe = regexp.MustCompile(`-+$`)
+	validAgentIDRe      = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+	invalidAgentCharsRe = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+	validIDRe           = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	invalidCharsRe      = regexp.MustCompile(`[^a-z0-9_-]+`)
+	leadingDashRe       = regexp.MustCompile(`^-+`)
+	trailingDashRe      = regexp.MustCompile(`-+$`)
 )
 
-// NormalizeAgentID sanitizes an agent ID to [a-z0-9][a-z0-9_-]{0,63}.
+// NormalizeAgentID sanitizes an agent ID to [a-zA-Z0-9][a-zA-Z0-9_-]{0,63}.
+// Letter case is preserved: identifiers match exactly (#1330), not by alias.
 // Invalid characters are collapsed to "-". Leading/trailing dashes stripped.
 //
 // Empty input returns EMPTY. It used to return the "main" sentinel, which
@@ -38,11 +41,10 @@ func NormalizeAgentID(id string) string {
 	if trimmed == "" {
 		return ""
 	}
-	lower := strings.ToLower(trimmed)
-	if validIDRe.MatchString(lower) {
-		return lower
+	if validAgentIDRe.MatchString(trimmed) {
+		return trimmed
 	}
-	result := invalidCharsRe.ReplaceAllString(lower, "-")
+	result := invalidAgentCharsRe.ReplaceAllString(trimmed, "-")
 	result = leadingDashRe.ReplaceAllString(result, "")
 	result = trailingDashRe.ReplaceAllString(result, "")
 	if len(result) > MaxAgentIDLength {

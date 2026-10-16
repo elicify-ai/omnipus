@@ -77,8 +77,24 @@ func ensureIsolatedTestOmnipusHome(t *testing.T) {
 // set a temp OMNIPUS_HOME: it read and wrote ~/.omnipus. A workspace under the
 // process's fallback home is moved under the per-test home; anything else (a test
 // that set its own workspace) is left alone.
+//
+// An empty workspace is not "left alone". A real boot fills it in
+// config.loadConfigInternal before NewAgentLoop; a hand-built test config skips
+// that fill. agent.initializeCore then does filepath.Dir("") == ".", and the
+// task-store migrations create tasks/ in the package directory (the go-test
+// working directory). Fill it the same way a real boot would, under the home
+// ensureIsolatedTestOmnipusHome already set. Callers must set that home first.
 func pinConfigWorkspaceToTestHome(cfg *config.Config) {
-	if cfg == nil || isolatedProcessHome == nil {
+	if cfg == nil {
+		return
+	}
+	if strings.TrimSpace(cfg.Agents.Defaults.Home) == "" {
+		if home, ok := os.LookupEnv("OMNIPUS_HOME"); ok && filepath.IsAbs(home) {
+			cfg.Agents.Defaults.Home = filepath.Join(home, "workspace")
+		}
+		return
+	}
+	if isolatedProcessHome == nil {
 		return
 	}
 	fallback := isolatedProcessHome.OmnipusDir + string(filepath.Separator)

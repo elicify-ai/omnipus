@@ -76,7 +76,21 @@ A skill is one folder, one file. These are the parts the app reads.
 | `author`, `version` | No | Shown on the skill's card in Installed Skills. |
 | `argument-hint` | No | A hint shown next to the skill in the chat `/` menu, such as `<query>`. |
 
+The optional `allowed-tools` metadata accepts a space-separated scalar (`Read Grep Bash`), a comma-separated scalar (`Read,Grep,Bash`), or a YAML list (`[Read, Grep, Bash]`, or one item per line). Surrounding whitespace is removed; tool-name case and declaration order are kept. Empty declarations produce no tool entries. Declaring tools here does not grant permission to use them; the agent's configured tool permissions still apply.
+
 The description is the part that decides whether the skill is ever used. The agent picks a skill by matching the description against the task, so write it as a trigger: "Use when the user asks to cut a release or publish release notes" fires; "Release process documentation" does not. Name the phrases a task would actually contain.
+
+## Skills in another workspace
+
+When Omnipus sets up a workspace other than the one you are chatting in, its skill tools take a `workspace_id`. Leaving it out means the workspace of the current conversation — except for `create_skill`, see below:
+
+- `edit_skill` and `remove_skill` look for a project skill (one that lives in a folder mounted into that workspace) in the named workspace first, then fall back to your installation's skills if no project skill is found. Errors listing a recognised skills folder or resolving its skill paths — other than a genuinely missing path — make these tools and the management listing return `READ_FAILED`; nothing is changed. The same refusal applies if a skill's path was found but its file contents cannot be read. A parent folder denying access or a skill file denying reading is an error, not proof that the project skill is absent. Restore access and read the skill again before retrying. A project skill with the same name in another workspace is not touched.
+- `create_skill` with a `workspace_id` creates the skill as a project skill in that workspace's mounted folder, under `.omnipus/skills/<name>/`. This needs exactly one mounted folder: with none, or with several, it is refused and nothing is saved. Without a `workspace_id` it creates an installation-wide user skill, available in every workspace — the one exception to the rule above, and the only way to create such a skill.
+- `list_skills` (management view) shows the named workspace's project skills.
+
+Only Omnipus may name a workspace other than the current one. Each of these tools reads the written file back and reports one of the four outcomes described in [tools](tools.md#what-a-change-tool-reports).
+
+A skill installed from a GitHub link takes its folder name from the link. That name must be a valid skill name — letters, digits and single hyphens, at most 64 characters, not a reserved Windows device name such as `CON` — otherwise the install is refused before anything is written. A link that hides a slash or backslash in percent-encoding (`%2F`, `%5C`, or a double-encoded form) is refused outright, before anything is downloaded.
 
 ## Limits and things to watch
 

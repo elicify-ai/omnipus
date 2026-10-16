@@ -32,7 +32,7 @@ func grantedSet(rules []PathRule) map[string]bool {
 // and that enumeration runs at SPAWN, while the exact deny list was captured
 // earlier at policy-build.
 //
-// So a backup appearing in between (pkg/migrate writes config.json.bak) was, by
+// So a backup appearing in between (a config.json.bak, for example) was, by
 // enumeration time, an existing child that no exact deny path matched. It was
 // granted the parent's full access on Linux while macOS denied it.
 //

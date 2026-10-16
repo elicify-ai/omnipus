@@ -132,6 +132,10 @@ func newOmnipusTeamAPI(t *testing.T) *restAPI {
 	tmpDir := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", tmpDir)
 	cfg := omnipusFullRosterConfig()
+	// The agent loop derives its task store from the agent home base; left
+	// empty it resolved "./tasks" and wrote task-migration sentinels into the
+	// package directory (TestWorkspacePUT_RejectsOmnipusOutsideDefaultBeforeWrites).
+	cfg.Agents.Defaults.Home = tmpDir
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))
