@@ -17,6 +17,8 @@ func TestRouting1340_UserClassification(t *testing.T) {
 		{"empty400_recovery_unchanged", 400, "", CodeUnknown},
 		{"arbitrary400_recovery_unchanged", 400, `{"error":{"message":"account header missing"}}`, CodeUnknown},
 		{"not_found_other_resource", 400, `{"error":{"message":"file not found for model input"}}`, CodeUnknown},
+		{"model_response_missing", 400, `{"error":{"message":"model response not found"}}`, CodeUnknown},
+		{"model_input_missing", 400, `{"error":{"message":"model input not found"}}`, CodeUnknown},
 		{"billing_override", 400, `{"error":{"message":"credit balance is too low"}}`, CodeQuotaBilling},
 		{"quota429", 429, `{"error":{"code":"insufficient_quota"}}`, CodeQuotaBilling},
 		{"auth401", 401, `{"error":{"code":"model_not_found"}}`, CodeProviderAuthFailed},

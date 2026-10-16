@@ -62,11 +62,14 @@ func TestRouting1340_Classification(t *testing.T) {
 	}{
 		{"bad_model_code", 400, `{"error":{"code":"model_not_found"}}`, "bad_model", false},
 		{"bad_model_message", 400, `{"error":{"message":"Model 'missing' not found"}}`, "bad_model", false},
+		{"bad_model_named_unquoted", 400, `{"error":{"message":"Model requested-model not found"}}`, "bad_model", false},
 		{"invalid_model_id", 400, `{"error":{"message":"missing is not a valid model ID"}}`, "bad_model", false},
 		{"not_offered", 400, `{"error":{"message":"Model 'missing' is not available on this provider"}}`, "bad_model", false},
 		{"empty400", 400, "", FailoverFormat, false},
 		{"arbitrary400", 400, `{"error":{"message":"account header missing"}}`, FailoverFormat, false},
 		{"unrelated_not_found", 400, `{"error":{"message":"file not found for model input"}}`, FailoverFormat, false},
+		{"model_response_missing", 400, `{"error":{"message":"model response not found"}}`, FailoverFormat, false},
+		{"model_input_missing", 400, `{"error":{"message":"model input not found"}}`, FailoverFormat, false},
 		{"model_input_format", 400, `{"error":{"message":"model does not support image input"}}`, FailoverFormat, false},
 		{"context_override", 400, `{"error":{"message":"context length exceeded"}}`, FailoverContextOverflow, false},
 		{"billing_override", 400, `{"error":{"message":"credit balance is too low"}}`, FailoverBilling, true},
@@ -90,6 +93,13 @@ func TestRouting1340_Classification(t *testing.T) {
 				t.Errorf("classification=%+v retriable=%t; want reason=%s status=%d retriable=%t", got, got.IsRetriable(), tc.want, tc.status, tc.retriable)
 			}
 		})
+	}
+}
+
+func TestRouting1340_UnquotedSelectedModel(t *testing.T) {
+	got := ClassifyError(&common.ProviderError{Status: 400, Body: `{"error":{"message":"Model gpt-6.1 not found"}}`}, "openai-chatgpt", "gpt-6.1")
+	if got == nil || got.Reason != FailoverReason("bad_model") || got.IsRetriable() {
+		t.Fatalf("positive evidence naming the requested model must be bad_model: %+v", got)
 	}
 }
 

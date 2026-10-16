@@ -338,7 +338,7 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 					Wrapped:  err,
 				}
 			}
-			if IsBadModelError(status, body) {
+			if IsBadModelError(status, body, model) {
 				return &FailoverError{
 					Reason: FailoverBadModel, Provider: provider, Model: model,
 					Status: status, Wrapped: err,

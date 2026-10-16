@@ -699,7 +699,7 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		if isBillingEvidence(body, status) {
 			return CodeQuotaBilling
 		}
-		if providers.IsBadModelError(status, body) {
+		if providers.IsBadModelError(status, body, pe.Model) {
 			return CodeBadModel
 		}
 		// C-24: a 404 carrying a retirement phrase is model_retired. The
