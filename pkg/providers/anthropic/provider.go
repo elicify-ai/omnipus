@@ -186,8 +186,10 @@ func (p *Provider) Chat(
 		return p.chatStreaming(ctx, params, opts)
 	}
 
+	boundary := sdkErrorBoundary{baseURL: p.baseURL}
+	opts = append(opts, option.WithMiddleware(boundary.middleware))
 	resp, err := p.client.Messages.New(ctx, params, opts...)
-	if err != nil {
+	if err = boundary.wrap(err); err != nil {
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
@@ -270,7 +272,8 @@ func (p *Provider) streamWithCallbacks(
 	// immediately after the stream is created and every subsequent Read
 	// re-arms the clock. Reads that race the fill simply skip one arm.
 	var armer stallBodyArmer
-	streamOpts := append(append([]option.RequestOption{}, opts...), option.WithRequestTimeout(0))
+	boundary := sdkErrorBoundary{baseURL: p.baseURL}
+	streamOpts := append(append([]option.RequestOption{}, opts...), option.WithRequestTimeout(0), option.WithMiddleware(boundary.middleware))
 	if p.streamHTTPClient != nil {
 		streamOpts = append(append([]option.RequestOption{}, streamOpts...), option.WithHTTPClient(p.streamHTTPClient))
 	}
@@ -410,7 +413,10 @@ func (p *Provider) streamWithCallbacks(
 		if watch.Fired() {
 			return nil, common.NewStallError(stall)
 		}
-		return nil, fmt.Errorf("claude API call: %w", err)
+		return nil, fmt.Errorf("claude API call: %w", boundary.wrap(err))
+	}
+	if err := boundary.wrap(nil); err != nil {
+		return nil, err
 	}
 	// A stream that ends without message_stop was cut off (the connection was
 	// closed under it): what accumulated is not an answer and a tool call that
