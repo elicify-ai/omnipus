@@ -65,6 +65,9 @@ func TestWU3ChannelSuccessfulWritesAreSavedButNotWorking(t *testing.T) {
 // TC-05: add_mcp_server is "working" only when the live status is connected;
 // every other live state, or no live check at all, is "saved but not working".
 func TestWU3MCPAddOutcomeFollowsLiveStatus(t *testing.T) {
+	// Chief Q4-A: every nonworking secret-free CREATE gets this exact
+	// conditional setup explanation, followed by the unchanged actual failure.
+	const provisional = "server saved without credential references; credential setup is not finished if this server needs a secret. "
 	const scope = "live connection: the server's status after reconciliation and the number of tools it registered"
 	live := []string{"calling the server's tools", "tool policies (none are assigned yet)"}
 	cases := []struct {
@@ -78,13 +81,13 @@ func TestWU3MCPAddOutcomeFollowsLiveStatus(t *testing.T) {
 	}{
 		{name: "connected", status: "connected", outcome: "working", scope: scope, notTested: live},
 		{name: "error", status: "error", errMsg: "connection refused", outcome: "saved but not working", scope: scope,
-			reason: "connection failed: connection refused", notTested: live},
+			reason: provisional + "connection failed: connection refused", notTested: live},
 		{name: "disconnected", status: "disconnected", outcome: "saved but not working", scope: scope,
-			reason: "the server is not connected", notTested: live},
+			reason: provisional + "the server is not connected", notTested: live},
 		{name: "reconcile-failed", noStatus: true, reconcileErr: errors.New("boom"), outcome: "saved but not working",
-			reason: "live reconciliation failed: boom", notTested: []string{"the live connection"}},
+			reason: provisional + "live reconciliation failed: boom", notTested: []string{"the live connection"}},
 		{name: "unchecked", noStatus: true, noReconcile: true, outcome: "saved but not working",
-			reason: "not checked: live connection status is unavailable", notTested: []string{"the live connection"}},
+			reason: provisional + "not checked: live connection status is unavailable", notTested: []string{"the live connection"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
