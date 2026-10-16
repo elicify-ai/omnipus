@@ -60,9 +60,28 @@ func q3RunNativeNoEcho(t *testing.T, name, policy string) {
 	require.Len(t, refusals, 1, "the actual forbidden call receives exactly one refusal")
 	assert.Contains(t, strings.ToLower(refusals[0]), "request a secret")
 	assert.Contains(t, refusals[0], "failed: nothing saved", "refusal remains the structured change-tool outcome")
+	// Mirror every field for test-only capture; keep the original JSON keys.
+	type approvalSnapshot struct {
+		ToolCallID string         `json:"ToolCallID"`
+		ToolName   string         `json:"ToolName"`
+		Args       map[string]any `json:"Args"`
+		AgentID    string         `json:"AgentID"`
+		SessionID  string         `json:"SessionID"`
+		TurnID     string         `json:"TurnID"`
+	}
 	f.approver.mu.Lock()
 	approvalCount := len(f.approver.requests)
-	approvalBytes, err := json.Marshal(f.approver.requests)
+	var approvalRequests []approvalSnapshot
+	if f.approver.requests != nil {
+		approvalRequests = make([]approvalSnapshot, approvalCount)
+		for i, request := range f.approver.requests {
+			approvalRequests[i] = approvalSnapshot{
+				ToolCallID: request.ToolCallID, ToolName: request.ToolName, Args: request.Args,
+				AgentID: request.AgentID, SessionID: request.SessionID, TurnID: request.TurnID,
+			}
+		}
+	}
+	approvalBytes, err := json.Marshal(approvalRequests)
 	f.approver.mu.Unlock()
 	require.NoError(t, err)
 	q3AssertValueFree(t, "approval request payload", approvalBytes)
