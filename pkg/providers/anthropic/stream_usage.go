@@ -27,11 +27,12 @@ func restoreOpeningUsage(msg *anthropic.Message, opening *anthropic.Usage) {
 	msg.Usage.CacheCreation = opening.CacheCreation
 }
 
+func hasMessageUsage(msg *anthropic.Message) bool {
+	return msg.JSON.Usage.Valid() || msg.Usage.InputTokens > 0 || msg.Usage.OutputTokens > 0 ||
+		msg.Usage.CacheReadInputTokens > 0 || msg.Usage.CacheCreationInputTokens > 0
+}
+
 func messageUsage(msg *anthropic.Message) (*UsageInfo, error) {
-	if !msg.JSON.Usage.Valid() && msg.Usage.InputTokens == 0 && msg.Usage.OutputTokens == 0 &&
-		msg.Usage.CacheReadInputTokens == 0 && msg.Usage.CacheCreationInputTokens == 0 {
-		return nil, nil
-	}
 	// Accumulated fields contain the latest output count; RawJSON still
 	// describes message_start and must not be used for final accounting.
 	raw, err := json.Marshal(msg.Usage)
@@ -53,12 +54,12 @@ func failedStreamUsage(err error, msg *anthropic.Message, opening *anthropic.Usa
 		return err
 	}
 	restoreOpeningUsage(msg, opening)
+	if !hasMessageUsage(msg) {
+		return err
+	}
 	usage, usageErr := messageUsage(msg)
 	if usageErr != nil {
 		return errors.Join(err, usageErr)
-	}
-	if usage == nil {
-		return err
 	}
 	var streamErr *common.StreamProviderError
 	if errors.As(err, &streamErr) {

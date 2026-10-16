@@ -24,7 +24,10 @@ func TestCachingFixStreamCancellationAndStallKeepUsage(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, _ = io.WriteString(w, evMessageStart+evBlockStart+evTextDelta)
-				w.(http.Flusher).Flush()
+				if flushErr := http.NewResponseController(w).Flush(); flushErr != nil {
+					t.Error(flushErr)
+					return
+				}
 				<-r.Context().Done()
 			}))
 			t.Cleanup(srv.Close)

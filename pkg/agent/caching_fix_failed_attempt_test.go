@@ -97,8 +97,8 @@ func TestCachingFixBilledFailureThenFallback(t *testing.T) {
 			t.Errorf("attempt%d=%+v, want provider=%s tokens=%d cost=%g", i, got, want.provider, want.total, want.cost)
 		}
 	}
-	if err := store.FlushSessionStats(meta.ID); err != nil {
-		t.Fatal(err)
+	if flushErr := store.FlushSessionStats(meta.ID); flushErr != nil {
+		t.Fatal(flushErr)
 	}
 	reopened, err := session.NewUnifiedStore(store.BaseDir())
 	if err != nil {

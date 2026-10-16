@@ -93,11 +93,12 @@ func TestCachingFixDecodedMaxTokens(t *testing.T) {
 		for _, numeric := range []string{"decoded", "int64", "int"} {
 			t.Run(fmt.Sprintf("%s_%d", numeric, limit), func(t *testing.T) {
 				opts := map[string]any{"max_tokens": limit}
-				if numeric == "decoded" {
+				switch numeric {
+				case "decoded":
 					if err := json.Unmarshal([]byte(fmt.Sprintf(`{"max_tokens":%d}`, limit)), &opts); err != nil {
 						t.Fatal(err)
 					}
-				} else if numeric == "int64" {
+				case "int64":
 					opts["max_tokens"] = int64(limit)
 				}
 				captured := make(chan int, 1)

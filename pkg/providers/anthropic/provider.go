@@ -279,9 +279,9 @@ func (p *Provider) streamWithCallbacks(
 	if stall > 0 {
 		streamOpts = append(append([]option.RequestOption{}, streamOpts...),
 			option.WithMiddleware(func(req *http.Request, next func(*http.Request) (*http.Response, error)) (*http.Response, error) {
-				resp, err := next(req)
-				if err != nil || resp == nil || resp.Body == nil {
-					return resp, err
+				resp, nextErr := next(req)
+				if nextErr != nil || resp == nil || resp.Body == nil {
+					return resp, nextErr
 				}
 				// Method value, bound to &armer: reads made before the monitor
 				// exists find armer.arm nil and skip; every later read re-arms.
@@ -413,7 +413,7 @@ func (p *Provider) streamWithCallbacks(
 		if watch.Fired() {
 			return nil, common.NewStallError(stall)
 		}
-		return nil, fmt.Errorf("claude API call: %w", boundary.wrap(err))
+		return nil, boundary.wrap(fmt.Errorf("claude API call: %w", err))
 	}
 	if err := boundary.wrap(nil); err != nil {
 		return nil, err
@@ -743,9 +743,13 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	var reasoning strings.Builder
 	var toolCalls []ToolCall
 
-	usage, err := messageUsage(resp)
-	if err != nil {
-		return nil, err
+	var usage *UsageInfo
+	if hasMessageUsage(resp) {
+		var usageErr error
+		usage, usageErr = messageUsage(resp)
+		if usageErr != nil {
+			return nil, usageErr
+		}
 	}
 
 	for _, block := range resp.Content {
