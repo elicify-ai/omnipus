@@ -82,7 +82,7 @@ The description is the part that decides whether the skill is ever used. The age
 
 When Omnipus sets up a workspace other than the one you are chatting in, its skill tools take a `workspace_id`. Leaving it out means the workspace of the current conversation — except for `create_skill`, see below:
 
-- `edit_skill` and `remove_skill` look for a project skill (one that lives in a folder mounted into that workspace) in the named workspace first, then fall back to your installation's skills. A project skill with the same name in another workspace is not touched.
+- `edit_skill` and `remove_skill` look for a project skill (one that lives in a folder mounted into that workspace) in the named workspace first, then fall back to your installation's skills if no project skill is found. Errors listing a recognised skills folder or resolving its skill paths — other than a genuinely missing path — make these tools and the management listing return `READ_FAILED`; nothing is changed. For example, a parent folder denying access is an error, not proof that the project skill is absent. Restore access and read the skill again before retrying. A project skill with the same name in another workspace is not touched.
 - `create_skill` with a `workspace_id` creates the skill as a project skill in that workspace's mounted folder, under `.omnipus/skills/<name>/`. This needs exactly one mounted folder: with none, or with several, it is refused and nothing is saved. Without a `workspace_id` it creates an installation-wide user skill, available in every workspace — the one exception to the rule above, and the only way to create such a skill.
 - `list_skills` (management view) shows the named workspace's project skills.
 
