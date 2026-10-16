@@ -104,6 +104,7 @@ type agentLoopRunTurnResponse struct {
 	orphanMarkup        providers.OrphanToolMarkup
 	hasOrphanMarkup     bool
 	normalizedToolCalls []providers.ToolCall
+	argumentRefusals    []*tools.ToolResult
 	ret0                turnResult
 	ret1                error
 }
