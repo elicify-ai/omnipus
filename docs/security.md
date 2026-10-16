@@ -508,6 +508,35 @@ A turn that consumed a message from a channel person cannot open this card, even
 
 Submitted values are not included in card frames, the conversation, or the continuation message. Stored versions also join the sensitive-value filtering set, including versions an integration has not selected. Filtering remains best-effort and can be switched off; do not treat it as protection against a command you deliberately allow to reveal a secret.
 
+### Saving is separate from selecting
+
+The card saves a new version; it does not itself change a provider, connector or channel. The agent must use that integration's configuration tool, with the stored **reference name** and your approval. Those tools refuse secret values in their inputs. Plaintext entry remains available in Settings.
+
+| Integration | What the agent selects | What is checked before saving the change |
+|---|---|---|
+| Model provider | `configure_provider` with `api_key_ref` | The provider, effective endpoint, protocol and API-key field match the card's destination. An endpoint-only card is restricted to that exact endpoint. Every affected provider row is checked. |
+| MCP server | `add_mcp_server` with an `env_refs` map | The server name, transport, executable, ordered arguments, URL and specific environment-variable name match the card's destination. Only the named reference entries are attached. |
+| Channel connection | `configure_channel` with fields such as `token_ref`, `bot_token_ref` or `app_secret_ref` | The exact connection instance, account/settings and credential field match the card's destination. A change that would redirect a retained credential to another destination is refused too. |
+
+A reference name alone is not permission to use a secret elsewhere. An unknown, unavailable, unbound or mismatched reference is refused without changing the integration or the stored value. If the destination changed, establish the new destination in Settings, then ask for a new card. Selecting a replacement leaves the earlier stored version intact.
+
+These are shared installation settings. The agent first reads the current entry and confirms the proposed change with you. If Settings or another agent changes that entry before the write, the tool refuses the stale revision. Re-read, review and confirm the new plan before retrying; do not replay the earlier approval blindly. Saving the card is not approval for this later configuration change.
+
+### Adding a new MCP server that needs a secret
+
+For a new server, the destination must exist before it can be shown on a card:
+
+| Step | What you should expect |
+|---|---|
+| 1. Save the non-secret server description | Approve its transport, executable and arguments, or URL. The server entry is saved and a connection is attempted. A server that needs a secret may not connect yet: the entry remains saved, but credential setup is unfinished. |
+| 2. Submit the secure card | The agent requests the environment-variable secret for that saved server. Submit saves a version and returns only its reference name to the continuation. |
+| 3. Approve reference attachment | The agent re-reads the server's revision, confirms the attachment and calls `add_mcp_server` with the reference map. This attaches references to the unchanged server; it is not a general update command. |
+| 4. Read the connection result | Omnipus attempts live reconciliation and reports the connection status. A saved reference is not proof that the server connected or that its tools work. Tools still require their normal assignments and policies. |
+
+Attaching references does not enable a disabled server, change the global MCP switch, replace omitted references, or alter its executable, arguments, URL or policies. Omitted description fields mean unchanged; supplied description fields must match the saved destination. A changed server revision requires a new confirmation, and a changed destination requires a new card.
+
+Cancelling the card leaves the non-secret server entry in place and stores no secret. Stopping after submission leaves the new version stored but does not attach it automatically. You can continue the setup later with a fresh confirmation or remove the server deliberately; Omnipus does not silently roll it back or remove and recreate it.
+
 ## How to manage saved secrets
 
 1. Open **Settings**, then select **Security**.
