@@ -56,6 +56,14 @@ jobs:
       - name: Bash syntax check
         run: bash -n scripts/cft-bundle.sh
 
+      - name: Lint ci-flake-classify.sh (bash)
+        run: shellcheck -s bash scripts/ci-flake-classify.sh scripts/ci-flake-classify_test.sh
+
+      - name: Bash syntax check for the flake classifier
+        run: |
+          bash -n scripts/ci-flake-classify.sh
+          bash -n scripts/ci-flake-classify_test.sh
+
   bats:
     name: bats (install + cft-bundle)
     runs-on: ubuntu-latest
@@ -73,3 +81,7 @@ jobs:
 
       - name: Run cft-bundle_test.bats
         run: bats scripts/cft-bundle_test.bats
+
+      - name: Run ci-flake-classify test
+        # Bash, not bats: it feeds fixture logs through the shared classifier.
+        run: bash scripts/ci-flake-classify_test.sh

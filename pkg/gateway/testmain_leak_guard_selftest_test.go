@@ -3,6 +3,7 @@ package gateway
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,8 +36,8 @@ func TestLeakGuardSeesAFileLeftUnderTheEntitiesDir(t *testing.T) {
 // The same guard must see a migration sentinel left in the package
 // directory itself, not only files under tasks/ or entities/.
 func TestLeakGuardSeesASentinelLeftAtThePackageRoot(t *testing.T) {
-	if len(leakedPackageDirFiles()) != 0 {
-		t.Skip("the package directory already holds leaked files; the TestMain guard will report them")
+	if leaked := leakedPackageDirFiles(); len(leaked) != 0 {
+		t.Fatalf("precondition: package directory already holds leaked files, left in place: %s", strings.Join(leaked, ", "))
 	}
 	const name = ".milestones_migrated"
 	if err := os.WriteFile(name, []byte("probe\n"), 0o600); err != nil {
