@@ -13,11 +13,12 @@ var badModelPatterns = []errorPattern{
 	rxp(`\bnot a valid model (?:id|identifier)\b`),
 }
 
-// Keep the model subject and its predicate in ONE matched span. A separate
-// message prefix/suffix check can incorrectly bind "image input" to the model.
+// Require a model-led clause, optionally after a delimited explanation. Mere
+// whitespace cannot start it: "input for this model" is an input restriction,
+// not a model subject. Keep the predicate/end binding and optional article.
 // The only capture is an unquoted identifier, which must equal the selected id.
 var modelAvailabilityAssertion = regexp.MustCompile(
-	"(?i)(?:^|[[:space:]:;,])model(?:[[:space:]]+(?:[\"'`][-a-z0-9_./:@~+]+[\"'`]|([-a-z0-9_./:@~+]+)))?" +
+	"(?i)(?:^|[:;.!?][[:space:]]+)[[:space:]]*(?:the[[:space:]]+)?model(?:[[:space:]]+(?:[\"'`][-a-z0-9_./:@~+]+[\"'`]|([-a-z0-9_./:@~+]+)))?" +
 		`[[:space:]]+is[[:space:]]+not[[:space:]]+(?:available|offered)(?:[[:space:]]+(?:on|by)[[:space:]]+this[[:space:]]+provider)?[.!]?[[:space:]]*$`,
 )
 

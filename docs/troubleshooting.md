@@ -127,6 +127,8 @@ A confirmed wrong-model error stops all attachment recovery too: removing an ima
 |---|---|
 | `The model 'm' is not available.` or `Model 'm' is not offered by this provider.` | Positive model-unavailability evidence: `bad_model`, with no attachment retry. |
 | `Model 'm': image input is not available.` or `Model 'm' is not available for image input.` | An image-input restriction, not proof that the model is missing. Existing attachment recovery can still apply. |
+| `Image input for model 'm' is not available.` or `Image input for this model is not available.` | The unavailable subject is image input, even though the sentence mentions a model. Existing image recovery can still apply. |
+| `PDF input for model 'm' is not available.` or `PDF input for this model is not available.` | A PDF-input restriction, not proof that the model is missing. Existing PDF-to-text recovery can still apply. |
 
 A structured `model_not_found` code is authoritative even if its text also mentions attachments, authentication or rate limits.
 

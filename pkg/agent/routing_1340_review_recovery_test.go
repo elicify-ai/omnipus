@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -40,6 +41,18 @@ func TestRouting1340_ReviewRecoveryDistinguishesModelAndCapability(t *testing.T)
 		{"capability_image_strip_retry", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Model 'm' is not available for image input"}}`}, 2, false},
 		{"colon_capability_subject", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Model 'm': image input is not available."}}`}, 2, false},
 		{"colon_capability_no_period", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Model 'm': image input is not available"}}`}, 2, false},
+		// CR R3-1 / SFH R3-N1: input is the subject; a model suffix cannot
+		// suppress the real attachment retry, including PDF-to-text recovery.
+		{"input_first_image_quoted", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Image input for model 'm' is not available."}}`}, 2, false},
+		{"input_first_image_this_model", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Image input for this model is not available."}}`}, 2, false},
+		{"prefixed_input_first_image", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Request rejected: image input for model 'm' is not available."}}`}, 2, false},
+		{"input_first_pdf_quoted", true, &common.ProviderError{Status: 400, Body: `{"error":{"message":"PDF input for model 'm' is not available."}}`}, 2, false},
+		{"input_first_pdf_this_model", true, &common.ProviderError{Status: 400, Body: `{"error":{"message":"PDF input for this model is not available."}}`}, 2, false},
+		{"prefixed_input_first_pdf", true, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Request rejected: PDF input for this model is not offered by this provider."}}`}, 2, false},
+		{"leading_article_pdf_absence", true, &common.ProviderError{Status: 400, Body: `{"error":{"message":"The model 'm' is not available."}}`}, 1, true},
+		{"pdf_absence_offered_by_provider", true, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Request rejected: the model 'm' is not offered by this provider."}}`}, 1, true},
+		{"structured_input_first_image", false, &common.ProviderError{Status: 400, Body: `{"error":{"code":"model_not_found","message":"Image input for this model is not available."}}`}, 1, true},
+		{"structured_input_first_pdf", true, &common.ProviderError{Status: 400, Body: `{"error":{"code":"model_not_found","message":"PDF input for model 'm' is not available."}}`}, 1, true},
 		{"leading_article_model_absent", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"The model 'm' is not available."}}`}, 1, true},
 		{"model_not_offered_by_provider", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"Model 'm' is not offered by this provider."}}`}, 1, true},
 		{"leading_article_not_offered", false, &common.ProviderError{Status: 400, Body: `{"error":{"message":"The model 'm' is not offered."}}`}, 1, true},
@@ -82,11 +95,20 @@ func TestRouting1340_ReviewRecoveryDistinguishesModelAndCapability(t *testing.T)
 				if f.rf.err != nil || f.rf.response == nil || f.rf.response.Content != "recovered-answer" {
 					t.Errorf("capability recovery failed: response=%+v err=%v", f.rf.response, f.rf.err)
 				}
-				if len(client.seen) != 2 || len(client.seen[0][0].Media) != 1 || len(client.seen[1][0].Media) != 0 || !f.rt.ts.imageRetryDone.Load() {
-					t.Errorf("real image strip/retry not observed: %+v", client.seen)
-				}
-				if f.rt.ts.outcomeRelabel != CodeMediaUnsupported {
-					t.Errorf("successful recovery outcome=%q, want media_unsupported", f.rt.ts.outcomeRelabel)
+				if tc.pdf {
+					if len(client.seen) != 2 || len(client.seen[0][0].Media) != 1 || len(client.seen[1][0].Media) != 0 || !f.rt.ts.mediaRetryDone.Load() || f.rt.ts.imageRetryDone.Load() {
+						t.Errorf("real PDF downgrade/retry not observed with separate per-class guards: %+v", client.seen)
+					}
+					if len(client.seen) == 2 && (client.seen[0][0].Content != "inspect this" || !strings.Contains(client.seen[1][0].Content, "inspect this") || !strings.Contains(client.seen[1][0].Content, "ORIGINAL_PDF_TEXT")) {
+						t.Errorf("PDF retry lost the original request or extracted document content: %+v", client.seen)
+					}
+				} else {
+					if len(client.seen) != 2 || len(client.seen[0][0].Media) != 1 || len(client.seen[1][0].Media) != 0 || !f.rt.ts.imageRetryDone.Load() {
+						t.Errorf("real image strip/retry not observed: %+v", client.seen)
+					}
+					if f.rt.ts.outcomeRelabel != CodeMediaUnsupported {
+						t.Errorf("successful recovery outcome=%q, want media_unsupported", f.rt.ts.outcomeRelabel)
+					}
 				}
 			}
 		})
