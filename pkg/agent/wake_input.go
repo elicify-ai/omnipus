@@ -60,9 +60,7 @@ func (al *AgentLoop) placeSavedWakeInput(ctx context.Context, sessionID, outcome
 	if err := al.ackConsumedSteeringWake(wake); err != nil {
 		return false, err
 	}
-	if al.asyncNotifier != nil {
-		al.asyncNotifier.sessionWakes.Delete(sessionID + "\x00" + outcomeID)
-	}
+	al.releaseWakePublication(sessionID, outcomeID)
 	return !placed, nil
 }
 
@@ -132,6 +130,15 @@ func (al *AgentLoop) placeSavedWakeAtEntry(ctx context.Context, ts *turnState, m
 	}
 	ts.opts.InputAlreadyArchived = true
 	return nil
+}
+
+// Publication coalescing is process-local, not lifetime state. A receiver
+// that finds a poll's consumed marker must release it just like a placing
+// consumer; the durable marker remains the duplicate-work guard.
+func (al *AgentLoop) releaseWakePublication(sessionID, outcomeID string) {
+	if al.asyncNotifier != nil {
+		al.asyncNotifier.sessionWakes.Delete(sessionID + "\x00" + outcomeID)
+	}
 }
 
 func visibleSteeringReceiptIDs(ids []string) []string {

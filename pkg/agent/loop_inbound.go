@@ -822,6 +822,7 @@ func (al *AgentLoop) resolveSystemMessageWorkspaceID(msg bus.InboundMessage, tra
 func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (string, error) {
 	sessionID := msg.AsyncTranscriptSessionID
 	messageID := inboundMetadata(msg, "steer_message_id")
+	defer al.releaseWakePublication(sessionID, messageID)
 	generation, err := strconv.Atoi(inboundMetadata(msg, "steer_generation"))
 	if err != nil || generation < 0 {
 		return "", fmt.Errorf("steer: wake %q has invalid generation", messageID)
