@@ -63,29 +63,58 @@ func NewMCPAddTool(d *Deps) *MCPAddTool      { return &MCPAddTool{deps: d} }
 func (t *MCPAddTool) Name() string           { return "add_mcp_server" }
 func (t *MCPAddTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *MCPAddTool) Description() string {
-	return "Add an MCP server to the configuration (tools.mcp.servers). The server is saved to config.json, a connection is attempted immediately, and the result reports live connection status and tool count. " +
-		"Every key in env is stored in the encrypted credential store and referenced from config.json by a ref (mcp_<name>_<key>) — never written in plaintext, mirroring configure_channel's credential handling. " +
-		"sse/http URLs must be https, or http only for loopback addresses (localhost, 127.x.x.x, ::1). " +
-		"Adding a server when MCP is globally disabled and no other server is enabled will turn tools.mcp.enabled ON — an install-wide change; if another server is already enabled the global flag is left alone and the new server will not connect until an operator enables it. " +
-		"A name that already exists is refused, not updated — remove it first with remove_mcp_server. " +
-		"Tools the server exposes register with no tool policy and cannot be called until an operator assigns one. " +
-		"expected_revision must be \"absent\" (the name's revision from list_mcp_servers); the write is refused if a server of that name appeared since.\n" +
-		"Parameters: name (required), expected_revision (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env."
+	return "Create an MCP server or attach stored env_refs to an existing unchanged descriptor; plaintext secrets are refused. " +
+		"For a new stdio server needing a secret, first create its descriptor without secrets using expected_revision=\"absent\". " +
+		"Then call request_secret with purpose and exactly one recipient form: server + env_key. " +
+		"Wait for the person to submit the secure web card. Submit stores a version; approved attachment selects it. " +
+		"Read list_mcp_servers, confirm the current entry, then call add_mcp_server with name, its expected_revision and non-empty env_refs. " +
+		"Each reference must have been stored for that exact server descriptor and environment variable; " +
+		"a different recipient is refused, so request a new card for it. Attachment changes only the named references: " +
+		"omit descriptor fields or supply exact matches; all other references, enable flags, assignments and policies stay unchanged. " +
+		"A stale revision or attempted descriptor change is refused; re-read and obtain confirmation before retrying. " +
+		"This is not a general server update or an in-place secret-value edit. The initial save is provisional when credentials are needed. " +
+		"If a later setup or connection step fails after commit, report \"saved but not working\" with the reason, " +
+		"not working or nothing saved. Connection status and tool count do not prove its tools can be called; " +
+		"operator assignment and tool policy still apply. Creation enables MCP globally if it was off and no other server was enabled; attachment never does."
 }
 
 func (t *MCPAddTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":      map[string]any{"type": "string"},
-			"transport": map[string]any{"type": "string", "enum": []string{"stdio", "sse", "http"}},
-			"command":   map[string]any{"type": "string"},
-			"args":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"url":       map[string]any{"type": "string"},
-			"env_refs":  map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
-			expectedRevisionParam: map[string]any{
+			"name": map[string]any{
 				"type":        "string",
-				"description": "The server name's revision from list_mcp_servers: \"absent\" for a new server.",
+				"description": "Server name. Create it without secrets before requesting a card with server=name and env_key; attachment targets that existing server.",
+			},
+			"transport": map[string]any{
+				"type": "string", "enum": []string{"stdio", "sse", "http"},
+				"description": "Creation defaults to stdio. For attachment, omit or match the saved transport exactly; omission preserves it. " +
+					"Environment-secret cards require stdio.",
+			},
+			"command": map[string]any{
+				"type":        "string",
+				"description": "Required when creating a stdio server. For attachment, omit or match the saved command exactly. Never put secret values here.",
+			},
+			"args": map[string]any{
+				"type": "array", "items": map[string]any{"type": "string"},
+				"description": "Command arguments for creation. For attachment, omit or match the saved ordered arguments exactly. Never put secret values here.",
+			},
+			"url": map[string]any{
+				"type": "string",
+				"description": "Required when creating an sse/http server: https, or http only for loopback hosts (localhost, 127.x.x.x, ::1). " +
+					"For attachment, omit or match the saved URL exactly. Never put secret values here.",
+			},
+			"env_refs": map[string]any{
+				"type": "object", "additionalProperties": map[string]any{"type": "string"},
+				"description": "Map environment-variable names to stored references, never plaintext env values. " +
+					"For each key, first request_secret with purpose, server=name and env_key, then wait for the person's card Submit. " +
+					"Each reference must match that exact descriptor and env_key; otherwise request a new card for that recipient. " +
+					"Non-empty for attachment; omitted keys preserve existing references. This selects versions, not edits to their values.",
+			},
+			expectedRevisionParam: map[string]any{
+				"type": "string",
+				"description": "Revision from list_mcp_servers: \"absent\" for creation, the current confirmed revision for attaching env_refs " +
+					"to an unchanged descriptor. A stale revision is refused: re-read and obtain confirmation for the revised change before retrying.",
 			},
 		},
 		"required": []string{"name", expectedRevisionParam},

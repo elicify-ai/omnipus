@@ -83,34 +83,46 @@ func NewProviderConfigureTool(d *Deps) *ProviderConfigureTool {
 func (t *ProviderConfigureTool) Name() string           { return "configure_provider" }
 func (t *ProviderConfigureTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ProviderConfigureTool) Description() string {
-	return "Store an LLM provider's API key in the encrypted credential store and wire it into config.json " +
-		"so the provider becomes usable, then check the SAVED entry: the configured endpoint is asked for its " +
-		"model list over the provider's protocol with the saved credential (local providers need no key). " +
-		"The result's outcome says whether that check passed; it does not prove that a chosen model runs. " +
-		"name must be a catalog provider id " +
-		"(list_models or the Settings → Providers screen show the valid ids; note the ids are " +
-		"'amazon-bedrock' and 'google', not 'bedrock' or 'gemini'). api_key is required for every cloud " +
-		"provider and optional only for local ones (ollama, lmstudio, vllm). api_base is optional and " +
-		"overrides the catalog's default endpoint; it must be a full http:// or https:// URL with a host. " +
-		"expected_revision is the provider's revision from list_providers (\"absent\" when it is not configured yet); " +
-		"the write is refused if the provider changed since. dry_run checks the input shape only and saves nothing.\n" +
-		"Parameters: name (required), api_key, api_base, expected_revision (required unless dry_run), dry_run."
+	return "Configure a provider by selecting api_key_ref; plaintext secrets are refused. " +
+		"First call request_secret with purpose and exactly one recipient: provider or endpoint. " +
+		"Wait for the person to submit the secure web card. Submit stores a version; this approved change selects it. " +
+		"A reference stored for a different recipient is refused: request a new card for the intended recipient. " +
+		"Cloud providers require api_key_ref; local providers need no key. Use catalog ids such as " +
+		"amazon-bedrock or google, not bedrock or gemini. After saving, this tool will check the SAVED entry by requesting a " +
+		"model list from the configured endpoint using its saved credential and protocol. This does not prove that a chosen model runs. " +
+		"A failed reload or saved-entry check after commit is \"saved but not working\" with the reason; " +
+		"never report it as working or unsaved. Pass expected_revision from list_providers (\"absent\" for a new entry); " +
+		"stale writes are refused. dry_run checks input shape only, without saving, recipient validation or network calls."
 }
 
 func (t *ProviderConfigureTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":        map[string]any{"type": "string"},
-			"api_key_ref": map[string]any{"type": "string"},
-			"api_base":    map[string]any{"type": "string"},
-			expectedRevisionParam: map[string]any{
+			"name": map[string]any{
 				"type":        "string",
-				"description": "The provider's revision from list_providers; \"absent\" for a provider that is not configured yet.",
+				"description": "Catalog provider id, such as amazon-bedrock or google; also the provider recipient for request_secret.",
+			},
+			"api_key_ref": map[string]any{
+				"type": "string",
+				"description": "Stored reference from request_secret with purpose and either provider or endpoint, never both, " +
+					"after the person's secure-card Submit. Required for cloud providers; local providers may omit it. " +
+					"Must match the exact recipient; otherwise request a new card for that recipient. Never pass a plaintext key.",
+			},
+			"api_base": map[string]any{
+				"type": "string",
+				"description": "Optional full http:// or https:// endpoint with a host, without credentials, query or fragment. " +
+					"The reference must match this effective recipient; if the recipient differs, request a new card for it.",
+			},
+			expectedRevisionParam: map[string]any{
+				"type": "string",
+				"description": "Provider revision from list_providers; \"absent\" for a new entry. Required unless dry_run. " +
+					"A stale revision is refused: re-read and obtain confirmation for the revised change before retrying.",
 			},
 			"dry_run": map[string]any{
-				"type":        "boolean",
-				"description": "Validate the provider id, key shape and api_base shape only; save nothing and make no network call.",
+				"type": "boolean",
+				"description": "Validate the catalog id, reference-name shape and endpoint shape only; " +
+					"no stored-reference or recipient checks, saves or network calls.",
 			},
 		},
 		"required": []string{"name"},

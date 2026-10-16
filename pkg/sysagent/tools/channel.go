@@ -232,19 +232,50 @@ func NewChannelConfigureTool(d *Deps) *ChannelConfigureTool { return &ChannelCon
 func (t *ChannelConfigureTool) Name() string                { return "configure_channel" }
 func (t *ChannelConfigureTool) Scope() tools.ToolScope      { return tools.ScopeCore }
 func (t *ChannelConfigureTool) Description() string {
-	return "Store a channel's credentials and settings. Secrets (token, app_secret) go into the encrypted credential store and are referenced from config.json by a *_ref — they are never written to config.json in plaintext. Non-secret fields (bot_id, app_id, mode) are written to config.json directly. This does NOT enable the channel and does NOT check whether it is enabled: call enable_channel separately, and note the channel only connects on the next config reload. WhatsApp does not take credentials here — it pairs by QR code in the Channels screen. expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, from list_channels), expected_revision (required), token, app_secret, bot_id, app_id, mode."
+	return "Save a channel instance's non-secret settings and select stored credential references; plaintext secrets are refused. " +
+		"Establish its intended settings first, then call request_secret with purpose and exactly one recipient form: instance + field " +
+		"for that existing connection. Wait for the person to submit the secure web card, then pass its returned references " +
+		"through the matching reference parameters. Submit stores a version; this approved change selects it. " +
+		"Each reference must match that exact instance, recipient settings and field; a different recipient is refused, " +
+		"so request a new card for it. A settings change that would redirect retained credentials is refused: " +
+		"change the destination in Settings first, then request a new card. Slack's paired card supplies bot_token and app_token; " +
+		"pass both as bot_token_ref and app_token_ref, not token_ref. Omitted references stay unchanged. " +
+		"Read list_channels and pass expected_revision (\"absent\" for a new entry); stale writes are refused. " +
+		"This does not enable or live-test the channel: call enable_channel separately; changes take effect on the next config reload. " +
+		"Report committed settings as \"saved but not working\" with the reason, never working or nothing saved. " +
+		"WhatsApp pairs by QR code in the Channels screen, not with credentials here."
 }
 
 func (t *ChannelConfigureTool) Parameters() map[string]any {
 	properties := map[string]any{
-		"id":                  map[string]any{"type": "string"},
-		"bot_id":              map[string]any{"type": "string"},
-		"app_id":              map[string]any{"type": "string"},
-		"mode":                map[string]any{"type": "string"},
+		"id": map[string]any{
+			"type":        "string",
+			"description": "Channel instance id from list_channels, also instance=id for request_secret. Establish its intended settings before requesting the card.",
+		},
+		"bot_id": map[string]any{
+			"type": "string",
+			"description": "Non-secret bot identifier; save it before requesting a credential card. " +
+				"If retained credentials block a recipient change, change the destination in Settings, then request a new card.",
+		},
+		"app_id": map[string]any{
+			"type": "string",
+			"description": "Non-secret application identifier; save it before requesting a credential card. " +
+				"If retained credentials block a recipient change, change the destination in Settings, then request a new card.",
+		},
+		"mode": map[string]any{
+			"type": "string",
+			"description": "Non-secret channel mode; save it before requesting a credential card. " +
+				"If retained credentials block a recipient change, change the destination in Settings, then request a new card.",
+		},
 		expectedRevisionParam: channelRevisionProperty(),
 	}
 	for _, binding := range channelReferenceBindings {
-		properties[binding.parameter] = map[string]any{"type": "string"}
+		properties[binding.parameter] = map[string]any{
+			"type": "string",
+			"description": "Stored reference for field=" + binding.field + "; first request_secret with purpose, instance=id and field=" + binding.field +
+				", then wait for the person's secure-card Submit. Must match that exact instance, recipient settings and field; " +
+				"otherwise request a new card for that recipient. Never pass a plaintext value.",
+		}
 	}
 	return map[string]any{
 		"type": "object", "properties": properties,
