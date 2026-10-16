@@ -137,7 +137,7 @@ Omnipus can change a workspace's name, description, team and delegation lines wi
 
 - An empty name is refused ("name is required"); leaving the name out keeps it.
 - A team member must be a real agent — an id that names no agent is refused, and so is a delegation line to an agent outside the team. Nothing is saved in either case.
-- After saving, the tool reads the workspace back from disk and checks that the delegation graph is valid and that every new line joins two team members. If not, the result says `saved but not working` with the reason. See [tools](tools.md#what-a-change-tool-reports) for the four outcomes.
+- After saving, the tool reads the workspace back from disk and checks that the delegation graph is valid and that every new line joins two team members. If not, the result says `saved but not working` with the reason. When a team is supplied, the tool also attempts to prepare its eligible members' main chats, even if the team is unchanged. An inactive chat colleague, or an inactive member whose saved agent record cannot be read, produces a `main_chat_warning` and `saved but not working`, not a claim that the chat is ready. Other eligible members are still prepared. Repair the unreadable agent record or remove that member, then retry the team. See [tools](tools.md#what-a-change-tool-reports) for the four outcomes.
 - The result carries the workspace's new `revision`, so the next change does not need another read. A change that would alter nothing writes nothing and keeps the revision.
 - Every workspace result has the same fields, with lists that are empty rather than missing.
 

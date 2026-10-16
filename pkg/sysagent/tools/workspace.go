@@ -603,32 +603,46 @@ func memberMainsWarning(deps *Deps, toolName, workspaceID string, team []string)
 	if w := provisionMemberMains(deps, toolName, workspaceID); w != "" {
 		parts = append(parts, w)
 	}
-	if inactive := inactiveNativeMembers(deps, team); len(inactive) > 0 {
+	inactive, err := inactiveNativeMembers(deps, team)
+	if len(inactive) > 0 {
 		parts = append(parts, fmt.Sprintf("Agent(s) %s are saved but not active, so their main chat could not be "+
 			"prepared; it is prepared when the agent is active and its chat is opened.", strings.Join(inactive, ", ")))
+	}
+	if err != nil {
+		slog.Error("sysagent: "+toolName+": member records could not be verified for main chats",
+			"workspace_id", workspaceID, "error", err)
+		parts = append(parts, fmt.Sprintf("The team was saved, but main-chat readiness in workspace %q could not be verified: %v. "+
+			"Repair the agent record or remove the member from the team, then retry.", workspaceID, err))
 	}
 	return strings.Join(parts, " ")
 }
 
 // inactiveNativeMembers lists the members that are saved native chat-target
-// agents but missing from the live roster. Nothing is listed when the live
-// roster cannot be read (nothing to compare against).
-func inactiveNativeMembers(deps *Deps, team []string) []string {
+// agents but missing from the live roster. Read failures are returned alongside
+// any verified inactive members, never treated as intentional ineligibility.
+// Nothing is listed when the live roster cannot be read (nothing to compare against).
+func inactiveNativeMembers(deps *Deps, team []string) ([]string, error) {
 	if !liveConfigAvailable(deps) || strings.TrimSpace(deps.Home) == "" || deps.EnsureWorkspaceMains == nil {
-		return nil
+		return nil, nil
 	}
 	live := configAgentPresenceSet(deps)
 	store := agentstore.New(deps.Home)
 	var out []string
+	var verificationErr error
 	for _, id := range team {
 		if live[id] {
 			continue
 		}
-		if a, err := store.Get(id); err == nil && a.IsChatTarget() {
+		a, err := store.Get(id)
+		if err != nil {
+			verificationErr = errors.Join(verificationErr, fmt.Errorf("agent %q could not be read: %w", id, err))
+			continue
+		}
+		if a.IsChatTarget() {
 			out = append(out, id)
 		}
 	}
-	return out
+	return out, verificationErr
 }
 
 // ---- system.workspace.update ----
