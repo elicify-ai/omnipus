@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -52,21 +54,38 @@ func TestWU3CreateAgentReportsDurablePartsWhenMembershipPublicationIsIncomplete(
 	assert.Contains(t, strings.ToLower(result.ForLLM), "delegation")
 }
 
-// A provider key can land before config publication fails. Keep the key fact
-// and old config fact separate; no secret-card selection path is claimed here.
-func TestWU3ProviderConfigFailureAfterCredentialSaveIsPartlySaved(t *testing.T) {
-	d, _ := wu3Deps(t)
-	backup := filepath.Join(d.Home, "config-before.json")
-	require.NoError(t, os.Rename(d.ConfigPath, backup))
-	require.NoError(t, os.Mkdir(d.ConfigPath, 0o700))
-	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "openai", "api_key": "wu3-partial-value", "api_base": "https://fixture.wu3.invalid/v1", "expected_revision": "absent"})
-	value, err := d.CredStore.Get("openai_API_KEY")
+// Q1-A translation: card Submit previously saved the version. A later provider
+// selection whose config publication fails saves nothing in THIS call; the
+// card's value/binding must survive unused, never be overwritten or rolled back.
+func TestWU4B_ProviderConfigFailureAfterCardSubmitRetainsValueWithoutSelection(t *testing.T) {
+	f := newWU4BFixture(t)
+	reg, sid, _ := wu4bCardRegistry(t, f)
+	card, err := reg.Create(context.Background(), sid, "omnipus", "wu4b-webchat", "", secretrequest.Input{Purpose: "Provider credential before failing selection", Provider: "openai"})
 	require.NoError(t, err)
-	assert.Equal(t, "wu3-partial-value", value, "credential really landed")
-	body := wu3Outcome(t, result, "partly saved")
-	assert.NotEmpty(t, body["changed_fields"])
-	assert.NotEmpty(t, body["missing_parts"])
-	assert.NotContains(t, result.ForLLM, "wu3-partial-value", "partial report still never leaks credential")
+	values := map[string]string{"api_key": "wu3-partial-value"}
+	submitted, err := reg.Submit(card.Card.RequestId, "wu4b-owner", gen.SecretSubmitRequest{Values: &values})
+	require.NoError(t, err)
+	require.Len(t, submitted.Card.ReferenceNames, 1)
+	ref := submitted.Card.ReferenceNames[0]
+	credentialsBefore := wu3ReadFile(t, filepath.Join(f.d.Home, "credentials.json"))
+	backup := filepath.Join(f.d.Home, "config-before.json")
+	configBefore := wu3ReadFile(t, f.d.ConfigPath)
+	require.NoError(t, os.Rename(f.d.ConfigPath, backup))
+	require.NoError(t, os.Mkdir(f.d.ConfigPath, 0o700))
+	result := systools.NewProviderConfigureTool(f.d).Execute(context.Background(), map[string]any{"name": "openai", "api_key_ref": ref, "expected_revision": "absent"})
+	require.True(t, result.IsError, result.ForLLM)
+	assert.Equal(t, 1, f.saves, "instrument: valid reference selection actually attempted the failing config publication")
+	body := wu3Outcome(t, result, "failed: nothing saved")
+	assert.Equal(t, []any{}, body["changed_fields"])
+	assert.Empty(t, f.cfg.Providers, "failed publication leaves no selected consumer")
+	assert.Equal(t, configBefore, wu3ReadFile(t, backup))
+	assert.Equal(t, credentialsBefore, wu3ReadFile(t, filepath.Join(f.d.Home, "credentials.json")), "failure cannot delete or rewrite a prior submission")
+	value, err := f.d.CredStore.Get(ref)
+	require.NoError(t, err)
+	assert.Equal(t, "wu3-partial-value", value)
+	assert.Zero(t, f.reloads)
+	assert.Zero(t, f.listings)
+	assert.NotContains(t, result.ForLLM, "wu3-partial-value")
 }
 
 // FR-030/Q2: a validation refusal is exactly failed: nothing saved, across
