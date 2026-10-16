@@ -962,6 +962,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		}
 		if admitted {
 			rootExecution = d
+			// The canonical consuming session owns the reminder on both worker
+			// and direct replay entry. Run after release/checked settlement.
+			defer al.remindUnansweredRequests(sessionID)
 			defer func() { runErr = errors.Join(runErr, al.finishRoomTurn(ts.opts.roomCost, runErr)) }()
 			release = func() { al.finishOrdinaryWakeExecution(msg, d) }
 		}

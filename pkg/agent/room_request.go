@@ -673,6 +673,7 @@ func (al *AgentLoop) newTurnRoomMeter(msg bus.InboundMessage) *roomCostMeter {
 	m := &roomCostMeter{al: al, sessionID: msg.SessionID, inputs: 1, rooms: map[string]int{}}
 	if isRoomRequestWake(msg) {
 		m.rooms[msg.Metadata[roomIDMetadataKey]]++
+		m.ownInput(msg.TranscriptEntryID, msg.Metadata[roomIDMetadataKey])
 	}
 	return m
 }
@@ -697,11 +698,10 @@ func (al *AgentLoop) reportRoomCost(m *roomCostMeter, sessionID string) {
 }
 
 // settleRoomInputs runs when a turn ended: a turn that failed fails (or, if
-// it was cancelled, interrupts) every room request it was handed besides its
-// own starting message (that one is settled by roomTurnEnded). A turn that
-// ended without an error leaves them to their answers and, for one still
-// unanswered, to the one reminder whose end fails it - a member is never left
-// "working" after its turn.
+// it was cancelled, interrupts) every room request it owns, including the
+// starting message. This includes a hard abort with a public nil error. A
+// successful turn leaves outstanding requests to their answers and the one
+// reminder whose end fails them.
 func (al *AgentLoop) settleRoomInputs(m *roomCostMeter, turnErr error) error {
 	rt := al.loadRoomRuntime()
 	if rt == nil || m == nil || turnErr == nil {
@@ -786,8 +786,8 @@ type roomCostMeter struct {
 	unpriced  bool
 	inputs    int
 	rooms     map[string]int
-	// joined are the room requests handed to the turn besides the message
-	// that started it (request id -> room id); the turn's end settles them.
+	// joined are all room requests owned by this turn, including a starting
+	// room message (request id -> room id); settlement is independent of cost.
 	joined   map[string]string
 	finished bool
 }

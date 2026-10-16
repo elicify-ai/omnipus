@@ -1536,7 +1536,13 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 		rw.writeWorkspaceSaveFailure(rw.state.Revision, false, "revision", "The workspace changes could not be prepared; read the workspace before retrying.", nil)
 		return
 	}
-	completeRevision, revisionErr := workspace.RevisionForState(rw.ws, rw.delegation)
+	// Saving an empty graph removes its file; read-back represents it as nil.
+	// The partial-save envelope must describe that persisted representation.
+	persistedDelegation := rw.delegation
+	if len(persistedDelegation) == 0 {
+		persistedDelegation = nil
+	}
+	completeRevision, revisionErr := workspace.RevisionForState(rw.ws, persistedDelegation)
 	if revisionErr != nil {
 		logsafeError("rest: workspace graph revision", "id", rw.id, "error", revisionErr)
 		rw.writeWorkspaceSaveFailure(rw.state.Revision, false, "revision", "The workspace changes could not be prepared; read the workspace before retrying.", nil)
