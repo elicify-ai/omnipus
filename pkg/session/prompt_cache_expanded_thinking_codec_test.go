@@ -31,8 +31,8 @@ func TestExpandedThinking_PrivateCodecKeepsOpaqueBlocksOffPublicWire(t *testing.
 		t.Fatal(err)
 	}
 	var reopened ModelPayload
-	if err := json.Unmarshal(raw, &reopened); err != nil {
-		t.Fatal(err)
+	if decodeErr := json.Unmarshal(raw, &reopened); decodeErr != nil {
+		t.Fatal(decodeErr)
 	}
 	replayed, err := DecodeModelPayload(reopened)
 	if err != nil {

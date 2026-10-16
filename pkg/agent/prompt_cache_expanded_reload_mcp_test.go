@@ -89,8 +89,6 @@ const (
 	// expandedReloadOwnerLabel / expandedReloadOtherLabel are failure-message
 	// labels only. The real session ids are created by the fixture's session
 	// store and carried on the fixture — never these strings.
-	expandedReloadOwnerLabel = "owner"
-	expandedReloadOtherLabel = "other"
 	// expandedReloadTurnReply is the capture provider's canned final answer.
 	expandedReloadTurnReply = "expanded-reload-turn-done"
 	// expandedReloadAgent is the seeded agent the fixture drives.

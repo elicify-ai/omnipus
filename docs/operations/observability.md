@@ -263,6 +263,12 @@ attachments immediately before that block. Tool-call follow-ups keep complete
 call/result groups ahead of the notes. Removing old history from the live window
 does not remove the original system instructions.
 
+On thinking-enabled Anthropic tool turns, the original signed thinking and
+redacted-thinking blocks are retained in private model history and replayed
+before the tool call on the continuation request. Their signatures and redacted
+data are not rewritten or included in the accounting log. A synthesized answer
+assembled from several truncated replies does not inherit one reply's signature.
+
 ### Stored accounting for each call
 
 Each successfully completed model call made through the agent turn loop has its
