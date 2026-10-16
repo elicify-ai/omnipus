@@ -1122,9 +1122,11 @@ export interface ChatStore {
    * AskUserQuestion card over the WS (`ask_user_answer`). Validation is the
    * server's (first-valid-wins); a dropped connection surfaces a connection
    * error and leaves the card pending for the reconnect snapshot to
-   * re-hydrate.
+   * re-hydrate. Returns the connection error text when the frame could not
+   * be sent, so the mounted card can retain its draft and release its latch.
+   * A successful socket send is not acceptance; wait for the server's card.
    */
-  sendAskUserAnswer: (answer: Omit<AskUserAnswerFrame, 'type'>) => void
+  sendAskUserAnswer: (answer: Omit<AskUserAnswerFrame, 'type'>) => string | void
   /**
    * ADR-092: set or clear this session's per-chat Auto-approve modifier
    * (`session_mode_update`). A human-only action — nothing agent-facing

@@ -10,13 +10,17 @@ export function createOutboundResponseSlice(): OutboundResponseSlice {
     sendAskUserAnswer: (answer) => {
       const { connection } = useConnectionStore.getState()
       if (!connection) {
-        useConnectionStore.getState().setConnectionError('Cannot send your answers — not connected. Reconnect and try again.')
-        return
+        const error = 'Cannot send your answers — not connected. Reconnect and try again.'
+        useConnectionStore.getState().setConnectionError(error)
+        return error
       }
       const sent = connection.send({ type: 'ask_user_answer', ...answer })
       if (!sent) {
-        useConnectionStore.getState().setConnectionError('Failed to send your answers — connection dropped. Reconnect and try again.')
+        const error = 'Failed to send your answers — connection dropped. Reconnect and try again.'
+        useConnectionStore.getState().setConnectionError(error)
+        return error
       }
+      return undefined
     },
 
     respondToPairing: (deviceId, decision) => {
