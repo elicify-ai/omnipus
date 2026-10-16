@@ -1319,6 +1319,7 @@ func isKnowledgeBaseEntry(handle *PathHandle, entry os.DirEntry) bool {
 // pkg/gateway/rest_library.go's own detectKnowledgeBaseInRoot documents for
 // the identical question over the REST listing.
 func formatDirEntries(handle *PathHandle, entries []os.DirEntry, offset, limit int) *ToolResult {
+	entries = fspolicy.VisibleDirectoryEntries(handle.abs, entries, handle.policy)
 	total := len(entries)
 	start := min(offset, total)
 	end := min(start+limit, total)

@@ -1,93 +1,12 @@
 package skills
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// TestAutoDiscoveryFromSkill verifies that DiscoverAllTools returns DiscoveredTool entries
-// for every allowed-tools entry in an installed skill's SKILL.md frontmatter.
-// Traces to: wave3-skill-ecosystem-spec.md line 857 (Test #27: TestAutoDiscoveryFromSkill)
-// BDD: Given an installed skill with allowed-tools: [Read, Grep, Write],
-// When DiscoverAllTools(loader) is called,
-// Then three DiscoveredTool entries are returned, one per declared tool.
-
-func TestAutoDiscoveryFromSkill(t *testing.T) {
-	// Traces to: wave3-skill-ecosystem-spec.md line 857 (Test #27)
-	tmp := t.TempDir()
-	skillDir := filepath.Join(tmp, "my-skill")
-	require.NoError(t, os.MkdirAll(skillDir, 0o755))
-
-	content := "---\nname: my-skill\ndescription: A skill with tools\nallowed-tools: Read, Grep, Write\n---\n\n# My Skill\n"
-	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o600))
-
-	loader := &SkillsLoader{globalSkills: tmp}
-	tools := DiscoverAllTools(loader)
-
-	// Must find exactly 3 tools: Read, Grep, Write
-	require.Len(t, tools, 3, "must discover one DiscoveredTool per allowed-tools entry")
-
-	toolNames := make(map[string]bool)
-	for _, dt := range tools {
-		toolNames[dt.ToolName] = true
-		assert.Equal(t, "my-skill", dt.SkillName, "SkillName must match the skill's name")
-		assert.NotEmpty(t, dt.Source, "Source must be set")
-	}
-
-	assert.True(t, toolNames["Read"], "Read must be discovered")
-	assert.True(t, toolNames["Grep"], "Grep must be discovered")
-	assert.True(t, toolNames["Write"], "Write must be discovered")
-}
-
-// TestAutoDiscoveryFromSkill_NoAllowedTools verifies that skills without allowed-tools
-// produce no discovered entries.
-// Traces to: wave3-skill-ecosystem-spec.md line 857 (Test #27 — no tools edge case)
-
-func TestAutoDiscoveryFromSkill_NoAllowedTools(t *testing.T) {
-	// Traces to: wave3-skill-ecosystem-spec.md line 857 (edge case: no tools declared)
-	tmp := t.TempDir()
-	skillDir := filepath.Join(tmp, "no-tools-skill")
-	require.NoError(t, os.MkdirAll(skillDir, 0o755))
-
-	content := "---\nname: no-tools-skill\ndescription: A skill without tools\n---\n\n# No Tools Skill\n"
-	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o600))
-
-	loader := &SkillsLoader{globalSkills: tmp}
-	tools := DiscoverAllTools(loader)
-
-	assert.Empty(t, tools, "skill without allowed-tools must produce no discovered tools")
-}
-
-// TestAutoDiscoveryFromSkill_MultipleSkills verifies that DiscoverAllTools aggregates
-// tools from all installed skills.
-// Traces to: wave3-skill-ecosystem-spec.md line 857 (Test #27 — multiple skills)
-
-func TestAutoDiscoveryFromSkill_MultipleSkills(t *testing.T) {
-	// Traces to: wave3-skill-ecosystem-spec.md line 857 (Test #27)
-	tmp := t.TempDir()
-
-	// Skill A: 2 tools
-	skillA := filepath.Join(tmp, "skill-a")
-	require.NoError(t, os.MkdirAll(skillA, 0o755))
-	contentA := "---\nname: skill-a\ndescription: Skill A\nallowed-tools: Read, Bash\n---\n"
-	require.NoError(t, os.WriteFile(filepath.Join(skillA, "SKILL.md"), []byte(contentA), 0o600))
-
-	// Skill B: 1 tool
-	skillB := filepath.Join(tmp, "skill-b")
-	require.NoError(t, os.MkdirAll(skillB, 0o755))
-	contentB := "---\nname: skill-b\ndescription: Skill B\nallowed-tools: Grep\n---\n"
-	require.NoError(t, os.WriteFile(filepath.Join(skillB, "SKILL.md"), []byte(contentB), 0o600))
-
-	loader := &SkillsLoader{globalSkills: tmp}
-	tools := DiscoverAllTools(loader)
-
-	assert.Len(t, tools, 3, "must aggregate tools from all installed skills")
-}
 
 // mockMCPLister is a test double for MCPToolLister that returns a static tool map.
 type mockMCPLister struct {

@@ -92,8 +92,9 @@ func train1N07ListingFixture(t *testing.T, restrict bool) (*ToolRegistry, contex
 
 func train1N07ListedNames(t *testing.T, listing string) []string {
 	t.Helper()
-	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(listing), "\n") {
+	lines := strings.Split(strings.TrimSpace(listing), "\n")
+	names := make([]string, 0, len(lines))
+	for _, line := range lines {
 		kind, name, ok := strings.Cut(line, ":")
 		require.True(t, ok, "expected an actual directory entry, got %q", line)
 		require.Contains(t, []string{"FILE", "DIR", "KB"}, kind, "unexpected directory entry %q", line)

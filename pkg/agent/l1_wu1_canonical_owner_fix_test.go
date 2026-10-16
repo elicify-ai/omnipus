@@ -46,7 +46,7 @@ func TestL1WU1EngineExistingSession_ConflictingMetadataRefusesBeforeTurn(t *test
 	}{
 		{"omitted_control", "mia", "", true},
 		{"matching_control", "jim", "jim", true},
-		{"normalized_match_control", "jim", "JIM", true},
+		{"normalized_match_control", "jim", "JIM", false},
 		{"mia_owner_jim_requested", "mia", "jim", false},
 		{"jim_owner_mia_requested", "jim", "mia", false},
 		{"deleted_owner_survivor_requested", "deleted", "mia", false},
