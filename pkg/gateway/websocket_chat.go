@@ -549,6 +549,14 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 		})
 		return true
 	}
+	// New-chat admission must finish before minting or publishing anything.
+	if hcm.frameSessionID == "" {
+		if _, registered := hcm.h.agentLoop.GetRegistry().GetAgent(hcm.targetAgentID); !registered {
+			logsafeWarn("ws: rejecting new-chat frame for an unknown agent", "agent_id", hcm.targetAgentID)
+			hcm.sendResolveRefusal(fmt.Sprintf("the requested agent is not available: %q", hcm.targetAgentID))
+			return true
+		}
+	}
 	if isWorkerAgentID(hcm.h.agentLoop.GetConfig(), hcm.targetAgentID) && !hcm.addressesExistingHelperOf(hcm.targetAgentID) {
 		// An explicit agent_id that resolves to a worker is illegitimate: a worker
 		// is a delegation-only labor tier, never a chat target. Refuse to mint a

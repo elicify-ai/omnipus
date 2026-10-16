@@ -17,6 +17,8 @@ When addressing an agent by its ID, use the exact letter case. For example, `Jim
 
 For an existing chat, a differently cased ordinary ID is refused before the message is saved or sent to the agent. Omitting the ID continues under that chat's stored owner; it does not choose another agent.
 
+For a new chat message, an unknown or differently cased ordinary ID is refused before a session is created or the message is saved. Requests for Omnipus in any letter case point to its canonical main chat rather than creating another conversation.
+
 ## When you would use it
 
 - You want a colleague with a fixed job and personality. Create a Main agent.
