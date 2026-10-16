@@ -21,11 +21,10 @@ export function subscribeAskUserAnswerRejection(card: CardIdentity, listener: Re
   }
 }
 
-/** Notify only this mounted pending card; terminal/unmounted cards have no listener. */
-export function reportAskUserAnswerRejected(card: CardIdentity, message: string): void {
-  // TODO(wire-1343): route the generated ErrorFrame.ask_user_card_id plus
-  // required session_id here, before generic turn-ending error handling.
-  // The authoritative pending/terminal card, not the message text, decides
-  // whether retry is allowed: an accepted-but-resume-failed card stays terminal.
-  for (const listener of listeners.get(askUserCardKey(card)) ?? []) listener(message)
+/** True only when a mounted pending card received the rejection inline. */
+export function reportAskUserAnswerRejected(card: CardIdentity, message: string): boolean {
+  const subscribers = listeners.get(askUserCardKey(card))
+  if (!subscribers) return false
+  for (const listener of subscribers) listener(message)
+  return true
 }
