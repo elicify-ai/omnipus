@@ -619,7 +619,7 @@ func (al *AgentLoop) gateRoomRequest(msg bus.InboundMessage) (*roomGate, bool) {
 		// member's ledger and is offered again on its next turn or a Retry
 		// (the room logged why it deferred).
 		al.heldRepublished.Delete(g.requestID)
-		logger.WarnCF("agent", "room request not run now: its room could not confirm it; it stays queued",
+		logger.WarnCF("agent", "room request is not runnable now; its capture is retained for later delivery or answer repair",
 			map[string]any{"session_id": msg.SessionID, "request_id": g.requestID, "room_id": g.roomID})
 		return nil, false
 	default:

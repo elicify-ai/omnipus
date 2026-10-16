@@ -46,6 +46,28 @@ func TestRoomsFix4_FailedTerminalWriteKeepsRepairOwnership(t *testing.T) {
 	}
 }
 
+// R3-N1 chief Q1 A: a late old wake is not cancellation authority over an
+// already-posted answer's unfinished mirror. Defer preserves repair, not work.
+func TestRoomsFix4_DuplicateWakePreservesUnmirroredAnswer(t *testing.T) {
+	f := newFixture(t)
+	room := f.squad("mia", "jim", "r2")
+	require.NoError(t, f.post(room.Id, "c1", "@Jim task"))
+	d := f.deliveryOf(room.Id, "jim")
+	require.True(t, f.svc.BeginConsume(room.Id, d.RequestID, "main-jim"))
+	f.deps.mirrorErr = errFault
+	require.ErrorIs(t, f.answer(room.Id, d.RequestID, "jim", "answer @Mia"), ErrMirrorFailed)
+	discard, err := f.svc.ConsumeEnded(room.Id, d.RequestID, errors.New("later provider failure"))
+	require.NoError(t, err)
+	require.False(t, discard)
+	require.Equal(t, ConsumeDefer, f.svc.DecideConsume(room.Id, d.RequestID, "main-jim"), "late wake must neither execute nor invalidate the live repair route")
+	require.Equal(t, "answered/", f.stateOf(room.Id, d.RequestID))
+	f.deps.mirrorErr = nil
+	require.NoError(t, f.answer(room.Id, d.RequestID, "jim", "answer @Mia"))
+	require.Len(t, f.entriesOf(room.Id), 2)
+	require.Equal(t, []string{"jim", "mia"}, f.deps.admittedTo())
+	require.Equal(t, ConsumeCancel, f.svc.DecideConsume(room.Id, d.RequestID, "main-jim"), "fully mirrored terminal work is still not executed again")
+}
+
 func TestRoomsFix4_CompletionReadFailureIsRepairable(t *testing.T) {
 	f := newFixture(t)
 	room := f.squad("mia", "jim")

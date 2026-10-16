@@ -223,7 +223,15 @@ func (s *Service) DecideConsume(roomID, requestID, sessionID string) ConsumeDeci
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d := r.deliveries[requestID]
-	if d == nil || d.State == StateCancelled || terminal(d.State) {
+	if d == nil || d.State == StateCancelled {
+		return ConsumeCancel
+	}
+	if terminal(d.State) {
+		// A duplicate wake may arrive after completion. Settled work never
+		// runs again, but an unfinished answer mirror still needs its capture.
+		if answerNeedsMirror(r, requestID) {
+			return ConsumeDefer
+		}
 		return ConsumeCancel
 	}
 	if d.Consumed {

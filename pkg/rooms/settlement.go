@@ -141,3 +141,12 @@ func validateSettlement(intent settlementRecord) error {
 	}
 	return fmt.Errorf("room settlement has invalid state %q", intent.State)
 }
+
+func answerNeedsMirror(r *room, requestID string) bool {
+	for _, entry := range r.entries {
+		if entry.AnswersRequest == requestID && !r.mirrored[entry.Entry.Id] {
+			return true
+		}
+	}
+	return false
+}
