@@ -57,8 +57,8 @@ func TestRoomsFix5_SystemWakeNoAnswerSettlesAfterOneReminder(t *testing.T) {
 	require.Len(t, snap.Entries, 1, "plain main replies must not masquerade as room answers")
 }
 
-// Architect R3-N3: the room wake IS the starting input, not an additional held
-// input. The paid provider waits for forced cancellation so this reaches Aborted.
+// Positive control for R3-N3: a real Stop during the paid provider's wait
+// reaches the typed cancellation exit, which already settles the initiator.
 func TestRoomsFix5_HardStopInterruptsInitiatingRequestWithoutReplay(t *testing.T) {
 	h := wu15NewHarness(t)
 	room := h.create("squad", "Launch", "mia", "jim")
@@ -104,4 +104,58 @@ func TestRoomsFix5_HardStopInterruptsInitiatingRequestWithoutReplay(t *testing.T
 	final = wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "root"), "mia")
 	require.Equal(t, "interrupted", final.State, "a later turn must not downgrade the Stop to no_answer")
 	require.Len(t, p.inputs(), 2, "only the original turn and the explicitly new human turn")
+}
+
+// Architect R3-N3's missed nil-error exit: land real Stop exactly after a
+// successful response, then force its hard phase before turn finalization.
+func TestRoomsFix5_ResponseBoundaryHardStopSettlesInitiator(t *testing.T) {
+	h := wu15NewHarness(t)
+	room := h.create("squad", "Launch", "mia", "jim")
+	p := &wu15ScriptProvider{answer: "plain response"}
+	h.provider("mia", p)
+	var selected atomic.Bool
+	var aborted atomic.Int64
+	stopped := make(chan struct{})
+	sid := h.main("mia")
+	h.al.SetEventSyncTap(func(e agent.Event) {
+		if e.Kind == agent.EventKindLLMResponse && selected.CompareAndSwap(false, true) {
+			result, err := h.al.StopSession(context.Background(), agent.StopRequest{SessionID: sid, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "wu15-tester"}, Channel: "webchat"})
+			require.NoError(t, err)
+			require.True(t, result.Durable)
+			require.NoError(t, result.RootErr)
+			turns, err := h.al.InterruptSessionHard("agent:mia:session:"+sid, agent.ScopeSelfOnly, "")
+			require.NoError(t, err)
+			require.Len(t, turns, 1, "instrument: hard Stop selects this exact live initiating turn")
+			close(stopped)
+		}
+		if end, ok := e.Payload.(agent.TurnEndPayload); e.Kind == agent.EventKindTurnEnd && ok && end.SessionID == sid && end.Status == agent.TurnEndStatusAborted {
+			aborted.Add(1)
+		}
+	})
+	h.post(room.Id, "root", "@Mia SOLE_RESPONSE_BOUNDARY")
+	d := wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "root"), "mia")
+	h.startLoop()
+	select {
+	case <-stopped:
+	case <-time.After(30 * time.Second):
+		t.Fatal("instrument: successful-response Stop cut was not reached")
+	}
+	fix4WaitTurnSettled(t, h, "mia")
+	require.Equal(t, int64(1), aborted.Load())
+	final := wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "root"), "mia")
+	require.Equal(t, "interrupted", final.State, "nil-error hard-abort outcome must still settle the starting request")
+	require.Nil(t, final.Reason)
+	capture, found, err := h.al.RequestLedger().Get(sid, d.RequestId)
+	require.NoError(t, err)
+	require.True(t, found && capture.Discarded)
+	h.post(room.Id, "root", "@Mia SOLE_RESPONSE_BOUNDARY")
+	conn := h.connect()
+	require.NoError(t, conn.WriteJSON(gen.AttachSessionFrame{Type: "attach_session", SessionId: sid}))
+	wu15ReadFrame(t, conn, "catch_up_complete")
+	h.sendMain(conn, "mia", "An independent later message.")
+	wu15ReadFrame(t, conn, "done")
+	fix4WaitTurnSettled(t, h, "mia")
+	final = wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "root"), "mia")
+	require.Equal(t, "interrupted", final.State, "later work cannot downgrade Stop to no_answer")
+	require.Len(t, p.inputs(), 2, "the new human turn runs, but the interrupted request is never replayed")
 }

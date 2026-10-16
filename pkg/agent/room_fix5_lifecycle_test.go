@@ -67,23 +67,23 @@ func TestRoomsFix5_DirectWakeNoAnswerOwnsOneReminder(t *testing.T) {
 	}
 }
 
-// Architect R3-N3's nil-error hard-abort control. The starting room message is
-// consumed normally, then hard Stop arrives before any provider call/poll.
-func TestRoomsFix5_InitiatingPrePollHardAbortRetainsSilentReturn(t *testing.T) {
+// Architect R3-N3's nil-error hard-abort path. Stop lands after a successful
+// provider response, so abortTurn (not the typed provider-error exit) unwinds.
+func TestRoomsFix5_InitiatingPostResponseHardAbortRetainsSilentReturn(t *testing.T) {
 	h, bridge, room, requestID := newFix5RoomMain(t, false)
 	wake, found := addrDrainInbound(t, h.al.bus)
 	require.True(t, found)
 	require.Equal(t, requestID, wake.TranscriptEntryID)
 	h.al.SetEventSyncTap(func(e Event) {
-		if e.Kind == EventKindTurnStart {
-			ts := h.al.getActiveTurnState("agent:" + testDefaultAgentID + ":session:" + h.id)
-			require.NotNil(t, ts)
-			require.True(t, ts.requestHardAbort(), "instrument: actual hard-abort flag before the first provider call")
+		if e.Kind == EventKindLLMResponse {
+			turns, err := h.al.InterruptSessionHard("agent:"+testDefaultAgentID+":session:"+h.id, ScopeSelfOnly, "")
+			require.NoError(t, err)
+			require.Len(t, turns, 1, "instrument: actual hard abort after the successful provider response")
 		}
 	})
 	_, _, err := h.al.processMessageAsPrimaryForTest(context.Background(), wake)
 	require.NoError(t, err, "an intentional successful hard Stop keeps its public silent return")
-	require.Empty(t, h.provider.calls())
+	require.Len(t, h.provider.calls(), 1, "the abort cut follows one successful provider response")
 	final := fix5RoomSnapshot(t, bridge, room.Id)
 	require.Equal(t, rooms.StateInterrupted, final.MemberStates[0].State)
 	require.Nil(t, final.MemberStates[0].Reason)
