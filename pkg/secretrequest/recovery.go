@@ -10,13 +10,29 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func (r *Registry) persistLocked(sessionID string) error {
+	pruned, err := r.persistStateLocked(sessionID)
+	if err != nil {
+		return err
+	}
+	if len(pruned) > 0 && r.opts.Credentials != nil {
+		store, storeErr := r.opts.Credentials()
+		if storeErr != nil {
+			return storeErr
+		}
+		return store.PruneCardReceipts(pruned)
+	}
+	return nil
+}
+
+// persistStateLocked publishes the bounded session state without deleting
+// credential receipts. Recovery defers receipt cleanup until its full scan succeeds.
+func (r *Registry) persistStateLocked(sessionID string) ([]string, error) {
 	var pending, terminal []Record
 	for _, rec := range r.entries {
 		if rec.Card.SessionId != sessionID {
@@ -44,23 +60,16 @@ func (r *Registry) persistLocked(sessionID string) error {
 	all := append(append([]Record{}, terminal...), pending...)
 	raw, err := json.Marshal(all)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := r.opts.Sessions.WriteSecretRequestState(sessionID, raw); err != nil {
-		return err
+		return nil, err
 	}
 	for _, id := range pruned {
 		delete(r.entries, id)
 		delete(r.inFlight, id)
 	}
-	if len(pruned) > 0 && r.opts.Credentials != nil {
-		store, err := r.opts.Credentials()
-		if err != nil {
-			return err
-		}
-		return store.PruneCardReceipts(pruned)
-	}
-	return nil
+	return pruned, nil
 }
 
 // Recover runs once at boot, before the gateway accepts a card submit. Receipt
@@ -76,55 +85,28 @@ func (r *Registry) Recover() error {
 	if r.opts.Sessions == nil {
 		return nil
 	}
-	sessions, err := r.opts.Sessions.ListSessions()
+	inventory, err := r.loadRequestInventoryLocked()
 	if err != nil {
 		r.initErr = err
 		return err
 	}
-	for _, meta := range sessions {
-		raw, readErr := r.opts.Sessions.ReadSecretRequestState(meta.ID)
-		if readErr != nil {
-			r.initErr = readErr
-			return readErr
-		}
-		var records []Record
-		if err := json.Unmarshal(raw, &records); err != nil {
-			r.initErr = err
-			return err
-		}
+	for sessionID, records := range inventory {
 		changed := false
 		for _, rec := range records {
-			if rec.Card.SessionId != meta.ID || rec.Card.RequestId == "" || len(rec.Recipients) != len(rec.Card.Fields) {
-				r.initErr = errors.New("invalid saved secret request metadata")
-				return r.initErr
-			}
 			if rec.Card.State == "pending" {
-				store, storeErr := r.opts.Credentials()
-				if storeErr != nil {
-					r.initErr = storeErr
-					return storeErr
+				recovered, recoverErr := r.recoverPendingLocked(rec)
+				if recoverErr != nil {
+					r.initErr = recoverErr
+					return recoverErr
 				}
-				receipt, exists, receiptErr := store.CardReceipt(rec.Card.RequestId)
-				if receiptErr != nil {
-					r.initErr = receiptErr
-					return receiptErr
-				}
-				if exists {
-					if receipt.SessionID != rec.Card.SessionId {
-						r.initErr = errors.New("secret receipt session mismatch")
-						return r.initErr
-					}
-					rec.Card.State, rec.Card.ReferenceNames, rec.Card.UpdatedAt = "submitted", receipt.References, receipt.SubmittedAt.Format(time.RFC3339Nano)
-				} else {
-					rec.Card.State, rec.Card.UpdatedAt = "interrupted", time.Now().UTC().Format(time.RFC3339Nano)
-				}
-				changed = true
+				rec, changed = recovered, true
 			}
 			r.entries[rec.Card.RequestId] = rec
 		}
 		if changed {
-			if err := r.persistLocked(meta.ID); err != nil {
-				return err
+			if _, persistErr := r.persistStateLocked(sessionID); persistErr != nil {
+				r.initErr = persistErr
+				return persistErr
 			}
 			for _, rec := range records {
 				recovered := r.entries[rec.Card.RequestId]
@@ -133,6 +115,10 @@ func (r *Registry) Recover() error {
 				}
 			}
 		}
+	}
+	if sweepErr := r.pruneOrphanReceiptsLocked(); sweepErr != nil {
+		r.initErr = sweepErr
+		return sweepErr
 	}
 	return nil
 }

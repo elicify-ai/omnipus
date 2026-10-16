@@ -43,9 +43,12 @@ type Options struct {
 	Sessions    *session.UnifiedStore
 	Config      func() *config.Config
 	Credentials func() (*credentials.Store, error)
-	Stopped     func(string) (bool, error)
-	Resume      func(Record) error
-	Audit       func(Record, string)
+	// RecoveryCredentials reports ErrRecoveryStoreAbsent for a fresh install;
+	// boot reconciliation must not create credentials or a key just to sweep.
+	RecoveryCredentials func() (*credentials.Store, error)
+	Stopped             func(string) (bool, error)
+	Resume              func(Record) error
+	Audit               func(Record, string)
 }
 
 // Registry serializes admission, Stop, submit and recovery. Session metadata

@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -47,9 +48,10 @@ func (al *AgentLoop) SecretRequests() *secretrequest.Registry {
 	}
 	reg := secretrequest.NewRegistry(secretrequest.Options{
 		Sessions: al.GetSessionStore(), Config: al.GetConfig,
-		Credentials: al.secretCredentialStore,
-		Stopped:     al.secretSessionStopped,
-		Resume:      al.dispatchSecretResume,
+		Credentials:         al.secretCredentialStore,
+		RecoveryCredentials: al.secretRecoveryCredentialStore,
+		Stopped:             al.secretSessionStopped,
+		Resume:              al.dispatchSecretResume,
 		Audit: func(rec secretrequest.Record, event string) {
 			audit.Emit(context.Background(), al.AuditLogger(), "secret.request."+event, audit.SeverityInfo, map[string]any{
 				"request_id": rec.Card.RequestId, "session_id": rec.Card.SessionId, "agent_id": rec.Card.ActingAgentId,
@@ -61,6 +63,21 @@ func (al *AgentLoop) SecretRequests() *secretrequest.Registry {
 	// mutex, so recovery runs at the gateway boundary after this method exits.
 	al.secretRequests.registry = reg
 	return reg
+}
+
+func (al *AgentLoop) secretRecoveryCredentialStore() (*credentials.Store, error) {
+	path := filepath.Join(filepath.Dir(al.GetSessionStore().BaseDir()), "credentials.json")
+	al.mu.RLock()
+	if al.sysagentDeps != nil && al.sysagentDeps.CredStore != nil {
+		path = al.sysagentDeps.CredStore.Path()
+	}
+	al.mu.RUnlock()
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, secretrequest.ErrRecoveryStoreAbsent
+	} else if err != nil {
+		return nil, err
+	}
+	return al.secretCredentialStore()
 }
 
 func (al *AgentLoop) secretCredentialStore() (*credentials.Store, error) {
