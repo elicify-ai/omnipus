@@ -103,7 +103,7 @@ The chat is a conversation with the workspace's agents. When the open conversati
 
 When an agent asks you questions, a card docks above the message box with one tab per question. Every question can be answered with the keyboard alone:
 
-- **↑** and **↓** move between the options and the free-text field; **Space** selects or clears an option.
+- **↑** and **↓** move between the options and the free-text field. **Space** selects an option; on a question that allows several selections, pressing **Space** again clears that option. On a single-select question, pressing **Space** again keeps the option selected.
 - **Enter** confirms the question and moves to the next unanswered one. Choosing an option — by click or **Space** — never moves on by itself; on a question with nothing chosen yet, **Enter** on an option picks it and moves on in one step.
 - Each question except the last shows **Next**; the last is confirmed with **Answer**, which sends every answer at once and is available only when every question is answered. **Cancel** sends no answers — the agent is told the card was cancelled and its turn continues.
 - No option is chosen for you in advance — the recommended one is only listed first and marked.
@@ -114,7 +114,11 @@ The open set and its waiting sets survive a gateway restart. A waiting set's 30-
 
 After another question set becomes active, reloading the chat can show an earlier set as past tool activity instead of rebuilding its completed card. Session Stop does not write a separate cancellation message for the earlier card.
 
-A failed card-state save is not treated as success. If a new set cannot be saved, the agent receives an error rather than a promise that it was queued. If saving the card state for an answer or cancellation fails, the current card and its existing waiting sets stay in place. The card shows an inline error, keeps your selections and typed answers, and makes **Answer** and **Cancel** available again so you can retry on that same card. A failed send while disconnected does the same; reconnect before retrying. The five-minute inactivity timer does not repeatedly resend a failed action: retry it deliberately. An error that names a card applies only to that card and chat; a late card error does not change the next card or stop a reply already in progress. Automatic default-safe saves on the server are retried after a failure.
+A failed card-state save is not treated as success. If a new set cannot be saved, the agent receives an error rather than a promise that it was queued. If saving the card state for an answer or cancellation fails, the current card and its existing waiting sets stay in place. The card shows an inline error, keeps your selections and typed answers, and makes **Answer** and **Cancel** available again so you can retry on that same card. A failed send while disconnected does the same; reconnect before retrying.
+
+If the connection drops after you choose **Answer** or **Cancel** and the result never reaches this tab, the app checks the card's saved state after reconnecting. If that check confirms the same question set is still pending, your draft stays in place, the controls unlock, and an inline notice asks you to review your answers and deliberately retry. Reconnecting alone or an ordinary card update does not unlock an outstanding action; a completed or replaced card is not reopened. The five-minute inactivity timer does not repeatedly resend a failed action: retry it deliberately.
+
+A card error changes only the matching card's state in its chat. A late error does not change the next card or stop a reply already in progress. If the app does not have the named chat loaded, it shows the error as a connection notice instead, without applying it to the chat currently on screen. Automatic default-safe saves on the server are retried after a failure.
 
 A different failure can happen after your answer or card cancellation was accepted: the paused turn may fail to continue. In that case the card still closes — the action cannot be repeated on that card — and the failure is recorded in the server log. If the agent seems unaware of your answer or cancellation, send a new message and, if needed, state it again.
 

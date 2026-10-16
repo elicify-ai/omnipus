@@ -30,6 +30,7 @@ import { useNotificationsStore } from '@/store/notifications'
 import { reconcileSecretRequests } from './secret-request-frames'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
+import { reportAskUserPendingReconciled } from '@/store/askUserAnswerFeedback'
 import { logDiagnostic } from '@/lib/telemetry'
 import { clearRedirectedTurnMarker, findPrecedingAssistantIndex, isRedirectInstructionId, normalizeTruncationReason } from '@/lib/truncation'
 import { buildGoalOutcomeInsertion } from '@/lib/goalOutcome'
@@ -131,6 +132,7 @@ function handleSessionStateFrame(
   )
   for (const [sid, card] of Object.entries(askChanges)) {
     withBucket(sid, () => ({ pendingAsk: card }))
+    if (card?.status === 'pending') reportAskUserPendingReconciled(card)
   }
   // ADR-082 D4/D5 (FR-008/FR-009), review CR3/S2: a connection that
   // just bound to a session (fresh mount, reconnect, or second tab)
