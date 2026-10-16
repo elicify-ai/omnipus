@@ -21,9 +21,10 @@ func priceLLMUsage(providerID, model string, usage providers.UsageInfo) promptca
 // turnCallAccounting is protected by turnState.mu. Each entry is priced once
 // at the actual provider boundary and later joined to its sanitized narration.
 type turnCallAccounting struct {
-	pending []session.TranscriptEntry
-	seen    bool
-	err     error
+	pending        []session.TranscriptEntry
+	seen           bool
+	err            error
+	continuationID string
 }
 
 // debitLLMUsage accounts a refused attempt whose usage was recovered from its
@@ -79,10 +80,10 @@ func (rt *agentLoopRunTurn) logCompletedCall(providerID, model string, response 
 	if response.Usage != nil {
 		usage = *response.Usage
 	}
-	if response.Content == "" && !rt.ts.abandoned.Load() && rt.ts.transcriptStore != nil && rt.ts.transcriptSessionID != "" {
+	if response.Content == "" && !isTruncatedFinishReason(response.FinishReason) && !rt.ts.abandoned.Load() && rt.ts.transcriptStore != nil && rt.ts.transcriptSessionID != "" {
 		// No-text calls own an invisible accounting entry immediately. A later
 		// synthetic terminal notice must not inherit their provider attribution.
-		if err := rt.ts.flushPendingCallAccounting(); err != nil {
+		if err := rt.ts.persistLatestCallAccounting(); err != nil {
 			rt.ts.setCallAccountingError(err)
 		}
 	}
@@ -148,6 +149,60 @@ func (ts *turnState) persistAssistantAccounting(entry session.TranscriptEntry) e
 		return err
 	}
 	return nil
+}
+
+// persistLatestCallAccounting writes only the completed no-text call. Earlier
+// continuation calls keep their accounting until their own narration settles.
+func (ts *turnState) persistLatestCallAccounting() error {
+	if err := ts.callAccountingError(); err != nil {
+		return err
+	}
+	ts.mu.Lock()
+	n := len(ts.callAccounting.pending)
+	if n != 1 {
+		// A saved continuation must settle first, in its original order.
+		ts.mu.Unlock()
+		return nil
+	}
+	entry := ts.callAccounting.pending[0]
+	ts.callAccounting.pending = nil
+	ts.mu.Unlock()
+	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
+		ts.setCallAccountingError(err)
+		return err
+	}
+	return nil
+}
+
+func (ts *turnState) markContinuationCallAccounting() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if n := len(ts.callAccounting.pending); n > 0 {
+		ts.callAccounting.continuationID = ts.callAccounting.pending[n-1].ID
+	}
+}
+
+// holdFollowingCallAccounting leaves only the calls that produced the saved
+// continuation prefix pending while that prefix is written. The following
+// round keeps its own accounting for its later narration or empty-call entry.
+func (ts *turnState) holdFollowingCallAccounting() func() {
+	ts.mu.Lock()
+	end := 0
+	for i, entry := range ts.callAccounting.pending {
+		if entry.ID == ts.callAccounting.continuationID {
+			end = i + 1
+			break
+		}
+	}
+	following := append([]session.TranscriptEntry(nil), ts.callAccounting.pending[end:]...)
+	ts.callAccounting.pending = ts.callAccounting.pending[:end]
+	ts.callAccounting.continuationID = ""
+	ts.mu.Unlock()
+	return func() {
+		ts.mu.Lock()
+		ts.callAccounting.pending = append(ts.callAccounting.pending, following...)
+		ts.mu.Unlock()
+	}
 }
 
 func (ts *turnState) flushPendingCallAccounting() error {

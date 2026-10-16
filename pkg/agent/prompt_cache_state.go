@@ -22,8 +22,13 @@ func NewSessionToolList(sessionID string) *SessionToolList {
 	return &SessionToolList{sessionID: sessionID, defs: make(map[string]providers.ToolDefinition)}
 }
 
-func (s *SessionToolList) Add(def providers.ToolDefinition) { s.defs[def.Function.Name] = def }
-func (s *SessionToolList) Remove(name string)               { delete(s.defs, name) }
+func (s *SessionToolList) Add(def providers.ToolDefinition) {
+	if s.defs == nil {
+		s.defs = make(map[string]providers.ToolDefinition)
+	}
+	s.defs[def.Function.Name] = def
+}
+func (s *SessionToolList) Remove(name string) { delete(s.defs, name) }
 func (s *SessionToolList) Definitions() []providers.ToolDefinition {
 	defs := make([]providers.ToolDefinition, 0, len(s.defs))
 	for _, def := range s.defs {

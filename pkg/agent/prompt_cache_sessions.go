@@ -61,6 +61,10 @@ func (rq *agentLoopRunTurnRequest) cacheToolSurface() {
 	state := rq.ri.rf.rt.al.promptCacheSession(rq.ri.rf.rt.ts)
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	// Membership lives in the session's loaded-name set. The outgoing slice
+	// owns this request's schemas; retaining another full copy per idle session
+	// would keep every Parameters map alive until that session is forgotten.
+	defer func() { state.tools.defs = nil }()
 	if rq.goalForce.layer1 {
 		rq.ri.rf.providerToolDefs = GoalNarrowedTools(state.tools, true, rq.ri.rf.providerToolDefs)
 		return

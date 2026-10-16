@@ -269,6 +269,9 @@ func (al *AgentLoop) evaluateTruncatedSuccess(
 
 	responseContent := response.Content
 	accumulated := ts.appendToAccumulator(responseContent)
+	if responseContent != "" {
+		ts.markContinuationCallAccounting()
+	}
 
 	if strings.TrimSpace(accumulated) == "" {
 		// D4a: nothing was ever produced. No retry, no fallback
@@ -482,6 +485,8 @@ func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationCha
 	if pending == "" {
 		return nil
 	}
+	restoreAccounting := ts.holdFollowingCallAccounting()
+	defer restoreAccounting()
 	ts.appendIntermediateAssistantTranscript(pending)
 	if !ts.opts.NoHistory && ts.agent != nil && ts.agent.Sessions != nil {
 		if err := ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", pending); err != nil {

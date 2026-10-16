@@ -452,6 +452,18 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 	return entry.Tool, true
 }
 
+// IsCoreTool reports whether a registered tool is part of the always-visible
+// registry surface. It grants no policy or offered-request authority.
+func (r *ToolRegistry) IsCoreTool(name string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry := r.tools[name]
+	return entry != nil && entry.IsCore
+}
+
 // GetIncludingHidden returns the registered tool for name regardless of whether
 // it is hidden or its TTL has expired. Unlike Get, it does NOT gate on TTL — it
 // exists for policy evaluation (canLoad), where a deferred/hidden MCP tool must
