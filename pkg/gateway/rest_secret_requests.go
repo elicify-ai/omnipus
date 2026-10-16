@@ -77,6 +77,7 @@ func (a *restAPI) HandleSecretRequests(w http.ResponseWriter, r *http.Request) {
 	}
 	input, err := decodeSecretSubmit(raw)
 	if err != nil {
+		reg.AuditRefusal(id, owner, "invalid_payload")
 		jsonErr(w, http.StatusBadRequest, "submit exactly the requested values, or cancel; no extra or null fields")
 		return
 	}
@@ -112,7 +113,7 @@ func decodeSecretSubmit(raw []byte) (gen.SecretSubmitRequest, error) {
 }
 
 func writeSecretRequestFailure(w http.ResponseWriter, err error) {
-	var refusal *secretrequest.Failure
+	var refusal *secretrequest.RequestError
 	if errors.As(err, &refusal) {
 		if refusal.State != nil {
 			writeJSON(w, refusal.Status, refusal.State)

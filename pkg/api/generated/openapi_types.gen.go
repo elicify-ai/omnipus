@@ -24589,7 +24589,7 @@ type SecretOptionsUpdateRequest struct {
 	AvailableInChannelTurns bool `json:"available_in_channel_turns"`
 }
 
-// SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Absence is never read as success.
+// SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
 type SecretRequestState struct {
 	// ReferenceNames Reference names the values were stored under. Present only when state is `submitted`.
 	ReferenceNames *[]string               `json:"reference_names,omitempty"`
