@@ -122,7 +122,8 @@ func seedPlainHistory(t *testing.T, agent *AgentInstance, key string, history []
 
 func plainHistoryBody(t *testing.T, capture plainHistoryCapture) []providers.Message {
 	t.Helper()
-	return plainHistoryNonSystem(capture.request.Messages)
+	conversation := requireConversationBeforeVolatileTail(t, capture.request.Messages)
+	return plainHistoryNonSystem(conversation)
 }
 
 func plainHistoryNonSystem(messages []providers.Message) []providers.Message {

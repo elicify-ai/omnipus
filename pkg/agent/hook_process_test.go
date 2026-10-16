@@ -68,7 +68,7 @@ func TestAgentLoop_MountProcessHook_LLMAndObserver(t *testing.T) {
 }
 
 func TestAgentLoop_MountProcessHook_ToolRewrite(t *testing.T) {
-	provider := &toolHookProvider{}
+	provider := &toolHookProvider{t: t}
 	al, agent, cleanup := newHookTestLoop(t, provider)
 	defer cleanup()
 
