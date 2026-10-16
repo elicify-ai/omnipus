@@ -246,6 +246,54 @@ test.describe('S-09 rendered-answer oracle', () => {
     await expect(normalizedAssistantText(page.locator('#live'))).rejects.toThrow('Assistant row has no rendered answer text')
   })
 
+  // ADR-087 suffixes are outside the body in ChatScreen's real row layout.
+  // Equal partial answers must fail, even if BOTH tabs have the same notice.
+  for (const notice of ['(interrupted)', '(cut off at the output limit)']) {
+    for (const placement of ['body', 'footer']) {
+      test(`rejects matching answers with ${notice} in the ${placement}`, async ({ page }) => {
+        const body = '<p>The sea keeps its own clock.</p>'
+        await renderAnswerRows(page, placement === 'body' ? `${body}<span>${notice}</span>` : body)
+        if (placement === 'footer') {
+          await page.locator('#live > div, #attached > div').evaluateAll((containers, text) => {
+            for (const container of containers) {
+              const suffix = document.createElement('span')
+              suffix.textContent = text
+              container.append(suffix)
+            }
+          }, notice)
+        }
+        for (const id of ['live', 'attached']) {
+          await expect(normalizedAssistantText(page.locator(`#${id}`))).rejects.toThrow(
+            'Assistant row contains an interruption, cutoff or error notice',
+          )
+        }
+      })
+    }
+  }
+
+  for (const status of ['error', 'interrupted', 'incomplete']) {
+    test(`rejects an answer whose row reports ${status}`, async ({ page }) => {
+      await renderAnswerRows(page, '<p>The sea keeps its own clock.</p>')
+      await page.locator('#attached').evaluate((row, value) => row.setAttribute('data-status', value), status)
+      await expect(normalizedAssistantText(page.locator('#attached'))).rejects.toThrow(
+        `Assistant row has failed or incomplete status: ${status}`,
+      )
+    })
+  }
+
+  for (const [label, notice] of [
+    ['system-error disclosure', '<details data-testid="error-detail-disclosure"><summary>Technical details</summary><pre>Provider request failed</pre></details>'],
+    ['system-error alert', '<div role="alert">The answer could not be saved</div>'],
+  ]) {
+    test(`rejects an answer with a ${label} outside its body`, async ({ page }) => {
+      await renderAnswerRows(page, '<p>The sea keeps its own clock.</p>')
+      await page.locator('#attached > div').evaluate((container, html) => container.insertAdjacentHTML('beforeend', html), notice)
+      await expect(normalizedAssistantText(page.locator('#attached'))).rejects.toThrow(
+        'Assistant row contains an interruption, cutoff or error notice',
+      )
+    })
+  }
+
   for (const [label, changed] of [
     ['truncated', 'The sea keeps its own'],
     ['duplicated', 'The sea keeps its own clock. The sea keeps its own clock.'],
