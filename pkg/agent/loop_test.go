@@ -228,9 +228,9 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 		t.Fatalf("system prompt missing sender context %q:\n%s", wantSender, systemPrompt)
 	}
 
-	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
+	lastMessage := requireConversationBeforeVolatileTail(t, provider.lastMessages)[len(provider.lastMessages)-2]
 	if lastMessage.Role != "user" || lastMessage.Content != "hello" {
-		t.Fatalf("last provider message = %+v, want unchanged user message", lastMessage)
+		t.Fatalf("last conversation message before volatile user-role tail = %+v, want unchanged user message", lastMessage)
 	}
 
 	// Channel-session routing: the non-webchat discord message must have caused a
