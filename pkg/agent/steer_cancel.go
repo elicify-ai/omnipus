@@ -667,7 +667,7 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, by steer.
 // leave a live revived record that boot mistakes for an idle, unstamped root.
 // The public steering Revive supplies neither snapshot nor identity. by is the
 // reviving principal; a human principal clears the unattended posture (#891).
-func (c *SteerCanceller) reviveWithExecution(ctx context.Context, sessionID string, by steer.Principal, selected *session.LifecycleRecord, execution *session.ExecutionIdentity) (int, error) {
+func (c *SteerCanceller) reviveWithExecution(ctx context.Context, sessionID string, by steer.Principal, selected *session.LifecycleRecord, execution *session.ExecutionIdentity, preconditions ...func(*session.LifecycleRecord) error) (int, error) {
 	if c == nil || c.Lifecycle == nil {
 		return 0, session.ErrLifecycleNotFound
 	}
@@ -679,6 +679,11 @@ func (c *SteerCanceller) reviveWithExecution(ctx context.Context, sessionID stri
 	err := c.Lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
 		if rec == nil {
 			return session.ErrLifecycleNotFound
+		}
+		for _, check := range preconditions {
+			if checkErr := check(rec); checkErr != nil {
+				return checkErr
+			}
 		}
 		if selected != nil && (rec.Generation != selected.Generation ||
 			(rec.ExecutionID == nil) != (selected.ExecutionID == nil) ||

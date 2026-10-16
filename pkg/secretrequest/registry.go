@@ -28,12 +28,13 @@ const MaxTerminalPerSession = 32
 
 // Record is internal session metadata. It NEVER holds a submitted value.
 type Record struct {
-	Card       gen.SessionStateSecretRequest `json:"card"`
-	Input      Input                         `json:"input"`
-	Recipients []credentials.CardRecipient   `json:"recipients"`
-	Owner      string                        `json:"owner"`
-	ChatID     string                        `json:"chat_id"`
-	ReasonCode string                        `json:"reason_code,omitempty"`
+	Card          gen.SessionStateSecretRequest `json:"card"`
+	Input         Input                         `json:"input"`
+	Recipients    []credentials.CardRecipient   `json:"recipients"`
+	Owner         string                        `json:"owner"`
+	ChatID        string                        `json:"chat_id"`
+	ReasonCode    string                        `json:"reason_code,omitempty"`
+	ResumeStopped bool                          `json:"resume_stopped,omitempty"`
 }
 
 // Options supplies live dependencies; reload never leaves a stale config or
@@ -42,9 +43,12 @@ type Options struct {
 	Sessions    *session.UnifiedStore
 	Config      func() *config.Config
 	Credentials func() (*credentials.Store, error)
-	Stopped     func(string) (bool, error)
-	Resume      func(Record) error
-	Audit       func(Record, string)
+	// RecoveryCredentials reports ErrRecoveryStoreAbsent for a fresh install;
+	// boot reconciliation must not create credentials or a key just to sweep.
+	RecoveryCredentials func() (*credentials.Store, error)
+	Stopped             func(string) (bool, error)
+	Resume              func(Record) error
+	Audit               func(Record, string)
 }
 
 // Registry serializes admission, Stop, submit and recovery. Session metadata
@@ -119,8 +123,8 @@ func (r *Registry) Create(ctx context.Context, sessionID, agentID, chatID, origi
 	}
 	cfg := r.opts.Config()
 	name := agentName(cfg, agentID)
-	if name == "" {
-		return Record{}, errors.New("acting agent is unavailable")
+	if name == "" || len([]rune(name)) > 128 {
+		return Record{}, errors.New("acting agent is unavailable or has an invalid display name")
 	}
 	if len([]rune(in.Purpose)) == 0 || len([]rune(in.Purpose)) > 500 || !utf8.ValidString(in.Purpose) {
 		return Record{}, errors.New("purpose must contain 1–500 characters")
@@ -148,6 +152,14 @@ func (r *Registry) Create(ctx context.Context, sessionID, agentID, chatID, origi
 	if err != nil {
 		return Record{}, err
 	}
+	if len(display.Lines) < 1 || len(display.Lines) > 8 {
+		return Record{}, errors.New("recipient cannot be shown on a secure card")
+	}
+	for _, line := range display.Lines {
+		if !utf8.ValidString(line) || len([]rune(line)) < 1 || len([]rune(line)) > 500 {
+			return Record{}, errors.New("recipient is too long to show safely on a secure card")
+		}
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	rec := Record{Input: in, Recipients: recipients, Owner: ancestry.Owner, ChatID: chatID, Card: gen.SessionStateSecretRequest{
 		RequestId: uuid.NewString(), SessionId: sessionID, ActingAgentId: agentID, ActingAgentName: name,
@@ -160,6 +172,9 @@ func (r *Registry) Create(ctx context.Context, sessionID, agentID, chatID, origi
 		rec.Card.WorkspaceId = &ancestry.WorkspaceID
 	}
 	if originLabel != "" {
+		if runes := []rune(originLabel); len(runes) > 200 {
+			originLabel = string(runes[:200])
+		}
 		rec.Card.OriginLabel = &originLabel
 	}
 	r.entries[rec.Card.RequestId] = rec
@@ -263,6 +278,18 @@ func (r *Registry) Submit(id, owner string, input gen.SecretSubmitRequest) (Reco
 }
 
 func (r *Registry) checkRecipientLocked(rec Record) error {
+	ancestry, ancestryErr := r.opts.Sessions.ResolveInteractionContext(rec.Card.SessionId)
+	root := rec.Card.SessionId
+	if rec.Card.RootSessionId != nil {
+		root = *rec.Card.RootSessionId
+	}
+	workspace := ""
+	if rec.Card.WorkspaceId != nil {
+		workspace = *rec.Card.WorkspaceId
+	}
+	if ancestryErr != nil || ancestry.RootSessionID != root || ancestry.WorkspaceID != workspace || ancestry.Owner != rec.Owner {
+		return errors.New("secret request session or account binding changed; request a new card")
+	}
 	if agentName(r.opts.Config(), rec.Card.ActingAgentId) == "" {
 		return errors.New("acting agent is unavailable")
 	}
@@ -287,8 +314,16 @@ func (r *Registry) checkRecipientLocked(rec Record) error {
 
 func (r *Registry) refuseLocked(rec Record, reason string) (Record, error) {
 	state := "refused"
+	rec.ReasonCode = "recipient_changed"
+	if strings.Contains(reason, "acting agent") {
+		rec.ReasonCode = "acting_agent_unavailable"
+	}
+	if strings.Contains(reason, "binding changed") {
+		rec.ReasonCode = "session_binding_changed"
+	}
 	if strings.Contains(reason, "stopped") {
 		state = "stopped"
+		rec.ReasonCode = "session_stopped"
 	}
 	updated, err := r.finishLocked(rec, state)
 	if err != nil {

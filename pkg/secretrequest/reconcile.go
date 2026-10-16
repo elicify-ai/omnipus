@@ -18,6 +18,9 @@ func (r *Registry) reconcilePendingLocked() error {
 		return errors.New("secret request service is unavailable")
 	}
 	cfg := r.opts.Config()
+	if cfg == nil {
+		return errors.New("live configuration is unavailable")
+	}
 	for id, rec := range r.entries {
 		if rec.Card.State != "pending" {
 			continue
@@ -40,12 +43,20 @@ func (r *Registry) reconcilePendingLocked() error {
 		if meta.AgentID != rec.Card.ActingAgentId {
 			reason = "session_binding_changed"
 		}
+		if rec.Card.RootSessionId != nil {
+			if _, rootErr := r.opts.Sessions.GetMeta(*rec.Card.RootSessionId); rootErr != nil {
+				if !errors.Is(rootErr, os.ErrNotExist) {
+					return rootErr
+				}
+				reason = "root_session_deleted"
+			}
+		}
 		if reason == "" {
 			continue
 		}
 		rec.ReasonCode = reason
-		if _, err := r.finishLocked(rec, "refused"); err != nil {
-			return err
+		if _, finishErr := r.finishLocked(rec, "refused"); finishErr != nil {
+			return finishErr
 		}
 	}
 	return nil

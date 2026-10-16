@@ -256,6 +256,9 @@ func (w *sessionWorker) enqueueOrRetry(msg bus.InboundMessage) (handled, retry b
 	if w.exiting.Load() {
 		return false, true
 	}
+	if w.parent.deferSecretResume(msg, "worker_inbox_full") {
+		return true, false
+	}
 	if msg.Channel == "system" {
 		logger.WarnCF("agent.worker", "Session worker inbox full — system message not queued; falling back to unserialized dispatch",
 			map[string]any{
@@ -386,6 +389,9 @@ func (al *AgentLoop) dispatchSessionWorker(scope string, msg bus.InboundMessage)
 	// the check and overshoot the cap.
 	admitted, release := al.admission.TryAdmit(scope)
 	if !admitted {
+		if al.deferSecretResume(msg, "session_capacity") {
+			return true
+		}
 		logger.WarnCF("agent", "At capacity — rejecting new session",
 			map[string]any{
 				"scope":    scope,

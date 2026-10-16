@@ -179,7 +179,7 @@ If the connection drops after you submit, do not paste the value into chat or su
 | Cancelled or stopped | Ask for a new card if you still want to provide the secret. |
 | Interrupted / Request unavailable | The gateway restarted before submission, or the request is no longer accessible. Ask for a new card. |
 | Destination changed | Ask for a new card and review its destination before submitting. |
-| Secret saved; continuation not confirmed | Keep the saved reference. Reload the chat; the gateway retries a continuation that has not reached the conversation yet. Do not replace the secret just to restart the conversation. |
+| Secret saved; continuation not confirmed | Keep the saved reference. Reload the chat; unless you explicitly stopped it, the gateway retries a continuation that has not reached the conversation yet. Do not replace the secret just to restart the conversation. |
 
 A failed vault write leaves the request pending and stores none of the submitted fields. A repeated submit after a successful save returns the existing submitted state instead of overwriting its version.
 

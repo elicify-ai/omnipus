@@ -16,8 +16,8 @@ import (
 
 // code-reviewer CR-03 / silent-failure-hunter SF-03 / architect F02 /
 // comment-analyzer C1: the saved-entry check must use the credential just
-// saved, not an older value still injected into the process environment
-// under the same reference (the reload that re-injects it is only queued).
+// selected, not an older value still injected into the process environment
+// under that reference (the reload that re-injects it is only queued).
 // Both rotation directions are covered: a good old key must not certify a bad
 // new one, and a bad old key must not fail a good new one.
 func TestWU3ConfigureProviderChecksTheSavedKeyNotTheInjectedOldOne(t *testing.T) {
@@ -34,6 +34,8 @@ func TestWU3ConfigureProviderChecksTheSavedKeyNotTheInjectedOldOne(t *testing.T)
 				APIBase: "https://rotation.wu3.invalid/v1", APIKeyRef: ref}}
 			require.NoError(t, d.CredStore.Set(ref, tc.oldKey))
 			t.Setenv(ref, tc.oldKey) // the boot-injected old value
+			newRef := systools.IssueProviderReferenceForTest(t, d, "openai", "", tc.newKey)
+			t.Setenv(newRef, tc.oldKey) // stale process value under the newly selected name
 			var seen []string
 			wu3Network(t, func(r *http.Request) (*http.Response, error) {
 				require.Equal(t, "rotation.wu3.invalid", r.URL.Host)
@@ -44,7 +46,7 @@ func TestWU3ConfigureProviderChecksTheSavedKeyNotTheInjectedOldOne(t *testing.T)
 				return wu3HTTPResponse(r, 401, `{"error":"bad key"}`), nil
 			})
 			result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{
-				"name": "openai", "api_key": tc.newKey,
+				"name": "openai", "api_key_ref": newRef,
 				"expected_revision": wu3SharedRow(t, d, "provider", "openai")["revision"],
 			})
 			assert.Equal(t, []string{"Bearer " + tc.newKey}, seen, "exactly one probe, with the newly saved key")
@@ -72,14 +74,18 @@ func TestWU3ConfigureProviderUnreadableSavedKeyIsReported(t *testing.T) {
 		listed++
 		return []string{"m"}, nil
 	}
-	// The store loses the entry right after it is written (a concurrent
+	ref := systools.IssueProviderReferenceForTest(t, d, "openai", "", "wu3-saved-then-lost")
+	t.Setenv(ref, "wu3-env-only")
+	// The store loses the selected entry at config publication (a concurrent
 	// removal); the check must say so instead of using the env value.
 	d.SaveConfigLocked = func(c *config.Config) error {
-		_ = d.CredStore.Delete(c.Providers[0].APIKeyRef)
+		if err := d.CredStore.Delete(c.Providers[0].APIKeyRef); err != nil {
+			return err
+		}
 		return config.SaveConfig(d.ConfigPath, c)
 	}
 	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{
-		"name": "openai", "api_key": "wu3-saved-then-lost",
+		"name": "openai", "api_key_ref": ref,
 		"expected_revision": wu3SharedRow(t, d, "provider", "openai")["revision"],
 	})
 	body := wu3Outcome(t, result, "saved but not working")
@@ -104,8 +110,9 @@ func TestWU3ConfigureProviderGuardRefusesForbiddenCloudEndpoint(t *testing.T) {
 		listed++
 		return nil, nil
 	}
+	ref := systools.IssueProviderReferenceForTest(t, d, "openai", "https://10.20.30.40/v1", "sk-wu3fixguardsecret000000000000")
 	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{
-		"name": "openai", "api_key": "sk-wu3fixguardsecret000000000000", "api_base": "https://10.20.30.40/v1",
+		"name": "openai", "api_key_ref": ref, "api_base": "https://10.20.30.40/v1",
 		"expected_revision": "absent",
 	})
 	body := wu3Outcome(t, result, "saved but not working")
@@ -131,8 +138,9 @@ func TestWU3ConfigureProviderGuardControls(t *testing.T) {
 			assert.Equal(t, "https://93.184.216.34/v1", api)
 			return []string{"m"}, nil
 		}
+		ref := systools.IssueProviderReferenceForTest(t, d, "openai", "https://93.184.216.34/v1", "sk-wu3fixallowed0000000000000000")
 		result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{
-			"name": "openai", "api_key": "sk-wu3fixallowed0000000000000000", "api_base": "https://93.184.216.34/v1",
+			"name": "openai", "api_key_ref": ref, "api_base": "https://93.184.216.34/v1",
 			"expected_revision": "absent",
 		})
 		wu3Outcome(t, result, "working")

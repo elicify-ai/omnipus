@@ -157,6 +157,36 @@ func (s *Store) PruneCardReceipts(ids []string) error {
 	return s.saveFileNoLock(sf)
 }
 
+// PruneOrphanCardReceipts reconciles receipt metadata against a complete,
+// successfully read request-state inventory. Values, versions and recipient
+// bindings are deliberately untouched; an unchanged inventory performs no write.
+func (s *Store) PruneOrphanCardReceipts(keep map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.key == nil {
+		return ErrStoreLocked
+	}
+	sf, err := s.loadFileInternal()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for id, receipt := range sf.CardReceipts {
+		if sessionID, exists := keep[id]; exists {
+			if sessionID != receipt.SessionID {
+				return errors.New("secret receipt session binding does not match saved request")
+			}
+			continue
+		}
+		delete(sf.CardReceipts, id)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return s.saveFileNoLock(sf)
+}
+
 // CardSecretMetadata returns internal, value-free reference bindings.
 func (s *Store) CardSecretMetadata() (map[string]CardSecret, error) {
 	s.mu.RLock()

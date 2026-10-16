@@ -7,7 +7,10 @@
 /** Group chats: sidebar section, squad dialog, Add participant, room route. Hidden until WU-15 (stage 3), #1314. */
 export const ROOMS_ENABLED = false
 
-/** An agent's private secrets panel (GET /secrets). Hidden until WU-4/5. */
+/** Destination-bound secret cards. Enabled with the WU-4 request/submit server. */
+export const SECRET_CARDS_ENABLED = true
+
+/** An agent's private secrets panel (GET /secrets). Hidden until WU-5. */
 export const AGENT_PRIVATE_SECRETS_ENABLED = false
 
 /**

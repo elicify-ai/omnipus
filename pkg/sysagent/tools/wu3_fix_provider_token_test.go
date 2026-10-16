@@ -20,6 +20,7 @@ func TestWU3ProviderTokenCoversTheRepresentativeRow(t *testing.T) {
 	a := &config.ModelConfig{Provider: "openai", Model: "model-a", APIBase: "https://a.wu3.invalid/v1", APIKeyRef: "ref-a"}
 	b := &config.ModelConfig{Provider: "openai", Model: "model-b", APIBase: "https://b.wu3.invalid/v1", APIKeyRef: "ref-b"}
 	cfg.Providers = []*config.ModelConfig{a, b}
+	ref := systools.IssueProviderReferenceForTest(t, d, "openai", "", "sk-wu3fixstaleplan000000000000000")
 	first := wu3SharedRow(t, d, "provider", "openai")
 	require.Equal(t, "https://a.wu3.invalid/v1", first["api_base"], "fixture: row A is described first")
 
@@ -29,7 +30,7 @@ func TestWU3ProviderTokenCoversTheRepresentativeRow(t *testing.T) {
 	assert.NotEqual(t, first["revision"], second["revision"], "a different represented row is a different token")
 
 	res := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{
-		"name": "openai", "api_key": "sk-wu3fixstaleplan000000000000000", "expected_revision": first["revision"],
+		"name": "openai", "api_key_ref": ref, "expected_revision": first["revision"],
 	})
 	wu3Error(t, res, "CONFLICT")
 	_, err := d.CredStore.Get("ref-b")

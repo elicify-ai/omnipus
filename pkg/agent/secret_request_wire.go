@@ -7,7 +7,9 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -19,6 +21,13 @@ import (
 )
 
 const secretResumeMetadataKey = "secret_request_resume"
+
+type secretResumeValidatedContextKey struct{}
+
+func secretResumeContextValidated(ctx context.Context) bool {
+	validated, _ := ctx.Value(secretResumeValidatedContextKey{}).(bool)
+	return validated
+}
 
 type secretRequestState struct {
 	mu       sync.Mutex
@@ -39,9 +48,10 @@ func (al *AgentLoop) SecretRequests() *secretrequest.Registry {
 	}
 	reg := secretrequest.NewRegistry(secretrequest.Options{
 		Sessions: al.GetSessionStore(), Config: al.GetConfig,
-		Credentials: al.secretCredentialStore,
-		Stopped:     al.secretSessionStopped,
-		Resume:      al.dispatchSecretResume,
+		Credentials:         al.secretCredentialStore,
+		RecoveryCredentials: al.secretRecoveryCredentialStore,
+		Stopped:             al.secretSessionStopped,
+		Resume:              al.dispatchSecretResume,
 		Audit: func(rec secretrequest.Record, event string) {
 			audit.Emit(context.Background(), al.AuditLogger(), "secret.request."+event, audit.SeverityInfo, map[string]any{
 				"request_id": rec.Card.RequestId, "session_id": rec.Card.SessionId, "agent_id": rec.Card.ActingAgentId,
@@ -53,6 +63,21 @@ func (al *AgentLoop) SecretRequests() *secretrequest.Registry {
 	// mutex, so recovery runs at the gateway boundary after this method exits.
 	al.secretRequests.registry = reg
 	return reg
+}
+
+func (al *AgentLoop) secretRecoveryCredentialStore() (*credentials.Store, error) {
+	path := filepath.Join(filepath.Dir(al.GetSessionStore().BaseDir()), "credentials.json")
+	al.mu.RLock()
+	if al.sysagentDeps != nil && al.sysagentDeps.CredStore != nil {
+		path = al.sysagentDeps.CredStore.Path()
+	}
+	al.mu.RUnlock()
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, secretrequest.ErrRecoveryStoreAbsent
+	} else if err != nil {
+		return nil, err
+	}
+	return al.secretCredentialStore()
 }
 
 func (al *AgentLoop) secretCredentialStore() (*credentials.Store, error) {
@@ -88,6 +113,11 @@ func (al *AgentLoop) stopSecretRequests(sessionID string) error {
 	if reg == nil {
 		return nil
 	}
+	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
+		if current, err := lifecycle.Load(sessionID); err == nil && secretRestartStopped(current) {
+			return nil
+		}
+	}
 	return reg.Stop(sessionID)
 }
 
@@ -109,7 +139,7 @@ func (al *AgentLoop) secretSessionStopped(id string) (bool, error) {
 			return false, err
 		}
 		if err == nil {
-			return rec.Stopped(), nil
+			return rec.Stopped() && !secretRestartStopped(rec), nil
 		}
 	}
 	return false, nil
@@ -129,27 +159,82 @@ func (al *AgentLoop) dispatchSecretResume(rec secretrequest.Record) error {
 	al.GetConfig().RegisterSensitiveValues(values)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return al.bus.PublishInbound(ctx, bus.InboundMessage{
+	msg := bus.InboundMessage{
 		Channel: "webchat", ChatID: rec.ChatID, SessionID: rec.Card.SessionId,
 		Content: secretrequest.ResumeMessage(rec), GatewayUserID: rec.Owner,
-		Metadata: map[string]string{"agent_id": rec.Card.ActingAgentId, secretResumeMetadataKey: rec.Card.RequestId},
+		Metadata: map[string]string{"agent_id": rec.Card.ActingAgentId, secretResumeMetadataKey: rec.Card.RequestId, ownerWakeMetadataKey: "1"},
+	}
+	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
+		current, readErr := lifecycle.Load(rec.Card.SessionId)
+		if readErr != nil && !errors.Is(readErr, session.ErrLifecycleNotFound) {
+			return readErr
+		}
+		if readErr == nil && current.SteeredBy != nil {
+			msg.Channel, msg.ChatID = "system", "webchat:"+rec.ChatID
+			msg.AsyncTranscriptSessionID, msg.AsyncOriginAgentID = rec.Card.SessionId, rec.Card.ActingAgentId
+			msg.Metadata["steer_message_id"] = secretrequest.ResumeEntryID(rec.Card.RequestId)
+			msg.Metadata["steer_generation"] = strconv.Itoa(current.Generation)
+		}
+	}
+	return al.bus.PublishInbound(ctx, msg)
+}
+
+// deferSecretResume makes a downstream queue rejection retriable and visible.
+// It never asks the person to resend a value already committed to the vault.
+func (al *AgentLoop) deferSecretResume(msg bus.InboundMessage, reasonCode string) bool {
+	id := inboundMetadata(msg, secretResumeMetadataKey)
+	if id == "" {
+		return false
+	}
+	reg := al.SecretRequests()
+	if reg == nil || !reg.DeferResume(id, msg.SessionID, reasonCode) {
+		return false
+	}
+	al.emitEvent(EventKindError, EventMeta{SessionKey: msg.SessionID, TracePath: "secret.resume"}, ErrorPayload{
+		Stage: "secret_resume", Code: "secret_resume_pending", SessionID: msg.SessionID,
+		Message: "Secret saved. Its continuation is waiting; reopen this chat to retry. Do not submit the secret again.",
 	})
+	return true
 }
 
 // processSecretResume is reached INSIDE the session worker, never steered into
 // the request's still-finishing park turn. ClaimResume writes the transcript
 // identity once; duplicate bus messages do not enter the model loop again.
 func (al *AgentLoop) processSecretResume(ctx context.Context, msg bus.InboundMessage) (string, *AgentInstance, error) {
+	if msg.Channel == "system" && msg.AsyncTranscriptSessionID != "" {
+		response, err := al.processSteeredSystemWake(ctx, msg)
+		if err != nil {
+			al.deferSecretResume(msg, "helper_admission_failed")
+		}
+		return response, nil, err
+	}
 	reg := al.SecretRequests()
 	if reg == nil {
 		return "", nil, errors.New("secret continuation service is unavailable")
 	}
-	rec, claimed, err := reg.ClaimResume(msg.Metadata[secretResumeMetadataKey], msg.SessionID)
-	if err != nil || !claimed {
+	rec, err := reg.Get(msg.Metadata[secretResumeMetadataKey], msg.GatewayUserID)
+	if err != nil {
 		return "", nil, err
 	}
-	delete(msg.Metadata, secretResumeMetadataKey)
+	if rec.ResumeStopped || rec.Card.State != "submitted" || rec.Card.SessionId != msg.SessionID {
+		return "", nil, errors.New("secret continuation binding is unavailable")
+	}
+	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
+		current, readErr := lifecycle.Load(msg.SessionID)
+		if readErr != nil && !errors.Is(readErr, session.ErrLifecycleNotFound) {
+			return "", nil, readErr
+		}
+		if readErr == nil && secretRestartStopped(current) {
+			if _, reviveErr := al.reviveSecretRestart(ctx, current); reviveErr != nil {
+				return "", nil, reviveErr
+			}
+		}
+	}
+	msg.Metadata["agent_id"] = rec.Card.ActingAgentId
 	msg.Content = secretrequest.ResumeMessage(rec)
-	msg.TranscriptEntryID = secretrequest.ResumeEntryID(rec.Card.RequestId)
-	return al.processMessage(ctx, msg)
+	response, usedAgent, processErr := al.processMessage(context.WithValue(ctx, secretResumeValidatedContextKey{}, true), msg)
+	if processErr != nil {
+		al.deferSecretResume(msg, "ordinary_admission_failed")
+	}
+	return response, usedAgent, processErr
 }
