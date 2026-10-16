@@ -171,12 +171,23 @@ func (r *Registry) Stop(sessionID string) error {
 	defer r.mu.Unlock()
 	var failures []error
 	for _, rec := range r.entries {
-		if rec.Card.State != "pending" {
+		if rec.Card.SessionId != sessionID && (rec.Card.RootSessionId == nil || *rec.Card.RootSessionId != sessionID) {
 			continue
 		}
-		if rec.Card.SessionId == sessionID || (rec.Card.RootSessionId != nil && *rec.Card.RootSessionId == sessionID) {
+		if rec.Card.State == "pending" {
 			if _, err := r.finishLocked(rec, "stopped"); err != nil {
 				failures = append(failures, err)
+			}
+		} else if rec.Card.State == "submitted" && !rec.ResumeStopped {
+			rec.ResumeStopped = true
+			r.entries[rec.Card.RequestId] = rec
+			delete(r.inFlight, rec.Card.RequestId)
+			if err := r.persistLocked(rec.Card.SessionId); err != nil {
+				failures = append(failures, err)
+			}
+			if r.opts.Audit != nil {
+				rec.ReasonCode = "session_stopped"
+				r.opts.Audit(cloneRecord(rec), "resume_stopped")
 			}
 		}
 	}
@@ -190,7 +201,7 @@ func ResumeMessage(rec Record) string {
 }
 
 func (r *Registry) resumeLocked(rec Record) error {
-	if rec.Card.State != "submitted" || r.inFlight[rec.Card.RequestId] {
+	if rec.Card.State != "submitted" || rec.ResumeStopped || r.inFlight[rec.Card.RequestId] {
 		return nil
 	}
 	entries, err := r.opts.Sessions.ReadTranscript(rec.Card.SessionId)
@@ -241,6 +252,24 @@ func (r *Registry) RetryResumes() error {
 
 func ResumeEntryID(id string) string { return "secret-resume-" + id }
 
+// DeferResume releases transport acceptance when downstream worker admission
+// rejected the message. The durable receipt remains the retry source; a full
+// inbox must not leave an in-process "in flight" claim that can never consume.
+func (r *Registry) DeferResume(id, sessionID, reasonCode string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rec, ok := r.entries[id]
+	if !ok || rec.Card.SessionId != sessionID || rec.Card.State != "submitted" {
+		return false
+	}
+	delete(r.inFlight, id)
+	rec.ReasonCode = reasonCode
+	if r.opts.Audit != nil {
+		r.opts.Audit(cloneRecord(rec), "resume_deferred")
+	}
+	return true
+}
+
 // ClaimResume is the serialized consumer boundary. A queued duplicate or a
 // replay after restart never starts another turn for the same request id.
 func (r *Registry) ClaimResume(id, sessionID string) (Record, bool, error) {
@@ -250,11 +279,21 @@ func (r *Registry) ClaimResume(id, sessionID string) (Record, bool, error) {
 	if !ok || rec.Card.State != "submitted" || rec.Card.SessionId != sessionID {
 		return Record{}, false, errors.New("secret continuation is unavailable")
 	}
+	if rec.ResumeStopped {
+		return Record{}, false, errors.New("secret continuation was explicitly stopped; saved references are unchanged")
+	}
 	if r.opts.Stopped != nil {
 		stopped, err := r.opts.Stopped(sessionID)
 		if err != nil || stopped {
 			delete(r.inFlight, id)
 			return Record{}, false, errors.New("secret continuation session is stopped or unavailable")
+		}
+		if rec.Card.RootSessionId != nil {
+			rootStopped, rootErr := r.opts.Stopped(*rec.Card.RootSessionId)
+			if rootErr != nil || rootStopped {
+				delete(r.inFlight, id)
+				return Record{}, false, errors.New("secret continuation root session is stopped or unavailable")
+			}
 		}
 	}
 	claimed, err := r.opts.Sessions.AppendTranscriptOnce(sessionID, session.TranscriptEntry{

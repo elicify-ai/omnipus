@@ -17,7 +17,7 @@ import (
 )
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, *AgentInstance, error) {
-	if inboundMetadata(msg, secretResumeMetadataKey) != "" {
+	if inboundMetadata(msg, secretResumeMetadataKey) != "" && !secretResumeContextValidated(ctx) {
 		return al.processSecretResume(ctx, msg)
 	}
 	pm := &agentLoopProcessMessage{al: al, ctx: ctx, msg: msg}

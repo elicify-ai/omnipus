@@ -498,7 +498,7 @@ When an agent needs a provider key, an MCP server environment secret, or a chann
 | Submit | All requested fields are saved together in the encrypted vault, under new versioned reference names. The agent continues with those names, never the values. |
 | Replace an integration secret | The replacement is saved as a new version. Saving the card alone does not switch the integration to it. |
 | Cancel the card, or Stop before submitting | Nothing is stored. |
-| Stop after submitting | The saved version remains in the vault. Stop does not undo an integration change already completed. |
+| Stop after submitting | The saved version remains in the vault. The stopped continuation does not restart on a later reload or gateway restart. Stop does not undo an integration change already completed. |
 | Gateway restarts before submission | The request becomes unavailable. Ask the agent for a new card. |
 | The destination changes while the card is open | Submission is refused. Ask for a new card showing the current destination. |
 

@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/utils"
@@ -841,13 +842,18 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if store == nil {
 		return "", fmt.Errorf("steer: wake: transcript store for %q is not available", sessionID)
 	}
+	rec, generation, secretHandled, secretErr := al.prepareSecretSteeredWake(ctx, &msg, rec, generation)
+	if secretErr != nil || secretHandled {
+		return "", secretErr
+	}
+	secretID := inboundMetadata(msg, secretResumeMetadataKey)
 	marker := "consumed " + messageID
 	entries, readErr := store.ReadTranscript(sessionID)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return "", fmt.Errorf("steer: wake: read transcript: %w", readErr)
 	}
 	for _, entry := range entries {
-		if entry.Content == marker {
+		if entry.Content == marker || (secretID != "" && entry.ID == secretrequest.ResumeEntryID(secretID)) {
 			if inbox := al.GetMessageInboxStore(); inbox != nil {
 				_ = inbox.Ack(sessionID, []string{messageID})
 			}
@@ -1012,6 +1018,10 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		rec = running
 	}
 
+	if claimed, claimErr := al.claimAdmittedSecretWake(secretID, sessionID, ts); claimErr != nil || !claimed {
+		abort()
+		return "", claimErr
+	}
 	// The consumed marker and the acknowledgement are written only once the
 	// turn is certain to run: a wake refused above must leave its entry
 	// pending for I-6's Revive (FR-B-013), never swallow it.

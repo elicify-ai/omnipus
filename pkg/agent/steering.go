@@ -77,6 +77,9 @@ type steeringQueueItem struct {
 	// origin is who this input came from (§6.18). A channel person's message
 	// consumed mid-turn makes the running turn channel-triggered.
 	origin inputOrigin
+	// secretRequestID is server-minted correlation for a reference-only
+	// continuation; claimed only when this admitted item is consumed.
+	secretRequestID string
 }
 
 type steeringWake struct {
@@ -1221,6 +1224,17 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 	consumedItems := make([]steeringQueueItem, 0, len(items))
 	al.recordConsumedInputOrigins(scope, items)
 	for i, item := range items {
+		if item.secretRequestID != "" {
+			message, claimed, claimErr := al.claimSecretSteeringInput(scope, item.secretRequestID)
+			if claimErr != nil {
+				al.steering.prependItemsScope(scope, items[i:])
+				return msgs, correlationIDs, consumedItems, claimErr
+			}
+			if !claimed {
+				continue
+			}
+			item.message, item.wake = message, nil
+		}
 		if item.steerControlID != "" {
 			// D4: a delegate steer is delivered once its exact text is durable
 			// in the session transcript; only then is it handed to the turn

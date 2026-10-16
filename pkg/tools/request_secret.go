@@ -41,20 +41,32 @@ func (t *RequestSecretTool) Execute(ctx context.Context, args map[string]any) *T
 			name = display
 		}
 	}
+	var reg *secretrequest.Registry
+	if t.registry != nil {
+		reg = t.registry()
+	}
+	auditRefusal := func(reason string) {
+		if reg != nil {
+			reg.AuditTurnRefusal(ToolTranscriptSessionID(ctx), ToolAgentID(ctx), reason)
+		}
+	}
 	if ToolTurnOrigin(ctx).ChannelTriggered() || (ToolChannel(ctx) != webChannelName && ToolDelegateSessionID(ctx) == "") {
+		auditRefusal("channel_origin")
 		return ErrorResult(fmt.Sprintf("open the web app and ask %s there", name))
 	}
 	if ToolAutoDenyAsk(ctx) {
+		auditRefusal("unattended_turn")
 		return ErrorResult("secret cards are unavailable in unattended runs; open the web app and ask " + name + " there")
 	}
-	if t.registry == nil || t.registry() == nil {
+	if reg == nil {
 		return ErrorResult("secret request service is unavailable")
 	}
 	text := func(key string) string { value, _ := args[key].(string); return value }
-	rec, err := t.registry().Create(ctx, ToolTranscriptSessionID(ctx), ToolAgentID(ctx), ToolChatID(ctx), ToolTurnOrigin(ctx).Label(), secretrequest.Input{
+	rec, err := reg.Create(ctx, ToolTranscriptSessionID(ctx), ToolAgentID(ctx), ToolChatID(ctx), ToolTurnOrigin(ctx).Label(), secretrequest.Input{
 		Purpose: text("purpose"), Endpoint: text("endpoint"), Provider: text("provider"), Server: text("server"), EnvKey: text("env_key"), Instance: text("instance"), Field: text("field"),
 	})
 	if err != nil {
+		auditRefusal("request_refused")
 		return ErrorResult(err.Error())
 	}
 	result := NewToolResult("Secret request pending (request_id=" + rec.Card.RequestId + "). Wait for the person to submit or cancel the secure card.")
