@@ -563,7 +563,7 @@ func buildParams(
 	}
 
 	maxTokens := int64(4096)
-	if mt, ok := options["max_tokens"].(int); ok {
+	if mt, ok := common.AsInt(options["max_tokens"]); ok {
 		maxTokens = int64(mt)
 	}
 
