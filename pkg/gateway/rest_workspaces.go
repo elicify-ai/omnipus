@@ -1555,7 +1555,7 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 		if err := workspaceSaveDelegationFn(rw.a.homePath, rw.id, rw.delegation); err != nil {
 			logsafeError("rest: update workspace: delegation write", "id", rw.id, "error", err)
 			stage := "delegation"
-			message := "Workspace fields were saved, but the delegation graph could not be saved; read the workspace again before retrying."
+			message := "workspace fields were saved, but the delegation graph could not be saved; read the workspace again before retrying"
 			if roomErr != nil {
 				stage = "delegation_and_room_sync"
 				message = "Workspace fields were saved, but the delegation graph and groups could not be updated; read the workspace and groups again before retrying."
