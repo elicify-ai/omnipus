@@ -13,9 +13,9 @@
 // I-3's consumption marker (step 3: "before executing, the turn appends a
 // `consumed <MessageID>` marker") once the woken turn is certain to run; the
 // drain writes the equivalent marker through Continue's shared dequeue path.
-// Boot recovery (boot_sweep.go::SteerBootRecovery) does not call this
-// function — a steered session still mid-flight at boot is marked
-// OutcomeInterrupted and delivered to its parent rather than resumed.
+// Boot recovery resumes native restart-stopped helpers through the normal
+// launcher/Dispatch path. That entry reconstructs from saved model history,
+// rather than replaying a historical tool invocation or launch instruction.
 package agent
 
 import (
@@ -144,15 +144,25 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 			}
 			opts.UserMessage = strings.Join(pending, "\n\n")
 		} else {
-			entries, readErr := store.ReadTranscript(rec.SessionID)
-			if readErr != nil {
-				return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
+			resumeHistory, historyErr := al.restartHistoryResume(rec)
+			if historyErr != nil {
+				return nil, historyErr
 			}
-			for i := len(entries) - 1; i >= 0; i-- {
-				if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
-					opts.UserMessage = entries[i].Content
-					opts.InputAlreadyArchived = true
-					break
+			if resumeHistory {
+				// The next model decision reads saved calls/results. Do not turn
+				// the old launch instruction into a new user message at boot.
+				opts.InputAlreadyArchived = true
+			} else {
+				entries, readErr := store.ReadTranscript(rec.SessionID)
+				if readErr != nil {
+					return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
+				}
+				for i := len(entries) - 1; i >= 0; i-- {
+					if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
+						opts.UserMessage = entries[i].Content
+						opts.InputAlreadyArchived = true
+						break
+					}
 				}
 			}
 		}

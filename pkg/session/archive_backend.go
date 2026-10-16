@@ -400,21 +400,22 @@ func (b *archiveBackend) PlaceSavedInput(ctx context.Context, key string, source
 	if err != nil {
 		return ModelSlot{}, WindowView{}, err
 	}
-	n, err := store.OrdinalCount()
-	if err != nil {
-		return ModelSlot{}, WindowView{}, err
-	}
-	// The already-placed set is derived from the published window rows — no
-	// separate counter or queue. A placement is always inside the window that
-	// consumed it; an evicted source was consumed long before.
-	rows, err := store.readOrdinalRows(clampSkip(meta.Skip, n), n)
-	if err != nil {
-		return ModelSlot{}, WindowView{}, err
-	}
-	for _, row := range rows {
-		if row.Source != nil && *row.Source == source {
-			return ModelSlot{}, WindowView{}, ErrAlreadyConsumed
+	// Consumption survives window eviction and process restart. Read the
+	// archive's body-free references rather than treating the active window
+	// as the lifetime consumed set (PW-D16). No second index/store is needed.
+	alreadyPlaced := false
+	if err := store.ScanAll(func(_ ArchiveAddress, rec ArchiveRecord) bool {
+		if rec.ModelRef != nil && rec.ModelRef.EntryID == source.EntryID &&
+			rec.ModelRef.PartitionKey == source.PartitionKey && rec.ModelRef.ByteOffset == source.ByteOffset {
+			alreadyPlaced = true
+			return false
 		}
+		return true
+	}); err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	if alreadyPlaced {
+		return ModelSlot{}, WindowView{}, ErrAlreadyConsumed
 	}
 	src, err := store.ReadAt(source)
 	if err != nil {

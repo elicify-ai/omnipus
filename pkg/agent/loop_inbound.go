@@ -855,6 +855,11 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		}
 	}
 
+	saved, consumed, savedErr := al.prepareSavedSystemWake(ctx, sessionID, messageID, rec.AgentID)
+	if savedErr != nil || consumed {
+		return "", savedErr
+	}
+
 	// D6/D7: a stopped session (landed, or with its current-generation Stop
 	// in flight) does no compute until it is explicitly resumed. The wake
 	// is neither consumed nor acknowledged: an inbox-backed report stays
@@ -1010,6 +1015,11 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		// (steer_launcher.go) uses its own commit's return value rather than
 		// its stale pre-write snapshot for the completion disposition below.
 		rec = running
+	}
+
+	if err := al.placeSavedWakeAtEntry(ctx, ts, messageID, saved); err != nil {
+		abort()
+		return "", err
 	}
 
 	// The consumed marker and the acknowledgement are written only once the

@@ -65,6 +65,10 @@ func (al *AgentLoop) assembleMessages(
 			ts.setContextWindowError(fmt.Errorf("context assembly: session store does not support atomic context checkpoints"))
 			return history
 		}
+		if err := al.placePendingSavedWakeInputs(ctx, ts); err != nil {
+			ts.setContextWindowError(err)
+			return history
+		}
 		snap, err := store.WindowView(ctx, ts.sessionKey)
 		if err != nil {
 			ts.setContextWindowError(err)
