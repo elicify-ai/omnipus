@@ -49,9 +49,9 @@ Step 4 items 2 (green) and 3 (mutation) and the proof-of-failability checklist a
 
 These gaps are real. They are not skipped tests. A `t.Skip` would hide them; a BLOCKED fatal for a symbol that is not the missing piece would be the wrong red.
 
-## Collision for GREEN
+## Legacy reconciliation — 2026-10-16
 
-`TestClassifySessionMessage_AcceptedReportKindsWakeEligible` still asserts that progress, checkpoint and artifact **do** wake. That is the old session-core FR-012. This spec reverses it (PW-D4). GREEN has to change that existing test. This pack does not edit it.
+`TestClassifySessionMessage_AcceptedReportKindsWakeEligible` now agrees with this pack: progress, checkpoint and artifact **do not** wake (PW-D4). The legacy Stop/replay, native-restart, met-ending identity and progress-diagnostic expectations were reconciled to the same spec, without changing production. Legacy function names are retained for traceability; no tests were deleted or skipped. Compatible cap, Stop-authority, input-retention, row-identity and delivery-failure assertions remain. Implementation GREEN, safe-placement/mutation proof and the coverage gaps above still belong to a different CHECK instance; reconciliation is not a feature-completion claim.
 
 ## GitNexus
 

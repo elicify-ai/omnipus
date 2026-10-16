@@ -695,6 +695,9 @@ func TestBoot_ClassifiesAllClasses(t *testing.T) {
 	}
 }
 
+// PW-D6 (founder 2026-10-15): this fixture was already stopped before boot.
+// It has no landed timeout transition; it does not exercise a historical timeout
+// event's required wake (§9.6). Keep the retained-note/no-resume regression.
 // TestBoot_TimeoutStoppedStaysStopped pins ADR-20260928 D8 (founder
 // decision, 2026-10-04): a steered session whose lifetime budget expired —
 // stop_note.cause=timeout, the shape steer_completion.go::completeSteeredTurn

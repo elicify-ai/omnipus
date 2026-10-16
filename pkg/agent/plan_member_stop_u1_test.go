@@ -126,8 +126,9 @@ func TestU1PlanStopSteeredMemberNoticeLandsForDirectParentOnly(t *testing.T) {
 	// Sweep cause: the member did not press Stop itself — the plan's stop
 	// swept it (see the file header's cause note).
 	noticeID, _ := assertU1StoppedChildNotice(t, al, origin, member, string(session.StopCauseCascade), "tester")
-	if got := wakes(noticeID); got != 1 {
-		t.Errorf("working direct-parent wakes for the member's stopped notice = %d, want exactly 1 (D6)", got)
+	// PW-D13 (founder 2026-10-15): a person's plan Stop is intentional, including its cascade.
+	if got := wakes(noticeID); got != 0 {
+		t.Errorf("working direct-parent wakes for the intentionally stopped member = %d, want 0 (PW-D13)", got)
 	}
 
 	// MAJ-009: the indirect ancestor receives nothing for this member.
