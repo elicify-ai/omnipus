@@ -1,6 +1,10 @@
 package agent
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
+)
 
 // R3 plus the existing ADR-051 media-recovery contract: classify positive
 // wrong-model evidence, never replace inconclusive400 during recovery, and
@@ -12,8 +16,11 @@ func TestRouting1340_UserClassification(t *testing.T) {
 		body   string
 		want   LLMErrorCode
 	}{
-		{"bad_model_code", 400, `{"error":{"code":"model_not_found"}}`, "bad_model"},
-		{"bad_model_message", 400, `{"error":{"message":"Model 'missing' not found"}}`, "bad_model"},
+		// Round1 architect D2: recovery remains inconclusive; the shared
+		// permanent-failure gate blocks retry, and terminal presentation
+		// classifies the original evidence as bad_model below.
+		{"bad_model_code", 400, `{"error":{"code":"model_not_found"}}`, CodeUnknown},
+		{"bad_model_message", 400, `{"error":{"message":"Model 'missing' not found"}}`, CodeUnknown},
 		{"empty400_recovery_unchanged", 400, "", CodeUnknown},
 		{"arbitrary400_recovery_unchanged", 400, `{"error":{"message":"account header missing"}}`, CodeUnknown},
 		{"not_found_other_resource", 400, `{"error":{"message":"file not found for model input"}}`, CodeUnknown},
@@ -38,6 +45,15 @@ func TestRouting1340_UserClassification(t *testing.T) {
 			got := TranslateLLMError(&ProviderError{Status: tc.status, Body: tc.body}, "")
 			if got.Code != tc.want {
 				t.Fatalf("user classification status%d=%q, want%q", tc.status, got.Code, tc.want)
+			}
+			if tc.name == "bad_model_code" || tc.name == "bad_model_message" {
+				terminal := TranslateTurnError(&common.ProviderError{Status: tc.status, Body: tc.body})
+				if terminal.Code != CodeBadModel || terminal.Retryable {
+					t.Fatalf("terminal model evidence lost: %+v", terminal)
+				}
+				if outcomeFallbackEligible(&ProviderError{Status: tc.status, Body: tc.body}, got.Code) {
+					t.Fatal("wrong-model evidence must still refuse the media fallback gate")
+				}
 			}
 		})
 	}

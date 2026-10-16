@@ -735,13 +735,10 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 	case errors.Is(runErr, context.Canceled), result.status == TurnEndStatusAborted:
 		return steer.OutcomeInterrupted, session.LifecycleStopped, "interrupted: the session was cancelled"
 	case runErr != nil:
-		reason := runErr.Error()
-		// A structured provider failure can echo the request or credentials.
-		// Keep its safe classified sentence in the parent handback/outbox too.
-		if pe := errorToProviderError(runErr); pe != nil && (pe.Status > 0 || pe.Body != "" || pe.Provider != "") {
-			reason = userVisibleTurnError(runErr)
-		}
-		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + reason
+		// Every untrusted failure can echo request data, including an unknown
+		// stream code with no HTTP facts. Only curated Omnipus text bypasses
+		// translation, through userVisibleTurnError's existing exception.
+		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + userVisibleTurnError(runErr)
 	case result.finalContent == toolLimitResponse:
 		// The turn hit the tool-iteration ceiling with no final response
 		// (loop_run_turn.go::finalizeTurn sets finalContent to the

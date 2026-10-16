@@ -187,6 +187,10 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	if err == nil {
 		return nil
 	}
+	var route *ModelRouteUnavailableError
+	if errors.As(err, &route) {
+		return nil // pre-request refusal, never a provider failover decision
+	}
 
 	// SDK-backed adapters normally normalize at their boundary; also accept
 	// wrapped SDK errors here so their structured status is never string-parsed.
@@ -279,6 +283,17 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 			Provider: provider,
 			Model:    model,
 			Wrapped:  err,
+		}
+	}
+
+	// A structured wrong-model code is authoritative on400, before any
+	// incidental prose (including a model name containing "expired"/"timeout"
+	// or an attachment phrase). Status-specific auth/quota/5xx paths stay put.
+	var boundary *common.ProviderError
+	if errors.As(err, &boundary) && boundary.Status == 400 && common.StructuredErrorCode(boundary.Body) == "model_not_found" {
+		return &FailoverError{
+			Reason: FailoverBadModel, Provider: provider, Model: model,
+			Status: boundary.Status, Wrapped: err,
 		}
 	}
 

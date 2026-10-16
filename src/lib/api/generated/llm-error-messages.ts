@@ -33,7 +33,7 @@ export type LLMErrorAttribution =
 export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -68,6 +68,7 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   context_window_unknown: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
   bad_model: "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings.",
   provider_request_rejected: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details.",
+  model_route_unavailable: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings.",
   unknown: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
 
@@ -100,6 +101,7 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   context_window_unknown: "config",
   bad_model: "config",
   provider_request_rejected: "product",
+  model_route_unavailable: "config",
   unknown: "unknown",
 }
 
@@ -117,4 +119,5 @@ export const llmErrorProviderMessages: Partial<Record<LLMErrorCode, string>> = {
   model_retired: "This model is no longer offered by {provider}. Pick a new model in the agent's settings.",
   bad_model: "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings.",
   provider_request_rejected: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details.",
+  model_route_unavailable: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings.",
 }

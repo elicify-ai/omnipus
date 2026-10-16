@@ -294,8 +294,13 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 				t.Errorf("parent fatal=%v, want %v (Stop/timeout are not provider failures)", e.Fatal, tc.fatal)
 			}
 			if tc.fatal {
-				if !strings.HasPrefix(e.Text, "failed:") || !strings.Contains(e.Text, tc.providerErr.Error()) {
-					t.Errorf("provider failure text=%q, want failed: plus actual provider error", e.Text)
+				// SFH F2: unclassified provider text is untrusted. The fixed
+				// unknown-failure sentence survives the real durable handback.
+				if want := "failed: " + UserMessageForCode(CodeUnknown); e.Text != want {
+					t.Errorf("provider failure text=%q, want exact safe translated sentence %q", e.Text, want)
+				}
+				if strings.Contains(e.Text, tc.providerErr.Error()) {
+					t.Errorf("raw provider failure reached the parent: %q", e.Text)
 				}
 				raw, marshalErr := msgs[0].MarshalJSON()
 				if marshalErr != nil || !bytes.Equal(raw, got.FinalDelivery.Payload) {

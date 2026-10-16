@@ -3318,6 +3318,10 @@ components:
           message: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
           attribution: product
           provider_message: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+        model_route_unavailable:
+          message: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
+          attribution: config
+          provider_message: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -3354,6 +3358,7 @@ components:
             - context_window_unknown
             - bad_model
             - provider_request_rejected
+            - model_route_unavailable
             - unknown
         message:
           type: string
@@ -3576,6 +3581,10 @@ components:
           message: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
           attribution: product
           provider_message: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+        model_route_unavailable:
+          message: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
+          attribution: config
+          provider_message: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -3612,6 +3621,7 @@ components:
             - context_window_unknown
             - bad_model
             - provider_request_rejected
+            - model_route_unavailable
             - unknown
         message:
           type: string

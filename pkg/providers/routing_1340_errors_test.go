@@ -17,7 +17,7 @@ import (
 // R2's oracle is the HTTP response itself. Real Codex adapter and SDK, fake
 // HTTP service only; no real token source, credentials, or provider requests.
 func TestRouting1340_CodexStructuredErrors(t *testing.T) {
-	for _, status := range []int{400, 401, 402, 408, 429, 500} {
+	for _, status := range []int{400, 401, 402, 404, 408, 429, 500} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			const body = `{"error":{"code":"model_not_found","type":"invalid_request_error","message":"the model does not exist"}}`
 			var calls atomic.Int64

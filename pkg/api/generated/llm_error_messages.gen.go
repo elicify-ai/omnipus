@@ -72,6 +72,7 @@ var LLMErrorCodes = []string{
 	"context_window_unknown",
 	"bad_model",
 	"provider_request_rejected",
+	"model_route_unavailable",
 	"unknown",
 }
 
@@ -105,6 +106,7 @@ var LLMErrorUserMessages = map[string]string{
 	"context_window_unknown":    "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
 	"bad_model":                 "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings.",
 	"provider_request_rejected": "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details.",
+	"model_route_unavailable":   "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings.",
 	"unknown":                   "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
 
@@ -138,6 +140,7 @@ var LLMErrorUserAttributions = map[string]LLMErrorAttribution{
 	"context_window_unknown":    LLMErrorAttributionConfig,
 	"bad_model":                 LLMErrorAttributionConfig,
 	"provider_request_rejected": LLMErrorAttributionProduct,
+	"model_route_unavailable":   LLMErrorAttributionConfig,
 	"unknown":                   LLMErrorAttributionUnknown,
 }
 
@@ -153,4 +156,5 @@ var LLMErrorProviderMessages = map[string]string{
 	"model_retired":             "This model is no longer offered by {provider}. Pick a new model in the agent's settings.",
 	"bad_model":                 "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings.",
 	"provider_request_rejected": "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details.",
+	"model_route_unavailable":   "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings.",
 }

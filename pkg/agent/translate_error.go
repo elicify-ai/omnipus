@@ -36,6 +36,8 @@ const (
 	// CodeProviderRequestRejected describes an otherwise unclassified terminal400.
 	// Recovery still sees CodeUnknown, allowing the existing media strip-retry.
 	CodeProviderRequestRejected LLMErrorCode = "provider_request_rejected"
+	// CodeModelRouteUnavailable is a pre-request named-client refusal.
+	CodeModelRouteUnavailable LLMErrorCode = "model_route_unavailable"
 )
 
 const (
@@ -699,9 +701,6 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		if isBillingEvidence(body, status) {
 			return CodeQuotaBilling
 		}
-		if providers.IsBadModelError(status, body, pe.Model) {
-			return CodeBadModel
-		}
 		// C-24: a 404 carrying a retirement phrase is model_retired. The
 		// 404-gate keeps every near-miss (a 410, or the phrase on another
 		// status) CodeUnknown byte-identically; the media strip-retry gate
@@ -880,6 +879,10 @@ func TranslateTurnError(err error) LLMError {
 	if code, ok := typedExitCode(err); ok {
 		return typedExitError(code, err)
 	}
+	var route *providers.ModelRouteUnavailableError
+	if errors.As(err, &route) {
+		return translateModelRouteUnavailable(route)
+	}
 	// Founder decision 2026-09-14: a streaming call aborted for total
 	// silence (common.ErrStreamStalled) is its own typed code, before any
 	// substring classifier can misread the sentinel's wording. Checked early
@@ -1052,7 +1055,11 @@ func TranslateTurnError(err error) LLMError {
 	// strip-retry remains reachable, but name the known rejection on failure.
 	code := llm.Code
 	var fe *providers.FailoverError
-	if errors.As(err, &fe) && fe.Reason == providers.FailoverBadModel {
+	// Structured model_not_found is authoritative; prose-only evidence may
+	// promote an inconclusive verdict, never overwrite genuine billing/policy.
+	badModelEvidence := pe != nil && providers.IsBadModelError(pe.Status, pe.Body, pe.Model) &&
+		(code == CodeUnknown || common.StructuredErrorCode(pe.Body) == "model_not_found")
+	if (errors.As(err, &fe) && fe.Reason == providers.FailoverBadModel) || badModelEvidence {
 		code = CodeBadModel
 	} else if code == CodeUnknown && pe != nil && pe.Status == 400 {
 		code = CodeProviderRequestRejected
@@ -1473,6 +1480,10 @@ func errorToProviderError(err error) *ProviderError {
 func providerErrorFromChain(err error) *ProviderError {
 	if err == nil {
 		return nil
+	}
+	var route *providers.ModelRouteUnavailableError
+	if errors.As(err, &route) {
+		return &ProviderError{Provider: route.Provider, Model: route.Model, Err: route}
 	}
 	// Prefer the most-specific pe — it carries the Body bytes that the
 	// classifier substring-matches on. errors.As will walk the Unwrap
