@@ -16,7 +16,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
-	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -263,7 +262,7 @@ func (p *Provider) streamWithCallbacks(
 	opts []option.RequestOption,
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
-) (*LLMResponse, error) {
+) (response *LLMResponse, err error) {
 	stall := p.effectiveStreamStallTimeout()
 
 	// stallArmer hands the monitor's arm fn to the body-wrapping middleware
@@ -303,6 +302,7 @@ func (p *Provider) streamWithCallbacks(
 
 	var msg anthropic.Message
 	var openingUsage *anthropic.Usage
+	defer func() { err = failedStreamUsage(err, &msg, openingUsage) }()
 	var lastTextLen int
 	var lastReasoningLen int
 	lastArgsLen := map[int]int{}
@@ -429,20 +429,7 @@ func (p *Provider) streamWithCallbacks(
 		return nil, &common.StreamProviderError{Code: "incomplete_stream", Message: "the stream ended before message_stop"}
 	}
 
-	// Cache/input counters on message_start describe the input once. A
-	// terminal usage delta must not replace them with an incremental count.
-	if openingUsage != nil {
-		if openingUsage.JSON.InputTokens.Valid() {
-			msg.Usage.InputTokens = openingUsage.InputTokens
-		}
-		if openingUsage.JSON.CacheReadInputTokens.Valid() {
-			msg.Usage.CacheReadInputTokens = openingUsage.CacheReadInputTokens
-		}
-		if openingUsage.JSON.CacheCreationInputTokens.Valid() {
-			msg.Usage.CacheCreationInputTokens = openingUsage.CacheCreationInputTokens
-		}
-		msg.Usage.CacheCreation = openingUsage.CacheCreation
-	}
+	restoreOpeningUsage(&msg, openingUsage)
 	return parseResponse(&msg)
 }
 
@@ -756,19 +743,9 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	var reasoning strings.Builder
 	var toolCalls []ToolCall
 
-	var usage *UsageInfo
-	if resp.JSON.Usage.Valid() || resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 ||
-		resp.Usage.CacheReadInputTokens > 0 || resp.Usage.CacheCreationInputTokens > 0 {
-		// Marshal the accumulated SDK fields, not RawJSON (which still
-		// describes message_start and therefore has stale output usage).
-		raw, err := json.Marshal(resp.Usage)
-		if err != nil {
-			return nil, err
-		}
-		usage, err = promptcache.ParseUsage("anthropic", raw)
-		if err != nil {
-			return nil, err
-		}
+	usage, err := messageUsage(resp)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, block := range resp.Content {
