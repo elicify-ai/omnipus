@@ -17,7 +17,7 @@ func TestSecretMatrix_DeletionFreesPendingCapacity(t *testing.T) {
 	for _, deleted := range []string{"session", "acting agent"} {
 		t.Run(deleted, func(t *testing.T) {
 			f := newMatrixEnv(t)
-			var cards []secretrequest.Record
+			cards := make([]secretrequest.Record, 0, 64)
 			for range 64 {
 				cards = append(cards, f.pending())
 			}
