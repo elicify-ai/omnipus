@@ -200,7 +200,7 @@ async function renderAnswerRows(page: Page, body: string, attachedBody = body): 
       <button>Copy</button></div></div>
     <div id="attached"><div><span>Mia</span>
       <div class="text-[length:var(--type-body-compact-size)]">${attachedBody}</div>
-      <button>Copy</button><span data-testid="message-model">deepseek/deepseek-v4.1-flash</span>
+      <button>Copy</button><span data-testid="message-model">fixture/model-id</span>
     </div></div>`)
 }
 
@@ -224,8 +224,8 @@ test.describe('S-09 rendered-answer oracle', () => {
   })
 
   test('retains a model slug when it is part of the answer, not the footer', async ({ page }) => {
-    await renderAnswerRows(page, '<p>The model is deepseek/deepseek-v4.1-flash.</p>')
-    expect(await normalizedAssistantText(page.locator('#attached'))).toBe('The model is deepseek/deepseek-v4.1-flash.')
+    await renderAnswerRows(page, '<p>The model is fixture/model-id.</p>')
+    expect(await normalizedAssistantText(page.locator('#attached'))).toBe('The model is fixture/model-id.')
   })
 
   test('rejects a row with only chrome instead of certifying empty equality', async ({ page }) => {
