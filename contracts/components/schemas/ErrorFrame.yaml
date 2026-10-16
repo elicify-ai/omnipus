@@ -11,6 +11,8 @@ additionalProperties: false
 dependentRequired:
   first_message_error:
     - client_message_id
+  ask_user_card_id:
+    - session_id
 properties:
   type:
     type: string
@@ -30,6 +32,15 @@ properties:
     minLength: 1
     maxLength: 4096
     description: Human-readable error description.
+  ask_user_card_id:
+    type: string
+    minLength: 1
+    description: >-
+      Exact AskUserAnswerFrame.card_id this answer or cancellation error
+      concerns. Requires session_id. This is a card-scoped notification,
+      not a turn-ending error or an acknowledgement of acceptance.
+      Omit client_message_id and first_message_error on these errors.
+      Authoritative card updates determine pending or terminal status.
   client_message_id:
     type: string
     minLength: 1
