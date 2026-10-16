@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 )
@@ -23,7 +24,7 @@ func plantUnreadableTasks() error {
 // restoreUnreadableTasks puts the directory back so the temp dir can be removed.
 func restoreUnreadableTasks(dir string) error {
 	err := os.Chmod(filepath.Join(dir, "tasks"), 0o755)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil

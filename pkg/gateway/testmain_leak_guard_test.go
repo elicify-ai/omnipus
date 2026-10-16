@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,7 +27,7 @@ func leakedPackageDirFiles() []string {
 		// symlink as absent.
 		if _, err := os.Lstat(name); err == nil {
 			leaked = append(leaked, name)
-		} else if !os.IsNotExist(err) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			leaked = append(leaked, fmt.Sprintf("%s (inspection failed: %v)", name, err))
 		}
 	}
@@ -35,7 +36,7 @@ func leakedPackageDirFiles() []string {
 			if err != nil {
 				// A missing root is not a leak. Any other inspection failure
 				// means this sweep cannot certify the tree is clean.
-				if !(path == rel && os.IsNotExist(err)) {
+				if path != rel || !errors.Is(err, os.ErrNotExist) {
 					leaked = append(leaked, fmt.Sprintf("%s (inspection failed: %v)", path, err))
 				}
 				return nil

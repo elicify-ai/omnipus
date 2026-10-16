@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,7 +31,7 @@ func plantUnreadableTasks() error {
 func restoreUnreadableTasks(dir string) error {
 	tasks := filepath.Join(dir, "tasks")
 	if _, err := os.Lstat(tasks); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err

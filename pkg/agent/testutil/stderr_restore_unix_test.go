@@ -32,8 +32,8 @@ func TestRestoreProcessStderr_UndoesPanicFileRedirect(t *testing.T) {
 	restored := false
 	t.Cleanup(func() {
 		if !restored {
-			if err := restoreProcessStderr(saved); err != nil {
-				t.Errorf("emergency stderr restore: %v", err)
+			if restoreErr := restoreProcessStderr(saved); restoreErr != nil {
+				t.Errorf("emergency stderr restore: %v", restoreErr)
 			}
 		}
 	})
@@ -75,8 +75,8 @@ func TestSaveProcessStderr_DuplicateIsCloseOnExec(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := restoreProcessStderr(saved); err != nil {
-			t.Errorf("emergency stderr restore: %v", err)
+		if restoreErr := restoreProcessStderr(saved); restoreErr != nil {
+			t.Errorf("emergency stderr restore: %v", restoreErr)
 		}
 	})
 	flags, err := unix.FcntlInt(uintptr(saved.fd), unix.F_GETFD, 0)
@@ -338,7 +338,7 @@ func stderrSuccessRunner(ctx context.Context, _ bool, home, configPath string, _
 	go func() {
 		defer close(serveDone)
 		serveErr = srv.Serve(ln)
-		if serveErr == http.ErrServerClosed {
+		if errors.Is(serveErr, http.ErrServerClosed) {
 			serveErr = nil
 		} else if serveErr != nil {
 			serveErr = fmt.Errorf("serve stderr-probe server: %w", serveErr)

@@ -23,7 +23,7 @@ type processStderrState struct {
 // restores it. The duplicate is created with close-on-exec in one call so
 // there is no window where a child can inherit it.
 func saveProcessStderr() (processStderrState, error) {
-	saved, err := unix.FcntlInt(uintptr(os.Stderr.Fd()), unix.F_DUPFD_CLOEXEC, 0)
+	saved, err := unix.FcntlInt(os.Stderr.Fd(), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
 		return processStderrState{}, fmt.Errorf("dup stderr: %w", err)
 	}
@@ -39,7 +39,7 @@ func restoreProcessStderr(saved processStderrState) error {
 	if err := unix.Dup2(saved.fd, int(os.Stderr.Fd())); err != nil {
 		closeErr := unix.Close(saved.fd)
 		if closeErr != nil {
-			return fmt.Errorf("dup2 stderr: %w (close saved: %v)", err, closeErr)
+			return fmt.Errorf("dup2 stderr: %w (close saved: %w)", err, closeErr)
 		}
 		return fmt.Errorf("dup2 stderr: %w", err)
 	}
