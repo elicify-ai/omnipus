@@ -109,6 +109,10 @@ func (s *Service) openRoom(roomID string) (*room, Workspace, error) {
 		r.mu.Unlock()
 		return nil, Workspace{}, err
 	}
+	if err := s.repairSettlements(r); err != nil {
+		r.mu.Unlock()
+		return nil, Workspace{}, err
+	}
 	if err := s.reconcile(r, ws, PrincipalSystem); err != nil {
 		r.mu.Unlock()
 		return nil, Workspace{}, err
@@ -211,6 +215,9 @@ func (s *Service) workspaceRoomsAs(ws Workspace, principal string) ([]*room, err
 		err := s.repairIncompleteCost(r)
 		if err == nil {
 			err = s.repairReleasedConsumes(r)
+		}
+		if err == nil {
+			err = s.repairSettlements(r)
 		}
 		if err == nil {
 			err = s.reconcile(r, ws, principal)

@@ -23,7 +23,9 @@ func TestRoomsFix4_FailedTerminalWriteKeepsRepairOwnership(t *testing.T) {
 			d := f.deliveryOf(room.Id, "jim")
 			require.True(t, f.svc.BeginConsume(room.Id, d.RequestID, "main-jim"))
 			j.set(func(j *faultJournal) { j.append = failState(target) })
-			f.svc.ConsumeEnded(room.Id, d.RequestID, turnErr)
+			discard, completionErr := f.svc.ConsumeEnded(room.Id, d.RequestID, turnErr)
+			require.Error(t, completionErr)
+			require.False(t, discard, "an unrecorded completion cannot authorize capture disposal")
 			require.Positive(t, j.injected(), "instrument: the terminal append failed")
 			f.svc.cardMu.Lock()
 			owner := f.svc.working["main-jim"][d.RequestID]
@@ -53,7 +55,9 @@ func TestRoomsFix4_CompletionReadFailureIsRepairable(t *testing.T) {
 	j := &fix2RecordReadFault{FileJournal: NewFileJournal(f.dir), fail: true}
 	svc := New(j, DepsFrom(f.deps))
 	t.Cleanup(svc.Close)
-	svc.ConsumeEnded(room.Id, d.RequestID, errors.New("provider failed"))
+	discard, completionErr := svc.ConsumeEnded(room.Id, d.RequestID, errors.New("provider failed"))
+	require.Error(t, completionErr)
+	require.False(t, discard)
 	require.Positive(t, j.hits, "instrument: completion could not load its room")
 	j.fail = false
 	_, err := svc.Get(room.Id)
@@ -78,7 +82,7 @@ func TestRoomsFix4_ReminderCannotFailPendingHandoffUndo(t *testing.T) {
 	j.set(func(j *faultJournal) { j.append = nil })
 	// Storage recovered, but no room open/read repaired B before A's genuine
 	// reminder ended. B was never handed to that turn or marked delivered.
-	f.svc.ReminderTurnEnded("main-jim")
+	require.NoError(t, f.svc.ReminderTurnEnded("main-jim"))
 	_, err := f.svc.Get(room.Id)
 	require.NoError(t, err)
 	require.Equal(t, "failed/no_answer", f.stateOf(room.Id, a.RequestID), "the real reminder still settles A")

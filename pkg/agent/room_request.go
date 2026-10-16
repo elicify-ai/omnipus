@@ -107,10 +107,10 @@ type RoomRuntime interface {
 	RoomConsumeHeld(roomID, requestID string)
 	// RoomConsumeEnded reports that the turn consuming the request ended with
 	// turnErr (nil: ended without error; the answer, if any, already arrived).
-	RoomConsumeEnded(roomID, requestID string, turnErr error)
+	RoomConsumeEnded(roomID, requestID string, turnErr error) (discardCapture bool, completionErr error)
 	// RoomReminderTurnEnded reports that the one unanswered-request reminder
 	// turn of sessionID ended: room requests still unanswered there failed.
-	RoomReminderTurnEnded(sessionID string)
+	RoomReminderTurnEnded(sessionID string) error
 	// RoomTurnCost reports the cost of a turn that consumed a room request.
 	RoomTurnCost(report RoomTurnCost)
 	// DeliverRoomAnswer is the room reply branch (FR-215).
@@ -654,15 +654,16 @@ func releaseRoomConsume(rt RoomRuntime, roomID, requestID string) error {
 
 // prepared reports a failed turn admission to the room: a stopped member
 // holds the request again, anything else ends it.
-func (g *roomGate) prepared(err error) {
+func (g *roomGate) prepared(err error) error {
 	if g == nil || err == nil {
-		return
+		return nil
 	}
 	if errors.Is(err, errOwnerWakeRetained) {
 		g.rt.RoomConsumeHeld(g.roomID, g.requestID)
-		return
+		return nil
 	}
-	g.rt.RoomConsumeEnded(g.roomID, g.requestID, err)
+	_, completionErr := g.rt.RoomConsumeEnded(g.roomID, g.requestID, err)
+	return completionErr
 }
 
 // newTurnRoomMeter is the cost meter of one ordinary turn: one input (the
@@ -701,10 +702,10 @@ func (al *AgentLoop) reportRoomCost(m *roomCostMeter, sessionID string) {
 // ended without an error leaves them to their answers and, for one still
 // unanswered, to the one reminder whose end fails it - a member is never left
 // "working" after its turn.
-func (al *AgentLoop) settleRoomInputs(m *roomCostMeter, turnErr error) {
+func (al *AgentLoop) settleRoomInputs(m *roomCostMeter, turnErr error) error {
 	rt := al.loadRoomRuntime()
 	if rt == nil || m == nil || turnErr == nil {
-		return
+		return nil
 	}
 	m.mu.Lock()
 	joined := make(map[string]string, len(m.joined))
@@ -713,28 +714,29 @@ func (al *AgentLoop) settleRoomInputs(m *roomCostMeter, turnErr error) {
 	}
 	m.mu.Unlock()
 	al.dropRoomSteering(joined)
+	var result error
 	for req, room := range joined {
-		rt.RoomConsumeEnded(room, req, turnErr)
-		if err := al.DiscardRequest(m.sessionID, req); err != nil {
-			logger.ErrorCF("agent", "a failed turn's room input could not be discarded", map[string]any{"request_id": req, "session_id": m.sessionID, "error": err.Error()})
-		}
+		result = errors.Join(result, al.completeRoomInput(rt, room, req, m.sessionID, turnErr))
 	}
+	return result
 }
 
 // roomTurnEnded runs when a worker turn's processMessage returned: a failed
 // room-request turn fails its request; the end of a reminder turn fails the
 // room requests still unanswered in that session.
-func (al *AgentLoop) roomTurnEnded(msg bus.InboundMessage, err error) {
+func (al *AgentLoop) roomTurnEnded(msg bus.InboundMessage, err error) error {
 	rt := al.loadRoomRuntime()
 	if rt == nil {
-		return
+		return nil
 	}
+	var result error
 	if isRoomRequestWake(msg) && err != nil {
-		rt.RoomConsumeEnded(msg.Metadata[roomIDMetadataKey], msg.TranscriptEntryID, err)
+		result = al.completeRoomInput(rt, msg.Metadata[roomIDMetadataKey], msg.TranscriptEntryID, msg.SessionID, err)
 	}
 	if msg.Metadata[requestReminderMetadataKey] != "" {
-		rt.RoomReminderTurnEnded(msg.SessionID)
+		result = errors.Join(result, rt.RoomReminderTurnEnded(msg.SessionID))
 	}
+	return result
 }
 
 // steerRoomRequest is the fence for a held room request re-published into a

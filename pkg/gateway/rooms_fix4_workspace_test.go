@@ -32,7 +32,7 @@ func TestRoomsFix4_SavedRoomSyncFailureUsesMutationEnvelope(t *testing.T) {
 	require.Positive(t, j.hits.Load(), "instrument: real room synchronization read failed")
 	var failure gen.ConfigurationMutationState
 	require.NoError(t, json.Unmarshal(body, &failure))
-	requireRoomContract(t, "ConfigurationMutationState", failure)
+	requireRoomContract(t, "ConfigurationMutationState", json.RawMessage(body))
 	require.Equal(t, gen.ConfigurationMutationStatePersistenceStatusPartial, failure.PersistenceStatus)
 	require.Equal(t, gen.ConfigurationMutationStateActivationStatusNotAttempted, failure.ActivationStatus)
 	require.Equal(t, []string{"core_team"}, failure.ChangedFields)

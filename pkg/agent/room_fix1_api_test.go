@@ -66,12 +66,16 @@ func TestFix1_FailedTurnSettlesItsJoinedRoomRequests(t *testing.T) {
 	f.al.roomRequests.Store("joined-1", "room-1")
 	m := &roomCostMeter{al: f.al, inputs: 1, rooms: map[string]int{}}
 	m.addInputs([]string{roomSteerCorrelation("joined-1"), "web-1"}, 2)
-	f.al.settleRoomInputs(m, context.Canceled)
+	if err := f.al.settleRoomInputs(m, context.Canceled); err != nil {
+		t.Fatal(err)
+	}
 	if len(rt.ended) != 1 || rt.ended[0] != "joined-1" {
 		t.Fatalf("the failed turn settled %v; want the joined room request", rt.ended)
 	}
 	rt.ended = nil
-	f.al.settleRoomInputs(m, nil)
+	if err := f.al.settleRoomInputs(m, nil); err != nil {
+		t.Fatal(err)
+	}
 	if len(rt.ended) != 0 {
 		t.Fatal("control: a turn without an error leaves the request to its answer and the reminder")
 	}

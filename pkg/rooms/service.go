@@ -141,7 +141,8 @@ type Service struct {
 	admitting sync.Map
 	// Failed allocation reads retain the incomplete mark until storage can
 	// save it. Reads never serve a complete total while that repair is pending.
-	incompleteCosts sync.Map // room id -> true
+	incompleteCosts    sync.Map // room id -> true
+	pendingSettlements sync.Map // settlementKey -> settlementRecord; completion bookkeeping only
 
 	// workspaceMu excludes on-read system reconciliation while a user save
 	// commits and applies its room memberships with that user's principal.
@@ -277,6 +278,9 @@ func (s *Service) readRoom(roomID string) (*room, error) {
 	if err := s.repairIncompleteCost(r); err != nil {
 		return nil, err
 	}
+	if err := s.repairSettlements(r); err != nil {
+		return nil, err
+	}
 	if err := s.recover(r); err != nil {
 		// Never serve states that could not be made true (a "working" member
 		// whose turn died with the process): the room is unreadable until
@@ -295,6 +299,19 @@ func (s *Service) readJournals(roomID string, r *room) error {
 	}
 	if err := readStream(s.journal, roomID, StreamMirrors, func(m mirrorRecord) { r.mirrored[m.AnswerID] = true }); err != nil {
 		return err
+	}
+	var settlementErr error
+	if err := readStream(s.journal, roomID, StreamSettlements, func(intent settlementRecord) {
+		if err := validateSettlement(intent); err != nil {
+			settlementErr = err
+			return
+		}
+		s.pendingSettlements.Store(settlementKey{roomID, intent.RequestID}, intent)
+	}); err != nil {
+		return err
+	}
+	if settlementErr != nil {
+		return settlementErr
 	}
 	// The turn journal is the allocated cost's source of truth (§6.14): each
 	// counted turn's share and unpriced flag are summed here, so a share is

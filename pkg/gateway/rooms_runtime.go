@@ -278,12 +278,12 @@ func (rt agentRoomRuntime) RoomConsumeHeld(roomID, requestID string) {
 	rt.svc.ConsumeHeld(roomID, requestID)
 }
 
-func (rt agentRoomRuntime) RoomConsumeEnded(roomID, requestID string, turnErr error) {
-	rt.svc.ConsumeEnded(roomID, requestID, turnErr)
+func (rt agentRoomRuntime) RoomConsumeEnded(roomID, requestID string, turnErr error) (bool, error) {
+	return rt.svc.ConsumeEnded(roomID, requestID, turnErr)
 }
 
-func (rt agentRoomRuntime) RoomReminderTurnEnded(sessionID string) {
-	rt.svc.ReminderTurnEnded(sessionID)
+func (rt agentRoomRuntime) RoomReminderTurnEnded(sessionID string) error {
+	return rt.svc.ReminderTurnEnded(sessionID)
 }
 
 func (rt agentRoomRuntime) RoomTurnCost(c agent.RoomTurnCost) {

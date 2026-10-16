@@ -19,11 +19,12 @@ import (
 
 // Journal streams of one room.
 const (
-	StreamEntries    = "entries"
-	StreamDeliveries = "deliveries"
-	StreamMirrors    = "mirrors"
-	StreamTurns      = "turns"
-	StreamCostGaps   = "cost_gaps"
+	StreamEntries     = "entries"
+	StreamDeliveries  = "deliveries"
+	StreamMirrors     = "mirrors"
+	StreamTurns       = "turns"
+	StreamCostGaps    = "cost_gaps"
+	StreamSettlements = "settlements"
 )
 
 // Journal is every durable write and read of the rooms (the "post-back"

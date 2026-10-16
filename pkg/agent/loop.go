@@ -1893,7 +1893,7 @@ func (al *AgentLoop) runAgentLoopBody(
 		return "", err
 	}
 	if result.status == TurnEndStatusAborted {
-		al.settleRoomInputs(opts.roomCost, context.Canceled)
+		settlementErr := al.settleRoomInputs(opts.roomCost, context.Canceled)
 		// Reached only for a case-1 (user-initiated) hard abort — abortTurn
 		// returns a non-nil error for every system-initiated abort (case 2),
 		// which the `if err != nil` branch above already returned from. See
@@ -1909,7 +1909,10 @@ func (al *AgentLoop) runAgentLoopBody(
 		// stop and an external-CLI worker's cancel. The Judge's turns set
 		// IsTaskRun but not RunningTaskID and keep the silent unwind.
 		if opts.RunningTaskID != "" {
-			return "", fmt.Errorf("%w: %w", ErrTurnCanceled, context.Canceled)
+			return "", errors.Join(fmt.Errorf("%w: %w", ErrTurnCanceled, context.Canceled), settlementErr)
+		}
+		if settlementErr != nil {
+			return "", errors.Join(context.Canceled, settlementErr)
 		}
 		return "", nil
 	}

@@ -211,10 +211,10 @@ func (f *fixture) BeginRoomConsume(room, request, sid string) bool {
 	return f.service.BeginConsume(room, request, sid)
 }
 func (f *fixture) RoomConsumeHeld(room, request string) { f.service.ConsumeHeld(room, request) }
-func (f *fixture) RoomConsumeEnded(room, request string, err error) {
-	f.service.ConsumeEnded(room, request, err)
+func (f *fixture) RoomConsumeEnded(room, request string, err error) (bool, error) {
+	return f.service.ConsumeEnded(room, request, err)
 }
-func (f *fixture) RoomReminderTurnEnded(sid string) { f.service.ReminderTurnEnded(sid) }
+func (f *fixture) RoomReminderTurnEnded(sid string) error { return f.service.ReminderTurnEnded(sid) }
 func (f *fixture) RoomTurnCost(c agent.RoomTurnCost) {
 	f.service.AddTurnCost(rooms.TurnCost{RoomID: c.RoomID, RequestID: c.RequestID, TurnID: c.TurnID, CostUSD: c.CostUSD, Priced: c.Priced, Inputs: c.Inputs, RoomInputs: c.RoomInputs})
 }

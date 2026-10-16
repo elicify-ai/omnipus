@@ -962,7 +962,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		}
 		if admitted {
 			rootExecution = d
-			defer func() { al.finishRoomTurn(ts.opts.roomCost, runErr) }()
+			defer func() { runErr = errors.Join(runErr, al.finishRoomTurn(ts.opts.roomCost, runErr)) }()
 			release = func() { al.finishOrdinaryWakeExecution(msg, d) }
 		}
 	}

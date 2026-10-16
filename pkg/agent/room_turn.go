@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -15,7 +17,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, agent *AgentInstance, opt
 	if opts.roomCost == nil {
 		opts.roomCost = al.newRoomMeterForOptions(opts)
 	}
-	defer func() { al.finishRoomTurn(opts.roomCost, runErr) }()
+	defer func() { runErr = errors.Join(runErr, al.finishRoomTurn(opts.roomCost, runErr)) }()
 	return al.runAgentLoopBody(ctx, agent, opts)
 }
 
@@ -31,7 +33,7 @@ func (al *AgentLoop) runSteeredTurnBody(ctx context.Context, rec *session.Lifecy
 		if ts.hardAbortRequested() || result.status == TurnEndStatusAborted {
 			settleErr = context.Canceled
 		}
-		al.finishRoomTurn(ts.opts.roomCost, settleErr)
+		runErr = errors.Join(runErr, al.finishRoomTurn(ts.opts.roomCost, settleErr))
 	}()
 	return al.runSteeredTurnBodyInner(ctx, rec, ts)
 }
@@ -80,19 +82,24 @@ func (m *roomCostMeter) ownInput(requestID, roomID string) {
 	m.joined[requestID] = roomID
 }
 
-func (al *AgentLoop) finishRoomTurn(m *roomCostMeter, turnErr error) {
+func (al *AgentLoop) finishRoomTurn(m *roomCostMeter, turnErr error) error {
 	if m == nil {
-		return
+		return nil
 	}
 	m.mu.Lock()
 	if m.finished {
 		m.mu.Unlock()
-		return
+		return nil
 	}
-	m.finished = true
 	m.mu.Unlock()
 	al.reportRoomCost(m, m.sessionID)
-	al.settleRoomInputs(m, turnErr)
+	if err := al.settleRoomInputs(m, turnErr); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.finished = true
+	m.mu.Unlock()
+	return nil
 }
 
 // A handed-over input may still be queued when an early gate fails. Drop
@@ -122,4 +129,24 @@ func (al *AgentLoop) dropRoomSteering(owned map[string]string) {
 	for _, transition := range q.terminalizing {
 		transition.finishingItems = keep(transition.finishingItems)
 	}
+}
+
+// A checked completion can retain an answered request for mirror repair without
+// keeping it scheduled as model input or owing another unanswered reminder.
+func (al *AgentLoop) completeRoomInput(rt RoomRuntime, roomID, requestID, sessionID string, turnErr error) error {
+	discard, err := rt.RoomConsumeEnded(roomID, requestID, turnErr)
+	if err != nil {
+		// The room's checked repair journal owns bookkeeping from here. Keep
+		// the ledger capability, but never rerun a failed task via a reminder.
+		al.settleRequest(requestID)
+		return fmt.Errorf("complete group request %s: %w", requestID, err)
+	}
+	if discard && sessionID != "" {
+		if err := al.DiscardRequest(sessionID, requestID); err != nil {
+			return fmt.Errorf("retire completed group request %s: %w", requestID, err)
+		}
+	} else {
+		al.settleRequest(requestID)
+	}
+	return nil
 }

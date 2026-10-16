@@ -206,15 +206,17 @@ func (f *fakeRoomRuntime) BeginRoomConsume(_, requestID, _ string) bool {
 	return f.allow
 }
 func (f *fakeRoomRuntime) RoomConsumeHeld(string, string) {}
-func (f *fakeRoomRuntime) RoomConsumeEnded(_, requestID string, _ error) {
+func (f *fakeRoomRuntime) RoomConsumeEnded(_, requestID string, _ error) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ended = append(f.ended, requestID)
+	return true, nil
 }
-func (f *fakeRoomRuntime) RoomReminderTurnEnded(sessionID string) {
+func (f *fakeRoomRuntime) RoomReminderTurnEnded(sessionID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reminded = append(f.reminded, sessionID)
+	return nil
 }
 func (f *fakeRoomRuntime) RoomTurnCost(RoomTurnCost) {}
 func (f *fakeRoomRuntime) DeliverRoomAnswer(_ context.Context, a RoomAnswer) (tools.ReplyReceipt, error) {

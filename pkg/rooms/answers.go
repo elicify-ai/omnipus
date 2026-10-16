@@ -285,50 +285,48 @@ func (s *Service) ReleaseConsume(roomID, requestID string) error {
 // ConsumeHeld puts a consumed request back to held: it met a stopped member.
 func (s *Service) ConsumeHeld(roomID, requestID string) {
 	s.withDelivery(roomID, requestID, func(r *room, d *deliveryRecord) {
-		if !terminal(d.State) {
+		if !terminal(d.State) && !r.rec.PendingReleases[requestID] && !s.settlementPending(r, requestID) {
 			s.forgetWorking(d.SessionID, requestID)
 			s.updateState(r, d, StateHeld, "")
 		}
 	})
 }
 
-// ConsumeEnded records the end of the turn that consumed the request. A turn
-// that ended without an error leaves the state as it is (the answer arrived,
-// or the one reminder is on its way).
-func (s *Service) ConsumeEnded(roomID, requestID string, turnErr error) {
-	if turnErr == nil {
-		return
-	}
-	s.withDelivery(roomID, requestID, func(r *room, d *deliveryRecord) {
-		if terminal(d.State) {
-			return
-		}
-		s.forgetWorking(d.SessionID, requestID)
-		if errors.Is(turnErr, context.Canceled) {
-			s.updateState(r, d, StateInterrupted, "")
-			return
-		}
-		s.updateState(r, d, StateFailed, ReasonTurnFailed)
-	})
-}
-
 // ReminderTurnEnded fails the room requests of sessionID still unanswered
 // after their one reminder turn.
-func (s *Service) ReminderTurnEnded(sessionID string) {
+func (s *Service) ReminderTurnEnded(sessionID string) error {
 	s.cardMu.Lock()
 	reqs := make(map[string]string, len(s.working[sessionID]))
 	for req, roomID := range s.working[sessionID] {
 		reqs[req] = roomID
 	}
 	s.cardMu.Unlock()
+	var result error
 	for req, roomID := range reqs {
-		s.withDelivery(roomID, req, func(r *room, d *deliveryRecord) {
-			if !terminal(d.State) && d.Consumed {
-				s.forgetWorking(sessionID, req)
-				s.updateState(r, d, StateFailed, ReasonNoAnswer)
-			}
-		})
+		r, err := s.loadRoom(roomID)
+		if err != nil {
+			result = errors.Join(result, err)
+			continue
+		}
+		r.mu.Lock()
+		if r.rec.PendingReleases[req] || s.settlementPending(r, req) {
+			r.mu.Unlock()
+			continue
+		}
+		d := r.deliveries[req]
+		if d == nil || terminal(d.State) || !d.Consumed {
+			r.mu.Unlock()
+			continue
+		}
+		intent := settlementRecord{RequestID: req, State: StateFailed, Reason: ReasonNoAnswer}
+		_, err = s.applySettlement(r, intent)
+		if err != nil {
+			err = errors.Join(err, s.rememberSettlement(roomID, intent))
+		}
+		r.mu.Unlock()
+		result = errors.Join(result, err)
 	}
+	return result
 }
 
 // TurnCost is one consumed room request's turn (§6.14).
@@ -433,6 +431,9 @@ func (s *Service) cardChanged(sessionID, cardID string, pending bool) {
 	s.cardMu.Unlock()
 	for req, roomID := range reqs {
 		s.withDelivery(roomID, req, func(r *room, d *deliveryRecord) {
+			if r.rec.PendingReleases[req] || s.settlementPending(r, req) {
+				return
+			}
 			switch {
 			case waiting && d.State == StateWorking:
 				s.updateState(r, d, StateWaitingOnUser, "")
