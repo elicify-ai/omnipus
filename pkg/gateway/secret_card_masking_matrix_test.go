@@ -22,7 +22,7 @@ func TestSecretK5_MasksEveryStoredVersionBeforeResumeAndAfterRebuild(t *testing.
 	detect := func(text, value string) bool { return strings.Contains(text, value) }
 	require.True(t, detect("connector refused "+values[0], values[0]), "leak detector positive control")
 	require.Equal(t, "connector refused "+values[0], logger.ScrubSensitiveValues("connector refused "+values[0]), "unregistered control must actually be visible")
-	var references []string
+	references := make([]string, 0, len(values))
 	for i, value := range values {
 		if i != 0 {
 			rec, err := f.al.SecretRequests().Create(context.Background(), f.rec.Card.SessionId, "omnipus", "http-card", "", secretrequest.Input{Purpose: "Replacement OpenAI key", Endpoint: secretCardEndpoint})

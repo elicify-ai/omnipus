@@ -69,7 +69,7 @@ func TestSecretMatrix_ConcurrentSubmitsCommitOneValueAndReceipt(t *testing.T) {
 // §6.2 / BDD-6.17: bounds are install-wide, not one account/agent/session.
 func TestSecretMatrix_PendingLimitsAreOnePerSessionAnd64InstallWide(t *testing.T) {
 	f := newMatrixEnv(t)
-	var cards []secretrequest.Record
+	cards := make([]secretrequest.Record, 0, 64)
 	for i := range 64 {
 		agentID := "omnipus"
 		if i%2 == 1 {
@@ -99,7 +99,7 @@ func TestSecretMatrix_PendingLimitsAreOnePerSessionAnd64InstallWide(t *testing.T
 func TestSecretMatrix_TerminalRetentionPrunesReceiptsNotValues(t *testing.T) {
 	f := newMatrixEnv(t)
 	sid := f.newSession("omnipus", "")
-	var submitted []secretrequest.Record
+	submitted := make([]secretrequest.Record, 0, 33)
 	for i := range 33 {
 		rec := f.create(sid, "omnipus", providerInput())
 		value := fmt.Sprintf("FAKE-RETAINED-VERSION-%02d", i+1)
@@ -166,8 +166,8 @@ func TestSecretMatrix_SlackMissingFieldIsAllOrNone(t *testing.T) {
 	require.Equal(t, "submitted", out.Card.State)
 	require.Len(t, out.Card.ReferenceNames, 2)
 	for i, value := range []string{"FAKE-SLACK-BOT", "FAKE-SLACK-APP"} {
-		stored, err := f.store.Get(out.Card.ReferenceNames[i])
-		require.NoError(t, err)
+		stored, readErr := f.store.Get(out.Card.ReferenceNames[i])
+		require.NoError(t, readErr)
 		require.Equal(t, value, stored)
 	}
 	receipt, exists, err := f.store.CardReceipt(rec.Card.RequestId)
