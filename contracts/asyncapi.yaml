@@ -2177,7 +2177,6 @@ components:
           maxLength: 5242880
         addressees:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
@@ -2190,7 +2189,6 @@ components:
             never forwards its mentions (§6.11).
         deliveries:
           type: array
-          maxItems: 256
           items:
             $ref: '#/components/schemas/RoomDeliveryState'
           description: Per-member delivery states for this entry. Never null.
@@ -2332,14 +2330,12 @@ components:
           description: Entries after the cursor, in seq order. Never null.
         members:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         muted:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
@@ -2411,14 +2407,12 @@ components:
           minimum: 1
         members:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         muted:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
