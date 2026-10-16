@@ -1,7 +1,7 @@
 import { createElement, type ReactNode } from 'react'
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigurationMutationState, Workspace } from '../../src/lib/api/generated/openapi-types'
 import { updateWorkspace, fetchWorkspace, workspacesQueryKeys } from '../../src/lib/api/workspaces'
 import { ConfigurationSaveError } from '../../src/lib/api/configuration'
@@ -25,6 +25,7 @@ const partial: ConfigurationMutationState = {
 function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
+beforeEach(() => { vi.spyOn(document, 'cookie', 'get').mockReturnValue('__Host-csrf=test') })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('saved membership with failed room synchronization', () => {
