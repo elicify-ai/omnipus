@@ -906,6 +906,7 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 		Role:             "assistant",
 		Content:          rr.rq.ri.rf.response.Content,
 		ReasoningContent: rr.rq.ri.rf.response.ReasoningContent,
+		ThinkingBlocks:   append([]string(nil), rr.rq.ri.rf.response.ThinkingBlocks...),
 	}
 	for _, tc := range rr.normalizedToolCalls {
 		argumentsJSON, marshalErr := json.Marshal(tc.Arguments)

@@ -32,6 +32,9 @@ type LLMResponse struct {
 	Usage            *UsageInfo        `json:"usage,omitempty"`
 	Reasoning        string            `json:"reasoning"`
 	ReasoningDetails []ReasoningDetail `json:"reasoning_details"`
+	// ThinkingBlocks carries opaque signed provider blocks for model replay,
+	// separate from display reasoning and every public wire projection.
+	ThinkingBlocks []string `json:"-"`
 	// Diagnostics is a content-free summary of what the provider's stream
 	// delivered, for the agent loop's empty-answer warning (provider hotfix
 	// H5). In-process only: never serialised, never shown to a user. nil
@@ -122,6 +125,7 @@ type Message struct {
 	Content          string         `json:"content"`
 	Media            []string       `json:"media,omitempty"`
 	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ThinkingBlocks   []string       `json:"-"`                      // opaque signed blocks; private model history only
 	SystemParts      []ContentBlock `json:"system_parts,omitempty"` // structured system blocks for cache-aware adapters
 	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`

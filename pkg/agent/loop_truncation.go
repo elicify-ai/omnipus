@@ -386,6 +386,8 @@ func (al *AgentLoop) truncationContinuationEligible(
 // post-context-overflow-trim assembly) all call it, so the shape the model
 // sees can never drift between the three.
 func continuationChainMessages(accumulated string) []providers.Message {
+	// A collapsed answer can span several provider replies. Never attach a
+	// single reply's signed thinking blocks to this synthesized text.
 	return []providers.Message{
 		{Role: "assistant", Content: accumulated},
 		truncationContinueMessage(),
@@ -427,6 +429,7 @@ func sameContinuationChainMessage(a, b providers.Message) bool {
 	return a.Role == b.Role &&
 		a.Content == b.Content &&
 		len(a.ToolCalls) == 0 && len(b.ToolCalls) == 0 &&
+		len(a.ThinkingBlocks) == 0 && len(b.ThinkingBlocks) == 0 &&
 		len(a.Media) == 0 && len(b.Media) == 0
 }
 

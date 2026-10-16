@@ -512,8 +512,11 @@ func buildParams(
 				)
 			}
 		case "assistant":
-			if len(msg.ToolCalls) > 0 {
-				var blocks []anthropic.ContentBlockParamUnion
+			if len(msg.ToolCalls) > 0 || len(msg.ThinkingBlocks) > 0 {
+				blocks, replayErr := replayThinkingBlocks(msg.ThinkingBlocks)
+				if replayErr != nil {
+					return anthropic.MessageNewParams{}, replayErr
+				}
 				if msg.Content != "" {
 					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 				}
@@ -742,6 +745,7 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	var content strings.Builder
 	var reasoning strings.Builder
 	var toolCalls []ToolCall
+	var thinkingBlocks []string
 
 	var usage *UsageInfo
 	if hasMessageUsage(resp) {
@@ -755,8 +759,14 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "thinking":
-			tb := block.AsThinking()
-			reasoning.WriteString(tb.Thinking)
+			reasoning.WriteString(block.Thinking)
+			fallthrough
+		case "redacted_thinking":
+			replay, replayErr := signedThinkingBlock(block)
+			if replayErr != nil {
+				return nil, replayErr
+			}
+			thinkingBlocks = append(thinkingBlocks, replay)
 		case "text":
 			tb := block.AsText()
 			content.WriteString(tb.Text)
@@ -805,11 +815,12 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	}
 
 	return &LLMResponse{
-		Content:      content.String(),
-		Reasoning:    reasoning.String(),
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
-		Usage:        usage,
+		Content:        content.String(),
+		Reasoning:      reasoning.String(),
+		ThinkingBlocks: thinkingBlocks,
+		ToolCalls:      toolCalls,
+		FinishReason:   finishReason,
+		Usage:          usage,
 	}, nil
 }
 

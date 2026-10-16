@@ -71,7 +71,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		// never a false success. Wrap with the existing assistant
 		// save-error wrapper, run the session_save error path below and
 		// markTurnFailed — DoneStats.TurnFailed must be true.
-		if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddMessage(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, finalMsg.Role, finalMsg.Content); addErr != nil {
+		if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.appendFinalModelResponse(finalMsg.Content, rz.rc.rx.rr.rq.ri.rf.response); addErr != nil {
 			notSaved := &messageNotSavedError{role: finalMsg.Role, cause: addErr}
 			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
