@@ -158,9 +158,9 @@ Everything is captured. Nothing is silent. An operator can audit any turn after 
 
 ## Model-call cache accounting
 
-The existing **Usage** screen shows token totals and cache-hit percentages by
-agent and provider. There is no caching settings page. For call-by-call details,
-use the application log's `llm_usage` line.
+The existing **Usage** screen shows recorded token totals and cache-hit percentages
+by agent and provider. There is no caching settings page. For call-by-call details
+from the agent turn loop, use the application log's `llm_usage` line.
 
 ### Enable the info line
 
@@ -175,9 +175,12 @@ OMNIPUS_LOG_LEVEL=info omnipus gateway
 Restart a running service with that environment variable to apply the override.
 This changes the application-wide level; there is no separate cache log level.
 
-Each successfully completed model request emits one info line, including requests
-that report no usage or zero cache tokens. A provider error remains an error; it
-is not converted into a successful, zero-token call. If a failed request already
+Each successfully completed model request made through the agent turn loop emits
+one info line, including requests that report no usage or zero cache tokens. This
+is not a log of every provider request made by Omnipus: auxiliary calls such as
+automatic recaps, fallback goal compilation and audio-model transcription run
+outside this accounting path. A provider error remains an error; it is not
+converted into a successful, zero-token call. Within the turn loop, if a failed request already
 reported billed usage, those tokens count once against that request's provider,
 even when another provider answers successfully afterward. A failed streamed
 request keeps the input and cache counts already received, plus the latest reported
@@ -230,6 +233,12 @@ The existing `GET /api/v1/stats/tokens` route exposes `cache_hit_ratio`,
 `by_provider`, `unpriced_tokens`, and `subscription_tokens`. Cached totals on the
 Usage screen include both reads and writes; the hit percentage uses reads only.
 
+These figures use Omnipus's normalized usage counters. Where a provider has not
+documented whether cached tokens are already included in its reported prompt
+count, Omnipus preserves that prompt count rather than guessing a subtraction
+rule. This currently applies to Google's optional cache counts. Treat those rows
+as normalized accounting figures, not a provider-confirmed reuse percentage.
+
 | Classification | Interpretation |
 |---|---|
 | `priced` | At least part of the call is priced from the catalog. Published zero prices remain real zero prices. A missing ordinary cache price uses that band's input price. |
@@ -256,16 +265,20 @@ does not remove the original system instructions.
 
 ### Stored accounting for each call
 
-Each completed provider call has its own assistant accounting entry in the
-session transcript. It stores the provider and model identifiers, billing
-classification, token portions, and the five-minute and one-hour write counts
-when reported. A call that returns no visible text still has an entry with empty
-content; that entry does not create an extra chat bubble.
+Each successfully completed model call made through the agent turn loop has its
+own assistant accounting entry in that session's transcript. A failed turn-loop
+attempt also has an accounting entry when the provider reported billed usage.
+These entries store the provider and model identifiers, billing classification,
+token portions, and the five-minute and one-hour write counts when reported. A
+call that returns no visible text can have an entry with empty content; that entry
+does not create an extra chat bubble. The auxiliary calls listed above are not
+included in this accounting path.
 
-A turn can contain several calls. Its summary totals are not an additional
-charge, and a later engine-generated notice does not count those tokens again.
-Each call is priced once when it completes. Reloading a session uses the stored
-cost and classification; it does not reprice earlier calls from a newer catalog.
+A turn can contain several accounted calls. Its summary totals are not an
+additional charge, and a later engine-generated notice does not count those
+tokens again. Each accounted call is priced once at its provider boundary.
+Reloading a session uses the stored cost and classification; it does not reprice
+earlier calls from a newer catalog.
 
 A successful request with zero cache reads is an ordinary miss. For a live cache
 proof, however, send the same conversation twice: the second request must report
