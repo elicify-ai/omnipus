@@ -177,8 +177,20 @@ This changes the application-wide level; there is no separate cache log level.
 
 Each successfully completed model request emits one info line, including requests
 that report no usage or zero cache tokens. A provider error remains an error; it
-is not converted into a successful, zero-token call. An example accounting
-message is:
+is not converted into a successful, zero-token call. If a failed request already
+reported billed usage, those tokens count once against that request's provider,
+even when another provider answers successfully afterward. A failed streamed
+request keeps the input and cache counts already received, plus the latest reported
+output count. Missing usage is not guessed. These failed attempts do not emit a
+successful-call `llm_usage` line.
+
+For Anthropic-protocol HTTP errors, the connector retains at most 8 KiB of the
+response for error classification and uses at most the first 512 bytes, followed
+by an ellipsis when needed, in the error preview. This is a size limit, not prompt
+redaction: a provider can still echo text within that preview. Retry timing and
+request identifiers from the response headers remain available to the retry path.
+
+An example successful-call accounting message is:
 
 ```text
 llm_usage provider="anthropic" model="claude-sonnet-4-5" agent="mia" session="session-example" call="call-example" uncached=1000 cache_read=8000 cache_write=2000 output=500 total=11500 billing=priced cost_usd=$0.0204

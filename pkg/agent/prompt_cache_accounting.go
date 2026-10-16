@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"errors"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/google/uuid"
@@ -27,19 +29,27 @@ type turnCallAccounting struct {
 	continuationID string
 }
 
-// debitLLMUsage accounts a refused attempt whose usage was recovered from its
-// typed error. Successful calls are accounted at their real provider boundary.
-func (al *AgentLoop) debitLLMUsage(ts *turnState, llmModel string, usage *providers.UsageInfo) {
-	if ts == nil || usage == nil {
+// accountProviderAttempt owns accounting at the real call boundary, before a
+// retry/fallback can replace the failed candidate's identity or hide its usage.
+// Recovery/classification must not debit this same attempt a second time.
+func (rt *agentLoopRunTurn) accountProviderAttempt(providerID, model string, response *providers.LLMResponse, err error) {
+	if err == nil {
+		if response != nil {
+			rt.logCompletedCall(providerID, model, response)
+		}
 		return
 	}
-	ts.mu.RLock()
-	providerID, model := ts.lastProducedProvider, ts.lastProducedModel
-	ts.mu.RUnlock()
-	if model != "" {
-		llmModel = model
+	var usage *providers.UsageInfo
+	var streamErr *common.StreamProviderError
+	var argumentsErr *common.ToolArgumentsError
+	if errors.As(err, &streamErr) {
+		usage = streamErr.Usage
+	} else if errors.As(err, &argumentsErr) {
+		usage = argumentsErr.Usage
 	}
-	ts.accountProviderCall(providerID, llmModel, usage)
+	if usage != nil {
+		rt.ts.accountProviderCall(providerID, model, usage)
+	}
 }
 
 func (ts *turnState) accountProviderCall(providerID, model string, usage *providers.UsageInfo) (session.TranscriptEntry, promptcache.PriceResult) {

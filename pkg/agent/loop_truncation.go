@@ -187,16 +187,8 @@ func (al *AgentLoop) evaluateTruncatedToolCallError(
 
 	*roundRepairUsed = true
 
-	// D3.9: the refused attempt was billed by the provider even though the
-	// call was refused locally — debit its usage exactly once, through the
-	// SAME function the success arm uses (debitLLMUsage). An earlier cut of
-	// this block re-typed the four accounting calls by hand and silently
-	// omitted SetLastUsage, so a turn whose last provider call was a refused
-	// truncated tool call reported the PREVIOUS call's usage as its last.
-	var tae *common.ToolArgumentsError
-	if errors.As(err, &tae) {
-		al.debitLLMUsage(ts, llmModel, tae.Usage)
-	}
+	// D3.9: the provider boundary already debited the refused attempt, before
+	// fallback/recovery. Scheduling its repair must not debit it again.
 
 	logger.WarnCF("agent", "tool call cut off at the output-token limit — re-prompting the model once",
 		map[string]any{

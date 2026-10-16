@@ -15,7 +15,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
@@ -344,12 +343,6 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) classifyFailure() agentLoo
 	activeProviderName := ""
 	if len(cr.rr.rq.ri.rf.rt.activeCandidates) > 0 {
 		activeProviderName = cr.rr.rq.ri.rf.rt.activeCandidates[0].Provider
-	}
-	// A provider that failed after the 200 (common.StreamProviderError) still
-	// billed the attempt: debit its usage like a delivered response (R2-S1-06).
-	var streamErr *common.StreamProviderError
-	if errors.As(cr.rr.rq.ri.rf.err, &streamErr) {
-		cr.rr.rq.ri.rf.rt.al.debitLLMUsage(cr.rr.rq.ri.rf.rt.ts, cr.rr.rq.ri.rf.rt.llmModel, streamErr.Usage)
 	}
 	failErr := providers.ClassifyError(cr.rr.rq.ri.rf.err, activeProviderName, cr.rr.rq.ri.rf.rt.llmModel)
 

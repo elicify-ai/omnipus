@@ -1624,9 +1624,7 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 				rt.ts.setLastProducedModel(model)
 				rt.ts.setLastProducedProvider(provider)
 				response, err := p.Chat(ctx, candidateMessages, toolDefsForCall, model, rt.llmOpts)
-				if err == nil && response != nil {
-					rt.logCompletedCall(provider, model, response)
-				}
+				rt.accountProviderAttempt(provider, model, response, err)
 				return response, err
 			},
 		)
