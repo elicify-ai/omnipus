@@ -105,8 +105,18 @@ When an agent asks you questions, a card docks above the message box with one ta
 
 - **↑** and **↓** move between the options and the free-text field; **Space** selects or clears an option.
 - **Enter** confirms the question and moves to the next unanswered one. Choosing an option — by click or **Space** — never moves on by itself; on a question with nothing chosen yet, **Enter** on an option picks it and moves on in one step.
-- Each question except the last shows **Next**; the last is confirmed with **Answer**, which sends every answer at once and is available only when every question is answered. **Cancel** sends nothing.
+- Each question except the last shows **Next**; the last is confirmed with **Answer**, which sends every answer at once and is available only when every question is answered. **Cancel** sends no answers — the agent is told the card was cancelled and its turn continues.
 - No option is chosen for you in advance — the recommended one is only listed first and marked.
+
+Only one question set is shown per chat. Additional sets wait in arrival order instead of replacing the open card, including sets about the same workspace. Answering or cancelling the current set reveals the next waiting set. Stopping the chat cancels the current set without resuming its turn; it still reveals the next waiting set and starts its default-safe timer, if any, rather than discarding the waiting sets.
+
+The open set and its waiting sets survive a gateway restart. A waiting set's 30-minute default-safe timer starts only when that set becomes visible. A restart does not give the open set a fresh 30 minutes: its timer keeps the original deadline, and one that already elapsed fires shortly after the restart. The server completes a set automatically using recommendations only when every question is marked safe to answer that way; questions that genuinely need your answer stay open.
+
+After another question set becomes active, reloading the chat can show an earlier set as past tool activity instead of rebuilding its completed card. Session Stop does not write a separate cancellation message for the earlier card.
+
+A failed card-state save is not treated as success. If a new set cannot be saved, the agent receives an error rather than a promise that it was queued. If saving the card state for an answer or cancellation fails, the current card and its existing waiting sets stay in place so the action can be retried. Automatic default-safe saves are retried after a failure.
+
+A different failure can happen after your answer or card cancellation was accepted: the paused turn may fail to continue. In that case the card still closes — the action cannot be repeated on that card — and the failure is recorded in the server log. If the agent seems unaware of your answer or cancellation, send a new message and, if needed, state it again.
 
 ### Who is replying
 

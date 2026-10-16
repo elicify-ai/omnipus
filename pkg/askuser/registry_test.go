@@ -389,18 +389,57 @@ func TestCreatePending_PersistsAndEmits(t *testing.T) {
 	}
 }
 
-func TestCreatePending_OnePerRoutingSession(t *testing.T) {
+// TestCreatePending_SecondSetQueuesWhileActive supersedes the pre-#1329
+// refusal expectation (founder decision relayed by team-lead 2026-10-16): a
+// second question set for a session that already has an active card is
+// enqueued FIFO — accepted without error, kept invisible behind the active
+// card, and promoted to the visible head only once the original resolves.
+func TestCreatePending_SecondSetQueuesWhileActive(t *testing.T) {
 	store := newTestStore(t)
+	// Fixture lifetime: UnifiedStore runs a background stats flusher; without
+	// Close the flusher outlives t.TempDir removal (observed as repeated
+	// "stats flush failed ... stats.json.lock" warnings in the green
+	// queue-pack run). Registered BEFORE the Quiesce cleanup so LIFO runs
+	// Quiesce first and closes the store before directory removal.
+	t.Cleanup(func() {
+		require.NoError(t, store.Close(), "store.Close must succeed")
+	})
 	sid := newOwnerSession(t, store)
-	reg := NewRegistry(store, &fakeResume{}, Options{})
+	resume := &fakeResume{}
+	reg := NewRegistry(store, resume, Options{})
 	t.Cleanup(reg.Quiesce)
 
-	if err := reg.CreatePending(testSet(sid)); err != nil {
+	first := testSet(sid)
+	if err := reg.CreatePending(first); err != nil {
 		t.Fatalf("first CreatePending: %v", err)
 	}
-	err := reg.CreatePending(testSet(sid))
-	if !errors.Is(err, ErrAlreadyPending) {
-		t.Fatalf("second CreatePending: want ErrAlreadyPending, got %v", err)
+	second := testSet(sid)
+	if err := reg.CreatePending(second); err != nil {
+		t.Fatalf("second CreatePending must queue, not refuse (founder #1329 part 2): %v", err)
+	}
+
+	// The active card is retained; the queued set stays hidden.
+	active, ok := reg.PendingForSession(sid)
+	if !ok || active.CardID != first.CardID {
+		t.Fatalf("active card must be retained: got (%+v, %v)", active, ok)
+	}
+	if _, visible := reg.Get(second.CardID); visible {
+		t.Fatal("a queued set must not be visible or answerable before promotion")
+	}
+
+	// Resolving the original makes the queued set the next visible head.
+	if err := reg.Submit(first.CardID, sid, "", []SubmittedAnswer{{Header: "Scope", Selected: []string{"Backend"}}}); err != nil {
+		t.Fatalf("Submit(first): %v", err)
+	}
+	next, ok := reg.PendingForSession(sid)
+	if !ok {
+		t.Fatal("the queued set must become the session's next active card")
+	}
+	if next.CardID != second.CardID {
+		t.Fatalf("promoted head = %s, want the queued %s", next.CardID, second.CardID)
+	}
+	if resume.count() != 1 {
+		t.Fatalf("want exactly 1 resume (the answer), got %d", resume.count())
 	}
 }
 

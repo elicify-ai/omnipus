@@ -1,6 +1,8 @@
 // Omnipus — AskUserQuestion tool tests (spec Tests 2, 5, 10, 11, 15 backend
 // halves): park-time stub + ParksTurn, liveness/caller-scope gates, and the
-// one-per-session inner-call error.
+// second-call-queues-while-a-card-is-open behavior over a REAL registry
+// (founder #1329 part 2, 2026-10-16 — supersedes the retired
+// one-per-session refusal wording; see pkg/askuser/registry_queue_test.go).
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -40,6 +42,14 @@ func (f *fakeAskRegistry) CancelByUser(cardID, _ string) error {
 	f.cancelled = append(f.cancelled, cardID)
 	return nil
 }
+
+// noopAskResume satisfies askuser.ResumeDispatcher for tool-level tests that
+// drive the REAL registry without a gateway resume turn (nil meta is
+// permitted at this seam — CreatePending skips durable persistence and its
+// parent-session gate when no MetaStore is wired).
+type noopAskResume struct{}
+
+func (noopAskResume) DispatchResume(*askuser.PendingSet, string) error { return nil }
 
 func newAskTool(reg AskUserQuestionRegistry) *AskUserQuestionTool {
 	return NewAskUserQuestionTool(func() AskUserQuestionRegistry { return reg })
@@ -200,17 +210,90 @@ func TestAskUserQuestion_ChannelOriginBlockedPermanently(t *testing.T) {
 	}
 }
 
-func TestAskUserQuestion_SecondCallErrorsOnePerSession(t *testing.T) {
-	// EC-11 / US-6 S6: a turn running while a set pends gets a tool error
-	// from its own AskUserQuestion call (one-per-routing-session).
-	reg := &fakeAskRegistry{createErr: askuser.ErrAlreadyPending}
-	tool := newAskTool(reg)
-	res := tool.Execute(webCtx(), validAskArgs())
-	if !res.IsError || res.ParksTurn {
-		t.Fatalf("second call must error without park: %+v", res)
+// TestAskUserQuestion_SecondCallQueuesWhileCardOpen supersedes the retired
+// one-per-session tool error (founder #1329 part 2, 2026-10-16): a second
+// AskUserQuestion call on a session with an open card must SUCCEED and park
+// — the real registry enqueues it FIFO behind the active card. The active
+// card stays answerable (here: cancelled by its user) until then; only then
+// does the second become the session's active card. No fake registry:
+// askuser.NewRegistry drives the production queue path; nil meta is the
+// documented tool-level seam (unit tests only), and the no-op resume
+// dispatcher stands in for the gateway.
+func TestAskUserQuestion_SecondCallQueuesWhileCardOpen(t *testing.T) {
+	reg := askuser.NewRegistry(nil, noopAskResume{}, askuser.Options{})
+	t.Cleanup(reg.Quiesce)
+	tool := NewAskUserQuestionTool(func() AskUserQuestionRegistry { return reg })
+
+	// No default_safe in these args: the default-safe timer is a 30-minute
+	// real clock and a test that never resolves it must not arm one
+	// (Quiesce would block on an unresolved timer). The successful stub
+	// shape/status contract is unchanged.
+	args := validAskArgs()
+	questions, ok := args["questions"].([]any)
+	if !ok || len(questions) < 1 {
+		t.Fatalf("validAskArgs shape changed: %#v", args["questions"])
 	}
-	if !strings.Contains(res.ForLLM, "already pending") {
-		t.Fatalf("want one-per-session error, got %q", res.ForLLM)
+	q0, ok := questions[0].(map[string]any)
+	if !ok {
+		t.Fatalf("questions[0] is not an object: %#v", questions[0])
+	}
+	delete(q0, "default_safe")
+
+	res1 := tool.Execute(webCtx(), args)
+	if res1.IsError {
+		t.Fatalf("first call: unexpected error: %s", res1.ForLLM)
+	}
+	if !res1.ParksTurn {
+		t.Fatal("first call must park the turn")
+	}
+	var stub1 struct {
+		Status        string `json:"status"`
+		CardID        string `json:"card_id"`
+		QuestionCount int    `json:"question_count"`
+	}
+	if err := json.Unmarshal([]byte(res1.ForLLM), &stub1); err != nil {
+		t.Fatalf("first stub does not parse: %v (%q)", err, res1.ForLLM)
+	}
+	if stub1.Status != "pending" || stub1.QuestionCount != 2 || stub1.CardID == "" {
+		t.Fatalf("bad first stub: %+v", stub1)
+	}
+
+	// The second call on the SAME open session must queue, not error.
+	res2 := tool.Execute(webCtx(), args)
+	if res2.IsError {
+		t.Fatalf("second call must succeed and park while a card is open (founder #1329 part 2): %s", res2.ForLLM)
+	}
+	if !res2.ParksTurn {
+		t.Fatal("second call must park the turn")
+	}
+	var stub2 struct {
+		Status        string `json:"status"`
+		CardID        string `json:"card_id"`
+		QuestionCount int    `json:"question_count"`
+	}
+	if err := json.Unmarshal([]byte(res2.ForLLM), &stub2); err != nil {
+		t.Fatalf("second stub does not parse: %v (%q)", err, res2.ForLLM)
+	}
+	if stub2.Status != "pending" || stub2.QuestionCount != 2 || stub2.CardID == "" {
+		t.Fatalf("bad second stub: %+v", stub2)
+	}
+	if stub2.CardID == stub1.CardID {
+		t.Fatal("the second call must mint its own card id")
+	}
+
+	// The FIRST card stays the active one until its user acts on it.
+	active, ok := reg.PendingForSession("session_owner_1")
+	if !ok || active.CardID != stub1.CardID {
+		t.Fatalf("the first card must stay active until CancelByUser: got (%+v, %v)", active, ok)
+	}
+
+	// Resolve the first card by user cancellation; the second becomes active.
+	if err := reg.CancelByUser(stub1.CardID, "session_owner_1"); err != nil {
+		t.Fatalf("CancelByUser(first): %v", err)
+	}
+	active, ok = reg.PendingForSession("session_owner_1")
+	if !ok || active.CardID != stub2.CardID {
+		t.Fatalf("the second card must become active after the first resolves: got (%+v, %v)", active, ok)
 	}
 }
 

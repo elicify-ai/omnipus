@@ -3,10 +3,11 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // AskUserQuestion (askuserquestion-tool-spec.md v3, ADR-074 D4b): the
-// owner-session structured clarification tool. Execute NEVER blocks — it
-// validates, persists the pending question set via the registry (pkg/askuser,
-// UnifiedMeta + in-process registry), emits the card via the registry's card
-// sink, and returns the park-time pending stub with ToolResult.ParksTurn set
+// owner-session structured clarification tool. Execute never waits for the
+// human's answer: it validates and persists the question set via the registry
+// (pkg/askuser, UnifiedMeta + in-process registry). The registry emits it
+// immediately or queues it behind the open set. Both return the park-time
+// pending stub with ToolResult.ParksTurn set
 // (the message_parent(question:true) precedent — pkg/agent/loop.go honors
 // ParksTurn as the single turn-park signal and ends the turn
 // TurnEndStatusParked). The answer never returns as a tool result: the
@@ -219,8 +220,6 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, args map[string]any) 
 
 	if err := reg.CreatePending(set); err != nil {
 		switch {
-		case errors.Is(err, askuser.ErrAlreadyPending):
-			return ErrorResult("AskUserQuestion: a question set is already pending on this session (one card per chat surface) — wait for the user's answers before asking again.")
 		case errors.Is(err, askuser.ErrSaturated):
 			return ErrorResult("AskUserQuestion: the pending-question registry is at capacity — try again later or ask conversationally.")
 		case errors.Is(err, askuser.ErrDelegatedChild):
@@ -246,7 +245,7 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, args map[string]any) 
 	}
 	// ParksTurn is set exclusively on the genuine success path (the C2
 	// precedent, message_parent.go): the registry has durably persisted the
-	// set, so the loop must end this turn TurnEndStatusParked NOW.
+	// active or queued set, so the loop must end this turn TurnEndStatusParked NOW.
 	result.ParksTurn = true
 	return result
 }

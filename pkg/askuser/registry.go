@@ -21,7 +21,8 @@ import (
 
 // Sentinel errors — the tool and the future frame handler branch on these.
 var (
-	// ErrAlreadyPending: one pending set per routing session (§0.9, US-6 S3).
+	// ErrAlreadyPending is retained for source compatibility. An occupied
+	// session now queues new sets instead of returning this legacy error.
 	ErrAlreadyPending = errors.New("askuser: a question set is already pending for this session")
 	// ErrSaturated: the global cross-session cap is reached (spec §4).
 	ErrSaturated = errors.New("askuser: pending-question registry is at capacity")
@@ -105,11 +106,17 @@ type AuditSink interface {
 // re-arm — the registry is a mirror of durable state, not the source of
 // truth for restart survival.
 type Registry struct {
-	mu        sync.Mutex
-	entries   map[string]*PendingSet // card_id → set (pending only)
-	byRouting map[string]string      // routing_session_key → card_id
-	bySession map[string]string      // transcript_session_id → card_id
-	timers    map[string][]*time.Timer
+	// State changes hold transitionMu across the durable write and publication.
+	// Lock order is transitionMu -> mu; mu is never held during store I/O,
+	// card emissions or resume dispatch. Resume dispatch also releases
+	// transitionMu so a resumed turn can admit another question set.
+	transitionMu sync.Mutex
+	mu           sync.Mutex
+	entries      map[string]*PendingSet   // card_id → active set only
+	byRouting    map[string]string        // routing_session_key → active card_id
+	bySession    map[string]string        // transcript_session_id → active card_id
+	queued       map[string][]*PendingSet // transcript_session_id → FIFO waiting sets
+	timers       map[string][]*time.Timer
 	// timerWG tracks in-flight timer callbacks so Quiesce (gateway
 	// shutdown, tests) can wait for their persists to finish rather than
 	// racing a directory teardown or process exit.
@@ -171,6 +178,7 @@ func NewRegistry(meta MetaStore, resume ResumeDispatcher, opts Options) *Registr
 		entries:          make(map[string]*PendingSet),
 		byRouting:        make(map[string]string),
 		bySession:        make(map[string]string),
+		queued:           make(map[string][]*PendingSet),
 		timers:           make(map[string][]*time.Timer),
 		maxPending:       opts.MaxPending,
 		defaultSafeDelay: opts.DefaultSafeDelay,
@@ -204,10 +212,10 @@ func (r *Registry) SetSteerAudienceResolver(resolver steer.AudienceResolver, obs
 // carries one, AND, when wired, ADR-091's edge-based audience classification
 // — a steered session's question is relayed to its steering session via
 // message_parent, never broadcast as this tool's own card, boundary 12,
-// FR-B-012), one-per-routing-session, and the global cap; persists the
-// set into the owner session's UnifiedMeta; arms the default-safe timers;
-// and emits the card via the sink. Implements the pkg/tools
-// AskUserQuestionRegistry seam.
+// FR-B-012) and the global cap. It durably admits the set as the session's
+// active card or queues it FIFO behind that card. Only the active card is
+// emitted and timed; queued sets become visible on resolution of the head.
+// Implements the pkg/tools AskUserQuestionRegistry seam.
 func (r *Registry) CreatePending(set *PendingSet) error {
 	if set == nil || set.CardID == "" || set.TranscriptSessionID == "" {
 		return fmt.Errorf("askuser: CreatePending: card id and transcript session id are required")
@@ -261,57 +269,7 @@ func (r *Registry) CreatePending(set *PendingSet) error {
 	if set.CreatedAt.IsZero() {
 		set.CreatedAt = r.now().UTC()
 	}
-	routingKey := set.RoutingSessionKey
-	if routingKey == "" {
-		routingKey = set.TranscriptSessionID
-	}
-	// snapshot is a private, immutable copy taken BEFORE the map insert:
-	// once `set` is in r.entries it is registry-owned and may be mutated
-	// under r.mu by a firing timer at any moment, so every read after the
-	// insert (persist, timer arming, the card emission) goes through this
-	// snapshot, never through `set` itself (-race-verified).
-	snapshot := set.Clone()
-
-	r.mu.Lock()
-	if _, exists := r.byRouting[routingKey]; exists {
-		r.mu.Unlock()
-		return ErrAlreadyPending
-	}
-	if _, exists := r.bySession[set.TranscriptSessionID]; exists {
-		r.mu.Unlock()
-		return ErrAlreadyPending
-	}
-	if r.maxPending > 0 && len(r.entries) >= r.maxPending {
-		r.mu.Unlock()
-		return ErrSaturated
-	}
-	r.entries[set.CardID] = set
-	r.byRouting[routingKey] = set.CardID
-	r.bySession[set.TranscriptSessionID] = set.CardID
-	r.mu.Unlock()
-
-	if err := r.persist(snapshot); err != nil {
-		// Roll the reservation back — a set that is not durably persisted
-		// must not park a turn (restart would lose it silently).
-		r.mu.Lock()
-		r.removeLocked(snapshot)
-		r.mu.Unlock()
-		return fmt.Errorf("askuser: CreatePending: persist failed: %w", err)
-	}
-
-	r.armTimers(snapshot)
-	defaultSafeCount := 0
-	for i := range snapshot.Questions {
-		if snapshot.Questions[i].DefaultSafe {
-			defaultSafeCount++
-		}
-	}
-	slog.Info("askuser: card created",
-		"card_id", snapshot.CardID,
-		"question_count", len(snapshot.Questions),
-		"default_safe_count", defaultSafeCount)
-	r.sink.EmitCard(snapshot.Clone())
-	return nil
+	return r.admit(set)
 }
 
 // relaySteeredQuestions delivers a delegated child's would-be card upward as
@@ -382,8 +340,8 @@ func relaySteeredQuestions(deliverer steer.UpwardDeliverer, set *PendingSet) err
 	return nil
 }
 
-// PendingForSession returns a clone of the pending set for the given
-// transcript session id, if one exists.
+// PendingForSession returns a clone of the active set for the given
+// transcript session id. Hidden waiting sets are not answerable yet.
 func (r *Registry) PendingForSession(sessionID string) (*PendingSet, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -405,15 +363,16 @@ func (r *Registry) Get(cardID string) (*PendingSet, bool) {
 	return s.Clone(), true
 }
 
-// PendingCount returns the number of pending sets across all sessions.
+// PendingCount returns the number of active and queued sets across all sessions.
 func (r *Registry) PendingCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.entries)
+	return r.pendingCountLocked()
 }
 
-// PendingAll returns a clone of every pending set, for the gateway's
-// session_state reconnect snapshot (spec US-6 S1/FR-9). Order is undefined.
+// PendingAll returns a clone of every active set, for the gateway's
+// session_state reconnect snapshot (spec US-6 S1/FR-9). Hidden FIFO entries
+// are omitted until promotion. Order across sessions is undefined.
 func (r *Registry) PendingAll() []*PendingSet {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -437,40 +396,10 @@ func (r *Registry) EffectiveDefaultSafeDelay() time.Duration {
 // unauthenticated single-user install). Validation failures are rejected
 // WITHOUT consuming the pending set; the first VALID submission wins.
 func (r *Registry) Submit(cardID, sessionID, user string, answers []SubmittedAnswer) error {
-	r.mu.Lock()
-	set, ok := r.entries[cardID]
-	if !ok {
-		r.mu.Unlock()
-		return ErrNoPending
-	}
-	if set.TranscriptSessionID != sessionID {
-		r.mu.Unlock()
-		return ErrSessionMismatch
-	}
-	if set.Owner != "" && user != "" && user != set.Owner {
-		r.mu.Unlock()
-		return ErrNotOwner
-	}
-	if set.Status != StatusPending {
-		// Unreachable while terminal sets are removed synchronously, but kept
-		// as the explicit first-valid-wins guard should retention be added.
-		r.mu.Unlock()
-		return ErrAlreadyResolved
-	}
-	final, err := validateSubmission(set.Questions, answers)
+	consumed, err := r.submitPending(cardID, sessionID, user, answers)
 	if err != nil {
-		r.mu.Unlock()
 		return err
 	}
-	// First valid submission wins — consume under the lock.
-	set.Status = StatusAnswered
-	set.Answers = final
-	consumed := set.Clone()
-	r.removeLocked(set)
-	r.mu.Unlock()
-
-	r.stopTimers(cardID)
-	r.persistTerminal(consumed)
 	selectedOptionCount := 0
 	freeTextCount := 0
 	autoDefaultCount := 0
@@ -489,9 +418,8 @@ func (r *Registry) Submit(cardID, sessionID, user string, answers []SubmittedAns
 		"selected_option_count", selectedOptionCount,
 		"free_text_count", freeTextCount,
 		"auto_default_count", autoDefaultCount)
-	// Terminal state-change emission (spec §3): the SPA collapses the card
-	// to the answered record and unlocks the composer on this frame.
-	r.sink.EmitCard(consumed.Clone())
+	// The durable transition has already emitted the answered record and
+	// the next queued card, if any. Resume dispatch must not hold its lock.
 	return markResumeDispatchError(r.dispatchResume(consumed, true))
 }
 
@@ -506,111 +434,47 @@ func (r *Registry) CancelByUser(cardID, sessionID string) error {
 	return markResumeDispatchError(r.dispatchResume(set, true))
 }
 
-// CancelOnSessionStop cancels any pending set reachable by the given key —
-// matched against BOTH the routing session key and the transcript session id
-// (US-6 S2: session Stop / channel `/cancel`). No resume turn is dispatched:
-// the user asked everything to stop. Returns true when a set was cancelled.
+// CancelOnSessionStop cancels the active set reachable by either session key
+// without dispatching a resume. Waiting sets are retained and the next head
+// is promoted. False means no cancellation was committed: a missing card is
+// a no-op, while a save failure is logged and leaves the card/queue intact.
 func (r *Registry) CancelOnSessionStop(key string) bool {
 	if key == "" {
 		return false
 	}
+	r.transitionMu.Lock()
+	defer r.transitionMu.Unlock()
 	r.mu.Lock()
 	id, ok := r.byRouting[key]
 	if !ok {
 		id, ok = r.bySession[key]
 	}
+	r.mu.Unlock()
 	if !ok {
-		r.mu.Unlock()
 		return false
 	}
-	set := r.entries[id]
-	set.Status = StatusCancelled
-	consumed := set.Clone()
-	r.removeLocked(set)
-	r.mu.Unlock()
-
-	r.stopTimers(consumed.CardID)
-	r.persistTerminal(consumed)
-	// Terminal state-change emission: collapse the card + unlock the
-	// composer on every connected client.
-	r.sink.EmitCard(consumed.Clone())
+	if _, err := r.cancelPending(id, ""); err != nil {
+		slog.Error("askuser: session stop could not cancel question set",
+			"card_id", id, "session_key", key, "error", err)
+		return false
+	}
 	return true
 }
 
-// cancelCommon validates + consumes a pending set into cancelled state.
+// cancelCommon validates, durably cancels and promotes the next queued set.
 func (r *Registry) cancelCommon(cardID, sessionID string) (*PendingSet, error) {
-	r.mu.Lock()
-	set, ok := r.entries[cardID]
-	if !ok {
-		r.mu.Unlock()
-		return nil, ErrNoPending
-	}
-	if sessionID != "" && set.TranscriptSessionID != sessionID {
-		r.mu.Unlock()
-		return nil, ErrSessionMismatch
-	}
-	set.Status = StatusCancelled
-	set.Answers = nil // EC-1: cancel discards selections, uniformly
-	consumed := set.Clone()
-	r.removeLocked(set)
-	r.mu.Unlock()
-
-	r.stopTimers(cardID)
-	r.persistTerminal(consumed)
-	// Terminal state-change emission (spec §3): collapse to the cancelled
-	// record on every connected client.
-	r.sink.EmitCard(consumed.Clone())
-	return consumed, nil
+	r.transitionMu.Lock()
+	defer r.transitionMu.Unlock()
+	return r.cancelPending(cardID, sessionID)
 }
 
-// RearmSession re-hydrates one session's persisted pending set into the
-// in-process registry after a restart (US-6 S1 / FR-9): timers re-arm from
-// the persisted CreatedAt (already-elapsed timers fire immediately). A
-// session with no persisted set is a no-op.
+// RearmSession restores the durable active card and complete FIFO after a
+// restart. Only the active card is emitted/timed, keeping its original
+// CreatedAt; queued clocks start fresh when their own card is promoted.
 func (r *Registry) RearmSession(sessionID string) error {
-	if r.meta == nil {
-		return fmt.Errorf("askuser: RearmSession: no meta store wired")
-	}
-	meta, err := r.meta.GetMeta(sessionID)
-	if err != nil {
-		return err
-	}
-	if meta.PendingAskJSON == "" {
-		return nil
-	}
-	var set PendingSet
-	if err := json.Unmarshal([]byte(meta.PendingAskJSON), &set); err != nil {
-		return fmt.Errorf("askuser: RearmSession: corrupt pending_ask on %s: %w", sessionID, err)
-	}
-	if set.Status != StatusPending {
-		// Terminal (answered/cancelled) record: nothing to re-arm. Leave it
-		// persisted — §0.6: the collapsed card renders from this record on
-		// history reload.
-		return nil
-	}
-	routingKey := set.RoutingSessionKey
-	if routingKey == "" {
-		routingKey = set.TranscriptSessionID
-	}
-	r.mu.Lock()
-	if _, exists := r.entries[set.CardID]; exists {
-		r.mu.Unlock()
-		return nil // already live
-	}
-	if _, exists := r.byRouting[routingKey]; exists {
-		r.mu.Unlock()
-		return nil
-	}
-	cp := set.Clone()
-	r.entries[cp.CardID] = cp
-	r.byRouting[routingKey] = cp.CardID
-	r.bySession[cp.TranscriptSessionID] = cp.CardID
-	r.mu.Unlock()
-
-	// Arm from the local `set` value, never the registry-owned `cp` — same
-	// post-insert aliasing rule as CreatePending's snapshot.
-	r.armTimers(&set)
-	return nil
+	r.transitionMu.Lock()
+	defer r.transitionMu.Unlock()
+	return r.rearmSessionLocked(sessionID)
 }
 
 // --- timers (US-3): server-side, over durable state ---
@@ -645,15 +509,31 @@ func (r *Registry) armTimers(set *PendingSet) {
 	if delay < 0 {
 		delay = 0
 	}
-	cardID := set.CardID
+	r.armDefaultSafeTimer(set.CardID, delay)
+}
+
+// A failed automatic save retains the pending state and retries rather than
+// losing a queued set or claiming the expiry completed. One tracked timer
+// per card also bounds resources during an extended storage outage.
+func (r *Registry) armDefaultSafeTimer(cardID string, delay time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.entries[cardID]; !exists {
+		return
+	}
+	// Reserve the replacement before releasing a stopped timer's slot, so
+	// a concurrent Quiesce cannot mistake a reschedule for completion.
 	r.timerWG.Add(1)
+	for _, previous := range r.timers[cardID] {
+		if previous.Stop() {
+			r.timerWG.Done()
+		}
+	}
 	t := time.AfterFunc(delay, func() {
 		defer r.timerWG.Done()
 		r.fireDefaultSafeSet(cardID)
 	})
-	r.mu.Lock()
-	r.timers[cardID] = append(r.timers[cardID], t)
-	r.mu.Unlock()
+	r.timers[cardID] = []*time.Timer{t}
 }
 
 func (r *Registry) stopTimers(cardID string) {
@@ -685,85 +565,31 @@ func (r *Registry) Quiesce() {
 // auto-submit (US-3 S3) takes the terminal path instead: terminal persist,
 // terminal emission, resume dispatch.
 func (r *Registry) fireDefaultSafeSet(cardID string) {
-	r.mu.Lock()
-	set, ok := r.entries[cardID]
-	if !ok || set.Status != StatusPending {
-		r.mu.Unlock()
+	r.transitionMu.Lock()
+	consumed, err := r.applyDefaultSafeSet(cardID)
+	if err != nil {
+		slog.Error("askuser: default-safe save failed; pending state retained for retry",
+			"card_id", cardID, "error", err)
+		r.armDefaultSafeTimer(cardID, defaultSafeRetryDelay)
+	}
+	r.transitionMu.Unlock()
+	if err != nil || consumed == nil {
 		return
 	}
-	if set.AutoResolved == nil {
-		set.AutoResolved = make(map[string]time.Time)
+	slog.Info("askuser: default-safe auto-submit fired",
+		"card_id", consumed.CardID,
+		"question_count", len(consumed.Questions),
+		"answer_count", len(consumed.Answers))
+	if err := r.dispatchResume(consumed, false); err != nil {
+		// Consumption and promotion already committed. Retrying the default
+		// save cannot resume that consumed card; retain the existing explicit,
+		// content-free dispatcher-failure report instead.
+		slog.Warn("askuser: server auto-submit resume dispatch failed",
+			"card_id", cardID,
+			"session_id", consumed.TranscriptSessionID,
+			"reason", "resume_dispatch_failed",
+			"error_type", fmt.Sprintf("%T", err))
 	}
-	now := r.now().UTC()
-	type autoResolution struct{ header, label string }
-	var resolved []autoResolution
-	for i := range set.Questions {
-		q := &set.Questions[i]
-		if !q.DefaultSafe {
-			continue
-		}
-		if _, done := set.AutoResolved[q.Header]; done {
-			continue
-		}
-		set.AutoResolved[q.Header] = now
-		resolved = append(resolved, autoResolution{header: q.Header, label: q.Recommended})
-	}
-	if len(resolved) == 0 {
-		// Everything already resolved (e.g. a re-arm raced a client action)
-		// — nothing to persist or emit.
-		r.mu.Unlock()
-		return
-	}
-	sessionID := set.TranscriptSessionID
-
-	// Server auto-submit condition: every question default-safe AND resolved.
-	serverSubmit := allDefaultSafe(set.Questions) && len(set.AutoResolved) == len(set.Questions)
-
-	var consumed *PendingSet
-	if serverSubmit {
-		set.Status = StatusAnswered
-		set.Answers = buildAllDefaultAnswers(set.Questions)
-		consumed = set.Clone()
-		r.removeLocked(set)
-	}
-	snapshot := set.Clone()
-	r.mu.Unlock()
-
-	if r.audit != nil {
-		// Audit stays per question — each auto-default is its own auditable
-		// resolution (spec §4 STRIDE note) even though they land in one batch.
-		for _, res := range resolved {
-			r.audit.RecordAutoDefault(cardID, sessionID, res.header, res.label)
-		}
-	}
-
-	if serverSubmit {
-		slog.Info("askuser: default-safe auto-submit fired",
-			"card_id", consumed.CardID,
-			"question_count", len(consumed.Questions),
-			"answer_count", len(consumed.Answers))
-		r.stopTimers(cardID)
-		r.persistTerminal(consumed)
-		r.sink.EmitCard(consumed.Clone())
-		if err := r.dispatchResume(consumed, false); err != nil {
-			slog.Warn("askuser: server auto-submit resume dispatch failed",
-				"card_id", cardID,
-				"session_id", sessionID,
-				"reason", "resume_dispatch_failed",
-				"error_type", fmt.Sprintf("%T", err))
-		}
-		return
-	}
-	// Non-terminal state change: persist the resolved-pending-submit marks so
-	// a restart re-derives them instead of re-arming a fired timer.
-	if err := r.persist(snapshot); err != nil {
-		slog.Warn("askuser: failed to persist auto-default resolution",
-			"card_id", cardID, "session_id", sessionID, "error", err)
-	}
-	// Non-terminal state-change emission: the connected card marks these
-	// questions resolved-pending-submit (auto badge) live — one frame for the
-	// whole batch.
-	r.sink.EmitCard(snapshot.Clone())
 }
 
 // buildAllDefaultAnswers builds the all-recommendation submission for the
@@ -799,28 +625,19 @@ func (r *Registry) removeLocked(set *PendingSet) {
 	}
 }
 
-// persist writes the set into the owner session's UnifiedMeta.
-func (r *Registry) persist(set *PendingSet) error {
+// persist writes the proposed head and complete FIFO in the existing
+// session-store record. Callers hold transitionMu and publish memory/frames
+// only after this succeeds. An empty queue keeps the legacy stored shape.
+func (r *Registry) persist(set *PendingSet, waiting []*PendingSet) error {
 	if r.meta == nil {
 		return nil
 	}
-	data, err := json.Marshal(set)
+	data, err := json.Marshal(pendingState{PendingSet: *set, QueuedSets: waiting})
 	if err != nil {
 		return err
 	}
 	s := string(data)
 	return r.meta.SetMeta(set.TranscriptSessionID, session.MetaPatch{PendingAskJSON: &s})
-}
-
-// persistTerminal updates the terminal registry/session-meta record (§0.6:
-// the collapsed record renders from THIS record) — the terminal set is
-// persisted so history reload can reconstruct the collapsed card, and the
-// pending flag is thereby consumed (Status != pending).
-func (r *Registry) persistTerminal(set *PendingSet) {
-	if err := r.persist(set); err != nil {
-		slog.Warn("askuser: failed to persist terminal question-set record",
-			"card_id", set.CardID, "session_id", set.TranscriptSessionID, "error", err)
-	}
 }
 
 // dispatchResume builds and dispatches the §0.2 resume message. Human card
