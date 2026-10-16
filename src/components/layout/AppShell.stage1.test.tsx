@@ -6,7 +6,7 @@ import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ToolApprovalActionRequest, ToolApprovalResponse } from '@/lib/api/generated/openapi-types'
+import type { SecretRequestState, ToolApprovalActionRequest, ToolApprovalResponse } from '@/lib/api/generated/openapi-types'
 import type { RoomRef, SecretRequestFrame, SessionStateFrame, SessionStateSecretRequest, ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { useSessionStore } from '@/store/session'
@@ -247,11 +247,12 @@ describe('stage 1 — hidden room traffic in the real main-chat renderer', () =>
   )
 })
 
-describe('stage 1 — hidden secret cards for live and snapshot carriers', () => {
-  // CHECK mutant for BOTH cases: AGENT_PRIVATE_SECRETS_ENABLED=true;
-  // narrower probe: remove its SecretRequestThreadTail mount guard.
+describe('WU-4 — secret cards enabled independently of the WU-5 private list', () => {
+  // WU-4 screen dispatch supersedes only the old hidden-card requirement.
+  // CHECK mutant for BOTH cases: SECRET_CARDS_ENABLED=false, restore the
+  // AGENT_PRIVATE_SECRETS_ENABLED guard, or remove the tail mount.
   it.each(['live', 'session_state'] as const)(
-    '[S1-b card; added dispatch] a %s secret request renders no card or secret endpoint request',
+    '[WU-4 card] a %s secret request renders in its root chat and submits through the authenticated endpoint',
     async (carrier) => {
       const { socket } = await mountStage1App()
       await settledMainChat(socket)
@@ -276,10 +277,49 @@ describe('stage 1 — hidden secret cards for live and snapshot carriers', () =>
       const { updated_at: _updated, ...received } = useSecretRequestStore.getState().byId[frame.request_id]!.request
       void _updated
       expect(received).toEqual({ ...payload, state: 'pending' })
-      expect(screen.queryByTestId('secret-request-card')).toBeNull()
-      expect(screen.queryByTestId('secret-request-thread-tail')).toBeNull()
-      expect(screen.queryByLabelText('Stage-one token')).toBeNull()
+      const card = screen.getByTestId('secret-request-card')
+      expect(card).toBeVisible()
+      expect(screen.getByTestId('secret-request-thread-tail')).toContainElement(card)
+      expect(card).toHaveAttribute('data-state', 'pending')
+      expect(within(card).getByTestId('secret-request-asker')).toHaveTextContent('Mia needs a secret')
+      expect(within(card).getByTestId('secret-request-purpose')).toHaveTextContent('Legacy secret request')
+      expect(within(card).getByTestId('secret-request-recipient')).toHaveTextContent('STAGE1_TOKEN')
+      const input = within(card).getByLabelText(/^Stage-one token(?: \*)?$/)
+      expect(input).toHaveAccessibleName('Stage-one token')
+      expect(input).toHaveAttribute('type', 'password')
       expect(net.requests.filter((request) => /^\/api\/v1\/(?:secrets|secret-requests)(?:\/|$)/.test(request.path))).toEqual([])
+
+      const saved: SecretRequestState = {
+        request_id: frame.request_id, state: 'submitted', reference_names: ['stage1_token.v1'], updated_at: NOW,
+      }
+      let acceptSubmit!: (response: Response) => void
+      const response = new Promise<Response>((resolve) => { acceptSubmit = resolve })
+      net.respond('POST', `/api/v1/secret-requests/${frame.request_id}/submit`, () => response)
+      const user = userEvent.setup()
+      // Synthetic value, never a real credential. The request is the only
+      // permitted sink; the real request/store/card path is not mocked.
+      const value = 'wu4-card-submit-sentinel'
+      await user.type(input, value)
+      const save = within(card).getByRole('button', { name: 'Save secret' })
+      await user.click(save)
+      expect(input).toHaveValue('')
+      expect(save).toBeDisabled()
+      expect(card).toHaveAttribute('data-state', 'submitting')
+      expect(within(card).getByRole('status')).toHaveTextContent('Submitting…')
+      expect(net.writes().map(({ method, path, body, credentials }) => ({ method, path, body, credentials }))).toEqual([{
+        method: 'POST', path: `/api/v1/secret-requests/${frame.request_id}/submit`,
+        body: { values: { value } }, credentials: 'include',
+      }])
+      expect(net.writes()[0]!.headers.get('X-CSRF-Token')).toBe('room-red-test')
+      await user.click(save)
+      expect(net.writes()).toHaveLength(1)
+      await act(async () => { acceptSubmit(json(saved)) })
+      await waitFor(() => expect(card).toHaveAttribute('data-state', 'submitted'))
+      expect(within(card).getByRole('status')).toHaveTextContent(/^Saved · stored as stage1_token.v1$/)
+      expect(within(card).queryByLabelText(/^Stage-one token/)).toBeNull()
+      expect(input).toHaveValue('')
+      expect(JSON.stringify(useSecretRequestStore.getState())).not.toContain(value)
+      expect(net.requests.filter((request) => /^\/api\/v1\/secrets(?:\/|$)/.test(request.path))).toEqual([])
     },
   )
 })
