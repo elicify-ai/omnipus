@@ -6,15 +6,16 @@ package systools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -51,16 +52,12 @@ func mcpURLSchemeValid(rawURL string) bool {
 	}
 }
 
-// mcpEnvCredKey returns the canonical credential-store key for one MCP
-// server's env var secret. Format mirrors the channel tools' channelCredKey
-// (pkg/sysagent/tools/channel.go): "mcp_<server>_<envKey>".
-func mcpEnvCredKey(serverName, envKey string) string {
-	return "mcp_" + serverName + "_" + envKey
-}
-
 // ---- system.mcp.add ----
 
-type MCPAddTool struct{ deps *Deps }
+type MCPAddTool struct {
+	deps *Deps
+	secretSelectionAudit
+}
 
 func NewMCPAddTool(d *Deps) *MCPAddTool      { return &MCPAddTool{deps: d} }
 func (t *MCPAddTool) Name() string           { return "add_mcp_server" }
@@ -85,7 +82,7 @@ func (t *MCPAddTool) Parameters() map[string]any {
 			"command":   map[string]any{"type": "string"},
 			"args":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"url":       map[string]any{"type": "string"},
-			"env":       map[string]any{"type": "object"},
+			"env_refs":  map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
 			expectedRevisionParam: map[string]any{
 				"type":        "string",
 				"description": "The server name's revision from list_mcp_servers: \"absent\" for a new server.",
@@ -102,19 +99,20 @@ type mcpAddToolExecute struct {
 	args                map[string]any
 	name                string
 	transport           string
-	command             string
-	urlStr              string
 	envRefs             map[string]string
-	expectedRevision    string
 	entry               config.MCPServerConfig
+	attachment          bool
+	unchanged           bool
 	flippedGlobalEnable bool
 	gatedGlobalDisabled bool
 }
 
 func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
 	defer func() { res = finalizeChangeResult(t.Name(), res) }()
+	if refusal := tools.ToolArgumentRefusal(t, args); refusal != nil {
+		return refusal
+	}
 	mat := &mcpAddToolExecute{t: t, ctx: ctx, args: args}
-
 	if r0, stop := mat.validateInput(); stop {
 		return r0
 	}
@@ -122,260 +120,122 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) (res *too
 	if missing != nil {
 		return missing
 	}
-	mat.expectedRevision = expected
-
-	// FR-085: the duplicate check, the credential writes and the config write
-	// all run under the gateway config write lock, after the revision check —
-	// a refused or colliding add never writes a credential.
-	var stopResult *tools.ToolResult
-	writeErr := t.deps.withSharedResourceWrite(sharedMCPServer, mat.name, mat.expectedRevision, func() error {
-		if r0, stop := mat.prepareEntry(); stop {
-			stopResult = r0
+	writeErr := t.deps.withSharedResourceWrite(sharedMCPServer, mat.name, expected, func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// A validated identical attachment has no publication or runtime side
+		// effect. All other writes re-derive under the agent-loop lock too.
+		if err := mat.prepareEntry(t.deps.GetCfg()); err != nil {
+			return err
+		}
+		if mat.unchanged {
 			return nil
 		}
-		if r0, stop := mat.persistConfig(); stop {
-			stopResult = r0
-		}
-		return nil
+		return mat.persistConfig()
 	})
 	if r, ok := revisionConflictResult(writeErr, "list_mcp_servers"); ok {
 		return r
 	}
-	if writeErr != nil {
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", writeErr.Error(), ""))
+	if r, ok := referenceSelectionRefusal(writeErr); ok {
+		return r
 	}
-	if stopResult != nil {
-		return stopResult
+	if writeErr != nil {
+		var inputErr *mcpSetupError
+		if errors.As(writeErr, &inputErr) {
+			return tools.ErrorResult(errorJSON(inputErr.code, inputErr.message, "Read list_mcp_servers before retrying"))
+		}
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", writeErr.Error(), "Stored credential values were not changed"))
+	}
+	if !mat.unchanged {
+		refs := make([]string, 0, len(mat.envRefs))
+		for _, key := range sortedStringKeys(mat.envRefs) {
+			refs = append(refs, mat.envRefs[key])
+		}
+		t.selected(ctx, t.Name(), mat.name, refs)
 	}
 	return mat.reconcileAndRespond()
 }
 
-// validateInput validates the server name, transport, and transport-specific connection fields.
+// validateInput checks common input only. Creation defaults must never be
+// applied until the live revision-locked entry is known to be absent.
 func (mat *mcpAddToolExecute) validateInput() (*tools.ToolResult, bool) {
 	mat.name, _ = mat.args["name"].(string)
 	if mat.name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", "")), true
 	}
-	// Reject path-traversal / separator characters in the server name — the name
-	// is the map key in config and must be a clean identifier.
 	if err := validateID(mat.name); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid server name: "+err.Error(), "")), true
 	}
-
-	mat.transport, _ = mat.args["transport"].(string)
-	if mat.transport == "" {
-		mat.transport = "stdio"
-	}
-	switch mat.transport {
-	case "stdio", "sse", "http":
-	default:
-		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			fmt.Sprintf("invalid transport %q: must be one of stdio, sse, http", mat.transport), "")), true
-	}
-
-	mat.command, _ = mat.args["command"].(string)
-	mat.urlStr, _ = mat.args["url"].(string)
-	switch mat.transport {
-	case "stdio":
-		if mat.command == "" {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"command is required for stdio transport", "")), true
-		}
-	case "sse", "http":
-		if mat.urlStr == "" {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"url is required for sse/http transport", "")), true
-		}
-		if !mcpURLSchemeValid(mat.urlStr) {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"url must use https, or http for loopback addresses only (localhost, 127.x.x.x, ::1)", "")), true
+	if raw, supplied := mat.args["env_refs"]; supplied {
+		var err error
+		mat.envRefs, err = readReferenceMap(raw)
+		if err != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Use request_secret for the saved server")), true
 		}
 	}
 	return nil, false
 }
 
-// prepareEntry checks for duplicates, stores environment credentials, and builds the persisted server entry.
-func (mat *mcpAddToolExecute) prepareEntry() (*tools.ToolResult, bool) {
-	argList := stringSliceArg(mat.args["args"])
-	envMap := stringMapArg(mat.args["env"])
-
-	// Duplicate-name pre-check: reject an existing server name
-	// BEFORE any credential-store write. Without this, a name collision was
-	// only discovered inside the WithConfig closure below — AFTER Phase 1 had
-	// already written every env value to the credential store under
-	// mcp_<name>_<key>, silently overwriting the ALREADY-CONFIGURED server's
-	// live credentials with whatever the (rejected) request supplied, even
-	// though the call as a whole reports ALREADY_EXISTS and appears to have
-	// changed nothing. This read is a snapshot, not a lock — the in-closure
-	// check further down is kept as the authoritative concurrency guard for
-	// the (now much rarer) race where a same-named server is created between
-	// this check and the WithConfig call.
-	if cfg := mat.t.deps.GetCfg(); cfg != nil {
-		if _, exists := cfg.Tools.MCP.Servers[mat.name]; exists {
-			return tools.ErrorResult(errorJSON("ALREADY_EXISTS",
-				fmt.Sprintf("mcp server %q already exists", mat.name),
-				"Use list_mcp_servers to see existing servers, or remove it first with remove_mcp_server")), true
-		}
+func (mat *mcpAddToolExecute) prepareEntry(cfg *config.Config) error {
+	if cfg == nil {
+		return &mcpSetupError{code: "SAVE_FAILED", message: "MCP configuration is unavailable"}
 	}
-
-	// Route every env value through the encrypted credential store
-	// instead of writing it into config.json in plaintext, mirroring
-	// configure_channel's channelCredKey pattern (pkg/sysagent/tools/channel.go).
-	// The whole `env` map is treated as secret-shaped rather than trying to
-	// guess which keys are sensitive (GITHUB_TOKEN, *_API_KEY, ...) and which
-	// are benign (PATH, NODE_ENV, ...) by name — there is no reliable way to
-	// tell them apart, and over-protecting a benign value costs nothing.
-	//
-	// Phase 1 (before the config write, same ordering configure_channel
-	// uses): store each value under mcp_<name>_<key>. A partial failure here
-	// (some keys stored, one fails) leaves those credential entries stored and
-	// no config write — no dangling ref is possible — and the result reports
-	// them as "partly saved" (FR-030).
-
-	if len(envMap) > 0 {
-		if mat.t.deps.CredStore == nil {
-			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
-				"credential store is not available",
-				"Ensure the credential store is unlocked before adding an MCP server with env values",
-			)), true
+	current, exists := cfg.Tools.MCP.Servers[mat.name]
+	mat.attachment = exists
+	var err error
+	if exists {
+		if len(mat.envRefs) == 0 {
+			return &mcpSetupError{code: "ALREADY_EXISTS", message: "MCP server already exists; only a non-empty env_refs attachment is allowed"}
 		}
-		mat.envRefs = make(map[string]string, len(envMap))
-		for key, value := range envMap {
-			credKey := mcpEnvCredKey(mat.name, key)
-			if err := mcpCredentialSet(mat.t.deps.CredStore, credKey, value); err != nil {
-				msg := fmt.Sprintf("Failed to store env credential %q: %s", key, err.Error())
-				if len(mat.envRefs) == 0 {
-					return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED", msg,
-						"Check that the credential store is unlocked",
-					)), true
-				}
-				// Earlier env credentials of this call ARE stored: a durable
-				// side effect, so the result is "partly saved", naming them.
-				return mat.partialCredentialResult("CREDENTIAL_SAVE_FAILED", msg,
-					"some env credentials were stored before credential "+key+" failed; the server entry was not saved",
-					mat.storedCredentialRefs(), []string{"env credential " + key, "mcp server entry"}), true
-			}
-			mat.envRefs[key] = credKey
+		if err = mat.checkAttachmentDescriptor(current); err != nil {
+			return err
 		}
+	} else if current, err = mat.createEntry(); err != nil {
+		return err
 	}
-
-	// Phase 2: persist the config entry. Env is deliberately left unset here —
-	// EnvRefs is the only place a value added through this tool lands. The
-	// real values are resolved back from the credential store at connect
-	// time (pkg/mcp.ResolveServerEnvRefs, pkg/agent/loop_mcp.go's
-	// reconcileLocked) so the plaintext secret exists only in memory, only
-	// for the duration of a connect attempt.
-	mat.entry = config.MCPServerConfig{
-		Enabled: true,
-		Type:    mat.transport,
-		Command: mat.command,
-		URL:     mat.urlStr,
-		Args:    argList,
-		EnvRefs: mat.envRefs,
+	entry, err := mat.boundEntry(current)
+	if err != nil {
+		return err
 	}
-	return nil, false
+	mat.entry, mat.transport = entry, mcpEffectiveTransport(entry)
+	mat.unchanged = exists && maps.Equal(current.EnvRefs, entry.EnvRefs)
+	mat.gatedGlobalDisabled = !cfg.Tools.MCP.Enabled
+	return nil
 }
 
-// persistConfig persists the server and handles global-enable and concurrent-name outcomes.
-func (mat *mcpAddToolExecute) persistConfig() (*tools.ToolResult, bool) {
-	// flippedGlobalEnable/gatedGlobalDisabled record which of the two
-	// auto-enable outcomes below happened, so the result note can be honest
-	// about it (set inside the WithConfig closure, read after it returns).
-
-	if err := mat.t.deps.WithConfig(func(cfg *config.Config) error {
+func (mat *mcpAddToolExecute) persistConfig() error {
+	return mat.t.deps.WithConfig(func(cfg *config.Config) error {
+		if err := mat.ctx.Err(); err != nil {
+			return err
+		}
+		if err := mat.prepareEntry(cfg); err != nil {
+			return err
+		}
 		if cfg.Tools.MCP.Servers == nil {
-			cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{}
-		}
-		if _, exists := cfg.Tools.MCP.Servers[mat.name]; exists {
-			return fmt.Errorf("mcp server %q already exists", mat.name)
+			cfg.Tools.MCP.Servers = make(map[string]config.MCPServerConfig)
 		}
 		cfg.Tools.MCP.Servers[mat.name] = mat.entry
-		// Adding a server only to have it silently ignored by a disabled global
-		// kill-switch (tools.mcp.enabled defaults to false on a fresh install)
-		// would reproduce the exact "saved but never connects" bug this tool
-		// exists to avoid — but only for the fresh-install case. If the flag is
-		// off AND another server is already enabled under it, that is an
-		// operator's deliberate kill-switch, not an unconfigured default, and
-		// must not be silently overridden by adding one more server.
-		if !cfg.Tools.MCP.Enabled {
-			otherEnabled := false
-			for otherName, otherSrv := range cfg.Tools.MCP.Servers {
-				if otherName == mat.name {
-					continue
-				}
-				if otherSrv.Enabled {
-					otherEnabled = true
-					break
-				}
-			}
-			if otherEnabled {
-				mat.gatedGlobalDisabled = true
-			} else {
-				cfg.Tools.MCP.Enabled = true
-				mat.flippedGlobalEnable = true
-			}
+		if !mat.attachment {
+			mat.enableNewServerIfFresh(cfg)
 		}
 		return nil
-	}); err != nil {
-		// Any env credentials written in Phase 1 belong to a request that is
-		// being rejected (a name-collision race or a save failure): remove
-		// them so the failure stores nothing and never hijacks the
-		// credentials of a same-named server.
-		if rollbackFailed := mat.rollbackEnvCredentials(); len(rollbackFailed) > 0 {
-			return mat.partialCredentialResult("SAVE_FAILED", "the server was not saved: "+err.Error(),
-				"the server entry was not saved, but stored env credentials could not be removed: "+
-					strings.Join(rollbackFailed, ", "), rollbackFailed, []string{"mcp server entry"}), true
-		}
-		if strings.Contains(err.Error(), "already exists") {
-			return tools.ErrorResult(errorJSON("ALREADY_EXISTS", err.Error(),
-				"Use list_mcp_servers to see existing servers, or remove it first with remove_mcp_server")), true
-		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), "")), true
-	}
-	return nil, false
+	})
 }
 
-// partialCredentialResult is the "partly saved" refusal of an add whose server
-// entry was not saved while env credentials (stored, named by reference, never
-// by value) remain durable.
-func (mat *mcpAddToolExecute) partialCredentialResult(code, msg, reason string, stored, missing []string) *tools.ToolResult {
-	return changeErrorWithOutcome(map[string]any{
-		"success":            false,
-		"error":              map[string]any{"code": code, "message": msg},
-		"name":               mat.name,
-		"changed_fields":     []string{"env_credentials"},
-		"stored_credentials": stored,
-	}, partlySaved(reason, "", missing))
-}
-
-// storedCredentialRefs lists, sorted, the credential references this call has
-// stored so far.
-func (mat *mcpAddToolExecute) storedCredentialRefs() []string {
-	refs := make([]string, 0, len(mat.envRefs))
-	for _, ref := range mat.envRefs {
-		refs = append(refs, ref)
+// Only creation retains the existing fresh-install enable behavior. Attachment
+// must preserve both the server's Enabled field and the global kill switch.
+func (mat *mcpAddToolExecute) enableNewServerIfFresh(cfg *config.Config) {
+	if cfg.Tools.MCP.Enabled {
+		return
 	}
-	sort.Strings(refs)
-	return refs
-}
-
-// rollbackEnvCredentials deletes the env credentials this call stored and
-// returns the credential keys it could not delete (each also logged).
-func (mat *mcpAddToolExecute) rollbackEnvCredentials() []string {
-	var failed []string
-	for envKey, credKey := range mat.envRefs {
-		if mat.t.deps.CredStore == nil {
-			failed = append(failed, credKey)
-			continue
-		}
-		if delErr := mcpCredentialDelete(mat.t.deps.CredStore, credKey); delErr != nil {
-			slog.Warn("add_mcp_server: failed to roll back env credential",
-				"server", mat.name, "env_key", envKey, "cred_key", credKey, "error", delErr)
-			failed = append(failed, credKey)
+	for name, server := range cfg.Tools.MCP.Servers {
+		if name != mat.name && server.Enabled {
+			return
 		}
 	}
-	sort.Strings(failed)
-	return failed
+	cfg.Tools.MCP.Enabled = true
+	mat.flippedGlobalEnable, mat.gatedGlobalDisabled = true, false
 }
 
 // reconcileAndRespond reconciles the live server state and returns an honest connection result.
@@ -385,7 +245,7 @@ func (mat *mcpAddToolExecute) reconcileAndRespond() *tools.ToolResult {
 	// of only being persisted to config.json. Nil in tests or when the
 	// gateway hasn't wired live MCP reconciliation.
 	var reconcileErr error
-	reconcileAttempted := mat.t.deps.ReconcileMCP != nil
+	reconcileAttempted := mat.t.deps.ReconcileMCP != nil && !mat.unchanged
 	if reconcileAttempted {
 		rctx, cancel := context.WithTimeout(mat.ctx, mcpReconcileTimeout)
 		reconcileErr = mat.t.deps.ReconcileMCP(rctx)
@@ -398,12 +258,18 @@ func (mat *mcpAddToolExecute) reconcileAndRespond() *tools.ToolResult {
 	result := map[string]any{
 		"name":           mat.name,
 		"transport":      mat.transport,
-		"enabled":        true,
+		"enabled":        mat.entry.Enabled,
 		"revision":       mcpServerRevision(mat.t.deps.GetCfg(), mat.name),
 		"changed_fields": mat.changedFields(),
 	}
-	const scope = "live connection: the server's status after reconciliation and the number of tools it registered"
+	scope := "live connection: the server's status after reconciliation and the number of tools it registered"
+	if mat.unchanged {
+		scope = "existing live connection status read back; identical references were not changed or reconciled"
+	}
 	notTested := []string{"calling the server's tools", "tool policies (none are assigned yet)"}
+	if mat.attachment {
+		notTested[1] = "tool-policy assignments"
+	}
 	var note string
 	var verdict changeOutcome
 	if mat.t.deps.MCPStatus != nil {
@@ -414,6 +280,9 @@ func (mat *mcpAddToolExecute) reconcileAndRespond() *tools.ToolResult {
 			result["tool_count"] = toolCount
 			note = fmt.Sprintf(
 				"Server connected; %d tool(s) registered and awaiting tool-policy assignment.", toolCount)
+			if mat.attachment {
+				note = fmt.Sprintf("Server connected; %d tool(s) registered. Existing tool assignments and policies are unchanged.", toolCount)
+			}
 			verdict = working(scope, notTested...)
 		case "error":
 			// The config write DID succeed — only the live connection failed.
@@ -449,32 +318,42 @@ func (mat *mcpAddToolExecute) reconcileAndRespond() *tools.ToolResult {
 			verdict = savedNotWorking("MCP is globally disabled", scope, notTested...)
 		}
 	}
+	if !mat.entry.Enabled {
+		note += " The saved server remains disabled."
+		verdict = savedNotWorking("the saved server is disabled", scope, notTested...)
+	}
+	if !mat.attachment && len(mat.envRefs) == 0 {
+		if verdict.Outcome != outcomeWorking {
+			verdict = savedNotWorking("server saved without credential references; credential setup is not finished if this server needs a secret. "+verdict.Reason,
+				verdict.CheckScope, verdict.NotTested...)
+		}
+		note += " No credential references were provided; request a secret card if this server needs credentials, then approve reference attachment."
+	}
+	if mat.unchanged {
+		if mat.t.deps.MCPStatus == nil {
+			note = "References already match; nothing was changed. Live connection status was not checked."
+		} else {
+			note = "References already match; nothing was changed. " + note
+		}
+	}
 	result["note"] = note
 
 	return changeSuccess(result, verdict)
 }
 
-// changedFields lists the durable parts add_mcp_server wrote.
+// changedFields lists only the durable parts this call actually wrote.
 func (mat *mcpAddToolExecute) changedFields() []string {
+	if mat.unchanged {
+		return []string{}
+	}
+	if mat.attachment {
+		return []string{"env_refs"}
+	}
 	fields := []string{"mcp_server_entry"}
 	if len(mat.envRefs) > 0 {
-		fields = append(fields, "env_credentials")
+		fields = append(fields, "env_refs")
 	}
 	return fields
-}
-
-// mcpCredentialSet stores one add_mcp_server env credential. A variable only so
-// a test can fail a later write after an earlier one succeeded
-// (FailMCPCredentialWriteAfterForTest); production never reassigns it.
-var mcpCredentialSet = func(store *credentials.Store, name, value string) error {
-	return store.Set(name, value)
-}
-
-// mcpCredentialDelete removes one env credential during add_mcp_server's
-// rollback. A variable only so a test can fail the rollback deterministically
-// (FailMCPCredentialRollbackForTest); production never reassigns it.
-var mcpCredentialDelete = func(store *credentials.Store, name string) error {
-	return store.Delete(name)
 }
 
 // ---- system.mcp.remove ----
