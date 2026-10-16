@@ -18,6 +18,10 @@ export interface OwnershipCookieFixture extends OwnershipBrowserTarget {
   agentB: string;
   chatA: string;
   chatB: string;
+  workspaceA: string;
+  workspaceB: string;
+  profileA: string;
+  profileB: string;
   close(): Promise<void>;
 }
 
@@ -100,7 +104,7 @@ export async function startOwnershipCookieFixture(): Promise<OwnershipCookieFixt
       const csrf = (await api.storageState()).cookies.find((cookie) => cookie.name === 'csrf')?.value;
       if (!csrf) throw new Error('private gateway did not issue its own csrf cookie');
       const headers = { 'X-CSRF-Token': csrf, Origin: gateway.baseURL };
-      const createPair = async (suffix: string): Promise<{ agent: string; chat: string }> => {
+      const createPair = async (suffix: string): Promise<{ agent: string; chat: string; workspace: string }> => {
         const created = await api.post('/api/v1/agents', { headers, data: { type: 'Main', name: `cookie-${suffix}-${Date.now()}`, soul: 'Browser cookie isolation probe; never a model turn.' } });
         if (!created.ok()) throw new Error(`private probe agent returned ${created.status()}: ${await created.text()}`);
         const agent = ((await created.json()) as { id: string }).id;
@@ -108,13 +112,30 @@ export async function startOwnershipCookieFixture(): Promise<OwnershipCookieFixt
         if (!workspace.ok()) throw new Error(`private workspace returned ${workspace.status()}: ${await workspace.text()}`);
         const chat = await api.post('/api/v1/sessions', { headers, data: { agent_id: agent, type: 'chat' } });
         if (!chat.ok()) throw new Error(`private chat returned ${chat.status()}: ${await chat.text()}`);
-        return { agent, chat: ((await chat.json()) as { id: string }).id };
+        return { agent, chat: ((await chat.json()) as { id: string }).id, workspace: ((await workspace.json()) as { id: string }).id };
       };
       const a = await createPair('A');
       const b = await createPair('B');
+      // No session workspace preference is forged. Read back the actual
+      // unique-membership premise used by the production browser resolver.
+      const rosterResponse = await api.get('/api/v1/workspaces');
+      if (!rosterResponse.ok()) throw new Error(`private workspace roster returned ${rosterResponse.status()}`);
+      const roster = (await rosterResponse.json()) as Array<{ id: string; core_team?: string[] }>;
+      for (const pair of [a, b]) {
+        const memberships = roster.filter((row) => row.core_team?.includes(pair.agent)).map((row) => row.id);
+        if (memberships.length !== 1 || memberships[0] !== pair.workspace) {
+          throw new Error(`BLOCKED: cookie probe ${pair.agent} membership [${memberships.join(',')}] does not identify exactly its workspace ${pair.workspace}`);
+        }
+      }
       const token = fs.readFileSync(path.join(gateway.homeDir, 'cli.token'), 'utf8').trim();
       if (!token) throw new Error('private gateway did not mint a WebSocket CLI credential');
-      return { baseURL: gateway.baseURL, token, origin: `http://127.0.0.1:${address.port}`, agentA: a.agent, agentB: b.agent, chatA: a.chat, chatB: b.chat, close };
+      return {
+        baseURL: gateway.baseURL, token, origin: `http://127.0.0.1:${address.port}`,
+        agentA: a.agent, agentB: b.agent, chatA: a.chat, chatB: b.chat,
+        workspaceA: a.workspace, workspaceB: b.workspace,
+        profileA: path.join(gateway.homeDir, 'browser', 'profiles', `ws-${a.workspace}`),
+        profileB: path.join(gateway.homeDir, 'browser', 'profiles', `ws-${b.workspace}`), close,
+      };
     } finally {
       await api.dispose();
     }
