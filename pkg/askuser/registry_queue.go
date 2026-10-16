@@ -176,7 +176,7 @@ func (r *Registry) finishPending(consumed *PendingSet) error {
 		storedHead = next
 	}
 	if err := r.persist(storedHead, waiting); err != nil {
-		return fmt.Errorf("askuser: resolve: persist failed: %w", err)
+		return fmt.Errorf("askuser: resolve: persist failed: %w", stateSaveError{cause: err})
 	}
 
 	r.mu.Lock()

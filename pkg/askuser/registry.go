@@ -39,6 +39,9 @@ var (
 	// ErrResumeDispatch marks a failure after a valid answer or cancellation
 	// has already been accepted and consumed as terminal.
 	ErrResumeDispatch = errors.New("askuser: accepted submission could not resume the parked turn")
+	// ErrStateSave marks an uncommitted head-consumption/promotion transition
+	// whose pending state could not be saved. The original cause is retained.
+	ErrStateSave = errors.New("askuser: pending question state could not be saved")
 	// ErrStopTargetChanged means the Stop's captured card is no longer the
 	// active head. No newer card or queued set is consumed by that Stop.
 	ErrStopTargetChanged = errors.New("askuser: the question card targeted by Stop is no longer the pending head; no card was cancelled")
@@ -59,6 +62,18 @@ func markResumeDispatchError(err error) error {
 		return nil
 	}
 	return resumeDispatchError{cause: err}
+}
+
+// stateSaveError distinguishes a rejected state transition from an invalid
+// answer while preserving the existing cause text and error chain for logs.
+type stateSaveError struct {
+	cause error
+}
+
+func (e stateSaveError) Error() string { return e.cause.Error() }
+func (e stateSaveError) Unwrap() error { return e.cause }
+func (e stateSaveError) Is(target error) bool {
+	return target == ErrStateSave || errors.Is(e.cause, target)
 }
 
 // MetaStore is the narrow slice of *session.UnifiedStore the registry needs

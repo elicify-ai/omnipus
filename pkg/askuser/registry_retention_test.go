@@ -37,7 +37,7 @@ func TestRetentionSweepForgetsPendingQueueAndTimers(t *testing.T) {
 	head := testSet(expired, retentionDefaultSafeQuestion(headText, headContext))
 	queued := testSet(expired, retentionDefaultSafeQuestion(queuedText, queuedContext))
 	keep := testSet(survivor, retentionDefaultSafeQuestion("Retained question?", "Retained context"))
-	var ownedTimers []*time.Timer
+	ownedTimers := make([]*time.Timer, 0, 2)
 	// Register before admission: even an expected RED or failed precondition
 	// must stop every long timer BEFORE Quiesce. Saved handles also rescue a
 	// faulty implementation that drops its timer map without stopping timers.

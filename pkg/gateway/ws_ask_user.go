@@ -262,6 +262,8 @@ func (d *askUserResumeDispatcher) DispatchResume(set *askuser.PendingSet, resume
 
 func askUserAnswerRejectionReason(err error) string {
 	switch {
+	case errors.Is(err, askuser.ErrStateSave):
+		return "state_save_failed"
 	case errors.Is(err, askuser.ErrNoPending):
 		return "no_pending"
 	case errors.Is(err, askuser.ErrSessionMismatch):
@@ -359,10 +361,21 @@ func (h *WSHandler) handleAskUserAnswer(wc *wsConn, f generated.AskUserAnswerFra
 			h.sendAskUserActionError(wc, f, "ask_user_answer: your answer was accepted but the paused turn could not resume. Details are in the server log.")
 			return
 		}
+		if errors.Is(err, askuser.ErrStateSave) {
+			// The write failed before consumption. Keep the actual cause in
+			// operator diagnostics, never in the client-facing message.
+			slog.Error("ws: ask_user_answer state save failed",
+				"card_id", f.CardId,
+				"session_id", f.SessionId,
+				"reason", askUserAnswerRejectionReason(err),
+				"error", err)
+			h.sendAskUserActionError(wc, f, "Could not save your answer or cancellation. The card is still open. Check gateway storage, then retry.")
+			return
+		}
 		slog.Info("ws: ask_user_answer rejected",
 			"card_id", f.CardId,
 			"session_id", f.SessionId,
 			"reason", askUserAnswerRejectionReason(err))
-		h.sendAskUserActionError(wc, f, "ask_user_answer: "+err.Error())
+		h.sendAskUserActionError(wc, f, "Could not accept this question-card action. Review the current card and try again.")
 	}
 }
