@@ -59,8 +59,10 @@ const webChannelName = "webchat"
 type AskUserQuestionRegistry interface {
 	CreatePending(set *askuser.PendingSet) error
 	PendingForSession(sessionID string) (*askuser.PendingSet, bool)
-	CancelOnSessionStop(key string) bool
+	CancelOnSessionStop(key string) (bool, error)
+	CancelOnSessionStopForCard(key, expectedCardID string) (bool, error)
 	CancelByUser(cardID, sessionID string) error
+	ForgetDeletedSession(sessionID string)
 }
 
 // AskUserQuestionTool implements the AskUserQuestion tool.

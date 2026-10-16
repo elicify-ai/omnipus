@@ -297,7 +297,7 @@ func (r *Registry) rearmSessionLocked(sessionID string) error {
 		r.mu.Unlock()
 		return err
 	}
-	head := state.PendingSet.Clone()
+	head := state.Clone()
 	r.entries[head.CardID] = head.Clone()
 	r.byRouting[routingSessionKey(head)] = head.CardID
 	r.bySession[sessionID] = head.CardID

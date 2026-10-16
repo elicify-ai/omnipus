@@ -21,6 +21,7 @@ type fakeAskRegistry struct {
 	created   []*askuser.PendingSet
 	createErr error
 	cancelled []string
+	forgotten []string
 }
 
 func (f *fakeAskRegistry) CreatePending(set *askuser.PendingSet) error {
@@ -33,9 +34,17 @@ func (f *fakeAskRegistry) CreatePending(set *askuser.PendingSet) error {
 
 func (f *fakeAskRegistry) PendingForSession(string) (*askuser.PendingSet, bool) { return nil, false }
 
-func (f *fakeAskRegistry) CancelOnSessionStop(key string) bool {
+func (f *fakeAskRegistry) CancelOnSessionStop(key string) (bool, error) {
 	f.cancelled = append(f.cancelled, key)
-	return true
+	return true, nil
+}
+
+func (f *fakeAskRegistry) CancelOnSessionStopForCard(key, _ string) (bool, error) {
+	return f.CancelOnSessionStop(key)
+}
+
+func (f *fakeAskRegistry) ForgetDeletedSession(sessionID string) {
+	f.forgotten = append(f.forgotten, sessionID)
 }
 
 func (f *fakeAskRegistry) CancelByUser(cardID, _ string) error {

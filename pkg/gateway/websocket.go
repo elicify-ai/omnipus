@@ -1444,6 +1444,7 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 		if err := json.Unmarshal(data, &f); err != nil {
 			slog.Warn("ws: malformed ask_user_answer frame", "error", err)
 			wh.wc.inboundDropped.Add(1)
+			wh.h.sendAskUserActionError(wh.wc, generated.AskUserAnswerFrame{}, "malformed ask_user_answer frame")
 			return wsHandlerReadLoopContinue
 		}
 		if f.CardId == "" || f.SessionId == "" {

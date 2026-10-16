@@ -503,7 +503,9 @@ func queueCase_SessionStopPromotesWithoutResume(t *testing.T) {
 	require.NoError(t, env.reg.CreatePending(first))
 	require.NoError(t, env.reg.CreatePending(second))
 
-	require.True(t, env.reg.CancelOnSessionStop(env.sid), "stop must cancel the session's active card")
+	stopOK, stopErr := env.reg.CancelOnSessionStop(env.sid)
+	require.NoError(t, stopErr, "stop must cancel the session's active card")
+	require.True(t, stopOK, "stop must cancel the session's active card")
 	require.Equal(t, 0, env.resume.count(), "session Stop must not dispatch any resume")
 
 	head, ok := env.reg.PendingForSession(env.sid)
@@ -1241,8 +1243,11 @@ func queueCase_SessionStopPersistFailureRetainsCards(t *testing.T) {
 	require.NoError(t, reg.CreatePending(second))
 
 	meta.arm(-1)
-	require.False(t, reg.CancelOnSessionStop(sid),
+	stopOK, stopErr := reg.CancelOnSessionStop(sid)
+	require.False(t, stopOK,
 		"a stop whose cancellation cannot be persisted must not be acknowledged")
+	require.ErrorIs(t, stopErr, errSentinelSetMeta,
+		"the failed stop must surface the EXACT underlying save error to the caller")
 	active, ok := reg.PendingForSession(sid)
 	require.True(t, ok, "the active card must be retained")
 	require.Equal(t, first.CardID, active.CardID)
@@ -1255,7 +1260,9 @@ func queueCase_SessionStopPersistFailureRetainsCards(t *testing.T) {
 	}), "no cancelled terminal emission may follow a failed stop")
 
 	meta.disarm()
-	require.True(t, reg.CancelOnSessionStop(sid), "the stop retry must succeed")
+	stopOK, stopErr = reg.CancelOnSessionStop(sid)
+	require.NoError(t, stopErr, "the stop retry must succeed")
+	require.True(t, stopOK, "the stop retry must succeed")
 	require.Equal(t, 0, resume.count(), "stop still dispatches no resume")
 	head, ok := reg.PendingForSession(sid)
 	require.True(t, ok)

@@ -261,6 +261,7 @@ type agentLoopRequestCancel struct {
 	store                    *session.UnifiedStore
 	turnID                   string
 	descendants              []string
+	pendingAskErr            error
 }
 
 // RequestCancel is the canonical cancel entry point. All four cancel surfaces
@@ -292,18 +293,24 @@ type agentLoopRequestCancel struct {
 //   - CancelOutcome{Fired: true, Descendants, TurnID} on a successful claim
 //   - CancelOutcome{Fired: false} when no active turn matches OR ClaimCancel
 //     found cancelFired==true (double-cancel race)
-//   - error only for parameter validation failures (empty scope)
+//   - error for validation or Stop-effect failures; a pending-question save
+//     failure is returned after the other applicable Stop effects are attempted
 func (al *AgentLoop) RequestCancel(
 	ctx context.Context,
 	scope CancelScope,
 	canceller CancelCanceller,
 	hooks CancelHooks,
-) (CancelOutcome, error) {
+) (outcome CancelOutcome, err error) {
 	rc := &agentLoopRequestCancel{al: al, ctx: ctx, scope: scope, canceller: canceller, hooks: hooks}
 	// Every Stop attempt on a resolved session is audited exactly once: a
 	// request that returns early (superseded generation, an unreadable record,
 	// an error) still happened.
 	defer func() {
+		// A failed card-state save must be reported, but it must not abort
+		// approval cancellation, turn interruption or escalation below.
+		if rc.pendingAskErr != nil {
+			err = errors.Join(err, rc.pendingAskErr)
+		}
 		if !rc.audited && rc.sessionID != "" {
 			rc.auditAttempt(false, false)
 		}
@@ -364,6 +371,9 @@ func (rc *agentLoopRequestCancel) validateAndResolve() (CancelOutcome, error, bo
 
 	if outcome, err, stop := rc.validateStopGeneration(); stop {
 		return outcome, err, true
+	}
+	if _, bound := rc.ctx.Value(pendingAskStopContextKey{}).(*pendingAskStopTargets); !bound {
+		rc.ctx = rc.al.bindPendingAskStop(rc.ctx, rc.sessionID, false)
 	}
 
 	// Founder decision 2026-09-14 (UAT B-1 run 4): an explicit Stop/cancel on a
@@ -468,7 +478,7 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	// background-kill cascade above and for the same reason — this must NOT
 	// be gated on wasFired/ClaimCancel. Fires whenever sessionID resolved,
 	// unconditionally; a session with no pending set is a cheap no-op. ---
-	rc.al.cancelPendingAskForScope(rc.sessionID)
+	rc.pendingAskErr = rc.al.cancelPendingAskForScope(rc.ctx, rc.sessionID)
 	if rc.scope.TurnOnly {
 		if err := rc.removeSelectedStopAdmission(); err != nil {
 			return CancelOutcome{}, err, true

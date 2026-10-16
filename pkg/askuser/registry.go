@@ -39,6 +39,9 @@ var (
 	// ErrResumeDispatch marks a failure after a valid answer or cancellation
 	// has already been accepted and consumed as terminal.
 	ErrResumeDispatch = errors.New("askuser: accepted submission could not resume the parked turn")
+	// ErrStopTargetChanged means the Stop's captured card is no longer the
+	// active head. No newer card or queued set is consumed by that Stop.
+	ErrStopTargetChanged = errors.New("askuser: the question card targeted by Stop is no longer the pending head; no card was cancelled")
 )
 
 type resumeDispatchError struct {
@@ -434,13 +437,23 @@ func (r *Registry) CancelByUser(cardID, sessionID string) error {
 	return markResumeDispatchError(r.dispatchResume(set, true))
 }
 
-// CancelOnSessionStop cancels the active set reachable by either session key
-// without dispatching a resume. Waiting sets are retained and the next head
-// is promoted. False means no cancellation was committed: a missing card is
-// a no-op, while a save failure is logged and leaves the card/queue intact.
-func (r *Registry) CancelOnSessionStop(key string) bool {
+// CancelOnSessionStop durably cancels the current head without a resume and
+// promotes its successor. A missing card is false,nil; a failed save is a
+// distinct error and leaves the entire head/FIFO unchanged.
+func (r *Registry) CancelOnSessionStop(key string) (bool, error) {
+	return r.cancelOnSessionStop(key, nil)
+}
+
+// CancelOnSessionStopForCard applies a Stop only to the head it captured.
+// Even an empty captured ID is a binding: a card that appeared afterwards
+// is not consumed. A stale target is an explicit no-op error for the caller.
+func (r *Registry) CancelOnSessionStopForCard(key, expectedCardID string) (bool, error) {
+	return r.cancelOnSessionStop(key, &expectedCardID)
+}
+
+func (r *Registry) cancelOnSessionStop(key string, expectedCardID *string) (bool, error) {
 	if key == "" {
-		return false
+		return false, nil
 	}
 	r.transitionMu.Lock()
 	defer r.transitionMu.Unlock()
@@ -450,15 +463,16 @@ func (r *Registry) CancelOnSessionStop(key string) bool {
 		id, ok = r.bySession[key]
 	}
 	r.mu.Unlock()
+	if expectedCardID != nil && id != *expectedCardID {
+		return false, ErrStopTargetChanged
+	}
 	if !ok {
-		return false
+		return false, nil
 	}
 	if _, err := r.cancelPending(id, ""); err != nil {
-		slog.Error("askuser: session stop could not cancel question set",
-			"card_id", id, "session_key", key, "error", err)
-		return false
+		return false, err
 	}
-	return true
+	return true, nil
 }
 
 // cancelCommon validates, durably cancels and promotes the next queued set.
@@ -566,13 +580,14 @@ func (r *Registry) Quiesce() {
 // terminal emission, resume dispatch.
 func (r *Registry) fireDefaultSafeSet(cardID string) {
 	r.transitionMu.Lock()
-	consumed, err := r.applyDefaultSafeSet(cardID)
+	resolution, err := r.applyDefaultSafeSet(cardID)
 	if err != nil {
 		slog.Error("askuser: default-safe save failed; pending state retained for retry",
 			"card_id", cardID, "error", err)
 		r.armDefaultSafeTimer(cardID, defaultSafeRetryDelay)
 	}
 	r.transitionMu.Unlock()
+	consumed := resolution.consumed
 	if err != nil || consumed == nil {
 		return
 	}

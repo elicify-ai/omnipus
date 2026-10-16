@@ -680,7 +680,9 @@ func TestCancelOnSessionStop_NoResumeDispatched(t *testing.T) {
 		t.Fatalf("CreatePending: %v", err)
 	}
 	// Matched via the transcript session id (the cancel scope's key).
-	if !reg.CancelOnSessionStop(sid) {
+	if ok, cancelErr := reg.CancelOnSessionStop(sid); cancelErr != nil {
+		t.Fatalf("CancelOnSessionStop: %v", cancelErr)
+	} else if !ok {
 		t.Fatal("CancelOnSessionStop found nothing")
 	}
 	if resume.count() != 0 {
@@ -699,7 +701,9 @@ func TestCancelOnSessionStop_NoResumeDispatched(t *testing.T) {
 		t.Fatalf("want cancelled terminal record, got %q", terminal.Status)
 	}
 	// Idempotent no-op afterwards.
-	if reg.CancelOnSessionStop(sid) {
+	if ok, cancelErr := reg.CancelOnSessionStop(sid); cancelErr != nil {
+		t.Fatalf("second CancelOnSessionStop: %v", cancelErr)
+	} else if ok {
 		t.Fatal("second stop-cancel must be a no-op")
 	}
 }
@@ -713,7 +717,9 @@ func TestCancelOnSessionStop_MatchesRoutingKey(t *testing.T) {
 	if err := reg.CreatePending(set); err != nil {
 		t.Fatalf("CreatePending: %v", err)
 	}
-	if !reg.CancelOnSessionStop(set.RoutingSessionKey) {
+	if ok, cancelErr := reg.CancelOnSessionStop(set.RoutingSessionKey); cancelErr != nil {
+		t.Fatalf("CancelOnSessionStop by routing key: %v", cancelErr)
+	} else if !ok {
 		t.Fatal("stop-cancel by routing key found nothing")
 	}
 }

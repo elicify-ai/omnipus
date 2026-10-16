@@ -116,6 +116,12 @@ After another question set becomes active, reloading the chat can show an earlie
 
 A failed card-state save is not treated as success. If a new set cannot be saved, the agent receives an error rather than a promise that it was queued. If saving the card state for an answer or cancellation fails, the current card and its existing waiting sets stay in place so the action can be retried. Automatic default-safe saves are retried after a failure.
 
+A card-state failure during **Stop** is reported as an incomplete Stop, not as “nothing pending”. The other Stop effects are still attempted. Once storage is repaired, a fresh Stop can retry the current card even if the turn already stopped. Each Stop targets the card it saw when issued: if that card changed in the meantime, it reports a no-op instead of cancelling the replacement.
+
+Using `/goal clear`, or starting a goal when none is active, also cancels the current question card without resuming its turn and reveals the next waiting set, if any. If saving that cancellation fails, the goal command stops and replies **Could not cancel the pending question card. Check session storage and retry.** The current card and its waiting sets stay unchanged.
+
+Deleting a chat is different from Stop: after its session data is successfully deleted, all of that chat's active and waiting question sets and timers are removed from the running registry. A refused or failed deletion does not trigger that cleanup. The same cleanup applies when workspace or agent deletion removes a session. This in-memory cleanup is best effort: a cleanup panic is logged without undoing the completed data deletion. Deleted sessions are not restored to the question registry after a restart.
+
 A different failure can happen after your answer or card cancellation was accepted: the paused turn may fail to continue. In that case the card still closes — the action cannot be repeated on that card — and the failure is recorded in the server log. If the agent seems unaware of your answer or cancellation, send a new message and, if needed, state it again.
 
 ### Who is replying

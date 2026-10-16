@@ -432,8 +432,9 @@ func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll 
 		slog.Warn("ws: handleCancel: RequestCancel error",
 			"session_id", sessionID, "error", err)
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:    string(generated.WsFrameTypeError),
-			Message: "cancel failed: the Stop request could not be completed. Details are in the server log.",
+			Type:      string(generated.WsFrameTypeError),
+			SessionId: &sessionID,
+			Message:   "cancel failed: the Stop request could not be completed. Details are in the server log.",
 		})
 		return
 	}

@@ -17,6 +17,7 @@ import (
 type fakeAskCancelRegistry struct {
 	mu        sync.Mutex
 	cancelled []string
+	forgotten []string
 }
 
 func (f *fakeAskCancelRegistry) CreatePending(*askuser.PendingSet) error { return nil }
@@ -25,11 +26,21 @@ func (f *fakeAskCancelRegistry) PendingForSession(string) (*askuser.PendingSet, 
 	return nil, false
 }
 
-func (f *fakeAskCancelRegistry) CancelOnSessionStop(key string) bool {
+func (f *fakeAskCancelRegistry) CancelOnSessionStop(key string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cancelled = append(f.cancelled, key)
-	return true
+	return true, nil
+}
+
+func (f *fakeAskCancelRegistry) CancelOnSessionStopForCard(key, _ string) (bool, error) {
+	return f.CancelOnSessionStop(key)
+}
+
+func (f *fakeAskCancelRegistry) ForgetDeletedSession(sessionID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forgotten = append(f.forgotten, sessionID)
 }
 
 func (f *fakeAskCancelRegistry) CancelByUser(cardID, _ string) error {

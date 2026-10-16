@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -311,12 +312,16 @@ func (s *askUserAuditSink) RecordAutoDefault(cardID, sessionID, header, label st
 // after acceptance is also surfaced, but the already-consumed card remains
 // terminal; its log record distinguishes that outcome from a rejection.
 func (h *WSHandler) handleAskUserAnswer(wc *wsConn, f generated.AskUserAnswerFrame) {
+	// The transport schema gate rejects invalid envelopes before dispatch.
+	// Guard direct callers and validation-off deployments too: no unusable
+	// identifier may consume a card or produce an invalid correlated error.
+	if strings.TrimSpace(f.CardId) == "" || strings.TrimSpace(f.SessionId) == "" {
+		h.sendAskUserActionError(wc, f, "ask_user_answer requires card_id and session_id")
+		return
+	}
 	reg := h.askUserReg
 	if reg == nil {
-		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:    string(generated.WsFrameTypeError),
-			Message: "ask_user_answer: no pending-question registry on this deployment",
-		})
+		h.sendAskUserActionError(wc, f, "ask_user_answer: no pending-question registry on this deployment")
 		return
 	}
 
@@ -351,19 +356,13 @@ func (h *WSHandler) handleAskUserAnswer(wc *wsConn, f generated.AskUserAnswerFra
 				"outcome", outcome,
 				"reason", reason,
 				"error", err) // the real cause, for the operator; the client frame stays fixed text
-			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "ask_user_answer: your answer was accepted but the paused turn could not resume. Details are in the server log.",
-			})
+			h.sendAskUserActionError(wc, f, "ask_user_answer: your answer was accepted but the paused turn could not resume. Details are in the server log.")
 			return
 		}
 		slog.Info("ws: ask_user_answer rejected",
 			"card_id", f.CardId,
 			"session_id", f.SessionId,
 			"reason", askUserAnswerRejectionReason(err))
-		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:    string(generated.WsFrameTypeError),
-			Message: "ask_user_answer: " + err.Error(),
-		})
+		h.sendAskUserActionError(wc, f, "ask_user_answer: "+err.Error())
 	}
 }
