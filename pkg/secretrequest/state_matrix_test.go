@@ -11,6 +11,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/secretrequest"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/require"
 )
 
@@ -155,7 +156,16 @@ func TestSecretMatrix_HelperCardRoutesToOmnipusMainOnly(t *testing.T) {
 	for _, rootAgent := range []string{"omnipus", "jim"} {
 		t.Run(rootAgent, func(t *testing.T) {
 			f := newMatrixEnv(t)
-			root := f.newSession(rootAgent, "")
+			var root string
+			if rootAgent == "omnipus" {
+				main, err := f.sessions.GetOrCreateMainSession(matrixWorkspace, rootAgent)
+				require.NoError(t, err)
+				owner := matrixOwner
+				require.NoError(t, f.sessions.SetMeta(main.ID, session.MetaPatch{Owner: &owner}))
+				root = main.ID
+			} else {
+				root = f.newSession(rootAgent, "")
+			}
 			child := f.newSession("helper", root)
 			rec, err := f.reg.Create(context.Background(), child, "helper", "helper-chat", "", providerInput())
 			if rootAgent == "jim" {
