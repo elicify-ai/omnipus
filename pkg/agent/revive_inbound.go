@@ -177,6 +177,7 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 		return "", agent, nil
 	}
 	opts.roomCost = al.newTurnRoomMeter(msg)
+	defer func() { al.finishRoomTurn(opts.roomCost, runErr) }()
 	preparation, prepErr := al.prepareOrdinaryExecution(ctx, msg, opts)
 	room.prepared(prepErr)
 	if errors.Is(prepErr, errOwnerWakeRetained) {
@@ -205,7 +206,5 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	}
 	resp, runErr = al.runAgentLoop(ctx, agent, opts)
 	d.recordTurnOutcome(runErr)
-	al.reportRoomCost(opts.roomCost, msg.SessionID)
-	al.settleRoomInputs(opts.roomCost, runErr)
 	return resp, agent, runErr
 }

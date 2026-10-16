@@ -270,8 +270,8 @@ func (rt agentRoomRuntime) DecideRoomConsume(roomID, requestID, sessionID string
 	}
 }
 
-func (rt agentRoomRuntime) RoomConsumeReleased(roomID, requestID string) {
-	rt.svc.ReleaseConsume(roomID, requestID)
+func (rt agentRoomRuntime) RoomConsumeReleased(roomID, requestID string) error {
+	return rt.svc.ReleaseConsume(roomID, requestID)
 }
 
 func (rt agentRoomRuntime) RoomConsumeHeld(roomID, requestID string) {

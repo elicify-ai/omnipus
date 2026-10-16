@@ -153,9 +153,8 @@ type processOptions struct {
 	// from routing, transcript containment and delegate tool authority.
 	executionDisposition *executionDisposition
 
-	// roomCost is set only for the ordinary turn that consumes a group-chat
-	// room request (room_request.go): it accumulates the turn's billed cost and
-	// the inputs the turn consumed, so the room's allocated cost can be
-	// computed (omnipus-system-agent §6.14). Nil for every other turn.
+	// roomCost owns handed-over room inputs before execution, independently
+	// of later pricing polls. Ordinary, system-wake and continuation turns all
+	// collect inputs/cost and settle their owned requests on exit (§6.14).
 	roomCost *roomCostMeter
 }

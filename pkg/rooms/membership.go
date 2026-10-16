@@ -50,6 +50,8 @@ func agentName(ws Workspace, id string) string {
 // List returns the workspace's rooms (team room first, FR-174). A storage or
 // read failure is an error (500), never an empty list (#1314).
 func (s *Service) List(workspaceID string) ([]generated.Room, error) {
+	s.workspaceMu.RLock()
+	defer s.workspaceMu.RUnlock()
 	ws, err := s.workspace(workspaceID)
 	if err != nil {
 		return nil, err
@@ -81,6 +83,8 @@ func (s *Service) Get(roomID string) (generated.Room, error) {
 // openRoom loads a room and its workspace and brings its membership up to
 // date with the workspace (FR-160, FR-162).
 func (s *Service) openRoom(roomID string) (*room, Workspace, error) {
+	s.workspaceMu.RLock()
+	defer s.workspaceMu.RUnlock()
 	r, err := s.loadRoom(roomID)
 	if err != nil {
 		return nil, Workspace{}, err
@@ -97,11 +101,22 @@ func (s *Service) openRoom(roomID string) (*room, Workspace, error) {
 		r.mu.Unlock()
 		return nil, Workspace{}, notFound("no such group chat")
 	}
+	if err := s.repairIncompleteCost(r); err != nil {
+		r.mu.Unlock()
+		return nil, Workspace{}, err
+	}
+	if err := s.repairReleasedConsumes(r); err != nil {
+		r.mu.Unlock()
+		return nil, Workspace{}, err
+	}
 	if err := s.reconcile(r, ws, PrincipalSystem); err != nil {
 		r.mu.Unlock()
 		return nil, Workspace{}, err
 	}
-	s.sweepStale(r)
+	if err := s.sweepStale(r); err != nil {
+		r.mu.Unlock()
+		return nil, Workspace{}, err
+	}
 	resume := s.unsentMentionsLocked(r)
 	r.mu.Unlock()
 	if len(resume) > 0 {
@@ -142,7 +157,7 @@ func (s *Service) unsentMentionsLocked(r *room) []string {
 // already fenced off but could not mark cancelled when it ran (a failed
 // write is reported to the person who paused or removed; the dequeue fence
 // refuses those requests either way). The caller holds r.mu.
-func (s *Service) sweepStale(r *room) {
+func (s *Service) sweepStale(r *room) error {
 	for _, id := range r.order {
 		d := r.deliveries[id]
 		member := slices.Contains(r.rec.Members, d.AgentID)
@@ -154,9 +169,10 @@ func (s *Service) sweepStale(r *room) {
 			reason = ReasonRemoved
 		}
 		if err := s.cancelDelivery(r, d, reason); err != nil {
-			logRoomError("a fenced-off request could still not be marked cancelled; it never runs", r.rec.ID, err)
+			return storageError("The change was saved, but pending requests could not be marked cancelled", err)
 		}
 	}
+	return nil
 }
 
 // workspaceRooms loads, reconciles and orders the workspace's rooms, making
@@ -192,9 +208,15 @@ func (s *Service) workspaceRoomsAs(ws Workspace, principal string) ([]*room, err
 	}
 	for _, r := range rs {
 		r.mu.Lock()
-		err := s.reconcile(r, ws, principal)
+		err := s.repairIncompleteCost(r)
 		if err == nil {
-			s.sweepStale(r)
+			err = s.repairReleasedConsumes(r)
+		}
+		if err == nil {
+			err = s.reconcile(r, ws, principal)
+		}
+		if err == nil {
+			err = s.sweepStale(r)
 		}
 		r.mu.Unlock()
 		if err != nil {
@@ -205,20 +227,33 @@ func (s *Service) workspaceRoomsAs(ws Workspace, principal string) ([]*room, err
 	return rs, nil
 }
 
-// SyncWorkspace brings the workspace's rooms up to date with its membership
-// now (called after a workspace's team changes). Errors are logged: the next
-// read reconciles again.
-func (s *Service) SyncWorkspace(workspaceID, principal string) {
+// ApplyWorkspaceUpdate commits a workspace save and applies its room roster
+// while room reads cannot reconcile it first as system (FR-172). A failure
+// after commit is a partial change: the saved workspace is not rolled back.
+func (s *Service) ApplyWorkspaceUpdate(workspaceID, principal string, commit func() error) error {
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
+	if err := commit(); err != nil {
+		return err
+	}
+	return s.syncWorkspace(workspaceID, principal)
+}
+
+// SyncWorkspace reconciles an already-stored workspace, preserving an explicit
+// actor (boot/on-read callers use PrincipalSystem). Failures reach the caller.
+func (s *Service) SyncWorkspace(workspaceID, principal string) error {
+	s.workspaceMu.Lock()
+	defer s.workspaceMu.Unlock()
+	return s.syncWorkspace(workspaceID, principal)
+}
+
+func (s *Service) syncWorkspace(workspaceID, principal string) error {
 	ws, err := s.workspace(workspaceID)
 	if err != nil {
-		if StatusOf(err) != 404 {
-			slog.Error("rooms: workspace sync failed; the next read retries", "workspace_id", workspaceID, "error", err)
-		}
-		return
+		return err
 	}
-	if _, err := s.workspaceRoomsAs(ws, principal); err != nil {
-		slog.Error("rooms: workspace sync failed; the next read retries", "workspace_id", workspaceID, "error", err)
-	}
+	_, err = s.workspaceRoomsAs(ws, principal)
+	return err
 }
 
 // ensureTeamRoom creates the workspace's one team room the first time it has
@@ -304,7 +339,7 @@ func (s *Service) reconcile(r *room, ws Workspace, principal string) error {
 	// are now cancelled (a failed label write is repaired by the next sweep;
 	// the dequeue fence refuses them either way).
 	if err := s.cancelMembers(r, removed, ReasonRemoved); err != nil {
-		logRoomError("a departed member's request could not be marked cancelled; it never runs", r.rec.ID, err)
+		return storageError("The members are removed, but pending requests could not be marked cancelled", err)
 	}
 	return nil
 }

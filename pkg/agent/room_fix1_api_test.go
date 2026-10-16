@@ -50,10 +50,11 @@ func (f *fenceRuntime) DecideRoomConsume(_, requestID, _ string) RoomConsumeDeci
 	return f.decision
 }
 
-func (f *fenceRuntime) RoomConsumeReleased(_, requestID string) {
+func (f *fenceRuntime) RoomConsumeReleased(_, requestID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.released = append(f.released, requestID)
+	return nil
 }
 
 // Ruling A (§6.11): a turn that fails fails every room request it was handed

@@ -165,6 +165,9 @@ type roomRecord struct { // not-wire-format: the room's on-disk record; the wire
 	// a live room with cancelled work. A deleted record is finished (its
 	// directory removed) on the next load and is never served.
 	Deleted bool `json:"deleted,omitempty"`
+	// PendingReleases journals handoffs that failed after working was saved.
+	// Replay these BEFORE restart recovery so unstarted work is queued, not interrupted.
+	PendingReleases map[string]bool `json:"pending_releases,omitempty"`
 	// Seq is the room stream position when the record was written.
 	Seq int64 `json:"seq"`
 }

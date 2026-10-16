@@ -1845,7 +1845,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 // runAgentLoop remains the top-level shell that starts a turn and publishes
 // any post-turn work. runTurn owns the full turn lifecycle.
-func (al *AgentLoop) runAgentLoop(
+func (al *AgentLoop) runAgentLoopBody(
 	ctx context.Context,
 	agent *AgentInstance,
 	opts processOptions,
@@ -1893,6 +1893,7 @@ func (al *AgentLoop) runAgentLoop(
 		return "", err
 	}
 	if result.status == TurnEndStatusAborted {
+		al.settleRoomInputs(opts.roomCost, context.Canceled)
 		// Reached only for a case-1 (user-initiated) hard abort — abortTurn
 		// returns a non-nil error for every system-initiated abort (case 2),
 		// which the `if err != nil` branch above already returned from. See

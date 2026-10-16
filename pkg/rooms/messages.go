@@ -299,7 +299,7 @@ func (s *Service) retryLocked(r *room, entryID string) []string {
 			}
 		case d.Generation != r.rec.Generation:
 			continue
-		case d.State == StateRecorded || d.State == StateUnknown || d.State == StateUnavailable || d.State == StateAdmitted:
+		case admittable(d.State):
 			pending = append(pending, id)
 		}
 	}

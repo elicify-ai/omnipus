@@ -91,7 +91,7 @@ const (
 // without it is treated as answering run / cancel only.
 type RoomFence interface {
 	DecideRoomConsume(roomID, requestID, sessionID string) RoomConsumeDecision
-	RoomConsumeReleased(roomID, requestID string)
+	RoomConsumeReleased(roomID, requestID string) error
 }
 
 // RoomRuntime is the room service as the agent loop sees it. The gateway
@@ -126,8 +126,8 @@ type RoomTurnCost struct {
 	Priced  bool
 	// Inputs is the number of inputs the turn consumed by its end (the room
 	// request itself plus every message steered into it). RoomInputs is how
-	// many of them came from this room (always 1: room requests never join a
-	// running turn).
+	// many of them came from this room (several held requests may be inputs
+	// at the start of a reviving turn; they never join an already-running turn).
 	Inputs, RoomInputs int
 }
 
@@ -475,18 +475,25 @@ func (al *AgentLoop) publishRoomRequestWake(ctx context.Context, c addressing.Ca
 // turn's starting inputs, never steered into a turn already under way
 // (FR-214, ruling A 2026-10-15; BDD-17.30 counts it in that turn's cost). It
 // passes the room fence first; the turn's end settles it (settleRoomInputs).
-func (al *AgentLoop) deliverHeldRoomRequest(sessionID string, c addressing.Capture) {
+func (al *AgentLoop) deliverHeldRoomRequest(sessionID string, c addressing.Capture, meters ...*roomCostMeter) {
 	msg := roomWakeMessage(c)
 	al.roomRequests.Store(c.RequestID, c.Source.RoomID)
 	g, proceed := al.gateRoomRequest(msg)
 	if !proceed {
 		return
 	}
-	if err := al.enqueueSteeringFromMessage(msg); err != nil {
-		releaseRoomConsume(g.rt, g.roomID, g.requestID)
-		logger.ErrorCF("agent", "a waiting room request could not be handed to the member's turn; it stays queued for its next turn",
+	if err := al.enqueueHeldRoomInput(msg, meters); err != nil {
+		if undoErr := releaseRoomConsume(g.rt, g.roomID, g.requestID); undoErr != nil {
+			logger.ErrorCF("agent", "a waiting room request did not reach the turn and its queue reset is pending storage recovery",
+				map[string]any{"session_id": sessionID, "request_id": c.RequestID, "error": err.Error(), "undo_error": undoErr.Error()})
+			return
+		}
+		logger.ErrorCF("agent", "a waiting room request did not reach the turn; it is queued again",
 			map[string]any{"session_id": sessionID, "request_id": c.RequestID, "error": err.Error()})
 		return
+	}
+	for _, meter := range meters {
+		meter.ownInput(c.RequestID, c.Source.RoomID)
 	}
 	al.markRequestDelivered(sessionID, c.RequestID)
 }
@@ -638,10 +645,11 @@ func decideRoomConsume(rt RoomRuntime, roomID, requestID, sessionID string) Room
 	return RoomConsumeCancel
 }
 
-func releaseRoomConsume(rt RoomRuntime, roomID, requestID string) {
+func releaseRoomConsume(rt RoomRuntime, roomID, requestID string) error {
 	if fence, ok := rt.(RoomFence); ok {
-		fence.RoomConsumeReleased(roomID, requestID)
+		return fence.RoomConsumeReleased(roomID, requestID)
 	}
+	return errors.New("room runtime cannot release a failed handoff")
 }
 
 // prepared reports a failed turn admission to the room: a stopped member
@@ -704,8 +712,12 @@ func (al *AgentLoop) settleRoomInputs(m *roomCostMeter, turnErr error) {
 		joined[req] = room
 	}
 	m.mu.Unlock()
+	al.dropRoomSteering(joined)
 	for req, room := range joined {
 		rt.RoomConsumeEnded(room, req, turnErr)
+		if err := al.DiscardRequest(m.sessionID, req); err != nil {
+			logger.ErrorCF("agent", "a failed turn's room input could not be discarded", map[string]any{"request_id": req, "session_id": m.sessionID, "error": err.Error()})
+		}
 	}
 }
 
@@ -765,6 +777,7 @@ func (al *AgentLoop) roomCallCost(model string, usage *providers.UsageInfo, esti
 type roomCostMeter struct {
 	al        *AgentLoop
 	sessionID string
+	scope     string
 	mu        sync.Mutex
 	turnID    string
 	cost      float64
@@ -773,7 +786,8 @@ type roomCostMeter struct {
 	rooms     map[string]int
 	// joined are the room requests handed to the turn besides the message
 	// that started it (request id -> room id); the turn's end settles them.
-	joined map[string]string
+	joined   map[string]string
+	finished bool
 }
 
 func (m *roomCostMeter) addCost(turnID string, cost float64, priced bool) {

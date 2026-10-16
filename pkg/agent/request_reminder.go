@@ -202,6 +202,10 @@ func (al *AgentLoop) receiverStopped(sessionID string) bool {
 // logged instead, never delivered into a void. A request whose asker could not
 // be read (a transient error) stays held and is retried by the next turn.
 func (al *AgentLoop) deliverHeldRequests(sessionID string, skipRequestID ...string) {
+	al.deliverHeldRequestsWithMeter(sessionID, nil, skipRequestID...)
+}
+
+func (al *AgentLoop) deliverHeldRequestsWithMeter(sessionID string, meter *roomCostMeter, skipRequestID ...string) {
 	ledger := al.RequestLedger()
 	if ledger == nil || sessionID == "" {
 		return
@@ -238,7 +242,7 @@ func (al *AgentLoop) deliverHeldRequests(sessionID string, skipRequestID ...stri
 		}
 		al.pendingRequests.Store(c.RequestID, sessionID)
 		if c.Source.Kind == addressing.SourceRoom {
-			al.deliverHeldRoomRequest(sessionID, c)
+			al.deliverHeldRoomRequest(sessionID, c, meter)
 			continue
 		}
 		if c.Text == "" {

@@ -14,7 +14,7 @@ A group chat (also called a room) is one conversation between you and two or mor
 | **Squad** | You. You give it a name (1 to 80 characters) | Two or more agents you choose | Yes |
 | **Ad-hoc room** | You. No name needed: it is named after its members, for example "Mia, Jim" | Two or more agents you choose | Yes |
 
-A conversation agent is an agent you can chat with directly. Workers, system agents and Omnipus never join a group chat. A squad or ad-hoc room has at most 256 agents: creating one and adding members both refuse a larger group, and one membership change names at most 256 agents. The team room's member list is not capped separately: it is always the workspace's whole team. The workspace lists its team room first, then squads, then ad-hoc rooms, each oldest first.
+A conversation agent is an agent you can chat with directly. Workers, system agents and Omnipus never join a group chat. A squad or ad-hoc room has at most 256 agents: creating one and adding members both refuse a larger group, and one membership change names at most 256 agents. The team room is the workspace's whole conversation team, including teams larger than 256. Its metadata, snapshots and message fan-out are accepted without a 256-member output limit; the 256-id limit still applies to each creation or mutation request. The workspace lists its team room first, then squads, then ad-hoc rooms, each oldest first.
 
 ### At least two agents
 
@@ -68,7 +68,7 @@ No agent works inside a group chat. Each agent's main chat is its one-to-one cha
 
 ### Approvals and questions
 
-- **Approving the request itself.** If an agent's `send_message` permission is set to Ask, a group request needs your approval before it reaches that agent. The approval is raised for that agent and labelled "for group <name>", and the group shows the member as awaiting your approval. If the permission is Deny, the request is refused.
+- **Approving the request itself.** If an agent's `send_message` permission is Allow, the request reaches that agent without approval. If it is Deny, the request is refused. If it is Ask, the request needs your approval unless a standing grant already covers `send_message` for that agent; then no new card is raised. When a card is raised, it belongs to that agent and is labelled "for group <name>", and the group shows the member as awaiting your approval.
 - **Approvals during the work.** Approvals and questions the agent raises while working on a group request belong to its main chat, not to the group. While one is open, the group shows the member as waiting for you.
 - **Where they appear in this version.** Approvals still appear in the app-wide approval dialog. That dialog does not show the "for group <name>" label. The card inside the agent's main chat is switched off until later work lands.
 - **Not supported yet.** Secret requests from group work are not handled in this version.
@@ -81,10 +81,11 @@ An agent's message in a group is only ever text for the other members. It can ne
 |---|---|---|
 | Saving the request in a member's main chat | The member shows "unavailable: storage". No request was recorded there and no turn started | Once storage works again, retry the message with its original `client_message_id` |
 | Starting the member's turn after the request was recorded | The member shows "queued". The request is not lost: it is handed to the member's next turn | Retry the message, or write to the agent; either starts it |
-| Checking the group, or saving "working", just before the member's turn takes the request | The request is not run on an unchecked group. It stays queued | Same as above. It runs once the group can be checked |
+| Checking the group, or saving "working", just before the member's turn takes the request | The request is not run on an unchecked group. It remains queued or held if it was held already | Retry the original message after storage recovers. A still-stopped member stays held; a runnable member is woken without a second capture |
+| Handing a checked request to a turn, then returning it to the queue | The request did not run. If its queue reset cannot be saved yet, the server logs the pending repair rather than claiming it is queued; group reads fail while repair is blocked | Once storage recovers, opening the group or Retry repairs the durable reset and makes the same request runnable again, including after restart |
 | Copying an answer into the main chat, or recording that copy | The answer stays in the group. The agent gets an error saying the main-chat copy is missing, and the answer's @-names are not passed on yet | The agent calls `answer_request` again with the same request and the same text. That repairs the copy without posting a second answer, and then passes the @-names on once. Loading the group again after a restart also repairs it and passes them on |
 | Saving a pause, a removal or a deletion | The change is refused with an error and nothing is cancelled | Try again |
-| Marking requests cancelled after a pause or removal was saved | You get an error. The requests are fenced off and will not run, but they may still show their old state | Send `/pause` again (or open the group again); the labels are repaired |
+| Marking requests cancelled after a pause or removal was saved | You get an error, including when removal came from a workspace team save. Membership remains changed and the requests cannot run. Reads refuse stale labels while the repair write is still failing | Once storage recovers, send `/pause` again or open the group; the labels are repaired |
 
 The `answer_request` tool's error starts with "reply refused, nothing was sent". For a failed main-chat copy that prefix is not accurate: the answer is already in the group. Do not treat a tool error at this stage as proof that nothing was posted.
 
@@ -102,10 +103,10 @@ The group shows one state per member: its most recent request. The labels in thi
 | waiting for you in <Agent>'s main chat (`waiting_on_user`) | The agent asked you something, or needs an approval, while working on it |
 | answered | The answer is in the group |
 | refused | The agent's permission refused the request |
-| failed (`failed`) | The turn failed, or ended with no answer after the reminder |
+| failed: turn failed, or failed: no answer (`failed`) | The turn failed (`turn failed`), or ended with no answer after the reminder (`no answer`) |
 | interrupted | The turn was stopped, or Omnipus restarted while it ran. Interrupted work is never re-run |
 | unavailable (`unavailable`) | Not delivered. The reason is shown, for example "rate limit", "not a member" or "storage" |
-| cancelled | Cancelled by `/pause`, by removing the member, or by deleting the group |
+| cancelled, or cancelled — removed (`cancelled`) | Cancelled by `/pause` or deleting the group (`cancelled`). Removing the member shows `cancelled — removed` |
 | unknown | After a restart, Omnipus could not prove what happened |
 
 A group needs your attention while any of its requests waits for your approval or your answer, even if a newer request of the same member has already finished.
@@ -186,7 +187,7 @@ The snapshot always includes every request that is still open. When there are mo
 
 ## Audit
 
-Group changes are written to the audit log as `room.changed` events. Each event records the room, the workspace, the action, the agents involved and who made the change: your user name for changes you made (including a change to a workspace's team that moved agents in or out of its groups), or `system` for the server's own updates (for example, a group brought up to date with its workspace's team when it is opened or listed, rather than during your team change).
+Group changes are written to the audit log as `room.changed` events. Each event records the room, the workspace, the action, the agents involved and who made the change. A signed-in browser session records that account's user name, including a workspace team change that moved agents in or out of its groups. The CLI token records `cli`. Development bypass records `_dev_bypass`. The legacy environment token records `_env_token`. The server's own updates record `system` (for example, boot-time reconciliation or a group brought up to date when opened or listed, rather than during your team change).
 
 | Action | When |
 |---|---|

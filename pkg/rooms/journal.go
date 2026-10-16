@@ -23,6 +23,7 @@ const (
 	StreamDeliveries = "deliveries"
 	StreamMirrors    = "mirrors"
 	StreamTurns      = "turns"
+	StreamCostGaps   = "cost_gaps"
 )
 
 // Journal is every durable write and read of the rooms (the "post-back"
@@ -202,7 +203,24 @@ func repairTornTail(path string) error {
 	if err != nil {
 		return fmt.Errorf("rooms: open journal: %w", err)
 	}
-	defer f.Close()
+	return repairJournalTail(f, data)
+}
+
+// journalRepairFile is the file edge of tail repair; tests can force a close
+// failure without mocking the repair algorithm or the journal.
+type journalRepairFile interface {
+	WriteAt([]byte, int64) (int, error)
+	Truncate(int64) error
+	Sync() error
+	Close() error
+}
+
+func repairJournalTail(f journalRepairFile, data []byte) (repairErr error) {
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			repairErr = errors.Join(repairErr, fmt.Errorf("rooms: close repaired journal: %w", closeErr))
+		}
+	}()
 	cut := bytes.LastIndexByte(data, '\n') + 1
 	if json.Valid(data[cut:]) {
 		if _, err := f.WriteAt([]byte{'\n'}, int64(len(data))); err != nil {

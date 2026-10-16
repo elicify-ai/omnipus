@@ -257,13 +257,29 @@ func (s *Service) DecideConsume(roomID, requestID, sessionID string) ConsumeDeci
 // ReleaseConsume undoes a consume whose turn never received the request (it
 // could not be handed to the turn): the request is queued again, not
 // running, so its next delivery runs it.
-func (s *Service) ReleaseConsume(roomID, requestID string) {
-	s.withDelivery(roomID, requestID, func(r *room, d *deliveryRecord) {
-		if !terminal(d.State) && d.Consumed {
-			s.forgetWorking(d.SessionID, requestID)
-			s.updateState(r, d, StateAdmitted, "")
-		}
-	})
+func (s *Service) ReleaseConsume(roomID, requestID string) error {
+	r, err := s.loadRoom(roomID)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d := r.deliveries[requestID]
+	if d == nil || r.deleted || terminal(d.State) || !d.Consumed {
+		return nil
+	}
+	if r.rec.PendingReleases == nil {
+		r.rec.PendingReleases = map[string]bool{}
+	}
+	r.rec.PendingReleases[requestID] = true
+	// Save intent independently of the delivery append. If the latter fails,
+	// live reads and restart both repair the unstarted request before serving it.
+	intentErr := s.persistRecord(r)
+	repairErr := s.repairReleasedConsumes(r)
+	if repairErr != nil {
+		return errors.Join(intentErr, repairErr)
+	}
+	return nil
 }
 
 // ConsumeHeld puts a consumed request back to held: it met a stopped member.
@@ -339,6 +355,9 @@ func (s *Service) AddTurnCost(c TurnCost) {
 			slog.Error("rooms: a turn's cost could not be allocated: the room could not be read; the room's cost omits it",
 				"room_id", c.RoomID, "turn_id", c.TurnID, "error", err)
 		}
+		if StatusOf(err) != 404 {
+			s.markCostIncomplete(c.RoomID)
+		}
 		return
 	}
 	r.mu.Lock()
@@ -349,6 +368,7 @@ func (s *Service) AddTurnCost(c TurnCost) {
 	share := allocate(c)
 	if err := s.journal.Append(r.rec.ID, StreamTurns, &turnRecord{TurnID: c.TurnID, MicroUSD: share, Unpriced: !c.Priced, At: s.now()}); err != nil {
 		logRoomError("a turn's cost could not be recorded; the room's cost is marked incomplete", r.rec.ID, err)
+		s.recordCostGap(r.rec.ID)
 		r.rec.CostUnpriced = true
 		if pErr := s.publishMeta(r, ws); pErr != nil {
 			logRoomError("the room's incomplete-cost mark could not be saved", r.rec.ID, pErr)

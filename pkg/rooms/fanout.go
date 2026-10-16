@@ -127,10 +127,16 @@ func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string, sett
 	if d == nil || r.deleted || !admittable(d.State) {
 		return Admission{}, nil, false
 	}
-	if _, saved := r.byEntryID[d.EntryID]; !saved {
+	idx, saved := r.byEntryID[d.EntryID]
+	if !saved {
 		// The delivery was recorded but its message never was (a write cut
 		// between the two): there is nothing to deliver. Re-sending that same
 		// message completes it; nothing else ever admits it.
+		return Admission{}, nil, false
+	}
+	// Every admission path, including original-message Retry, obeys the
+	// room -> mirror -> mention barrier (FR-216).
+	if source := r.entries[idx]; source.AnswersRequest != "" && !r.mirrored[source.Entry.Id] {
 		return Admission{}, nil, false
 	}
 	if !s.deliveryCurrent(r, d) {
@@ -187,7 +193,7 @@ func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string, sett
 // admittable: the delivery has not started a turn and may be (re)admitted.
 func admittable(state string) bool {
 	switch state {
-	case StateRecorded, StateUnknown, StateUnavailable, StateAdmitted:
+	case StateRecorded, StateUnknown, StateUnavailable, StateAdmitted, StateHeld:
 		return true
 	}
 	return false

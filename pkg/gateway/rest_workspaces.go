@@ -1530,16 +1530,8 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 
 	rw.ws.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
-	if err := writeWorkspaceFile(rw.a.homePath, rw.ws); err != nil {
-		logsafeError("rest: update workspace: write", "id", rw.id, "error", err)
-		jsonErr(rw.w, http.StatusInternalServerError, "internal server error")
+	if !rw.persistWorkspaceAndRooms() {
 		return
-	}
-	// FR-160/FR-162: the workspace's group chats follow its team now (every
-	// room read reconciles again, so a failure here only delays it). The
-	// membership changes are audited under the signed-in user (FR-172).
-	if hub := rw.a.rooms.Load(); hub != nil && hub.svc != nil {
-		hub.svc.SyncWorkspace(rw.id, requestUsername(rw.r))
 	}
 	if rw.delegationChanged {
 		rw.changedFields = append(rw.changedFields, "delegation")

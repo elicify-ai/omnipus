@@ -139,10 +139,16 @@ type Service struct {
 	// id in flight to a channel closed when its admission finished.
 	inflight  sync.WaitGroup
 	admitting sync.Map
+	// Failed allocation reads retain the incomplete mark until storage can
+	// save it. Reads never serve a complete total while that repair is pending.
+	incompleteCosts sync.Map // room id -> true
 
-	mu        sync.Mutex
-	rooms     map[string]*room
-	loadedAll bool
+	// workspaceMu excludes on-read system reconciliation while a user save
+	// commits and applies its room memberships with that user's principal.
+	workspaceMu sync.RWMutex
+	mu          sync.Mutex
+	rooms       map[string]*room
+	loadedAll   bool
 	// sessions maps a member main session to the room requests it is
 	// working on (for waiting_on_user) and the cards pending there.
 	// cardMu guards working and pending; it is a leaf lock (never held
@@ -265,6 +271,12 @@ func (s *Service) readRoom(roomID string) (*room, error) {
 		s.finishDeletion(r)
 		return nil, notFound("no such group chat")
 	}
+	if err := s.repairReleasedConsumes(r); err != nil {
+		return nil, err
+	}
+	if err := s.repairIncompleteCost(r); err != nil {
+		return nil, err
+	}
 	if err := s.recover(r); err != nil {
 		// Never serve states that could not be made true (a "working" member
 		// whose turn died with the process): the room is unreadable until
@@ -298,6 +310,9 @@ func (s *Service) readJournals(roomID string, r *room) error {
 		unpriced = unpriced || t.Unpriced
 	})
 	if err != nil {
+		return err
+	}
+	if err := readStream(s.journal, roomID, StreamCostGaps, func(t turnRecord) { unpriced = unpriced || t.Unpriced }); err != nil {
 		return err
 	}
 	// The record's own mark stays: it also says a turn line could not be

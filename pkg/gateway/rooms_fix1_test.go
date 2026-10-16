@@ -8,14 +8,18 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/rooms"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -255,6 +259,11 @@ func TestRoomsFix1_RestartNeverReplaysInterruptedWork(t *testing.T) {
 	h.post(room.Id, "interrupted", "@Mia unfinished request")
 	old := wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "interrupted"), "mia")
 	h.waitState(room.Id, old.RequestId, "working")
+	select {
+	case <-p.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("instrument: the interrupted input never reached the provider")
+	}
 	restore := wu15DurableCrashImage(t, h.home)
 	h.shutdown()
 	restore()
@@ -273,12 +282,20 @@ func TestRoomsFix1_RestartNeverReplaysInterruptedWork(t *testing.T) {
 	wu15ReadFrame(t, conn, "catch_up_complete")
 	h.sendMain(conn, "mia", "WAKE_AFTER_RESTART")
 	h.waitState(room.Id, fresh.RequestId, "answered")
-	marker := `request_id="` + old.RequestId + `"`
-	for _, call := range restarted.inputs() {
-		for _, msg := range call {
-			require.NotContains(t, msg.Content, marker, "FR-216: the interrupted request was given to the member again")
+	// Retained/quoted model history is legitimate, regardless of how often
+	// its text appears. A real re-delivery must cross the working fence again.
+	// Pin the actual request's durable consume count instead of scanning history.
+	data, readErr := os.ReadFile(filepath.Join(rooms.DefaultDir(h.home), room.Id, "deliveries.jsonl"))
+	require.NoError(t, readErr)
+	working := 0
+	for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var record map[string]any
+		require.NoError(t, json.Unmarshal(line, &record))
+		if record["request_id"] == old.RequestId && record["state"] == "working" {
+			working++
 		}
 	}
+	require.Equal(t, 1, working, "§6.11: exactly the original pre-crash consume, never a restart re-delivery")
 	require.NotEmpty(t, restarted.inputs(), "instrument: the restarted member really ran")
 	capture, found, err := h.al.RequestLedger().Get(h.main("mia"), old.RequestId)
 	require.NoError(t, err)
