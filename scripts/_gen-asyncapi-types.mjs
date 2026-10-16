@@ -43,6 +43,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { resolve, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
+import { runDependentRequiredSelfTests } from "./_gen-asyncapi-types.selftest.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -79,6 +80,15 @@ function resolveJsYaml() {
   }
   throw new Error("js-yaml not found — install it in node_modules");
 }
+
+// Run the converter's generic behavior probes during normal generation too,
+// so the drift gate cannot bless generated validators that drop dependencies.
+runDependentRequiredSelfTests({
+  schemaToZod,
+  withFrameDependencies,
+  z: createRequire(resolveJsYaml())("zod").z,
+});
+if (process.argv.includes("--self-test")) process.exit(0);
 
 const yaml = require(resolveJsYaml());
 
@@ -294,9 +304,9 @@ function schemaToZod(schema, indent = 0) {
     if (Object.keys(props).length === 0) {
       // Empty object with no defined properties — treat as record
       if (schema.additionalProperties !== false) {
-        return "z.record(z.unknown())";
+        return withDependentRequired("z.record(z.unknown())", schema, indent);
       }
-      return `z.object({})${hasAdditional ? ".passthrough()" : ".strict()"}`;
+      return withDependentRequired(`z.object({})${hasAdditional ? ".passthrough()" : ".strict()"}`, schema, indent);
     }
 
     const propLines = [];
@@ -309,17 +319,63 @@ function schemaToZod(schema, indent = 0) {
     }
 
     const closing = hasAdditional ? ".passthrough()" : ".strict()";
-    // NOTE: a top-level `anyOf` sitting alongside `properties`/`type: object`
-    // (e.g. MessageFrame's "content non-empty OR media non-empty") is
-    // deliberately NOT folded in here — see emitSchemaConst below, which
-    // splits such a schema into a plain `<Name>Base` object (used inside
-    // z.discriminatedUnion, which requires plain ZodObject members) plus the
-    // publicly-exported, .refine()-validated `<Name>`.
-    return `z\n${pad}  .object({\n${propLines.join("\n")}\n${pad}  })\n${pad}  ${closing}`;
+    // The top-level emission below separates refined frame validators from
+    // their plain ZodObject bases for z.discriminatedUnion. Dependencies are
+    // still emitted here for standalone, nested and array-contained objects.
+    const objectExpr = `z\n${pad}  .object({\n${propLines.join("\n")}\n${pad}  })\n${pad}  ${closing}`;
+    return withDependentRequired(objectExpr, schema, indent);
   }
 
   // Untyped — accept any value
   return "z.unknown()";
+}
+
+/** Preserve JSON Schema's presence-based sibling dependencies at any depth. */
+function withDependentRequired(expression, schema, indent = 0) {
+  const dependencies = Object.entries(schema.dependentRequired ?? {});
+  if (dependencies.length === 0) return expression;
+  const pad = " ".repeat(indent);
+  const lines = [`${expression}.superRefine((value, ctx) => {`];
+  for (const [trigger, siblings] of dependencies) {
+    if (!Array.isArray(siblings) || siblings.some((key) => typeof key !== "string")) {
+      throw new Error(`dependentRequired for ${trigger} must list sibling property names`);
+    }
+    for (const sibling of siblings) {
+      const present = (key) => `Object.prototype.hasOwnProperty.call(value, ${JSON.stringify(key)})`;
+      lines.push(`${pad}  if (${present(trigger)} && !${present(sibling)}) {`);
+      lines.push(`${pad}    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [${JSON.stringify(sibling)}], message: ${JSON.stringify(`${sibling} is required when ${trigger} is present`)} });`);
+      lines.push(`${pad}  }`);
+    }
+  }
+  lines.push(`${pad}})`);
+  return lines.join("\n");
+}
+
+/**
+ * A discriminated union needs plain object members, so enforce top-level
+ * dependencies through their full named validators after discriminator lookup.
+ * Existing anyOf-only frames keep their previous union behavior unchanged.
+ */
+function withFrameDependencies(baseUnionExpression, frameSchemas) {
+  const dependentFrames = frameSchemas.filter(({ schema }) =>
+    Object.keys(schema.dependentRequired ?? {}).length > 0);
+  if (dependentFrames.length === 0) return baseUnionExpression;
+  const lines = [`${baseUnionExpression}.superRefine((value, ctx) => {`, "  switch (value.type) {"];
+  for (const { name, schema } of dependentFrames) {
+    const discriminator = schema.properties?.type?.const;
+    if (typeof discriminator !== "string") {
+      throw new Error(`dependent frame ${name} needs a string type discriminator`);
+    }
+    lines.push(`    case ${JSON.stringify(discriminator)}: {`);
+    lines.push(`      const parsed = ${name}.safeParse(value);`);
+    lines.push("      if (!parsed.success) {");
+    lines.push("        for (const issue of parsed.error.issues) ctx.addIssue(issue);");
+    lines.push("      }");
+    lines.push("      break;");
+    lines.push("    }");
+  }
+  lines.push("  }", "})");
+  return lines.join("\n");
 }
 
 /**
@@ -575,32 +631,32 @@ const discriminatedUnionBaseNames = new Map();
 // Emitted in definition order; forward refs resolved by hoisting the const.
 for (const [name, schema] of Object.entries(schemas)) {
   if (name === "WsFrameType") continue;
-  const baseExpr = schemaToZod(schema, 0);
-  const hasObjectAnyOf =
-    Array.isArray(schema.anyOf) &&
-    schema.anyOf.length > 0 &&
-    (schema.type === "object" || schema.properties);
+  const isObject = schema.type === "object" || schema.properties;
+  const hasObjectAnyOf = isObject && Array.isArray(schema.anyOf) && schema.anyOf.length > 0;
+  const hasDependencies = isObject && Object.keys(schema.dependentRequired ?? {}).length > 0;
+  const { dependentRequired, ...plainSchema } = schema;
+  const baseExpr = schemaToZod(hasDependencies ? plainSchema : schema, 0);
 
-  if (!hasObjectAnyOf) {
+  if (!hasObjectAnyOf && !hasDependencies) {
     zodLines.push(`export const ${name} = ${baseExpr};`);
     zodLines.push("");
     continue;
   }
 
-  // Split into a plain `<Name>Base` object (the z.discriminatedUnion member)
-  // plus the publicly-exported `<Name>` — the SAME name every existing
-  // consumer already imports — now additionally enforcing the anyOf
-  // cross-field invariant via .refine(). This is a transparent upgrade: no
-  // consumer needs to change which name it imports.
+  // Keep a plain base for discriminator dispatch, then derive the public
+  // validator from the full schema constraints without changing its name.
   const baseName = `${name}Base`;
   discriminatedUnionBaseNames.set(name, baseName);
-  const branchExprs = schema.anyOf.map((branch) => anyOfBranchPredicate(branch));
-  const predicate = branchExprs.map((b) => `(${b})`).join(" || ");
   zodLines.push(`export const ${baseName} = ${baseExpr};`);
   zodLines.push("");
-  zodLines.push(`export const ${name} = ${baseName}.refine((v) => ${predicate}, {`);
-  zodLines.push(`  message: "does not satisfy the schema's anyOf constraint",`);
-  zodLines.push(`});`);
+  let refinedExpr = baseName;
+  if (hasObjectAnyOf) {
+    const branchExprs = schema.anyOf.map((branch) => anyOfBranchPredicate(branch));
+    const predicate = branchExprs.map((b) => `(${b})`).join(" || ");
+    refinedExpr += `.refine((v) => ${predicate}, {\n  message: "does not satisfy the schema's anyOf constraint",\n})`;
+  }
+  if (hasDependencies) refinedExpr = withDependentRequired(refinedExpr, schema);
+  zodLines.push(`export const ${name} = ${refinedExpr};`);
   zodLines.push("");
 }
 
@@ -608,12 +664,10 @@ for (const [name, schema] of Object.entries(schemas)) {
 
 zodLines.push("// ── WS frame discriminated union ─────────────────────────────────────────────");
 zodLines.push("");
-zodLines.push("export const WsFrame = z.discriminatedUnion(\"type\", [");
-frameNames.forEach((name) => {
-  const memberName = discriminatedUnionBaseNames.get(name) ?? name;
-  zodLines.push(`  ${memberName},`);
-});
-zodLines.push("]);");
+const unionMembers = frameNames.map((name) => discriminatedUnionBaseNames.get(name) ?? name);
+const baseUnionExpression = `z.discriminatedUnion("type", [\n${unionMembers.map((name) => `  ${name},`).join("\n")}\n])`;
+const frameSchemas = frameNames.map((name) => ({ name, schema: schemas[name] }));
+zodLines.push(`export const WsFrame = ${withFrameDependencies(baseUnionExpression, frameSchemas)};`);
 zodLines.push("");
 zodLines.push("export type WsFrameType = z.infer<typeof WsFrameType>;");
 zodLines.push("export type WsFrame = z.infer<typeof WsFrame>;");

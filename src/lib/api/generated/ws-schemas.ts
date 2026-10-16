@@ -386,11 +386,12 @@ export const LLMErrorReplay = z
   })
   .strict();
 
-export const ErrorFrame = z
+export const ErrorFrameBase = z
   .object({
     type: z.literal("error"),
     session_id: z.string().max(255).optional(),
     message: z.string().min(1).max(4096),
+    ask_user_card_id: z.string().min(1).optional(),
     client_message_id: z.string().min(1).max(128).optional(),
     first_message_error: z.enum(["not_saved", "delivery_unknown", "answer_not_started"]).optional(),
     payload: z
@@ -401,6 +402,15 @@ export const ErrorFrame = z
     seq: z.number().int().min(1).optional(),
   })
   .strict();
+
+export const ErrorFrame = ErrorFrameBase.superRefine((value, ctx) => {
+  if (Object.prototype.hasOwnProperty.call(value, "first_message_error") && !Object.prototype.hasOwnProperty.call(value, "client_message_id")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["client_message_id"], message: "client_message_id is required when first_message_error is present" });
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "ask_user_card_id") && !Object.prototype.hasOwnProperty.call(value, "session_id")) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["session_id"], message: "session_id is required when ask_user_card_id is present" });
+  }
+});
 
 export const ToolCallStartFrame = z
   .object({
@@ -1594,7 +1604,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   MessageStatusFrame,
   TokenFrame,
   DoneFrame,
-  ErrorFrame,
+  ErrorFrameBase,
   ToolCallStartFrame,
   ToolCallResultFrame,
   SubagentStartFrame,
@@ -1661,7 +1671,17 @@ export const WsFrame = z.discriminatedUnion("type", [
   MailPanelObserverFrame,
   MailPanelObserverAckFrame,
   MailPanelObserverErrorFrame,
-]);
+]).superRefine((value, ctx) => {
+  switch (value.type) {
+    case "error": {
+      const parsed = ErrorFrame.safeParse(value);
+      if (!parsed.success) {
+        for (const issue of parsed.error.issues) ctx.addIssue(issue);
+      }
+      break;
+    }
+  }
+});
 
 export type WsFrameType = z.infer<typeof WsFrameType>;
 export type WsFrame = z.infer<typeof WsFrame>;

@@ -580,6 +580,8 @@ type DoneStats struct {
 
 // ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
 type ErrorFrame struct {
+	// Exact AskUserAnswerFrame.card_id this answer or cancellation error concerns. Requires session_id. This is a card-scoped notification, not a turn-ending error or an acknowledgement of acceptance. Omit client_message_id and first_message_error on these errors. Authoritative card updates determine pending or terminal status.
+	AskUserCardId *string `json:"ask_user_card_id,omitempty"`
 	// The client_message_id of the user message this error is about. With first_message_error it is the first-send outcome. Without first_message_error it marks a message-scoped refusal: the named message was refused (for example an @-recipient send) and the error ends no turn, so a client must not treat it as the end of the chat's running turn.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	// Ordinary ID-bearing first-send outcome. Requires client_message_id. not_saved proves no user entry was written; delivery_unknown means bytes may have reached disk but durable delivery cannot be confirmed. answer_not_started means the entry is durably saved but turn admission failed, and requires its confirmed session_id. General errors and workspace-setup kickoffs omit these first-send fields.

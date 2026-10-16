@@ -562,6 +562,7 @@ sync-agents-md:
 # root. Always use `tsc -b --noEmit` here and in CI. See F6 / npm run typecheck.
 verify-contracts: gen-contracts lint-wire-types
 	npx tsc -b --noEmit
+	node --test scripts/asyncapi-card-error-runtime.test.mjs
 	git diff --exit-code -- contracts/ pkg/api/generated/ src/lib/api/generated/ pkg/gateway/inboundschemas/
 
 ## docs-reference: Regenerate provider, model, and built-in tool reference tables
