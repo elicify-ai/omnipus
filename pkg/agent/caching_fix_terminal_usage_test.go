@@ -49,6 +49,13 @@ func TestCachingFixBilledTerminalFailureOnce(t *testing.T) {
 				if entry.Role == "assistant" {
 					total += entry.Tokens
 					if entry.Tokens > 0 {
+						wantInput, wantOutput := 40, 10
+						if len(billed) > 0 {
+							wantInput, wantOutput = 2, 3
+						}
+						if entry.PromptTokens != wantInput || entry.CompletionTokens != wantOutput || entry.CacheReadTokens != 0 || entry.CacheWriteTokens != 0 {
+							t.Errorf("billed split=%d/%d/%d/%d, want %d/%d/0/0", entry.PromptTokens, entry.CompletionTokens, entry.CacheReadTokens, entry.CacheWriteTokens, wantInput, wantOutput)
+						}
 						billed = append(billed, entry.Tokens)
 					}
 				}
