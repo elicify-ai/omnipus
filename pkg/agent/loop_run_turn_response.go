@@ -677,6 +677,7 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 		if outcomeRelabelApplies(llm.Code, rr.rq.ri.rf.rt.ts.outcomeRelabel) {
 			llm.Code = rr.rq.ri.rf.rt.ts.outcomeRelabel
 			llm.Message = UserMessageForCode(rr.rq.ri.rf.rt.ts.outcomeRelabel)
+			llm.ProviderMessage = false
 		}
 
 		rr.rq.ri.rf.rt.al.emitEvent(

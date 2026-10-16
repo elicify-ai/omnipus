@@ -776,9 +776,20 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 
 	var usedLight bool
 	rp.rc.rx.rr.rq.ri.rf.rt.activeCandidates, rp.rc.rx.rr.rq.ri.activeModel, usedLight = rp.rc.rx.rr.rq.ri.rf.rt.al.selectCandidates(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage, rp.rc.rx.rr.rq.ri.messages)
-	rp.rc.rx.rr.rq.ri.rf.rt.activeProvider = rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Provider
-	if usedLight && rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.LightProvider != nil {
-		rp.rc.rx.rr.rq.ri.rf.rt.activeProvider = rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.LightProvider
+	rt := rp.rc.rx.rr.rq.ri.rf.rt
+	rt.activeProvider = rt.ts.agent.Provider
+	if usedLight && rt.ts.agent.LightProvider != nil {
+		rt.activeProvider = rt.ts.agent.LightProvider
+	}
+	// The injected primary may be the global default, not the selected
+	// candidate's client. Bind the pool while holding the model/pool lock,
+	// including for single-candidate and light-model streaming turns.
+	if len(rt.activeCandidates) > 0 {
+		if pool := rt.ts.agent.providerPool.Load(); pool != nil {
+			if p := (*pool)[rt.activeCandidates[0].Provider]; p != nil {
+				rt.activeProvider = p
+			}
+		}
 	}
 	rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.mu.RUnlock()
 	rp.rc.rx.rr.rq.ri.pendingMessages = append([]providers.Message(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.InitialSteeringMessages...)
@@ -1578,17 +1589,10 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 			rt.activeCandidates,
 			func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
 				if len(rt.activeCandidates) == 1 {
-					// F1: the one candidate IS the active provider (rt sets
-					// activeProvider from the same candidate list selectCandidates
-					// returned), so the attempt runs exactly what today's plain
-					// path runs — same instance, same streaming behavior, same
-					// rt.llmModel. rt.llmModel is what the attempt calls with:
-					// it is activeModel as selected, plus any BeforeLLM hook's
-					// model override (applied just above, at the hook block) —
-					// the chain's `model` parameter would silently drop the
-					// override. FR-007's per-candidate pool lookup only
-					// distinguishes providers when there is more than one
-					// candidate.
+					// selectTurnProvider binds the candidate's pool client even
+					// for one candidate. Keep this attempt path for streaming
+					// and rt.llmModel: a BeforeLLM hook may have overridden the
+					// selected model, which the chain's model would discard.
 					rt.providerCallStreamedBytes.Store(0) // C-10 counts THIS attempt only
 					return rt.runProviderAttempt(ctx, rt.activeProvider, provider, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes)
 				}

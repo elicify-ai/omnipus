@@ -112,6 +112,15 @@ Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed t
 
 ## The provider rejects your model requests
 
+For an HTTP 400 rejection, the failure notice distinguishes a wrong model from an otherwise unclassified bad request:
+
+| Notice | Meaning and next step |
+|---|---|
+| `bad_model`, naming the provider and model | The provider specifically reported that the model was not found or is not offered. Choose a model offered by that provider in the agent's settings. Omnipus does not try another provider for this failure. |
+| `HTTP 400: Bad Request; format`, naming the provider and model | The provider rejected the request, but did not identify a more specific cause. This does **not** prove the model is unavailable. Enable **Verbose chat** before reproducing it to inspect the available technical detail. |
+
+The same safe explanation is saved in the conversation and remains after reopening it. Raw provider response text is not saved as that explanation. Technical detail is live-only and scrubbed for credentials; turning **Verbose chat** on after delivery or reopening history does not recover discarded detail. Existing attachment recovery, context-length handling, and authentication, billing and rate-limit classifications still take their own paths.
+
 **"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then removes the oldest eligible whole piece — a complete old step (assistant calls plus all their matching results), or an older assistant reply that made no tool calls, whichever comes first in the conversation; if nothing can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.
 
 This is an internal retry notice, not a data-loss event: relief changes the model's view, not the admitted archive text. It keeps the original user message and media, instructions, call/result structure and unconsumed steering. If those required parts still do not fit, Omnipus returns the last real provider rejection when no further reduction is possible or the retry limit is reached. It does not stop merely because a local size estimate says the immutable remainder is too large.

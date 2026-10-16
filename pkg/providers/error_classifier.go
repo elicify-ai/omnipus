@@ -188,6 +188,10 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		return nil
 	}
 
+	// SDK-backed adapters normally normalize at their boundary; also accept
+	// wrapped SDK errors here so their structured status is never string-parsed.
+	err = normalizeSDKError(err)
+
 	// Harvest the attempt's own identity for any candidate field the caller
 	// left empty. Never overwrites a pinned candidate identity.
 	var innerFE *FailoverError
@@ -231,6 +235,12 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	var tae *common.ToolArgumentsError
 	if errors.As(err, &tae) {
 		return nil
+	}
+	if innerFE != nil && innerFE.Reason == FailoverBadModel {
+		return &FailoverError{
+			Reason: FailoverBadModel, Provider: provider, Model: model,
+			Status: innerFE.Status, Wrapped: err,
+		}
 	}
 
 	// A stall-aborted stream (founder decision 2026-09-14) is a transient
@@ -326,6 +336,12 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 					Model:    model,
 					Status:   status,
 					Wrapped:  err,
+				}
+			}
+			if IsBadModelError(status, body) {
+				return &FailoverError{
+					Reason: FailoverBadModel, Provider: provider, Model: model,
+					Status: status, Wrapped: err,
 				}
 			}
 		}

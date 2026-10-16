@@ -735,7 +735,13 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 	case errors.Is(runErr, context.Canceled), result.status == TurnEndStatusAborted:
 		return steer.OutcomeInterrupted, session.LifecycleStopped, "interrupted: the session was cancelled"
 	case runErr != nil:
-		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + runErr.Error()
+		reason := runErr.Error()
+		// A structured provider failure can echo the request or credentials.
+		// Keep its safe classified sentence in the parent handback/outbox too.
+		if pe := errorToProviderError(runErr); pe != nil && (pe.Status > 0 || pe.Body != "" || pe.Provider != "") {
+			reason = userVisibleTurnError(runErr)
+		}
+		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + reason
 	case result.finalContent == toolLimitResponse:
 		// The turn hit the tool-iteration ceiling with no final response
 		// (loop_run_turn.go::finalizeTurn sets finalContent to the

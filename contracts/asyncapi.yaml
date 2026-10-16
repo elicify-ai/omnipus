@@ -3310,6 +3310,14 @@ components:
         context_window_unknown:
           message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
           attribution: config
+        bad_model:
+          message: "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings."
+          attribution: config
+          provider_message: "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings."
+        provider_request_rejected:
+          message: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+          attribution: product
+          provider_message: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -3344,6 +3352,8 @@ components:
             - judge_conclusion_failed
             - delegated_task_limit
             - context_window_unknown
+            - bad_model
+            - provider_request_rejected
             - unknown
         message:
           type: string
@@ -3558,6 +3568,14 @@ components:
         context_window_unknown:
           message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
           attribution: config
+        bad_model:
+          message: "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings."
+          attribution: config
+          provider_message: "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings."
+        provider_request_rejected:
+          message: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+          attribution: product
+          provider_message: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -3592,6 +3610,8 @@ components:
             - judge_conclusion_failed
             - delegated_task_limit
             - context_window_unknown
+            - bad_model
+            - provider_request_rejected
             - unknown
         message:
           type: string

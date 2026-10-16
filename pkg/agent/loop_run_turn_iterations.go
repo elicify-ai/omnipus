@@ -632,6 +632,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) surfaceEmptyRetryOutcome() age
 		if outcomeRelabelApplies(llm.Code, cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel) {
 			llm.Code = cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel
 			llm.Message = UserMessageForCode(cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel)
+			llm.ProviderMessage = false
 		}
 
 		cn.rc.rx.rr.rq.ri.rf.rt.al.emitEvent(

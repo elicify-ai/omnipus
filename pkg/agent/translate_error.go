@@ -31,6 +31,14 @@ import (
 type LLMErrorCode string
 
 const (
+	// CodeBadModel is an operator-fixable model/provider mismatch, never an outage.
+	CodeBadModel LLMErrorCode = "bad_model"
+	// CodeProviderRequestRejected describes an otherwise unclassified terminal400.
+	// Recovery still sees CodeUnknown, allowing the existing media strip-retry.
+	CodeProviderRequestRejected LLMErrorCode = "provider_request_rejected"
+)
+
+const (
 	// CodeMediaUnsupported: provider rejected a media block (image or PDF).
 	// Either capability-absence (model has no vision) or format-rejection
 	// (model has vision, but the supplied format is not acceptable).
@@ -691,6 +699,9 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		if isBillingEvidence(body, status) {
 			return CodeQuotaBilling
 		}
+		if providers.IsBadModelError(status, body) {
+			return CodeBadModel
+		}
 		// C-24: a 404 carrying a retirement phrase is model_retired. The
 		// 404-gate keeps every near-miss (a 410, or the phrase on another
 		// status) CodeUnknown byte-identically; the media strip-retry gate
@@ -827,7 +838,7 @@ func TranslateLLMError(pe *ProviderError, message string) LLMError {
 		llm.Provider = pe.Provider
 		llm.Model = pe.Model
 		llm.RequestID = pe.RequestID
-		if sentence := providerMessageFor(code, pe.Provider); sentence != "" {
+		if sentence := providerMessageFor(code, pe.Provider, pe.Model); sentence != "" {
 			llm.Message = sentence
 			llm.ProviderMessage = true
 		}
@@ -1035,7 +1046,27 @@ func TranslateTurnError(err error) LLMError {
 		// before this fallback started threading pe through.
 		pe = nil
 	}
-	return TranslateLLMError(pe, err.Error())
+	llm := TranslateLLMError(pe, err.Error())
+	// This is a terminal presentation, AFTER the recovery classifier had its
+	// chance. Keep inconclusive400 unknown inside TranslateLLMError so media
+	// strip-retry remains reachable, but name the known rejection on failure.
+	code := llm.Code
+	var fe *providers.FailoverError
+	if errors.As(err, &fe) && fe.Reason == providers.FailoverBadModel {
+		code = CodeBadModel
+	} else if code == CodeUnknown && pe != nil && pe.Status == 400 {
+		code = CodeProviderRequestRejected
+	}
+	if code != llm.Code {
+		llm.Code = code
+		llm.Message = defaultUserMessage(llm.Code)
+		llm.Retryable = false
+		if sentence := providerMessageFor(llm.Code, llm.Provider, llm.Model); sentence != "" {
+			llm.Message = sentence
+			llm.ProviderMessage = true
+		}
+	}
+	return llm
 }
 
 // previousReplyStillFinishingMessage is the user text for an admission refused
