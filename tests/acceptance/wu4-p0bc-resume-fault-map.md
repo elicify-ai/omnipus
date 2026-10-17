@@ -35,3 +35,16 @@ The QA branch retains older production, so defect runs use an unchanged source a
 | `TestWU4P0BOrdinaryInboxWakeRetainsMarkerAndAckRequirements` | Three control leaves PASS, exit 0 | Healthy ordinary inbox delivery executes/marks/acknowledges; marker and Ack faults each keep its body from running and its input pending |
 
 Correction: the initial ordinary-control draft used `UnackedCount`, which counts questions/blockers and excludes its final handback. That instrument-only failure is excluded from RED evidence. The final control uses `Drain`, proves a real pending handback before each case, and passes all three named leaves. No compile error, panic, timeout or empty collection is credited as RED. Post-acceptance assertions that the four RED rows cannot reach remain deferred to GREEN/CHECK.
+
+## P0-c publication receipt
+
+Same unchanged production archive `78d1b04e5e2ff1418c9ec56b5fb3aaeefd161a17`. The new fixture runs the registered request_secret tool in an actual helper, waits for its park turn to finish, submits the real card, and retains its actual original bus wake. Boot is the existing persisted boot-epoch/recovery path. Stop is the ordinary public StopSession operation, with human and agent actors tested separately. Fresh registries re-read durable request metadata. A stopped stale wake may be a harmless no-op or a rejection: its return-error representation is not the oracle; zero ClaimResume publications and zero additional model turns are.
+
+| Selector (anchored with `^` and `$`) | Observed on unchanged production | Reason |
+|---|---|---|
+| `TestWU4P0CExplicitStopAfterRestartVetoesWithheldSecretWake` | Human + agent RED, exit 1 | Restart lands, explicit Stop is accepted, then retry incorrectly re-dispatches and the withheld wake claims/executes once instead of zero times |
+| `TestWU4P0CExplicitStopAfterRecoveredWakeQueuedVetoesConsumption` | Human + agent RED, exit 1 | A recovery wake already queued before explicit Stop still claims/executes after that Stop |
+| `TestWU4P0CPostRestartStopVetoSurvivesRevivalAndAnotherBoot` | Human + agent RED, exit 1 | After public revival clears the session Stop, another real boot and fresh registry resurrect the old saved request; one claim/extra turn proves the explicit veto was not durable |
+| Existing `TestSecretWake_RestartStopRevivesUnconsumedReceiptOnlyOnceAcrossBoots` | Control PASS, exit 0 | Without a later explicit Stop, restart-only recovery really executes once, and another boot never consumes it twice |
+
+All six RED leaves reach the required zero-versus-one claim and no-additional-turn assertions, not a constructor/compile/panic/timeout failure. Saved references remain readable and submitted; log/error/durable plaintext scans report no separate failures. Raw commands/exits are in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/l1/wu4/qa-red/p0bc-20261017/p0c-runs.json`; exact executed source hashes are in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/l1/wu4/qa-red/p0bc-20261017/p0c-source-manifest.json`. Independent implementation GREEN, mutation probes, fresh CHECK and live UAT remain deferred, not passed.
