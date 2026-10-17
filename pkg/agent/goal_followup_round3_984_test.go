@@ -17,6 +17,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
+// PW-D17 (spec §22, 2026-10-15): retry the stored final under its own id, never
+// fall back to a separate verdict-round wake. Keep the failed-transport control.
 func TestGoal984_StoredNotWokenHandbackFallsBackToOneVerdictWake(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -55,12 +57,14 @@ func TestGoal984_StoredNotWokenHandbackFallsBackToOneVerdictWake(t *testing.T) {
 	mu.Lock()
 	gotWakeIDs := append([]string(nil), wakeIDs...)
 	mu.Unlock()
-	if len(gotWakeIDs) != 1 || gotWakeIDs[0] != verdictID {
-		t.Fatalf("parent wakes = %v, want exactly verdict %q", gotWakeIDs, verdictID)
+	if len(gotWakeIDs) != 0 {
+		t.Errorf("standalone verdict fallback wakes = %v, want none; only the saved final owns the met ending (PW-D17)", gotWakeIDs)
 	}
 	assertUnackedMessageIDs(t, inbox, parentID, child.SessionID, verdictID)
 }
 
+// PW-D16 (spec §22, 2026-10-15): this direct refused-wake fixture has no combined
+// chat save. It must stay unacked; the full met path acks only after that save.
 func TestGoal984_WakeMetVerdictLeavesEntryUnackedWhenParentStopped(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()

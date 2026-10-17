@@ -822,6 +822,7 @@ func (al *AgentLoop) resolveSystemMessageWorkspaceID(msg bus.InboundMessage, tra
 func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (string, error) {
 	sessionID := msg.AsyncTranscriptSessionID
 	messageID := inboundMetadata(msg, "steer_message_id")
+	defer al.releaseWakePublication(sessionID, messageID)
 	generation, err := strconv.Atoi(inboundMetadata(msg, "steer_generation"))
 	if err != nil || generation < 0 {
 		return "", fmt.Errorf("steer: wake %q has invalid generation", messageID)
@@ -853,6 +854,11 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 			}
 			return "", nil
 		}
+	}
+
+	saved, consumed, savedErr := al.prepareSavedSystemWake(ctx, sessionID, messageID, rec.AgentID)
+	if savedErr != nil || consumed {
+		return "", savedErr
 	}
 
 	// D6/D7: a stopped session (landed, or with its current-generation Stop
@@ -1010,6 +1016,11 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		// (steer_launcher.go) uses its own commit's return value rather than
 		// its stale pre-write snapshot for the completion disposition below.
 		rec = running
+	}
+
+	if err := al.placeSavedWakeAtEntry(ctx, ts, messageID, saved); err != nil {
+		abort()
+		return "", err
 	}
 
 	// The consumed marker and the acknowledgement are written only once the

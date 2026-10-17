@@ -622,7 +622,7 @@ type GoalOutcomeFrame struct {
 	Type      string `json:"type"`
 }
 
-// GoalOutcomeFrameOutcome — Hand-synced WS copy of contracts/components/schemas/GoalOutcome.yaml (the REST/transcript carrier — see it for every field's meaning). Named differently because pkg/api/generated holds the OpenAPI and AsyncAPI Go types in one package and cannot declare `GoalOutcome` twice. Any field edit MUST be mirrored in GoalOutcome.yaml.
+// GoalOutcomeFrameOutcome — Hand-synced WS copy of contracts/components/schemas/GoalOutcome.yaml (the REST/transcript carrier — see it for every field's meaning). Named differently because pkg/api/generated holds the OpenAPI and AsyncAPI Go types in one package and cannot declare `GoalOutcome` twice. Any field edit MUST be mirrored in GoalOutcome.yaml. An ending is stored once per transcript: helper and parent have different message ids but share the goal id, ending, rounds and Judge reason.
 type GoalOutcomeFrameOutcome struct {
 	CriteriaTotal *int   `json:"criteria_total,omitempty"`
 	EndedAt       string `json:"ended_at"`
@@ -702,6 +702,25 @@ type GoalStatusFrame struct {
 	// ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (originally 8 states, superseding the earlier 4-value active/paused_judge_unavailable/brake_fired/cleared set — no back-compat at the time; `cleared` re-added as a 9th value by the UAT S3 fix so a user-initiated `/goal clear` no longer collapses into `failed`). Four values ADDED by the joint ADR-084/ADR-085/ADR-086 delivery (C-39); a fifth, `judge_refused_god_mode` (JUDGE-FR-057a), was REMOVED on 2026-09-20 by issue #761 — nothing can emit it, do not re-add. `judge_cas_loss` (JUDGE-FR-083, reason string stays `cas_loss`), `blocked` (JUDGE-FR-093, not terminal), `claim_overturned` (JUDGE-FR-102, not terminal), `expired` (ADR-086 GOAL-FR-028, terminal). See components/schemas/GoalStatusFrame.yaml for the full per-state crosswalk description.
 	State string `json:"state"`
 	Type  string `json:"type"`
+}
+
+// HelperEventFrame — Server to client. Immutable helper-event row addressed to one transcript. Emitted live after save and replayed by the stamped helper_event subtype. Keep components/schemas/HelperEventFrame.yaml in sync.
+type HelperEventFrame struct {
+	HelperEvent HelperEventFrameEvent `json:"helper_event"`
+	MessageId   string                `json:"message_id"`
+	Seq         *int64                `json:"seq,omitempty"`
+	SessionId   string                `json:"session_id"`
+	Type        string                `json:"type"`
+}
+
+// HelperEventFrameEvent — Hand-synced WS copy of components/schemas/HelperEvent.yaml. Keep both shapes identical.
+type HelperEventFrameEvent struct {
+	CreatedAt       string  `json:"created_at"`
+	GoalId          *string `json:"goal_id,omitempty"`
+	HelperSessionId string  `json:"helper_session_id"`
+	HelperTitle     *string `json:"helper_title,omitempty"`
+	Kind            string  `json:"kind"`
+	Text            string  `json:"text"`
 }
 
 // JudgeVerdictFrame — Server → client. Live push of a judge adjudication (ADR-049 D2/D4/NFR-5) — the WS carrier of a judge verdict. The other carrier is the persisted session-transcript entry (Message.type=judge_verdict / Message.verdict, contract C12); both carry the same shape so they cannot silently disagree.
@@ -1777,6 +1796,7 @@ const (
 	WsFrameTypeBrowserInputControlAck   WsFrameType = "browser_input_control_ack"
 	WsFrameTypeBrowserHandoverNotice    WsFrameType = "browser_handover_notice"
 	WsFrameTypeGoalOutcome              WsFrameType = "goal_outcome"
+	WsFrameTypeHelperEvent              WsFrameType = "helper_event"
 	WsFrameTypeLibraryChanged           WsFrameType = "library_changed"
 	WsFrameTypeSessionSnapshot          WsFrameType = "session_snapshot"
 	WsFrameTypeCatchUpComplete          WsFrameType = "catch_up_complete"

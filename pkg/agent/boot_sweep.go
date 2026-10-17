@@ -242,6 +242,13 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		notice("stop-intents:"+id, fmt.Sprintf("session %s accepted Stop controls unreadable at boot: %v", id, pendingErr))
 		return pendingErr
 	}
+	if rec.ExecutionID != nil && r.BootEpoch != nil && rec.ExecutionID.BootSeq == r.BootEpoch.Current() &&
+		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued) {
+		// A repeated repair pass in this process must not interrupt the native
+		// continuation this same boot already admitted.
+		r.recoverStoppedChildNotice(ctx, rec, notice)
+		return nil
+	}
 	stopLandedByBoot := false
 	var interruptedErr error
 	if !pendingStop && !rec.Terminal() && rec.State != session.LifecycleNeedsInput &&
@@ -277,6 +284,16 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	// older untaken one ring here); its true must not short-circuit the
 	// interrupted arm below, which finishes D8.3's parent notification for
 	// the run this restart interrupted.
+	if !pendingStop && interruptedErr == nil {
+		// Resume admission (or its visible refusal) precedes the one restart
+		// wake. The immutable restart row is still sourced from the ledger.
+		r.resumeRestartHelper(ctx, rec, notice)
+	}
+	if al, loopErr := r.noticeLoop(); loopErr == nil {
+		if repairErr := errors.Join(al.repairHelperEvents(id), al.repairGoalOutcome(id)); repairErr != nil {
+			notice("helper-event-repair:"+id, fmt.Sprintf("helper %s rows are pending repair: %v", id, repairErr))
+		}
+	}
 	stopNoticeRecovered := r.recoverStoppedChildNotice(ctx, rec, notice)
 	if interruptedErr != nil {
 		// Historical replay is independent, but cannot erase a refused current

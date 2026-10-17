@@ -13,11 +13,8 @@ import (
 	"strings"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // errSteerUpwardDelivererNotWired is returned by every SteerUpwardDeliverer
@@ -363,7 +360,15 @@ func deliverySummary(msg generated.SessionMessage) string {
 		}
 	case "goal_status":
 		if v, err := msg.AsSessionMessageGoalStatus(); err == nil {
-			return fmt.Sprintf("A delegated session's goal verdict: %s", v.Condition)
+			text := fmt.Sprintf("A delegated session's goal verdict: %s", v.Condition)
+			if v.Evidence != nil {
+				for _, evidence := range *v.Evidence {
+					if evidence.Note != nil && strings.TrimSpace(*evidence.Note) != "" {
+						text += "\n" + *evidence.Note
+					}
+				}
+			}
+			return text
 		}
 	case "artifact":
 		if v, err := msg.AsSessionMessageArtifact(); err == nil {
@@ -452,12 +457,14 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	event steer.UpwardEvent,
 	msg generated.SessionMessage,
 	class session.SessionMessageDeliveryClass,
-) (steer.Delivery, error) {
+) (delivery steer.Delivery, retErr error) {
+	var pendingRowError error
+	defer func() { retErr = errors.Join(retErr, pendingRowError) }()
 	// Q1=A (#984 follow-up): the producer's explicit suppression overrides the
 	// class's wake-eligibility. A suppressed event keeps EVERY other property
 	// of a wake-eligible delivery — frames, dedupe fall-through semantics,
 	// ack tracking — except the wake itself; see UpwardEvent.SuppressWake.
-	wakeEligible := class.WakeEligible && !event.SuppressWake
+	wakeEligible := class.WakeEligible && !event.SuppressWake && !isMetGoalMessage(msg)
 
 	var res *session.AppendResult
 	var appendErr error
@@ -494,6 +501,16 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	// the SAME frames + wake path a first delivery takes — safe to repeat:
 	// deliverSubagentMessage/State/End's frame ids are deterministic and
 	// AppendTranscriptStrict rejects (id-dedupes) a repeat write.
+	if err := al.repairHelperEvents(childRec.SessionID); err != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: repair helper rows: %w", err)
+	}
+	if err := al.repairGoalOutcome(childRec.SessionID); err != nil {
+		var pending *helperEventRowPendingError
+		if !errors.As(err, &pending) {
+			return steer.Delivery{}, fmt.Errorf("steer: deliver: repair goal rows: %w", err)
+		}
+		pendingRowError = err
+	}
 	if res.Deduped {
 		shortCircuit := !wakeEligible
 		if !shortCircuit {
@@ -695,81 +712,20 @@ func (d *SteerUpwardDeliverer) wakeOwnerOrStore(
 	msg generated.SessionMessage,
 	res *session.AppendResult,
 ) (steer.Delivery, error) {
-	ownerRec, ownerErr := lifecycle.Load(ownerKey)
-	if ownerErr != nil || ownerRec == nil {
-		// Edge case: the steering session's own record is gone (deleted
-		// while the child was running). The entry is still durably stored
-		// under the edge's owner key; surfaced to the operator, never a
-		// hard failure — the child's own outcome must still land.
-		logger.WarnCF("agent", "steer: deliver: steering session record missing — entry stored, wake skipped",
-			map[string]any{"owner_key": ownerKey, "child_session_id": event.ChildSessionID})
+	reason, helperEvent := upwardWakeDetails(childRec, msg)
+	if reason == "" {
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
-
-	// FR-B-013: a recipient carrying a Stop marker for its CURRENT
-	// generation is not woken; the entry is stored and acknowledged at
-	// revival (I-6 Revive).
-	if ownerRec.Stop != nil && ownerRec.Stop.Generation == ownerRec.Generation {
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+	body, err := al.combinedEndingInput(childRec, msg)
+	if err != nil {
+		return steer.Delivery{}, err
 	}
-
-	sessionKey := ownerKey
-	if ts := al.getActiveTurnState(sessionKey); ts != nil && ts.IsAlive() {
-		if steerUpwardDelivererAfterLiveTurnCheckTestHook != nil {
-			steerUpwardDelivererAfterLiveTurnCheckTestHook(sessionKey, ownerRec.Generation)
-		}
-		pm := providers.Message{Role: "user", Content: deliverySummary(msg)}
-		if enqErr := al.EnqueueSteeringWake(sessionKey, ownerRec.AgentID, ownerKey, res.MessageID, pm); enqErr != nil {
-			current, loadErr := lifecycle.Load(ownerKey)
-			if errors.Is(enqErr, errSteeringScopeClosed) && loadErr == nil &&
-				current.Generation == ownerRec.Generation && !current.Terminal() {
-				return d.wakeStoredMessage(ctx, childRec, current, msg, res.MessageID)
-			}
-			return steer.Delivery{}, fmt.Errorf("steer: deliver: enqueue steering message: %w", enqErr)
-		}
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryQueuedIntoLiveTurn}, nil
+	delivery, err := al.WakeSession(withUpwardWakeSource(ctx, childRec.SessionID, helperEvent), ownerKey, reason, res.MessageID, body)
+	if errors.Is(err, errWakeRecipientUnavailable) {
+		reportUndeliveredWake("steer: deliver: recipient unavailable", event, ownerKey, childRec.Generation, delivery.Delivery)
+		return delivery.Delivery, nil
 	}
-	return d.wakeStoredMessage(ctx, childRec, ownerRec, msg, res.MessageID)
-}
-
-func (d *SteerUpwardDeliverer) wakeStoredMessage(
-	ctx context.Context,
-	childRec *session.LifecycleRecord,
-	ownerRec *session.LifecycleRecord,
-	msg generated.SessionMessage,
-	messageID string,
-) (steer.Delivery, error) {
-	al := d.agentLoop
-	ownerKey := ownerRec.SessionID
-	kindStr, _ := msg.Discriminator()
-	if al.asyncNotifier != nil {
-		target := childRec.SteeredBy.ReportingTarget
-		wakeEvent := tools.MessageParentWakeEvent{
-			Channel:             target.Channel,
-			ChatID:              target.ChatID,
-			AgentID:             ownerRec.AgentID,
-			TranscriptSessionID: ownerKey,
-			Content:             deliverySummary(msg),
-			MessageID:           messageID,
-			Generation:          ownerRec.Generation,
-		}
-		if wakeParentStoredMessage(ctx, al.asyncNotifier, kindStr, wakeEvent) {
-			return steer.Delivery{MessageID: messageID, Outcome: steer.DeliveryWoke}, nil
-		}
-	}
-	return steer.Delivery{MessageID: messageID, Outcome: steer.DeliveryStoredNotWoken}, nil
-}
-
-func wakeParentStoredMessage(ctx context.Context, notifier *asyncNotifierImpl, kind string, event tools.MessageParentWakeEvent) bool {
-	if err := notifier.WakeParentAlways(ctx, kind, event); err != nil {
-		// Best-effort: the message is already durable, and boot recovery can
-		// re-nudge it. Reporting false keeps error handling out of Deliver's
-		// successful stored-not-woken result.
-		logger.WarnCF("agent", "steer: deliver: wake failed (message is durable)",
-			map[string]any{"kind": kind, "error": err.Error()})
-		return false
-	}
-	return true
+	return delivery.Delivery, err
 }
 
 // steerUpwardDelivererAfterLiveTurnCheckTestHook is a deterministic seam for

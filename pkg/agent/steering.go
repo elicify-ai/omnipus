@@ -1223,6 +1223,21 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 			}
 		}
 		if item.wake != nil {
+			// A saved helper input is only dequeued here. Placement and its
+			// consumed marker wait for the model fence, after all tool results.
+			if store := al.GetSessionStore(); store != nil {
+				addr, _, savedErr := store.SavedChatInput(item.wake.transcriptSessionID, "saved-input-"+item.wake.messageID)
+				if savedErr != nil {
+					al.steering.prependItemsScope(scope, items[i:])
+					return msgs, correlationIDs, consumedItems, savedErr
+				}
+				if addr.EntryID != "" {
+					msgs = append(msgs, item.message)
+					correlationIDs = append(correlationIDs, savedWakeCorrelationPrefix+item.wake.messageID)
+					consumedItems = append(consumedItems, item)
+					continue
+				}
+			}
 			if err := al.recordAcceptedSteeredInstruction(*item.wake, item.message); err != nil {
 				al.steering.prependItemsScope(scope, items[i:])
 				slog.Error("agent: accepted steered instruction not recorded; restored unmarked suffix to queue",
