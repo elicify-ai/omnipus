@@ -475,6 +475,12 @@ func (c *SteerCanceller) ContinueAcceptedStop(ctx context.Context, intent sessio
 	}
 	switch accepted.Outcome {
 	case session.StopAcceptGranted:
+		// ResumeAcceptedStop has released its record lock and confirmed this
+		// selection still owns the Stop. A superseded retry never sets a veto.
+		if intentErr := observeSecretStopIntent(ctx, sessionID); intentErr != nil {
+			report.Unreachable = append(report.Unreachable,
+				steer.UnreachableSession{ID: sessionID, Reason: intentErr.Error()})
+		}
 		report.Reached = append(report.Reached, sessionID)
 		c.cancelStamped(ctx, map[string]session.StopSelection{sessionID: *accepted.Selection}, &report, stopTurn)
 	case session.StopAcceptTerminal:
@@ -526,6 +532,13 @@ func (c *SteerCanceller) cascade(
 				continue
 			}
 			seen[id] = struct{}{}
+			// A fresh explicit Stop still vetoes a pending secret continuation
+			// when the lifecycle stop is already landed. Run before stampStop,
+			// outside its record lock; ClaimResume takes registry then lifecycle.
+			if intentErr := observeSecretStopIntent(ctx, id); intentErr != nil {
+				report.Unreachable = appendUniqueUnreachable(report.Unreachable,
+					steer.UnreachableSession{ID: id, Reason: intentErr.Error()})
+			}
 			accepted, outcome, err := c.stampStop(id, at, by, cause)
 			switch {
 			case errors.Is(err, errCascadeTerminal):

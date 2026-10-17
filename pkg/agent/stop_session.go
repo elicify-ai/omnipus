@@ -95,6 +95,11 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	if al == nil || strings.TrimSpace(req.SessionID) == "" {
 		return res, fmt.Errorf("Stop requires a session")
 	}
+	intentCause := req.Cause
+	if req.Continue != nil {
+		intentCause = req.Continue.Cause
+	}
+	ctx = al.withSecretStopIntent(ctx, intentCause)
 	// N6: once this Stop has ended the session's episode, release any retained
 	// external-CLI driver (its option/env snapshot). No-op while the run is still
 	// winding down (releaseExternalRunIfIdle checks the running flag; the steered
