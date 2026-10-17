@@ -88,8 +88,9 @@ func wu4P0ADamageNonce(t *testing.T, f *issue1277Fixture, ref, consumer string) 
 	var entries map[string]map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(document["credentials"], &entries))
 	require.Contains(t, entries, ref, "instrument: damage must target a stored configured entry")
-	material := []string{wu4P0AValue, wu4P0AMailValue, issue1277ProviderValue,
-		"qa1277-healthy-secret", issue1277HealthyAccess, "qa1277-broken-access", fixedHexKey}
+	material := make([]string, 0, 7+2*len(entries)+3)
+	material = append(material, wu4P0AValue, wu4P0AMailValue, issue1277ProviderValue,
+		"qa1277-healthy-secret", issue1277HealthyAccess, "qa1277-broken-access", fixedHexKey)
 	for _, entry := range entries {
 		for _, field := range []string{"nonce", "ciphertext"} {
 			var value string
