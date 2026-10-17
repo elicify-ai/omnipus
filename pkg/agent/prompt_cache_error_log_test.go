@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -76,12 +77,16 @@ func TestLogLine_ErrorBodyDropsPrompt(t *testing.T) {
 	}
 }
 
-// cachingLine reports whether a log record is the per-call accounting line:
-// an info line that carries the cache counters. The generic "LLM call failed"
-// record is not that line.
+// cachingLine identifies the per-call accounting record from the real file
+// log's JSON level and message, never from uppercase text inside the message.
+// The generic "LLM call failed" record is not the accounting line.
 func cachingLine(line string) bool {
-	if !strings.Contains(line, "INFO") {
+	var record struct {
+		Level   string `json:"level"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(line), &record); err != nil {
 		return false
 	}
-	return strings.Contains(line, "cache read") || strings.Contains(line, "cache_read") || strings.Contains(line, "uncached")
+	return record.Level == "info" && strings.HasPrefix(record.Message, "llm_usage ")
 }
