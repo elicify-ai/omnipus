@@ -84,7 +84,7 @@ func (p *modelAvailabilityParser) subject(model string) availabilitySubject {
 	if q.takeWord("model") {
 		predicate := q
 		generic := predicate.takeWord("is") && predicate.takeWord("not")
-		if generic || q.peek().kind == availabilityEnd || q.peek().isSeparator(':') || q.takeModelID(model) {
+		if generic || q.takeModelID(model) || q.peek().kind == availabilityEnd || q.peek().isSeparator(':') {
 			*p = q
 			return availabilityModelSubject
 		}
