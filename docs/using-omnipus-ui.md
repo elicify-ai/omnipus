@@ -118,8 +118,11 @@ When an agent needs a key, token or password, its secret card appears above the 
 | **Cancel** | Cancels the request without storing a value. |
 | A refused submit | Shows the reason without claiming success. The fields are cleared; enter fresh values for another deliberate attempt. |
 | A lost submit response | Says **Submission unknown** and checks the request's state. It never automatically sends the values again. **Check again** retries only that state check. |
+| **Saved, but the agent's next step is not confirmed** | The server saved the secret, but could not confirm the next step. Stored reference names remain visible. Do not enter or send the secret again: reopen this chat to retry the saved continuation. The warning cannot be dismissed or replaced by a newer card while it remains unconfirmed. |
 | A resolved request | Shows **Saved**, **Cancelled**, **Stopped**, **Request unavailable**, or **Refused**, as reported by the server. A restart-interrupted request is unavailable, not saved. |
 | Reconnecting or reloading | Restores the request metadata and latest result supplied by the server, never typed values from the server. Reloading starts a pending card with empty fields; reconnecting never automatically resends them. |
+
+In the open tab, the saved-but-unconfirmed warning survives reconnecting, later **Saved** updates, and moving away from the chat and back. A state check that finds the stored secret does not prove the agent continued. Only a confirmed successful submit or a different final request outcome clears that warning. A full page reload restores the server's request metadata, not this tab's warning.
 
 Secret cards are available independently of the agent profile's **Private secrets** list, which is not yet enabled. See [security](security.md) for the limits of secret storage and use.
 
