@@ -36,15 +36,26 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
-// approvalWorkspaceMaxHops bounds approvalWorkspaceID's walk up the
-// delegation chain. Real chains are a handful of levels deep; the bound only
-// guarantees termination over corrupt or cyclic on-disk meta.
-const approvalWorkspaceMaxHops = 16
-
 // approvalWorkspaceIDMaxLen mirrors the wire schema's maxLength for
 // workspace_id (ToolApprovalRequiredFrame / SessionStatePendingApproval). A
 // longer value is omitted rather than emitted schema-invalid.
 const approvalWorkspaceIDMaxLen = 128
+
+// approvalOriginLabelMaxRunes mirrors the wire schema's maxLength for
+// origin_label (K7: ≤ 200).
+const approvalOriginLabelMaxRunes = 200
+
+// approvalOriginLabel is the wire value of an entry's origin label: nil for a
+// web turn (no label), else the label cut to the schema's bound.
+func approvalOriginLabel(label string) *string {
+	if label == "" {
+		return nil
+	}
+	if r := []rune(label); len(r) > approvalOriginLabelMaxRunes {
+		label = string(r[:approvalOriginLabelMaxRunes])
+	}
+	return &label
+}
 
 // approvalWorkspaceID resolves the workspace an approval belongs to from the
 // acting session's meta. A delegated child session may carry no workspace of
@@ -57,30 +68,15 @@ func (h *WSHandler) approvalWorkspaceID(sessionID string) string {
 	if h == nil || h.agentLoop == nil || sessionID == "" {
 		return ""
 	}
-	seen := make(map[string]struct{}, 4)
-	sid := sessionID
-	for hop := 0; hop < approvalWorkspaceMaxHops && sid != ""; hop++ {
-		if _, dup := seen[sid]; dup {
-			return ""
-		}
-		seen[sid] = struct{}{}
-		store := h.resolveSessionStore(sid)
-		if store == nil {
-			return ""
-		}
-		meta, err := store.GetMeta(sid)
-		if err != nil || meta == nil {
-			return ""
-		}
-		if meta.WorkspaceID != "" {
-			if len(meta.WorkspaceID) > approvalWorkspaceIDMaxLen {
-				return ""
-			}
-			return meta.WorkspaceID
-		}
-		sid = meta.ParentSessionID
+	store := h.resolveSessionStore(sessionID)
+	if store == nil {
+		return ""
 	}
-	return ""
+	context, _ := store.ResolveInteractionContext(sessionID)
+	if len(context.WorkspaceID) > approvalWorkspaceIDMaxLen {
+		return ""
+	}
+	return context.WorkspaceID
 }
 
 // broadcastToolApprovalRequired sends a tool_approval_required WS frame to
@@ -122,6 +118,7 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 	if ws := h.approvalWorkspaceID(entry.SessionID); ws != "" {
 		frame.WorkspaceId = &ws
 	}
+	frame.OriginLabel = approvalOriginLabel(entry.OriginLabel)
 	frame.Segments = h.bashApprovalSegments(entry)
 	raw, err := json.Marshal(frame)
 	if err != nil {
@@ -252,6 +249,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 			if ws := h.approvalWorkspaceID(e.SessionID); ws != "" {
 				entry.WorkspaceId = &ws
 			}
+			entry.OriginLabel = approvalOriginLabel(e.OriginLabel)
 			pendingApprovals = append(pendingApprovals, entry)
 		}
 	}
@@ -326,6 +324,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 	// may later echo back to acknowledge. 0 when the main has no outcome yet;
 	// omitted for a non-main, the connection-open emit, and an unreadable mark.
 	frame.AttentionBound = h.attentionBoundFor(sessionID)
+	frame.SecretRequests = h.secretRequestSnapshot(wc, sessionID)
 
 	raw, err := json.Marshal(frame)
 	if err != nil {

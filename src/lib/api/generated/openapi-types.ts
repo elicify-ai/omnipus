@@ -3939,7 +3939,7 @@ export interface paths {
         put?: never;
         /**
          * Submit (or cancel) a secret card
-         * @description Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of `values` or `cancel: true`. All checks run before any write; any failure writes nothing. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
+         * @description Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of `values` or `cancel: true`. All trust and payload checks run before the atomic store publication; a refusal or failed save writes no values. After publication, a metadata or continuation-dispatch failure returns 503 with state submitted and the committed references. The submission IS saved; boot or chat attach retries an undelivered continuation. A repeated submit is idempotent and returns 409 with the same committed state, without storing another version. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
          */
         post: operations["submitSecretRequest"];
         delete?: never;
@@ -8858,7 +8858,7 @@ export interface components {
              */
             type: "Main";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -8945,7 +8945,7 @@ export interface components {
              */
             type: "Subagent";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -9024,7 +9024,7 @@ export interface components {
              */
             type: "subagent_3p";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -9089,7 +9089,7 @@ export interface components {
             mcp_servers?: components["schemas"]["AgentMCPBinding"][];
             tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
-             * @description New display name. Rejected on locked agents.
+             * @description New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Renamed Agent
              */
             name?: string;
@@ -17837,7 +17837,7 @@ export interface components {
         } & (unknown | unknown);
         /**
          * SecretRequestState
-         * @description Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Absence is never read as success.
+         * @description Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
          */
         SecretRequestState: {
             request_id: string;
@@ -27015,6 +27015,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The save failed before publication. No submitted values were stored; the request remains pending. The error is value-free. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The submission IS committed, but post-commit metadata or continuation dispatch is not confirmed. The body has state submitted and the committed reference_names. Boot or chat attach retries an undelivered continuation. Re-submitting returns 409 with the same state and never stores another version. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"];
                 };
             };
         };

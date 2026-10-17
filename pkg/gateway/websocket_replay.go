@@ -214,6 +214,7 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 		BootId:    &bootID,
 		Reason:    &reason,
 	}
+	snapshot.SecretRequests = wh.h.secretRequestSnapshot(wh.wc, wh.attachID)
 	if view.HasEarlier {
 		snapshot.HasEarlierMessages = &view.HasEarlier
 	}

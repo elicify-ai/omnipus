@@ -74,6 +74,12 @@ type steeringQueueItem struct {
 	// web/channel input; Stop's FR-024 discard uses it to label the original
 	// message "discarded". Empty for every other item.
 	transcriptEntryID string
+	// origin is who this input came from (§6.18). A channel person's message
+	// consumed mid-turn makes the running turn channel-triggered.
+	origin inputOrigin
+	// secretRequestID is server-minted correlation for a reference-only
+	// continuation; claimed only when this admitted item is consumed.
+	secretRequestID string
 }
 
 type steeringWake struct {
@@ -551,7 +557,7 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Content: msg.Content,
 		Media:   append([]string(nil), msg.Media...),
 	}
-	_, _, err = al.enqueueHumanSteeringMessage(route.SessionKey, ag.ID, pmsg, msg.TranscriptEntryID)
+	_, _, err = al.enqueueInboundSteeringMessage(route.SessionKey, ag.ID, pmsg, msg.TranscriptEntryID, inboundInputOrigin(msg))
 	return err
 }
 
@@ -957,22 +963,29 @@ func (al *AgentLoop) enqueueDelegateSteer(scope, agentID string, msg providers.M
 // EnqueueSteeringMessage wrapper above strips the status to keep the
 // pkg/tools DelegateSteeringSink interface unchanged.
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
-	return al.enqueueSteeringMessageEntry(scope, agentID, msg, correlationID, "")
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, correlationID, "", inputOrigin{})
 }
 
 // enqueueHumanSteeringMessage queues a person's web/channel message and keeps
 // its archive entry id, so a Stop that discards it before delivery (FR-024) can
 // label that original message.
 func (al *AgentLoop) enqueueHumanSteeringMessage(scope, agentID string, msg providers.Message, transcriptEntryID string) (string, EnqueueStatus, error) {
-	return al.enqueueSteeringMessageEntry(scope, agentID, msg, "", transcriptEntryID)
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, "", transcriptEntryID, inputOrigin{})
 }
 
-func (al *AgentLoop) enqueueSteeringMessageEntry(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string) (string, EnqueueStatus, error) {
+// enqueueInboundSteeringMessage is enqueueHumanSteeringMessage for an inbound
+// message whose origin (§6.18: a channel person, another agent) is known, so
+// consuming it mid-turn records that origin on the running turn.
+func (al *AgentLoop) enqueueInboundSteeringMessage(scope, agentID string, msg providers.Message, transcriptEntryID string, origin inputOrigin) (string, EnqueueStatus, error) {
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, "", transcriptEntryID, origin)
+}
+
+func (al *AgentLoop) enqueueSteeringMessageEntry(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string, origin inputOrigin) (string, EnqueueStatus, error) {
 	correlationID = strings.TrimSpace(correlationID)
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
-	item := steeringQueueItem{message: msg, correlationID: correlationID, transcriptEntryID: transcriptEntryID}
+	item := steeringQueueItem{message: msg, correlationID: correlationID, transcriptEntryID: transcriptEntryID, origin: origin}
 	// onPostFinish fires only when the closing hand-off's transition buffer
 	// accepted this item during a terminal transition with non-refusal; its
 	// return value becomes enqueueSteeringItemWithStatus's own returned
@@ -1209,7 +1222,19 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 	msgs := make([]providers.Message, 0, len(items))
 	correlationIDs := make([]string, 0, len(items))
 	consumedItems := make([]steeringQueueItem, 0, len(items))
+	al.recordConsumedInputOrigins(scope, items)
 	for i, item := range items {
+		if item.secretRequestID != "" {
+			message, claimed, claimErr := al.claimSecretSteeringInput(scope, item.secretRequestID)
+			if claimErr != nil {
+				al.steering.prependItemsScope(scope, items[i:])
+				return msgs, correlationIDs, consumedItems, claimErr
+			}
+			if !claimed {
+				continue
+			}
+			item.message, item.wake = message, nil
+		}
 		if item.steerControlID != "" {
 			// D4: a delegate steer is delivered once its exact text is durable
 			// in the session transcript; only then is it handed to the turn

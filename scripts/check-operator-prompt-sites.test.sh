@@ -11,14 +11,14 @@
 # guard's observed exit code for each.
 #
 # Covers:
-#   1. A clean fixture with exactly 2 OperatorPrompt=true sites and 10
+#   1. A clean fixture with exactly 2 OperatorPrompt=true sites and 11
 #      PublishInbound call sites — exits 0.
 #   2. A THIRD OperatorPrompt=true site planted — CAUGHT (exit 1).
 #   3. Only 1 OperatorPrompt=true site (one removed) — CAUGHT (exit 1).
 #   4. OperatorPrompt=true mentioned only inside a `//` comment — NOT counted
-#      (does not change the 2/10 verdict).
+#      (does not change the 2/11 verdict).
 #   5. OperatorPrompt=true inside a _test.go file — NOT counted.
-#   6. An ELEVENTH PublishInbound call site planted — CAUGHT (exit 1).
+#   6. A TWELFTH PublishInbound call site planted — CAUGHT (exit 1).
 #   7. The PublishInbound func DEFINITION line itself (no leading dot) is
 #      NEVER counted as a call site.
 #   8. A tree missing the required pkg/ directory — exits 2, never a silent
@@ -74,7 +74,7 @@ assert_contains() {
   fi
 }
 
-# A clean, minimal 2-site/10-call fixture, reused as the base for every test.
+# A clean, minimal 2-site/11-call fixture, reused as the base for every test.
 plant_clean_baseline() {
   setup_fixture "pkg/gateway/websocket.go" '
 package gateway
@@ -162,6 +162,17 @@ func (al *AgentLoop) runAgentLoop() {
 	}
 }
 '
+  setup_fixture "pkg/agent/secret_request_wire.go" '
+package agent
+
+func (al *AgentLoop) dispatchSecretResume(rec secretrequest.Record) error {
+	return al.bus.PublishInbound(context.Background(), bus.InboundMessage{
+		SessionID: rec.Card.SessionId,
+		Content: secretrequest.ResumeMessage(rec), GatewayUserID: rec.Owner,
+		Metadata: map[string]string{"secret_request_resume": rec.Card.RequestId},
+	})
+}
+'
   setup_fixture "pkg/bus/bus.go" '
 package bus
 
@@ -174,14 +185,14 @@ func (mb *MessageBus) PublishInbound(ctx context.Context, msg InboundMessage) er
 echo "=== check-operator-prompt-sites self-test (ADR-085 BROWSER-FR-029/FR-029a) ==="
 echo ""
 
-echo "Test 1: a clean 2-site/10-call fixture exits 0"
+echo "Test 1: a clean 2-site/11-call fixture exits 0"
 setup_skeleton
 plant_clean_baseline
 OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
 EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "clean-exit" 0 "$EXIT_CODE"
-assert_contains "clean-ok" "OK:" "$OUTPUT"
+assert_contains "clean-ok" "OK: exactly 2 OperatorPrompt=true sites and 11 PublishInbound call sites." "$OUTPUT"
 
 echo ""
 echo "Test 2: a THIRD OperatorPrompt=true site is caught"
@@ -262,7 +273,7 @@ assert_exit_code "test-file-exit" 0 "$EXIT_CODE"
 assert_contains "test-file-count" "OperatorPrompt assigned true: 2 site(s) (want exactly 2)" "$OUTPUT"
 
 echo ""
-echo "Test 6: an ELEVENTH PublishInbound call site is caught"
+echo "Test 6: a TWELFTH PublishInbound call site is caught"
 setup_skeleton
 plant_clean_baseline
 setup_fixture "pkg/agent/rogue_publish.go" '
@@ -275,9 +286,9 @@ func rogue(b *bus.MessageBus, msg bus.InboundMessage) {
 OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
 EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
-assert_exit_code "tenth-call-exit" 1 "$EXIT_CODE"
-assert_contains "tenth-call-finding" "rogue_publish.go" "$OUTPUT"
-assert_contains "tenth-call-count" "PublishInbound call sites: 11 (want exactly 10)" "$OUTPUT"
+assert_exit_code "twelfth-call-exit" 1 "$EXIT_CODE"
+assert_contains "twelfth-call-finding" "rogue_publish.go" "$OUTPUT"
+assert_contains "twelfth-call-count" "PublishInbound call sites: 12 (want exactly 11)" "$OUTPUT"
 
 echo ""
 echo "Test 7: the PublishInbound func definition itself is never counted"

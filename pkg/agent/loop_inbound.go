@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/utils"
@@ -817,8 +818,8 @@ func (al *AgentLoop) resolveSystemMessageWorkspaceID(msg bus.InboundMessage, tra
 }
 
 // processSteeredSystemWake reconstructs a durable steering-session turn from
-// its lifecycle record. The consumed marker is the idempotency boundary: a
-// replayed wake is acknowledged without starting another turn.
+// its lifecycle record. Ordinary inbox wakes use their consumed marker;
+// secret-only direct-bus wakes use the mandatory request-id claim instead.
 func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (string, error) {
 	sessionID := msg.AsyncTranscriptSessionID
 	messageID := inboundMetadata(msg, "steer_message_id")
@@ -841,15 +842,25 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if store == nil {
 		return "", fmt.Errorf("steer: wake: transcript store for %q is not available", sessionID)
 	}
-	marker := "consumed " + messageID
+	rec, generation, secretHandled, secretErr := al.prepareSecretSteeredWake(ctx, &msg, rec, generation)
+	if secretErr != nil || secretHandled {
+		return "", secretErr
+	}
+	secretID := inboundMetadata(msg, secretResumeMetadataKey)
+	marker := ""
+	if secretID == "" {
+		marker = "consumed " + messageID
+	}
 	entries, readErr := store.ReadTranscript(sessionID)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return "", fmt.Errorf("steer: wake: read transcript: %w", readErr)
 	}
 	for _, entry := range entries {
-		if entry.Content == marker {
-			if inbox := al.GetMessageInboxStore(); inbox != nil {
-				_ = inbox.Ack(sessionID, []string{messageID})
+		if (secretID == "" && entry.Content == marker) || (secretID != "" && entry.ID == secretrequest.ResumeEntryID(secretID)) {
+			if secretID == "" {
+				if inbox := al.GetMessageInboxStore(); inbox != nil {
+					_ = inbox.Ack(sessionID, []string{messageID})
+				}
 			}
 			return "", nil
 		}
@@ -1012,20 +1023,17 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		rec = running
 	}
 
-	// The consumed marker and the acknowledgement are written only once the
-	// turn is certain to run: a wake refused above must leave its entry
-	// pending for I-6's Revive (FR-B-013), never swallow it.
-	if appendErr := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
-		ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
-		Content: marker, AgentID: rec.AgentID, Timestamp: time.Now().UTC(),
-	}); appendErr != nil {
+	if claimed, claimErr := al.claimAdmittedSecretWake(secretID, sessionID, ts); claimErr != nil || !claimed {
 		abort()
-		return "", fmt.Errorf("steer: wake: append consumed marker: %w", appendErr)
+		return "", claimErr
 	}
-	if inbox := al.GetMessageInboxStore(); inbox != nil {
-		if ackErr := inbox.Ack(sessionID, []string{messageID}); ackErr != nil {
+	// A secret-only wake has no inbox row. Its successful request-id claim is
+	// the sole consumption boundary: redundant writes after it could strand an
+	// already-claimed request before the body. Ordinary wakes still owe both.
+	if secretID == "" {
+		if consumeErr := al.consumeOrdinarySystemWake(store, sessionID, messageID, rec.AgentID); consumeErr != nil {
 			abort()
-			return "", fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, ackErr)
+			return "", consumeErr
 		}
 	}
 	defer release()

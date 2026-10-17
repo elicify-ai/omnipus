@@ -92,7 +92,12 @@ func readSoul(path string) ([]byte, error) {
 	return b, nil
 }
 
-func readStateFiles(entityPath, soulPath string) (*State, []byte, []byte, error) {
+// readStateFiles reads the record stored for id. Agent ids match exactly
+// (chief ruling 2026-10-14, #1032): a differently cased spelling is an unknown
+// id on every filesystem, so the record's own stored id must equal id — a
+// case-insensitive filesystem (macOS) would otherwise open omnipus.json for
+// "OMNIPUS". A record without a stored id must sit under exactly id's file name.
+func readStateFiles(entityPath, soulPath, id string) (*State, []byte, []byte, error) {
 	entityBytes, err := os.ReadFile(entityPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -104,11 +109,42 @@ func readStateFiles(entityPath, soulPath string) (*State, []byte, []byte, error)
 	if err = json.Unmarshal(entityBytes, &agent); err != nil {
 		return nil, nil, nil, fmt.Errorf("agentstore: parse entity: %w", err)
 	}
+	if exactErr := confirmExactAgentID(entityPath, id, agent.ID); exactErr != nil {
+		return nil, nil, nil, exactErr
+	}
 	soulBytes, err := readSoul(soulPath)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return &State{Agent: &agent, Soul: string(soulBytes), Revision: revisionFor(entityBytes, soulBytes)}, entityBytes, soulBytes, nil
+}
+
+// readStoreDir lists the agent entity directory for confirmExactAgentID. A
+// variable only so a test can present the listing a case-insensitive volume
+// would give on any filesystem; production never reassigns it.
+var readStoreDir = os.ReadDir
+
+// confirmExactAgentID returns entity.ErrNotFound unless the record at
+// entityPath is id's under exact comparison: its stored id equals id, or — for
+// a record that stores none — its file name is exactly id + ".json".
+func confirmExactAgentID(entityPath, id, storedID string) error {
+	if storedID != "" {
+		if storedID != id {
+			return entity.ErrNotFound
+		}
+		return nil
+	}
+	entries, err := readStoreDir(filepath.Dir(entityPath))
+	if err != nil {
+		return fmt.Errorf("agentstore: read store directory: %w", err)
+	}
+	want := filepath.Base(entityPath)
+	for _, e := range entries {
+		if e.Name() == want {
+			return nil
+		}
+	}
+	return entity.ErrNotFound
 }
 
 func (s *Store) soulPath(id string) string {
@@ -126,7 +162,7 @@ func (s *Store) PeekRevision(id string) (string, error) {
 		return "", err
 	}
 	entityPath := filepath.Join(s.inner.Dir(), id+".json")
-	state, _, _, err := readStateFiles(entityPath, s.soulPath(id))
+	state, _, _, err := readStateFiles(entityPath, s.soulPath(id), id)
 	if err != nil {
 		return "", err
 	}
@@ -139,7 +175,7 @@ func (s *Store) ReadState(id string) (state *State, err error) {
 	}
 	err = s.inner.WithLock(id, func(entityPath string) error {
 		var readErr error
-		state, _, _, readErr = readStateFiles(entityPath, s.soulPath(id))
+		state, _, _, readErr = readStateFiles(entityPath, s.soulPath(id), id)
 		return readErr
 	})
 	if err != nil {
@@ -191,7 +227,7 @@ func (s *Store) MutateState(id, expectedRevision string, mutate func(*config.Age
 	}
 	var updated *config.AgentConfig
 	err = s.inner.WithLock(id, func(entityPath string) error {
-		current, oldEntity, oldSoul, readErr := readStateFiles(entityPath, s.soulPath(id))
+		current, oldEntity, oldSoul, readErr := readStateFiles(entityPath, s.soulPath(id), id)
 		if readErr != nil {
 			return readErr
 		}
@@ -249,7 +285,7 @@ func (s *Store) MutateState(id, expectedRevision string, mutate func(*config.Age
 					result.PersistenceStatus = PersistenceNone
 				}
 				result.ErrorStage = "replace_soul"
-				actual, _, _, actualErr := readStateFiles(entityPath, s.soulPath(id))
+				actual, _, _, actualErr := readStateFiles(entityPath, s.soulPath(id), id)
 				if actualErr == nil {
 					result.Revision = actual.Revision
 				}
@@ -257,7 +293,7 @@ func (s *Store) MutateState(id, expectedRevision string, mutate func(*config.Age
 			}
 			result.ChangedFields = append(result.ChangedFields, "soul")
 		}
-		actual, _, _, actualErr := readStateFiles(entityPath, s.soulPath(id))
+		actual, _, _, actualErr := readStateFiles(entityPath, s.soulPath(id), id)
 		if actualErr != nil {
 			result.PersistenceStatus = PersistencePartial
 			result.ErrorStage = "verify"
@@ -323,13 +359,13 @@ func (s *Store) CreateState(id string, agent *config.AgentConfig, soul string) (
 		result.ChangedFields = append(result.ChangedFields, "entity")
 		if replaceErr := s.replaceFile(soulStage, s.soulPath(id)); replaceErr != nil {
 			result.PersistenceStatus, result.ErrorStage = PersistencePartial, "replace_soul"
-			if actual, _, _, readErr := readStateFiles(entityPath, s.soulPath(id)); readErr == nil {
+			if actual, _, _, readErr := readStateFiles(entityPath, s.soulPath(id), id); readErr == nil {
 				result.Revision = actual.Revision
 			}
 			return replaceErr
 		}
 		result.ChangedFields = append(result.ChangedFields, "soul")
-		actual, _, _, readErr := readStateFiles(entityPath, s.soulPath(id))
+		actual, _, _, readErr := readStateFiles(entityPath, s.soulPath(id), id)
 		if readErr != nil {
 			result.PersistenceStatus, result.ErrorStage = PersistencePartial, "verify"
 			return readErr
@@ -361,7 +397,7 @@ func (s *Store) DeleteState(id, expectedRevision string) (result MutationResult,
 	}
 	err = s.inner.WithLock(id, func(entityPath string) error {
 		soulPath := s.soulPath(id)
-		current, _, _, readErr := readStateFiles(entityPath, soulPath)
+		current, _, _, readErr := readStateFiles(entityPath, soulPath, id)
 		if readErr != nil {
 			return readErr
 		}

@@ -69,6 +69,14 @@ For any other model, check the provider's documentation for **tool use**, **tool
 
 Some providers cannot be enumerated from a published catalog. Ollama and other local providers depend on what is installed on your machine, so Omnipus requests their live list. A custom endpoint has no catalog to enumerate; you maintain its model names under **Models** in that provider's settings.
 
+## What the provider check proves
+
+When Omnipus configures a provider with `configure_provider`, it checks the saved entry straight away: the configured endpoint (your own address if you set one, otherwise the catalog's) is asked for its model list over that provider's protocol, with the saved key. A local provider such as Ollama is checked without a key. The result is `working` when the list comes back and `saved but not working` with the reason otherwise — a refused key, an unreachable address, or a protocol that has no model list. A passing check does not prove that a particular model runs, that you have quota, or that the model supports tools.
+
+`configure_provider` also has a dry run (`dry_run`): it checks the provider id, the key's shape and the address's shape, saves nothing and contacts nobody.
+
+`list_models` lists models through each configured provider's saved endpoint the same way. Asking it for a provider that is not configured is an error that says so, instead of an empty list. `list_providers` shows each provider's effective endpoint (`api_base`), protocol and the name of its saved key reference (`api_key_ref`, never the key), and `test_provider` accepts every provider `list_providers` shows.
+
 ## Limits and things to watch
 
 A fallback is not used for every error. Omnipus moves to the next model after temporary failures such as timeouts, connection drops, overload, or rate limits. It skips a model that is cooling down after recent failures. A successful request clears that model's cooldown.

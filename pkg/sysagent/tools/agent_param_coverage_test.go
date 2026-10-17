@@ -59,6 +59,7 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 		"skills": true, "mcp_servers": true, "tool_policy_changes": true,
 		"memory_enabled": true, "voice": true,
 		"context_window_override": true, "model_params": true,
+		"workspace_id": true, // resolveTargetWorkspace in validate (FR-040)
 	}
 
 	for name := range declared {
@@ -107,6 +108,7 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 		"max_tool_iterations": true,
 		"memory_enabled":      true, "voice": true,
 		"context_window_override": true, "model_params": true,
+		"agent_md": true, // agentMetadataWrites (#1064)
 	}
 
 	for name := range declared {
@@ -135,6 +137,8 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 // provider and max_tool_iterations parameters are not just schema-declared
 // but actually persisted onto the entity record.
 func TestAgentCreate_AppliesProviderAndMaxToolIterations(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
@@ -170,6 +174,7 @@ func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
+	before := wu3DurableInventory(t, deps.Home)
 	result := tool.Execute(context.Background(), map[string]any{
 		"name":                "Bad Bot",
 		"description":         "d",
@@ -186,9 +191,7 @@ func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
 	if errObj["code"] != "INVALID_INPUT" {
 		t.Errorf("error code = %v, want INVALID_INPUT", errObj["code"])
 	}
-	if _, err := agentstore.New(deps.Home).Get("bad-bot"); err == nil {
-		t.Error("agent should not have been created after validation failure")
-	}
+	requireNoDurableChange(t, deps.Home, before, "agent should not have been created after validation failure")
 }
 
 // TestAgentUpdate_AppliesProviderAndMaxToolIterations mirrors the create-side

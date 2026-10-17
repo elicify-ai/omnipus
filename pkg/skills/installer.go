@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
@@ -107,6 +108,9 @@ func (si *SkillInstaller) SetHTTPClient(client *http.Client) {
 // Supports: "owner/repo", "owner/repo/path", or full URL like "https://github.com/owner/repo/tree/ref/path"
 func parseGitHubRef(repo string) (GitHubRef, error) {
 	repo = strings.TrimSpace(repo)
+	if err := refuseEncodedSeparators(repo); err != nil {
+		return GitHubRef{}, err
+	}
 
 	// Handle full URL
 	if strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "https://") {
@@ -162,7 +166,13 @@ func (si *SkillInstaller) InstallFromGitHub(ctx context.Context, repo string) er
 	if ref.SubPath != "" {
 		skillName = filepath.Base(ref.SubPath)
 	}
-	skillDirectory := filepath.Join(si.workspace, "skills", skillName)
+	// #1276: the folder name comes from an (agent-supplied) GitHub link, so it
+	// is validated before any filesystem use and the result is confined to
+	// the skills directory.
+	skillDirectory, err := si.derivedSkillDirectory(skillName)
+	if err != nil {
+		return err
+	}
 
 	if _, err := os.Stat(skillDirectory); err == nil {
 		return fmt.Errorf("skill '%s' already exists", skillName)
@@ -201,6 +211,51 @@ func (si *SkillInstaller) InstallFromGitHub(ctx context.Context, repo string) er
 		return fmt.Errorf("SKILL.md not found in repository")
 	}
 	return nil
+}
+
+// refuseEncodedSeparators refuses a GitHub link that hides a path separator
+// in percent-encoding — %2F or %5C, or a double-encoded form via %25 — before
+// any component is derived from it (#1276, chief ruling 2026-10-14T19:35Z).
+// URL parsing would otherwise decode "evil%2Ffolder" into two components and
+// silently install a different repository. No network or filesystem effect.
+func refuseEncodedSeparators(link string) error {
+	lower := strings.ToLower(link)
+	for _, enc := range []string{"%2f", "%5c", "%25"} {
+		if strings.Contains(lower, enc) {
+			return fmt.Errorf("the skill folder name in the GitHub link %q hides a path separator in "+
+				"percent-encoding (or an encoded %%); use the plain owner/repo/folder form", link)
+		}
+	}
+	return nil
+}
+
+// derivedSkillDirectory validates a skill folder name derived from a GitHub
+// link and returns its directory under <workspace>/skills (#1276). The name
+// must be a loader-valid skill name (letters, digits and single hyphens, at
+// most MaxNameLength characters — which already excludes separators
+// (including a backslash), "..", dots and spaces), must not be a Windows
+// reserved device name (CON, NUL, COM1, LPT1, … in any letter case) on any
+// platform (an install made here can be carried to Windows), and the joined
+// path must stay inside the skills directory.
+func (si *SkillInstaller) derivedSkillDirectory(name string) (string, error) {
+	if !namePattern.MatchString(name) {
+		return "", fmt.Errorf("the skill folder name %q taken from the GitHub link is not a valid skill name "+
+			"(letters, digits and single hyphens only)", name)
+	}
+	if len(name) > MaxNameLength {
+		return "", fmt.Errorf("the skill folder name %q taken from the GitHub link is longer than %d characters",
+			name, MaxNameLength)
+	}
+	if err := pathsafe.WindowsRules.ValidateComponent(name); err != nil {
+		return "", fmt.Errorf("the skill folder name %q taken from the GitHub link cannot be used: %w", name, err)
+	}
+	root := filepath.Join(si.workspace, "skills")
+	dir := filepath.Join(root, name)
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel != name {
+		return "", fmt.Errorf("the skill folder name %q taken from the GitHub link leaves the skills directory", name)
+	}
+	return dir, nil
 }
 
 // downloadDir recursively downloads a directory from GitHub API

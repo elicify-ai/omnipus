@@ -468,7 +468,9 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	// background-kill cascade above and for the same reason — this must NOT
 	// be gated on wasFired/ClaimCancel. Fires whenever sessionID resolved,
 	// unconditionally; a session with no pending set is a cheap no-op. ---
-	rc.al.cancelPendingAskForScope(rc.sessionID)
+	if err := rc.al.cancelPendingAskForScope(rc.sessionID); err != nil {
+		return CancelOutcome{}, err, true
+	}
 	if rc.scope.TurnOnly {
 		if err := rc.removeSelectedStopAdmission(); err != nil {
 			return CancelOutcome{}, err, true

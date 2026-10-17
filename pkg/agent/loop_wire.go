@@ -581,6 +581,14 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 	agent.Tools.RegisterReplacing(tools.NewAskUserQuestionTool(func() tools.AskUserQuestionRegistry {
 		return rw.rs.al.getAskUserRegistry()
 	}))
+	agent.Tools.RegisterReplacing(tools.NewRequestSecretTool(rw.rs.al.SecretRequests, func(id string) string {
+		for _, ac := range rw.rs.al.GetConfig().Agents.List {
+			if ac.ID == id {
+				return ac.Name
+			}
+		}
+		return id
+	}))
 
 	// set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004..FR-006):
 	// the validated write-path over this session's goal record.

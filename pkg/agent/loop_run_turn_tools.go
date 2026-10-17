@@ -407,6 +407,10 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 		return agentLoopRunTurnToolsExecuteContinue
 	}
 
+	if i < len(ex.rx.rr.argumentRefusals) && ex.rx.rr.argumentRefusals[i] != nil {
+		return ex.admitPlaintextRefusal(tc, ex.rx.rr.argumentRefusals[i])
+	}
+
 	// UAT B-9 run 4: an AskUserQuestion trailing a SUCCESSFUL set_goal
 	// from the SAME model response never runs. The rubric note already
 	// says the two narrowed doors are alternatives ("Call exactly ONE
@@ -446,7 +450,7 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 		)
 		return agentLoopRunTurnToolsExecuteContinue
 	}
-	return agentLoopRunTurnToolsExecuteNext
+	return ex.refusePlaintextToolCall(tc)
 }
 
 // applyQuarantineAndHooks applies denial quarantine, control gates, hooks, and the argument bound.
@@ -634,7 +638,9 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 		)
 		return agentLoopRunTurnToolsExecuteContinue
 	}
-	return agentLoopRunTurnToolsExecuteNext
+	// A hook may have rewritten the tool name/arguments. Recheck the same
+	// opt-in refusal before any approval or argument-bearing event.
+	return ex.refusePlaintextToolCall(tc)
 }
 
 // applyApprovalHook applies the optional approval hook.

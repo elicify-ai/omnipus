@@ -23,7 +23,9 @@ func (rc *agentLoopRequestCancel) prepareSelectedStopDisposition() (CancelOutcom
 		return CancelOutcome{SkippedNewerGeneration: true}, nil, true
 	}
 	if d == nil || rc.al.activeTurnForCancel(rc.sessionID, rc.scope) == nil {
-		rc.al.cancelPendingAskForScope(rc.sessionID)
+		if err := rc.al.cancelPendingAskForScope(rc.sessionID); err != nil {
+			return CancelOutcome{}, err, true
+		}
 		if rc.hooks.CancelPendingApprovals != nil {
 			rc.hooks.CancelPendingApprovals(rc.sessionID, "session canceled")
 		}

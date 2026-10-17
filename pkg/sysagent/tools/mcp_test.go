@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
@@ -46,12 +47,8 @@ func resultJSON(t *testing.T, forLLM string) map[string]any {
 	return m
 }
 
-// TestMCPTools_RoundTrip exercises the wired system.mcp.add / list / remove
-// tools against a real (in-memory) config and a real (in-memory, unlocked)
-// credential store, and asserts the data survives. Uses
-// newTestDepsWithCredStore (defined in channel_impl_test.go) rather than
-// newTestDeps because add_mcp_server now requires a credential store
-// whenever env is non-empty.
+// D2-A adaptation: create a secret-free descriptor, attach a prior bound
+// reference, then retain the original list/remove round-trip assertions.
 func TestMCPTools_RoundTrip(t *testing.T) {
 	deps, cfg := newTestDepsWithCredStore(t)
 	ctx := context.Background()
@@ -61,15 +58,23 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 	remove := systools.NewMCPRemoveTool(deps)
 
 	// --- add a stdio server ---
-	res := add.Execute(ctx, map[string]any{
+	res := add.Execute(ctx, systools.WithCurrentRevisionForTest(add, map[string]any{
 		"name":    "filesystem",
 		"command": "npx",
 		"args":    []any{"-y", "@modelcontextprotocol/server-filesystem"},
-		"env":     map[string]any{"ROOT": "/tmp"},
-	})
+	}))
 	m := resultJSON(t, res.ForLLM)
 	if m["success"] == false {
 		t.Fatalf("add returned error: %s", res.ForLLM)
+	}
+	// D2-A: the actual secret-free descriptor exists before a card can bind to it.
+	if res.IsError {
+		t.Fatalf("create: %s", res.ForLLM)
+	}
+	issued := systools.IssueCardReferencesForTest(t, deps, secretrequest.Input{Server: "filesystem", EnvKey: "ROOT"}, "/tmp")[0]
+	res = add.Execute(ctx, systools.WithCurrentRevisionForTest(add, map[string]any{"name": "filesystem", "env_refs": map[string]any{"ROOT": issued}}))
+	if res.IsError {
+		t.Fatalf("attach: %s", res.ForLLM)
 	}
 	// Verify it actually landed in config (the real subsystem).
 	srv, ok := cfg.Tools.MCP.Servers["filesystem"]
@@ -118,20 +123,20 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 	}
 
 	// --- duplicate add is rejected ---
-	res = add.Execute(ctx, map[string]any{"name": "filesystem", "command": "npx"})
+	res = add.Execute(ctx, systools.WithCurrentRevisionForTest(add, map[string]any{"name": "filesystem", "command": "npx"}))
 	m = resultJSON(t, res.ForLLM)
 	if m["success"] != false {
 		t.Fatalf("duplicate add should fail, got: %s", res.ForLLM)
 	}
 
 	// --- remove without confirm is rejected ---
-	res = remove.Execute(ctx, map[string]any{"name": "filesystem"})
+	res = remove.Execute(ctx, systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "filesystem"}))
 	if m2 := resultJSON(t, res.ForLLM); m2["success"] != false {
 		t.Fatalf("remove without confirm should fail, got: %s", res.ForLLM)
 	}
 
 	// --- remove with confirm succeeds, persists, and cleans up the credential ---
-	res = remove.Execute(ctx, map[string]any{"name": "filesystem", "confirm": true})
+	res = remove.Execute(ctx, systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "filesystem", "confirm": true}))
 	if m2 := resultJSON(t, res.ForLLM); m2["success"] == false {
 		t.Fatalf("remove failed: %s", res.ForLLM)
 	}
@@ -143,25 +148,23 @@ func TestMCPTools_RoundTrip(t *testing.T) {
 	}
 
 	// --- remove of unknown server returns NOT_FOUND ---
-	res = remove.Execute(ctx, map[string]any{"name": "ghost", "confirm": true})
+	res = remove.Execute(ctx, systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "ghost", "confirm": true}))
 	m = resultJSON(t, res.ForLLM)
 	if m["success"] != false {
 		t.Fatalf("removing unknown server should fail, got: %s", res.ForLLM)
 	}
 }
 
-// TestMCPAdd_EnvRequiresCredentialStore asserts add_mcp_server refuses env
-// values outright when no credential store is wired, rather than silently
-// falling back to writing them in plaintext (the regression this whole
-// fix exists to close).
-func TestMCPAdd_EnvRequiresCredentialStore(t *testing.T) {
+// D2-A: plaintext is refused with card guidance even without a store; a
+// non-secret descriptor still needs no credential store.
+func TestMCPAdd_PlaintextRefusedEvenWithoutCredentialStore(t *testing.T) {
 	deps, cfg := newTestDeps(t) // CredStore is nil
 	add := systools.NewMCPAddTool(deps)
-	res := add.Execute(context.Background(), map[string]any{
+	res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{
 		"name":    "no-cred-store",
 		"command": "npx",
 		"env":     map[string]any{"TOKEN": "sekrit"},
-	})
+	}))
 	m := resultJSON(t, res.ForLLM)
 	if m["success"] != false {
 		t.Fatalf("add with env and no credential store must fail, got: %s", res.ForLLM)
@@ -169,47 +172,43 @@ func TestMCPAdd_EnvRequiresCredentialStore(t *testing.T) {
 	if _, ok := cfg.Tools.MCP.Servers["no-cred-store"]; ok {
 		t.Fatalf("server must not be persisted when env storage fails")
 	}
-	errObj, _ := m["error"].(map[string]any)
-	if errObj["code"] != "CREDENTIAL_SAVE_FAILED" {
-		t.Fatalf("want error code CREDENTIAL_SAVE_FAILED, got: %v", errObj)
+	if !strings.Contains(res.ForLLM, "request a secret") {
+		t.Fatalf("D2-A: plaintext refusal must explain request a secret: %s", res.ForLLM)
 	}
+	wu3Outcome(t, res, "failed: nothing saved")
 	// A server with NO env values at all must still succeed without a
 	// credential store — env is the only thing that requires one.
-	res = add.Execute(context.Background(), map[string]any{"name": "no-env-fine", "command": "npx"})
+	res = add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "no-env-fine", "command": "npx"}))
 	m = resultJSON(t, res.ForLLM)
 	if m["success"] == false {
 		t.Fatalf("add with no env values must succeed even without a credential store: %s", res.ForLLM)
 	}
 }
 
-// TestMCPAdd_NameCollisionDoesNotHijackExistingCredentials is the regression
-// test for a security finding: add_mcp_server used to write
-// every incoming env value to the credential store under mcp_<name>_<key>
-// BEFORE checking whether a server named <name> already existed. Concretely:
-// add_mcp_server{name:"github", env:{"GITHUB_TOKEN":"wrong"}} against an
-// already-configured "github" server used to overwrite the real token under
-// the same credential key, THEN discover the name collision and return
-// ALREADY_EXISTS — leaving the existing server's live credential silently
-// hijacked despite the call reporting failure.
-//
-// This test proves: (a) the collision is rejected with ALREADY_EXISTS, and
-// (b) the pre-existing server's credential-store value is completely
-// unchanged by the rejected call — the fix moved the duplicate-name check to
-// run BEFORE any CredStore.Set.
+// Q1-A adaptation preserves collision/credential-hijack protection: a
+// secret-free duplicate cannot alter an already selected card-issued value.
+// Reference attachment is a separately validated branch, not general upsert.
 func TestMCPAdd_NameCollisionDoesNotHijackExistingCredentials(t *testing.T) {
 	deps, cfg := newTestDepsWithCredStore(t)
 	ctx := context.Background()
 	add := systools.NewMCPAddTool(deps)
 
 	// Seed an already-configured "github" server with a real token.
-	res := add.Execute(ctx, map[string]any{
+	res := add.Execute(ctx, systools.WithCurrentRevisionForTest(add, map[string]any{
 		"name":    "github",
 		"command": "npx",
-		"env":     map[string]any{"GITHUB_TOKEN": "real-token-value"},
-	})
+	}))
 	m := resultJSON(t, res.ForLLM)
 	if m["success"] == false {
 		t.Fatalf("seed add returned error: %s", res.ForLLM)
+	}
+	if res.IsError {
+		t.Fatalf("create: %s", res.ForLLM)
+	}
+	issued := systools.IssueCardReferencesForTest(t, deps, secretrequest.Input{Server: "github", EnvKey: "GITHUB_TOKEN"}, "real-token-value")[0]
+	res = add.Execute(ctx, systools.WithCurrentRevisionForTest(add, map[string]any{"name": "github", "env_refs": map[string]any{"GITHUB_TOKEN": issued}}))
+	if res.IsError {
+		t.Fatalf("attach: %s", res.ForLLM)
 	}
 	srv, ok := cfg.Tools.MCP.Servers["github"]
 	if !ok {
@@ -224,12 +223,12 @@ func TestMCPAdd_NameCollisionDoesNotHijackExistingCredentials(t *testing.T) {
 		t.Fatalf("seed credential lookup: got (%q, %v), want (real-token-value, nil)", realValue, err)
 	}
 
-	// Attempt to add a server with the SAME name and a wrong token.
-	res = add.Execute(ctx, map[string]any{
+	// A descriptor-only duplicate remains a collision under CONFIRM-A.
+	// Plaintext wrong-token attempts are independently refused by the D2 matrix.
+	res = add.Execute(ctx, systools.WithCurrentRevisionForTest(add, map[string]any{
 		"name":    "github",
 		"command": "npx",
-		"env":     map[string]any{"GITHUB_TOKEN": "wrong"},
-	})
+	}))
 	m = resultJSON(t, res.ForLLM)
 	if m["success"] != false {
 		t.Fatalf("colliding add must fail, got: %s", res.ForLLM)
@@ -269,7 +268,7 @@ func TestMCPRemove_OrphansCredentialsWhenStoreUnavailable(t *testing.T) {
 		"srv": {Enabled: true, Type: "stdio", Command: "npx", EnvRefs: map[string]string{"TOKEN": "mcp_srv_TOKEN"}},
 	}
 	remove := systools.NewMCPRemoveTool(deps)
-	res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+	res := remove.Execute(context.Background(), systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "srv", "confirm": true}))
 	m := resultJSON(t, res.ForLLM)
 	if m["success"] == false {
 		t.Fatalf("remove must still succeed (config removal does not depend on credential cleanup): %s", res.ForLLM)
@@ -350,7 +349,7 @@ func TestMCPAdd_TransportValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res := add.Execute(ctx, tc.args)
+			res := add.Execute(ctx, systools.WithCurrentRevisionForTest(add, tc.args))
 			m := resultJSON(t, res.ForLLM)
 			gotErr := m["success"] == false
 			if gotErr != tc.wantErr {
@@ -369,7 +368,7 @@ func TestMCPAdd_GlobalKillSwitchGating(t *testing.T) {
 	t.Run("flips when no other server is enabled", func(t *testing.T) {
 		deps, cfg := newTestDeps(t)
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "fresh-srv", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "fresh-srv", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add returned error: %s", res.ForLLM)
@@ -389,7 +388,7 @@ func TestMCPAdd_GlobalKillSwitchGating(t *testing.T) {
 			"existing-enabled": {Enabled: true, Type: "stdio", Command: "npx"},
 		}
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "gated-srv", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "gated-srv", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add returned error: %s", res.ForLLM)
@@ -432,7 +431,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 			return "connected", 3, ""
 		}
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "srv-connected", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "srv-connected", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add returned error: %s", res.ForLLM)
@@ -462,7 +461,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 			return "error", 0, "connection refused"
 		}
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "srv-error", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "srv-error", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		// The config write DID succeed — this must still be success=true.
 		if m["success"] == false {
@@ -487,7 +486,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 			return "disconnected", 0, ""
 		}
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "srv-disc", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "srv-disc", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add returned error: %s", res.ForLLM)
@@ -505,7 +504,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 		deps, _ := newTestDeps(t)
 		deps.ReconcileMCP = func(ctx context.Context) error { return fmt.Errorf("boom") }
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "srv-reconcile-err", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "srv-reconcile-err", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add should still succeed when reconcile itself errors (config write succeeded): %s", res.ForLLM)
@@ -534,7 +533,7 @@ func TestMCPAdd_ReconcileAndStatus(t *testing.T) {
 	t.Run("nil funcs use fallback note and no status field", func(t *testing.T) {
 		deps, _ := newTestDeps(t) // ReconcileMCP and MCPStatus left nil
 		add := systools.NewMCPAddTool(deps)
-		res := add.Execute(context.Background(), map[string]any{"name": "srv-nil", "command": "npx"})
+		res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{"name": "srv-nil", "command": "npx"}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("add returned error: %s", res.ForLLM)
@@ -567,7 +566,7 @@ func TestMCPRemove_Reconcile(t *testing.T) {
 			return nil
 		}
 		remove := systools.NewMCPRemoveTool(deps)
-		res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+		res := remove.Execute(context.Background(), systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "srv", "confirm": true}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("remove returned error: %s", res.ForLLM)
@@ -593,7 +592,7 @@ func TestMCPRemove_Reconcile(t *testing.T) {
 			"srv": {Enabled: true, Type: "stdio", Command: "npx"},
 		}
 		remove := systools.NewMCPRemoveTool(deps)
-		res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+		res := remove.Execute(context.Background(), systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "srv", "confirm": true}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf("remove returned error: %s", res.ForLLM)
@@ -611,7 +610,7 @@ func TestMCPRemove_Reconcile(t *testing.T) {
 		}
 		deps.ReconcileMCP = func(ctx context.Context) error { return fmt.Errorf("boom") }
 		remove := systools.NewMCPRemoveTool(deps)
-		res := remove.Execute(context.Background(), map[string]any{"name": "srv", "confirm": true})
+		res := remove.Execute(context.Background(), systools.WithCurrentRevisionForTest(remove, map[string]any{"name": "srv", "confirm": true}))
 		m := resultJSON(t, res.ForLLM)
 		if m["success"] == false {
 			t.Fatalf(

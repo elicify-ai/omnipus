@@ -62,10 +62,11 @@ func (p *startupBlockedProvider) GetDefaultModel() string {
 // /api/v1/providers, and a startupBlockedProvider naming the missing
 // credential if it is the default model's provider. Escalating the same ref
 // again here would put back exactly the fatal boot this change removed.
-// A provider whose credential fails for any OTHER reason — wrong master key,
-// corrupted store entry — is NOT silently degraded: reportInjectionErrors
-// keeps that fatal at injection time, so it never reaches "degraded
-// provider" state and never needs to appear in this map at all.
+// Known per-entry authentication or encoding damage is deferred until the
+// independent store health check: another decryptable entry permits a loud,
+// scoped degradation. A wrong master key, unreadable document, locked store or
+// unknown failure still refuses boot/reload. reportInjectionErrors handles
+// provider attribution separately, so those refs do not belong in this map.
 //
 // The non-channel categories (voice, web-search tools, skill marketplaces)
 // mirror credentials.ResolveAll's nonChannelRefs slice (pkg/credentials/
@@ -249,8 +250,8 @@ func mcpEnabledEnvSensitiveValues(cfg *config.Config, store *credentials.Store) 
 
 // reportInjectionErrors logs every credentials.InjectFromConfig failure at
 // ERROR and returns the ones that must stop the caller (boot or reload) —
-// plus, separately, the entry-authentication failures whose fatal-vs-scoped
-// verdict the caller must defer until it has checked the store's health
+// plus, separately, known per-entry authentication or encoding failures whose
+// fatal-vs-scoped verdict must wait until it has checked the store's health
 // (#1277, see credentials.Store.HealthCheck).
 //
 // The split, and why it is not "everything is fatal" any more (2026-08-14,
@@ -278,6 +279,12 @@ func mcpEnabledEnvSensitiveValues(cfg *config.Config, store *credentials.Store) 
 //     the configured refs: at least one decryptable entry, even unreferenced,
 //     proves the store is readable and this error can be scoped. No decryptable
 //     entry in a nonempty store means a whole-store failure, which stays fatal.
+//
+//   - An *EntryEncodingError identifies malformed Base64 or nonce length in
+//     one entry. It is deferred to the same health decision, including when
+//     a provider or mailbox references it and injection runs before HealthCheck.
+//     With a decryptable sibling it degrades only the affected consumer, just
+//     like an unreadable channel entry found during bundle resolution.
 //
 //   - Everything else is STORE-WIDE, and stays fatal: the bare
 //     credentials.ErrStoreLocked (store never unlocked — short-circuited
@@ -315,15 +322,15 @@ func reportInjectionErrors(errs []error, phase string) (fatal []error, deferredA
 				continue
 			}
 			var entryAuth *credentials.EntryAuthError
-			if errors.As(refErr.Err, &entryAuth) {
+			var entryEncoding *credentials.EntryEncodingError
+			if errors.As(refErr.Err, &entryAuth) || errors.As(refErr.Err, &entryEncoding) {
 				// The caller's store health check decides whether this entry's
-				// authentication failure is scoped or whole-store.
+				// authentication or encoding failure is scoped or whole-store.
 				deferredAuth = append(deferredAuth, e)
 				continue
 			}
-			// The ref IS configured but the cause is neither a missing ref nor
-			// an ambiguous entry-auth failure — a corrupt store document, an
-			// env failure. Store-wide: fatal.
+			// An unclassified configured-ref failure (including a corrupt store
+			// document or env failure) stays fatal.
 			slog.Error(
 				phase+": credential store unreadable for a configured ref — "+
 					"not a simple missing ref, treating as store-wide (wrong master key or "+
@@ -343,15 +350,14 @@ func reportInjectionErrors(errs []error, phase string) (fatal []error, deferredA
 	return fatal, deferredAuth
 }
 
-// splitEntryAuthFailures extracts the subset of errs whose cause is an
-// entry-authentication failure (*credentials.EntryAuthError, which unwraps to
-// ErrWrongKey) — the ambiguous class #1277 scopes by the store's own
-// readability witness: a wrong whole-store master key fails every entry, a
-// single tampered entry fails only itself.
+// splitEntryAuthFailures extracts per-entry authentication and encoding
+// failures for the store-health decision. Both are scoped only with a
+// decryptable witness; file, lock and unknown failures remain in rest.
 func splitEntryAuthFailures(errs []error) (auth, rest []error) {
 	for _, e := range errs {
 		var entryAuth *credentials.EntryAuthError
-		if errors.As(e, &entryAuth) {
+		var entryEncoding *credentials.EntryEncodingError
+		if errors.As(e, &entryAuth) || errors.As(e, &entryEncoding) {
 			auth = append(auth, e)
 			continue
 		}
@@ -364,6 +370,25 @@ func splitEntryAuthFailures(errs []error) (auth, rest []error) {
 // store-level failure class, so /health's degraded reason can name the store
 // without leaking the underlying error detail (see reloadDegradedStatus).
 var errCredentialStoreUnreadableClass = errors.New("credential store unreadable")
+
+// storeHealthFailure turns a credential-store health result into the
+// boot/reload/refresh decision: nil when the store is healthy, nil (after an
+// ERROR log naming them) when only some entries are damaged and the store is
+// otherwise readable — a visible, scoped failure, never a whole-store refusal
+// (founder 2026-10-15, WU-4) — and the error to refuse with otherwise.
+func storeHealthFailure(phase string, healthErr error) error {
+	if healthErr == nil {
+		return nil
+	}
+	var damaged *credentials.DamagedEntriesError
+	if errors.As(healthErr, &damaged) {
+		slog.Error(phase+": damaged credential entries cannot be read — re-enter them; "+
+			"the rest of the credential store is readable and the system continues",
+			"credential_refs", damaged.Names, "error", healthErr)
+		return nil
+	}
+	return healthErr
+}
 
 // fatalStoreWideAuthFailure refuses boot, reload or refresh on a store-level
 // failure. The sentinel supports a fixed public health reason; cause preserves
@@ -507,7 +532,7 @@ func bootCredentials(
 	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
 	// The store, not the configured refs or resolved bundle, decides whole-store
 	// health. Run even with only MCP refs or no refs; an absent file is healthy.
-	if healthErr := credStore.HealthCheck(); healthErr != nil {
+	if healthErr := storeHealthFailure("boot", credStore.HealthCheck()); healthErr != nil {
 		return nil, nil, nil, fatalStoreWideAuthFailure(healthErr,
 			append(append([]error{}, deferredAuth...), bundleAuth...))
 	}

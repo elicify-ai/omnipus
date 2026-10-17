@@ -2,6 +2,7 @@ package skills
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -97,19 +98,31 @@ type SlugCollision struct {
 // A SKILL.md that is a symlink to another file INSIDE the same mount (row 12)
 // resolves inside the mount root and is discovered normally.
 func DiscoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugCollision) {
+	found, collisions, _ := discoverProjectSkills(mountName, mountRoot)
+	return found, collisions
+}
+
+// discoverProjectSkills is DiscoverProjectSkills that also reports whether the
+// mount could be inspected completely: a non-nil error means the mount root
+// could not be resolved, or a recognised skills folder exists but could not be
+// read. A missing recognised folder, or one refused because it escapes the
+// mount, is a complete answer (no error).
+func discoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugCollision, error) {
 	mountRootReal, err := filepath.EvalSymlinks(mountRoot)
 	if err != nil {
 		// A mount whose own root cannot be resolved (missing, broken) has
 		// nothing to discover. This is not logged as a warning here — mount
 		// existence is a precondition enforced by the mount store itself, not
-		// this discovery step's concern.
-		return nil, nil
+		// this discovery step's concern — but it is reported to a caller that
+		// needs to know whether the scan was complete.
+		return nil, nil, fmt.Errorf("mount %q: project folder unavailable: %w", mountName, err)
 	}
 	mountRootReal = filepath.Clean(mountRootReal)
 
 	found := make(map[string]ProjectSkill) // slug (case-folded) -> winning skill
 	wonBy := make(map[string]string)       // slug (case-folded) -> winning dir's description
 	var collisions []SlugCollision
+	var incomplete error
 
 	for _, dirRel := range projectSkillsDirs {
 		dirPath := filepath.Join(mountRoot, filepath.FromSlash(dirRel))
@@ -125,6 +138,7 @@ func DiscoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugC
 			if !errors.Is(readErr, os.ErrNotExist) {
 				slog.Warn("skills: failed to read project skills directory",
 					"mount", mountName, "dir", dirPath, "error", readErr)
+				incomplete = errors.Join(incomplete, fmt.Errorf("mount %q: %s: %w", mountName, dirRel, readErr))
 			}
 			continue
 		}
@@ -183,14 +197,14 @@ func DiscoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugC
 	}
 
 	if len(found) == 0 {
-		return nil, collisions
+		return nil, collisions, incomplete
 	}
 	out := make([]ProjectSkill, 0, len(found))
 	for _, ps := range found {
 		out = append(out, ps)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, collisions
+	return out, collisions, incomplete
 }
 
 // realWithinRoot resolves candidate to its real (symlink-free) path and
@@ -245,6 +259,19 @@ func (shelf ProjectShelf) lookupByName(name string) (ProjectSkill, bool) {
 // earliest) mount wins and the collision is recorded naming both mounts
 // (D4.2's ordering rule).
 func MergeProjectSkills(mounts []ProjectMount) (ProjectShelf, []SlugCollision) {
+	shelf, collisions, _ := mergeProjectSkills(mounts)
+	return shelf, collisions
+}
+
+// MergeProjectSkillsChecked is MergeProjectSkills for a caller that must not
+// act on a partial scan (a workspace-specific skill change): err is non-nil
+// when any mount could not be inspected completely, and then the shelf may be
+// missing skills that do exist.
+func MergeProjectSkillsChecked(mounts []ProjectMount) (ProjectShelf, []SlugCollision, error) {
+	return mergeProjectSkills(mounts)
+}
+
+func mergeProjectSkills(mounts []ProjectMount) (ProjectShelf, []SlugCollision, error) {
 	sorted := make([]ProjectMount, len(mounts))
 	copy(sorted, mounts)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
@@ -252,9 +279,11 @@ func MergeProjectSkills(mounts []ProjectMount) (ProjectShelf, []SlugCollision) {
 	shelf := make(ProjectShelf)
 	winningMount := make(map[string]string) // slug (case-folded) -> owning mount name
 	var collisions []SlugCollision
+	var incomplete error
 
 	for _, m := range sorted {
-		discovered, dirCollisions := DiscoverProjectSkills(m.Name, m.Root)
+		discovered, dirCollisions, err := discoverProjectSkills(m.Name, m.Root)
+		incomplete = errors.Join(incomplete, err)
 		collisions = append(collisions, dirCollisions...)
 
 		for _, ps := range discovered {
@@ -277,5 +306,5 @@ func MergeProjectSkills(mounts []ProjectMount) (ProjectShelf, []SlugCollision) {
 		}
 	}
 
-	return shelf, collisions
+	return shelf, collisions, incomplete
 }

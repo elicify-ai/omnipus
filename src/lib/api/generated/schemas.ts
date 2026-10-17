@@ -3980,7 +3980,7 @@ export const AgentCreateRequestMain =
     mcp_servers: z.array(AgentMCPBinding).optional(),
     tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Main"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
@@ -4004,7 +4004,7 @@ export const AgentCreateRequestSubagent =
     mcp_servers: z.array(AgentMCPBinding).optional(),
     tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Subagent"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
@@ -4025,7 +4025,7 @@ export const AgentCreateRequestSubagent =
 export const AgentCreateRequestSubagent3p =
   z.object({
     type: z.literal("subagent_3p"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
@@ -4056,7 +4056,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   mcp_servers: z.array(AgentMCPBinding).optional(),
   tool_policy_changes: ToolPolicyChanges.optional(),
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).max(100).optional(),
   description: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().max(64).optional(),
@@ -13032,7 +13032,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "post",
     path: "/secret-requests/:id/submit",
     alias: "submitSecretRequest",
-    description: `Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of &#x60;values&#x60; or &#x60;cancel: true&#x60;. All checks run before any write; any failure writes nothing. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
+    description: `Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of &#x60;values&#x60; or &#x60;cancel: true&#x60;. All trust and payload checks run before the atomic store publication; a refusal or failed save writes no values. After publication, a metadata or continuation-dispatch failure returns 503 with state submitted and the committed references. The submission IS saved; boot or chat attach retries an undelivered continuation. A repeated submit is idempotent and returns 409 with the same committed state, without storing another version. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
 `,
     requestFormat: "json",
     parameters: [
@@ -13073,6 +13073,17 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         status: 413,
         description: `Body larger than 65,536 bytes.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The save failed before publication. No submitted values were stored; the request remains pending. The error is value-free.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `The submission IS committed, but post-commit metadata or continuation dispatch is not confirmed. The body has state submitted and the committed reference_names. Boot or chat attach retries an undelivered continuation. Re-submitting returns 409 with the same state and never stores another version.
+`,
+        schema: SecretRequestState,
       },
     ],
   },

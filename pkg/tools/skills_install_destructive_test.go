@@ -183,6 +183,13 @@ func TestInstallSkillToolReportsPartialStateWhenPreviousPackageCannotBeRestored(
 		"error_stage":        "restore_previous",
 		"message":            "replacement publication failed and the previous package could not be restored; no live package is available",
 		"persistence_status": "partial",
+		// FR-030 (omnipus-system-agent, WU-3): a partial publication reports
+		// "partly saved", never "failed: nothing saved".
+		"outcome":       "partly saved",
+		"reason":        "the skill was partly published (stage restore_previous)",
+		"check_scope":   "",
+		"not_tested":    []any{},
+		"missing_parts": []any{"skill publication"},
 	}, payload)
 	require.NotContains(t, result.ForLLM, "private publish cause")
 	require.NotContains(t, result.ForLLM, "private restore cause")

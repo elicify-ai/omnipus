@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // policyApproverAdapter implements agent.PolicyApprover using the in-process
@@ -44,13 +45,15 @@ func newPolicyApproverAdapter(reg *approvalRegistryV2, ws *WSHandler) *policyApp
 // the entry is already in denied_saturated state and resultCh has a pre-delivered
 // outcome, so we skip the WS broadcast and unblock immediately.
 func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.PolicyApprovalReq) (bool, string, bool) {
-	entry, accepted := a.reg.requestApproval(
+	entry, accepted := a.reg.requestApprovalWithOrigin(
 		req.ToolCallID,
 		req.ToolName,
 		req.Args,
 		req.AgentID,
 		req.SessionID,
 		req.TurnID,
+		// FR-240 / K7: the server-derived turn origin, never client input.
+		tools.ToolTurnOrigin(ctx).Label(),
 	)
 	if entry == nil {
 		// Defensive: should never happen (requestApproval always returns non-nil).

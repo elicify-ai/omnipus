@@ -84,7 +84,7 @@ func TestKnownChannels_MatchesCanonicalChannelTypes(t *testing.T) {
 // next config reload.
 func TestKnownChannels_SignalNotAccepted(t *testing.T) {
 	deps, _ := newTestDeps(t)
-	res := systools.NewChannelEnableTool(deps).Execute(context.Background(), map[string]any{"id": "signal"})
+	res := systools.NewChannelEnableTool(deps).Execute(context.Background(), systools.WithCurrentRevisionForTest(systools.NewChannelEnableTool(deps), map[string]any{"id": "signal"}))
 	if !res.IsError {
 		t.Fatalf("enable_channel(\"signal\") should be rejected (signal is not a canonical channel type "+
 			"in this codebase yet — see config.KnownChannelTypes), got success: %s", res.ForLLM)
@@ -103,7 +103,7 @@ func TestKnownChannels_PreviouslyMissingChannelsAreAccepted(t *testing.T) {
 			if cfg.Channels == nil {
 				cfg.Channels = map[string]config.ChannelInstanceConfig{}
 			}
-			res := systools.NewChannelEnableTool(deps).Execute(context.Background(), map[string]any{"id": id})
+			res := systools.NewChannelEnableTool(deps).Execute(context.Background(), systools.WithCurrentRevisionForTest(systools.NewChannelEnableTool(deps), map[string]any{"id": id}))
 			if res.IsError {
 				t.Errorf("enable_channel(%q) should succeed (it is a real, supported channel type), got error: %s",
 					id, res.ForLLM)

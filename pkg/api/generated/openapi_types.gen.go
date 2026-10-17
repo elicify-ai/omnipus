@@ -14769,7 +14769,7 @@ type AgentCreateRequestMain struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
@@ -14860,7 +14860,7 @@ type AgentCreateRequestSubagent struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
@@ -14951,7 +14951,7 @@ type AgentCreateRequestSubagent3p struct {
 	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
 	Model *string `json:"model,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
@@ -15368,7 +15368,7 @@ type AgentUpdateRequest struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name New display name. Rejected on locked agents.
+	// Name New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
 	Name *string `json:"name,omitempty"`
 
 	// Provider New explicit routing key for the primary model (O3 two-field model). When set, resolution uses it directly and never infers a provider. Allowed on all agents. Send an empty string to clear it (fall back to default-provider resolution).
@@ -24589,7 +24589,7 @@ type SecretOptionsUpdateRequest struct {
 	AvailableInChannelTurns bool `json:"available_in_channel_turns"`
 }
 
-// SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Absence is never read as success.
+// SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
 type SecretRequestState struct {
 	// ReferenceNames Reference names the values were stored under. Present only when state is `submitted`.
 	ReferenceNames *[]string               `json:"reference_names,omitempty"`
