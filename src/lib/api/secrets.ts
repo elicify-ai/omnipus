@@ -22,13 +22,14 @@ import { isApiError } from '../api-error'
 import { request } from './http'
 
 /**
- * The outcome of a submit: the server's resulting state, or — on 409 — the
- * request's CURRENT state (already submitted, cancelled, stopped…), which the
- * server sends as the 409 body. Any other failure is thrown.
+ * A successful submit, the current state on 409, or a committed 503 whose
+ * values are saved but whose continuation is not confirmed. Other failures
+ * are thrown; a state read alone cannot confirm the continuation.
  */
-export type SecretSubmitOutcome = // not-wire-format: in-browser union over two generated SecretRequestState responses
+export type SecretSubmitOutcome = // not-wire-format: in-browser union over generated SecretRequestState responses
   | { kind: 'accepted'; state: SecretRequestState }
   | { kind: 'not-pending'; state: SecretRequestState }
+  | { kind: 'committed-uncertain'; state: SecretRequestState }
 
 function stateFrom409Body(body: string | undefined): SecretRequestState | null {
   if (!body) return null
@@ -36,6 +37,20 @@ function stateFrom409Body(body: string | undefined): SecretRequestState | null {
     const parsed = SecretRequestStateSchema.safeParse(JSON.parse(body))
     return parsed.success ? (parsed.data as SecretRequestState) : null
   } catch {
+    return null
+  }
+}
+
+/** K5: only a matching, schema-valid submitted 503 proves a committed save. */
+function committedStateFrom503(error: unknown, requestId: string): SecretRequestState | null {
+  if (!isApiError(error) || error.status !== 503 || !error.body) return null
+  try {
+    const parsed = SecretRequestStateSchema.safeParse(JSON.parse(error.body))
+    return parsed.success && parsed.data.state === 'submitted' && parsed.data.request_id === requestId
+      ? (parsed.data as SecretRequestState)
+      : null
+  } catch {
+    // An unavailable/malformed 503 is still thrown and reconciled normally.
     return null
   }
 }
@@ -54,6 +69,8 @@ export async function submitSecretRequest(requestId: string, body: SecretSubmitR
     )
     return { kind: 'accepted', state }
   } catch (error) {
+    const committed = committedStateFrom503(error, requestId)
+    if (committed) return { kind: 'committed-uncertain', state: committed }
     if (isApiError(error) && error.status === 409) {
       const state = stateFrom409Body(error.body)
       if (state) return { kind: 'not-pending', state }
