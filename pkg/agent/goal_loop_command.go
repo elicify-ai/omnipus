@@ -225,7 +225,11 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	// No active goal: a fresh `/goal <intent>` supersedes any AskUserQuestion
 	// card still parked from an earlier attempt (E1/S-32) — cancelled WITHOUT
 	// dispatching a resume turn (FR-028; the re-homed cancelOrphanedClarifyCard).
-	gl.al.cancelOrphanedClarifyCard(gl.al.getAskUserRegistry(), gl.sessionID)
+	if err := gl.al.cancelOrphanedClarifyCard(gl.al.getAskUserRegistry(), gl.sessionID); err != nil {
+		logger.WarnCF("agent", "goal: pending question cancellation failed; new goal not started",
+			map[string]any{"session_id": gl.sessionID, "error": err.Error()})
+		return true, true, "Could not cancel the pending question card. Check session storage and retry."
+	}
 
 	if goalIntentNeedsLLMCompile(gl.args) {
 		// ADR-088 D1 (US-1): instant activation. Admit ONCE (FR-003), mint the

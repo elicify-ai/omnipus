@@ -375,9 +375,24 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	if err := validateSessionID(sessionID); err != nil {
 		return err
 	}
-	h := us.lockSession(sessionID)
-	defer h.Unlock()
+	err := func() error {
+		h := us.lockSession(sessionID)
+		defer h.Unlock()
+		return us.deleteSessionLocked(sessionID)
+	}()
+	if err != nil {
+		return err
+	}
+	// Never invoke cleanup under the store shard: the registry's normal
+	// order is transitionMu -> store shard, and the inverse deadlocks.
+	us.notifySessionDeleted(sessionID)
+	return nil
+}
 
+// deleteSessionLocked owns the existing durable delete sequence. The caller
+// holds this session's shard; observers run only after this returns success
+// and that shard has been released.
+func (us *UnifiedStore) deleteSessionLocked(sessionID string) error {
 	dir := filepath.Join(us.baseDir, sessionID)
 	if _, err := os.Stat(dir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {

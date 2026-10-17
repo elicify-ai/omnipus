@@ -392,6 +392,7 @@ export interface ErrorFrame {
   type: "error";
   session_id?: string;
   message: string;
+  ask_user_card_id?: string;
   client_message_id?: string;
   first_message_error?: "not_saved" | "delivery_unknown" | "answer_not_started";
   payload?: {

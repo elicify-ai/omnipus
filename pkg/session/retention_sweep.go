@@ -105,6 +105,9 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
 	removed := 0
+	// Notify memory-only consumers only after successful whole-session removal
+	// and after releasing every shard; registry transitions take store locks.
+	var deletedSessions []string
 	// Track session dirs we touched so we can decide which to remove entirely.
 	touchedSessionDirs := make(map[string]struct{})
 
@@ -247,6 +250,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 			delete(us.dirtyStats, sessID) // ADR-057 U6 W24: no dangling flush target
 			us.cacheMu.Unlock()
 			us.u4IndexEvict(sessID) // FR-097
+			deletedSessions = append(deletedSessions, sessID)
 		}
 		if dirRmErr != nil {
 			slog.Warn("session: retention_sweep: dir remove failed", "dir", sessDir, "error", dirRmErr)
@@ -264,6 +268,10 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// released here, BEFORE the goal retention pass — never nested inside
 	// lockAllSessionShards's hold, in either direction.
 	unlock()
+
+	for _, sessionID := range deletedSessions {
+		us.notifySessionDeleted(sessionID)
+	}
 
 	// FR-007: tell each session whose window moved. Written after the shards
 	// are released (the append takes its own shard).

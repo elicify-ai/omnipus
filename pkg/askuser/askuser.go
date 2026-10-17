@@ -100,9 +100,10 @@ const (
 // (SessionMeta.PendingAskJSON) and mirrored in the in-process Registry.
 type PendingSet struct {
 	CardID string `json:"card_id"`
-	// RoutingSessionKey is the pending-key namespace (§0.9): one set per
-	// routing session. For a root (owner) turn this is the turn's session
-	// key; delegated children cannot call the tool at all (owner-only).
+	// RoutingSessionKey is the pending-key namespace: one visible set per
+	// routing session, with later sets waiting in its durable FIFO. For a
+	// root (owner) turn this is the turn's session key; delegated children
+	// cannot call the tool at all (owner-only).
 	RoutingSessionKey string `json:"routing_session_key"`
 	// TranscriptSessionID is the owner session's real store-backed id — the
 	// key the pending state persists under, and the session the resume turn

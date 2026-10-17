@@ -5,6 +5,8 @@
 package agent
 
 import (
+	"context"
+
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -18,6 +20,13 @@ func (al *AgentLoop) SetAskUserRegistry(r tools.AskUserQuestionRegistry) {
 	al.askUserRegistryMu.Lock()
 	al.askUserRegistry = r
 	al.askUserRegistryMu.Unlock()
+	if store := al.GetSessionStore(); store != nil {
+		store.SetSessionDeletedObserver(func(sessionID string) {
+			if registry := al.getAskUserRegistry(); registry != nil {
+				registry.ForgetDeletedSession(sessionID)
+			}
+		})
+	}
 }
 
 // getAskUserRegistry returns the live registry, or nil when unwired.
@@ -27,17 +36,18 @@ func (al *AgentLoop) getAskUserRegistry() tools.AskUserQuestionRegistry {
 	return al.askUserRegistry
 }
 
-// cancelPendingAskForScope cancels any pending AskUserQuestion set reachable
-// from a cancel scope's session identity (spec US-6 S2: session Stop and
-// channel `/cancel` cancel the set). No resume turn is dispatched — the user
-// asked everything to stop; the terminal cancelled record persists for the
-// collapsed-card render. A nil registry or empty key is a no-op: a parked
-// set simply stays pending, which is the pre-wiring behavior.
-func (al *AgentLoop) cancelPendingAskForScope(sessionID string) {
+// cancelPendingAskForScope carries the captured head and its failure through
+// the one Stop request. It never resumes a cancelled turn or consumes a
+// successor that the request did not target.
+func (al *AgentLoop) cancelPendingAskForScope(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
-		return
+		return nil
 	}
-	if r := al.getAskUserRegistry(); r != nil {
-		r.CancelOnSessionStop(sessionID)
+	targets, ok := ctx.Value(pendingAskStopContextKey{}).(*pendingAskStopTargets)
+	if !ok {
+		// cancel captures this standalone call's head once; no unchecked
+		// context assertion is needed when there was no outer Stop binding.
+		targets = &pendingAskStopTargets{targets: make(map[string]*pendingAskStopTarget)}
 	}
+	return targets.cancel(al, sessionID)
 }
