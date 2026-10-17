@@ -82,6 +82,15 @@ func TestExpandedBounds_Format_NegativeCountersClampToZero(t *testing.T) {
 			usage: protocoltypes.UsageInfo{CacheWrite5mTokens: -40, CacheWrite1hTokens: 60},
 			want:  expandedBoundsLinePrefix + `uncached=0 cache_read=0 cache_write=0 output=0 total=0 write_5m=0 write_1h=60 billing=unpriced`,
 		},
+		{
+			// Symmetric twin of the row above, from the same contract: the
+			// write section stays listed (5m is positive), the negative 1h
+			// lifetime clamps to 0 and is never printed. Kills a selective
+			// one-hour-clamp-removal mutant, which the 5m row cannot reach.
+			name:  "negative_one_hour_write_clamps_while_section_stays_listed",
+			usage: protocoltypes.UsageInfo{CacheWrite5mTokens: 40, CacheWrite1hTokens: -60},
+			want:  expandedBoundsLinePrefix + `uncached=0 cache_read=0 cache_write=0 output=0 total=0 write_5m=40 write_1h=0 billing=unpriced`,
+		},
 	}
 
 	for _, tt := range tests {
