@@ -3,6 +3,7 @@ package promptcache
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -25,6 +26,7 @@ func ParseUsage(providerID string, raw []byte) (*protocoltypes.UsageInfo, error)
 // NormalizeUsage reads a documented usage object into additive token counts.
 // Repeated aliases are alternatives, never separate contributions. Unknown
 // fields and non-integer, negative or overflowing counters are ignored.
+// An unrepresentable aggregate is rejected before any usage can be accounted.
 func NormalizeUsage(providerID string, raw []byte) (protocoltypes.UsageInfo, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
@@ -53,7 +55,11 @@ func NormalizeUsage(providerID string, raw []byte) (protocoltypes.UsageInfo, err
 		u.CacheWrite5mTokens = count("cache_creation", "ephemeral_5m_input_tokens")
 		u.CacheWrite1hTokens = count("cache_creation", "ephemeral_1h_input_tokens")
 		if u.CacheWrite5mTokens > 0 || u.CacheWrite1hTokens > 0 {
-			u.CacheWriteTokens = u.CacheWrite5mTokens + u.CacheWrite1hTokens
+			writeTotal, ok := addUsageCounts(u.CacheWrite5mTokens, u.CacheWrite1hTokens)
+			if !ok {
+				return protocoltypes.UsageInfo{}, errors.New("cache write token counts exceed the supported integer range")
+			}
+			u.CacheWriteTokens = writeTotal
 		}
 	} else {
 		u.PromptTokens = count("prompt_tokens")
@@ -96,8 +102,25 @@ func NormalizeUsage(providerID string, raw []byte) (protocoltypes.UsageInfo, err
 			u.PromptTokens = max(0, u.PromptTokens-u.CacheReadTokens-u.CacheWriteTokens)
 		}
 	}
-	u.TotalTokens = u.PromptTokens + u.CacheReadTokens + u.CacheWriteTokens + u.CompletionTokens
+	total, ok := addUsageCounts(u.PromptTokens, u.CacheReadTokens, u.CacheWriteTokens, u.CompletionTokens)
+	if !ok {
+		return protocoltypes.UsageInfo{}, errors.New("total token counts exceed the supported integer range")
+	}
+	u.TotalTokens = total
 	return u, nil
+}
+
+// addUsageCounts checks before adding so an overflow cannot become accounting.
+func addUsageCounts(counts ...int) (int, bool) {
+	maxInt := int(^uint(0) >> 1)
+	total := 0
+	for _, count := range counts {
+		if count < 0 || count > maxInt-total {
+			return 0, false
+		}
+		total += count
+	}
+	return total, true
 }
 
 func usageCount(fields map[string]json.RawMessage, path ...string) int {

@@ -221,6 +221,12 @@ are excluded. Fewer than 32 counters are emitted. Prompt text, tool arguments,
 provider error bodies and credentials are not part of this line. The existing
 credential scrubber still runs before the application log is written.
 
+Recognized token counters must be non-negative integers within the supported
+integer range. Invalid individual values are ignored. Omnipus also checks the
+combined lifetime-write count and the full token total: if either sum cannot be
+represented, it rejects that usage response rather than storing wrapped or
+negative totals. This is input validation, not a token or spending limit.
+
 ### Read the hit percentage and billing classification
 
 ```text
