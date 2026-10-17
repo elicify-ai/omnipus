@@ -86,18 +86,20 @@ func isModelRetiredBody(body string, status int) bool {
 }
 
 // providerMessageFor assembles the §6 sentence for code with the provider's
-// display name substituted into the {provider} slot. Returns "" when the
-// code has no provider-message template (generated.LLMErrorProviderMessages),
-// or the provider id is empty — the caller keeps the catalogue copy then.
-func providerMessageFor(code LLMErrorCode, providerID string) string {
+// display name and failing model substituted into their slots. Every slot
+// must have a fact; otherwise keep the catalogue copy, never a literal slot.
+func providerMessageFor(code LLMErrorCode, providerID, modelID string) string {
 	if providerID == "" {
 		return ""
 	}
 	tmpl, ok := generated.LLMErrorProviderMessages[string(code)]
-	if !ok {
+	if !ok || (strings.Contains(tmpl, "{model}") && modelID == "") {
 		return ""
 	}
-	return strings.ReplaceAll(tmpl, "{provider}", providers.DisplayName(providerID))
+	return strings.NewReplacer(
+		"{provider}", scrubDetailText(providers.DisplayName(providerID)),
+		"{model}", scrubDetailText(modelID),
+	).Replace(tmpl)
 }
 
 // WireLLMError is the ONE assembly point from an ErrorPayload to the
@@ -148,7 +150,7 @@ func WireLLMError(p ErrorPayload) generated.LLMError {
 		Retryable: retryable,
 		Detail:    &detail,
 	}
-	if providerMessageFor(code, providerID) != "" {
+	if providerMessageFor(code, providerID, modelID) != "" {
 		flag := true
 		out.ProviderMessage = &flag
 	}

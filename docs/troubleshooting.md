@@ -112,6 +112,34 @@ Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed t
 
 ## The provider rejects your model requests
 
+A `model_route_unavailable` notice means Omnipus could not set up the named provider/model connection from its saved settings. No request was sent to that pair, and a global-default connection was not substituted. Check the provider's API key or sign-in and endpoint settings before trying again. The notice names the pair; scrubbed setup details are available only live under **Verbose chat**.
+
+For an HTTP 400 rejection, the failure notice distinguishes a wrong model from an otherwise unclassified bad request:
+
+| Notice | Meaning and next step |
+|---|---|
+| `bad_model`, naming the provider and model | The provider specifically reported that the model was not found or is not offered. Choose a model offered by that provider in the agent's settings. Omnipus does not try another provider for this failure. |
+| `HTTP 400: Bad Request; format`, naming the provider and model | The provider rejected the request, but did not identify a more specific cause. This does **not** prove the model is unavailable. Enable **Verbose chat** before reproducing it to inspect the available technical detail. |
+
+A confirmed wrong-model error stops all attachment recovery too: removing an image or converting a PDF cannot make a missing model exist. For availability prose, Omnipus reads the clause's **subject** — what is unavailable — rather than searching for the word “model”.
+
+The supported model wording is a simple **model is not available/offered** statement. It can start with **the**, **this** or **a**, include **requested** before **model**, and name a model identifier. It can end with **on/by this provider**. A neutral error prefix can introduce the clause with punctuation, including a colon with no following space. Input-type subjects are different, even when they mention a model:
+
+| Provider wording | How Omnipus treats it |
+|---|---|
+| `The model 'm' is not available.` or `Model 'm' is not offered by this provider.` | Positive model-unavailability evidence: `bad_model`, with no attachment retry. |
+| `This model is not available.`, `The requested model m is not available.` or `A model 'm' is not available.` | The subject is still the model: `bad_model`, with no attachment retry. |
+| `Request rejected:model m is not available.` | The colon introduces a model-subject clause; a missing space after it does not change the classification. |
+| `Model 'm': image input is not available.` or `Model 'm' is not available for image input.` | An image-input restriction, not proof that the model is missing. Existing attachment recovery can still apply. |
+| `Image input for model 'm' is not available.` or `Image input for this model is not available.` | The unavailable subject is image input, even though the sentence mentions a model. Existing image recovery can still apply. |
+| `PDF input for model 'm' is not available.` or `PDF input for this model is not available.` | A PDF-input restriction, not proof that the model is missing. Existing PDF-to-text recovery can still apply. |
+
+This is a limited diagnostic grammar, not a general English interpretation. Unsupported subjects, qualifiers or compound availability messages are not treated as proof of a missing model; existing bad-request classification and eligible attachment recovery remain available. A generic bad-request notice does not prove that the configured model is valid, either. Other specific error classifications keep their existing rules.
+
+A structured `model_not_found` code is authoritative even if its text also mentions attachments, authentication or rate limits.
+
+The same safe explanation is saved in the conversation and remains after reopening it, including when an empty-response retry fails. Helper failure handbacks use translated explanations even for unfamiliar streaming error codes. Raw provider response text is not saved as that explanation. Technical detail is live-only and scrubbed for credentials; turning **Verbose chat** on after delivery or reopening history does not recover discarded detail. Existing attachment recovery, context-length handling, and authentication, billing and rate-limit classifications still take their own paths.
+
 **"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then removes the oldest eligible whole piece — a complete old step (assistant calls plus all their matching results), or an older assistant reply that made no tool calls, whichever comes first in the conversation; if nothing can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.
 
 This is an internal retry notice, not a data-loss event: relief changes the model's view, not the admitted archive text. It keeps the original user message and media, instructions, call/result structure and unconsumed steering. If those required parts still do not fit, Omnipus returns the last real provider rejection when no further reduction is possible or the retry limit is reached. It does not stop merely because a local size estimate says the immutable remainder is too large.

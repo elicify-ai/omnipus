@@ -176,6 +176,41 @@ func (h *issue1296Harness) awaitTurn(t *testing.T, sessionID string) {
 	}
 }
 
+// awaitRequestReminderFence joins the single reminder owed by this plain-text
+// peer fixture. The first TurnEnd can precede the reminder's saved acknowledgement,
+// so consume its completion before a caller takes the denied-peer transcript
+// snapshot. An unexpected receiver turn must fail rather than be discarded.
+func (h *issue1296Harness) awaitRequestReminderFence(t *testing.T) {
+	t.Helper()
+	deadline := time.NewTimer(busDeliveryTimeout)
+	defer deadline.Stop()
+	for {
+		select {
+		case event, ok := <-h.events.C:
+			require.True(t, ok, "turn event stream must stay connected")
+			if event.Kind != agent.EventKindTurnEnd {
+				continue
+			}
+			end, typed := event.Payload.(agent.TurnEndPayload)
+			require.True(t, typed)
+			if end.SessionID != h.recvID {
+				continue
+			}
+			require.Equal(t, agent.TurnEndStatusCompleted, end.Status,
+				"request-reminder follow-on turn must complete")
+			require.Equal(t, "request-reminder:"+h.recvID, end.ChatID,
+				"follow-on receiver turn ran on an unexpected chat; expected the "+
+					"request-reminder owner wake (request_reminder.go) — any other "+
+					"chat means an unauthorized receiver turn, which must fail")
+			return
+		case runErr := <-h.runDone:
+			t.Fatalf("issue1296 fixture: loop exited while fencing the request reminder: %v", runErr)
+		case <-deadline.C:
+			t.Fatal("issue1296 fixture: the request-reminder follow-on turn never completed")
+		}
+	}
+}
+
 func (h *issue1296Harness) peerSend(t *testing.T, content string) *tools.ToolResult {
 	t.Helper()
 	sender, ok := h.loop.GetRegistry().GetAgent("policy-sender")
@@ -190,6 +225,9 @@ func (h *issue1296Harness) peerSend(t *testing.T, content string) *tools.ToolRes
 	require.NotNil(t, result)
 	if !result.IsError {
 		h.awaitTurn(t, h.recvID)
+		// The reminder publish happens after the TurnEnd this await consumed;
+		// fence its follow-on turn before any caller reads the transcript.
+		h.awaitRequestReminderFence(t)
 	}
 	return result
 }
