@@ -58,6 +58,9 @@ func (d gatewayAddressDeps) PublishGuestReply(sessionID string, entry session.Tr
 		token.ReplyToMessageId = &replyTo
 		token.ReplyToParticipant = entry.ReplyToParticipant
 	}
+	// K33: a member's group-chat answer mirrored into its main chat renders
+	// as the same collapsed entry live and on replay.
+	token.RoomRef = entry.RoomRef
 	d.h.hubPublishFrameMeta(sessionID, string(generated.WsFrameTypeToken), hubFrameMeta{
 		kind: hubKindToken, messageID: messageID, agentID: agentID, content: entry.Content,
 	}, token)
@@ -65,6 +68,7 @@ func (d gatewayAddressDeps) PublishGuestReply(sessionID string, entry session.Tr
 		Type:      string(generated.WsFrameTypeDone),
 		SessionId: sessionID,
 		MessageId: &messageID,
+		RoomRef:   entry.RoomRef,
 	}
 	d.h.hubPublishFrameMeta(sessionID, string(generated.WsFrameTypeDone), hubFrameMeta{kind: hubKindDone}, done)
 }
@@ -85,6 +89,7 @@ func (d gatewayAddressDeps) PublishUserEntry(sessionID string, entry session.Tra
 		Content:     entry.Content,
 		Timestamp:   entry.Timestamp.UTC().Format(time.RFC3339Nano),
 		Participant: entry.Participant,
+		RoomRef:     entry.RoomRef, // K33: a group chat's request to this agent
 	}
 	if entry.AgentID != "" {
 		aid := entry.AgentID

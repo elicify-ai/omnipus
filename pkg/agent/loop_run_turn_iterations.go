@@ -277,6 +277,7 @@ turnLoop:
 	er.cn.rc.rx.rr.rq.ri.rf.rt.al.tickSearchPromotionHorizon(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.manifestBucket())
 
 	if steerMsgs, steerCorrelationIDs := er.cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		er.cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
 			map[string]any{
 				"agent_id":       er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -567,6 +568,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 		cn.rc.rx.rr.citationTracker.EmitCitations(cn.responseContent)
 	}
 	if steerMsgs, steerCorrelationIDs := cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 		logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
 			map[string]any{
 				"agent_id":       cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,

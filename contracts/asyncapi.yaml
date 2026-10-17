@@ -2177,7 +2177,6 @@ components:
           maxLength: 5242880
         addressees:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
@@ -2190,7 +2189,6 @@ components:
             never forwards its mentions (§6.11).
         deliveries:
           type: array
-          maxItems: 256
           items:
             $ref: '#/components/schemas/RoomDeliveryState'
           description: Per-member delivery states for this entry. Never null.
@@ -2289,10 +2287,10 @@ components:
       title: RoomSnapshotFrame
       description: >
         Server → client (spec omnipus-system-agent K45, K26, K27). The answer to
-        attach_room: the room entries after the cursor in order, the members,
-        mutes, member states, pause state, generation and allocated cost.
-        `complete` is false when the server could not serve every entry after the
-        cursor. THIS FILE EXISTS for the Constraint #8 5-step process and the
+        attach_room: the room entries after the cursor in seq order (at most the
+        newest 10,000; `has_older` is true when older entries after the cursor
+        were left out), the members, mutes, member states, pause state,
+        generation and allocated cost. THIS FILE EXISTS for the Constraint #8 5-step process and the
         pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
         schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
         Landing 1, WU-15 produces it.
@@ -2332,24 +2330,24 @@ components:
           description: Entries after the cursor, in seq order. Never null.
         members:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         muted:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         member_states:
           type: array
-          maxItems: 10000
           items:
             $ref: '#/components/schemas/RoomDeliveryState'
-          description: Current delivery states of outstanding requests. Never null.
+          description: >-
+            Every outstanding (non-terminal) delivery state plus the latest terminal
+            state of each member. Never null. Live states are never dropped (ruling
+            Q2), so this array has no fixed upper bound.
         paused:
           type: boolean
         generation:
@@ -2368,6 +2366,12 @@ components:
           type: boolean
         complete:
           type: boolean
+          description: always true; reserved.
+        has_older:
+          type: boolean
+          description: >
+            True when entries after the cursor older than the ones served were
+            left out (a snapshot carries at most the newest 10,000 entries).
     RoomMetaFrame:
       title: RoomMetaFrame
       description: >
@@ -2403,14 +2407,12 @@ components:
           minimum: 1
         members:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         muted:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1

@@ -6817,8 +6817,8 @@ export const Room = z.object({
   workspace_id: z.string().min(1).max(128),
   kind: z.enum(["team", "squad", "adhoc"]),
   name: z.string().min(1).max(80),
-  members: z.array(z.string().min(1).max(128)).max(256),
-  muted: z.array(z.string().min(1).max(128)).max(256),
+  members: z.array(z.string().min(1).max(128)),
+  muted: z.array(z.string().min(1).max(128)),
   paused: z.boolean(),
   generation: z.number().int().gte(0),
   origin_session_id: z.string().min(1).max(255).optional(),
@@ -12662,6 +12662,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
@@ -12698,6 +12703,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -12743,6 +12753,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         description: `Validation failed — semantically invalid input.`,
         schema: ErrorResponse,
       },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
@@ -12784,6 +12799,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -16877,7 +16897,7 @@ This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-
     method: "get",
     path: "/workspaces/:id/rooms",
     alias: "listWorkspaceRooms",
-    description: `Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+    description: `Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md). A storage or read failure is an explicit 500 with the error body, never 200 with an empty list (#1314).
 `,
     requestFormat: "json",
     parameters: [
@@ -16902,6 +16922,11 @@ This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -16945,6 +16970,11 @@ This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -17074,9 +17104,9 @@ export const RoomEntry = z
     client_message_id: z.string().min(1).max(128).optional(),
     author: RoomEntryAuthor,
     text: z.string().max(5242880),
-    addressees: z.array(z.string().min(1).max(128)).max(256),
+    addressees: z.array(z.string().min(1).max(128)),
     after_pause: z.boolean(),
-    deliveries: z.array(RoomDeliveryState).max(256),
+    deliveries: z.array(RoomDeliveryState),
     timestamp: z.string(),
   })
   .strict();
@@ -17113,15 +17143,16 @@ export const RoomSnapshotFrame = z
     room_id: z.string().min(1).max(128),
     seq: z.number().int().min(0),
     entries: z.array(RoomEntry).max(10000),
-    members: z.array(z.string().min(1).max(128)).max(256),
-    muted: z.array(z.string().min(1).max(128)).max(256),
-    member_states: z.array(RoomDeliveryState).max(10000),
+    members: z.array(z.string().min(1).max(128)),
+    muted: z.array(z.string().min(1).max(128)),
+    member_states: z.array(RoomDeliveryState),
     paused: z.boolean(),
     generation: z.number().int().min(0),
     read_only_reason: z.string().min(1).max(200).optional(),
     allocated_cost_micro_usd: z.number().int().min(0),
     allocated_cost_unpriced: z.boolean(),
     complete: z.boolean(),
+    has_older: z.boolean().optional(),
   })
   .strict();
 
@@ -17130,8 +17161,8 @@ export const RoomMetaFrame = z
     type: z.literal("room_meta"),
     room_id: z.string().min(1).max(128),
     seq: z.number().int().min(1),
-    members: z.array(z.string().min(1).max(128)).max(256),
-    muted: z.array(z.string().min(1).max(128)).max(256),
+    members: z.array(z.string().min(1).max(128)),
+    muted: z.array(z.string().min(1).max(128)),
     paused: z.boolean(),
     generation: z.number().int().min(0),
     read_only_reason: z.string().min(1).max(200).optional(),

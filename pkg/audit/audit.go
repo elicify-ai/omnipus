@@ -339,6 +339,8 @@ var validEventNames = map[EventName]struct{}{
 	// See events.go for the wire shape contract.
 	EventMediaDelete:        {},
 	EventMediaCascadeDelete: {},
+	// omnipus-system-agent FR-172: group-chat (room) changes. See events.go.
+	EventRoomChanged: {},
 	// ADR-092 (shell permission modes) FR-032/FR-046 typed audit events.
 	// See shell_permission_events.go for the wire shape contract.
 	EventShellModeChange:          {},

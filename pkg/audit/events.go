@@ -540,6 +540,14 @@ const (
 	// filenames, bytes_freed, count}. Same shape convention as
 	// EventMediaDelete / workspace.delete.
 	EventMediaCascadeDelete = "media.cascade_delete"
+
+	// EventRoomChanged — INFO. A group chat (room) was created, its
+	// membership or mutes changed, its team room followed a workspace team
+	// change, or it was deleted (omnipus-system-agent FR-172). Emitted by
+	// pkg/gateway/rooms_runtime.go for pkg/rooms. User = the authenticated web
+	// user (empty for a change driven by a workspace edit). Fields:
+	// {room_id, workspace_id, action, agent_ids}.
+	EventRoomChanged = "room.changed"
 )
 
 // ---------------------------------------------------------------------------

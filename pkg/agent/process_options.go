@@ -152,4 +152,9 @@ type processOptions struct {
 	// executionDisposition carries canonical admission ownership separately
 	// from routing, transcript containment and delegate tool authority.
 	executionDisposition *executionDisposition
+
+	// roomCost owns handed-over room inputs before execution, independently
+	// of later pricing polls. Ordinary, system-wake and continuation turns all
+	// collect inputs/cost and settle their owned requests on exit (§6.14).
+	roomCost *roomCostMeter
 }

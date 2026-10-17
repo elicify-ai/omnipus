@@ -130,6 +130,12 @@ type AgentLoop struct {
 	// (address_router.go).
 	addressDeps   atomic.Pointer[AddressDeps]
 	requestLedger atomic.Pointer[ledgerHolder]
+	// roomRuntime / roomWriter back group-chat rooms (room_request.go).
+	roomRuntime atomic.Pointer[RoomRuntime]
+	roomWriter  atomic.Pointer[RoomReceiverWriter]
+	roomPricer  atomic.Pointer[RoomCallPricer]
+	// roomRequests maps a room request id to its room id (cost allocation).
+	roomRequests sync.Map
 	// mirrorFailHook is a test seam run just before the connector-reply mirror
 	// append (nil in production).
 	mirrorFailHook func()
@@ -668,7 +674,10 @@ func (al *AgentLoop) debitLLMUsage(ts *turnState, llmModel string, usage *provid
 		return
 	}
 	ts.SetLastUsage(usage)
-	ts.AddTurnStats(int64(usage.TotalTokens), estimateLLMCallCost(llmModel, usage))
+	cost := estimateLLMCallCost(llmModel, usage)
+	ts.AddTurnStats(int64(usage.TotalTokens), cost)
+	roomCost, priced := al.roomCallCost(llmModel, usage, cost)
+	ts.opts.roomCost.addCost(ts.turnID, roomCost, priced)
 	ts.AddTurnCacheStats(usage.CacheReadTokens, usage.CacheWriteTokens)
 	ts.AddTurnIOStats(usage.PromptTokens, usage.CompletionTokens)
 }
@@ -1836,7 +1845,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 // runAgentLoop remains the top-level shell that starts a turn and publishes
 // any post-turn work. runTurn owns the full turn lifecycle.
-func (al *AgentLoop) runAgentLoop(
+func (al *AgentLoop) runAgentLoopBody(
 	ctx context.Context,
 	agent *AgentInstance,
 	opts processOptions,
@@ -1884,6 +1893,7 @@ func (al *AgentLoop) runAgentLoop(
 		return "", err
 	}
 	if result.status == TurnEndStatusAborted {
+		settlementErr := al.settleRoomInputs(opts.roomCost, context.Canceled)
 		// Reached only for a case-1 (user-initiated) hard abort — abortTurn
 		// returns a non-nil error for every system-initiated abort (case 2),
 		// which the `if err != nil` branch above already returned from. See
@@ -1899,7 +1909,10 @@ func (al *AgentLoop) runAgentLoop(
 		// stop and an external-CLI worker's cancel. The Judge's turns set
 		// IsTaskRun but not RunningTaskID and keep the silent unwind.
 		if opts.RunningTaskID != "" {
-			return "", fmt.Errorf("%w: %w", ErrTurnCanceled, context.Canceled)
+			return "", errors.Join(fmt.Errorf("%w: %w", ErrTurnCanceled, context.Canceled), settlementErr)
+		}
+		if settlementErr != nil {
+			return "", errors.Join(context.Canceled, settlementErr)
 		}
 		return "", nil
 	}
