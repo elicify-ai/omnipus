@@ -52,7 +52,6 @@ import {
   chatInput,
   assistantMessages,
   dismissStaleDialogOverlay,
-  selectAgent,
   waitForConnected,
 } from './fixtures/selectors';
 import { freshChat } from './fixtures/session-setup';
@@ -89,15 +88,13 @@ async function startFreshChat(page: import('@playwright/test').Page): Promise<vo
   // is live, so the dismissal sticks. It would equally block freshChat's
   // sidebar reads below, so this stays first.
   await dismissStaleDialogOverlay(page);
-  // Founder decision D7 removed every New-chat UI entry (the banner button
-  // included), so the old isVisible-guarded click could never fire again —
-  // this helper's empty-thread guarantee had silently vanished. freshChat
-  // (public REST create + the SPA's own deep-link route) is the suite's
-  // replacement seam and restores the toHaveCount(0) guarantee unconditionally.
-  await freshChat(page);
+  // Create the empty chat FOR Jim. Creating one for the selected agent and
+  // then clicking Jim's row reopens Jim's older chat, including its children
+  // and delegation lines (run 38729142998: (a) saw 4 rows, (b) saw 4 lines).
+  // freshChat binds the returned session and checks its selected-agent row;
+  // the empty-transcript assertion must run on that final Jim session.
+  await freshChat(page, /Jim/i);
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
-  // Route to Jim — Mia declines to delegate (see note above).
-  await selectAgent(page, /Jim/i);
 }
 
 // Open/close the Activity panel — mirrors replay-fidelity.spec.ts's /
