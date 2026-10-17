@@ -432,11 +432,11 @@ func (s *Store) List() ([]string, error) {
 	return names, nil
 }
 
-// DamagedEntriesError reports store entries whose stored encoding is damaged
-// (malformed Base64, a wrong nonce length) while at least one other entry still
+// DamagedEntriesError reports unreadable entries while at least one other entry
 // decrypts under the master key: the failure is real and visible, but scoped to
-// the named entries — the store itself is readable. Callers treat it as a
-// per-entry failure, never as a whole-store one.
+// the named entries — the store itself is readable. HealthCheck reports encoding
+// damage; SensitiveValues also includes authentication failures in its partial
+// scan. A locked, unreadable or wholly undecryptable store never returns this type.
 type DamagedEntriesError struct {
 	Names []string
 	Errs  []error

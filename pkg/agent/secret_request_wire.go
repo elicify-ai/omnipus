@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -152,11 +153,26 @@ func (al *AgentLoop) dispatchSecretResume(rec secretrequest.Record) error {
 	if err != nil {
 		return err
 	}
-	values, err := store.SensitiveValues()
-	if err != nil {
-		return err
+	values, scanErr := store.SensitiveValues()
+	var damaged *credentials.DamagedEntriesError
+	if scanErr != nil && !errors.As(scanErr, &damaged) {
+		return scanErr
+	}
+	// A readable sibling cannot establish that THIS submitted version is usable.
+	// Recheck every submitted ref, and mask the values read at that boundary too.
+	for _, ref := range rec.Card.ReferenceNames {
+		value, readErr := store.Get(ref)
+		if readErr != nil {
+			return readErr
+		}
+		values = append(values, value)
 	}
 	al.GetConfig().RegisterSensitiveValues(values)
+	if damaged != nil {
+		slog.Error("secret resume: some vault entries are damaged; readable values remain masked — repair the named credentials",
+			"request_id", rec.Card.RequestId, "session_id", rec.Card.SessionId,
+			"stage", "sensitive_values", "credential_refs", damaged.Names)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	msg := bus.InboundMessage{

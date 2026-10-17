@@ -203,6 +203,8 @@ func (s *Store) CardSecretMetadata() (map[string]CardSecret, error) {
 
 // SensitiveValues includes every readable stored value, not only configured
 // references. Unselected and superseded card values must remain masked too.
+// A decryptable witness makes failures in other entries a DamagedEntriesError;
+// locked, unreadable and wholly undecryptable stores never acquire that scope.
 func (s *Store) SensitiveValues() ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -219,11 +221,12 @@ func (s *Store) SensitiveValues() ([]string, error) {
 	}
 	sort.Strings(names)
 	values := make([]string, 0, len(names))
-	var failures []error
+	failures := &DamagedEntriesError{}
 	for _, name := range names {
 		value, decryptErr := decrypt(s.key, name, sf.Credentials[name])
 		if decryptErr != nil {
-			failures = append(failures, decryptErr)
+			failures.Names = append(failures.Names, name)
+			failures.Errs = append(failures.Errs, decryptErr)
 			continue
 		}
 		values = append(values, value)
@@ -239,5 +242,8 @@ func (s *Store) SensitiveValues() ([]string, error) {
 			}
 		}
 	}
-	return values, errors.Join(failures...)
+	if len(failures.Errs) > 0 && len(values) > 0 {
+		return values, failures
+	}
+	return values, errors.Join(failures.Errs...)
 }

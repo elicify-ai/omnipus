@@ -506,7 +506,7 @@ The card does **not** ask you to re-type your account password: submitting that 
 
 A turn that consumed a message from a channel person cannot open this card, even when that message arrived in an agent's main chat. The agent instead asks you to open the web app and ask it there. Unattended runs cannot open a card either.
 
-Submitted values are not included in card frames, the conversation, or the continuation message. Stored versions also join the sensitive-value filtering set, including versions an integration has not selected. Filtering remains best-effort and can be switched off; do not treat it as protection against a command you deliberately allow to reveal a secret.
+Submitted values are not included in card frames, the conversation, or the continuation message. Stored versions also join the sensitive-value filtering set, including versions an integration has not selected. A damaged, unrelated vault entry does not prevent a continuation from using its readable submitted references: readable versions remain in the filtering set, and previously registered values are retained when the complete scan reports damage. If the submitted references themselves cannot be read, the continuation waits for repair; do not submit their values again. Filtering remains best-effort and can be switched off; do not treat it as protection against a command you deliberately allow to reveal a secret.
 
 ### Saving is separate from selecting
 
