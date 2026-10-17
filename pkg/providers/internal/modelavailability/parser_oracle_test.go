@@ -1,8 +1,9 @@
 package modelavailability_test
 
 import (
-	"github.com/elicify-ai/omnipus/pkg/providers/internal/modelavailability"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/internal/modelavailability"
 )
 
 // TestAvailabilitySubjectOracle copies the independent QA-authored prose table
