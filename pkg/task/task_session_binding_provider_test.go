@@ -47,7 +47,11 @@ func (w *bindingClaimWorker) Chat(
 		return nil, fmt.Errorf("binding worker fixture: read task before provider reply: %w", err)
 	}
 	w.sessionIDs = append(w.sessionIDs, stored.SessionID)
-	if n := len(messages); n > 0 && messages[n-1].Role == "tool" {
+	conversation, err := taskConversationBeforeVolatileTail(messages)
+	if err != nil {
+		return nil, err
+	}
+	if conversation[len(conversation)-1].Role == "tool" {
 		return &providers.LLMResponse{Content: "I have claimed completion."}, nil
 	}
 	w.turns++
@@ -85,12 +89,15 @@ func (j *bindingMetJudge) Chat(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	var user string
-	for _, message := range messages {
-		if message.Role == "user" {
-			user = message.Content
-		}
+	conversation, err := taskConversationBeforeVolatileTail(messages)
+	if err != nil {
+		return nil, err
 	}
+	last := conversation[len(conversation)-1]
+	if last.Role != "user" {
+		return nil, fmt.Errorf("binding judge fixture: expected prose criteria immediately before volatile tail, got role %q", last.Role)
+	}
+	user := last.Content
 	const header = "## Prose criteria to judge"
 	headerAt := strings.Index(user, header)
 	if headerAt < 0 {

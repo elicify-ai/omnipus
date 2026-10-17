@@ -11,6 +11,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -270,13 +271,20 @@ func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, err
 	if apiResp.Status == "incomplete" && apiResp.IncompleteDetails.Reason == "max_output_tokens" {
 		truncationEvidenceReason = "length"
 	}
-	var usage *protocoltypes.UsageInfo
-	if apiResp.Usage.TotalTokens > 0 {
-		usage = &protocoltypes.UsageInfo{
-			PromptTokens:     int(apiResp.Usage.InputTokens),
-			CompletionTokens: int(apiResp.Usage.OutputTokens),
-			TotalTokens:      int(apiResp.Usage.TotalTokens),
+	// RawJSON retains Responses usage extensions such as cache_write_tokens.
+	// Constructed SDK structs in tests have no raw JSON; marshal their typed
+	// fields instead. Neither representation leaves the normalizer.
+	rawUsage := []byte(apiResp.Usage.RawJSON())
+	if len(rawUsage) == 0 && (apiResp.Usage.TotalTokens > 0 || apiResp.Usage.InputTokens > 0 || apiResp.Usage.OutputTokens > 0) {
+		var err error
+		rawUsage, err = json.Marshal(apiResp.Usage)
+		if err != nil {
+			return nil, err
 		}
+	}
+	usage, err := promptcache.ParseUsage("openai", rawUsage)
+	if err != nil {
+		return nil, err
 	}
 
 	// A response the API marked failed (the `response.failed` stream event) is

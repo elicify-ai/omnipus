@@ -14,18 +14,19 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // TestReminder_WithinByteBudget (test 25, FR-013/MIN-001) — the ADR-072 D3
-// reminder is <=240 BYTES, the unit context.go's own static_chars/
-// total_chars measurements actually use (len() over a string), not tokens —
-// no tokenizer exists anywhere in this codebase. Also asserts the reminder
-// actually reaches buildDynamicContext's output, so the budget is measured
-// on the string that is really emitted, not just the source constant.
+// reminder is <=240 BYTES (len over a string), not tokens. FR-009 requires
+// the unchanged reminder in BuildMessages' actual trailing user block and
+// outside the system prefix. Check emitted assembly, not an internal renderer
+// whose metadata/volatile split may change without changing this contract.
 func TestReminder_WithinByteBudget(t *testing.T) {
 	byteLen := len(skillReminderNote)
 	if byteLen > maxSkillReminderBytes {
@@ -41,18 +42,36 @@ func TestReminder_WithinByteBudget(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	cb := NewContextBuilder(tmpDir)
 
-	dynamic := cb.buildDynamicContext(0, "", "test", "chat1", "user1", "Alice")
-	assert.Contains(t, dynamic, skillReminderNote,
-		"the dynamic context block actually emitted per-request must contain the reminder verbatim")
+	history := []providers.Message{
+		{Role: "user", Content: "earlier request"},
+		{Role: "assistant", Content: "earlier reply"},
+	}
+	msgs := cb.BuildMessages(0, history, "new request", nil, "", "test", "chat1", "user1", "Alice", "", nil)
+	require.Len(t, msgs, len(history)+3, "system, unchanged history, current user and one trailing reminder block")
+	require.Equal(t, "system", msgs[0].Role)
+	assert.Equal(t, history, msgs[1:len(history)+1], "the reminder must not displace or change history")
+	assert.Equal(t, providers.Message{Role: "user", Content: "new request"}, msgs[len(msgs)-2],
+		"the current request remains immediately before the volatile tail")
+	tail := msgs[len(msgs)-1]
+	assert.Equal(t, "user", tail.Role, "FR-009: the reminder is in the final user block")
+	assert.Contains(t, tail.Content, skillReminderNote, "the emitted tail must contain the bounded reminder verbatim")
+	assert.Equal(t, 1, strings.Count(tail.Content, skillReminderNote), "the reminder is emitted once, not duplicated")
+	for _, msg := range msgs {
+		if msg.Role == "system" {
+			assert.NotContains(t, msg.Content, skillReminderNote, "FR-009: the reminder must not be in system Content")
+			for _, part := range msg.SystemParts {
+				assert.NotContains(t, part.Text, skillReminderNote, "FR-009: the reminder must not be in a system block")
+			}
+		}
+	}
 }
 
 // TestTurnAssembly_MenuInsideCacheBoundaryReminderOutside (test 35, D3 part
 // 1+2) — the "# Skills" menu stays inside the CACHED static prompt block
 // (SystemParts[0], the block carrying CacheControl), while the D3 reminder
-// lands in the UN-CACHED dynamic block (SystemParts[1], no CacheControl).
-// This is the load-bearing placement claim: the menu is stable per-agent and
-// belongs inside the cache breakpoint (ADR-071 D5), while the reminder must
-// sit closer to the user's message on every single turn for recency.
+// lands in the uncached trailing user block after the conversation, alongside
+// the clock (prompt-caching FR-007/009 and regression table).
+// The skill menu remains in the stable prefix; the reminder is never system-role.
 func TestTurnAssembly_MenuInsideCacheBoundaryReminderOutside(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": "# Agent\nTest agent.",
@@ -67,26 +86,42 @@ func TestTurnAssembly_MenuInsideCacheBoundaryReminderOutside(t *testing.T) {
 
 	cb := NewContextBuilder(tmpDir).WithSkillAllowlist([]string{"release-notes"})
 
-	msgs := cb.BuildMessages(0, nil, "hello", nil, "", "test", "chat1", "user1", "Alice", "", nil)
+	history := []providers.Message{
+		{Role: "user", Content: "earlier question"},
+		{Role: "assistant", Content: "earlier answer"},
+	}
+	msgs := cb.BuildMessages(0, history, "hello", nil, "", "test", "chat1", "user1", "Alice", "", nil)
 	require.NotEmpty(t, msgs)
 	require.Equal(t, "system", msgs[0].Role)
-	require.Len(t, msgs[0].SystemParts, 2, "static + dynamic blocks only — no active skills, no breadcrumb, on this turn")
 
 	staticBlock := msgs[0].SystemParts[0]
-	dynamicBlock := msgs[0].SystemParts[1]
-
-	require.NotNil(t, staticBlock.CacheControl, "the static block must carry cache_control (ADR-071 D5's cached prefix)")
+	require.NotNil(t, staticBlock.CacheControl, "the static block must carry cache_control so the skill menu stays in the stable prefix")
 	assert.Equal(t, "ephemeral", staticBlock.CacheControl.Type)
 	assert.Contains(t, staticBlock.Text, "# Skills", "the menu heading must be inside the cached static block")
 	assert.Contains(t, staticBlock.Text, "release-notes", "the granted skill's menu entry must be inside the cached static block")
 	assert.NotContains(t, staticBlock.Text, skillReminderNote, "the reminder must NOT be inside the cached static block")
-
-	assert.Nil(t, dynamicBlock.CacheControl, "the dynamic block must carry no cache_control — it changes every request")
-	assert.Contains(t, dynamicBlock.Text, skillReminderNote, "the reminder must be inside the un-cached dynamic block")
-	// The reminder legitimately quotes the menu's own heading name
-	// ("# Skills"), so the no-duplication check below asserts on the
-	// granted skill's actual MENU ENTRY, not the heading string.
-	assert.NotContains(t, dynamicBlock.Text, "release-notes", "the granted skill's menu entry must not be duplicated into the dynamic block")
+	for _, part := range msgs[0].SystemParts {
+		assert.NotContains(t, part.Text, skillReminderNote, "the reminder moves behind the conversation; it is not a system block")
+	}
+	for _, msg := range msgs {
+		if msg.Role == "system" {
+			assert.NotContains(t, msg.Content, skillReminderNote, "the reminder must not be a system-role message")
+		}
+	}
+	var tail string
+	seenHello := false
+	for _, msg := range msgs {
+		if msg.Content == "hello" {
+			seenHello = true
+			continue
+		}
+		if seenHello && msg.Role == "user" {
+			tail += msg.Content
+		}
+	}
+	require.True(t, seenHello, "the current user message must be present so the reminder can sit after it")
+	assert.Contains(t, tail, skillReminderNote, "the per-turn skill reminder must be a user-role block after the conversation")
+	assert.NotContains(t, tail, "release-notes", "the granted skill's menu entry must not be duplicated into the reminder tail")
 }
 
 // TestTurnAssembly_NoSkillBodiesWhenNoneActive (test 33) — ADR-072 D1's

@@ -14,21 +14,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// byModelCell is the per-model token breakdown cell used in both the per-agent
-// and cross-agent by_model maps. The json tags are byte-identical to the inline
-// element shapes generated for AgentTokenEntry.ByModel and
-// TokenUsageSummary.ByModel in pkg/api/generated/openapi_types.gen.go.
-// Canonical schema: contracts/components/schemas/ModelTokens.yaml.
-type byModelCell struct { // not-wire-format: mirrors the oapi-codegen-inlined by_model element shared by AgentTokenEntry and TokenUsageSummary; canonical schema ModelTokens.yaml — field order and tags must stay byte-identical to the generated inline shape
-	CacheRead  *int `json:"cache_read,omitempty"`
-	CacheWrite *int `json:"cache_write,omitempty"`
-	In         *int `json:"in,omitempty"`
-	Out        *int `json:"out,omitempty"`
-	Total      int  `json:"total"`
-}
-
-// nonZeroPtr returns a pointer to v when v != 0, or nil when v == 0.
-// Used to emit optional integer fields only when they carry a non-zero value.
 func nonZeroPtr(v int) *int {
 	if v == 0 {
 		return nil
@@ -36,223 +21,97 @@ func nonZeroPtr(v int) *int {
 	return &v
 }
 
-// toByModelCell converts a session.ModelTokens value to a byModelCell,
-// omitting zero-valued optional fields.
-func toByModelCell(mt session.ModelTokens) byModelCell {
-	return byModelCell{
-		CacheRead:  nonZeroPtr(mt.CacheRead),
-		CacheWrite: nonZeroPtr(mt.CacheWrite),
-		In:         nonZeroPtr(mt.In),
-		Out:        nonZeroPtr(mt.Out),
-		Total:      mt.Total,
+func toByModelCell(mt session.ModelTokens) gen.ModelTokens {
+	return gen.ModelTokens{
+		CacheHitRatio: session.CacheHitRatio(mt.In, mt.CacheRead, mt.CacheWrite),
+		CacheRead:     nonZeroPtr(mt.CacheRead), CacheWrite: nonZeroPtr(mt.CacheWrite),
+		In: nonZeroPtr(mt.In), Out: nonZeroPtr(mt.Out), Total: mt.Total,
 	}
 }
 
-// addModelTokens accumulates src into dst field-by-field.
-func addModelTokens(dst *session.ModelTokens, src session.ModelTokens) {
-	dst.In += src.In
-	dst.Out += src.Out
-	dst.CacheRead += src.CacheRead
-	dst.CacheWrite += src.CacheWrite
-	dst.Total += src.Total
+func initGeneratedSlice[T any](dst *[]T) { *dst = make([]T, 0) }
+
+// initOptionalMap allocates the exact generated anonymous map type inferred
+// from its destination. No copied wire struct or shadow response is needed.
+func initOptionalMap[K comparable, V any](dst **map[K]V) {
+	m := make(map[K]V)
+	*dst = &m
 }
 
-// HandleTokenStats handles GET /api/v1/stats/tokens.
-//
-// It returns per-agent token usage aggregated from SessionMeta.Stats across all
-// sessions using session.AggregateUsage. The response shape matches
-// gen.TokenUsageSummary (contracts/components/schemas/TokenUsageSummary.yaml).
-//
-// The ?period query parameter accepts "day", "week", "month" (default), or
-// "all". Unrecognized values are rejected with 400.
-//
-// Token attribution: tokens are charged to the session's owner, sm.AgentID.
-// Attributing to each sm.AgentIDs entry would double-count a joined session.
-//
-// subagent_3p (external CLI workers) are excluded — they run on a separate
-// engine and their tokens are not tracked through Omnipus's provider layer.
+// HandleTokenStats serves the existing usage route using generated types only.
 func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-
-	// Validate and normalise the period query parameter via the single source
-	// of truth (session.ParseUsagePeriod).  Empty → month; unrecognized → 400.
 	period, ok := session.ParseUsagePeriod(r.URL.Query().Get("period"))
 	if !ok {
 		jsonErr(w, http.StatusBadRequest, "period must be one of: day, week, month, all")
 		return
 	}
-
-	// ListAllSessions merges the shared store (new sessions) with all per-agent
-	// legacy stores, deduplicates, and returns a slice of *UnifiedMeta.
-	//
-	// ADR-057 U9 (FR-092/FR-098) made this call paginated and hierarchy-aware.
-	// This endpoint MUST pass flat=true: per FR-104, a roots-only listing
-	// would silently drop delegated children's token spend from both the
-	// by-agent totals below (line ~111) and the by-model breakdown (line
-	// ~125), under-reporting real spend with a green build. limit=0/offset=0
-	// mean "no limit, from the start" (FR-098(b)), matching this handler's
-	// pre-pagination "aggregate over every session, every store" behavior
-	// exactly — see HandleActivity/HandleStorageStats (pkg/gateway/rest.go,
-	// U18) for the same flat=true idiom this mirrors.
 	page, errs := a.agentLoop.ListAllSessions(0, 0, "", true)
-	allSessions := page.Sessions
-	for _, e := range errs {
-		slog.Warn("rest: token stats: partial session list error", "error", e)
+	for _, err := range errs {
+		slog.Warn("rest: token stats: partial session list error", "error", err)
 	}
-
 	registry := a.agentLoop.GetRegistry()
-
-	// Build NameResolver (agent display name from registry) and Exclude
-	// predicate (skip subagent_3p — external CLI workers).
-	nameResolver := func(agentID string) string {
-		name, _ := registry.GetAgentName(agentID)
-		return name
-	}
 	cfg := a.agentLoop.GetConfig()
-	excludeFn := func(agentID string) bool {
-		return cfg.IsExternalCLIWorkerID(agentID)
+	exclude := func(id string) bool { return cfg.IsExternalCLIWorkerID(id) }
+	opts := session.UsageOptions{
+		Period: period, Now: time.Now().UTC(), Dimension: session.UsageDimensionAgent,
+		NameResolver: func(id string) string { name, _ := registry.GetAgentName(id); return name },
+		Exclude:      exclude,
 	}
-
-	// Aggregate by-agent dimension for the response.
-	report := session.AggregateUsage(allSessions, session.UsageOptions{
-		Period:       period,
-		Now:          time.Now().UTC(),
-		Dimension:    session.UsageDimensionAgent,
-		NameResolver: nameResolver,
-		Exclude:      excludeFn,
-	})
-
-	// Build per-agent entries from report buckets.
-	// We also need per-agent by-model breakdowns; compute them with a second
-	// model-keyed pass limited to each agent's sessions.
-	//
-	// agentModelMap[agentID][model] = accumulated ModelTokens.
-	agentModelMap := make(map[string]map[string]session.ModelTokens)
-	for _, sm := range allSessions {
-		sm.PostLoad()
-		agentID := sm.AgentID
-		if agentID == "" {
-			continue
+	report := session.AggregateUsage(page.Sessions, opts)
+	out := gen.TokenUsageSummary{
+		PeriodStart: report.PeriodStart, PeriodEnd: report.PeriodEnd,
+		TokensCacheRead: nonZeroPtr(report.Total.CacheRead), TokensCacheWrite: nonZeroPtr(report.Total.CacheWrite),
+		UnpricedTokens: nonZeroPtr(report.UnpricedTokens), SubscriptionTokens: nonZeroPtr(report.SubscriptionTokens),
+	}
+	initGeneratedSlice(&out.Agents)
+	for _, bucket := range report.Buckets {
+		entry := gen.AgentTokenEntry{
+			AgentId: bucket.Key, AgentName: bucket.Label,
+			TokensIn: bucket.In, TokensOut: bucket.Out, TokensTotal: bucket.Total,
+			TokensCacheRead: nonZeroPtr(bucket.CacheRead), TokensCacheWrite: nonZeroPtr(bucket.CacheWrite),
+			CacheHitRatio: bucket.CacheHitRatio,
 		}
-		if excludeFn(agentID) {
-			continue
+		opts.AgentID, opts.Dimension = bucket.Key, session.UsageDimensionModel
+		models := session.AggregateUsage(page.Sessions, opts)
+		if len(models.Buckets) > 0 {
+			initOptionalMap(&entry.ByModel)
+			for _, m := range models.Buckets {
+				// Preserve the handler's existing by_model rule: only stored
+				// model ids, not the aggregator's unmodeled remainder.
+				if m.Key == "(unknown)" {
+					continue
+				}
+				(*entry.ByModel)[m.Key] = toByModelCell(session.ModelTokens{In: m.In, Out: m.Out, CacheRead: m.CacheRead, CacheWrite: m.CacheWrite, Total: m.Total})
+			}
 		}
-		// Apply same period filter the aggregator uses.
-		if !report.PeriodStart.IsZero() {
-			if sm.UpdatedAt.Before(report.PeriodStart) || !sm.UpdatedAt.Before(report.PeriodEnd) {
+		out.Agents = append(out.Agents, entry)
+	}
+	sort.Slice(out.Agents, func(i, j int) bool { return out.Agents[i].AgentId < out.Agents[j].AgentId })
+	opts.AgentID, opts.Dimension = "", session.UsageDimensionModel
+	models := session.AggregateUsage(page.Sessions, opts)
+	if len(models.Buckets) > 0 {
+		initOptionalMap(&out.ByModel)
+		for _, m := range models.Buckets {
+			if m.Key == "(unknown)" {
 				continue
 			}
-		}
-		for model, mt := range sm.Stats.ByModel {
-			if _, ok := agentModelMap[agentID]; !ok {
-				agentModelMap[agentID] = make(map[string]session.ModelTokens)
-			}
-			existing := agentModelMap[agentID][model]
-			addModelTokens(&existing, mt)
-			agentModelMap[agentID][model] = existing
+			(*out.ByModel)[m.Key] = toByModelCell(session.ModelTokens{In: m.In, Out: m.Out, CacheRead: m.CacheRead, CacheWrite: m.CacheWrite, Total: m.Total})
 		}
 	}
-
-	// Build cross-agent by_model totals.
-	crossModelMap := make(map[string]session.ModelTokens)
-	for _, perAgent := range agentModelMap {
-		for model, mt := range perAgent {
-			existing := crossModelMap[model]
-			addModelTokens(&existing, mt)
-			crossModelMap[model] = existing
+	if len(report.ByProvider) > 0 {
+		initOptionalMap(&out.ByProvider)
+		for id, cell := range report.ByProvider {
+			(*out.ByProvider)[id] = toByModelCell(session.ModelTokens{In: cell.In, Out: cell.Out, CacheRead: cell.CacheRead, CacheWrite: cell.CacheWrite, Total: cell.Total})
 		}
 	}
-
-	// Build the per-agent Agents slice.  We use report.Buckets (already sorted
-	// and deduplicated by AggregateUsage) as the authoritative source.
-	//
-	// gen.AgentTokenEntry.ByModel uses an anonymous inline struct type generated
-	// by oapi-codegen; our named byModelCell is byte-identical in JSON tags but
-	// a distinct Go type.  We embed gen.AgentTokenEntry inside agentEntryWithByModel
-	// and shadow ByModel with interface{} so json.Marshal sees byModelCell (which
-	// serializes identically) while the outer struct carries all other fields from
-	// the contract type without repetition.  The shadowing rule in encoding/json:
-	// a promoted field is overridden by a field at the outer depth with the same name.
-	type agentEntryWithByModel struct { // not-wire-format: embeds gen.AgentTokenEntry, shadows ByModel with typed byModelCell map — JSON output is contract-identical to AgentTokenEntry
-		gen.AgentTokenEntry
-		ByModel any `json:"by_model,omitempty"`
-	}
-	enriched := make([]agentEntryWithByModel, 0, len(report.Buckets))
-	for _, b := range report.Buckets {
-		e := agentEntryWithByModel{
-			AgentTokenEntry: gen.AgentTokenEntry{
-				AgentId:          b.Key,
-				AgentName:        b.Label,
-				TokensIn:         b.In,
-				TokensOut:        b.Out,
-				TokensTotal:      b.Total,
-				TokensCacheRead:  nonZeroPtr(b.CacheRead),
-				TokensCacheWrite: nonZeroPtr(b.CacheWrite),
-			},
-		}
-		if modelMap, hasModel := agentModelMap[b.Key]; hasModel && len(modelMap) > 0 {
-			byModel := make(map[string]byModelCell, len(modelMap))
-			for model, mt := range modelMap {
-				byModel[model] = toByModelCell(mt)
-			}
-			e.ByModel = byModel
-		}
-		enriched = append(enriched, e)
-	}
-
-	// Sort entries by AgentId for stable output (matches prior behavior).
-	sort.Slice(enriched, func(i, j int) bool { return enriched[i].AgentId < enriched[j].AgentId })
-
-	// Build cross-agent by_model for the top-level response field.
-	var crossModelOut any
-	if len(crossModelMap) > 0 {
-		m := make(map[string]byModelCell, len(crossModelMap))
-		for model, mt := range crossModelMap {
-			m[model] = toByModelCell(mt)
-		}
-		crossModelOut = m
-	}
-
-	// Grand-total cache fields (optional — omit when zero for wire-compat with
-	// receivers that don't yet read cache fields).
-
-	// gen.TokenUsageSummary.Agents is an inline anonymous struct generated by
-	// oapi-codegen (it inlines $ref'd object items rather than aliasing them to
-	// the named AgentTokenEntry component). This thin wrapper holds the named
-	// gen.AgentTokenEntry items and reproduces the TokenUsageSummary JSON shape;
-	// the AgentTokenEntry element type is the contract source of truth that
-	// make verify-contracts tracks for drift.
-	type tokenUsageResp struct { // not-wire-format: wrapper over gen.AgentTokenEntry items, mirrors TokenUsageSummary with cache+by_model extensions
-		Agents            []agentEntryWithByModel `json:"agents"`
-		ByModel           any                     `json:"by_model,omitempty"`
-		PeriodEnd         time.Time               `json:"period_end"`
-		PeriodStart       time.Time               `json:"period_start"`
-		TokensCacheRead   *int                    `json:"tokens_cache_read,omitempty"`
-		TokensCacheWrite  *int                    `json:"tokens_cache_write,omitempty"`
-		Partial           bool                    `json:"partial,omitempty"`
-		PartialErrorCount *int                    `json:"partial_error_count,omitempty"`
-	}
-
-	// Surface partial-store failures so the dashboard can warn the operator that
-	// the totals may under-count, instead of presenting a degraded number as
-	// authoritative (mirrors the get_usage tool's partial flag).
-	var partialCount *int
 	if len(errs) > 0 {
-		n := len(errs)
-		partialCount = &n
+		partial := true
+		out.Partial = &partial
+		out.PartialErrorCount = nonZeroPtr(len(errs))
 	}
-
-	jsonOK(w, tokenUsageResp{
-		Agents:            enriched,
-		ByModel:           crossModelOut,
-		PeriodEnd:         report.PeriodEnd,
-		PeriodStart:       report.PeriodStart,
-		TokensCacheRead:   nonZeroPtr(report.Total.CacheRead),
-		TokensCacheWrite:  nonZeroPtr(report.Total.CacheWrite),
-		Partial:           len(errs) > 0,
-		PartialErrorCount: partialCount,
-	})
+	jsonOK(w, out)
 }

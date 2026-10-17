@@ -24,7 +24,8 @@
 // Read the "retired" count as a finding, not as a pass: those 31 models lost
 // their vendor-specific budgets when the registry snapshot replaced the seed.
 // The test fails if that count moves in either direction, so the next snapshot
-// bump has to be looked at by a person.
+// bump has to be looked at by a person. The JSON is the historical DS-6 baseline;
+// the three reviewed v2026.10.15.1 source updates below leave its seed_* data intact.
 package resize_test
 
 import (
@@ -85,6 +86,35 @@ func loadParityDataset(t *testing.T) parityDataset {
 func TestMediaResize_BudgetsUnchangedForSeedModels(t *testing.T) {
 	ds := loadParityDataset(t)
 	require.Len(t, ds.Rows, 78, "DS-6 is exactly the 78 models of the retired 1.0.0 seed")
+
+	// Audited source changes, not values copied from the resolver under test:
+	// models.dev fd71c96978099f48352a7f9d77f5320c6e5e274b, provider TOMLs
+	// providers/mistral/models/ministral-{3b,8b}-latest.toml now list image;
+	// providers/zai/models/glm-4.6v-flash.toml exists and inherits image/text/video
+	// from models/zhipuai/glm-4.6v-flash.toml. The catalog publication at
+	// 37cc134a97a038dd4fd99b5cb3926d68b2598402 retains the provider resize seeds:
+	// Mistral 8000 / 10485760, ZAI 6000 / 5242880 (resize_limits.json).
+	const correctionSource = "models.dev@fd71c96978099f48352a7f9d77f5320c6e5e274b (catalog v2026.10.15.1)"
+	updated := 0
+	for i := range ds.Rows {
+		row := &ds.Rows[i]
+		switch row.Provider + "/" + row.Model {
+		case "mistral/ministral-3b-latest", "mistral/ministral-8b-latest":
+			row.ExpectedInputModalities = []string{"image", "text"}
+			row.CorrectionSource = correctionSource
+			updated++
+		case "zai/glm-4.6v-flash":
+			row.ExpectedFound = true
+			row.ExpectedInputModalities = []string{"image", "text", "video"}
+			row.ExpectedResizeLimits = parityLimits{LongEdgePx: 6000, MaxBytes: 5242880}
+			row.Divergence = "corrected"
+			row.CorrectionSource = correctionSource
+			ds.Counts["retired"]--
+			ds.Counts["corrected"]++
+			updated++
+		}
+	}
+	require.Equal(t, 3, updated, "all three reviewed catalog updates must match a historical seed row")
 
 	cat, err := catalog.NewCatalog(catalog.EmbeddedSnapshot)
 	require.NoError(t, err, "the embedded snapshot must parse")
@@ -164,15 +194,15 @@ func TestMediaResize_BudgetsUnchangedForSeedModels(t *testing.T) {
 		"the dataset's recorded divergence counts must match its rows")
 	assert.Equal(t, 14, counts["none"],
 		"14 of the 78 seed models resolve exactly as they did before the fold")
-	assert.Equal(t, 33, counts["corrected"],
-		"33 seed models resolve to registry-corrected modalities or limits")
-	assert.Equal(t, 31, counts["retired"],
-		"31 seed models are absent from the registry snapshot and fall to the FR-004 miss defaults — "+
+	assert.Equal(t, 34, counts["corrected"],
+		"34 seed models resolve to registry-corrected modalities or limits, including the restored GLM row")
+	assert.Equal(t, 30, counts["retired"],
+		"30 seed models are absent from the registry snapshot and fall to the FR-004 miss defaults — "+
 			"if this moves, the snapshot changed which models it carries")
 }
 
 // TestMediaResize_MissServesDocumentDefault pins the FR-004 consumer contract
-// the 31 retired rows rely on: a (provider, model) miss hands the media path
+// the 30 retired rows rely on: a (provider, model) miss hands the media path
 // the document's default resize limits, never a zero budget the pipeline would
 // reject.
 func TestMediaResize_MissServesDocumentDefault(t *testing.T) {

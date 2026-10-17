@@ -156,6 +156,146 @@ A normal turn produces, in order:
 
 Everything is captured. Nothing is silent. An operator can audit any turn after the fact by reading the JSONL; a developer can subscribe live via a subprocess hook to watch every event as it happens.
 
+## Model-call cache accounting
+
+The existing **Usage** screen shows recorded token totals and cache-hit percentages
+by agent and provider. There is no caching settings page. For call-by-call details
+from the agent turn loop, use the application log's `llm_usage` line.
+
+### Enable the info line
+
+The shipped application log level is `warn`, so this line is hidden by default.
+Set the existing `gateway.log_level` to `info`, or start the gateway with the
+existing environment override:
+
+```sh
+OMNIPUS_LOG_LEVEL=info omnipus gateway
+```
+
+Restart a running service with that environment variable to apply the override.
+This changes the application-wide level; there is no separate cache log level.
+
+Each successfully completed model request made through the agent turn loop emits
+one info line, including requests that report no usage or zero cache tokens. This
+is not a log of every provider request made by Omnipus: auxiliary calls such as
+automatic recaps, fallback goal compilation and audio-model transcription run
+outside this accounting path. A provider error remains an error; it is not
+converted into a successful, zero-token call. Within the turn loop, if a failed request already
+reported billed usage, those tokens count once against that request's provider,
+even when another provider answers successfully afterward. A failed streamed
+request keeps the input and cache counts already received, plus the latest reported
+output count. Missing usage is not guessed. These failed attempts do not emit a
+successful-call `llm_usage` line.
+
+For Anthropic-protocol HTTP errors, the connector retains at most 8 KiB of the
+response for error classification and uses at most the first 512 bytes, followed
+by an ellipsis when needed, in the error preview. This is a size limit, not prompt
+redaction: a provider can still echo text within that preview. Retry timing and
+request identifiers from the response headers remain available to the retry path.
+
+An example successful-call accounting message is:
+
+```text
+llm_usage provider="anthropic" model="claude-sonnet-4-5" agent="mia" session="session-example" call="call-example" uncached=1000 cache_read=8000 cache_write=2000 output=500 total=11500 billing=priced cost_usd=$0.0204
+```
+
+The amounts above are illustrative: actual prices come from the current catalog,
+not a price list maintained inside Omnipus.
+
+| Field | Meaning |
+|---|---|
+| `provider`, `model`, `agent`, `session`, `call` | Application-written identifiers that correlate the request with its conversation and producer |
+| `uncached` | Input tokens not read from or written into the provider cache |
+| `cache_read` | Input tokens reused from the provider cache |
+| `cache_write` | Input tokens written into a cache on this request |
+| `output`, `total` | Output tokens, and the sum of all four token portions |
+| `write_5m`, `write_1h` | Separate write counts when the provider reports the lifetime split |
+| `billing` | `priced`, `unpriced`, or `subscription` |
+| `cost_usd` | Catalog-priced portions only; absent for subscription and fully unpriced calls |
+| `unpriced_tokens` | The portion that has no price; present when positive |
+| `one_hour_rule` | `cache_write_1h`, `2x catalog input`, or `unpriced`, when a one-hour write needs that rule |
+
+The line contains only normalized numeric counters and application-written
+identifiers. Unknown usage fields, strings, arrays and objects from the provider
+are excluded. Fewer than 32 counters are emitted. Prompt text, tool arguments,
+provider error bodies and credentials are not part of this line. The existing
+credential scrubber still runs before the application log is written.
+
+Recognized token counters must be non-negative integers within the supported
+integer range. Invalid individual values are ignored. Omnipus also checks the
+combined lifetime-write count and the full token total: if either sum cannot be
+represented, it rejects that usage response rather than storing wrapped or
+negative totals. This is input validation, not a token or spending limit.
+
+### Read the hit percentage and billing classification
+
+```text
+cache-hit ratio = cache_read / (uncached + cache_read + cache_write)
+```
+
+A ratio of `0.8` is **80%**. When the denominator is zero there is no percentage;
+that is not a measured 0% hit rate. Output tokens are not in this denominator.
+The existing `GET /api/v1/stats/tokens` route exposes `cache_hit_ratio`,
+`by_provider`, `unpriced_tokens`, and `subscription_tokens`. Cached totals on the
+Usage screen include both reads and writes; the hit percentage uses reads only.
+
+These figures use Omnipus's normalized usage counters. Where a provider has not
+documented whether cached tokens are already included in its reported prompt
+count, Omnipus preserves that prompt count rather than guessing a subtraction
+rule. This currently applies to Google's optional cache counts. Treat those rows
+as normalized accounting figures, not a provider-confirmed reuse percentage.
+
+| Classification | Interpretation |
+|---|---|
+| `priced` | At least part of the call is priced from the catalog. Published zero prices remain real zero prices. A missing ordinary cache price uses that band's input price. |
+| `unpriced` | The catalog has no usable input price, or none of the call's consumed portions can be priced. Tokens still count. No old fallback dollar rate is substituted. |
+| `subscription` | A ChatGPT sign-in call counts cached and uncached tokens but records no API dollar cost, even when its model has a catalog API price. |
+
+A call can be mixed: for example, a provider with a priced five-minute cache
+write but no published one-hour write price and no documented one-hour multiplier
+records the five-minute cost, stays `billing=priced`, and separately reports the
+one-hour tokens as `unpriced_tokens`. It does not discard the known cost or call
+the unpriced portion free. Native Anthropic's documented one-hour multiplier is
+2 times catalog input when the catalog does not supply `cache_write_1h`.
+
+### Request layout
+
+Caching does not change who supplied a message. Current-sender, session and
+runtime metadata remain in the system context—the request's instruction prefix.
+Only the changing clock, tool-summary, scratchpad and goal-checklist notes, plus
+the per-turn skill reminder, follow the conversation in one user-role text block.
+When a turn is assembled, its current user message retains its caption and
+attachments immediately before that block. Tool-call follow-ups keep complete
+call/result groups ahead of the notes. Removing old history from the live window
+does not remove the original system instructions.
+
+On thinking-enabled Anthropic tool turns, the original signed thinking and
+redacted-thinking blocks are retained in private model history and replayed
+before the tool call on the continuation request. Their signatures and redacted
+data are not rewritten or included in the accounting log. A synthesized answer
+assembled from several truncated replies does not inherit one reply's signature.
+
+### Stored accounting for each call
+
+Each successfully completed model call made through the agent turn loop has its
+own assistant accounting entry in that session's transcript. A failed turn-loop
+attempt also has an accounting entry when the provider reported billed usage.
+These entries store the provider and model identifiers, billing classification,
+token portions, and the five-minute and one-hour write counts when reported. A
+call that returns no visible text can have an entry with empty content; that entry
+does not create an extra chat bubble. The auxiliary calls listed above are not
+included in this accounting path.
+
+A turn can contain several accounted calls. Its summary totals are not an
+additional charge, and a later engine-generated notice does not count those
+tokens again. Each accounted call is priced once at its provider boundary.
+Reloading a session uses the stored cost and classification; it does not reprice
+earlier calls from a newer catalog.
+
+A successful request with zero cache reads is an ordinary miss. For a live cache
+proof, however, send the same conversation twice: the second request must report
+more than zero cache-read tokens. HTTP success alone is not proof of caching.
+
 ## See also
 
 [Hooks](../hooks/README.md) explains how to write a subprocess hook that consumes the event stream.

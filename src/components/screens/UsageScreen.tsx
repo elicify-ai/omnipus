@@ -10,6 +10,7 @@ import { Card } from '@/components/ui/card'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { ErrorState } from '@/components/ui/error-state'
 import { fetchTokenStats, fetchSessions, fetchAgents, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
+import type { ModelTokens } from '@/lib/api/generated/openapi-types'
 import { formatTokens } from '@/lib/formatTokens'
 import { sessionDisplayTitle } from '@/lib/nav/sessionDisplayTitle'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
@@ -74,6 +75,7 @@ interface BarItem {
   name: string
   tokens: number
   href?: string
+  cacheHitRatio?: ModelTokens['cache_hit_ratio']
 }
 
 function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) {
@@ -88,7 +90,7 @@ function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) 
         const pct = maxTokens > 0 ? Math.round((item.tokens / maxTokens) * 100) : 0
         const formattedTokens = formatTokens(item.tokens)
         return (
-          <div key={item.name} className="flex items-center gap-[var(--space-2-5)]" role="listitem">
+          <div key={item.name} className="flex flex-wrap items-center gap-[var(--space-2-5)]" role="listitem">
             {/* Name */}
             <div className="w-28 sm:w-36 shrink-0 truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]" title={item.name}>
               {item.href ? (
@@ -114,6 +116,14 @@ function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) 
             >
               {formattedTokens}
             </div>
+            {item.cacheHitRatio != null && (
+              <div className="w-full sm:w-auto shrink-0 whitespace-nowrap text-right text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                <span>Cache hit</span>{' '}
+                <span className="font-mono tabular-nums text-[var(--color-secondary)]">
+                  {Math.round(item.cacheHitRatio * 100)}%
+                </span>
+              </div>
+            )}
           </div>
         )
       })}
@@ -249,7 +259,7 @@ const PERIODS: { value: TokenStatsPeriod; label: string }[] = [
 
 export function UsageScreen() {
   const [period, setPeriod] = useState<TokenStatsPeriod>('month')
-  const [breakdownTab, setBreakdownTab] = useState<'agent' | 'model' | 'session'>('agent')
+  const [breakdownTab, setBreakdownTab] = useState<'agent' | 'model' | 'provider' | 'session'>('agent')
 
   // ADR-052 FR-036 / SC-014: UsageScreen is the ONE surface that must show
   // verifier-role (the Judge) LLM spend, unlike Sidebar/SearchModal which
@@ -338,7 +348,11 @@ export function UsageScreen() {
 
   // By-agent bar items
   const agentItems: BarItem[] = (summary?.agents ?? [])
-    .map((a) => ({ name: a.agent_name ?? a.agent_id, tokens: a.tokens_total ?? 0 }))
+    .map((a) => ({
+      name: a.agent_name ?? a.agent_id,
+      tokens: a.tokens_total ?? 0,
+      cacheHitRatio: a.cache_hit_ratio,
+    }))
     .filter((a) => a.tokens > 0)
     .sort((a, b) => b.tokens - a.tokens)
   const agentMax = agentItems[0]?.tokens ?? 0
@@ -356,6 +370,17 @@ export function UsageScreen() {
     .filter((m) => m.tokens > 0)
     .sort((a, b) => b.tokens - a.tokens)
   const modelMax = modelItems[0]?.tokens ?? 0
+
+  // By-provider bar items — the backend supplies the ratio, not a mean of agent ratios.
+  const providerItems: BarItem[] = Object.entries(summary?.by_provider ?? {})
+    .map(([name, entry]) => ({
+      name,
+      tokens: entry.total ?? 0,
+      cacheHitRatio: entry.cache_hit_ratio,
+    }))
+    .filter((p) => p.tokens > 0)
+    .sort((a, b) => b.tokens - a.tokens)
+  const providerMax = providerItems[0]?.tokens ?? 0
 
   // By-session items — use sessions list (includes verifier sessions, see
   // the fetchSessions call above) with total_tokens. Title resolves through
@@ -393,7 +418,7 @@ export function UsageScreen() {
               {/* ScreenHeader above already renders "Usage" as the page's h2 —
                   this is a decorative restatement, not a second heading. */}
               <div className="font-headline text-xl font-bold text-[var(--color-secondary)]">Usage</div>
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">Token usage by agent, model, and session</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">Token usage by agent, model, provider, and session</p>
             </div>
           </div>
 
@@ -501,11 +526,12 @@ export function UsageScreen() {
             {/* Breakdown tabs */}
             <Tabs
               value={breakdownTab}
-              onValueChange={(v) => setBreakdownTab(v as 'agent' | 'model' | 'session')}
+              onValueChange={(v) => setBreakdownTab(v as 'agent' | 'model' | 'provider' | 'session')}
             >
-              <TabsList className="mb-[var(--space-3)]">
+              <TabsList className="mb-[var(--space-3)] h-auto flex-wrap">
                 <TabsTrigger value="agent" data-testid="tab-agent">By agent</TabsTrigger>
                 <TabsTrigger value="model" data-testid="tab-model">By model</TabsTrigger>
+                <TabsTrigger value="provider" data-testid="tab-provider">By provider</TabsTrigger>
                 <TabsTrigger value="session" data-testid="tab-session">By session</TabsTrigger>
               </TabsList>
 
@@ -515,6 +541,10 @@ export function UsageScreen() {
 
               <TabsContent value="model" data-testid="tab-content-model">
                 <BarList items={modelItems} maxTokens={modelMax} />
+              </TabsContent>
+
+              <TabsContent value="provider" data-testid="tab-content-provider">
+                <BarList items={providerItems} maxTokens={providerMax} />
               </TabsContent>
 
               <TabsContent value="session" data-testid="tab-content-session">

@@ -63,7 +63,7 @@ func (p *d2bProvider) Chat(ctx context.Context, messages []providers.Message, _ 
 		ts.mu.RUnlock()
 	}
 	for _, m := range messages {
-		if m.Role == "user" {
+		if m.Role == "user" && !m.Volatile { // FR-007: observe the continuation instruction before the tail.
 			o.lastUser = m.Content
 		}
 	}

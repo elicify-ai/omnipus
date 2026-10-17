@@ -71,7 +71,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		// never a false success. Wrap with the existing assistant
 		// save-error wrapper, run the session_save error path below and
 		// markTurnFailed — DoneStats.TurnFailed must be true.
-		if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddMessage(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, finalMsg.Role, finalMsg.Content); addErr != nil {
+		if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.appendFinalModelResponse(finalMsg.Content, rz.rc.rx.rr.rq.ri.rf.response); addErr != nil {
 			notSaved := &messageNotSavedError{role: finalMsg.Role, cause: addErr}
 			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
@@ -818,6 +818,9 @@ const (
 
 // prepareToolSurface filters and validates the tool surface offered for this provider request.
 func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestFlow {
+	// Reload rebuilds registry entries, not session membership. Restore only
+	// still-authorized loaded names before visibility filtering/pruning.
+	rq.ri.rf.rt.al.restoreLoadedToolRetention(rq.ri.rf.rt.ts)
 	allAgentTools := rq.ri.rf.rt.ts.agent.Tools.GetAll()
 	rq.policyFilteredTools, rq.filterTimePolicyMap = tools.FilterToolsByPolicy(allAgentTools, rq.ri.rf.rt.ts.agent.AgentType, rq.ri.rf.rt.ts.agent.LoadToolPolicy())
 
@@ -944,6 +947,8 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		rq.ri.rf.providerToolDefs = tools.ToolsToProviderDefs(stripInfraToolDefs(rq.policyFilteredTools))
 	}
 
+	rq.cacheToolSurface()
+
 	// Native web search support
 	_, hasWebSearch := rq.ri.rf.rt.ts.agent.Tools.Get("search_web")
 	rq.useNativeSearch = rq.ri.cfg.Tools.Web.PreferNative &&
@@ -973,47 +978,28 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 // current ephemeral instruction messages. The window-group check is the only
 // tool-structure gate: a bad history is refused here, never repaired.
 func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
-	repairedHistory := rq.ri.messages
+	repairedHistory := withoutVolatileNotes(rq.ri.messages)
 	if err := validateWindowGroups(repairedHistory); err != nil {
 		rq.ri.rf.rt.ts.setContextWindowError(err)
 		rq.ri.rf.callMessages = repairedHistory
 		return
 	}
 
-	rq.ri.rf.callMessages = repairedHistory
-	// Re-inject the acting agent's current scratchpad as an ephemeral system
-	// message so the checklist survives context compression and the agent
-	// always sees its plan at the top of the turn. The note is NOT persisted
+	rq.ri.rf.callMessages = rq.ri.rf.rt.al.freezeSessionSkillMenu(rq.ri.rf.rt.ts, repairedHistory)
+	// Rebuild the acting agent's scratchpad as request-only user-tail text,
+	// so its checklist survives context trimming without changing the prefix.
+	// The note is NOT persisted
 	// to history — it is rebuilt fresh each turn from the task store.
 	if rq.ri.rf.rt.ts.agent != nil {
 		if note := rq.ri.rf.rt.al.buildScratchpadNote(rq.ri.rf.rt.ts.agent.ID, rq.ri.rf.rt.ts.opts.TranscriptSessionID); note != "" && len(rq.ri.rf.callMessages) > 0 {
-			// Insert after callMessages[0] (the system prompt) so it immediately
-			// follows the agent's identity, before the conversation history.
-			injected := make([]providers.Message, 0, len(rq.ri.rf.callMessages)+1)
-			injected = append(injected, rq.ri.rf.callMessages[0])
-			injected = append(injected, providers.Message{Role: "system", Content: note})
-			injected = append(injected, rq.ri.rf.callMessages[1:]...)
-			rq.ri.rf.callMessages = injected
+			rq.ri.rf.callMessages = appendVolatileNote(rq.ri.rf.callMessages, note)
 		}
 		// Inject per-turn workspace instructions (AGENT.md) as an ephemeral
 		// system message immediately after the system prompt. Empty/absent
 		// instructions are a no-op — zero behavioral change.
 		//
-		// Ordering note (finding 10c, context-audit 2026-08 — ADR-088 D9
-		// retires the ADR-078 D2 goal-pending note that used to sit between
-		// this call and injectManifestNote below; buildGoalPendingNote/
-		// injectGoalPendingNote, pkg/agent/goal_pending_note.go, are deleted
-		// in full — instant activation leaves no pending state for a note to
-		// describe): the remaining injectors (this one, injectWebRenderingNote,
-		// injectManifestNote) insert at index 1 of the message array, so call
-		// order alone determines final position — the LAST call ends up
-		// CLOSEST to the system message. With every note present this turn,
-		// final order is: [0] system prompt · [1] manifest note · [2]
-		// web-rendering note · [3] workspace instructions · [4] scratchpad
-		// (spliced above, before this call) · [5+] history. See
-		// injectWorkspaceInstructions' own doc comment
-		// (workspace_instructions.go) for the authoritative, single-sourced
-		// version of this contract.
+		// Workspace and web-rendering instructions stay before history. The
+		// volatile note collectors are combined into one user message below.
 		rq.ri.rf.callMessages = injectWorkspaceInstructions(rq.ri.rf.callMessages, buildWorkspaceInstructionsNote(rq.ri.rf.rt.ts.opts.WorkspaceID))
 		// Web-only: encourage Mermaid diagrams when the turn comes from the web
 		// chat (the sole surface that renders them). Per-turn + surface-gated on
@@ -1035,8 +1021,8 @@ func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 		// does not hold, making this call a no-op on every non-goal turn.
 		rq.ri.rf.callMessages = injectGoalRubricNote(rq.ri.rf.callMessages,
 			buildGoalRubricInjectionNote(rq.goalForce.rubric, rq.goalForce.isWebchat))
-		// Re-inject the compressed manifest of unloaded lazy tools as an ephemeral
-		// system message. Like the scratchpad, it is rebuilt every turn (never
+		// Rebuild the compressed unloaded-tool summary as volatile user-tail
+		// text. Like the scratchpad, it is request-only (never
 		// persisted) so it is never stale and not double-counted in the cached
 		// system prompt. Injected only when Compressed is active and there are
 		// unloaded lazy tools to list.
@@ -1057,6 +1043,10 @@ func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 		rq.ri.rf.providerToolDefs = nil
 		rq.ri.rf.rt.ts.markGracefulTerminalUsed()
 	}
+	if rq.ri.rf.rt.ts.agent != nil {
+		rq.ri.rf.callMessages = appendVolatileNote(rq.ri.rf.callMessages, buildVolatileContext())
+	}
+	rq.ri.rf.callMessages = consolidateVolatileNotes(rq.ri.rf.callMessages)
 }
 
 // prepareLLMRequest applies request options and hooks, then records the outgoing LLM request.
@@ -1065,7 +1055,7 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 	rq.ri.rf.rt.llmOpts = map[string]any{
 		"max_tokens":       rq.ri.rf.rt.ts.agent.MaxTokens,
 		"temperature":      rq.ri.rf.rt.ts.agent.Temperature,
-		"prompt_cache_key": rq.ri.rf.rt.ts.agent.ID,
+		"prompt_cache_key": rq.ri.rf.rt.ts.cacheSessionID(),
 	}
 	if rq.useNativeSearch && !narrowingActive {
 		rq.ri.rf.rt.llmOpts["native_search"] = true
@@ -1128,6 +1118,11 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 	// native-search strip, graceful-terminal clearing, BeforeLLM hook). The
 	// tool loop below refuses any call to a tool outside it — see
 	// toolNotOfferedRefusal (tool_offer_gate.go).
+	if err := rq.recordPromptTokenSizes(); err != nil {
+		rq.ret0 = turnResult{status: TurnEndStatusError}
+		rq.ret1 = err
+		return agentLoopRunTurnRequestReturn
+	}
 	rq.offeredTools = newOfferedToolSet(rq.ri.rf.providerToolDefs)
 
 	// G1 fix: a cheap, non-blocking tool-call-argument progress callback,
@@ -1450,6 +1445,9 @@ func (rf *agentLoopRunTurnFallbacks) synthesizeImageRejection(pe *ProviderError,
 // callProviderOnce calls the configured provider or fallback chain once and records streaming progress.
 // Provider rate-limit retries for every turn, delegated included, live in the fallback chain (§7.4).
 func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (response *providers.LLMResponse, err error) {
+	if accountingErr := rt.ts.callAccountingError(); accountingErr != nil {
+		return nil, accountingErr
+	}
 	if cwErr := rt.ts.contextWindowError(); cwErr != nil {
 		return nil, cwErr
 	}
@@ -1626,7 +1624,11 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 				if p == nil {
 					p = rt.activeProvider
 				}
-				return p.Chat(ctx, candidateMessages, toolDefsForCall, model, rt.llmOpts)
+				rt.ts.setLastProducedModel(model)
+				rt.ts.setLastProducedProvider(provider)
+				response, err := p.Chat(ctx, candidateMessages, toolDefsForCall, model, rt.llmOpts)
+				rt.accountProviderAttempt(provider, model, response, err)
+				return response, err
 			},
 		)
 		if fbErr != nil {

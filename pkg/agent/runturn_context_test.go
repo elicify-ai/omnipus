@@ -303,7 +303,8 @@ func TestRunTurn_ImmutableResidueStillSends(t *testing.T) {
 		var calls []providers.ToolCall
 		var results []providers.Message
 		callIndex, resultIndex := -1, -1
-		for i, message := range requests[1] {
+		conversation := requireConversationBeforeVolatileTail(t, requests[1])
+		for i, message := range conversation {
 			switch message.Role {
 			case "user":
 				users = append(users, message)

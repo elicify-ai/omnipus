@@ -31,7 +31,7 @@ package session
 // per-model In/Out pair sat at 0 beside a non-zero Total. Now:
 //
 //   - hasSplit reports whether the provider's input/output split was
-//     recorded on this entry at all (prompt>0 OR completion>0).
+//     recorded on this entry at all (any prompt, completion, cache-read or cache-write counter is positive).
 //   - When hasSplit, TokensIn/TokensOut (and the per-model In/Out) take the
 //     provider's PromptTokens/CompletionTokens DIRECTLY — including when one
 //     of the two is genuinely 0 (e.g. prompt=5000, completion=0 for a turn
@@ -50,7 +50,7 @@ package session
 //     fix, this time silently, only on turns with a genuinely-zero half of
 //     the split. See TestAccumulateEntryStats_HasSplitBoundary for the
 //     pinned cases.
-//   - When NOT hasSplit (both are 0 — the legacy no-split case: entries
+//   - When NOT hasSplit (all split counters are 0 — the legacy no-split case: entries
 //     written before this convention existed, or a provider that reports
 //     only a total), TokensOut falls back to the entry's whole Tokens total,
 //     preserving historical behaviour for old transcripts and for any
@@ -61,7 +61,7 @@ package session
 func accumulateEntryStats(stats *SessionStats, entry TranscriptEntry) {
 	if entry.Role == "assistant" {
 		promptTokens, completionTokens := entry.PromptTokens, entry.CompletionTokens
-		hasSplit := promptTokens > 0 || completionTokens > 0
+		hasSplit := promptTokens > 0 || completionTokens > 0 || entry.CacheReadTokens > 0 || entry.CacheWriteTokens > 0
 
 		if hasSplit {
 			stats.TokensIn += promptTokens
@@ -71,25 +71,41 @@ func accumulateEntryStats(stats *SessionStats, entry TranscriptEntry) {
 		}
 		stats.TokensCacheRead += entry.CacheReadTokens
 		stats.TokensCacheWrite += entry.CacheWriteTokens
-		if entry.Model != "" {
-			if stats.ByModel == nil {
-				stats.ByModel = make(map[string]ModelTokens)
-			}
-			mt := stats.ByModel[entry.Model]
-			mt.In += promptTokens
-			mt.Out += completionTokens
-			mt.CacheRead += entry.CacheReadTokens
-			mt.CacheWrite += entry.CacheWriteTokens
-			mt.Total += entry.Tokens
-			stats.ByModel[entry.Model] = mt
+		modelID := entry.ModelID
+		if modelID == "" {
+			modelID = entry.Model
+		}
+		addEntryTokens(&stats.ByModel, modelID, entry)
+		addEntryTokens(&stats.ByProvider, entry.ProviderID, entry)
+		stats.UnpricedTokens += entry.UnpricedTokens
+		if entry.BillingClass == "subscription" {
+			stats.SubscriptionTokens += entry.Tokens
 		}
 	} else {
 		stats.TokensIn += entry.Tokens
 	}
 	stats.TokensTotal += entry.Tokens
-	stats.Cost += entry.Cost
+	if entry.BillingClass != "subscription" {
+		stats.Cost += entry.Cost
+	}
 	stats.ToolCalls += len(entry.ToolCalls)
 	if entry.Type == "" || entry.Type == EntryTypeMessage {
 		stats.MessageCount++
 	}
+}
+
+func addEntryTokens(cells *map[string]ModelTokens, key string, entry TranscriptEntry) {
+	if key == "" {
+		return
+	}
+	if *cells == nil {
+		*cells = make(map[string]ModelTokens)
+	}
+	mt := (*cells)[key]
+	mt.In += entry.PromptTokens
+	mt.Out += entry.CompletionTokens
+	mt.CacheRead += entry.CacheReadTokens
+	mt.CacheWrite += entry.CacheWriteTokens
+	mt.Total += entry.Tokens
+	(*cells)[key] = mt
 }
