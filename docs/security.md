@@ -550,6 +550,8 @@ Omnipus stores credential values in an encrypted file. Settings refer to credent
 
 Rotation re-encrypts the whole vault with the new passphrase. Back up the new passphrase because Omnipus needs it to unlock the vault later.
 
+If one saved entry is damaged but another entry can still be decrypted, the gateway keeps running. This also applies when the damaged entry is used by a provider, mailbox or channel, during startup, configuration reload or a Settings update. The affected integration cannot use that entry; the server log names its reference at error level so you can repair or re-enter it. Other readable entries remain usable, and detecting damage does not rewrite the vault. A locked vault, an unreadable vault file, or a nonempty vault with no decryptable entry still stops startup or rejects the update. If the master key may be wrong, restore the correct key before re-entering secrets.
+
 Each stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open.
 
 Installations from an earlier release are upgraded automatically, once. The first time the upgraded gateway (or any `omnipus` command) opens the vault, it re-encrypts every entry with its name, using the same master key, and saves the whole file in one step. You do not re-enter anything. The upgrade is recorded in the audit log as `credentials.store_migrated`, with the number of entries and no names or values. After it, the vault never reads the old format again.

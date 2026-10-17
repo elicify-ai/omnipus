@@ -129,6 +129,21 @@ func (e *EntryAuthError) Error() string {
 // that behaviour without having to know this type exists.
 func (e *EntryAuthError) Unwrap() error { return ErrWrongKey }
 
+// EntryEncodingError identifies malformed encoding in one stored entry, not an
+// unreadable store document. Its cause contains only the encoding fault, never
+// the nonce, ciphertext or plaintext. Gateway callers scope it only after the
+// store health check finds another decryptable entry.
+type EntryEncodingError struct {
+	Name string
+	Err  error
+}
+
+func (e *EntryEncodingError) Error() string {
+	return fmt.Sprintf("credentials: entry %q is malformed: %v", e.Name, e.Err)
+}
+
+func (e *EntryEncodingError) Unwrap() error { return e.Err }
+
 // NotFoundError is returned when a credential name is not in the store.
 type NotFoundError struct{ Name string }
 
@@ -758,16 +773,17 @@ func encrypt(key []byte, name string, plaintext []byte) (encEntry, error) {
 // decrypt opens an AES-256-GCM ciphertext, requiring the AAD that binds it to
 // name. A ciphertext sealed under a different name, edited in place, or sealed
 // under a different master key fails authentication and yields a
-// *EntryAuthError naming the entry; malformed base64 yields an error naming it
-// too. The entry name is in every error this function returns.
+// *EntryAuthError naming the entry. Malformed base64 or nonce length yields
+// *EntryEncodingError so callers can distinguish entry damage from a file,
+// lock or cipher-initialization failure without parsing an error message.
 func decrypt(key []byte, name string, entry encEntry) (string, error) {
 	nonce, err := base64.StdEncoding.DecodeString(entry.Nonce)
 	if err != nil {
-		return "", fmt.Errorf("credentials: entry %q is malformed: nonce is not valid base64: %w", name, err)
+		return "", &EntryEncodingError{Name: name, Err: fmt.Errorf("nonce is not valid base64: %w", err)}
 	}
 	ct, err := base64.StdEncoding.DecodeString(entry.Ciphertext)
 	if err != nil {
-		return "", fmt.Errorf("credentials: entry %q is malformed: ciphertext is not valid base64: %w", name, err)
+		return "", &EntryEncodingError{Name: name, Err: fmt.Errorf("ciphertext is not valid base64: %w", err)}
 	}
 
 	block, err := aes.NewCipher(key)
@@ -781,8 +797,7 @@ func decrypt(key []byte, name string, entry encEntry) (string, error) {
 	// GCM.Open panics on a nonce of the wrong length; a damaged entry is a
 	// clear, named error for that entry, never a crash (founder 2026-10-15).
 	if len(nonce) != gcm.NonceSize() {
-		return "", fmt.Errorf("credentials: entry %q is malformed: nonce must be %d bytes, got %d",
-			name, gcm.NonceSize(), len(nonce))
+		return "", &EntryEncodingError{Name: name, Err: fmt.Errorf("nonce must be %d bytes, got %d", gcm.NonceSize(), len(nonce))}
 	}
 	plain, err := gcm.Open(nil, nonce, ct, aadFor(name))
 	if err != nil {

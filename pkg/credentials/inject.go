@@ -62,13 +62,14 @@ const (
 // mirroring rest.go's describeCredentialResolutionError:
 //   - Err is *NotFoundError: the ref genuinely is not in the vault. Scoped,
 //     degradable — this ONE entry is unusable, nothing else is affected.
-//   - Err is anything else (ErrWrongKey, a corrupted-entry decrypt failure,
-//     an unreadable credentials.json, an os.Setenv failure, …): store-wide
-//     or environment-wide. MUST be treated the same as the bare
-//     ErrStoreLocked short-circuit below — fatal, not degraded. Gateway.go's
-//     reportInjectionErrors is the canonical caller; see its doc comment for
-//     the incident (2026-08-15) where degrading on *CredentialRefError alone
-//     let a wrong master key boot as if only one provider were broken.
+//   - Err is *EntryAuthError or *EntryEncodingError: defer the scope decision
+//     until Store.HealthCheck independently proves readability with another
+//     decryptable entry. A known damaged entry may then degrade its consumer;
+//     a nonempty store with no readable witness remains a whole-store failure.
+//   - Anything else (an unreadable credentials.json, an os.Setenv failure, …)
+//     stays fatal, like the bare ErrStoreLocked short-circuit below. Gateway's
+//     reportInjectionErrors is the canonical caller; degrading solely because
+//     an error carries a ref would let a wrong master key boot as a local fault.
 type CredentialRefError struct {
 	// Scope is ScopeProvider or ScopeMailbox.
 	Scope string
