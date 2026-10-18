@@ -139,6 +139,13 @@ func newWU6Fixture(t *testing.T) *wu6Fixture {
 	astore := agentstore.New(f.home)
 	require.NoError(t, astore.Create("omnipus", &config.AgentConfig{ID: "omnipus", Name: "Omnipus", Type: config.AgentTypeCore}))
 	require.NoError(t, astore.Create("mia", &config.AgentConfig{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom}))
+	// REST-surface tests drive the production route table, whose /api/v1/secrets
+	// handler sits behind withAuth (rest.go::registerAdditionalEndpoints).
+	// DevModeBypass is what admits the fixture's header-less do() requests:
+	// checkBearerAuth authenticates them as the synthetic _dev_bypass user
+	// (auth.go::checkBearerAuth) — the same identity wu6Owner names, so
+	// mainSession's owner stamps match the caller the way production sees them.
+	f.cfg.Gateway.DevModeBypass = true
 	if f.cfg.Sandbox.ToolPolicies == nil {
 		f.cfg.Sandbox.ToolPolicies = map[string]string{}
 	}
@@ -217,14 +224,6 @@ func (w *wu6Fixture) mainSession(workspace, agentID string) string {
 	return s.ID
 }
 
-// webTurn drives a real web-app turn through the running loop consumer.
-func (w *wu6Fixture) webTurn(sid, text string) {
-	w.t.Helper()
-	require.NoError(w.t, w.bus.PublishInbound(context.Background(), bus.InboundMessage{
-		Channel: "webchat", ChatID: sid, SessionID: sid, Content: text,
-	}))
-}
-
 // commitPrivateEntry stores an agent_private-shaped entry through the REAL
 // card-commit path (the same Store.CommitCard the K5 submit calls). The WU-6
 // subject is listing/removal, not card admission (WU-5's), so the tests
@@ -249,8 +248,19 @@ func (w *wu6Fixture) commitPrivateEntry(t *testing.T, sid, workspace, agentID, v
 func (w *wu6Fixture) issueRemove(ref string) *approvalEntry {
 	w.t.Helper()
 	w.provider.setDefaultScript([]providers.LLMResponse{
+		// remove_secret is an ADR-071 lazy (Tier-3) tool: callable only once
+		// ToolSearch promotes it into the offered set
+		// (pkg/agent/loop_run_turn_tools.go::toolNotOfferedRefusal). The
+		// promotion step is part of the real flow — ToolSearch's own
+		// description says "After loading, call the tool directly".
+		{ToolCalls: []providers.ToolCall{{ID: "wu6-load-" + ref, Type: "function", Name: "ToolSearch",
+			Arguments: map[string]any{"names": []any{"remove_secret"}}}}},
 		{ToolCalls: []providers.ToolCall{{ID: "wu6-remove-" + ref, Type: "function", Name: "remove_secret",
-			Arguments: map[string]any{"reference": ref}}}},
+			// reference_name is the tool schema's parameter
+			// (pkg/sysagent/tools/secret_remove.go::Parameters, required,
+			// additionalProperties false); the older "reference" spelling
+			// was only ever a developer-side fallback being removed.
+			Arguments: map[string]any{"reference_name": ref}}}},
 		{Content: "done", FinishReason: "stop"},
 	})
 	w.removeTurnDone = make(chan error, 1)
@@ -356,7 +366,6 @@ func TestWU6ListSecrets_AgentScoping(t *testing.T) {
 	omniRefs := w.commitPrivateEntry(t, omniSales, "sales", "omnipus", wu6PrivateAlt, "wu6-omnipus-private-value")
 
 	listFor := func(sid, agentID string) string {
-		t := w.t
 		ctx := tools.WithAgentID(
 			tools.WithTranscriptSessionID(
 				tools.WithToolContext(context.Background(), "webchat", sid),
