@@ -48,11 +48,16 @@ import (
 // wu5 rest constants (values are the tests', lengths asserted in the agent
 // pack; see pkg/agent/wu5_private_secret_fixture_test.go).
 const (
-	wu5Variable   = "WEATHER_TOKEN"
-	wu5ValueV1    = "WEATHER_SALES_V1"
-	wu5ValueV2    = "WEATHER_SALES_V2"
-	wu5Purpose    = "weather API token for the sales agent"
-	wu5Owner      = "wu5-owner"
+	wu5Variable = "WEATHER_TOKEN"
+	wu5ValueV1  = "WEATHER_SALES_V1"
+	wu5ValueV2  = "WEATHER_SALES_V2"
+	wu5Purpose  = "weather API token for the sales agent"
+	// wu5Owner is the identity the fixture ACTUALLY authenticates with:
+	// DevModeBypass admits every request as auth.go's `_dev_bypass` synthetic
+	// user, and the K5 submit resolves its owner from that identity — the
+	// session ancestry's owner must be the same string or every REST submit
+	// misses its record.
+	wu5Owner      = "_dev_bypass"
 	wu5OptionsURL = "/api/v1/secrets/%s/options"
 )
 
@@ -68,10 +73,14 @@ func newWU5GatewayProvider() *wu5GatewayProvider {
 	return &wu5GatewayProvider{calls: map[string]int{}, scripts: map[string][]providers.LLMResponse{}, prompts: map[string][][]providers.Message{}}
 }
 
+// setScript installs the response sequence for one transcript session and
+// RESTARTS that session's call counter — every phase of a test scripts its
+// own segment from index 0, never inheriting an earlier phase's offset.
 func (p *wu5GatewayProvider) setScript(sid string, script []providers.LLMResponse) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.scripts[sid] = script
+	p.calls[sid] = 0
 }
 
 func (p *wu5GatewayProvider) GetDefaultModel() string { return "test-model" }
@@ -146,12 +155,24 @@ func newWU5GatewayFixture(t *testing.T, bypass bool) *wu5GatewayFixture {
 	withEdition(t, config.EditionCore)
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
+	// OMNIPUS_HOME is pinned BEFORE the loop is built: the audit logger
+	// resolves its `system/` directory at construction, so the env must
+	// already point at the fixture home (the K49 audit assertion reads it).
+	t.Setenv("OMNIPUS_HOME", tmpDir)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`), 0o600))
+	// Membership for the workspace the tests use (the real resume turn's
+	// admission resolves the agent's workspace membership).
+	seedWU5Membership(t, tmpDir)
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: bypass},
-		Sandbox: config.OmnipusSandboxConfig{ToolPolicies: map[string]string{
-			"bash": "allow", "request_secret": "allow", "environment_setup": "allow",
-		}},
+		Sandbox: config.OmnipusSandboxConfig{
+			// Audit ON: the K49 contract ("audited") is asserted against the
+			// real audit log under the data home.
+			AuditLog: true,
+			ToolPolicies: map[string]string{
+				"bash": "allow", "request_secret": "allow", "environment_setup": "allow",
+			},
+		},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096, MaxToolIterations: 8},
 			List:     []config.AgentConfig{{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom}, {ID: "omnipus", Name: "Omnipus", Type: config.AgentTypeCore}},
@@ -161,8 +182,7 @@ func newWU5GatewayFixture(t *testing.T, bypass bool) *wu5GatewayFixture {
 	t.Cleanup(msgBus.Close)
 	provider := newWU5GatewayProvider()
 	al := mustAgentLoop(t, cfg, msgBus, provider)
-	home := filepath.Dir(al.GetSessionStore().BaseDir())
-	t.Setenv("OMNIPUS_HOME", home)
+	home := tmpDir
 	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
 	require.NoError(t, store.UnlockWithKey(bytes.Repeat([]byte{0x39}, 32)))
 	t.Cleanup(store.Close)
@@ -197,6 +217,20 @@ func (f *wu5GatewayFixture) mainSession(workspace, agentID string) string {
 	require.NoError(f.t, err)
 	owner := wu5Owner
 	require.NoError(f.t, f.al.GetSessionStore().SetMeta(s.ID, session.MetaPatch{Owner: &owner}))
+	return s.ID
+}
+
+// chatSession creates an ADDITIONAL real chat session for one (workspace,
+// agent) pair — a main session is computed from the pair (one per pair), so
+// a second card for the SAME pair (BDD-6.22's two concurrent submits) needs
+// its own chat session carrying the same workspace and owner.
+func (f *wu5GatewayFixture) chatSession(workspace, agentID string) string {
+	f.t.Helper()
+	s, err := f.al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", agentID)
+	require.NoError(f.t, err)
+	ws := workspace
+	owner := wu5Owner
+	require.NoError(f.t, f.al.GetSessionStore().SetMeta(s.ID, session.MetaPatch{WorkspaceID: &ws, Owner: &owner}))
 	return s.ID
 }
 
@@ -405,7 +439,7 @@ func TestWU5SecretOptions_ChannelFlag_GatesInjection(t *testing.T) {
 		wu5BashGW(`printf 'len=%s' "${#WEATHER_TOKEN}"`), wu5StopGW("off check"),
 	})
 	f.channelTurnGW(sid)
-	f.provider.waitFor(sid, 3, "default-off channel turn", t)
+	f.provider.waitFor(sid, 2, "default-off channel turn", t)
 	offOut := strings.Join(f.provider.toolResults(sid), "\n")
 	require.Contains(t, offOut, "len=0", "instrument: with the flag default off, the channel turn must not see the value (FR-241 default)")
 
@@ -426,7 +460,7 @@ func TestWU5SecretOptions_ChannelFlag_GatesInjection(t *testing.T) {
 		wu5BashGW(`printf 'len=%s' "${#WEATHER_TOKEN}"`), wu5StopGW("on check"),
 	})
 	f.channelTurnGW(sid)
-	f.provider.waitFor(sid, 5, "flag-on channel turn", t)
+	f.provider.waitFor(sid, 2, "flag-on channel turn", t)
 	onOut := strings.Join(f.provider.toolResults(sid), "\n")
 	require.Contains(t, onOut, "len=16", "with the flag on, the channel-triggered turn sees the value (BDD-7.12 row 'on'; FR-241)")
 
@@ -446,7 +480,7 @@ func TestWU5PrivateVersion_SelectedOnSubmit_ReplacementSupersedes(t *testing.T) 
 	v1Refs := f.storePrivateVersion(t, "sales", wu5ValueV1)
 	require.Len(t, v1Refs, 1)
 	v1 := f.entryFor(v1Refs)
-	require.Equal(t, "selected", v1.State, "the first version is selected at once (BDD-6.19; FR-086)")
+	require.Equal(t, gen.SecretNameEntryStateSelected, v1.State, "the first version is selected at once (BDD-6.19; FR-086)")
 	require.Equal(t, "agent_private", string(v1.Kind), "the kind is agent_private (K6)")
 	require.NotNil(t, v1.Owner, "the entry carries the owner pair (K6, CRIT-001 scope)")
 	require.Equal(t, "mia", v1.Owner.AgentId, "owner pair names the agent")
@@ -459,10 +493,10 @@ func TestWU5PrivateVersion_SelectedOnSubmit_ReplacementSupersedes(t *testing.T) 
 	require.Len(t, v2Refs, 1)
 	require.NotEqual(t, v1Refs[0], v2Refs[0], "a replacement stores a NEW versioned reference (FR-072)")
 	v2 := f.entryFor(v2Refs)
-	require.Equal(t, "selected", v2.State, "the replacement is selected at once (BDD-6.20)")
+	require.Equal(t, gen.SecretNameEntryStateSelected, v2.State, "the replacement is selected at once (BDD-6.20)")
 	require.Equal(t, int64(2), v2.Version, "the replacement is version 2 (FR-072)")
 	v1 = f.entryFor(v1Refs)
-	require.Equal(t, "superseded", v1.State, "the previous version becomes superseded (FR-072)")
+	require.Equal(t, gen.SecretNameEntryStateSuperseded, v1.State, "the previous version becomes superseded (FR-072)")
 
 	// K6 lists names and metadata, never a value.
 	rec := f.do(http.MethodGet, "/api/v1/secrets", "")
@@ -477,13 +511,14 @@ func TestWU5PrivateVersion_SelectedOnSubmit_ReplacementSupersedes(t *testing.T) 
 func TestWU5PrivateVersion_ConcurrentSubmits_ExactlyOneSelected(t *testing.T) {
 	f := newWU5GatewayFixture(t, true)
 
-	// Two pending cards for the same (sales, mia, WEATHER_TOKEN) pair.
+	// Two pending cards for the SAME (sales, mia, WEATHER_TOKEN) pair — two
+	// chats of one pair, the world BDD-6.22 describes.
 	type pending struct {
 		sid, requestID, fieldKey string
 	}
 	cards := make([]pending, 0, 2)
 	for i := 0; i < 2; i++ {
-		sid := f.mainSession(fmt.Sprintf("sales-concurrent-%d", i), "mia")
+		sid := f.chatSession("sales", "mia")
 		requestID, err := f.requestPrivateCard(sid, "mia", nil)
 		require.NoError(t, err, "BLOCKED: the agent_private card kind is not implemented (US-7, FR-076)")
 		cards = append(cards, pending{sid: sid, requestID: requestID, fieldKey: f.cardFieldKey(sid)})
@@ -566,7 +601,7 @@ func TestWU5PrivateSecret_OmnipusTargetValidated(t *testing.T) {
 	refs := f.referenceNames(requestID)
 	require.Len(t, refs, 1)
 	entry := f.entryFor(refs)
-	require.Equal(t, "selected", entry.State, "as the first version it is selected at once (BDD-7.8)")
+	require.Equal(t, gen.SecretNameEntryStateSelected, entry.State, "as the first version it is selected at once (BDD-7.8)")
 
 	miaSession := f.mainSession("sales", "mia")
 	f.provider.setScript(miaSession, []providers.LLMResponse{

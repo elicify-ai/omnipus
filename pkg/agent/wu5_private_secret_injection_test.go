@@ -117,7 +117,7 @@ func TestWU5PrivateSecret_OtherAgentSameWorkspace_Excluded(t *testing.T) {
 	// --- Ray again, now that Mia's secret is selected: still unset. ---
 	f.provider.setScript(ray, []providers.LLMResponse{wu5Bash(rayLen), wu5Stop("ray done 2")})
 	f.webTurn(ray, "print the weather token length again")
-	f.waitForCalls(ray, 4, "Ray's post-store command ran")
+	f.waitForCalls(ray, 2, "Ray's post-store command ran")
 	rayResults = strings.Join(f.provider.toolResultsFor(ray), "\n")
 	require.Contains(t, rayResults, "RAY_RAN", "Ray's command must still run after the store (BDD-7.2: exit 0)")
 	require.Contains(t, rayResults, "raylen=0",
@@ -176,8 +176,8 @@ func TestWU5PrivateSecret_WorkspaceScope_TwoWorkspaces(t *testing.T) {
 	for err := range errs {
 		require.NoError(t, err, "both concurrent turns must process")
 	}
-	f.waitForCalls(sales, 4, "concurrent Sales check")
-	f.waitForCalls(mkt, 4, "concurrent Marketing check")
+	f.waitForCalls(sales, 2, "concurrent Sales check")
+	f.waitForCalls(mkt, 2, "concurrent Marketing check")
 
 	salesOut := strings.Join(f.provider.toolResultsFor(sales), "\n")
 	mktOut := strings.Join(f.provider.toolResultsFor(mkt), "\n")
