@@ -85,6 +85,8 @@ When an agent's model was saved without a provider, its context window now comes
 
 You set fallbacks per agent. Open the agent's **Identity** settings and use **Fallback models**. Their order matters. A fallback should use a tool-capable model and a provider with valid credentials; otherwise it cannot rescue the request.
 
+Every fallback is a provider and a model together. Saving a fallback without a provider is refused, and the error names the entry. Omnipus never guesses a provider for a fallback. A fallback saved without a provider before this change is not used: the agent runs on its main model and its complete fallbacks, and the server log names the incomplete entry each time the agent loads. Pick a provider for that fallback in the agent's settings to use it again.
+
 The catalog changes over time. Use the provider and model lists in **Settings → Providers** as the live list. Treat the examples on this page as a starting point, not a complete inventory.
 
 ## Related pages
