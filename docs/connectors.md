@@ -26,6 +26,15 @@ Email works differently. An email mailbox belongs to one agent in one workspace.
 5. Select **Save & Enable**. The connected account appears with an **Enabled** status.
 6. To connect another account on the same platform, select **Add another…** beside its group.
 
+### Connecting from chat
+
+You can also ask Omnipus in chat to connect a platform. Omnipus first asks you for the credentials through a secure card in the chat (the value never appears in the conversation), then shows one approval card for the whole connection. When you approve, a single step saves the settings, binds the connection to the workspace and agent you named, enables it and starts it.
+
+- The agent you name must already be on that workspace's team, and the workspace must not be archived. Otherwise the connect fails with **failed: nothing saved** — nothing is written, even if the token is valid.
+- The result separates what was proven from what was not tested. **Working** means only that the connection started with the saved credentials and the platform accepted them; incoming message delivery and outgoing replies are listed as not tested.
+- A connection that did not start is reported as **saved but not working**, with the reason — for example a rejected token. It is never reported as working. Fix the credential and try again, or open **Configure** on its card.
+- WhatsApp needs no credentials. The connection is saved and pairing starts; the result says **saved but not working: pairing not finished** until you scan the QR code. Open the WhatsApp connection on **Connectors** to see the code.
+
 ## Choosing which agent answers
 
 Every connector is bound to one workspace and names the agent that answers it — its main agent. Saving the binding needs both; there is no default agent to fall back to.

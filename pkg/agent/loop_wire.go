@@ -2139,6 +2139,12 @@ func (al *AgentLoop) WireSysagentDeps(deps *systools.Deps) {
 	if depsCopy.ReloadAndWaitFallback == nil {
 		depsCopy.ReloadAndWaitFallback = al.reloadAndWait
 	}
+	if depsCopy.ChannelLiveStatus == nil {
+		depsCopy.ChannelLiveStatus = al.channelLiveStatus
+	}
+	if depsCopy.NotePairingRequest == nil {
+		depsCopy.NotePairingRequest = al.NotePairingRequest
+	}
 	al.sysagentDeps = &depsCopy
 	al.wireSysagentDepsLocked(al.registry, &depsCopy)
 }

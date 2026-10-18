@@ -105,6 +105,9 @@ type AgentLoop struct {
 	// (FR-019): key sessionKey (string), value *RecallSpan. Never persisted;
 	// set by recall_conversation, read/dropped by windowTrim + assembly.
 	recallSpans sync.Map // key: sessionKey (string), value: *RecallSpan
+	// pairingRequests correlates a chat-started channel pairing with the
+	// request and chat that started it (K10, FR-081): channel id -> pairingCorrelation.
+	pairingRequests sync.Map
 	// pendingRequests / remindedRequests back the unanswered-request reminder
 	// (request_reminder.go): request id -> receiver session id, and the ids that
 	// already got their one reminder.

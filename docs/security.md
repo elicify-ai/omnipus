@@ -184,7 +184,7 @@ For reading, this now matches the shell. Under Auto-approve, the shell command `
 | Browser scripts and uploads | `browser_evaluate`, `browser_upload_file` |
 | Settings and diagnostics | `set_config`, `run_doctor` |
 | Providers | `configure_provider`, `test_provider` |
-| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `test_channel` |
+| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `test_channel` |
 | Connected servers | `add_mcp_server`, `remove_mcp_server` |
 | Agents and workspaces | `create_agent`, `update_agent`, `set_agent_permissions`, `update_workspace` |
 | Skills | `create_skill`, `edit_skill`, `remove_skill` |
@@ -520,7 +520,7 @@ The card saves a new version; it does not itself change a provider, connector or
 |---|---|---|
 | Model provider | `configure_provider` with `api_key_ref` | The provider, effective endpoint, protocol and API-key field match the card's destination. An endpoint-only card is restricted to that exact endpoint. Every affected provider row is checked. |
 | MCP server | `add_mcp_server` with an `env_refs` map | The server name, transport, executable, ordered arguments, URL and specific environment-variable name match the card's destination. Only the named reference entries are attached. |
-| Channel connection | `configure_channel` with fields such as `token_ref`, `bot_token_ref` or `app_secret_ref` | The exact connection instance, account/settings and credential field match the card's destination. A change that would redirect a retained credential to another destination is refused too. |
+| Channel connection | `configure_channel` or `connect_channel` with fields such as `token_ref`, `bot_token_ref` or `app_secret_ref` | The exact connection instance, account/settings and credential field match the card's destination. A change that would redirect a retained credential to another destination is refused too. |
 
 A reference name alone is not permission to use a secret elsewhere. An unknown, unavailable, unbound or mismatched reference is refused without changing the integration or the stored value. If the destination changed, establish the new destination in Settings, then ask for a new card. Selecting a replacement leaves the earlier stored version intact.
 

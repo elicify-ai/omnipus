@@ -57,6 +57,7 @@ var (
 	_ tools.ChangeTool = (*SkillRemoveTool)(nil)
 	_ tools.ChangeTool = (*SelectSecretVersionTool)(nil)
 	_ tools.ChangeTool = (*RemoveSecretTool)(nil)
+	_ tools.ChangeTool = (*ChannelConnectTool)(nil)
 )
 
 func (t *AgentCreateTool) ReportsChangeOutcome()       {}

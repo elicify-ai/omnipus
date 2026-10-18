@@ -171,6 +171,13 @@ type Deps struct {
 	// WaitForReloadFunc is not wired: the agent loop's own TriggerReload plus
 	// a bounded wait for the pending flag to clear. WireSysagentDeps fills it.
 	ReloadAndWaitFallback func() error
+	// ChannelLiveStatus reports whether a configured channel instance runs
+	// after the last reload, with a value-free failure reason (connect_channel).
+	// WireSysagentDeps fills it from the agent loop's channel manager.
+	ChannelLiveStatus func(id string) (running bool, failure string, known bool)
+	// NotePairingRequest correlates a chat-started QR pairing with its
+	// request and chat (K10, FR-081). WireSysagentDeps fills it.
+	NotePairingRequest func(channelID, requestID, sessionID string)
 	// WaitForPendingReloadFunc BLOCKS until any reload already queued by a
 	// prior publish hook (UpsertAgentFastFunc / ReloadFunc) has actually
 	// landed in memory, OR returns an error after reloadWaitTimeout elapses.
