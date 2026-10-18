@@ -30,7 +30,7 @@ So per the brief's escape hatch, the whole draft lives in `docs/internal/specs/o
 | W10 add connector | `skills/add-connector.md` | FR-070 (references only), FR-053; OSA-4 `add_mcp_server` check; WF W10 |
 | W11 remove connector | `skills/remove-connector.md` | ADR OSA-3 ask list; WF W11 |
 | W12 add/change provider | `skills/add-provider.md` | FR-031, FR-070; BDD-9.1–9.3, 9.7; **#1061** |
-| W13 connect channel | `skills/connect-channel.md` | FR-080, FR-081 (QR in chat), FR-121/FR-127 (binding); BDD-8.1–8.5, 8.7, 8.8 |
+| W13 connect channel | `skills/connect-channel.md` | FR-080, FR-081 (QR: spec design is in-chat, **Train 2 reports "pairing not finished: scan the WhatsApp QR code"** — see reconciliation below), FR-121/FR-127 (binding); BDD-8.1–8.5, 8.7, 8.8 |
 | W14 disable channel | `skills/disable-channel.md` | ADR OSA-3; WF W14 |
 | W16 doctor & usage | `skills/doctor-usage.md` | ADR OSA-9 Dependencies (E5); WF W16 |
 | W17 shell diagnosis | `skills/shell-diagnosis.md` | ADR OSA-1 (bash: ask, diagnosis only); WF W17 |
@@ -47,14 +47,14 @@ Every name below is used in the text with the exact spelling the spec gives. "Ex
 | Name | Spec section | Exists today | Evidence |
 |---|---|---|---|
 | `request_secret` | §6.5, FR-060 | no | grep ABSENT (all pkg, non-test) |
-| `list_secrets` | §6.5, FR-073 | no | grep ABSENT |
-| `remove_secret` | §6.5, FR-077 | no | grep ABSENT |
-| `select_secret_version` | §6.5, FR-086 | no | grep ABSENT |
-| `connect_channel` | FR-080, WU-7 | no | grep ABSENT |
+| `list_secrets` | §6.5, FR-073 | **yes on Train 2** (`origin/work/omnipus-l1-wu4` @ 6d08fa238); no on this branch's base 8754a1a4a | `pkg/tools/list_secrets.go::ListSecretsTool.Name` (Train 2) |
+| `remove_secret` | §6.5, FR-077 | **yes on Train 2**; no on base | `pkg/sysagent/tools/secret_remove.go::RemoveSecretTool` (param `reference_name`; post-#1277 in-use behaviour wired) |
+| `select_secret_version` | §6.5, FR-086 | **yes on Train 2 — private variables only**; integration reference refused (`NOT_PRIVATE` → "use the integration's configuration tool") | `pkg/sysagent/tools/secret_version.go::SelectSecretVersionTool` (Train 2) |
+| `connect_channel` | FR-080, WU-7 | **yes on Train 2**; no on base | `pkg/sysagent/tools/channel_connect.go::ChannelConnectTool` (params `id`/`workspace_id`/`agent_id`/`expected_revision`/`<field>_ref`) |
 | `set_agent_permissions` | FR-024, FR-021 | no | grep ABSENT |
 | `workflow_start` (MessageFrame field) | K8, FR-012 | no | grep ABSENT |
 | `delete_everything` (delete_agent param) | K50, FR-243 | no | grep ABSENT |
-| `expected_revision` (shared-resource token) | FR-085, FR-088 | no (WU-3; `revision` on workspace/agent exists) | grep ABSENT |
+| `expected_revision` (shared-resource token) | FR-085, FR-088 | channel writes: **yes on Train 2** (`channelRevisionProperty`); provider/MCP/mailbox tokens remain WU-3 | `pkg/sysagent/tools/channel_connect.go` (Train 2) |
 | `environment_setup` validated target parameter | FR-040 (WU-3) | tool exists; target param lands with WU-3 | tool in `pkg/coreagent/seed.go` static list |
 | `GodModeActive` | ADR OSA-3, FR-015 | **yes** | `pkg/agent/instance.go::GodModeActive` |
 | `Skill`, `ToolSearch`, `AskUserQuestion` | §6.5 | yes | `pkg/tools/skill.go::SkillTool.Name`, `pkg/tools/tools_tool.go::ToolsTool.Name`, `pkg/tools/ask_user_question.go::AskUserQuestionToolName` |
@@ -78,6 +78,30 @@ The Ava/Admin-era embedded skills stay untouched until WU-2 (grants) and WU-11 (
 | `interview` | **kept** (shared with Mia/Jim; workflow skills interview in their own steps) |
 | `delegation-graph` | folded into `team-delegation` / `team-setup` |
 | `plan`, `orchestrate`, `define-goal`, `deep-research`, `inbox-triage`, `elicify-*`, `verify` | not Omnipus workflow skills — out of WU-9 scope |
+
+## Train 2 reconciliation (2026-10-18)
+
+Rulings and implementations on `origin/work/omnipus-l1-wu4` (latest `6d08fa238`, read-only) folded into this draft:
+
+| Ruling / implementation | Draft change |
+|---|---|
+| `connect_channel` wired: params `id` (instance key embedding the type — `telegram`, `telegram.eu`), `workspace_id`, `agent_id`, `expected_revision`, per-type `<field>_ref`; one call configures + binds + enables + tests; "working" only when running; WhatsApp reports "pairing not finished: scan the WhatsApp QR code" — **no in-chat QR yet** | `skills/connect-channel.md` rewritten (params, outcomes, QR on Connectors page); core-prompt routing entry for connect-channel is the verbatim line from `connect_channel.md` §3 |
+| `select_secret_version` private-variables only (chief Q2 A, FR-086); integration reference refused, pointing to the integration's configuration tool | core prompt secrets rule now states the private-only scope and the refusal path |
+| `list_secrets` (every native agent, own private variables in this workspace; Omnipus sees all; Settings-stored rows show kind "unbound", "Stored in Settings; no recipient recorded") and `remove_secret` (Omnipus, Ask; `reference_name`; consumers on the approval card; three separate facts) | core prompt secrets rule: check `list_secrets` before requesting a card; `remove_secret` stays in the ask list |
+| Omnipus may **create** workspaces (`allow`) but **never delete** one — founder 2026-10-18, deferred to #1363; deletion is Settings-only | core prompt paragraph 1: create-when-asked, never-delete, say-so rule; no skill mentions workspace deletion |
+| Approvals: card in the parent chat with attention signals; **no "waiting elsewhere" banner** (founder 2026-10-18) | no change needed — the core prompt already kept helper cards in this chat and never promised a banner |
+
+**Found during reconciliation (reported, not fixed — Train 2's file, not this draft):** the wired `connect_channel` Description (`pkg/sysagent/tools/channel_connect.go::ChannelConnectTool.Description`, Train 2) still says "the code and progress render in the chat", but the implementation returns "pairing not finished: scan the WhatsApp QR code" and renders no QR in chat. That one sentence should be corrected at the source (or the in-chat QR landed) so the tool text and behaviour agree.
+
+## Wiring targets (exact, for backend-lead)
+
+| Draft file | Wire into |
+|---|---|
+| `skills/<slug>.md` (18 files; slug = frontmatter `name:`) | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu9/pkg/skills/embedded/<slug>/SKILL.md` — e.g. `skills/create-agent.md` → `pkg/skills/embedded/create-agent/SKILL.md`. Directory name MUST equal the frontmatter name (`pkg/skills/CLAUDE.md`) |
+| `core-prompt.md` § "Core prompt text (draft v1)" | one Go string constant in `pkg/coreagent/prompts_adr090.go` (the block that today holds `"ava"` and `"admin"`, removed by WU-2/WU-11), plus the `omnipusGodModeNote` per-turn injection from `pkg/agent/instance.go::GodModeActive` |
+| `askuser-question-description.md` changes 1–2 | the two clause edits in `pkg/tools/ask_user_question.go::AskUserQuestionTool.Description` |
+| Routing table | lives only in the core-prompt constant (FR-011); the connect-channel entry is the verbatim line from `omnipus-scratch/l1/train2/prompt/connect_channel.md` §3 |
+| Grants | the 18 skill names into Omnipus's role skill inventory (WU-2's `pkg/coreagent/role_policies_adr090.go` work); replaced Ava/Admin skills removed per the map above |
 
 ## Wiring checklist for backend-lead (after WU-7, per plan §2)
 
