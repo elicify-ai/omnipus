@@ -28,17 +28,22 @@ Skills reach your agents from four places.
 | A mounted folder | Skills that belong to a repository and travel with it | Put them in `.omnipus/skills` or `.claude/skills` at the root, then [mount the folder](library.md) |
 | The ClawHub registry | Community-published skills | Search and install from the Skills & Tools screen |
 
-Omnipus ships 21 embedded skill packages covering setup, planning, research, and document workflows.
+Omnipus ships 29 embedded skill packages covering setup, planning, research, and document workflows.
 
-## Omnipus's initial setup skills
+## Omnipus's setup workflow skills
 
-On a fresh install, Omnipus receives these existing setup playbooks automatically:
+On a fresh install, Omnipus receives these setup workflows automatically, and only Omnipus receives them. Each one starts with a single "use when" line, and Omnipus's own instructions route every setup request to exactly one of them:
 
 | Purpose | Skill identifiers |
 |---|---|
-| Clarification and troubleshooting | `interview`, `doctor` |
-| Agents, skills and workspace teams | `agent-authoring`, `skill-authoring`, `tool-mapping`, `skill-mapping`, `delegation-graph`, `workspace-team` |
-| Connectors, providers and channels | `mcp-install`, `provider-setup`, `channel-setup` |
+| Clarification | `interview` |
+| Agents | `create-agent`, `change-agent`, `remove-agent` |
+| Skills | `write-skill`, `install-skill` |
+| Teams and workspaces | `team-setup`, `team-delegation`, `welcome-workspace` |
+| Connectors and providers | `add-connector`, `remove-connector`, `add-provider`, `provider-config` |
+| Channels | `connect-channel`, `disable-channel` |
+| Health, usage and diagnosis | `doctor-usage`, `shell-diagnosis` |
+| Planning steps used by the workflows above | `capability-plan`, `dependency-check` |
 
 Mia, Jim and the other built-in agents keep their existing skill assignments. Assigning a skill does not grant tool permissions: Omnipus's tools still follow the same global and per-agent permission rules. If you change or clear an agent's skill grants, a later restart does not restore the initial list.
 
