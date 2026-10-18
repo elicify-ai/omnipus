@@ -19,6 +19,7 @@ import { queryClient } from '@/lib/queryClient'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { IconButton } from '@/components/ui/icon-button'
+import { ErrorState } from '@/components/ui/error-state'
 import { SquadDialog } from '@/components/rooms/SquadDialog'
 
 const KIND_ORDER: Record<Room['kind'], number> = { team: 0, squad: 1, adhoc: 2 }
@@ -58,6 +59,7 @@ export function WorkspaceGroupChats({ workspace, onOverlayClose }: { workspace: 
   // The app's one client, passed explicitly: WorkspaceAgentList is props-driven and renders without a provider.
   const roomsQuery = useQuery({ queryKey: roomsQueryKeys.list(workspace.id), queryFn: () => fetchWorkspaceRooms(workspace.id) }, queryClient)
   const rooms = sidebarRooms(roomsQuery.data ?? [])
+  const stale = roomsQuery.isError && roomsQuery.data !== undefined
   return (
     <div data-testid={`group-chats-${workspace.id}`} className="mt-[var(--space-2)] flex flex-col">
       <div className="flex items-center pr-[var(--space-2)]">
@@ -76,7 +78,14 @@ export function WorkspaceGroupChats({ workspace, onOverlayClose }: { workspace: 
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {roomsQuery.isError ? (
+      {stale && (
+        <ErrorState
+          message="Could not refresh group chats — showing cached, out-of-date groups"
+          onRetry={() => void roomsQuery.refetch()}
+          className="px-[var(--space-2-5)] py-[var(--space-1)]"
+        />
+      )}
+      {roomsQuery.isError && !stale ? (
         <div className="flex items-center gap-[var(--space-2)] pr-[var(--space-3)] py-[var(--space-1)]">
           <span className="flex-1 px-[var(--space-2-5)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">Could not load group chats</span>
           <Button
@@ -89,7 +98,7 @@ export function WorkspaceGroupChats({ workspace, onOverlayClose }: { workspace: 
         </div>
       ) : roomsQuery.isPending ? (
         <span role="status" className="px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Loading group chats…</span>
-      ) : rooms.length === 0 ? (
+      ) : rooms.length === 0 && !stale ? (
         <span className="px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">No group chats yet</span>
       ) : (
         rooms.map((room) => <RoomRow key={room.id} room={room} onOverlayClose={onOverlayClose} />)

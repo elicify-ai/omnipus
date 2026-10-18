@@ -7,6 +7,14 @@
 // REAL production route tree, AppShell, sidebar/chat/profile/modal, stores,
 // generated API clients and socket dispatcher. No feature-switch mocks.
 // GREEN and the exact mutations listed per case are deferred to fresh CHECK.
+//
+// SUPERSESSION (founder decision 2026-10-18, Train 3 re-cut, recorded in
+// /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/PLAN-omnipus-L1-v2-20261013.md
+// line 143: "WU-15 rooms + room screens, rooms switched on"): every room pin
+// below is re-aimed from the 2026-10-14 "hidden/unreachable under the off
+// switch" pole to the matching switched-on pole at the same assertion
+// strength (S1-a1, S1-a2, S1-a3, S1-a traffic ×4). The secrets and approval
+// pins keep the 2026-10-14 stage-1 oracles unchanged.
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
@@ -19,7 +27,7 @@ import { useChatStore } from '@/store/chat'
 import { useSecretRequestStore } from '@/store/secretRequests'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { json, MAIN_ID, NOW, ROOM_ID, workspace, WS } from '../../../tests/l1-room-ui/harness'
+import { json, MAIN_ID, NOW, ROOM_ID, snapshot, workspace, WS } from '../../../tests/l1-room-ui/harness'
 import {
   approval, emitFromGateway, exposeTranscriptViewport, MAIN_PATH, mountStage1App, resetStage1App,
   SETTINGS_PATH, settledMainChat, Stage1Network, stopStage1App,
@@ -71,9 +79,15 @@ async function showApproval(socket: Parameters<typeof emitFromGateway>[0], frame
   return panel
 }
 
-describe('stage 1 — rooms hidden through the real application shell', () => {
-  // CHECK mutant for S1-a1: featureSwitches.ts::ROOMS_ENABLED = true.
-  it('[S1-a1; dispatch 2(a)] a populated expanded workspace has no Group chats and never reads its room collection', async () => {
+describe('stage 1 — rooms switched on through the real application shell', () => {
+  // SUPERSEDED pin, re-aimed per the founder's 2026-10-18 Train 3 decision
+  // "rooms switched on" (see the file header): the 2026-10-14 stage-1 pin
+  // asserted the Group chats section absent and the room collection unread.
+  // The switched-on pin (FR-160, FR-161, FR-174; WorkspaceGroupChats.tsx)
+  // asserts the section and its room row VISIBLE and the room-list read
+  // issued exactly once.
+  // CHECK mutant for S1-a1: featureSwitches.ts::ROOMS_ENABLED = false.
+  it('[S1-a1; dispatch 2(a)] a populated expanded workspace shows its Group chats section and reads its room collection exactly once', async () => {
     const { router } = await mountStage1App(SETTINGS_PATH)
     const workspaces = screen.getByRole('group', { name: 'Workspaces' })
     expect(within(workspaces).getByRole('button', { name: 'Sales' })).toBeVisible()
@@ -81,35 +95,60 @@ describe('stage 1 — rooms hidden through the real application shell', () => {
     expect(within(workspaces).getByRole('button', { name: 'Jim' })).toBeVisible()
     await settledReads()
     expect(router.state.location.pathname).toBe('/settings')
-    expect(screen.queryByText('Group chats', { exact: true })).toBeNull()
-    expect(screen.queryByTestId(`group-chats-${WS}`)).toBeNull()
-    expect(roomRequests()).toEqual([])
+    const groupChats = screen.getByTestId(`group-chats-${WS}`)
+    expect(groupChats).toBeVisible()
+    expect(within(groupChats).getByText('Group chats', { exact: true })).toBeVisible()
+    // The harness squad room (hidden: false) lists under the section per FR-174.
+    expect(within(groupChats).getByTestId(`room-row-${ROOM_ID}`)).toBeVisible()
+    expect(roomRequests().map((request) => `${request.method} ${request.path}`)).toEqual([
+      `GET /api/v1/workspaces/${WS}/rooms`,
+    ])
   })
 
-  // CHECK mutant for S1-a2: featureSwitches.ts::ROOMS_ENABLED = true.
-  it('[S1-a2; dispatch 2(a)] a member main chat has no Add participant entry point or room-list request', async () => {
+  // SUPERSEDED pin, re-aimed per the founder's 2026-10-18 Train 3 decision
+  // "rooms switched on" (see the file header): the 2026-10-14 stage-1 pin
+  // asserted no Add participant entry point. The switched-on pin asserts the
+  // entry point VISIBLE in the member main chat (AddParticipant.tsx), while
+  // the chat itself still issues no attach_room and no room-detail read — the
+  // sidebar's own single room-list read is the only room traffic.
+  // CHECK mutant for S1-a2: featureSwitches.ts::ROOMS_ENABLED = false.
+  it('[S1-a2; dispatch 2(a)] a member main chat shows the Add participant entry point without any room attach or room-detail read', async () => {
     const { router, socket } = await mountStage1App()
     await settledMainChat(socket)
     expect(screen.getByTestId('chat-input')).toBeVisible()
     expect(useSessionStore.getState().activeAgentId).toBe('mia')
     await settledReads()
     expect(router.state.location.pathname).toBe(MAIN_PATH)
-    expect(screen.queryByRole('button', { name: 'Add participant', hidden: true })).toBeNull()
-    expect(roomRequests()).toEqual([])
+    expect(screen.getByTestId('add-participant')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Add participant' })).toBeVisible()
+    expect(roomRequests().map((request) => `${request.method} ${request.path}`)).toEqual([
+      `GET /api/v1/workspaces/${WS}/rooms`,
+    ])
+    expect(socket.sent.filter((frame) => frame.type === 'attach_room')).toEqual([])
   })
 
-  // CHECK mutant for S1-a3: set ROOMS_ENABLED=true, or remove the disabled-room
-  // beforeLoad redirect from the REAL workspace room Route.
-  it('[S1-a3; dispatch 2(a)] a direct room URL redirects to workspace chat without any room REST request or attach_room frame', async () => {
-    const { router, socket } = await mountStage1App(`/workspaces/${WS}/rooms/${ROOM_ID}`)
-    await waitFor(() => expect(router.state.location.pathname).toBe(MAIN_PATH))
-    await settledMainChat(socket)
+  // SUPERSEDED pin, re-aimed per the founder's 2026-10-18 Train 3 decision
+  // "rooms switched on" (see the file header): the 2026-10-14 stage-1 pin
+  // asserted the direct room URL redirects to workspace chat. The switched-on
+  // pin (FR-175, FR-199; K45 — the route "attaches the room only") asserts the
+  // room screen mounts at the SAME URL, attaches ITS room, reads the room, and
+  // renders from a real room_snapshot.
+  // CHECK mutant for S1-a3: featureSwitches.ts::ROOMS_ENABLED = false.
+  it('[S1-a3; dispatch 2(a)] a direct room URL mounts the room, attaches it and reads it without redirecting', async () => {
+    const roomPath = `/workspaces/${WS}/rooms/${ROOM_ID}`
+    const { router, socket } = await mountStage1App(roomPath)
     await settledReads()
-    expect(roomRequests()).toEqual([])
-    // Positive socket control: the actual app has attached the member main.
-    expect(socket.sent.filter((frame) => frame.type === 'attach_session').map((frame) => frame.session_id)).toContain(MAIN_ID)
-    expect(socket.sent.filter((frame) => frame.type === 'attach_room')).toEqual([])
-    expect(screen.queryByTestId('room-header')).toBeNull()
+    expect(router.state.location.pathname).toBe(roomPath)
+    expect(roomRequests().map((request) => `${request.method} ${request.path}`)).toContain(`GET /api/v1/rooms/${ROOM_ID}`)
+    expect(roomRequests().filter((request) => request.method !== 'GET')).toEqual([])
+    await waitFor(() => {
+      if (!socket.sent.some((frame) => frame.type === 'attach_room' && frame.room_id === ROOM_ID)) {
+        throw new Error('RoomScreen has not attached its room on the hub connection')
+      }
+    })
+    // The screen renders from a real snapshot, not from the REST read alone.
+    await emitFromGateway(socket, snapshot())
+    expect(await screen.findByTestId('room-header')).toBeVisible()
   })
 })
 
@@ -257,8 +296,14 @@ describe('stage 1 — every pending approval has exactly one actionable surface'
   })
 })
 
-describe('stage 1 — hidden room traffic in the real main-chat renderer', () => {
-  // CHECK mutant for all four cases: ROOMS_ENABLED=true; a narrower probe
+describe('stage 1 — room traffic rendered in the real main-chat renderer', () => {
+  // SUPERSEDED pins, re-aimed per the founder's 2026-10-18 Train 3 decision
+  // "rooms switched on" (see the file header): the 2026-10-14 stage-1 pins
+  // asserted a room_ref carrier renders nothing. The switched-on pins
+  // (FR-162; RoomTrafficEntry.tsx) assert exactly ONE collapsed entry with its
+  // disclosure toggle visible, which expands to the "Open group" link — while
+  // the entry itself still issues no room REST read.
+  // CHECK mutant for all four cases: ROOMS_ENABLED=false; a narrower probe
   // removes the gate at the corresponding RoomTrafficMessage mount.
   it.each([
     { layout: 'plain', kind: 'request' },
@@ -266,7 +311,7 @@ describe('stage 1 — hidden room traffic in the real main-chat renderer', () =>
     { layout: 'virtual', kind: 'streaming answer' },
     { layout: 'virtual', kind: 'completed answer' },
   ] as const)(
-    '[S1-a traffic; added dispatch] a $layout $kind carrying room_ref renders no room-traffic entry',
+    '[S1-a traffic; added dispatch] a $layout $kind carrying room_ref renders its room-traffic entry',
     async ({ layout, kind }) => {
       if (layout === 'plain') vi.stubGlobal('ResizeObserver', undefined)
       else exposeTranscriptViewport()
@@ -287,16 +332,22 @@ describe('stage 1 — hidden room traffic in the real main-chat renderer', () =>
         }
       }
       // Positive transport/store control: the tested carrier really arrived;
-      // absence cannot pass because the fixture/parser dropped room_ref.
+      // presence cannot pass because the fixture/parser dropped room_ref.
       await waitFor(() => {
         const messages = Object.values(useChatStore.getState().sessionsById[MAIN_ID]?.messagesById ?? {})
         expect(messages.find((message) => message.content === content)?.roomRef).toEqual(roomRef)
       })
       await settledReads()
-      expect(screen.queryByTestId('room-traffic-entry')).toBeNull()
-      expect(screen.queryByTestId('room-traffic-toggle')).toBeNull()
-      expect(screen.queryByRole('link', { name: /open group/i, hidden: true })).toBeNull()
-      expect(roomRequests()).toEqual([])
+      const entries = screen.getAllByTestId('room-traffic-entry')
+      expect(entries).toHaveLength(1)
+      expect(entries[0]).toBeVisible()
+      const toggle = screen.getByTestId('room-traffic-toggle')
+      expect(toggle).toBeVisible()
+      await userEvent.setup().click(toggle)
+      expect(await screen.findByRole('link', { name: 'Open group Launch' })).toBeVisible()
+      expect(roomRequests().map((request) => `${request.method} ${request.path}`)).toEqual([
+        `GET /api/v1/workspaces/${WS}/rooms`,
+      ])
     },
   )
 })

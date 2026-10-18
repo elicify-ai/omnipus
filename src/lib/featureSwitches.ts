@@ -4,8 +4,8 @@
 // Flip a switch only together with its server landing; the code behind it
 // stays in place.
 
-/** Group chats: sidebar section, squad dialog, Add participant, room route. Hidden until WU-15 (stage 3), #1314. */
-export const ROOMS_ENABLED = false
+/** Group chats: sidebar section, squad dialog, Add participant, room route. On since WU-15's server landed (stage 3, #1314). */
+export const ROOMS_ENABLED = true
 
 /** An agent's private secrets panel (GET /secrets). Hidden until WU-4/5. */
 export const AGENT_PRIVATE_SECRETS_ENABLED = false

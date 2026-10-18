@@ -1,6 +1,7 @@
 // RED — FR-160/174/175, US-17 AS-1/2, §6.3, BDD-17.1/2/20.
 // Existing sidebar is real; QueryClient/router/stores are real; fetch only is fake.
 import type { ComponentType } from 'react'
+import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Stage 1 ships rooms OFF. Preserve the original enabled-feature oracles.
@@ -8,13 +9,21 @@ vi.mock('@/lib/featureSwitches', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/featureSwitches')>(),
   ROOMS_ENABLED: true,
 }))
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { roomsQueryKeys } from '@/lib/api/rooms'
+import { queryClient } from '@/lib/queryClient'
 import { WorkspaceAgentList } from './WorkspaceAgentList'
 import {
   agents, json, mountAt, Network, requiredExport, resetRealStores, room,
   stopHarness, workspace, WS,
 } from '../../../../tests/l1-room-ui/harness'
+
+// §6.3 "Cached list + hint" does not quote the group-chat words. The same
+// column for the team list is BDD-12.13 "may be out of date", and the sidebar
+// says the cached rows are out of date. Any of these is the hint; the empty
+// and first-load strings are not.
+const STALE_HINT = /out of date|out-of-date|stale|cached|last known/i
 
 let net: Network
 let currentPath: () => string
@@ -102,6 +111,44 @@ describe('workspace Group chats section', () => {
     net.respond('GET', `/api/v1/workspaces/${WS}/rooms`, () => json([room()]))
     await userEvent.setup().click(retry)
     expect(await within(group).findByTestId('room-row-launch')).toHaveTextContent('Launch')
+    expect(within(group).queryByText('No group chats yet', { exact: true })).toBeNull()
+  })
+
+  it('[§6.3; FR-112] a failed refresh keeps the cached rows, marks them stale, and Retry success clears the hint', async () => {
+    net.rooms = [room()]
+    const group = await showSidebar()
+    expect(await within(group).findByTestId('room-row-launch')).toHaveTextContent('Launch')
+    expect(within(group).queryByText(STALE_HINT)).toBeNull()
+
+    net.respond('GET', `/api/v1/workspaces/${WS}/rooms`, () => json({ error: 'storage failure' }, 500))
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: roomsQueryKeys.list(WS) })
+    })
+
+    // Wait until the 500 has been painted. The row has to still be there:
+    // the error arm must not replace a cached list (§6.3).
+    await waitFor(() => {
+      expect(within(group).getByTestId('room-row-launch')).toHaveTextContent('Launch')
+      expect(within(group).getByText(STALE_HINT)).toBeVisible()
+    })
+    const retry = within(group).getByRole('button', { name: /^retry$/i })
+    expect(retry).toBeEnabled()
+    expect(within(group).queryByText('No group chats yet', { exact: true })).toBeNull()
+
+    const user = userEvent.setup()
+    await user.click(retry)
+    await waitFor(() => {
+      expect(within(group).getByTestId('room-row-launch')).toHaveTextContent('Launch')
+      expect(within(group).getByText(STALE_HINT)).toBeVisible()
+    })
+
+    net.respond('GET', `/api/v1/workspaces/${WS}/rooms`, () => json([room({ id: 'quiet', name: 'Quiet' })]))
+    await user.click(within(group).getByRole('button', { name: /^retry$/i }))
+    await waitFor(() => {
+      expect(within(group).getByTestId('room-row-quiet')).toHaveTextContent('Quiet')
+      expect(within(group).queryByText(STALE_HINT)).toBeNull()
+    })
+    expect(within(group).queryByTestId('room-row-launch')).toBeNull()
     expect(within(group).queryByText('No group chats yet', { exact: true })).toBeNull()
   })
 
@@ -199,5 +246,44 @@ describe('FR-161/175/204 squad dialog (public props, real controls)', () => {
       expect(name).toHaveValue('x'.repeat(length))
       expect(create).toBeEnabled()
     }
+  })
+})
+
+describe('sidebar New squad… reaches the real dialog (US-17 AS-2; FR-161/174/175; BDD-17.2)', () => {
+  it('[FR-161/174/175; K24; BDD-17.2] New squad… posts the two chosen agents and opens the returned room without minting a session', async () => {
+    net.rooms = [room({ id: 'quiet', name: 'Quiet' })]
+    const created = room({ id: 'launch', name: 'Launch', members: ['mia', 'jim'] })
+    net.respond('POST', `/api/v1/workspaces/${WS}/rooms`, () => {
+      net.rooms = [room({ id: 'quiet', name: 'Quiet' }), created]
+      return json(created, 201)
+    })
+    const group = await showSidebar()
+    expect(await within(group).findByTestId('room-row-quiet')).toHaveTextContent('Quiet')
+
+    const trigger = within(group).getByRole('button', { name: 'New group chat in Sales' })
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+      fireEvent.pointerUp(trigger, { button: 0, pointerType: 'mouse' })
+    })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('menuitem', { name: 'New squad…' }))
+    const view = await screen.findByRole('dialog')
+    await user.click(await within(view).findByRole('checkbox', { name: /Mia/ }))
+    await user.click(within(view).getByRole('checkbox', { name: /Jim/ }))
+    await user.type(within(view).getByRole('textbox', { name: /name/i }), 'Launch')
+    await user.click(within(view).getByRole('button', { name: /create/i }))
+
+    await waitFor(() => expect(net.writes()).toHaveLength(1))
+    expect(net.writes()[0]).toMatchObject({
+      method: 'POST',
+      path: `/api/v1/workspaces/${WS}/rooms`,
+      body: { kind: 'squad', name: 'Launch', agent_ids: ['mia', 'jim'] },
+    })
+    expect(net.writes().filter((write) => write.path.includes('/sessions'))).toEqual([])
+    await waitFor(() => expect(currentPath()).toBe('/workspaces/sales/rooms/launch'))
+    // Navigation swaps the route outlet, so the list has to be read again.
+    const shown = screen.getByTestId(`group-chats-${WS}`)
+    expect(await within(shown).findByTestId('room-row-launch')).toHaveTextContent('Launch')
+    expect(within(shown).getByTestId('room-row-quiet')).toHaveTextContent('Quiet')
   })
 })

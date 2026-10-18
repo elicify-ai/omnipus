@@ -1,0 +1,51 @@
+Warning: Route file "/private/tmp/wu15-failproof/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/private/tmp/wu15-failproof/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/private/tmp/wu15-failproof/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/private/tmp/wu15-failproof/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /private/tmp/wu15-failproof
+
+ ❯ src/lib/featureSwitches.stage1.test.ts (3 tests | 1 failed) 14ms
+     × [S1-g rooms] ships ROOMS_ENABLED as exactly true 7ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/featureSwitches.stage1.test.ts > founder decision 2026-10-14 — stage-1 shipped switches > [S1-g rooms] ships ROOMS_ENABLED as exactly true
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/lib/featureSwitches.stage1.test.ts:21:27
+     19|   // CHECK mutant: featureSwitches.ts::ROOMS_ENABLED true → false.
+     20|   it('[S1-g rooms] ships ROOMS_ENABLED as exactly true', () => {
+     21|     expect(ROOMS_ENABLED).toBe(true)
+       |                           ^
+     22|   })
+     23|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 passed (3)
+   Start at  14:23:03
+   Duration  1.25s (transform 109ms, setup 201ms, import 42ms, tests 14ms, environment 770ms)
+
