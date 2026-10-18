@@ -19,6 +19,14 @@ func (r *SteerBootRecovery) resumeRestartHelper(ctx context.Context, stopped *se
 		stopped.StopNote.Cause != session.StopCauseRestart || stopped.Is3P {
 		return
 	}
+	if stopped.Origin != nil && stopped.Origin.Kind == session.OriginKindTask {
+		// A create_task run has its own restart rule: boot reconciliation
+		// marks the task itself interrupted/failed (rest_tasks.go
+		// reconcileStuckTasks), and its session stays stopped(restart). Resuming
+		// the session would split the task (failed) from its session (working).
+		// PW-D6 resumes delegated native helpers only.
+		return
+	}
 	al, err := r.noticeLoop()
 	if err == nil {
 		var pending bool
