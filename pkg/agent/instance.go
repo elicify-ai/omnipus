@@ -492,6 +492,7 @@ func (nai *newAgentInstance) resolveCandidates() {
 	// primary candidate routes through it directly (never inferred). Empty
 	// provider preserves the pre-O3 selection exactly.
 	primaryProvider := resolveAgentPrimaryProvider(nai.agentCfg, nai.defaults)
+	warnUnpairedFallbacks(nai.agentID, nai.fallbackModels)
 	nai.candidates = resolveAgentCandidatesWithPrimaryProvider(
 		nai.cfg, nai.defaults.DefaultModel.Provider, nai.model, primaryProvider, nai.fallbackModels, nai.fallbacks)
 
@@ -524,7 +525,7 @@ func (nai *newAgentInstance) configureRouting() {
 	// to avoid repeated model_list lookups on every incoming message.
 
 	if rc := nai.defaults.Routing; rc != nil && rc.Enabled && rc.LightModel != "" {
-		resolved := resolveModelCandidates(nai.cfg, nai.defaults.DefaultModel.Provider, rc.LightModel, nil)
+		resolved := resolveModelCandidates(nai.cfg, nai.defaults.DefaultModel.Provider, rc.LightModel)
 		if len(resolved) > 0 {
 			// Use the already-resolved pair, rather than resolving the model
 			// again and potentially choosing another provider row/account.
@@ -1224,6 +1225,25 @@ func resolveAgentPrimaryProvider(agentCfg *config.AgentConfig, defaults *config.
 		return ""
 	}
 	return strings.TrimSpace(defaults.DefaultModel.Provider)
+}
+
+// warnUnpairedFallbacks reports every configured fallback that does not name
+// BOTH a provider and a model. Such an entry is never routed (founder rule
+// 2026-10-18, issue #1340: provider and model always come in pairs) and must
+// not disappear silently, so each one is named with its agent at load.
+func warnUnpairedFallbacks(agentID string, fallbacks []config.FallbackModel) {
+	for i, fb := range fallbacks {
+		model, provider := strings.TrimSpace(fb.Model), strings.TrimSpace(fb.Provider)
+		if model != "" && provider != "" {
+			continue
+		}
+		if model == "" && provider == "" {
+			continue // an empty slot, not a configured entry
+		}
+		logger.WarnCF("agent",
+			"fallback ignored: a fallback must name both a provider and a model; set the missing half in the agent's fallback settings",
+			map[string]any{"agent_id": agentID, "fallback_index": i, "model": model, "provider": provider})
+	}
 }
 
 // resolveAgentFallbacks resolves the fallback models for an agent.
