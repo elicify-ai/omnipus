@@ -619,23 +619,34 @@ func TestSharedMediaConn_ConfiguredPortTaken_FallsBackToNextFreePort(t *testing.
 // direction: the explicitly configured port stays the FIRST choice, because it
 // is the only port the operator has declared to their provider/firewall.
 func TestSharedMediaConn_ConfiguredPortFree_BindsExactlyThatPort(t *testing.T) {
-	// Take a port, then release it — a cheap way to name a port that is
-	// almost certainly free right now.
-	probe, err := net.ListenPacket("udp", ":0")
-	require.NoError(t, err)
-	free := mediaConnPort(t, probe)
-	require.NoError(t, probe.Close())
+	// Draw/close/rebind race: the window between the probe's close and the
+	// production bind can hand the port to another test binary. Redraw —
+	// bounded — until the bind lands exactly on a freshly drawn port; the
+	// oracle (an available configured port is bound exactly) is unchanged.
+	for attempt := 1; attempt <= 5; attempt++ {
+		free := drawFreeUDPPort(t, 5)
 
-	cfg := &config.Config{}
-	cfg.Tools.Browser.WebRTCMediaUDPPort = free
+		cfg := &config.Config{}
+		cfg.Tools.Browser.WebRTCMediaUDPPort = free
 
-	h := &BrowserWSHandler{}
-	conn := h.sharedMediaConn(cfg)
-	require.NotNil(t, conn)
-	t.Cleanup(func() { _ = conn.Close() })
+		h := &BrowserWSHandler{}
+		conn := h.sharedMediaConn(cfg)
+		if conn == nil {
+			t.Logf("attempt %d: the production bind failed on the freshly drawn port %d — redrawing", attempt, free)
+			continue
+		}
+		if mediaConnPort(t, conn) != free {
+			t.Logf("attempt %d: port %d was taken before the bind — redrawing", attempt, free)
+			_ = conn.Close()
+			continue
+		}
+		t.Cleanup(func() { _ = conn.Close() })
 
-	assert.Equal(t, free, mediaConnPort(t, conn),
-		"an available configured port must be bound exactly — never quietly moved")
+		assert.Equal(t, free, mediaConnPort(t, conn),
+			"an available configured port must be bound exactly — never quietly moved")
+		return
+	}
+	t.Fatal("TestSharedMediaConn_ConfiguredPortFree_BindsExactlyThatPort: no freshly drawn port stayed free through the production bind in 5 attempts")
 }
 
 // TestSharedMediaConn_Unconfigured_ReturnsNil pins the pre-ADR-062 default:
