@@ -1,4 +1,9 @@
 // Acceptance source: team-lead's 2026-10-14 stage-1 dispatch, items 2(a)–(f).
+// SUPERSESSION (Train 3, amendment section 1 / bundle B3 + founder ruling
+// 2026-10-18): approval pins are re-aimed from the app-wide modal to the
+// inline card in the root chat; no case asserts the cross-workspace banner
+// either way beyond the founder's "no Go-there notice" rule — see the note
+// above showApproval.
 // REAL production route tree, AppShell, sidebar/chat/profile/modal, stores,
 // generated API clients and socket dispatcher. No feature-switch mocks.
 // GREEN and the exact mutations listed per case are deferred to fresh CHECK.
@@ -43,16 +48,27 @@ function roomRequests() {
   return net.requests.filter((request) => /^\/api\/v1\/(?:rooms(?:\/|$)|workspaces\/[^/]+\/rooms(?:\/|$))/.test(request.path))
 }
 
+// SUPERSESSION (Train 3, amendment section 1 / bundle B3): INLINE_TOOL_APPROVALS_ENABLED
+// ships ON — the approval card shows INLINE in its root chat (ToolApprovalThreadTail
+// above the composer) instead of the app-wide ToolApprovalModal, and a reconnect
+// snapshot restores the full approvable card. Every modal-path S1 case below is
+// re-aimed to the inline-card equivalent at the same strength. Whether the
+// cross-workspace "N approvals waiting — Go there" banner ships is an OPEN founder
+// decision: no case asserts its presence or absence; a clearly marked TODO marks
+// where a banner assertion would go.
 async function showApproval(socket: Parameters<typeof emitFromGateway>[0], frame = approval()) {
   expect(screen.queryAllByRole('dialog', { hidden: true })).toHaveLength(0)
   await emitFromGateway(socket, frame)
   await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([frame.approval_id]))
-  const modal = await screen.findByRole('dialog', { name: 'Tool Approval Required' })
-  expect(modal).toBeVisible()
-  expect(within(modal).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
-  expect(within(modal).getByRole('button', { name: 'Deny' })).toBeEnabled()
-  expect(modal).toHaveTextContent(String(frame.args.path))
-  return modal
+  // The card is the inline thread tail in the root chat — never the modal.
+  const card = await screen.findByTestId('tool-approval-thread-tail')
+  expect(card).toBeVisible()
+  const panel = within(card).getByTestId('tool-approval-panel')
+  expect(within(panel).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
+  expect(within(panel).getByRole('button', { name: 'Deny' })).toBeEnabled()
+  expect(panel).toHaveTextContent(String(frame.args.path))
+  expect(screen.queryByRole('dialog', { name: 'Tool Approval Required' })).toBeNull()
+  return panel
 }
 
 describe('stage 1 — rooms hidden through the real application shell', () => {
@@ -128,36 +144,39 @@ const settingsActions = [
   { label: 'Deny', action: 'deny' },
 ] as const satisfies ReadonlyArray<{ label: string; action: ToolApprovalActionRequest['action'] }>
 
-describe('stage 1 — release approval modal reachable on Settings', () => {
-  // CHECK mutant for BOTH S1-c cases: remove AppShell's ToolApprovalModal mount.
-  it.each(settingsActions)('[S1-c; dispatch 2(c)] $label on Settings posts the exact $action decision for the active chat approval', async ({ label, action }) => {
+describe('stage 1 — the inline approval card is actionable in the root chat (bundle B3)', () => {
+  // CHECK mutant for BOTH S1-c cases: remove ChatScreen's ToolApprovalThreadTail
+  // mount (the inline card), or re-gate the ChatScreen.tsx inline mount on the switch.
+  it.each(settingsActions)('[S1-c; dispatch 2(c)] $label on the card in the root chat posts the exact $action decision for the active chat approval', async ({ label, action }) => {
     const frame = approval({ approval_id: `settings-${action}`, args: { path: `${action}-requested.txt` } })
     const response: ToolApprovalResponse = { approval_id: frame.approval_id, action, status: 'ok' }
     net.respond('POST', `/api/v1/tool-approvals/${frame.approval_id}`, () => json(response))
-    const { router, socket } = await mountStage1App(SETTINGS_PATH)
+    // Bundle B3: the card lives in the root chat, so the case now acts from
+    // the open main chat (the approval's own chat) instead of Settings.
+    const { router, socket } = await mountStage1App()
+    await settledMainChat(socket)
     await settledReads()
     expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
     expect(frame.session_id).toBe(MAIN_ID)
-    expect(router.state.location.pathname).toBe('/settings')
-    const modal = await showApproval(socket, frame)
-    expect(screen.queryByTestId('chat-input')).toBeNull()
-    await userEvent.setup().click(within(modal).getByRole('button', { name: label }))
+    expect(screen.getByTestId('chat-input')).toBeVisible()
+    const panel = await showApproval(socket, frame)
+    await userEvent.setup().click(within(panel).getByRole('button', { name: label }))
     await waitFor(() => expect(net.writes()).toHaveLength(1))
     expect(net.writes().map(({ method, path, body, credentials }) => ({ method, path, body, credentials }))).toEqual([{
       method: 'POST', path: `/api/v1/tool-approvals/${frame.approval_id}`,
       body: { action }, credentials: 'include',
     }])
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Tool Approval Required' })).toBeNull())
+    await waitFor(() => expect(useToolApprovalStore.getState().queue).toEqual([]))
     expect(useToolApprovalStore.getState().resolvedIds).toContain(frame.approval_id)
-    expect(router.state.location.pathname).toBe('/settings')
+    expect(router.state.location.pathname).toBe(MAIN_PATH)
     expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
   })
 })
 
 describe('stage 1 — every pending approval has exactly one actionable surface', () => {
-  // CHECK mutant for S1-d: remove AppShell's ToolApprovalModal mount.
-  // Additional narrower mutant: filter the modal queue by activeSessionId.
-  it('[S1-d; dispatch 2(d)] a child approval without root_session_id appears while the parent main chat stays open, without a Go there detour', async () => {
+  // CHECK mutant for S1-d: remove ChatScreen's ToolApprovalThreadTail mount.
+  // Additional narrower mutant: filter the approval queue by activeSessionId.
+  it('[S1-d; dispatch 2(d)] a child approval without root_session_id appears on the card in the parent main chat, which stays open, without a Go there detour — and the parent main’s attention cue comes on', async () => {
     const { router, socket } = await mountStage1App()
     await settledMainChat(socket)
     const frame = approval({ session_id: 'helper-child', agent_id: 'gp', args: { path: 'child-requested.txt' } })
@@ -168,37 +187,62 @@ describe('stage 1 — every pending approval has exactly one actionable surface'
     expect(screen.queryByRole('button', { name: /go there/i, hidden: true })).toBeNull()
     expect(screen.queryByRole('link', { name: /go there/i, hidden: true })).toBeNull()
     expect(net.writes()).toEqual([])
+    // Founder ruling 2026-10-18: "when it appears the attention mechanisms
+    // must be triggered and the main agent entry in the sidebar must be
+    // triggered" — a pending helper approval turns the parent main's
+    // needs_attention on, so the existing sidebar attention cue renders.
+    // RED-FOR-THE-FOLLOW-UP on 29f78ee56: the approval→attention wiring is
+    // not in the dev's push yet; the follow-up commit wires it.
+    expect(
+      await screen.findByRole('status', { name: /your attention/ }, { timeout: 5_000 }),
+    ).toBeInTheDocument()
   })
 
-  // CHECK mutant for S1-e: featureSwitches.ts::INLINE_TOOL_APPROVALS_ENABLED = true.
-  it('[S1-e; dispatch 2(e)] the open chat own approval appears once in the modal, never inline or in a banner', async () => {
+  // CHECK mutant for S1-e: re-gate the ChatScreen inline mount, or restore
+  // AppShell's ToolApprovalModal mount.
+  it('[S1-e; dispatch 2(e)] the open chat own approval appears exactly once, inline in the root chat — never the app-wide modal', async () => {
     const { router, socket } = await mountStage1App()
     await settledMainChat(socket)
     await showApproval(socket)
-    // hidden:true catches duplicate cards even if the modal's accessibility
-    // isolation hides the chat subtree from ordinary role queries.
-    expect(screen.getAllByRole('dialog', { hidden: true })).toHaveLength(1)
-    expect(screen.getAllByRole('button', { name: 'Approve Once', hidden: true })).toHaveLength(1)
-    expect(screen.queryByTestId('tool-approval-panel')).toBeNull()
-    expect(screen.queryByTestId('tool-approval-thread-tail')).toBeNull()
+    // Exactly ONE card, rendered once, with one primary action — even counting
+    // hidden nodes, so a second host cannot hide behind accessibility isolation.
+    expect(screen.queryAllByTestId('tool-approval-thread-tail')).toHaveLength(1)
+    expect(screen.queryAllByRole('button', { name: 'Approve Once', hidden: true })).toHaveLength(1)
+    // The app-wide modal is gone with the inline switch (bundle B3).
+    expect(screen.queryByRole('dialog', { name: 'Tool Approval Required' })).toBeNull()
+    // Founder ruling 2026-10-18: no "N approvals waiting — Go there" notice —
+    // attention mechanisms, not a navigation banner. (Own-chat approval: the
+    // cross-workspace banner has nothing to report either way.)
     expect(screen.queryByTestId('cross-workspace-approval-banner')).toBeNull()
+    expect(screen.queryByText(/approvals? waiting/i)).toBeNull()
     expect(router.state.location.pathname).toBe(MAIN_PATH)
     expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
   })
 
-  // CHECK mutant for S1-f: remove AppShell's ToolApprovalModal mount.
-  // Additional narrower mutant: restore the release active-workspace queue filter.
-  it('[S1-f; dispatch 2(f)] an approval from another workspace appears in the modal without switching the active workspace', async () => {
+  // CHECK mutant for S1-f: broaden the card's chat filter to all workspaces
+  // (it must stay scoped), or restore the Go-there banner.
+  it('[S1-f; dispatch 2(f)] an approval from another workspace stays OUT of the open chat\'s card — queue holds it, workspace and session unchanged, and no Go-there banner appears', async () => {
     net.workspaces = [workspace(), workspace({ id: 'marketing', name: 'Marketing', core_team: ['ray'], member_configs: { ray: { main_session_id: 'main-ray-marketing' } } })]
     const { router, socket } = await mountStage1App()
     await settledMainChat(socket)
     expect(useWorkspacesStore.getState().activeWorkspaceId).toBe(WS)
     const frame = approval({ workspace_id: 'marketing', session_id: 'main-ray-marketing', agent_id: 'ray', args: { path: 'marketing-requested.txt' } })
-    await showApproval(socket, frame)
+    await emitFromGateway(socket, frame)
+    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([frame.approval_id]))
+    // The card is chat-scoped (bundle B3): another chat's approval never
+    // renders in the open chat.
+    expect(screen.queryByTestId('tool-approval-panel')).toBeNull()
     expect(useWorkspacesStore.getState().activeWorkspaceId).toBe(WS)
     expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
     expect(router.state.location.pathname).toBe(MAIN_PATH)
+    // Founder ruling 2026-10-18: NO CrossWorkspaceApprovalBanner / "N approvals
+    // waiting in … — Go there" notice while an approval pends in another chat —
+    // the card in its own chat plus the attention cues carry it instead.
+    // RED-FOR-THE-FOLLOW-UP on 29f78ee56: the banner mount still renders for a
+    // cross-workspace approval; the follow-up commit removes it.
     expect(screen.queryByTestId('cross-workspace-approval-banner')).toBeNull()
+    expect(screen.queryByText(/approvals? waiting/i)).toBeNull()
+    expect(screen.queryByText(/go there/i)).toBeNull()
     expect(net.writes()).toEqual([])
   })
 })
@@ -284,12 +328,14 @@ describe('stage 1 — hidden secret cards for live and snapshot carriers', () =>
   )
 })
 
-function visibleModalFor(frame: ToolApprovalRequiredFrame) {
-  const modal = screen.getByRole('dialog', { name: 'Tool Approval Required' })
-  expect(modal).toBeVisible()
-  expect(modal).toHaveTextContent(String(frame.args.path))
-  expect(screen.getAllByRole('dialog', { hidden: true })).toHaveLength(1)
-  return modal
+function visibleCardFor(frame: ToolApprovalRequiredFrame) {
+  // Bundle B3: the queued head renders on the inline card in the root chat.
+  const card = screen.getByTestId('tool-approval-thread-tail')
+  expect(card).toBeVisible()
+  const panel = within(card).getByTestId('tool-approval-panel')
+  expect(panel).toHaveTextContent(String(frame.args.path))
+  expect(screen.queryAllByRole('dialog', { hidden: true })).toEqual([])
+  return panel
 }
 
 function replyToApproval(frame: ToolApprovalRequiredFrame, action: ToolApprovalActionRequest['action']) {
@@ -297,48 +343,62 @@ function replyToApproval(frame: ToolApprovalRequiredFrame, action: ToolApprovalA
   net.respond('POST', `/api/v1/tool-approvals/${frame.approval_id}`, () => json(response))
 }
 
-describe('stage 1 — release modal drains every queued approval', () => {
-  // CHECK mutant: remove AppShell's ToolApprovalModal mount; narrower probe:
-  // filter the modal queue by active session, losing its child/other workspace.
-  it('[S1-q; added dispatch] approve/deny/approve drains three real queued requests in arrival order without navigation', async () => {
-    const { router, socket } = await mountStage1App(SETTINGS_PATH)
+describe('stage 1 — the inline card drains its chat\'s queued approvals (bundle B3)', () => {
+  // CHECK mutant: remove ChatScreen's ToolApprovalThreadTail mount; narrower
+  // probe: filter the approval queue by active session, losing the arrival
+  // order. Bundle B3 + founder ruling 2026-10-18: the card is chat-scoped —
+  // it drains THIS chat's approvals in arrival order; another chat's approval
+  // never hijacks the card (its own chat + the attention cues carry it, and
+  // there is no Go-there banner).
+  it('[S1-q; added dispatch] approve/deny drains two same-chat queued requests in arrival order on the inline card, while another chat\'s approval waits its turn, without navigation', async () => {
+    const { router, socket } = await mountStage1App()
+    await settledMainChat(socket)
     const first = approval({ approval_id: 'queue-parent', args: { path: 'queue-parent.txt' } })
-    const child = approval({ approval_id: 'queue-child', session_id: 'helper-child', agent_id: 'gp', args: { path: 'queue-child.txt' } })
-    const other = approval({ approval_id: 'queue-other', workspace_id: 'marketing', session_id: 'main-ray-marketing', agent_id: 'ray', args: { path: 'queue-other.txt' } })
-    replyToApproval(first, 'allow_once'); replyToApproval(child, 'deny'); replyToApproval(other, 'allow_once')
+    const second = approval({ approval_id: 'queue-second', agent_id: 'gp', args: { path: 'queue-second.txt' } })
+    const elsewhere = approval({ approval_id: 'queue-elsewhere', workspace_id: 'marketing', session_id: 'main-ray-marketing', agent_id: 'ray', args: { path: 'queue-elsewhere.txt' } })
+    replyToApproval(first, 'allow_once'); replyToApproval(second, 'deny'); replyToApproval(elsewhere, 'allow_once')
     await showApproval(socket, first)
-    await emitFromGateway(socket, child)
-    await emitFromGateway(socket, other)
-    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([first.approval_id, child.approval_id, other.approval_id]))
-    visibleModalFor(first)
-    expect(visibleModalFor(first)).not.toHaveTextContent('queue-child.txt')
+    await emitFromGateway(socket, second)
+    await emitFromGateway(socket, elsewhere)
+    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([first.approval_id, second.approval_id, elsewhere.approval_id]))
+    visibleCardFor(first)
+    expect(visibleCardFor(first)).not.toHaveTextContent('queue-second.txt')
+    expect(visibleCardFor(first)).not.toHaveTextContent('queue-elsewhere.txt')
     const user = userEvent.setup()
-    await user.click(within(visibleModalFor(first)).getByRole('button', { name: 'Approve Once' }))
-    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([child.approval_id, other.approval_id]))
-    await user.click(within(visibleModalFor(child)).getByRole('button', { name: 'Deny' }))
-    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([other.approval_id]))
-    await user.click(within(visibleModalFor(other)).getByRole('button', { name: 'Approve Once' }))
-    await waitFor(() => expect(useToolApprovalStore.getState().queue).toEqual([]))
+    await user.click(within(visibleCardFor(first)).getByRole('button', { name: 'Approve Once' }))
+    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([second.approval_id, elsewhere.approval_id]))
+    // The next SAME-CHAT approval takes the card, in arrival order.
+    expect(visibleCardFor(second)).toHaveTextContent('queue-second.txt')
+    await user.click(within(visibleCardFor(second)).getByRole('button', { name: 'Deny' }))
+    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([elsewhere.approval_id]))
+    // The other chat's approval is still pending — and it does NOT steal the
+    // open chat's card (the card unmounts when this chat has nothing to show).
+    expect(screen.queryByTestId('tool-approval-panel')).toBeNull()
+    expect(useToolApprovalStore.getState().queue).toHaveLength(1)
+    // Founder ruling 2026-10-18: no "N approvals waiting — Go there" notice.
+    // RED-FOR-THE-FOLLOW-UP on 29f78ee56: the banner mount still renders.
+    expect(screen.queryByTestId('cross-workspace-approval-banner')).toBeNull()
+    expect(screen.queryByText(/approvals? waiting/i)).toBeNull()
     expect(net.writes().map(({ method, path, body }) => ({ method, path, body }))).toEqual([
       { method: 'POST', path: '/api/v1/tool-approvals/queue-parent', body: { action: 'allow_once' } },
-      { method: 'POST', path: '/api/v1/tool-approvals/queue-child', body: { action: 'deny' } },
-      { method: 'POST', path: '/api/v1/tool-approvals/queue-other', body: { action: 'allow_once' } },
+      { method: 'POST', path: '/api/v1/tool-approvals/queue-second', body: { action: 'deny' } },
     ])
-    expect(useToolApprovalStore.getState().resolvedIds).toEqual([first.approval_id, child.approval_id, other.approval_id])
+    expect(useToolApprovalStore.getState().resolvedIds).toEqual([first.approval_id, second.approval_id])
     expect(screen.queryByRole('dialog', { name: 'Tool Approval Required' })).toBeNull()
-    expect(router.state.location.pathname).toBe('/settings')
+    expect(router.state.location.pathname).toBe(MAIN_PATH)
     expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
     expect(useWorkspacesStore.getState().activeWorkspaceId).toBe(WS)
   })
 })
 
-describe('stage 1 — release modal expiry cannot approve a timed-out call', () => {
-  // CHECK mutant: remove AppShell's modal mount; narrower probe: force
-  // ToolApprovalModal.tsx::ToolApprovalCard hasExpired=false.
+describe('stage 1 — the inline card expiry cannot approve a timed-out call (bundle B3)', () => {
+  // CHECK mutant: remove ChatScreen's ToolApprovalThreadTail mount; narrower
+  // probe: force ToolApprovalPanel's hasExpired=false.
   // Oracle: added expiry requirement, ADR-092 D4 (no auto-submit; timeout is
   // denial) and asyncapi.yaml::ToolApprovalResolvedFrame (drop terminal entry).
-  it('[S1-exp; added dispatch] at expiry actions disappear without a POST and denied_timeout promotes the next queued request', async () => {
-    const { router, socket } = await mountStage1App(SETTINGS_PATH)
+  it('[S1-exp; added dispatch] at expiry the card actions disappear without a POST and denied_timeout promotes the next queued request', async () => {
+    const { router, socket } = await mountStage1App()
+    await settledMainChat(socket)
     await settledReads()
     // Clock edge only. Preserve real DOM/socket/query scheduling so fixture
     // delivery is not manufactured by mocked application helpers.
@@ -350,9 +410,9 @@ describe('stage 1 — release modal expiry cannot approve a timed-out call', () 
     await emitFromGateway(socket, next)
     await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([expiring.approval_id, next.approval_id]))
     act(() => { vi.advanceTimersByTime(999) })
-    expect(within(visibleModalFor(expiring)).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
+    expect(within(visibleCardFor(expiring)).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
     act(() => { vi.advanceTimersByTime(1) })
-    const expired = visibleModalFor(expiring)
+    const expired = visibleCardFor(expiring)
     for (const name of ['Approve Once', 'Deny', 'Always Allow', 'Cancel']) {
       expect(within(expired).queryByRole('button', { name })).toBeNull()
     }
@@ -360,30 +420,35 @@ describe('stage 1 — release modal expiry cannot approve a timed-out call', () 
     await emitFromGateway(socket, { type: 'tool_approval_resolved', approval_id: expiring.approval_id, state: 'denied_timeout', session_id: MAIN_ID })
     await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([next.approval_id]))
     expect(useToolApprovalStore.getState().resolvedIds).toContain(expiring.approval_id)
-    expect(within(visibleModalFor(next)).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
-    expect(within(visibleModalFor(next)).getByRole('button', { name: 'Deny' })).toBeEnabled()
+    expect(within(visibleCardFor(next)).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
+    expect(within(visibleCardFor(next)).getByRole('button', { name: 'Deny' })).toBeEnabled()
     expect(net.writes()).toEqual([])
-    expect(router.state.location.pathname).toBe('/settings')
+    expect(router.state.location.pathname).toBe(MAIN_PATH)
     expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
     vi.useRealTimers()
   })
 
-  // CHECK mutant: remove AppShell's modal mount, or force hasExpired=false.
+  // CHECK mutant: remove ChatScreen's ToolApprovalThreadTail mount, or force
+  // hasExpired=false.
   it('[S1-exp zero; added dispatch] a zero-lifetime request is already non-actionable on arrival and never submits automatically', async () => {
-    const { socket } = await mountStage1App(SETTINGS_PATH)
+    const { socket } = await mountStage1App()
+    await settledMainChat(socket)
     const frame = approval({ approval_id: 'expired-on-arrival', expires_in_ms: 0, args: { path: 'expired-on-arrival.txt' } })
     await emitFromGateway(socket, frame)
     await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([frame.approval_id]))
-    const modal = await screen.findByRole('dialog', { name: 'Tool Approval Required' })
-    expect(modal).toBeVisible()
-    expect(modal).toHaveTextContent('expired-on-arrival.txt')
+    const card = await screen.findByTestId('tool-approval-thread-tail')
+    expect(card).toBeVisible()
+    const panel = within(card).getByTestId('tool-approval-panel')
+    expect(panel).toHaveTextContent('expired-on-arrival.txt')
     for (const name of ['Approve Once', 'Deny', 'Always Allow', 'Cancel']) {
-      expect(within(modal).queryByRole('button', { name })).toBeNull()
+      expect(within(panel).queryByRole('button', { name })).toBeNull()
     }
-    const dismiss = within(modal).getByRole('button', { name: 'Dismiss' })
+    const dismiss = within(panel).getByRole('button', { name: 'Dismiss' })
     expect(dismiss).toBeEnabled()
     await userEvent.setup().click(dismiss)
     await waitFor(() => expect(useToolApprovalStore.getState().queue).toEqual([]))
+    // The docked tail div is unconditional; the CARD inside it unmounts.
+    expect(screen.queryByTestId('tool-approval-panel')).toBeNull()
     expect(screen.queryByRole('dialog', { name: 'Tool Approval Required' })).toBeNull()
     expect(net.writes()).toEqual([])
   })

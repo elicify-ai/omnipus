@@ -1,5 +1,7 @@
 // L1 amendment §1.2 R6 / §1.5: root chat replaces modal workspace scope.
-// All resolution memory, stub, deduplication and workspace metadata assertions retained.
+// All resolution memory, deduplication and workspace metadata assertions retained.
+// SUPERSESSION (Train 3, amendment section 1 / bundle B3): snapshot restores
+// are FULL entries (the pre-B3 Deny-only stub is retired).
 // Store-level tests for server-confirmed approval resolution and workspace
 // scope (UAT 2026-09-14: a resolved approval's dialog stayed stuck and showed
 // in other workspaces). See src/store/toolApproval.ts's header for the design.
@@ -40,6 +42,11 @@ function snapshot(
     emitted_at: new Date().toISOString(),
     pending_approvals: entries.map((e) => ({
       approval_id: e.id,
+      // Bundle B3: the snapshot requires the full request identity; derive
+      // deterministic fields from the id so every call site keeps its shape.
+      tool_call_id: `call-${e.id}`,
+      turn_id: `turn-${e.id}`,
+      args: {},
       session_id: 'sess-x',
       tool_name: 'write_file',
       agent_id: 'agent-x',
@@ -101,9 +108,11 @@ describe('markResolved — a server-confirmed resolution removes the approval fo
     act(() => {
       useToolApprovalStore.getState().reconcileWithSessionState(snapshot([{ id: 'appr-closed' }]))
     })
-    // The agent is still waiting server-side, so it must come back (as a stub).
+    // The agent is still waiting server-side, so it must come back — and
+    // bundle B3 restores the FULL approvable identity, not a Deny-only stub.
     expect(ids()).toEqual(['appr-closed'])
-    expect(useToolApprovalStore.getState().queue[0].toolCallId).toBe('')
+    expect(useToolApprovalStore.getState().queue[0].toolCallId).toBe('call-appr-closed')
+    expect(useToolApprovalStore.getState().queue[0].turnId).toBe('turn-appr-closed')
   })
 
   it('marking the same id twice records it once', () => {

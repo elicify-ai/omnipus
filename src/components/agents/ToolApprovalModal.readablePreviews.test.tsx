@@ -1,5 +1,10 @@
 // L1 amendment §1.2 R6 / §1.5: inline container replaces the modal.
 // All non-container preview/action/security oracles retained; B3 stub deletion deferred.
+// SUPERSESSION (Train 3, amendment section 1 / bundle B3): the snapshot
+// requires the full request, so the reconnect-stub entries this file's
+// hand-built describe renders are unreachable from the wire; the two
+// end-to-end stub cases (Deny-only card, elapsed stub) are retired with that
+// subject, and the stub UI branches themselves await the dev's fold.
 // ToolApprovalModal.readablePreviews.test.tsx — inline surface
 //
 // Coverage for the per-tool readable-summary registry (approvalPreviews/):
@@ -340,41 +345,14 @@ describe('ToolApprovalPanel — reconnect-stub (Deliverable 4)', () => {
 // it, the store's stub-creation code could regress back to doing nothing and
 // every other test in this file would stay green.
 describe('ToolApprovalPanel — reconnect gap, end-to-end (store fix + modal rendering)', () => {
-  it('L1 §1.2 R6: a session_state frame reporting an approval this tab never queued renders the honest Deny-only card', () => {
-    // Start exactly where a fresh page load starts: nobody has enqueued
-    // anything locally, but the server still thinks this approval is open.
-    act(() => {
-      useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
-    })
-
-    const frame: SessionStateFrame = {
-      type: 'session_state',
-      user_id: 'user-1',
-      pending_approvals: [
-        {
-          approval_id: 'appr-e2e-unseen',
-          session_id: 'sess-mount',
-          tool_name: 'request_mount',
-          agent_id: 'agent-jim',
-          expires_in_ms: 200_000,
-        },
-      ],
-      emitted_at: new Date().toISOString(),
-    }
-
-    act(() => {
-      useToolApprovalStore.getState().reconcileWithSessionState(frame)
-    })
-
-    render(<ToolApprovalPanel />)
-
-    expect(screen.getByText('Approval Details Unavailable')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^Approve$/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Add folder/i })).not.toBeInTheDocument()
-    expect(screen.queryByTestId('always-allow-toggle')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^Cancel$/i })).not.toBeInTheDocument()
-  })
+  // RETIRED with bundle B3 (Train 3, amendment section 1): "a session_state
+  // frame reporting an approval this tab never queued renders the honest
+  // Deny-only card". Its subject — a Deny-only stub entry — is unreachable:
+  // SessionStatePendingApproval now REQUIRES tool_call_id, turn_id and args,
+  // so reconcile restores the full approvable card; the dev recommends
+  // deleting the stub UI branches in the fold, and this case dies with that
+  // subject (the full-restore pin now lives in the store tests and the
+  // refreshed case below).
 
   it('L1 §1.2 R6: an approval already queued from a live frame is refreshed, not duplicated, and keeps rendering its full card', () => {
     // Simulate: the live tool_approval_required frame already arrived (via
@@ -402,6 +380,9 @@ describe('ToolApprovalPanel — reconnect gap, end-to-end (store fix + modal ren
       pending_approvals: [
         {
           approval_id: 'appr-e2e-known',
+          tool_call_id: 'call-e2e-known',
+          turn_id: 'turn-e2e-known',
+          args: { host_path: '/Users/dana/repo', reason: 'to read the config' },
           session_id: 'sess-mount',
           tool_name: 'request_mount',
           agent_id: 'agent-jim',
@@ -429,41 +410,13 @@ describe('ToolApprovalPanel — reconnect gap, end-to-end (store fix + modal ren
     expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
   })
 
-  it('L1 §1.2 R6: a stub whose reported delta has already elapsed renders as expired, not as freshly askable', () => {
-    // expires_in_ms is relative to frame receipt. A delta of 0 (or already
-    // negative-by-the-time-React-renders) must land on the modal's existing
-    // hasExpired state, not a live countdown with a working Deny button —
-    // otherwise a reconnect could show a stub approval as actionable seconds
-    // after the server-side window it was actually granted has closed.
-    act(() => {
-      useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
-    })
-
-    const frame: SessionStateFrame = {
-      type: 'session_state',
-      user_id: 'user-1',
-      pending_approvals: [
-        {
-          approval_id: 'appr-e2e-elapsed',
-          session_id: 'sess-mount',
-          tool_name: 'request_mount',
-          agent_id: 'agent-jim',
-          expires_in_ms: 0,
-        },
-      ],
-      emitted_at: new Date().toISOString(),
-    }
-
-    act(() => {
-      useToolApprovalStore.getState().reconcileWithSessionState(frame)
-    })
-
-    render(<ToolApprovalPanel />)
-
-    expect(screen.getByText(/Approval expired unanswered — the agent is told nobody answered/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Deny/i })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Dismiss/i })).toBeInTheDocument()
-  })
+  // RETIRED with bundle B3 (Train 3, amendment section 1): "a stub whose
+  // reported delta has already elapsed renders as expired". Same subject
+  // death as the Deny-only case above — the wire can no longer produce a
+  // stub entry (the snapshot requires the full request), so there is no
+  // stub whose delta could elapse. The relative-delta expiry rule itself
+  // survives in src/store/toolApproval.test.ts's delta-of-0 full-restore
+  // case.
 })
 
 // Real stores/QueryClient/auth survive the test boundary; only fetch/socket doubled.

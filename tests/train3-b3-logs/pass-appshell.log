@@ -1,0 +1,166 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train3-b3-spa/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train3-b3-spa/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train3-b3-spa/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train3-b3-spa/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train3-b3-spa
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-d; dispatch 2(d)] a child approval without root_session_id appears on the card in the parent main chat, which stays open, without a Go there detour — and the parent main’s attention cue comes on
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-f; dispatch 2(f)] an approval from another workspace stays OUT of the open chat's card — queue holds it, workspace and session unchanged, and no Go-there banner appears
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline card drains its chat's queued approvals (bundle B3) > [S1-q; added dispatch] approve/deny drains two same-chat queued requests in arrival order on the inline card, while another chat's approval waits its turn, without navigation
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+ ❯ src/components/layout/AppShell.stage1.test.tsx (18 tests | 3 failed) 14125ms
+     × [S1-d; dispatch 2(d)] a child approval without root_session_id appears on the card in the parent main chat, which stays open, without a Go there detour — and the parent main’s attention cue comes on 656ms
+     × [S1-f; dispatch 2(f)] an approval from another workspace stays OUT of the open chat's card — queue holds it, workspace and session unchanged, and no Go-there banner appears 643ms
+     × [S1-q; added dispatch] approve/deny drains two same-chat queued requests in arrival order on the inline card, while another chat's approval waits its turn, without navigation 801ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-d; dispatch 2(d)] a child approval without root_session_id appears on the card in the parent main chat, which stays open, without a Go there detour — and the parent main’s attention cue comes on
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-panel"]
+
+Ignored nodes: comments, script, style
+[36m<div[39m
+  [33mclass[39m=[32m"mx-auto w-full max-w-3xl px-[var(--space-3)]"[39m
+  [33mdata-testid[39m=[32m"tool-approval-thread-tail"[39m
+[36m/>[39m
+ ❯ Object.getElementError ../omnipus-l1-ui/node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ ../omnipus-l1-ui/node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ ../omnipus-l1-ui/node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ ../omnipus-l1-ui/node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ showApproval src/components/layout/AppShell.stage1.test.tsx:66:30
+     64|   const card = await screen.findByTestId('tool-approval-thread-tail')
+     65|   expect(card).toBeVisible()
+     66|   const panel = within(card).getByTestId('tool-approval-panel')
+       |                              ^
+     67|   expect(within(panel).getByRole('button', { name: 'Approve Once' })).…
+     68|   expect(within(panel).getByRole('button', { name: 'Deny' })).toBeEnab…
+ ❯ src/components/layout/AppShell.stage1.test.tsx:184:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-f; dispatch 2(f)] an approval from another workspace stays OUT of the open chat's card — queue holds it, workspace and session unchanged, and no Go-there banner appears
+AssertionError: expected <button tabindex="0" …(5)>…(3)</button> to be null
+
+- Expected:
+null
+
++ Received:
+<button
+  class="relative inline-flex whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-full items-center justify-start gap-[var(--space-2)] rounded-none px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-accent)]/10 border-b border-[var(--color-accent)]/30 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)] text-left"
+  data-action-state="idle"
+  data-ds-action=""
+  data-testid="cross-workspace-approval-banner"
+  tabindex="0"
+  type="button"
+>
+  <svg
+    aria-hidden="true"
+    class="shrink-0"
+    fill="currentColor"
+    height="14"
+    viewBox="0 0 256 256"
+    width="14"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M208,36H48A20,20,0,0,0,28,56v56c0,54.29,26.32,87.22,48.4,105.29,23.71,19.39,47.44,26,48.44,26.29a12.1,12.1,0,0,0,6.32,0c1-.28,24.73-6.9,48.44-26.29,22.08-18.07,48.4-51,48.4-105.29V56A20,20,0,0,0,208,36Zm-4,76c0,35.71-13.09,64.69-38.91,86.15A126.28,126.28,0,0,1,128,219.38a126.14,126.14,0,0,1-37.09-21.23C65.09,176.69,52,147.71,52,112V60H204Z"
+    />
+  </svg>
+  <span
+    class="flex-1 truncate"
+  >
+    1 approval waiting in Ray's chat in Marketing
+  </span>
+  <span
+    class="shrink-0 underline underline-offset-2"
+  >
+    Go there
+  </span>
+</button>
+
+ ❯ src/components/layout/AppShell.stage1.test.tsx:243:69
+    241|     // RED-FOR-THE-FOLLOW-UP on 29f78ee56: the banner mount still rend…
+    242|     // cross-workspace approval; the follow-up commit removes it.
+    243|     expect(screen.queryByTestId('cross-workspace-approval-banner')).to…
+       |                                                                     ^
+    244|     expect(screen.queryByText(/approvals? waiting/i)).toBeNull()
+    245|     expect(screen.queryByText(/go there/i)).toBeNull()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline card drains its chat's queued approvals (bundle B3) > [S1-q; added dispatch] approve/deny drains two same-chat queued requests in arrival order on the inline card, while another chat's approval waits its turn, without navigation
+AssertionError: expected <button tabindex="0" …(5)>…(3)</button> to be null
+
+- Expected:
+null
+
++ Received:
+<button
+  class="relative inline-flex whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-full items-center justify-start gap-[var(--space-2)] rounded-none px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-accent)]/10 border-b border-[var(--color-accent)]/30 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)] text-left"
+  data-action-state="idle"
+  data-ds-action=""
+  data-testid="cross-workspace-approval-banner"
+  tabindex="0"
+  type="button"
+>
+  <svg
+    aria-hidden="true"
+    class="shrink-0"
+    fill="currentColor"
+    height="14"
+    viewBox="0 0 256 256"
+    width="14"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M208,36H48A20,20,0,0,0,28,56v56c0,54.29,26.32,87.22,48.4,105.29,23.71,19.39,47.44,26,48.44,26.29a12.1,12.1,0,0,0,6.32,0c1-.28,24.73-6.9,48.44-26.29,22.08-18.07,48.4-51,48.4-105.29V56A20,20,0,0,0,208,36Zm-4,76c0,35.71-13.09,64.69-38.91,86.15A126.28,126.28,0,0,1,128,219.38a126.14,126.14,0,0,1-37.09-21.23C65.09,176.69,52,147.71,52,112V60H204Z"
+    />
+  </svg>
+  <span
+    class="flex-1 truncate"
+  >
+    1 approval waiting in Ray's chat
+  </span>
+  <span
+    class="shrink-0 underline underline-offset-2"
+  >
+    Go there
+  </span>
+</button>
+
+ ❯ src/components/layout/AppShell.stage1.test.tsx:380:69
+    378|     // Founder ruling 2026-10-18: no "N approvals waiting — Go there" …
+    379|     // RED-FOR-THE-FOLLOW-UP on 29f78ee56: the banner mount still rend…
+    380|     expect(screen.queryByTestId('cross-workspace-approval-banner')).to…
+       |                                                                     ^
+    381|     expect(screen.queryByText(/approvals? waiting/i)).toBeNull()
+    382|     expect(net.writes().map(({ method, path, body }) => ({ method, pat…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 15 passed (18)
+   Start at  18:45:32
+   Duration  46.10s (transform 21.41s, setup 333ms, import 30.11s, tests 14.12s, environment 1.20s)
+

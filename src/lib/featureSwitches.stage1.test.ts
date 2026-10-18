@@ -20,8 +20,10 @@ describe('founder decision 2026-10-14 — stage-1 shipped switches', () => {
     expect(AGENT_PRIVATE_SECRETS_ENABLED).toBe(false)
   })
 
-  // CHECK mutant: featureSwitches.ts::INLINE_TOOL_APPROVALS_ENABLED false → true.
-  it('[S1-g approvals] ships INLINE_TOOL_APPROVALS_ENABLED as exactly false', () => {
-    expect(INLINE_TOOL_APPROVALS_ENABLED).toBe(false)
+  // SUPERSESSION (Train 3, amendment section 1 / bundle B3): inline approvals
+  // ship ON — the card shows inline in its root chat instead of the app-wide
+  // ToolApprovalModal. CHECK mutant: true → false.
+  it('[S1-g approvals] ships INLINE_TOOL_APPROVALS_ENABLED as exactly true', () => {
+    expect(INLINE_TOOL_APPROVALS_ENABLED).toBe(true)
   })
 })

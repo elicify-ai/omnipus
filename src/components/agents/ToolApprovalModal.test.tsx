@@ -545,6 +545,9 @@ describe('ToolApprovalPanel — session_state reset handler (FR-052, FR-073, FR-
       pending_approvals: [
         {
           approval_id: 'appr-live',
+          tool_call_id: 'call-live',
+          turn_id: 'turn-live',
+          args: {},
           session_id: 'sess-001',
           tool_name: 'fetch_url',
           agent_id: 'agent-main',
@@ -582,6 +585,9 @@ describe('ToolApprovalPanel — session_state reset handler (FR-052, FR-073, FR-
         pending_approvals: [
           {
             approval_id: 'appr-live',
+            tool_call_id: 'call-live',
+            turn_id: 'turn-live',
+            args: {},
             session_id: 'sess-001',
             tool_name: 'fetch_url',
             agent_id: 'agent-main',
