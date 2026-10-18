@@ -493,6 +493,8 @@ An authorized `environment_setup` run can create and read new files directly ins
 
 When an agent needs a provider key, an MCP server environment secret, or a channel credential, it can open a **secure secret card** in the web app. Type the value into that card, not into the chat. The card names the acting agent, explains why the secret is needed, and shows its destination. An Omnipus helper's card appears in Omnipus's main chat; other helpers must ask their parent.
 
+While a secure card is waiting, the sidebar marks a main chat as needing attention: the chat where the card was raised when that is a main chat, otherwise the main chat above the helper that raised it, otherwise the asking agent's main chat in that workspace. Known limit: when that agent has no main chat in the workspace, no sidebar entry is marked; the card still shows in its own chat. When the server cannot read the waiting cards, the entry shows attention as unknown, not "nothing pending". Once the card is no longer waiting, it no longer counts toward the cue.
+
 | Action or state | What happens |
 |---|---|
 | Submit | All requested fields are saved together in the encrypted vault, under new versioned reference names. The agent continues with those names, never the values. |
