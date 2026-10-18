@@ -143,7 +143,7 @@ func TestWU15Rooms_TaskSenderDoesNotMakeReceiverMainUnattended(t *testing.T) {
 
 	// The real dispatch binds a task-origin session — the sender chain under
 	// test — as a MAIN-mode child of jim's main.
-	taskSession := ""
+	var taskSession string
 	require.Eventually(t, func() bool {
 		current, err := h.api.taskStore.Get(created.Id)
 		return err == nil && current.SessionID != ""
