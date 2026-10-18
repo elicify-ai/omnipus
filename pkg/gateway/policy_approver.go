@@ -51,7 +51,7 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		req.AgentID,
 		req.SessionID,
 		req.TurnID,
-		approvalExtras{RoomRef: req.RoomRef, OriginLabel: req.OriginLabel},
+		approvalExtras{RoomRef: req.RoomRef, OriginLabel: req.OriginLabel, RoomPreAdmission: req.RoomPreAdmission},
 	)
 	if entry == nil {
 		// Defensive: should never happen (requestApproval always returns non-nil).
@@ -65,7 +65,7 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		// A member's own approval while it works on a group-chat request shows
 		// the room "waiting for you in <Agent>'s main chat" (FR-169). A room's
 		// pre-admission card is not the member's work and does not count.
-		if entry.RoomRef == nil {
+		if !entry.RoomPreAdmission {
 			a.wsHandler.roomCard(entry.SessionID, entry.ApprovalID, true)
 			defer a.wsHandler.roomCard(entry.SessionID, entry.ApprovalID, false)
 		}

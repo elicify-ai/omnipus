@@ -384,9 +384,9 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		return true, "", false
 	}
 	approver := al.loadToolApprover()
-	var originLabel string
+	var origin approvalOrigin
 	if ts := turnStateFromContext(ctx); ts != nil {
-		originLabel = ts.opts.approvalOriginLabel
+		origin = ts.opts.approvalOrigin
 	}
 	return approver.RequestApproval(ctx, PolicyApprovalReq{
 		ToolCallID:  toolCallID,
@@ -395,7 +395,8 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		AgentID:     agentID,
 		SessionID:   sessionID,
 		TurnID:      turnID,
-		OriginLabel: originLabel,
+		RoomRef:     origin.roomRefCopy(),
+		OriginLabel: origin.Label,
 	})
 }
 

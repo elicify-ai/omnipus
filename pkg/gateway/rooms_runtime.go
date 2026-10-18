@@ -235,7 +235,7 @@ func (d *gatewayRoomDeps) CancelApproval(requestID string) {
 		return
 	}
 	reg.cancelPendingMatching(func(e *approvalEntry) bool {
-		return e.RoomRef != nil && e.RoomRef.RequestId == requestID
+		return e.RoomPreAdmission && e.RoomRef != nil && e.RoomRef.RequestId == requestID
 	}, "cancel")
 }
 

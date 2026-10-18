@@ -385,9 +385,10 @@ func (al *AgentLoop) requestRoomApproval(ctx context.Context, a RoomRequestAdmis
 		SessionID:  mainID,
 		// The card belongs to no turn of the member (the request is not
 		// admitted yet); the wire contract needs a non-empty turn id.
-		TurnID:      "room-" + a.DeliveryID,
-		RoomRef:     &generated.RoomRef{RoomId: a.RoomID, RoomName: a.RoomName, RequestId: a.DeliveryID, Role: "request"},
-		OriginLabel: "for group " + a.RoomName,
+		TurnID:           "room-" + a.DeliveryID,
+		RoomRef:          &generated.RoomRef{RoomId: a.RoomID, RoomName: a.RoomName, RequestId: a.DeliveryID, Role: "request"},
+		OriginLabel:      "for group " + a.RoomName,
+		RoomPreAdmission: true,
 	})
 	return approved, reason
 }

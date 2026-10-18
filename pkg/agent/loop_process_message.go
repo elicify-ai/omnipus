@@ -135,7 +135,7 @@ func (pm *agentLoopProcessMessage) prepareTurn() {
 		Metadata: pm.msg.Metadata,
 		// Spec §6.18: a turn started by a channel person or a peer agent's
 		// request labels its approval cards with that origin.
-		approvalOriginLabel: pm.al.turnApprovalOriginLabel(pm.msg, pm.transcriptSessionID),
+		approvalOrigin: pm.al.turnApprovalOrigin(pm.msg, pm.transcriptSessionID),
 	}
 
 	// ADR-085 BROWSER-FR-029: release a held browser wheel BEFORE this turn

@@ -143,21 +143,41 @@ func (al *AgentLoop) publishUserEntry(sessionID string, entry session.Transcript
 	}
 }
 
-// turnApprovalOriginLabel derives the origin label every approval card of a
-// turn carries (spec §6.18, K7 origin_label) from the input that started it:
+// approvalOrigin is a turn's server-derived approval origin (spec §6.18,
+// K7): the card label and, for a group-chat room request, the room
+// reference. The zero value is a plain web turn.
+type approvalOrigin struct {
+	Label   string
+	RoomRef *generated.RoomRef
+}
+
+// roomRefCopy returns a copy of the room reference (nil when none), so an
+// approval request never shares the turn's value.
+func (o approvalOrigin) roomRefCopy() *generated.RoomRef {
+	if o.RoomRef == nil {
+		return nil
+	}
+	ref := *o.RoomRef
+	return &ref
+}
+
+// turnApprovalOrigin derives the origin every approval card of a turn
+// carries (spec §6.18, K7) from the input that started it:
 //   - a connector (channel) message: "while answering <person> on
 //     <connection>" — the person is the adapter-stamped sender display name,
 //     the connection is the channel instance the message arrived on
 //     (BDD-16.33 "while answering Anna on tg-1");
+//   - the wake of a group-chat room request (room_request.go
+//     roomWakeMessage): "for group <name>" and the room reference {room,
+//     name, request id = delivery id, role request} (FR-169, FR-251, K7);
 //   - the wake of a request a peer agent sent (address_router.go
-//     publishRequestWake: ChatID "request:<id>", TranscriptEntryID = the
-//     request id): "asked by <Agent>", naming the sender by its display name
-//     from the request ledger — the server-recorded sender, never the request
-//     text.
+//     publishRequestWake): "asked by <Agent>".
 //
-// Any other turn (the web user, an automatic wake) gets no label; so does a
-// request capture that cannot be read (logged).
-func (al *AgentLoop) turnApprovalOriginLabel(msg bus.InboundMessage, sessionID string) string {
+// Room and peer requests are both read from the request ledger — the
+// server-recorded capture, never the request text. Any other turn (the web
+// user, an automatic wake) gets no origin; so does a request capture that
+// cannot be read (logged).
+func (al *AgentLoop) turnApprovalOrigin(msg bus.InboundMessage, sessionID string) approvalOrigin {
 	if isConnectorChannel(msg.Channel) {
 		person := strings.TrimSpace(msg.Sender.DisplayName)
 		if person == "" {
@@ -169,35 +189,43 @@ func (al *AgentLoop) turnApprovalOriginLabel(msg bus.InboundMessage, sessionID s
 		if person == "" {
 			person = "a person"
 		}
-		return "while answering " + person + " on " + inboundInstanceID(msg)
+		return approvalOrigin{Label: "while answering " + person + " on " + inboundInstanceID(msg)}
 	}
 	requestID := msg.TranscriptEntryID
 	if sessionID == "" || requestID == "" || msg.ChatID != "request:"+requestID {
-		return ""
-	}
-	if msg.Metadata[roomIDMetadataKey] != "" {
-		// A group-chat room request is not a peer ask: its turn is labelled
-		// "for group <name>" (§6.18), which lands with the WU-15 room
-		// approval work. Until then it carries no label rather than a
-		// wrong "asked by".
-		return ""
+		return approvalOrigin{}
 	}
 	ledger := al.RequestLedger()
 	if ledger == nil {
-		return ""
+		return approvalOrigin{}
 	}
 	capture, found, err := ledger.Get(sessionID, requestID)
 	if err != nil {
-		logger.WarnCF("agent", "approval origin label: request capture unreadable; approvals of this turn carry no label",
+		logger.WarnCF("agent", "approval origin: request capture unreadable; approvals of this turn carry no origin label",
 			map[string]any{"session_id": sessionID, "request_id": requestID, "error": err.Error()})
-		return ""
+		return approvalOrigin{}
 	}
-	if !found || capture.Sender.Agent.AgentID == "" {
-		return ""
+	if !found {
+		return approvalOrigin{}
+	}
+	if msg.Metadata[roomIDMetadataKey] != "" {
+		if capture.Source.RoomID == "" || capture.Source.RoomName == "" {
+			return approvalOrigin{}
+		}
+		return approvalOrigin{
+			Label: "for group " + capture.Source.RoomName,
+			RoomRef: &generated.RoomRef{
+				RoomId: capture.Source.RoomID, RoomName: capture.Source.RoomName,
+				RequestId: requestID, Role: "request",
+			},
+		}
+	}
+	if capture.Sender.Agent.AgentID == "" {
+		return approvalOrigin{}
 	}
 	name := al.agentDisplayName(capture.Sender.Agent)
 	if name == "" {
 		name = capture.Sender.Agent.AgentID
 	}
-	return "asked by " + name
+	return approvalOrigin{Label: "asked by " + name}
 }

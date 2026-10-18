@@ -297,7 +297,7 @@ const roomAdmissionAwaitLimit = 10 * time.Second
 // (FR-251) return once the request it approved is admitted (or refused by the
 // re-read authorization), so the person's next look shows the result.
 func (a *restAPI) awaitRoomAdmission(entry *approvalEntry) {
-	if entry == nil || entry.RoomRef == nil {
+	if entry == nil || entry.RoomRef == nil || !entry.RoomPreAdmission {
 		return
 	}
 	if hub := a.rooms.Load(); hub != nil && hub.svc != nil {

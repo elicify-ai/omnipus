@@ -132,13 +132,20 @@ type approvalEntry struct {
 	CreatedAt time.Time
 	ExpiresAt time.Time
 
-	// RoomRef is set only on a group chat's pre-admission card
-	// (omnipus-system-agent FR-251, K7), raised in the member's main chat.
-	// OriginLabel is the server-derived turn origin (spec §6.18): "for group
-	// <name>" on that card, "asked by <Agent>" for a turn that consumed a
-	// peer request; empty for a plain web turn. Immutable after creation.
+	// RoomRef names the group chat of a room's pre-admission card
+	// (omnipus-system-agent FR-251, K7) or of a member's own approval inside
+	// a room-request turn (FR-169); both are raised in the member's main
+	// chat. OriginLabel is the server-derived turn origin (spec §6.18): "for group
+	// <name>" for both, "asked by <Agent>" for a turn that consumed a peer
+	// request; empty for a plain web turn. Immutable after creation.
 	RoomRef     *generated.RoomRef
 	OriginLabel string
+	// RoomPreAdmission marks a room's pre-admission card (FR-251): the
+	// request is not admitted yet, so /pause, member removal and room
+	// deletion cancel it and approving it awaits the admission. A member's
+	// own approval inside a room-request turn carries RoomRef too, but is
+	// the member's work (FR-169) and is not cancelled by those room events.
+	RoomPreAdmission bool
 
 	// Mutable — protected by the registry's mu.
 	state ApprovalState
@@ -153,8 +160,9 @@ type approvalEntry struct {
 
 // approvalExtras are the optional origin fields of a new approval.
 type approvalExtras struct {
-	RoomRef     *generated.RoomRef
-	OriginLabel string
+	RoomRef          *generated.RoomRef
+	OriginLabel      string
+	RoomPreAdmission bool
 }
 
 // ApprovalOutcome is the result delivered to the blocked agent loop goroutine.
@@ -462,7 +470,7 @@ func (r *approvalRegistryV2) requestApproval(
 			SessionID:  actingSessionID,
 			TurnID:     turnID,
 			CreatedAt:  time.Now(),
-			RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel,
+			RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel, RoomPreAdmission: extra.RoomPreAdmission,
 			state:    ApprovalStateDeniedMissingTurnID,
 			resultCh: make(chan ApprovalOutcome, 1),
 		}
@@ -502,7 +510,7 @@ func (r *approvalRegistryV2) requestApproval(
 			SessionID:  actingSessionID,
 			TurnID:     turnID,
 			CreatedAt:  time.Now(),
-			RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel,
+			RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel, RoomPreAdmission: extra.RoomPreAdmission,
 			state:    ApprovalStateDeniedSaturated,
 			resultCh: make(chan ApprovalOutcome, 1),
 		}
@@ -523,7 +531,7 @@ func (r *approvalRegistryV2) requestApproval(
 		TurnID:     turnID,
 		CreatedAt:  now,
 		ExpiresAt:  expiresAt,
-		RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel,
+		RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel, RoomPreAdmission: extra.RoomPreAdmission,
 		state:    ApprovalStatePending,
 		resultCh: make(chan ApprovalOutcome, 1),
 	}
