@@ -44,11 +44,17 @@ describe('SecretNameEntry — the K6 kind ruling widens the enum to "unbound"', 
 
   it('still requires recipient for a known kind — requiredness intact', () => {
     // GREEN by design (§2.4: no requiredness change); this is the pin that
-    // must SURVIVE the regeneration.
-    const { recipient: _omitted, ...noRecipient } = UNBOUND_ENTRY
+    // must SURVIVE the regeneration. The restore leg proves the rejection is
+    // the MISSING recipient and nothing else about the fixture: the same
+    // body with the recipient restored parses (the recipient schema has no
+    // per-kind refinement, so the unbound-shaped recipient is itself valid
+    // on a provider_key entry).
+    const { recipient, ...noRecipient } = UNBOUND_ENTRY
+    const providerKeyBody = { ...noRecipient, kind: 'provider_key' }
+    expect(() => SecretNameEntry.parse(providerKeyBody)).toThrow()
     expect(() =>
-      SecretNameEntry.parse({ ...noRecipient, kind: 'provider_key' }),
-    ).toThrow()
+      SecretNameEntry.parse({ ...providerKeyBody, recipient }),
+    ).not.toThrow()
   })
 
   it('accepts the unbound kind with the fixed single line — lines non-empty per minItems', () => {

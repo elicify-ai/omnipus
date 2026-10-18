@@ -46,13 +46,14 @@ func TestRESTBuiltinPolicyMap_CurrentCatalogue(t *testing.T) {
 				t.Run(fmt.Sprintf("strict=%t/%s/%s", validateInbound, route, tc.name), func(t *testing.T) {
 					api, chain := policyCatalogueTestAPI(t, validateInbound)
 					policies := policyCatalogueFromGET(t, chain)
-					_, futureImplemented := policies["remove_secret"]
-					require.False(t, futureImplemented, "stage-1 reservation fixture must still be unimplemented")
+					_, futureImplemented := policies["connect_mailbox"]
+					require.False(t, futureImplemented,
+						"the reservation fixture must name a reserved, not-yet-implemented tool; connect_mailbox is a landing-2 tool (shipped ceiling ask, no central-catalogue implementation). WU-6 implemented the old example remove_secret, so the example moved — update it again only when connect_mailbox lands")
 					before := preparePolicyReservationFixture(t, api, policies, tc.storedFuture)
 					api.agentLoop.GetConfig().Gateway.ValidateInbound = validateInbound
 					rosterBefore := createBoundaryRoster(t, api)
 					if tc.supplied != "" {
-						policies["remove_secret"] = tc.supplied
+						policies["connect_mailbox"] = tc.supplied
 					}
 					delete(policies, tc.omit)
 					if tc.invalid != "" {
@@ -92,7 +93,7 @@ func TestRESTBuiltinPolicyMap_CurrentCatalogue(t *testing.T) {
 					for name, policy := range policies {
 						assert.Equal(t, config.ToolPolicy(policy), state.Agent.Tools.Builtin.Policies[name], "submitted %s must persist", name)
 					}
-					future, present := state.Agent.Tools.Builtin.Policies["remove_secret"]
+					future, present := state.Agent.Tools.Builtin.Policies["connect_mailbox"]
 					switch {
 					case tc.supplied != "":
 						assert.True(t, present)
@@ -109,7 +110,7 @@ func TestRESTBuiltinPolicyMap_CurrentCatalogue(t *testing.T) {
 							expected[name] = config.ToolPolicy(policy)
 						}
 						if tc.storedFuture && tc.supplied == "" {
-							expected["remove_secret"] = config.ToolPolicyDeny
+							expected["connect_mailbox"] = config.ToolPolicyDeny
 						}
 						assert.Equal(t, expected, state.Agent.Tools.Builtin.Policies, "only supplied and previously stored reserved entries may persist")
 					}
@@ -169,7 +170,7 @@ func preparePolicyReservationFixture(t *testing.T, api *restAPI, implemented map
 			}
 		}
 		if stored {
-			record.Tools.Builtin.Policies["remove_secret"] = config.ToolPolicyDeny
+			record.Tools.Builtin.Policies["connect_mailbox"] = config.ToolPolicyDeny
 		}
 		return nil
 	}, nil)
