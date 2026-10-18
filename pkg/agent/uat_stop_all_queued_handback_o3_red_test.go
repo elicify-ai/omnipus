@@ -98,6 +98,46 @@ func newUATO3QueuedHandback(t *testing.T) *uatO3Fixture {
 	require.NoError(t, al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &ws, Owner: &owner}))
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(p.release) }) }
+	// ARCH-2 reconciliation: under the corrected wake entry (§9.4 recipient
+	// table; US-6 AS-3) a helper outcome may only be published as a bus wake
+	// while the parent is IDLE — an outcome arriving during a live ordinary
+	// turn joins that turn's steering queue instead. The queued hand-back this
+	// pack consumes is therefore produced BETWEEN the parent's turns: the
+	// helper below runs to completion before the human root turn is started.
+	registered, ok := parentAgent.Tools.Get("delegate")
+	require.True(t, ok, "BLOCKED: registered delegate tool missing — required by UAT O3 / ADR D7")
+	dt, ok := registered.(*tools.DelegateTool)
+	require.True(t, ok)
+	ctx := tools.WithTranscriptSessionID(tools.WithAgentID(tools.WithWorkspaceID(context.Background(), ws), parentAgent.ID), meta.ID)
+	ctx = tools.WithToolCallID(ctx, "uat-o3-real-delegate")
+	result := dt.Execute(ctx, map[string]any{"action": "run", "agent_id": childAgent.ID, "task": "Finish the requested helper work", "label": "UAT O3 helper"})
+	require.NotNil(t, result)
+	require.False(t, result.IsError, "SETUP: actual delegate.run was refused: %s", result.ForLLM)
+	joinGoalFixtureRuns(t, al) // Join actual launch, model, commit, publication and retirement.
+	children, err := al.GetSessionLifecycleStore().List(session.LifecycleFilter{SteeringSessionID: meta.ID})
+	require.NoError(t, err)
+	require.Len(t, children, 1, "one actual delegate.run creates exactly one helper")
+	child := children[0]
+	require.Equal(t, session.LifecycleCompleted, child.State, "the queued event must come from a genuinely completed helper")
+	require.NotNil(t, child.FinalDelivery, "the final must be committed before the wake is published")
+	require.Equal(t, int32(1), childProvider.calls.Load(), "the real helper must run exactly once")
+	pending, _, _, err := al.GetMessageInboxStore().Drain(meta.ID, child.SessionID, "", 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	handback, err := pending[0].AsSessionMessageHandback()
+	require.NoError(t, err)
+	require.Equal(t, uatO3ChildAnswer, handback.ResultSoFar)
+	require.Equal(t, fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation), handback.MessageId)
+	// No Run consumer has been started: the ACTUAL runtime-produced wake
+	// remains queued on the real inbound bus until after the Stop-all boundary.
+	// It was published while the parent was between turns — the idle-wake row
+	// of §9.4 — not during a live turn (ARCH-2 would join that turn, US-6 AS-3).
+	require.Equal(t, 1, len(msgBus.InboundChan()), "SETUP: real completed helper must have queued one unconsumed system wake")
+
+	// Only now does the ordinary human root start, held at its provider: O3's
+	// Stop-all must land on a genuinely running root while the queued wake
+	// stays unconsumed on the bus. Admission mints the production execution on
+	// the root record (already ensured idle by the wake path, §9.4).
 	rootDone := make(chan struct{})
 	rootResult := &rootHumanResult{}
 	go func() {
@@ -125,33 +165,6 @@ func newUATO3QueuedHandback(t *testing.T) *uatO3Fixture {
 	require.NoError(t, err)
 	require.Equal(t, session.LifecycleRunning, root.State)
 	require.NotNil(t, root.ExecutionID, "the real root admission must own a production-minted execution")
-	registered, ok := parentAgent.Tools.Get("delegate")
-	require.True(t, ok, "BLOCKED: registered delegate tool missing — required by UAT O3 / ADR D7")
-	dt, ok := registered.(*tools.DelegateTool)
-	require.True(t, ok)
-	ctx := tools.WithTranscriptSessionID(tools.WithAgentID(tools.WithWorkspaceID(context.Background(), ws), parentAgent.ID), meta.ID)
-	ctx = tools.WithToolCallID(ctx, "uat-o3-real-delegate")
-	result := dt.Execute(ctx, map[string]any{"action": "run", "agent_id": childAgent.ID, "task": "Finish the requested helper work", "label": "UAT O3 helper"})
-	require.NotNil(t, result)
-	require.False(t, result.IsError, "SETUP: actual delegate.run was refused: %s", result.ForLLM)
-	joinGoalFixtureRuns(t, al) // Join actual launch, model, commit, publication and retirement.
-	children, err := al.GetSessionLifecycleStore().List(session.LifecycleFilter{SteeringSessionID: meta.ID})
-	require.NoError(t, err)
-	require.Len(t, children, 1, "one actual delegate.run creates exactly one helper")
-	child := children[0]
-	require.Equal(t, session.LifecycleCompleted, child.State, "the queued event must come from a genuinely completed helper")
-	require.NotNil(t, child.FinalDelivery, "the final must be committed before the wake is published")
-	require.Equal(t, int32(1), childProvider.calls.Load(), "the real helper must run exactly once")
-	pending, _, _, err := al.GetMessageInboxStore().Drain(meta.ID, child.SessionID, "", 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	handback, err := pending[0].AsSessionMessageHandback()
-	require.NoError(t, err)
-	require.Equal(t, uatO3ChildAnswer, handback.ResultSoFar)
-	require.Equal(t, fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation), handback.MessageId)
-	// No Run consumer has been started: the ACTUAL runtime-produced wake
-	// remains queued on the real inbound bus until after the Stop-all boundary.
-	require.Equal(t, 1, len(msgBus.InboundChan()), "SETUP: real completed helper must have queued one unconsumed system wake")
 	return &uatO3Fixture{al: al, msgBus: msgBus, parent: p, rootID: meta.ID, childID: child.SessionID, rootResult: rootResult, release: release, joinRoot: joinRoot}
 }
 
