@@ -242,100 +242,31 @@ describe('ToolApprovalPanel — registry fallback (Deliverable 1)', () => {
   })
 })
 
-describe('ToolApprovalPanel — reconnect-stub (Deliverable 4)', () => {
-  // Reproduces the shape a future reconcileWithSessionState hydration fix
-  // would need to produce for an approval whose full frame never reached
-  // this browser tab (see the isReconnectStub note in ToolApprovalPanel.tsx):
-  // toolCallId and turnId both empty — a shape the wire schema guarantees can
-  // never come from a genuine live tool_approval_required frame (both fields
-  // are required, minLength 1, on ToolApprovalRequiredFrame).
-  const RECONNECT_STUB_APPROVAL = {
-    approvalId: 'appr-reconnect',
-    toolCallId: '',
-    toolName: 'request_mount',
-    args: {},
-    agentId: 'agent-jim',
-    sessionId: 'sess-mount',
-    turnId: '',
-    expiresAt: Date.now() + 120_000,
-  }
-
-  it('L1 §1.2 R6: renders an honest notice instead of a blank or normal-looking card', () => {
-    act(() => {
-      useToolApprovalStore.setState({ queue: [RECONNECT_STUB_APPROVAL] })
-    })
-    render(<ToolApprovalPanel />)
-    expect(screen.getByText('Approval Details Unavailable')).toBeInTheDocument()
-    expect(screen.getByText(/did not come back with it/)).toBeInTheDocument()
-    // Proves this is NOT silently falling through to request_mount's normal
-    // 'replace' summary (which would show a "Folder" field even with {} args).
-    expect(screen.queryByText('Folder')).not.toBeInTheDocument()
-  })
-
-  it('L1 §1.2 R6: offers ONLY Deny — no Approve, no Add folder, no Always Allow, no Cancel', () => {
-    act(() => {
-      useToolApprovalStore.setState({ queue: [RECONNECT_STUB_APPROVAL] })
-    })
-    render(<ToolApprovalPanel />)
-    expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^Approve$/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Add folder/i })).not.toBeInTheDocument()
-    expect(screen.queryByTestId('always-allow-toggle')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^Cancel$/i })).not.toBeInTheDocument()
-  })
-
-  it('L1 §1.2 R6: the single Deny button dispatches the real deny action, in the reconnect-stub rendering specifically', async () => {
-    // Deliberately re-asserts the stub title alongside the dispatch: without
-    // the fix this approval renders the NORMAL 4-button row (Approve exists
-    // too, and "Deny" there is unrelated to the reconnect-stub code path), so
-    // pinning both in one test is what makes this fail on unfixed code rather
-    // than passing vacuously because Deny-dispatches-deny was already true.
-    act(() => {
-      useToolApprovalStore.setState({ queue: [RECONNECT_STUB_APPROVAL] })
-    })
-    render(<ToolApprovalPanel />)
-    expect(screen.getByText('Approval Details Unavailable')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^Approve$/i })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /Deny/i }))
-    await waitFor(() => {
-      expect(approvalPosts()).toContainEqual({ id: 'appr-reconnect', body: { action: 'deny' } })
-    })
-  })
-
-  it('L1 §1.2 R6: reconnect-stub remains Deny-only but never steals composer focus (B3 deferred)', () => {
-    // Stub shape/actions retained by dispatch. Only the modal focus oracle is
-    // superseded: amendment R6 says "never takes focus on appearance".
-    render(<><textarea aria-label="Chat composer" /><ToolApprovalPanel /></>)
-    const composer = screen.getByLabelText('Chat composer')
-    composer.focus()
-    act(() => useToolApprovalStore.setState({ queue: [RECONNECT_STUB_APPROVAL] }))
-    expect(screen.getByText('Approval Details Unavailable')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Deny/i })).not.toHaveFocus()
-    expect(composer).toHaveFocus()
-    expect(approvalPosts()).toEqual([])
-  })
-
-  it('L1 §1.2 R6: a normal request_mount approval (real toolCallId/turnId) is NOT treated as a reconnect stub', () => {
-    // Guards the sentinel itself: a live frame's non-empty ids must never
-    // trip this branch, or every ordinary approval would degrade to
-    // Deny-only.
+describe('ToolApprovalPanel — a normal approval renders the full approvable card (bundle B3)', () => {
+  // RETIRED with bundle B3 (founder ruling / amendment section 1; commit
+  // 8f740826e): the four reconnect-stub rendering cases ("honest notice",
+  // "offers ONLY Deny", "Deny dispatches in the stub rendering", "never
+  // steals composer focus (B3 deferred)") died with their subject — the
+  // isReconnectStub UI branch is deleted, and the wire can no longer produce
+  // a stub entry (the snapshot requires tool_call_id/turn_id/args). The
+  // full-card pin below is their surviving positive counterpart.
+  it('L1 §1.2 R6: a normal request_mount approval renders the full approvable card', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
     render(<ToolApprovalPanel />)
-    expect(screen.queryByText('Approval Details Unavailable')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
     // Real args are present, so Always Allow must be offered — it remembers
     // THIS folder, not any folder.
     expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
+    // The retired stub surface never returns.
+    expect(screen.queryByText('Approval Details Unavailable')).not.toBeInTheDocument()
   })
 })
 
 // ── End-to-end: session_state frame → store → rendered modal ───────────────
 //
-// Everything above proves the CONSUMER half: given a queue entry already
-// shaped like a reconnect stub, the modal renders it honestly. None of it
-// proves a stub ever gets INTO the queue. These tests drive the real
+// These tests drive the real
 // useToolApprovalStore.reconcileWithSessionState action (no store mocking)
 // starting from an empty queue — the actual state a fresh page load leaves
 // the store in — so the only thing standing between an outstanding

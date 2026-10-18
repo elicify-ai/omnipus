@@ -60,3 +60,23 @@ but not now"). Every re-aimed file carries this note.
 Kept: `ToolApprovalModal.test.tsx`'s non-literal assertions, every non-stub
 readablePreviews case, the hand-built reconnect-stub rendering describe (its UI
 branches still ship until the fold).
+
+
+## Round 3 — follow-up commit landed (8f740826e): banner + dead stub UI removed
+
+The dev's second commit removed `CrossWorkspaceApprovalBanner`, its lib
+(`crossWorkspaceApprovals.ts`), the dead `isReconnectStub` UI branches and the
+`toolCallId`/`turnId` props on the internal cards. Dispositions (founder ruling
+2026-10-18 cited in each):
+
+| Target | Action | Reason |
+|---|---|---|
+| `CrossWorkspaceApprovalBanner.test.tsx`, `crossWorkspaceApprovals.test.ts` | deleted (whole files) | modules deleted in 8f740826e — no subject remains |
+| `AppShell.test.tsx` "cross-workspace approval banner coexists with other banners" describe | deleted | the banner is retired by the founder ruling; the connection banner's stacking behaviour stays covered by the remaining banner cases |
+| `AppShell.test.tsx` header/mock comments referencing the banner | tidied | stale references to the deleted module |
+| `MailPanel.attachmentDownloadError.test.tsx:71` | dropped the `vi.mock` of the deleted banner module | the mock referenced a deleted file; MailPanel never rendered the banner |
+| `ToolApprovalModal.readablePreviews.test.tsx` 4 reconnect-stub rendering cases ("honest notice", "ONLY Deny", "Deny dispatches in the stub rendering", "never steals composer focus") | deleted | the stub UI is deleted (B3) — the wire can no longer produce a stub; the surviving positive counterpart is the renamed "a normal request_mount approval renders the full approvable card" case (plus the added never-returns assertion on the retired surface) |
+| S1-d (AppShell.stage1) | RE-AIMED per team-lead Q4=A | the pin was wrong: a rootless frame means "this session is the root" (K7, `toolApproval.ts::approvalChatId`), and attention is server truth (U11 N2). The frame now carries `root_session_id: MAIN_ID`; `Stage1Network` serves `needs_attention: true` on the main's `/sessions` row (a mutable `mainNeedsAttention` flag the sessions handler reads); the case asserts the card in the parent chat AND the main agent entry's warning attention halo (the expanded-workspace rendering of the cue). GREEN with NO production change |
+
+Proof: `AppShell.stage1.test.tsx` 18/18; every touched file serial exit 0;
+`npm run typecheck` exit 0. Logs in `tests/train3-b3-logs/final-*.log`.

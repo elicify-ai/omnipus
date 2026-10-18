@@ -176,26 +176,36 @@ describe('stage 1 — the inline approval card is actionable in the root chat (b
 describe('stage 1 — every pending approval has exactly one actionable surface', () => {
   // CHECK mutant for S1-d: remove ChatScreen's ToolApprovalThreadTail mount.
   // Additional narrower mutant: filter the approval queue by activeSessionId.
-  it('[S1-d; dispatch 2(d)] a child approval without root_session_id appears on the card in the parent main chat, which stays open, without a Go there detour — and the parent main’s attention cue comes on', async () => {
+  // Q4=A (team-lead, on K7 + U11 N2): a frame carrying root_session_id routes
+  // to that root chat (toolApproval.ts::approvalChatId), and a main's
+  // needs_attention is SERVER truth — the SPA refetches the roster on every
+  // approval frame and reads it; the frame itself is never matched to mains.
+  it('[S1-d; dispatch 2(d)] a root-routed helper approval appears on the card in the parent main chat, which stays open, without a Go there detour — and the server-flagged attention cue comes on', async () => {
     const { router, socket } = await mountStage1App()
     await settledMainChat(socket)
-    const frame = approval({ session_id: 'helper-child', agent_id: 'gp', args: { path: 'child-requested.txt' } })
-    expect(Object.hasOwn(frame, 'root_session_id')).toBe(false)
+    // The helper frame routes to the MAIN (root_session_id), so its card
+    // shows in the main's own chat.
+    const frame = approval({ session_id: 'helper-child', agent_id: 'gp', root_session_id: MAIN_ID, args: { path: 'child-requested.txt' } })
+    // Server truth: the pending helper approval flagged the main.
+    net.mainNeedsAttention = true
     await showApproval(socket, frame)
     expect(router.state.location.pathname).toBe(MAIN_PATH)
     expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
+    // Founder ruling 2026-10-18: "when it appears the attention mechanisms
+    // must be triggered and the main agent entry in the sidebar must be
+    // triggered" — the roster refetch reads the server's needs_attention and
+    // the existing sidebar rendering responds: with the workspace expanded,
+    // the main agent's row icon carries the warning attention halo (the
+    // collapsed workspace shows the count cue instead).
+    const salesGroup = screen.getByRole('group', { name: 'Sales' })
+    const miaRow = within(salesGroup).getByRole('button', { name: 'Mia' })
+    expect(
+      miaRow.querySelector('[data-attention-halo="warning"]'),
+      'the main agent entry must show the attention halo',
+    ).not.toBeNull()
     expect(screen.queryByRole('button', { name: /go there/i, hidden: true })).toBeNull()
     expect(screen.queryByRole('link', { name: /go there/i, hidden: true })).toBeNull()
     expect(net.writes()).toEqual([])
-    // Founder ruling 2026-10-18: "when it appears the attention mechanisms
-    // must be triggered and the main agent entry in the sidebar must be
-    // triggered" — a pending helper approval turns the parent main's
-    // needs_attention on, so the existing sidebar attention cue renders.
-    // RED-FOR-THE-FOLLOW-UP on 29f78ee56: the approval→attention wiring is
-    // not in the dev's push yet; the follow-up commit wires it.
-    expect(
-      await screen.findByRole('status', { name: /your attention/ }, { timeout: 5_000 }),
-    ).toBeInTheDocument()
   })
 
   // CHECK mutant for S1-e: re-gate the ChatScreen inline mount, or restore
