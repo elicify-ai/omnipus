@@ -185,6 +185,19 @@ func newTabSwitchNavigateLiveView(t *testing.T, resolver security.Resolver, oldT
 	}
 }
 
+// requireTabChangedNavigationRefusal: the user's address was refused because
+// the tab changed under it, so the refusal must reach them with that reason
+// and the resubmit advice (docs/browser.md "Limits and things to watch").
+// A benign error is only logged by the gateway (browser_ws_input.go
+// handleInputContext), leaving a generic "Browser control failed" — the
+// review round-2 finding N1.
+func requireTabChangedNavigationRefusal(t *testing.T, err error) {
+	t.Helper()
+	require.False(t, IsBenignLiveInputError(err), "a refused navigation must be surfaced, not logged quietly: %v", err)
+	require.Contains(t, err.Error(), "the active tab changed while the address was being checked")
+	require.Contains(t, err.Error(), "enter the address again")
+}
+
 func requireNothingDispatched(t *testing.T, dispatchedTo <-chan string) {
 	t.Helper()
 	select {
@@ -226,8 +239,7 @@ func TestLiveView_DispatchInput_Navigate_TabChangeDuringValidationIsRefused(t *t
 
 	err := waitDispatchResult(t, errCh)
 	require.Error(t, err, "a navigate made for the old tab must not be carried out on the new one")
-	require.True(t, IsBenignLiveInputError(err), "a retired target is the ordinary retry-on-the-current-tab refusal: %v", err)
-	require.Contains(t, err.Error(), "input target changed")
+	requireTabChangedNavigationRefusal(t, err)
 	requireNothingDispatched(t, dispatchedTo)
 }
 
@@ -253,8 +265,7 @@ func TestLiveView_DispatchInput_Navigate_TabReplacedBeforeLookupReturnsIsRefused
 
 	err := waitDispatchResult(t, errCh)
 	require.Error(t, err)
-	require.True(t, IsBenignLiveInputError(err), "%v", err)
-	require.Contains(t, err.Error(), "input target changed")
+	requireTabChangedNavigationRefusal(t, err)
 	requireNothingDispatched(t, dispatchedTo)
 }
 
