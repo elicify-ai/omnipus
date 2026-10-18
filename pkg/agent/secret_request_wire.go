@@ -228,8 +228,13 @@ func (al *AgentLoop) processSecretResume(ctx context.Context, msg bus.InboundMes
 	if reg == nil {
 		return "", nil, errors.New("secret continuation service is unavailable")
 	}
+	// Every rejection below happens BEFORE the durable request claim, so the
+	// accepted transport is released (DeferResume) and attach/boot can retry
+	// once the fault is repaired. A Stop veto or non-submitted binding is not
+	// retryable and is never released here.
 	rec, err := reg.Get(msg.Metadata[secretResumeMetadataKey], msg.GatewayUserID)
 	if err != nil {
+		al.deferSecretResume(msg, "request_read_failed")
 		return "", nil, err
 	}
 	if rec.ResumeStopped || rec.Card.State != "submitted" || rec.Card.SessionId != msg.SessionID {
@@ -238,10 +243,12 @@ func (al *AgentLoop) processSecretResume(ctx context.Context, msg bus.InboundMes
 	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
 		current, readErr := lifecycle.Load(msg.SessionID)
 		if readErr != nil && !errors.Is(readErr, session.ErrLifecycleNotFound) {
+			al.deferSecretResume(msg, "lifecycle_read_failed")
 			return "", nil, readErr
 		}
 		if readErr == nil && secretRestartStopped(current) {
 			if _, reviveErr := al.reviveSecretRestart(ctx, current); reviveErr != nil {
+				al.deferSecretResume(msg, "restart_revival_failed")
 				return "", nil, reviveErr
 			}
 		}
