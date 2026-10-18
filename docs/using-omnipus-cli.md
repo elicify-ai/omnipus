@@ -187,7 +187,7 @@ Most jobs can be done from either place.
 | Pick a model for one run | `--model <slug>` | The model picker in chat |
 | Manage API keys | `omnipus credentials …` | Settings → Providers |
 | Review the audit log | `omnipus audit` | Settings → Security |
-| Create and edit agents | — | The Agents screen |
+| Create and edit agents | — | Ask Omnipus (**Add agent** in the sidebar or **Team → Add agent**); edit from the workspace's **Team** |
 | Connect Telegram, Discord, Slack and more | — | The Connectors screen, Configure |
 | Add MCP servers | — | The Skills screen |
 | Follow task work | — | A workspace's Board and Calendar |

@@ -15,7 +15,6 @@ import { Route as LandingRouteImport } from './routes/landing'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
-import { Route as AppAgentsRouteImport } from './routes/_app/agents'
 import { Route as AppAutomationsRouteImport } from './routes/_app/automations'
 import { Route as AppBrowserLiveRouteImport } from './routes/_app/browser-live'
 import { Route as AppConnectorsRouteImport } from './routes/_app/connectors'
@@ -27,9 +26,6 @@ import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppSkillsRouteImport } from './routes/_app/skills'
 import { Route as AppTasksRouteImport } from './routes/_app/tasks'
 import { Route as AppUsageRouteImport } from './routes/_app/usage'
-import { Route as AppAdminChatRouteImport } from './routes/_app/admin.chat'
-import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
-import { Route as AppAgentsAgentIdRouteImport } from './routes/_app/agents.$agentId'
 import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
 import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
 import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
@@ -72,11 +68,6 @@ const OnboardingRoute = OnboardingRouteImport.update({
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppAgentsRoute = AppAgentsRouteImport.update({
-  id: '/agents',
-  path: '/agents',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAutomationsRoute = AppAutomationsRouteImport.update({
@@ -133,21 +124,6 @@ const AppUsageRoute = AppUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
   getParentRoute: () => AppRoute,
-} as any)
-const AppAdminChatRoute = AppAdminChatRouteImport.update({
-  id: '/admin/chat',
-  path: '/admin/chat',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AppAgentsRoute,
-} as any)
-const AppAgentsAgentIdRoute = AppAgentsAgentIdRouteImport.update({
-  id: '/$agentId',
-  path: '/$agentId',
-  getParentRoute: () => AppAgentsRoute,
 } as any)
 const AppSessionsSessionIdRoute = AppSessionsSessionIdRouteImport.update({
   id: '/sessions/$sessionId',
@@ -242,7 +218,6 @@ export interface FileRoutesByFullPath {
   '/landing': typeof LandingRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
-  '/agents': typeof AppAgentsRouteWithChildren
   '/automations': typeof AppAutomationsRoute
   '/browser-live': typeof AppBrowserLiveRoute
   '/connectors': typeof AppConnectorsRoute
@@ -254,12 +229,9 @@ export interface FileRoutesByFullPath {
   '/skills': typeof AppSkillsRoute
   '/tasks': typeof AppTasksRoute
   '/usage': typeof AppUsageRoute
-  '/admin/chat': typeof AppAdminChatRoute
-  '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/panel/$panelId': typeof FullscreenPanelPanelIdRoute
-  '/agents/': typeof AppAgentsIndexRoute
   '/workspaces/': typeof AppWorkspacesIndexRoute
   '/workspaces/$workspaceId/board': typeof AppWorkspacesWorkspaceIdBoardRoute
   '/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
@@ -289,11 +261,8 @@ export interface FileRoutesByTo {
   '/skills': typeof AppSkillsRoute
   '/tasks': typeof AppTasksRoute
   '/usage': typeof AppUsageRoute
-  '/admin/chat': typeof AppAdminChatRoute
-  '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/panel/$panelId': typeof FullscreenPanelPanelIdRoute
-  '/agents': typeof AppAgentsIndexRoute
   '/workspaces': typeof AppWorkspacesIndexRoute
   '/workspaces/$workspaceId/board': typeof AppWorkspacesWorkspaceIdBoardRoute
   '/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
@@ -314,7 +283,6 @@ export interface FileRoutesById {
   '/landing': typeof LandingRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
-  '/_app/agents': typeof AppAgentsRouteWithChildren
   '/_app/automations': typeof AppAutomationsRoute
   '/_app/browser-live': typeof AppBrowserLiveRoute
   '/_app/connectors': typeof AppConnectorsRoute
@@ -327,12 +295,9 @@ export interface FileRoutesById {
   '/_app/tasks': typeof AppTasksRoute
   '/_app/usage': typeof AppUsageRoute
   '/_app/': typeof AppIndexRoute
-  '/_app/admin/chat': typeof AppAdminChatRoute
-  '/_app/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/_app/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/_fullscreen/panel/$panelId': typeof FullscreenPanelPanelIdRoute
-  '/_app/agents/': typeof AppAgentsIndexRoute
   '/_app/workspaces/': typeof AppWorkspacesIndexRoute
   '/_app/workspaces/$workspaceId/board': typeof AppWorkspacesWorkspaceIdBoardRoute
   '/_app/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
@@ -353,7 +318,6 @@ export interface FileRouteTypes {
     | '/landing'
     | '/login'
     | '/onboarding'
-    | '/agents'
     | '/automations'
     | '/browser-live'
     | '/connectors'
@@ -365,12 +329,9 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/usage'
-    | '/admin/chat'
-    | '/agents/$agentId'
     | '/sessions/$sessionId'
     | '/workspaces/$workspaceId'
     | '/panel/$panelId'
-    | '/agents/'
     | '/workspaces/'
     | '/workspaces/$workspaceId/board'
     | '/workspaces/$workspaceId/calendar'
@@ -400,11 +361,8 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/usage'
-    | '/admin/chat'
-    | '/agents/$agentId'
     | '/sessions/$sessionId'
     | '/panel/$panelId'
-    | '/agents'
     | '/workspaces'
     | '/workspaces/$workspaceId/board'
     | '/workspaces/$workspaceId/calendar'
@@ -424,7 +382,6 @@ export interface FileRouteTypes {
     | '/landing'
     | '/login'
     | '/onboarding'
-    | '/_app/agents'
     | '/_app/automations'
     | '/_app/browser-live'
     | '/_app/connectors'
@@ -437,12 +394,9 @@ export interface FileRouteTypes {
     | '/_app/tasks'
     | '/_app/usage'
     | '/_app/'
-    | '/_app/admin/chat'
-    | '/_app/agents/$agentId'
     | '/_app/sessions/$sessionId'
     | '/_app/workspaces/$workspaceId'
     | '/_fullscreen/panel/$panelId'
-    | '/_app/agents/'
     | '/_app/workspaces/'
     | '/_app/workspaces/$workspaceId/board'
     | '/_app/workspaces/$workspaceId/calendar'
@@ -507,13 +461,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/agents': {
-      id: '/_app/agents'
-      path: '/agents'
-      fullPath: '/agents'
-      preLoaderRoute: typeof AppAgentsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/automations': {
@@ -592,27 +539,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/usage'
       preLoaderRoute: typeof AppUsageRouteImport
       parentRoute: typeof AppRoute
-    }
-    '/_app/admin/chat': {
-      id: '/_app/admin/chat'
-      path: '/admin/chat'
-      fullPath: '/admin/chat'
-      preLoaderRoute: typeof AppAdminChatRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/agents/': {
-      id: '/_app/agents/'
-      path: '/'
-      fullPath: '/agents/'
-      preLoaderRoute: typeof AppAgentsIndexRouteImport
-      parentRoute: typeof AppAgentsRoute
-    }
-    '/_app/agents/$agentId': {
-      id: '/_app/agents/$agentId'
-      path: '/$agentId'
-      fullPath: '/agents/$agentId'
-      preLoaderRoute: typeof AppAgentsAgentIdRouteImport
-      parentRoute: typeof AppAgentsRoute
     }
     '/_app/sessions/$sessionId': {
       id: '/_app/sessions/$sessionId'
@@ -722,20 +648,6 @@ declare module '@tanstack/react-router' {
   }
 }
 
-interface AppAgentsRouteChildren {
-  AppAgentsAgentIdRoute: typeof AppAgentsAgentIdRoute
-  AppAgentsIndexRoute: typeof AppAgentsIndexRoute
-}
-
-const AppAgentsRouteChildren: AppAgentsRouteChildren = {
-  AppAgentsAgentIdRoute: AppAgentsAgentIdRoute,
-  AppAgentsIndexRoute: AppAgentsIndexRoute,
-}
-
-const AppAgentsRouteWithChildren = AppAgentsRoute._addFileChildren(
-  AppAgentsRouteChildren,
-)
-
 interface AppWorkspacesWorkspaceIdRouteChildren {
   AppWorkspacesWorkspaceIdBoardRoute: typeof AppWorkspacesWorkspaceIdBoardRoute
   AppWorkspacesWorkspaceIdCalendarRoute: typeof AppWorkspacesWorkspaceIdCalendarRoute
@@ -774,7 +686,6 @@ const AppWorkspacesWorkspaceIdRouteWithChildren =
   )
 
 interface AppRouteChildren {
-  AppAgentsRoute: typeof AppAgentsRouteWithChildren
   AppAutomationsRoute: typeof AppAutomationsRoute
   AppBrowserLiveRoute: typeof AppBrowserLiveRoute
   AppConnectorsRoute: typeof AppConnectorsRoute
@@ -787,14 +698,12 @@ interface AppRouteChildren {
   AppTasksRoute: typeof AppTasksRoute
   AppUsageRoute: typeof AppUsageRoute
   AppIndexRoute: typeof AppIndexRoute
-  AppAdminChatRoute: typeof AppAdminChatRoute
   AppSessionsSessionIdRoute: typeof AppSessionsSessionIdRoute
   AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRouteWithChildren
   AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
-  AppAgentsRoute: AppAgentsRouteWithChildren,
   AppAutomationsRoute: AppAutomationsRoute,
   AppBrowserLiveRoute: AppBrowserLiveRoute,
   AppConnectorsRoute: AppConnectorsRoute,
@@ -807,7 +716,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppTasksRoute: AppTasksRoute,
   AppUsageRoute: AppUsageRoute,
   AppIndexRoute: AppIndexRoute,
-  AppAdminChatRoute: AppAdminChatRoute,
   AppSessionsSessionIdRoute: AppSessionsSessionIdRoute,
   AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRouteWithChildren,
   AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,

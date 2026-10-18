@@ -51,7 +51,7 @@ import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import type { ChatMessage } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
-import { useChatAgents, isStandaloneChatOperator } from '@/hooks/useChatAgents'
+import { useChatAgents } from '@/hooks/useChatAgents'
 import { logDiagnostic } from '@/lib/telemetry'
 
 // ── Slash/skill/agent palette item shape ────────────────────────────────────
@@ -792,29 +792,18 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
 
   // Mention candidates: the SAME agent list and scoping the composer surfaces
   // elsewhere (useChatAgents — the ready, non-worker, chat-eligible,
-  // workspace-scoped list with the ADR-090 Admin standalone exemption), with
-  // one restored-menu difference: the agent that OWNS the current chat is
-  // excluded — addressing yourself is meaningless, and selection no longer
-  // switches agents (FR-029), so there is no active-agent marker either.
-  // R2-S2-DV-07: Admin is also excluded OUTSIDE the default workspace — the
-  // gateway refuses an @ request to Admin from any other (its eligibility is
-  // that exact workspace pair: pkg/gateway/main_session.go::mainAgentEligible
-  // returns ws.IsDefault), so the picker must not offer a choice that cannot
-  // work. The predicate stays useChatAgents' ONE definition (exported), and
-  // the same filter rides the recipient derivation's workspace id, which is
-  // this same active workspace (src/lib/recipientAddress.ts).
+  // workspace-scoped list), with one restored-menu difference: the agent that
+  // OWNS the current chat is excluded — addressing yourself is meaningless,
+  // and selection no longer switches agents (FR-029), so there is no
+  // active-agent marker either.
   // Reactive slice only (Fix 5): activeAgentId is the one session-store field
   // this hook reads reactively; everything else is used as the hook returns it.
-  const { chatAgents, activeWorkspaceIsDefault } = useChatAgents()
+  const { chatAgents } = useChatAgents()
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const mentionCandidates = useMemo(
     () =>
-      chatAgents.filter(
-        (agent) =>
-          agent.id !== activeAgentId
-          && (activeWorkspaceIsDefault || !isStandaloneChatOperator(agent)),
-      ),
-    [chatAgents, activeAgentId, activeWorkspaceIsDefault],
+      chatAgents.filter((agent) => agent.id !== activeAgentId),
+    [chatAgents, activeAgentId],
   )
 
   // Sorted by name (localeCompare) BEFORE ranking/capping — same rationale as

@@ -336,17 +336,6 @@ export async function updateConfig(data: Partial<Config>): Promise<Config> {
   return rawToFrontendConfig(raw)
 }
 
-// Session scope — controls DM conversation isolation granularity.
-// SessionScopeResponse is re-exported from generated openapi-types above.
-// SessionScopeRequest (request body) — re-exported from generated openapi-types.
-// See contracts/components/schemas/SessionScopeRequest.yaml.
-// SessionScopeUpdateResponse — re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/SessionScopeUpdateResponse.yaml.
-//
-// No current caller reads or writes DM scope (fetchSessionScope/
-// updateSessionScope were removed as zero-consumer exports) — DMScope and
-// the re-exported types above remain available for a future Settings surface.
-
 // Retention — session log retention policy.
 // RetentionConfig — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/RetentionConfig.yaml.

@@ -6,8 +6,7 @@
  * (conditional render, not CSS visibility) so they don't affect tab order or
  * ARIA tree when hidden.
  *
- * Modelled on the CreateAgentModal.tsx:278-307 collapsed pattern but extracted
- * into a single reusable primitive (spec §2, #316).
+ * A single reusable collapsed-section primitive (spec §2, #316).
  *
  * Consumed by: ToolPolicyEditor (#318) and any future surface that wants a
  * safe-to-skip advanced section.

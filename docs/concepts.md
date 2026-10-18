@@ -7,7 +7,7 @@ Omnipus is a team of AI agents that runs on your own machine. This page introduc
 Everything in Omnipus hangs together in one shape:
 
 - **Workspaces** keep related chats, tasks, calendar entries, files and agent teams together; ordinary conversations can also exist without a workspace.
-- **Agents** do the work. Three chat colleagues ship built in, alongside workers and internal engine agents. You can create your own agents too.
+- **Agents** do the work. Three chat colleagues ship built in, alongside workers and internal engine agents. You add your own agents by asking Omnipus.
 - Agents act through **tools**: reading and writing files, searching the web, running commands.
 - Work takes three shapes: **tasks**, **plans**, and **goals**.
 - **Connectors** carry your messages in from chat platforms such as Telegram or Discord.

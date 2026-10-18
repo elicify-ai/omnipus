@@ -1,7 +1,7 @@
 // useFocusRestore — restore focus to the trigger that opened a Radix dialog
 //
-// Wave 6 / B-fix: Wave A's CreateAgentModal (175-213) and Wave B's
-// AgentProfile (147-204) each implemented a near-verbatim copy of this
+// Wave 6 / B-fix: two dialogs (the since-removed create modal and
+// AgentProfile) each implemented a near-verbatim copy of this
 // pattern: capture document.activeElement in `onOpenAutoFocus` BEFORE
 // Radix shifts focus into the dialog, then restore on close via
 // requestAnimationFrame + try/catch. The 30-line block was the #1 source

@@ -234,8 +234,6 @@ export type SkillTrustLevel = 'block_unverified' | 'warn_unverified' | 'allow_al
 
 export type PromptInjectionLevel = 'low' | 'medium' | 'high'
 
-export type DMScope = 'main' | 'per-peer' | 'per-channel-peer' | 'per-account-channel-peer'
-
 // PendingRestartEntry — re-exported from generated openapi-types (no local body needed).
 
 export function fetchPendingRestart(): Promise<PendingRestartEntry[]> {
