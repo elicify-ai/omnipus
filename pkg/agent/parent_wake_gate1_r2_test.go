@@ -227,7 +227,7 @@ func TestResume_RefusedWhenRecordedWorkspaceWasDeleted(t *testing.T) {
 	h := newPWBootRecoveryHarness(t)
 	const wsGone = "gate1-ws-deleted"
 	_, statErr := os.Stat(filepath.Join(omnipusHome(), "workspaces", wsGone+".json"))
-	require.True(t, os.IsNotExist(statErr), "SETUP: the recorded workspace must not exist")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "SETUP: the recorded workspace must not exist")
 	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 	rec := h.steeredRecord(child, parent, session.LifecycleRunning)
