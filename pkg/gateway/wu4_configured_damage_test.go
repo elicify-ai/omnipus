@@ -161,6 +161,9 @@ func wu4P0ARequireConfiguredConsumer(t *testing.T, runtime issue1277RuntimeState
 
 func wu4P0ARequireScopedDamage(t *testing.T, consumer, boundary string) {
 	t.Helper()
+	previousLevel := logger.GetLevel()
+	logger.SetLevel(logger.INFO)
+	t.Cleanup(func() { logger.SetLevel(previousLevel) })
 	f, ref := newWU4P0AConfiguredFixture(t, consumer)
 	// Positive instrument: identical configured entries and real runtime work
 	// before tampering; a broken fixture must not masquerade as the required RED.
