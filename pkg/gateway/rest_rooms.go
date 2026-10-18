@@ -10,6 +10,7 @@
 //	GET    /api/v1/rooms/{id}              getRoom
 //	DELETE /api/v1/rooms/{id}              deleteRoom
 //	PATCH  /api/v1/rooms/{id}/members      updateRoomMembers
+//	GET    /api/v1/rooms/{id}/messages     getRoomHistory (#1332)
 //	POST   /api/v1/rooms/{id}/messages     postRoomMessage
 //
 // Every body is a generated type, validated against its inbound schema when
@@ -25,6 +26,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,7 +110,8 @@ func (a *restAPI) handleWorkspaceRooms(w http.ResponseWriter, r *http.Request, w
 	}
 }
 
-// HandleRooms serves /api/v1/rooms/{id}, /members and /messages.
+// HandleRooms serves /api/v1/rooms/{id}, /members and /messages (GET pages
+// history, POST sends).
 func (a *restAPI) HandleRooms(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/rooms"), "/")
 	segs := strings.Split(rest, "/")
@@ -130,6 +133,8 @@ func (a *restAPI) HandleRooms(w http.ResponseWriter, r *http.Request) {
 		a.updateRoomMembers(w, r, roomID)
 	case sub == "messages" && r.Method == http.MethodPost:
 		a.postRoomMessage(w, r, roomID)
+	case sub == "messages" && r.Method == http.MethodGet:
+		a.getRoomHistory(w, r, roomID)
 	case sub == "" || sub == "members" || sub == "messages":
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	default:
@@ -148,6 +153,62 @@ func (a *restAPI) getRoom(w http.ResponseWriter, roomID string) {
 		return
 	}
 	writeRoomJSON(w, http.StatusOK, room)
+}
+
+// getRoomHistory serves GET /api/v1/rooms/{id}/messages (#1332,
+// ROOM-HISTORY-PAGING-1332-20261018): one older page of a room's entries.
+// Order (D3): authentication (withAuth, already passed), limit, cursor
+// syntax, then the room read, which applies the room-dependent cursor bound.
+// The rules hold with inbound validation on and off — a GET has no body.
+func (a *restAPI) getRoomHistory(w http.ResponseWriter, r *http.Request, roomID string) {
+	query := r.URL.Query()
+	limit := rooms.HistoryDefaultLimit
+	if values, present := query["limit"]; present {
+		n, ok := parseHistoryInt(values)
+		if !ok || n < 1 || n > rooms.HistoryMaxLimit {
+			jsonErr(w, http.StatusBadRequest, "limit must be an integer from 1 to 1000")
+			return
+		}
+		limit = int(n)
+	}
+	var beforeSeq *int64
+	if values, present := query["before_seq"]; present {
+		n, ok := parseHistoryInt(values)
+		if !ok || n < 1 {
+			jsonErr(w, http.StatusBadRequest, "before_seq must be a positive int64 integer")
+			return
+		}
+		beforeSeq = &n
+	}
+	svc := a.roomService(w)
+	if svc == nil {
+		return
+	}
+	page, err := svc.History(roomID, beforeSeq, limit)
+	if err != nil {
+		writeRoomError(w, "history", err)
+		return
+	}
+	writeRoomJSON(w, http.StatusOK, page)
+}
+
+// parseHistoryInt parses one query value as a non-negative decimal int64:
+// exactly one occurrence, digits only (no sign, space, point or exponent),
+// leading zeroes allowed, overflow refused (ruling D3).
+func parseHistoryInt(values []string) (int64, bool) {
+	if len(values) != 1 || values[0] == "" {
+		return 0, false
+	}
+	for _, c := range values[0] {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func (a *restAPI) deleteRoom(w http.ResponseWriter, r *http.Request, roomID string) {
