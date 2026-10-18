@@ -279,11 +279,14 @@ test(
 
     const nonce = `recap-nonce-${Date.now()}`;
     const input = chatInput(page);
-    // Amendment 287–293: do not turn an automatic carry-forward check into a
-    // deliberate private-note test; those notes intentionally span workspaces.
+    // Amendment 287–293: ban deliberate private-note writes, not automatic
+    // workspace continuity. "For this conversation only / do not save" asked
+    // the model to forget the very fact the next chat requires (run 38760311753:
+    // "You flagged that codename as conversation-only", then UNKNOWN).
+    // The tool-free transcript assertions below still exclude private memory.
     await input.fill(
-      `For this conversation only, the launch codename is ${nonce}. ` +
-      'Do not save this in memory and do not use any tools. Just acknowledge it.',
+      `The launch codename for this workspace is ${nonce}. ` +
+      'Do not use any tools or write a private memory note. Just acknowledge it.',
     );
     const firstTurn = traffic.mark();
     await input.press('Enter');
