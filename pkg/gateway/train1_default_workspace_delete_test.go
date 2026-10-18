@@ -23,7 +23,7 @@ import (
 func TestTrain1WorkspaceDeleteTool_DefaultRefusalMatchesHTTP(t *testing.T) {
 	const reason = "cannot delete the default workspace"
 	provider := testutil.NewScenario()
-	api, _, _, _, _ := train1WorkspacePolicyHarness(t, provider)
+	api, reg, tab, _, _ := train1WorkspacePolicyHarness(t, provider)
 	defaultID, err := workspace.ResolveDefaultID(api.homePath)
 	require.NoError(t, err)
 	before, err := workspace.ReadState(api.homePath, defaultID)
@@ -63,6 +63,8 @@ func TestTrain1WorkspaceDeleteTool_DefaultRefusalMatchesHTTP(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, before, after, "default record, team, graph and revision stay unchanged")
 	assert.Zero(t, provider.CallCount(), "body hardening is not a claim of agent invocation")
+	assert.Empty(t, reg.pendingApprovals(), "direct body refusal must not request approval")
+	assert.Empty(t, tab.sendCh, "direct body refusal must not emit an approval frame")
 }
 
 // Real cascade targets make a late refusal detectable: checking only the

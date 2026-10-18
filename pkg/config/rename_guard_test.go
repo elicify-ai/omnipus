@@ -231,6 +231,11 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 		"return &workspace.State{Workspace: rw.ws, Delegation: edges, Revision: revision}": true,
 		"rw.ws = state.Workspace": true,
 	},
+	// Train 1 #1363: ReadState returns workspace.State; this is the default
+	// multi-agent workspace record, not an agent's home directory.
+	"pkg/gateway/train1_default_workspace_delete_test.go": {
+		`require.True(t, before.Workspace.IsDefault)`: true,
+	},
 	"pkg/sysagent/tools/workspace.go": {
 		"\"core_team\":   state.Workspace.CoreTeam,":    true,
 		"\"description\": state.Workspace.Description,": true,
@@ -239,6 +244,9 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 		"\"pin_order\":   state.Workspace.PinOrder,":    true,
 		"\"pinned\":      state.Workspace.Pinned,":      true,
 		"\"status\":      state.Workspace.Status,":      true,
+		// Train 1 #1363: CheckRevisionLocked returns workspace.State;
+		// default-workspace protection reads that record, not AgentConfig.
+		`if refusal := workspacepkg.RefuseDefaultDeletion(state.Workspace.IsDefault); refusal != nil {`: true,
 		// WU-3 (FR-032, #1057): update_workspace's staged read-back and the
 		// canonical workspace view read workspace.State.Workspace.
 		`resp := workspaceView(state.Workspace, state.Delegation, state.Revision, computeWorkspaceTaskCount(home, id))`:                                                                    true,

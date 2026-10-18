@@ -27,7 +27,7 @@ func TestTrain1WorkspaceDeleteTool_BoundChannelsMatchHTTP(t *testing.T) {
 		for _, failConfig := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/config_failure_%t", entry, failConfig), func(t *testing.T) {
 				provider := testutil.NewScenario()
-				api, _, _, _, _ := train1WorkspacePolicyHarness(t, provider)
+				api, reg, tab, _, _ := train1WorkspacePolicyHarness(t, provider)
 				before := train1SeedBoundDeletionChannels(t, api)
 				state, err := workspace.ReadState(api.homePath, train1ChannelDeleteTarget)
 				require.NoError(t, err)
@@ -71,6 +71,8 @@ func TestTrain1WorkspaceDeleteTool_BoundChannelsMatchHTTP(t *testing.T) {
 					train1AssertChannelsCleaned(t, before, saved.Channels)
 				}
 				assert.Zero(t, provider.CallCount(), "lower-layer body coverage does not enable Omnipus deletion")
+				assert.Empty(t, reg.pendingApprovals(), "lower-layer deletion must not request approval")
+				assert.Empty(t, tab.sendCh, "lower-layer deletion must not emit an approval frame")
 			})
 		}
 	}
@@ -167,7 +169,7 @@ func train1AssertChannelsCleaned(t *testing.T, before, after map[string]config.C
 // Preserve committed-write reporting independently of the denied agent path.
 func TestTrain1WorkspaceDeleteTool_BoundChannelsRefreshFailure(t *testing.T) {
 	provider := testutil.NewScenario()
-	api, _, _, _, _ := train1WorkspacePolicyHarness(t, provider)
+	api, reg, tab, _, _ := train1WorkspacePolicyHarness(t, provider)
 	before := train1SeedBoundDeletionChannels(t, api)
 	state, err := workspace.ReadState(api.homePath, train1ChannelDeleteTarget)
 	require.NoError(t, err)
@@ -204,4 +206,6 @@ func TestTrain1WorkspaceDeleteTool_BoundChannelsRefreshFailure(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &saved))
 	train1AssertChannelsCleaned(t, before, saved.Channels)
 	assert.Zero(t, provider.CallCount())
+	assert.Empty(t, reg.pendingApprovals(), "direct body failure must not request approval")
+	assert.Empty(t, tab.sendCh, "direct body failure must not emit an approval frame")
 }
