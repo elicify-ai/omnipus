@@ -156,7 +156,7 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	retired := state.retired[targetCtx] || lv.tabCtx != targetCtx
 	lv.mu.Unlock()
 	if retired {
-		return benignInputError("browser live: input target changed; retry on the current tab")
+		return inputTargetChangedError(in.Kind)
 	}
 	lv.mu.Lock()
 	_, tracked := state.held[heldInputID{target: targetCtx, viewer: viewerID, key: inputHoldKey(in), source: in.SourceContext}]
@@ -279,6 +279,19 @@ func (lv *LiveView) preflightNavigate(caller context.Context, viewerID string, i
 	return lv.validateNavigateURL(caller, viewerID, target, in)
 }
 
+// inputTargetChangedError refuses input whose tab changed before dispatch.
+// Ordinary input keeps the quiet benign refusal (a stray pointer event after
+// a tab switch is routine). A navigate is one deliberate submission: its
+// refusal is a real error so the gateway shows the user why their address
+// was not opened and what to do (docs/browser.md, "Limits and things to
+// watch"), instead of only logging it.
+func inputTargetChangedError(kind string) error {
+	if kind == "navigate" {
+		return realInputError("browser live: navigation canceled because the active tab changed while the address was being checked; enter the address again on the tab you want")
+	}
+	return benignInputError("browser live: input target changed; retry on the current tab")
+}
+
 // inputTargetLocked is the tab an input is dispatched to. A validated
 // navigate stays bound to the tab it was validated for: if the shared
 // browser moved to another tab meanwhile, dispatch's retirement check then
@@ -334,7 +347,7 @@ func (lv *LiveView) validateNavigateURL(caller context.Context, viewerID string,
 	targetChanged := state.retired[target] || lv.tabCtx != target
 	lv.mu.Unlock()
 	if targetChanged {
-		return in, benignInputError("browser live: input target changed; retry on the current tab")
+		return in, inputTargetChangedError(in.Kind)
 	}
 	if err != nil {
 		return in, realInputError("browser live: navigate blocked: %w", err)
