@@ -27,6 +27,10 @@ REAL: inbound origin derivation, server peer-wake publication, checked steering 
 
 Negative/error classes are the channel/peer provenance regressions and the three pre-claim faults; genuine web, active-turn, duplicate and Stop controls detect an instrument or overbroad-fix error. State ordering, zero/one claim boundaries, zero/one message delivery and repeated retries are explicit. Unrelated numeric input limits belong to existing packs, not this increment.
 
+## Optional P0-b safety increment (after required P0-d / SF-02)
+
+Independent refusal oracle: FR-069 / FR-089 masking-before-use and the brief's explicit whole-store / submitted-reference safety boundary. A readable unrelated witness does not authorize a locked or wholly unreadable store, nor prove the SUBMITTED reference is readable. The new `TestWU4P0BResumeDispatchRefusesUnusableStoreOrSubmittedReference` directly exercises the real existing dispatch boundary with a real submitted ordinary record and its original bus wake withheld. Cases: healthy positive (one actual publication), locked store, whole-file read failure, whole-file JSON corruption, and the submitted reference's malformed nonce with the unrelated witness still decryptable (all four refuse, zero publication/claim/continuation). Restore real filesystem/key state, preserve encrypted bytes/versions, scan logs/data for both synthetic plaintexts. This is a dispatch-guard control, not an attach-recovery claim; it never clears the live inFlight map. No original P0-b test is changed.
+
 ## Failability and deliberate gaps
 
 RED: execute each anchored top-level selector serially through the designated slot runner, preserve raw output, direct exit and exact source SHA/hash; count named PASS/FAIL lines. A compilation failure, empty selector or wait timeout is not behavioral RED. Existing correct controls are named PASS, not falsely represented as observed RED.
