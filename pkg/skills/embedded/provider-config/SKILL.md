@@ -1,6 +1,6 @@
 ---
 name: provider-config
-description: Use when any provider task comes up — what the provider tools can and cannot connect, and when to send the user to Settings instead.
+description: Use when the person asks about connecting an AI provider or asks what the provider tools can and cannot connect — it states the API-key-only limit, the exact catalogue ids, and when to send them to Settings instead.
 metadata:
   display_name: Provider Config
 ---
