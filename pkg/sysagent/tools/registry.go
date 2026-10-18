@@ -59,6 +59,9 @@ func AllTools(d *Deps) []tools.Tool {
 		NewMCPRemoveTool(d),
 		NewMCPListTool(d),
 
+		// Secret version selection (1): Omnipus's private-variable rollback.
+		NewSelectSecretVersionTool(d),
+
 		// Provider management (4)
 		NewProviderConfigureTool(d),
 		NewProviderListTool(d),
@@ -75,7 +78,7 @@ func AllTools(d *Deps) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 32 system tools.
+// BuildRegistry creates a ToolRegistry containing all 33 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()
