@@ -72,6 +72,37 @@ echo "Test 3: a tree without the selfcheck exits 2 (never a silent green)"
 mkdir -p "$TMP_DIR/empty"
 REPO_ROOT="$TMP_DIR/empty" bash "$GUARD" >/dev/null 2>&1; check "missing-selfcheck" 2 $?
 
+echo "Test 4: a dispatcher that ignores the GO override is caught by selfcheck case 6c"
+# The 2026-10-19 steer: case 6c's matcher was hardened to match the machine id
+# only in addressing positions (`machine status|start|stop <id>`, `--machine
+# <id>`) because on the Fly worker `hostname -s` IS the machine id and rides
+# inside OWNER_TOKEN. This test proves the hardened matcher still bites: a
+# mutant whose default tier map IGNORES the CI_CLUSTER_GO_MACHINE override
+# really dispatches the go tier onto the default machine, and 6c must go red
+# — including under the selfcheck's hostile-hostname simulation.
+MUT4_DIR="$TMP_DIR/mutant4/deploy/ci-worker"
+mkdir -p "$MUT4_DIR"
+cp "$REPO/deploy/ci-worker/runci.sh" "$MUT4_DIR/runci.sh"
+GIT_DIR_ABS="$(git -C "$REPO" rev-parse --absolute-git-dir)"
+# shellcheck disable=SC2016 # literal sed replacement, no regex metachars
+sed 's/[$][{]CI_CLUSTER_GO_MACHINE-080d74db170408[}]/080d74db170408/' \
+  "$REPO/deploy/ci-worker/ci-cluster.sh" > "$MUT4_DIR/ci-cluster.sh"
+if cmp -s "$REPO/deploy/ci-worker/ci-cluster.sh" "$MUT4_DIR/ci-cluster.sh"; then
+  echo "  FAIL [mutant4-built]: the mutation did not change ci-cluster.sh, so this test proves nothing"
+  FAIL=$((FAIL + 1))
+else
+  GIT_DIR="$GIT_DIR_ABS" CI_CLUSTER_UNDER_TEST="$MUT4_DIR/ci-cluster.sh" \
+    bash "$GUARD" >"$TMP_DIR/mutant4.out" 2>&1; rc=$?
+  check "mutant4-dispatcher" 1 "$rc"
+  if grep -q '(6c) the go tier.s default machine was touched despite an override' "$TMP_DIR/mutant4.out" \
+    && ! grep -q -e 'missing' -e 'cannot resolve ref' -e 'md5' "$TMP_DIR/mutant4.out"; then
+    echo "  PASS [mutant4-reason]: caught by 6c's addressing-position matcher, as intended"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL [mutant4-reason]: the mutant failed for some other reason:"; sed 's/^/    | /' "$TMP_DIR/mutant4.out" | tail -20
+    FAIL=$((FAIL + 1))
+  fi
+fi
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ] || exit 1

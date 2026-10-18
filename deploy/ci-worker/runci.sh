@@ -11,6 +11,24 @@
 #   concurrent LLM shards their own rate-limit windows; unset ⇒ they fall back to the primary
 #   key (the run still works, just at single-key parallelism). See run_e2e below.
 set -uo pipefail
+# Trailer when the run is killed by a signal (2026-10-18, lint@d52b70bdc: the
+# console session's server side tore the run down mid-write — every process
+# died at 13:59:26Z, no guest OOM in dmesg, no flyd event — and the log simply
+# stopped, so the dispatcher could not tell "killed" from "still going").
+# These traps write an explicit KILLED line (through the RUNLOG tee once it is
+# up, otherwise to the console capture) and then exit, preserving death-by-
+# signal semantics: HUP=129, INT=130, TERM=143. No RESULT line is written —
+# a run killed mid-gate HAS no verdict, and ci-cluster.sh treats a missing
+# RESULT as an incomplete run and says so explicitly.
+# Limits, stated honestly: a SIGKILL (guest OOM killer) cannot be trapped —
+# nothing runs on SIGKILL — and a signal delivered to runci.sh ALONE while a
+# foreground gate child runs is acted on only after that child exits. The
+# guaranteed net for both is the dispatcher's liveness watchdog
+# (ci-cluster.sh::dispatch_tier), which ends the tier with an explicit
+# STALLED/DIED verdict when the remote gate process is gone without a RESULT.
+trap 'echo "RUNCI: KILLED by signal HUP — no verdict written; gate state at death is unknown"; exit 129' HUP
+trap 'echo "RUNCI: KILLED by signal INT — no verdict written; gate state at death is unknown"; exit 130' INT
+trap 'echo "RUNCI: KILLED by signal TERM — no verdict written; gate state at death is unknown"; exit 143' TERM
 
 REF="${1:-HEAD}"
 GATE="${2:-all}"

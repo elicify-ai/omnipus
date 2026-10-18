@@ -78,6 +78,12 @@ All are documented with burn history in `deploy/ci-worker/CLAUDE.md`:
    RESULT line is `FAIL:no-result-line` (SSH drop or interruption) — never assumed green.
    The proof harness exploits this deliberately: its stub `fly` exits 0 even for failing
    gates, and the dispatcher still reports the failure.
+4. **A dead session must end in a verdict, never a hang (2026-10-18/19).** The worst
+   wrapper failure is not a wrong exit code but NO return: on 2026-10-18 the Fly session
+   server tore down a running lint gate mid-write (every remote process died at 13:59:26Z —
+   no guest OOM in dmesg, no flyd event), the local `fly ssh console` sat on a half-open
+   flow forever, and the dispatcher hung for ~3 hours with no verdict. Every gate's console
+   therefore runs under a liveness watchdog (below).
 4. **Stale-checkout false-red.** Every gate log's `HEAD: <sha>` line must be a prefix of the
    locally-resolved ref sha. A worker that tested a different commit fails its gates'
    verdicts (`FAIL:head-mismatch`), so a mixed-commit run can never be reported as a pass.
@@ -93,8 +99,29 @@ All are documented with burn history in `deploy/ci-worker/CLAUDE.md`:
    `fly ssh console` with output captured to `<logdir>/<tier>-<gate>.log`. Gates within a
    tier run sequentially (the machine's `runci.lock` would queue a second run for up to 90
    minutes); all gates in a tier run even after one fails, mirroring `runci.sh all`.
+
+   **Gate watchdog (2026-10-19, `ci-cluster.sh::dispatch_tier`).** While a gate's console
+   runs, the tier re-checks it every second (verdict-in-log first, then the console
+   process) and probes the REMOTE liveness of *this* gate's runci.sh
+   (`pgrep -f "/cache/[r]unci.sh <ref> <gate>"`, ref- and gate-specific so a co-tenant's
+   run can never make a dead gate look alive) once per `CI_CLUSTER_WATCH_INTERVAL`
+   (default 30s). After `CI_CLUSTER_DEAD_STRIKES` (default 3) consecutive not-alive
+   probes, the console is killed and `handle_incomplete_gate` decides: if the remote
+   RUNLOG (`/cache/logs/<gate>@…`, which runci.sh tee's from its first output line) holds
+   a verdict — the transport died but the run finished — the verdict is RECOVERED and the
+   gate counts as completed; otherwise the tier ends with an explicit, non-zero
+   **STALLED/DIED** verdict naming the gate, the machine and the last log line. Liveness,
+   never a timer: a healthy go-race (~25 min) probes `alive` on every cycle and is never
+   killed. `runci.sh` complements this with HUP/INT/TERM traps that write a
+   `RUNCI: KILLED by signal …` trailer and exit 129/130/143 — a SIGKILL (guest OOM) cannot
+   be trapped, which is exactly why the dispatcher-side watchdog is the guarantee.
+   Verdict classification: `FAIL:stalled` (watchdog fired, nothing recoverable),
+   `FAIL:killed-by-signal` (trailer present — the log itself says why there is no
+   verdict), `FAIL:no-result-line` (console exited without a verdict; recovered-or-stalled
+   logic also applies). The knobs are environment variables so the selfcheck can run the
+   watchdog at 1s/2-strikes; production defaults stay 30s/3.
 3. **Collect**: verdicts + HEAD shas from the logs; a summary table; one exit code
-   (0 all green · 1 any failure/incomplete/mismatch · 2 config or pre-flight refusal).
+   (0 all green · 1 any failure/incomplete/stalled/mismatch · 2 config or pre-flight refusal).
 4. **Teardown**: an EXIT trap stops every machine *this run started* — including on gate
    failure and on SIGINT/SIGTERM (proven with a stubbed `fly` in the script's development
    log, 2026-09-16). Machines that were **already running** when the dispatcher arrived are
