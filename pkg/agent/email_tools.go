@@ -99,6 +99,23 @@ func mailGenerationForPair(agentID, workspaceID string) (string, error) {
 	return (*r)(agentID, workspaceID)
 }
 
+// emailToolAccount is the transport account the email tools dial for one
+// mailbox. SignatureHTML rides the account so send_email, reply and
+// create_email_draft append that mailbox's signature through email.Compose.
+func emailToolAccount(mb config.MailboxConfig, password string) email.Account {
+	return email.Account{
+		IMAPHost:      mb.IMAPHost,
+		IMAPPort:      mb.IMAPPort,
+		SMTPHost:      mb.SMTPHost,
+		SMTPPort:      mb.SMTPPort,
+		Username:      mb.Username,
+		Password:      password,
+		SentFolder:    mb.SentFolderName,
+		DraftsFolder:  mb.DraftsFolderName,
+		SignatureHTML: mb.SignatureHTML,
+	}
+}
+
 func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *AgentInstance) {
 	if cfg == nil || agent == nil {
 		return
@@ -136,16 +153,7 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 			continue
 		}
 
-		client, err := email.NewClient(email.Account{
-			IMAPHost:     mb.IMAPHost,
-			IMAPPort:     mb.IMAPPort,
-			SMTPHost:     mb.SMTPHost,
-			SMTPPort:     mb.SMTPPort,
-			Username:     mb.Username,
-			Password:     password,
-			SentFolder:   mb.SentFolderName,
-			DraftsFolder: mb.DraftsFolderName,
-		})
+		client, err := email.NewClient(emailToolAccount(mb, password))
 		if err != nil {
 			slog.Warn("email tools: mailbox transport construction failed — skipping pair",
 				"agent_id", agentID, "workspace_id", wsID, "error", err)

@@ -38,6 +38,14 @@ type mailboxIdentity interface {
 	AccountAddress() string
 }
 
+// mailboxSignature exposes the mailbox's saved HTML signature
+// (config.MailboxConfig.SignatureHTML). *email.Client implements it. A
+// transport without the capability, or one that returns "", sends with no
+// signature block (US-1: a mailbox without a signature stays bare).
+type mailboxSignature interface {
+	SignatureHTML() string
+}
+
 // messageAppender saves a fully composed RFC 5322 message to a folder
 // (Sent copies, D7/D18/MC-9; drafts with \Draft, D8/FR-029).
 type messageAppender interface {
@@ -235,14 +243,15 @@ func checkMailBodyBound(toolName, body string) error {
 // mailComposeInput carries what send_email / reply / create_email_draft share
 // before composition.
 type mailComposeInput struct {
-	toolName  string
-	from      string
-	subject   string
-	markdown  string
-	inReplyTo string
-	recips    *mailRecipients
-	attach    []email.Attachment
-	draft     bool
+	toolName      string
+	from          string
+	subject       string
+	markdown      string
+	inReplyTo     string
+	recips        *mailRecipients
+	attach        []email.Attachment
+	draft         bool
+	signatureHTML string
 }
 
 // composeMail renders the outbound message via email.Compose (MC-2/3/4, D29,
@@ -251,15 +260,16 @@ type mailComposeInput struct {
 // has already enforced MC-22 (1 MiB MC-22) and parsed recipients (MC-27).
 func composeMail(in mailComposeInput) (email.ComposeOutput, error) {
 	out, err := email.Compose(email.ComposeInput{
-		From:        in.from,
-		To:          bareAddresses(in.recips.To),
-		Cc:          bareAddresses(in.recips.Cc),
-		Bcc:         bareAddresses(in.recips.Bcc),
-		Subject:     in.subject,
-		Markdown:    in.markdown,
-		InReplyTo:   in.inReplyTo,
-		Attachments: in.attach,
-		Draft:       in.draft,
+		From:          in.from,
+		To:            bareAddresses(in.recips.To),
+		Cc:            bareAddresses(in.recips.Cc),
+		Bcc:           bareAddresses(in.recips.Bcc),
+		Subject:       in.subject,
+		Markdown:      in.markdown,
+		InReplyTo:     in.inReplyTo,
+		Attachments:   in.attach,
+		Draft:         in.draft,
+		SignatureHTML: in.signatureHTML,
 	})
 	if err != nil {
 		return email.ComposeOutput{}, fmt.Errorf("%s: %w", in.toolName, err)
@@ -439,9 +449,16 @@ func (t *CreateEmailDraftTool) Execute(ctx context.Context, args map[string]any)
 	if strings.TrimSpace(from) == "" {
 		return ErrorResult("create_email_draft: cannot determine the mailbox's sending address (transport does not expose its identity)")
 	}
+	// Tool drafts are Omnipus drafts. The signature is rendered into the
+	// stored HTML and plain parts, and the bookkeeping Markdown stays the
+	// agent's unsigned body — the same split panel Save uses when
+	// IsOmnipusDraft (F10). Panel Send recomposes from that Markdown and
+	// appends the signature once. Putting the signature into the Markdown
+	// source would sign the later panel send twice.
 	out, err := composeMail(mailComposeInput{
 		toolName: t.Name(), from: from, subject: subject, markdown: body,
 		inReplyTo: inReplyTo, recips: recips, attach: attach, draft: true,
+		signatureHTML: mailboxSignatureHTML(tp),
 	})
 	if err != nil {
 		return ErrorResult(err.Error())

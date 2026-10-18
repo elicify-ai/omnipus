@@ -131,6 +131,9 @@ type Account struct {
 	// DraftsFolder is the IMAP folder agent drafts are APPENDed to with \Draft
 	// (email-mail-view-spec §2.1 drafts_folder_name). Empty means "Drafts".
 	DraftsFolder string
+	// SignatureHTML is the mailbox signature (config MailboxConfig.SignatureHTML).
+	// Empty means this mailbox has none. Compose re-sanitizes before appending.
+	SignatureHTML string
 }
 
 // withDefaults returns a copy of a with default ports applied.

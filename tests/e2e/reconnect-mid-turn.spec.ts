@@ -13,10 +13,11 @@
  * of one session must converge on the same persisted text.
  */
 
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected, assistantMessages } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
+import { normalizedAssistantText } from './fixtures/assistant-text'
 
 // Plain prose, no tools: a single long streaming round with a stable shape.
 const LONG_PROMPT =
@@ -25,6 +26,31 @@ const LONG_PROMPT =
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]')
 // Any assistant row, running or finished (assistantMessages() excludes running rows).
 const anyAssistantRow = (page: Page) => page.locator('[data-message-id]:not(.flex-row-reverse)')
+
+/**
+ * The answer text streamed so far in a RUNNING assistant row, whitespace-
+ * normalized: the row's answer body (the same container
+ * fixtures/assistant-text.ts::normalizedAssistantText reads) without the
+ * trailing reply-status mark ("Thinking…") that sits inside it while the turn
+ * runs. Reading the whole row instead put the agent name and that mark into
+ * the "before" text: CI run 39100617554 captured
+ * "Mia The sea keeps its own calendar. Long before anyone tho Thinking
+ * Thinking… Copy", whose first 60 characters ended in " T" and could never
+ * prefix the finished answer ("…anyone thought …").
+ */
+async function streamedAnswerText(row: Locator): Promise<string> {
+  return row.evaluate((el) => {
+    const bodies = el.querySelectorAll(':scope > div > div[class~="text-[length:var(--type-body-compact-size)]"]')
+    if (bodies.length !== 1) return ''
+    const body = bodies[0] as HTMLElement
+    let text = body.innerText
+    for (const mark of Array.from(body.querySelectorAll<HTMLElement>('[data-testid="reply-status-indicator"]'))) {
+      const markText = mark.innerText.trim()
+      if (markText && text.trimEnd().endsWith(markText)) text = text.trimEnd().slice(0, -markText.length)
+    }
+    return text.replace(/\s+/g, ' ').trim()
+  })
+}
 
 async function startLongTurn(page: Page): Promise<string> {
   const input = chatInput(page)
@@ -35,10 +61,11 @@ async function startLongTurn(page: Page): Promise<string> {
   await input.fill(LONG_PROMPT)
   await input.press('Enter')
   await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
-  // Wait until some text has actually streamed so "at least as long" is a real bar.
+  // Wait until some ANSWER text has actually streamed (not the agent name or
+  // the status mark) so "at least as long" is a real bar.
   const row = anyAssistantRow(page).first()
-  await expect.poll(async () => (await row.innerText().catch(() => '')).trim().length, { timeout: 60_000 }).toBeGreaterThan(80)
-  return (await row.innerText()).trim()
+  await expect.poll(async () => (await streamedAnswerText(row).catch(() => '')).length, { timeout: 60_000 }).toBeGreaterThan(80)
+  return streamedAnswerText(row)
 }
 
 async function waitTurnDone(page: Page) {
@@ -86,11 +113,11 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
 
     // Exactly one assistant message; catch-up + live tail ⇒ no gap.
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await assistantMessages(page).first().innerText()).trim()
+    // Both sides are whitespace-normalized answer text (no name, mark or footer).
+    const after = await normalizedAssistantText(assistantMessages(page).first())
     expect(after.length).toBeGreaterThanOrEqual(before.length)
-    // The text seen before the reload is a prefix of the final text (modulo whitespace).
-    const norm = (s: string) => s.replace(/\s+/g, ' ')
-    expect(norm(after).startsWith(norm(before).slice(0, 60))).toBeTruthy()
+    // The answer seen before the reload is a prefix of the final answer.
+    expect(after.startsWith(before.slice(0, 60)), `before: ${before.slice(0, 60)} | after: ${after.slice(0, 80)}`).toBeTruthy()
   })
 
   test('S-09 second tab attaches mid-turn and converges on the same text', async ({ page, context }) => {
@@ -125,8 +152,10 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     await expect(assistantMessages(page2)).toHaveCount(1, { timeout: 30_000 })
 
-    const t1 = (await assistantMessages(page).first().innerText()).replace(/\s+/g, ' ').trim()
-    const t2 = (await assistantMessages(page2).first().innerText()).replace(/\s+/g, ' ').trim()
+    // Run 38729142998 had identical answers but an attached-only model footer.
+    // Compare all answer prose exactly; optional row metadata is not the answer.
+    const t1 = await normalizedAssistantText(assistantMessages(page).first())
+    const t2 = await normalizedAssistantText(assistantMessages(page2).first())
     expect(t2).toBe(t1)
     await page2.close()
   })
@@ -178,7 +207,168 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
 
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await assistantMessages(page).first().innerText()).trim()
+    const after = await normalizedAssistantText(assistantMessages(page).first())
     expect(after.length).toBeGreaterThanOrEqual(before.length)
+  })
+})
+
+// Harness-only regressions for S-09. Static HTML replaces application rendering,
+// not the browser or Locator API. These run in the existing Chromium E2E shard:
+// the ordinary Vitest jobs do not provision a Playwright browser.
+async function renderAnswerRows(page: Page, body: string, attachedBody = body): Promise<void> {
+  // ChatScreen::AssistantMessage wraps MarkdownText in .prose-sm inside the
+  // body; VirtualAssistantMessageRow renders HistoricalMessageMarkdown's
+  // elements directly. Both have the same body container, outside the label
+  // and action/model footer. Deliberately exercise those DIFFERENT layouts.
+  await page.setContent(`
+    <div id="live"><div><span>Mia</span>
+      <div class="text-[length:var(--type-body-compact-size)]"><div class="prose-sm">${body}</div></div>
+      <button>Copy</button></div></div>
+    <div id="attached"><div><span>Mia</span>
+      <div class="text-[length:var(--type-body-compact-size)]">${attachedBody}</div>
+      <button>Copy</button><span data-testid="message-model">fixture/model-id</span>
+    </div></div>`)
+}
+
+test.describe('S-09 rendered-answer oracle', () => {
+  test('compares identical prose exactly despite an attached-only model footer', async ({ page }) => {
+    await renderAnswerRows(page, '<p>The sea keeps its own clock.</p>')
+    const live = await normalizedAssistantText(page.locator('#live'))
+    const attached = await normalizedAssistantText(page.locator('#attached'))
+    expect(live).toBe('The sea keeps its own clock.')
+    expect(attached).toBe(live)
+  })
+
+  test('normalizes only whitespace across all paragraphs', async ({ page }) => {
+    await renderAnswerRows(page, '<p>The   sea</p><p>keeps\nits own clock.</p>')
+    expect(await normalizedAssistantText(page.locator('#live'))).toBe('The sea keeps its own clock.')
+  })
+
+  test('retains every Markdown text block in order', async ({ page }) => {
+    await renderAnswerRows(page, '<div class="prose-sm">First part.</div><div class="prose-sm">Last part.</div>')
+    expect(await normalizedAssistantText(page.locator('#live'))).toBe('First part. Last part.')
+  })
+
+  test('retains a model slug when it is part of the answer, not the footer', async ({ page }) => {
+    await renderAnswerRows(page, '<p>The model is fixture/model-id.</p>')
+    expect(await normalizedAssistantText(page.locator('#attached'))).toBe('The model is fixture/model-id.')
+  })
+
+  test('rejects a row with only chrome instead of certifying empty equality', async ({ page }) => {
+    await page.setContent('<div id="empty"><span>Mia</span><button>Copy</button><span data-testid="message-model">model</span></div>')
+    await expect(normalizedAssistantText(page.locator('#empty'))).rejects.toThrow('Assistant row has no rendered answer text')
+  })
+
+  test('rejects an ambiguous row with multiple answer containers', async ({ page }) => {
+    await page.setContent(`<div id="ambiguous"><div>
+      <div class="text-[length:var(--type-body-compact-size)]">First answer</div>
+      <div class="text-[length:var(--type-body-compact-size)]">Second answer</div>
+    </div></div>`)
+    await expect(normalizedAssistantText(page.locator('#ambiguous'))).rejects.toThrow('Assistant row has multiple answer containers')
+  })
+
+  test('rejects a blank Markdown body instead of comparing two empty strings', async ({ page }) => {
+    await renderAnswerRows(page, '<p>   </p>')
+    await expect(normalizedAssistantText(page.locator('#live'))).rejects.toThrow('Assistant row has no rendered answer text')
+  })
+
+  // ADR-087 suffixes are outside the body in ChatScreen's real row layout.
+  // Equal partial answers must fail, even if BOTH tabs have the same notice.
+  for (const notice of ['(interrupted)', '(cut off at the output limit)']) {
+    for (const placement of ['body', 'footer']) {
+      test(`rejects matching answers with ${notice} in the ${placement}`, async ({ page }) => {
+        const body = '<p>The sea keeps its own clock.</p>'
+        await renderAnswerRows(page, placement === 'body' ? `${body}<span>${notice}</span>` : body)
+        if (placement === 'footer') {
+          await page.locator('#live > div, #attached > div').evaluateAll((containers, text) => {
+            for (const container of containers) {
+              const suffix = document.createElement('span')
+              suffix.textContent = text
+              container.append(suffix)
+            }
+          }, notice)
+        }
+        for (const id of ['live', 'attached']) {
+          await expect(normalizedAssistantText(page.locator(`#${id}`))).rejects.toThrow(
+            'Assistant row contains an interruption, cutoff or error notice',
+          )
+        }
+      })
+    }
+  }
+
+  for (const status of ['error', 'interrupted', 'incomplete']) {
+    test(`rejects an answer whose row reports ${status}`, async ({ page }) => {
+      await renderAnswerRows(page, '<p>The sea keeps its own clock.</p>')
+      await page.locator('#attached').evaluate((row, value) => row.setAttribute('data-status', value), status)
+      await expect(normalizedAssistantText(page.locator('#attached'))).rejects.toThrow(
+        `Assistant row has failed or incomplete status: ${status}`,
+      )
+    })
+  }
+
+  for (const [label, notice] of [
+    ['system-error disclosure', '<details data-testid="error-detail-disclosure"><summary>Technical details</summary><pre>Provider request failed</pre></details>'],
+    ['system-error alert', '<div role="alert">The answer could not be saved</div>'],
+  ]) {
+    test(`rejects an answer with a ${label} outside its body`, async ({ page }) => {
+      await renderAnswerRows(page, '<p>The sea keeps its own clock.</p>')
+      await page.locator('#attached > div').evaluate((container, html) => container.insertAdjacentHTML('beforeend', html), notice)
+      await expect(normalizedAssistantText(page.locator('#attached'))).rejects.toThrow(
+        'Assistant row contains an interruption, cutoff or error notice',
+      )
+    })
+  }
+
+  for (const [label, changed] of [
+    ['truncated', 'The sea keeps its own'],
+    ['duplicated', 'The sea keeps its own clock. The sea keeps its own clock.'],
+    ['altered', 'The sky keeps its own clock.'],
+  ]) {
+    test(`does not certify a ${label} answer as converged`, async ({ page }) => {
+      await renderAnswerRows(page, '<p>The sea keeps its own clock.</p>', `<p>${changed}</p>`)
+      const live = await normalizedAssistantText(page.locator('#live'))
+      const attached = await normalizedAssistantText(page.locator('#attached'))
+      expect(live).toBe('The sea keeps its own clock.')
+      expect(attached).toBe(changed)
+      expect(attached).not.toBe(live)
+    })
+  }
+})
+
+// Harness-only regressions for S-08's "before" text. The running row mirrors
+// ChatScreen's live AssistantMessage: agent label, then ONE answer body that
+// holds the streamed text AND the trailing reply-status mark, then Copy.
+async function renderRunningRow(page: Page, streamed: string): Promise<void> {
+  await page.setContent(`
+    <div id="running" data-status="running"><div><span>Mia</span>
+      <div class="text-[length:var(--type-body-compact-size)]"><div class="prose-sm">${streamed}</div>
+        <span data-testid="reply-status-indicator"><span>Thinking</span> Thinking…</span></div>
+      <button>Copy</button></div></div>`)
+}
+
+test.describe('S-08 streamed-answer oracle', () => {
+  test('reads only the streamed answer: no agent name, status mark or Copy', async ({ page }) => {
+    // The exact shape CI run 39100617554 captured mid-stream.
+    await renderRunningRow(page, '<p>The sea keeps its own calendar. Long before anyone tho</p>')
+    expect(await streamedAnswerText(page.locator('#running'))).toBe(
+      'The sea keeps its own calendar. Long before anyone tho',
+    )
+  })
+
+  test('the streamed answer prefixes the finished answer it grows into', async ({ page }) => {
+    await renderRunningRow(page, '<p>The sea keeps its own calendar. Long before anyone tho</p>')
+    const before = await streamedAnswerText(page.locator('#running'))
+    await renderAnswerRows(page, '<p>The sea keeps its own calendar. Long before anyone thought to write dates on paper.</p>')
+    const after = await normalizedAssistantText(page.locator('#live'))
+    expect(after.startsWith(before.slice(0, 60))).toBe(true)
+  })
+
+  test('still catches a real gap: a finished answer that does not continue the streamed one', async ({ page }) => {
+    await renderRunningRow(page, '<p>The sea keeps its own calendar. Long before anyone tho</p>')
+    const before = await streamedAnswerText(page.locator('#running'))
+    await renderAnswerRows(page, '<p>The sky keeps its own calendar. Long before anyone thought to write.</p>')
+    const after = await normalizedAssistantText(page.locator('#live'))
+    expect(after.startsWith(before.slice(0, 60))).toBe(false)
   })
 })
