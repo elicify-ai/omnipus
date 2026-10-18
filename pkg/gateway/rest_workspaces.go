@@ -1651,9 +1651,9 @@ func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
 	// FR-1.9: no access gate — owner is attribution only.
 
 	// Default workspace cannot be deleted (FR-1.6 delete-protection retained).
-	if rd.ws.IsDefault {
+	if err := workspace.RefuseDefaultDeletion(rd.ws.IsDefault); err != nil {
 		unlock()
-		jsonErr(rd.w, http.StatusConflict, "cannot delete the default workspace")
+		jsonErr(rd.w, http.StatusConflict, err.Error())
 		return true
 	}
 

@@ -1548,9 +1548,14 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 	unlock := workspacepkg.LockID(id)
 
 	// Guard: verify the workspace exists before any irreversible mutations.
-	if _, err := workspacepkg.CheckRevisionLocked(t.deps.Home, id, revision); err != nil {
+	state, err := workspacepkg.CheckRevisionLocked(t.deps.Home, id, revision)
+	if err != nil {
 		unlock()
 		return workspaceRevisionError(id, err)
+	}
+	if refusal := workspacepkg.RefuseDefaultDeletion(state.Workspace.IsDefault); refusal != nil {
+		unlock()
+		return tools.ErrorResult(errorJSON("CONFLICT", refusal.Error(), ""))
 	}
 
 	// Step 1: cascade-delete tasks
