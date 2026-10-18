@@ -101,6 +101,18 @@ with those features, not weakened; each deletion is listed")
 | `src/components/screens/AgentListScreen.systemSection.test.tsx` | deleted | FR-108; FR-008 (the "Built-in colleagues — Mia, Jim, Ava and Admin" section it pins is retired UI) |
 | `src/components/agents/CreateAgentModal.test.tsx` | deleted | FR-108 (create wizard/modal removed) |
 | `src/components/agents/CreateAgentWizard.test.tsx` | deleted | FR-108 |
+| `src/components/agents/wizard/Advanced.toolIterationLimit.test.tsx` | deleted | FR-108 (imports only the deleted `wizard/Advanced`) |
+| `src/components/agents/wizard/Step1Identity.commandPreview.test.tsx` | deleted | FR-108 (imports only the deleted wizard modules) |
+| `src/components/agents/wizard/Step1Identity.envFocus.test.tsx` | deleted | FR-108 (imports only the deleted wizard modules) |
+| `src/components/agents/wizard/Step1Identity.prefillValidate.test.tsx` | deleted | FR-108 (imports only the deleted wizard modules) |
+| `src/components/agents/wizard/Step1Identity.test.tsx` | deleted | FR-108 (imports only the deleted wizard modules) |
+| `src/components/agents/wizard/Step2Personality.test.tsx` | deleted | FR-108 (imports only the deleted `./Step2Personality` / `../CreateAgentWizard`) |
+
+The six `wizard/` rows above were deleted by commit 97040691e (frontend lane, under
+team-lead decision Q3 = B: the wizard test directory is retired with the directory),
+between this pack's commits and the dev's GREEN; CHECK finding F1 required them listed
+here. Each imports only deleted modules, so deletion was the only disposition and no
+surviving coverage was lost (verified by CHECK at base).
 | `src/components/agents/WorkerCard.test.tsx` | deleted | FR-108 (WorkerCard rendered only on the retired screen) |
 | `src/components/agents/identityPreview.wave1.test.tsx` | deleted | FR-108 (wholly renders `CreateAgentWizard`) |
 | `src/test/integration/agent-list.test.tsx` | deleted | FR-108 (test #26 pins AgentListScreen's fetch/grid) |
@@ -176,6 +188,32 @@ Kept after verification: `src/lib/api/configuration.test.ts`'s `createAgent` cas
 REST client stays (FR-108's "documented as a non-UI API"); 36/36 green.
 
 ## 5. Notes for GREEN and CHECK
+
+### CHECK round (stream-c/wu11-check-report.md — WARN, TWS 0) — fixes applied
+
+- **F1 (fixed):** the six `wizard/` test files deleted by 97040691e are now listed in
+  §4 with their retiring line (FR-108) and the Q3 = B decision noted.
+- **F2 (fixed, truthful-rename option):** the eligibleMains case is renamed
+  "…keeps Mia (validated members only)". The strengthening option (a real cached-Admin
+  roster member) was tried first and exposed a layering fact, recorded here for the
+  next CHECK: `eligibleMainAgents` has no retired-id gate in the roster path — a
+  cached Admin LISTED ON A TEAM renders as an ordinary member row on any workspace.
+  Reaching it requires the server to re-seed Admin AND keep it on a core_team (a
+  double regression); retirement is enforced once at eligibility
+  (`lib/omnipus.ts::isTeamEligible` → `isChatEligibleAgent`), which is where the
+  stale-cache guards live (Sidebar.agentRows N10, the add-existing picker,
+  useChatAgents, useSlashMenu). If CHECK wants belt-and-braces at the roster path
+  too, `lib/omnipus.ts::teamKindOf` is the single-line place; the pin to restore is
+  the fixture probe described above.
+- **F3 (fixed):** the stale "adminMainSessionIdOfWorkspace: the Admin-main rule stays
+  real" comment is corrected in all 10 surviving files that carried it
+  (Sidebar.agentRows' copy was already rewritten in round 2 — 11 total per CHECK).
+- **F4 (fixed, cheap form):** the profile-reachable keep-green guard gains a
+  source-mount pin — `AppShell.tsx` imports `AgentProfile` and hosts
+  `<AgentProfile />` exactly once — so a future change dropping the shell mount dies
+  with the three open-path cases above it.
+
+
 
 - `src/components/agents/CLAUDE.md` still documents "Creation has one path" via
   `CreateAgentWizard` and the built-in Mia/Jim/Ava/Admin roster — the module-doc update

@@ -65,8 +65,8 @@ const seam = vi.hoisted(() => {
 })
 
 vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
-  // Real seam for everything the stubs don't override (notably
-  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
+  // Real seam for everything the stubs don't override. (WU-11 GREEN removed the
+  // Admin-main seam reader with the retired Admin row — FR-008.)
   ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
   mainSessionIdOfMember: (member: object) => seam.mainSessionIdOfMember(member),
   isMainSession: (session: unknown) => seam.isMainSession(session),
@@ -142,7 +142,7 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
     }, expected, 'FR-003, BDD-01.1, dataset N01')
   })
 
-  it('BDD-01.2 / N10 default workspace keeps Mia; a cached Admin never becomes a row', async () => {
+  it('BDD-01.2 / N10 default workspace keeps Mia (validated members only)', async () => {
     const miaMember = member()
     const nativeMember = member()
     const externalMember = member()

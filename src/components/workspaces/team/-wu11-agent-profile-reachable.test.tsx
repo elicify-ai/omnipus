@@ -23,6 +23,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { useUiStore } from '@/store/ui'
 import type { Agent, Workspace } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
@@ -115,5 +117,16 @@ describe('WU-11 keep-green — the agent profile editor stays reachable without 
     )
     await user.click(await screen.findByRole('button', { name: 'Edit Omnipus' }))
     expect(openEditAgentSlideOver).toHaveBeenCalledWith('omnipus')
+  })
+
+  // CHECK F4 (WU-11): the three controls above only OPEN the editor — the
+  // place that RENDERS it is the shell's single `<AgentProfile />` mount
+  // (AppShell.tsx, hosted once at shell level since agents.tsx was deleted,
+  // FR-108). Pin the mount itself: if a future change drops it, every
+  // openEditAgentSlideOver call renders nowhere and this dies with them.
+  it('the app shell hosts the store-driven editor exactly once', () => {
+    const shell = readFileSync(join(import.meta.dirname, '..', '..', '..', '..', 'src/components/layout/AppShell.tsx'), 'utf8')
+    expect(shell, 'the shell must import the editor it hosts').toContain("import { AgentProfile } from '@/components/agents/AgentProfile'")
+    expect(shell.match(/<AgentProfile \/>/g) ?? [], 'exactly one <AgentProfile /> mount in AppShell').toHaveLength(1)
   })
 })
