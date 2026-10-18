@@ -1340,8 +1340,8 @@ type SessionStatePendingApproval struct {
 	ActingAgentName *string `json:"acting_agent_name,omitempty"`
 	AgentId         string  `json:"agent_id"`
 	ApprovalId      string  `json:"approval_id"`
-	// Same value as ToolApprovalRequiredFrame.args — an object, never null. Optional until bundle B3 (WU-8). The snapshot reaches exactly the connections the live frame reaches (same audience rule).
-	Args        map[string]any `json:"args,omitempty"`
+	// Same value as ToolApprovalRequiredFrame.args — an object, never null. The snapshot reaches exactly the connections the live frame reaches (same audience rule).
+	Args        map[string]any `json:"args"`
 	ExpiresInMs int            `json:"expires_in_ms"`
 	// Spec K7, §6.18. Server-derived turn origin, e.g. "while answering <person> on <connection>", "for group <name>", "asked by <Agent>". Omitted for a plain web turn.
 	OriginLabel *string `json:"origin_label,omitempty"`
@@ -1352,11 +1352,11 @@ type SessionStatePendingApproval struct {
 	// Same value and rules as ToolApprovalRequiredFrame.segments.
 	Segments  []CommandSegmentInfo `json:"segments,omitempty"`
 	SessionId string               `json:"session_id"`
-	// L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete and approvable. Optional until bundle B3 (WU-8) makes it required.
-	ToolCallId *string `json:"tool_call_id,omitempty"`
-	ToolName   string  `json:"tool_name"`
-	// Same value as ToolApprovalRequiredFrame.turn_id. Optional until bundle B3 (WU-8).
-	TurnId *string `json:"turn_id,omitempty"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete and approvable.
+	ToolCallId string `json:"tool_call_id"`
+	ToolName   string `json:"tool_name"`
+	// Same value as ToolApprovalRequiredFrame.turn_id.
+	TurnId string `json:"turn_id"`
 	// Same value and semantics as ToolApprovalRequiredFrame.workspace_id.
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
