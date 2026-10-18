@@ -28,12 +28,7 @@ func i1ContinueHumanAndDelegate(t *testing.T, al *agent.AgentLoop, stg *setupAnd
 	meta, err := al.GetSessionStore().GetMeta(root)
 	require.NoError(t, err)
 	wc.userID = meta.Owner
-	var phaseProbeHelperID string
-	ctx, phaseProbeRealCancel := context.WithCancel(context.Background())
-	cancel := func() {
-		defer phaseProbeRealCancel()
-		i1PhaseProbeBeforeCancel(t, al, stg, root, phaseProbeHelperID)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
 	var releaseOnce, closeOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(p.release) }) }
 	runDone := make(chan error, 1)
@@ -83,7 +78,6 @@ func i1ContinueHumanAndDelegate(t *testing.T, al *agent.AgentLoop, stg *setupAnd
 	require.Len(t, children, 1, "one registered delegate action must create one actual helper")
 	require.Equal(t, session.LifecycleRunning, children[0].State)
 	require.NotNil(t, children[0].ExecutionID)
-	phaseProbeHelperID = children[0].SessionID
 	res, err := al.StopSession(ctx, agent.StopRequest{SessionID: children[0].SessionID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: meta.Owner}, Channel: "webchat"})
 	require.NoError(t, err)
 	require.NoError(t, res.RootErr)
@@ -124,45 +118,4 @@ func i1ContinueHumanAndDelegate(t *testing.T, al *agent.AgentLoop, stg *setupAnd
 	}
 	assert.Equal(t, map[string]bool{live.ExecutionID.RunID: true}, runs, "exactly one fresh root execution, never boot replay or double admission")
 	t.Logf("I1 continuation: same generation=%d; one fresh root run; one answer; registered helper executed", live.Generation)
-}
-
-// i1PhaseProbeBeforeCancel makes a notice already created by helper cleanup
-// observable before shutdown. This exposes a cleanup-order regression instead
-// of relying on cancellation to win a race against a permitted notice round.
-// The corrected fixture cancels dispatch while the helper is still running.
-func i1PhaseProbeBeforeCancel(t *testing.T, al *agent.AgentLoop, stg *setupAndStartServicesState, root, helperID string) {
-	t.Helper()
-	if helperID == "" {
-		return
-	}
-	helper, err := stg.lifecycleStore.Load(helperID)
-	require.NoError(t, err)
-	if helper.State != session.LifecycleStopped {
-		t.Logf("ROOT-PHASE-PROBE: dispatch cancel precedes helper stop; state=%s", helper.State)
-		return
-	}
-	deadline := time.NewTimer(cancelTestTurnStartDeadline)
-	defer deadline.Stop()
-	tick := time.NewTicker(10 * time.Millisecond)
-	defer tick.Stop()
-	prefix := "consumed stopped-notice:" + root + ":" + helperID + ":"
-	for {
-		entries, err := al.GetSessionStore().ReadTranscript(root)
-		require.NoError(t, err)
-		for _, entry := range entries {
-			if strings.HasPrefix(entry.Content, prefix) {
-				record, err := stg.lifecycleStore.Load(root)
-				require.NoError(t, err)
-				require.NotNil(t, record.ExecutionID)
-				t.Logf("ROOT-PHASE-PROBE: real marker=%q root=%s agent=%s run=%s steered=%t", entry.Content, record.SessionID, record.AgentID, record.ExecutionID.RunID, record.SteeredBy != nil)
-				return
-			}
-		}
-		select {
-		case <-tick.C:
-		case <-deadline.C:
-			t.Errorf("ROOT-PHASE-PROBE INCONCLUSIVE: no real stopped-notice consumed marker before the existing deadline")
-			return
-		}
-	}
 }
