@@ -66,7 +66,6 @@ func TestWU5PrivateVariable_GrammarAndProtectedSet(t *testing.T) {
 	require.NotNil(t, tool)
 
 	for _, row := range wu5GrammarRows() {
-		row := row
 		t.Run(row.name, func(t *testing.T) {
 			// A fresh real session per row: an admitted card stays pending,
 			// and the registry refuses a second pending card per session.

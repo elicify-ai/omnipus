@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,10 +62,16 @@ func wu5RequestPrivateSecret(variable string) providers.LLMResponse {
 	}}}
 }
 
-// wu5Bash is the model's real bash call.
+// wu5Bash is the model's real bash call with a unique tool-call id (unique
+// ids are what lets the result deduper count each call exactly once).
 func wu5Bash(command string) providers.LLMResponse {
+	return wu5BashCall(fmt.Sprintf("wu5-bash-%d", wu5CallSeq.Add(1)), command)
+}
+
+// wu5BashCall is the model's real bash call under an explicit tool-call id.
+func wu5BashCall(id, command string) providers.LLMResponse {
 	return providers.LLMResponse{ToolCalls: []providers.ToolCall{{
-		ID: "wu5-bash", Type: "function", Name: "bash",
+		ID: id, Type: "function", Name: "bash",
 		Arguments: map[string]any{"command": command},
 	}}}
 }
@@ -94,6 +101,9 @@ type wu5ScriptedProvider struct {
 	scripts map[string][]providers.LLMResponse
 	prompts map[string][][]providers.Message
 }
+
+// wu5CallSeq mints unique tool-call ids for scripted bash calls.
+var wu5CallSeq atomic.Int64
 
 func newWU5ScriptedProvider() *wu5ScriptedProvider {
 	return &wu5ScriptedProvider{
@@ -154,17 +164,43 @@ func (p *wu5ScriptedProvider) toolResultsFor(sessionID string) []string {
 	return out
 }
 
-// promptTextFor concatenates every prompt content for a session (leak sweeps).
-func (p *wu5ScriptedProvider) promptTextFor(sessionID string) string {
+// uniqueToolResultsFor returns each distinct tool call's result exactly once
+// (keyed by tool_call_id, first occurrence, in first-seen order). Every later
+// prompt re-includes earlier results as history, so the raw walk multiplies
+// each result by the number of subsequent model rounds; counting oracles
+// must read this, not the raw walk.
+func (p *wu5ScriptedProvider) uniqueToolResultsFor(sessionID string) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var b []byte
+	seen := make(map[string]bool)
+	var out []string
 	for _, msgs := range p.prompts[sessionID] {
 		for _, m := range msgs {
-			b = append(b, m.Content...)
+			if m.Role != "tool" || m.ToolCallID == "" || seen[m.ToolCallID] {
+				continue
+			}
+			seen[m.ToolCallID] = true
+			out = append(out, m.Content)
 		}
 	}
-	return string(b)
+	return out
+}
+
+// resultForCall returns the tool result addressed to one tool_call_id —
+// the plumbing equivalent of the model reading the result under its own
+// call id (two background-spawning tools both answer with ExecResponse
+// JSON, so the id, not the shape, tells them apart).
+func (p *wu5ScriptedProvider) resultForCall(sessionID, callID string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, msgs := range p.prompts[sessionID] {
+		for _, m := range msgs {
+			if m.Role == "tool" && m.ToolCallID == callID {
+				return m.Content
+			}
+		}
+	}
+	return ""
 }
 
 // wu5Fixture is one real loop with the WU-5 agents registered.
@@ -231,6 +267,11 @@ func newWU5FixtureOpts(t *testing.T, provisionDocRuntime bool) *wu5Fixture {
 	require.NoError(t, store.UnlockWithKey(bytes.Repeat([]byte{0x39}, 32)))
 	t.Cleanup(store.Close)
 	al.WireSysagentDeps(&systools.Deps{Home: home, GetCfg: al.GetConfig, CredStore: store})
+	// The shipped default (pkg/config/defaults.go) filters stored sensitive
+	// values out of tool output; the raw hand-built fixture leaves it off.
+	// Exercise the real masking path — the WU-4 pre-claim fixture made the
+	// same call (c6e0de4d3).
+	al.GetConfig().Tools.FilterSensitiveData = true
 	// The loop-wired agents (from cfg.Agents.List, carrying the loop's exec
 	// deps and full tool surface) run the turns with the fixture's scripted
 	// provider — deliberately NO registerAgent here: a bare AgentInstance
