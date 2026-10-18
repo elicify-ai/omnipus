@@ -185,14 +185,49 @@ func reviveAndRun(t *testing.T, al *AgentLoop, launcher *SteerLauncher, childID 
 	return gen
 }
 
-// TestSteerLauncher_AutoDenyAskInheritance_HumanReviveClearsUnattended: a person
-// who revives an unattended child is the audience now, so the revived run must
-// PROMPT for its ask-policy call (founder ruling R2). The principal rule is the
-// gateway-identity one used by principalAuthorizedForTarget
-// (session_messaging_wire.go): Kind == human with a non-empty ID.
-func TestSteerLauncher_AutoDenyAskInheritance_HumanReviveClearsUnattended(t *testing.T) {
-	al, launcher, parentSessionID, approver := reviveFixture(t)
-	childID := launchOnly(t, launcher, tools.WithAutoDenyAsk(context.Background(), true), parentSessionID, "call-891-human-revive")
+// taskRootSteeringSession is newTestSteeringSession's task-root twin (#1263
+// R1): a real store-backed session whose durable record carries a task
+// origin, so a delegate child of it sits on an unattended chain exactly the
+// way a helper of a real task run does. The persisted root record — not a
+// test-side stamp on the child — is what the amendment's root-origin
+// classification reads (L1-AMENDMENTS-20261013.md §1.2 R1).
+func taskRootSteeringSession(t *testing.T, al *AgentLoop, ownerAgentID, taskID string) string {
+	t.Helper()
+	meta, err := al.GetSessionStore().NewSession(session.SessionTypeTask, "system", ownerAgentID)
+	if err != nil {
+		t.Fatalf("NewSession(task root): %v", err)
+	}
+	if err := al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{TaskID: &taskID}); err != nil {
+		t.Fatalf("SetMeta(task root).TaskID: %v", err)
+	}
+	rec := &session.LifecycleRecord{
+		SessionID:  meta.ID,
+		Generation: 1,
+		// A live task run delegates its helper: the launcher refuses a
+		// terminal steering conversation.
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		AgentID:        ownerAgentID,
+		Origin:         &session.Origin{Kind: session.OriginKindTask, TaskID: taskID},
+	}
+	if err := al.GetSessionLifecycleStore().Persist(rec); err != nil {
+		t.Fatalf("Persist(task root record): %v", err)
+	}
+	return meta.ID
+}
+
+// TestSteerLauncher_TaskRoot_HumanReviveStaysUnattended re-aims the former
+// TestSteerLauncher_AutoDenyAskInheritance_HumanReviveClearsUnattended to
+// amendment rule R5 (founder 2026-10-13, L1-AMENDMENTS-20261013.md §1.2;
+// §1.5 names this re-aim): a person who revives a TASK-rooted chain is not
+// its approval audience — who is on the other end is the chain's root
+// origin, never the reviving principal — so the revived run keeps
+// auto-denying and the record keeps the posture. clearUnattendedForHuman,
+// whose clearing the former oracle pinned, is deleted.
+func TestSteerLauncher_TaskRoot_HumanReviveStaysUnattended(t *testing.T) {
+	al, launcher, _, approver := reviveFixture(t)
+	taskRootID := taskRootSteeringSession(t, al, testDefaultAgentID, "task-891-human-revive")
+	childID := launchOnly(t, launcher, tools.WithAutoDenyAsk(context.Background(), true), taskRootID, "call-891-human-revive")
 	launch, err := al.GetSessionLifecycleStore().Load(childID)
 	require.NoError(t, err)
 	_, err = launcher.Dispatch(context.Background(), childID, launch.Generation)
@@ -205,11 +240,11 @@ func TestSteerLauncher_AutoDenyAskInheritance_HumanReviveClearsUnattended(t *tes
 
 	reviveAndRun(t, al, launcher, childID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "alice"})
 
-	require.Equal(t, 1, approver.countFor("knowledge_edit"),
-		"after a human revive the run must prompt normally, not auto-deny")
+	require.Zero(t, approver.countFor("knowledge_edit"),
+		"a person reviving a task-rooted chain must not become its approval audience (R5) — the revived run keeps auto-denying")
 	rec, err := al.GetSessionLifecycleStore().Load(childID)
 	require.NoError(t, err)
-	require.False(t, rec.Unattended, "the human revive must clear Unattended in the revive's own record write")
+	require.True(t, rec.Unattended, "a human revive must leave the unattended posture in place (R5: clearUnattendedForHuman is deleted)")
 }
 
 // TestSteerLauncher_AutoDenyAskInheritance_AgentReviveKeepsUnattended: an agent
@@ -288,18 +323,23 @@ func TestPostFinishSteer_AgentSteerKeepsUnattended(t *testing.T) {
 	require.True(t, final.Unattended, "an agent's post-finish steer must not clear Unattended")
 }
 
-// TestPostFinishSteer_PersonSteerClearsUnattended: a person steers the finished
-// child (chat input carries no ledger receipt): they are the audience, so the
-// revived run prompts.
-func TestPostFinishSteer_PersonSteerClearsUnattended(t *testing.T) {
-	al, launcher, parentSessionID, approver := reviveFixture(t)
-	rec := finishUnattendedChild(t, al, launcher, parentSessionID, "call-891-postfinish-person")
+// TestPostFinishSteer_TaskRoot_PersonSteerStaysUnattended re-aims the former
+// TestPostFinishSteer_PersonSteerClearsUnattended to amendment rule R5
+// (founder 2026-10-13, L1-AMENDMENTS-20261013.md §1.2): a person steering a
+// finished child of a TASK root adds no approval audience — chat input
+// carrying no ledger receipt does not matter — so the next generation keeps
+// auto-denying and the posture stays.
+func TestPostFinishSteer_TaskRoot_PersonSteerStaysUnattended(t *testing.T) {
+	al, launcher, _, approver := reviveFixture(t)
+	taskRootID := taskRootSteeringSession(t, al, testDefaultAgentID, "task-891-postfinish-person")
+	rec := finishUnattendedChild(t, al, launcher, taskRootID, "call-891-postfinish-person")
 	require.Zero(t, approver.countFor("knowledge_edit"), "control: the first run auto-denies")
 
 	items := []steeringQueueItem{{message: providers.Message{Role: "user", Content: "please redo it"}, correlationID: "corr-person"}}
 	require.NoError(t, al.processFinishingItems(context.Background(), rec, nil, items, true))
 
 	final := waitForGeneration(t, al, rec.SessionID, rec.Generation+1)
-	require.Equal(t, 1, approver.countFor("knowledge_edit"), "a person's post-finish steer must prompt normally")
-	require.False(t, final.Unattended, "a person's post-finish steer must clear Unattended")
+	require.Zero(t, approver.countFor("knowledge_edit"),
+		"a person's post-finish steer of a task-rooted chain must keep it auto-denying (R5)")
+	require.True(t, final.Unattended, "a person's post-finish steer must not clear Unattended (R5)")
 }
