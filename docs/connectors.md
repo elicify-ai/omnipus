@@ -22,7 +22,7 @@ Email works differently. An email mailbox belongs to one agent in one workspace.
 1. Open **Connectors**. Platforms that are not connected yet show **Configure**.
 2. Select **Configure** for the platform you want. A panel opens with its required fields.
 3. Enter the platform credentials. Use the platform guide below to find the values you need.
-4. Choose a **Workspace** and an agent. The agent list contains members of that workspace.
+4. Choose a **Workspace** and a **Main agent**, the agent that answers messages on this account. The **Main agent** list contains members of that workspace.
 5. Select **Save & Enable**. The connected account appears with an **Enabled** status.
 6. To connect another account on the same platform, select **Add another…** beside its group.
 

@@ -334,16 +334,19 @@ describe('ChannelConfigPanel — Routing section', () => {
     })
   })
 
-  it('renders the "Default agent" label', async () => {
-    // Content test: a "Default agent" label for the SmartSelect is present.
+  it('renders the "Main agent" label and never a "Default agent" one', async () => {
+    // Content test: the SmartSelect's label names the bound agent as the
+    // channel's main agent (omnipus-system-agent FR-121, FR-140); there is no
+    // default agent (FR-120), so that wording is gone.
     renderChannelConfigPanel('telegram')
     await waitFor(() => {
-      // getAllByText: multiple "default agent" matches are valid (label + help text).
-      const matches = screen.getAllByText(/default agent/i)
+      // getAllByText: multiple "main agent" matches are valid (label + help text).
+      const matches = screen.getAllByText(/main agent/i)
       expect(matches.length).toBeGreaterThan(0)
       // At least one must be a label element.
       expect(matches.some((el) => el.tagName.toLowerCase() === 'label')).toBe(true)
     })
+    expect(screen.queryByText(/default agent/i)).not.toBeInTheDocument()
   })
 
   // The "renders help text about global default fallback" test was deleted

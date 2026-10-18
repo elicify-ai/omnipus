@@ -52,7 +52,7 @@ Native mode is included in the default build (see Build requirement above), so n
 The pairing QR renders live inside the SPA — no log scraping required.
 
 1. Open **Connectors** in the sidebar and click **Configure** on the WhatsApp card.
-2. Under **Routing**, choose a **Workspace** and a chat agent from that workspace, then select **Save & Enable**. WhatsApp uses the built-in native connection. The QR appears in the panel and refreshes automatically as whatsmeow rotates it.
+2. Under **Routing**, choose a **Workspace** and a **Main agent** (a chat agent from that workspace), then select **Save & Enable**. WhatsApp uses the built-in native connection. The QR appears in the panel and refreshes automatically as whatsmeow rotates it.
 3. On your phone, open WhatsApp → **Linked Devices** → **Link a Device** and scan the QR.
 
 The QR reaches the Configure panel over a live connection and refreshes on its own, so you never need to reload to get a fresh code.
