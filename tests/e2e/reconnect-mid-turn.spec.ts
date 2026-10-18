@@ -13,7 +13,7 @@
  * of one session must converge on the same persisted text.
  */
 
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected, assistantMessages } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
@@ -27,6 +27,31 @@ const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]')
 // Any assistant row, running or finished (assistantMessages() excludes running rows).
 const anyAssistantRow = (page: Page) => page.locator('[data-message-id]:not(.flex-row-reverse)')
 
+/**
+ * The answer text streamed so far in a RUNNING assistant row, whitespace-
+ * normalized: the row's answer body (the same container
+ * fixtures/assistant-text.ts::normalizedAssistantText reads) without the
+ * trailing reply-status mark ("Thinking…") that sits inside it while the turn
+ * runs. Reading the whole row instead put the agent name and that mark into
+ * the "before" text: CI run 39100617554 captured
+ * "Mia The sea keeps its own calendar. Long before anyone tho Thinking
+ * Thinking… Copy", whose first 60 characters ended in " T" and could never
+ * prefix the finished answer ("…anyone thought …").
+ */
+async function streamedAnswerText(row: Locator): Promise<string> {
+  return row.evaluate((el) => {
+    const bodies = el.querySelectorAll(':scope > div > div[class~="text-[length:var(--type-body-compact-size)]"]')
+    if (bodies.length !== 1) return ''
+    const body = bodies[0] as HTMLElement
+    let text = body.innerText
+    for (const mark of Array.from(body.querySelectorAll<HTMLElement>('[data-testid="reply-status-indicator"]'))) {
+      const markText = mark.innerText.trim()
+      if (markText && text.trimEnd().endsWith(markText)) text = text.trimEnd().slice(0, -markText.length)
+    }
+    return text.replace(/\s+/g, ' ').trim()
+  })
+}
+
 async function startLongTurn(page: Page): Promise<string> {
   const input = chatInput(page)
   await expect(input).toBeVisible({ timeout: 15_000 })
@@ -36,10 +61,11 @@ async function startLongTurn(page: Page): Promise<string> {
   await input.fill(LONG_PROMPT)
   await input.press('Enter')
   await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
-  // Wait until some text has actually streamed so "at least as long" is a real bar.
+  // Wait until some ANSWER text has actually streamed (not the agent name or
+  // the status mark) so "at least as long" is a real bar.
   const row = anyAssistantRow(page).first()
-  await expect.poll(async () => (await row.innerText().catch(() => '')).trim().length, { timeout: 60_000 }).toBeGreaterThan(80)
-  return (await row.innerText()).trim()
+  await expect.poll(async () => (await streamedAnswerText(row).catch(() => '')).length, { timeout: 60_000 }).toBeGreaterThan(80)
+  return streamedAnswerText(row)
 }
 
 async function waitTurnDone(page: Page) {
@@ -87,11 +113,11 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
 
     // Exactly one assistant message; catch-up + live tail ⇒ no gap.
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await assistantMessages(page).first().innerText()).trim()
+    // Both sides are whitespace-normalized answer text (no name, mark or footer).
+    const after = await normalizedAssistantText(assistantMessages(page).first())
     expect(after.length).toBeGreaterThanOrEqual(before.length)
-    // The text seen before the reload is a prefix of the final text (modulo whitespace).
-    const norm = (s: string) => s.replace(/\s+/g, ' ')
-    expect(norm(after).startsWith(norm(before).slice(0, 60))).toBeTruthy()
+    // The answer seen before the reload is a prefix of the final answer.
+    expect(after.startsWith(before.slice(0, 60)), `before: ${before.slice(0, 60)} | after: ${after.slice(0, 80)}`).toBeTruthy()
   })
 
   test('S-09 second tab attaches mid-turn and converges on the same text', async ({ page, context }) => {
@@ -181,7 +207,7 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
 
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await assistantMessages(page).first().innerText()).trim()
+    const after = await normalizedAssistantText(assistantMessages(page).first())
     expect(after.length).toBeGreaterThanOrEqual(before.length)
   })
 })
@@ -308,4 +334,41 @@ test.describe('S-09 rendered-answer oracle', () => {
       expect(attached).not.toBe(live)
     })
   }
+})
+
+// Harness-only regressions for S-08's "before" text. The running row mirrors
+// ChatScreen's live AssistantMessage: agent label, then ONE answer body that
+// holds the streamed text AND the trailing reply-status mark, then Copy.
+async function renderRunningRow(page: Page, streamed: string): Promise<void> {
+  await page.setContent(`
+    <div id="running" data-status="running"><div><span>Mia</span>
+      <div class="text-[length:var(--type-body-compact-size)]"><div class="prose-sm">${streamed}</div>
+        <span data-testid="reply-status-indicator"><span>Thinking</span> Thinking…</span></div>
+      <button>Copy</button></div></div>`)
+}
+
+test.describe('S-08 streamed-answer oracle', () => {
+  test('reads only the streamed answer: no agent name, status mark or Copy', async ({ page }) => {
+    // The exact shape CI run 39100617554 captured mid-stream.
+    await renderRunningRow(page, '<p>The sea keeps its own calendar. Long before anyone tho</p>')
+    expect(await streamedAnswerText(page.locator('#running'))).toBe(
+      'The sea keeps its own calendar. Long before anyone tho',
+    )
+  })
+
+  test('the streamed answer prefixes the finished answer it grows into', async ({ page }) => {
+    await renderRunningRow(page, '<p>The sea keeps its own calendar. Long before anyone tho</p>')
+    const before = await streamedAnswerText(page.locator('#running'))
+    await renderAnswerRows(page, '<p>The sea keeps its own calendar. Long before anyone thought to write dates on paper.</p>')
+    const after = await normalizedAssistantText(page.locator('#live'))
+    expect(after.startsWith(before.slice(0, 60))).toBe(true)
+  })
+
+  test('still catches a real gap: a finished answer that does not continue the streamed one', async ({ page }) => {
+    await renderRunningRow(page, '<p>The sea keeps its own calendar. Long before anyone tho</p>')
+    const before = await streamedAnswerText(page.locator('#running'))
+    await renderAnswerRows(page, '<p>The sky keeps its own calendar. Long before anyone thought to write.</p>')
+    const after = await normalizedAssistantText(page.locator('#live'))
+    expect(after.startsWith(before.slice(0, 60))).toBe(false)
+  })
 })

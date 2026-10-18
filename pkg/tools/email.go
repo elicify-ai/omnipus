@@ -461,6 +461,7 @@ func (t *SendEmailTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		out, cerr := composeMail(mailComposeInput{
 			toolName: t.Name(), from: from, subject: subject, markdown: body,
 			inReplyTo: inReplyTo, recips: recips, attach: attach,
+			signatureHTML: mailboxSignatureHTML(tp),
 		})
 		if cerr != nil {
 			return ErrorResult(cerr.Error())
@@ -486,6 +487,15 @@ func (t *SendEmailTool) Execute(ctx context.Context, args map[string]any) *ToolR
 func mailboxFrom(tp email.Transport) string {
 	if ident, ok := tp.(mailboxIdentity); ok {
 		return ident.AccountAddress()
+	}
+	return ""
+}
+
+// mailboxSignatureHTML returns the mailbox signature, or "" when the
+// transport does not expose one or the mailbox has none saved.
+func mailboxSignatureHTML(tp email.Transport) string {
+	if sig, ok := tp.(mailboxSignature); ok {
+		return sig.SignatureHTML()
 	}
 	return ""
 }
@@ -609,6 +619,7 @@ func (t *ReplyTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 		out, cerr := composeMail(mailComposeInput{
 			toolName: t.Name(), from: from, subject: subject, markdown: body,
 			inReplyTo: orig.MessageID, recips: recips, attach: attach,
+			signatureHTML: mailboxSignatureHTML(tp),
 		})
 		if cerr != nil {
 			return ErrorResult(cerr.Error())
