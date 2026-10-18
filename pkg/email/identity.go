@@ -20,6 +20,11 @@ func (c *Client) SentFolderName() string { return c.acct.withDefaults().sentFold
 // DraftsFolderName returns the account's Drafts folder name (default "Drafts").
 func (c *Client) DraftsFolderName() string { return c.acct.withDefaults().draftsFolder() }
 
+// SignatureHTML returns the mailbox signature configured on this account.
+// Empty means the mailbox has no signature. The mail tools pass it to
+// email.Compose, which re-sanitizes and appends it once.
+func (c *Client) SignatureHTML() string { return c.acct.SignatureHTML }
+
 // ParseRecipientList parses recipient entries with the SAME MC-4 rules the
 // transport and Compose use: entries split on CR/LF and commas BEFORE parsing
 // (an injection attempt degrades into an unparseable, reported piece),
