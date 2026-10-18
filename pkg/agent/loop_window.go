@@ -66,7 +66,10 @@ func (al *AgentLoop) assembleMessages(
 			return history
 		}
 		if err := al.placePendingSavedWakeInputs(ctx, ts); err != nil {
-			ts.setContextWindowError(err)
+			// Saved wake inputs are user-role context admissions into this
+			// same archive: if they cannot be placed, this turn's input is not
+			// saved either, so the sender gets the fixed not-saved reply.
+			ts.setContextWindowError(&messageNotSavedError{role: "user", cause: err})
 			return history
 		}
 		snap, err := store.WindowView(ctx, ts.sessionKey)

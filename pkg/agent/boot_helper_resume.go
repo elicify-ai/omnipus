@@ -36,12 +36,14 @@ func (r *SteerBootRecovery) resumeRestartHelper(ctx context.Context, stopped *se
 			steer.Principal{Kind: steer.PrincipalKindAgent, ID: "restart-recovery"}, stopped, nil)
 	}
 	if err == nil {
-		launcher := al.getSteerSessionLauncher()
+		var launcher steer.SessionLauncher = al.getSteerSessionLauncher()
 		if launcher == nil {
-			err = errors.New("restart resume: session launcher is not wired")
-		} else {
-			_, err = launcher.Dispatch(ctx, stopped.SessionID, generation)
+			// The gateway wires exactly NewSteerLauncher(agentLoop), which is
+			// stateless; the loop's own instance is the same launch primitive,
+			// not a substitute worker, so resume never depends on wiring order.
+			launcher = NewSteerLauncher(al)
 		}
+		_, err = launcher.Dispatch(ctx, stopped.SessionID, generation)
 	}
 	if err == nil {
 		return

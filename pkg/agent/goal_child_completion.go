@@ -560,7 +560,7 @@ func (al *AgentLoop) wakeMetVerdictEntry(sessionID, goalID string, round int) er
 	}
 	for _, entry := range entries {
 		if entry.ID == "saved-input-"+finalID {
-			_, err := al.WakeSession(withUpwardWakeSource(context.Background(), sessionID, nil), parentID, "finished", finalID, entry.Content)
+			_, err := al.WakeSession(withUpwardWakeSource(context.Background(), sessionID, "handback", nil), parentID, "finished", finalID, entry.Content)
 			return err
 		}
 	}

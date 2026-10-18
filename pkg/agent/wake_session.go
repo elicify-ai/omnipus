@@ -20,6 +20,10 @@ type wakeSource struct {
 	childID        string
 	event          *generated.HelperEvent
 	restartBootSeq uint64
+	// publishKind is the descriptive bus kind a producer has always used
+	// (the upward message's own kind, or "error" for a stop notice). It is
+	// not a wake reason and does not change eligibility.
+	publishKind string
 }
 type wakeSourceKey struct{}
 
@@ -131,8 +135,14 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 			return result, nil
 		}
 		current, loadErr := al.GetSessionLifecycleStore().Load(recipientSessionID)
+		// The live turn closed its steering scope between the live check and
+		// the enqueue. The same execution is either still finishing (not yet
+		// terminal) or an ordinary root that just completed; both fall through
+		// to one idle wake so the outcome is not dropped. A terminal helper or
+		// a changed generation is never reopened.
+		justCompletedRoot := current != nil && current.SteeredBy == nil && current.State == session.LifecycleCompleted
 		if loadErr != nil || !errors.Is(err, errSteeringScopeClosed) || current.Generation != rec.Generation ||
-			current.SteeredBy != nil || current.State != session.LifecycleCompleted {
+			(current.Terminal() && !justCompletedRoot) {
 			return result, fmt.Errorf("wake session: join live turn: %w", errors.Join(err, loadErr))
 		}
 		rec = current
@@ -149,7 +159,11 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 		return result, nil
 	}
 	channel, chatID := wakeStreamAddress(meta)
-	err = al.asyncNotifier.WakeParentAlways(ctx, reason, tools.MessageParentWakeEvent{
+	publishKind := reason
+	if source, ok := ctx.Value(wakeSourceKey{}).(wakeSource); ok && source.publishKind != "" {
+		publishKind = source.publishKind
+	}
+	err = al.asyncNotifier.WakeParentAlways(ctx, publishKind, tools.MessageParentWakeEvent{
 		Channel: channel, ChatID: chatID, AgentID: rec.AgentID, TranscriptSessionID: recipientSessionID,
 		Content: body, MessageID: outcomeID, Generation: rec.Generation,
 	})

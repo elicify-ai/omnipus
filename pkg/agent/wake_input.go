@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -72,6 +73,12 @@ func (al *AgentLoop) placePendingSavedWakeInputs(ctx context.Context, ts *turnSt
 		return nil
 	}
 	meta, err := al.GetSessionStore().GetMeta(ts.transcriptSessionID)
+	if errors.Is(err, fs.ErrNotExist) {
+		// SaveChatInput refuses a recipient without metadata, so a session
+		// with no metadata cannot hold a saved wake input: nothing to place.
+		// Its turn proceeds exactly as it did before saved inputs existed.
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -84,6 +91,12 @@ func (al *AgentLoop) placePendingSavedWakeInputs(ctx context.Context, ts *turnSt
 	}
 	for _, input := range inputs {
 		id := strings.TrimPrefix(input.ID, "saved-input-")
+		if al.wakePublicationInFlight(ts.transcriptSessionID, id) {
+			// Its published wake (idle turn or live-turn join) is the consumer
+			// that places it. Placing it here too would let an unrelated turn
+			// take the input out from under that wake and a delegate poll.
+			continue
+		}
 		if _, err := al.placeSavedWakeInput(ctx, ts.transcriptSessionID, id, ts.agent.ID); err != nil {
 			return err
 		}
@@ -139,6 +152,17 @@ func (al *AgentLoop) releaseWakePublication(sessionID, outcomeID string) {
 	if al.asyncNotifier != nil {
 		al.asyncNotifier.sessionWakes.Delete(sessionID + "\x00" + outcomeID)
 	}
+}
+
+// wakePublicationInFlight reports a wake this process published for the
+// saved input and whose receiver has not exited yet. After a restart no
+// publication is in flight, so the next legitimate turn places the input.
+func (al *AgentLoop) wakePublicationInFlight(sessionID, outcomeID string) bool {
+	if al.asyncNotifier == nil {
+		return false
+	}
+	_, inFlight := al.asyncNotifier.sessionWakes.Load(sessionID + "\x00" + outcomeID)
+	return inFlight
 }
 
 func visibleSteeringReceiptIDs(ids []string) []string {

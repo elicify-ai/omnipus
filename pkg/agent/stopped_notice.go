@@ -244,7 +244,7 @@ func (al *AgentLoop) wakeParentForStoppedNotice(ctx context.Context, rec *sessio
 		return nil
 	}
 	event := stoppedHelperEvent(rec, tr)
-	source := wakeSource{childID: rec.SessionID, event: &event}
+	source := wakeSource{childID: rec.SessionID, event: &event, publishKind: "error"}
 	if tr.Cause == session.StopCauseRestart && rec.StopNote != nil && rec.StopNote.Seq == tr.StopSeq {
 		source.restartBootSeq = rec.StopNote.BootSeq
 	}

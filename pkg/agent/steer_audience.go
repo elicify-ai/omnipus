@@ -262,19 +262,28 @@ func deliverOwnerKey(rec *session.LifecycleRecord) string {
 // which Deliver's caller cannot reach here since res.MessageID was the id
 // Append itself just resolved).
 func deliverEntryIsAcked(inbox *session.MessageInboxStore, ownerKey, childSessionID, messageID string) (bool, error) {
+	_, unacked, err := unackedDeliverEntry(inbox, ownerKey, childSessionID, messageID)
+	return !unacked, err
+}
+
+// unackedDeliverEntry returns the stored, still-unacknowledged entry for
+// messageID. A deduplicated Append keeps the FIRST stored content, so a
+// re-delivery wakes with that stored entry, never with the newer caller's
+// bytes the inbox did not keep.
+func unackedDeliverEntry(inbox *session.MessageInboxStore, ownerKey, childSessionID, messageID string) (generated.SessionMessage, bool, error) {
 	cursor := ""
 	for {
 		msgs, next, more, err := inbox.Drain(ownerKey, childSessionID, cursor, session.DefaultInboxUnackedMax)
 		if err != nil {
-			return false, err
+			return generated.SessionMessage{}, false, err
 		}
 		for _, m := range msgs {
 			if messageIDOf(m) == messageID {
-				return false, nil
+				return m, true, nil
 			}
 		}
 		if !more || next == cursor {
-			return true, nil
+			return generated.SessionMessage{}, false, nil
 		}
 		cursor = next
 	}
@@ -514,11 +523,15 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	if res.Deduped {
 		shortCircuit := !wakeEligible
 		if !shortCircuit {
-			acked, ackedErr := deliverEntryIsAcked(inbox, ownerKey, event.ChildSessionID, res.MessageID)
+			stored, unacked, ackedErr := unackedDeliverEntry(inbox, ownerKey, event.ChildSessionID, res.MessageID)
 			if ackedErr != nil {
 				return steer.Delivery{}, fmt.Errorf("steer: deliver: check acknowledgement: %w", ackedErr)
 			}
-			shortCircuit = acked
+			shortCircuit = !unacked
+			if unacked {
+				// The saved wake input must match the one entry the inbox kept.
+				msg = stored
+			}
 		}
 		if shortCircuit {
 			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
@@ -720,7 +733,8 @@ func (d *SteerUpwardDeliverer) wakeOwnerOrStore(
 	if err != nil {
 		return steer.Delivery{}, err
 	}
-	delivery, err := al.WakeSession(withUpwardWakeSource(ctx, childRec.SessionID, helperEvent), ownerKey, reason, res.MessageID, body)
+	publishKind, _ := msg.Discriminator()
+	delivery, err := al.WakeSession(withUpwardWakeSource(ctx, childRec.SessionID, publishKind, helperEvent), ownerKey, reason, res.MessageID, body)
 	if errors.Is(err, errWakeRecipientUnavailable) {
 		reportUndeliveredWake("steer: deliver: recipient unavailable", event, ownerKey, childRec.Generation, delivery.Delivery)
 		return delivery.Delivery, nil

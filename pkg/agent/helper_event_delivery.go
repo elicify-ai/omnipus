@@ -185,6 +185,6 @@ func (al *AgentLoop) combinedEndingInput(child *session.LifecycleRecord, msg gen
 		goal.Prompt, strings.Join(conditions, "\n"), strings.Join(reasons, "\n"), body), nil
 }
 
-func withUpwardWakeSource(ctx context.Context, childID string, event *generated.HelperEvent) context.Context {
-	return context.WithValue(ctx, wakeSourceKey{}, wakeSource{childID: childID, event: event})
+func withUpwardWakeSource(ctx context.Context, childID, publishKind string, event *generated.HelperEvent) context.Context {
+	return context.WithValue(ctx, wakeSourceKey{}, wakeSource{childID: childID, event: event, publishKind: publishKind})
 }

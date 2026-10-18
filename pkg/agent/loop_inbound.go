@@ -1025,15 +1025,19 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 
 	// The consumed marker and the acknowledgement are written only once the
 	// turn is certain to run: a wake refused above must leave its entry
-	// pending for I-6's Revive (FR-B-013), never swallow it.
-	if appendErr := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
-		ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
-		Content: marker, AgentID: rec.AgentID, Timestamp: time.Now().UTC(),
-	}); appendErr != nil {
-		abort()
-		return "", fmt.Errorf("steer: wake: append consumed marker: %w", appendErr)
+	// pending for I-6's Revive (FR-B-013), never swallow it. A saved wake
+	// input's placement above already wrote this same marker and ack; one
+	// logical event keeps exactly one durable consumption marker.
+	if !saved {
+		if appendErr := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+			ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
+			Content: marker, AgentID: rec.AgentID, Timestamp: time.Now().UTC(),
+		}); appendErr != nil {
+			abort()
+			return "", fmt.Errorf("steer: wake: append consumed marker: %w", appendErr)
+		}
 	}
-	if inbox := al.GetMessageInboxStore(); inbox != nil {
+	if inbox := al.GetMessageInboxStore(); inbox != nil && !saved {
 		if ackErr := inbox.Ack(sessionID, []string{messageID}); ackErr != nil {
 			abort()
 			return "", fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, ackErr)
