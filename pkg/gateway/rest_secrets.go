@@ -11,7 +11,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -131,11 +130,9 @@ func (a *restAPI) secretsConfig(ctx context.Context) *config.Config {
 	return a.agentLoop.GetConfig()
 }
 
+// secretsHome is where workspace records (display names) live.
 func (a *restAPI) secretsHome() string {
-	if sessions := a.agentLoop.GetSessionStore(); sessions != nil {
-		return filepath.Dir(sessions.BaseDir())
-	}
-	return a.homePath
+	return config.OmnipusHomeDir()
 }
 
 func requestUsername(r *http.Request) string {

@@ -103,6 +103,12 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry, cfg *config.Con
 			agent.Tools.Unregister("bash")
 			continue
 		}
+		// ADR-090: the replacement must keep the document runtime the base
+		// instance wired (instance.go) — otherwise every live bash call loses
+		// the managed document toolchain layer.
+		if agent.DocumentRuntime != nil {
+			execTool.SetDocumentRuntime(*agent.DocumentRuntime)
+		}
 		agent.Tools.RegisterReplacing(execTool)
 	}
 

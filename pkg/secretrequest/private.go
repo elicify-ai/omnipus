@@ -6,7 +6,6 @@ package secretrequest
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -74,12 +73,10 @@ func DisplayLines(cfg *config.Config, home string, r credentials.CardRecipient) 
 	return []string{agent + " in " + workspaceTitle(home, r.WorkspaceID), "Variable: " + r.Field}
 }
 
-// home is the data directory the session store lives in.
+// home is the data directory workspace records live in — the same
+// OMNIPUS_HOME the agent loop's turn admission resolves membership against.
 func (r *Registry) home() string {
-	if r.opts.Sessions == nil {
-		return ""
-	}
-	return filepath.Dir(r.opts.Sessions.BaseDir())
+	return config.OmnipusHomeDir()
 }
 
 // workspaceTitle is the workspace's display name, or its id with an initial
