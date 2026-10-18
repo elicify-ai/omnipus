@@ -236,3 +236,45 @@ func TestWU8_ResolvedFrame_CarriesRootSession(t *testing.T) {
 		"K7: the resolved frame lets the root chat's card clear without a lookup")
 	require.Equal(t, root, *frame.RootSessionId)
 }
+
+// TestWU8_ChannelApproval_OriginLabelNamesTheConversation closes the
+// channel-origin gap the map named: an approval inside a turn that answers a
+// person on a channel connection is labelled "while answering <sender> on
+// <channel>" (spec K7, §6.18 channel row; amendment §1.2 R6), live and on
+// the reload snapshot. The <sender> token is the channel conversation the
+// turn is answering (the fixture's chat id) — if the wire detail resolves
+// differently, that is a chief question, not a local guess.
+func TestWU8_ChannelApproval_OriginLabelNamesTheConversation(t *testing.T) {
+	h := newL11263Harness(t, false, config.ToolPolicyAsk, nil)
+	leaf := l11263Script(l11263Write())
+	inst, ok := h.api.agentLoop.GetRegistry().GetAgent(l11263Leaf)
+	require.True(t, ok)
+	inst.Provider = leaf
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.api.agentLoop.ProcessDirectWithChannelAs(context.Background(),
+			l11263Leaf, "Write the file", "wu8-channel-chat", "telegram", "chat-42")
+		done <- err
+	}()
+	t.Cleanup(func() {
+		for _, e := range h.reg.pendingApprovals() {
+			h.reg.resolve(e.ApprovalID, ApprovalActionCancel, false)
+		}
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Error("channel turn cleanup did not join")
+		}
+	})
+	entry := h.awaitInteractiveApproval(t)
+	frame := wu8TypedFrame[gen.ToolApprovalRequiredFrame](t, apprResReadFrame(t, h.tab, "tool_approval_required"))
+
+	require.NotNil(t, frame.OriginLabel,
+		"§6.18/K7: a channel-origin ask names the conversation being answered")
+	require.Equal(t, "while answering chat-42 on telegram", *frame.OriginLabel)
+
+	snap, _ := wu8SnapshotPending(t, h, entry.ApprovalID)
+	require.NotNil(t, snap.OriginLabel, "the channel label survives the reload")
+	require.Equal(t, "while answering chat-42 on telegram", *snap.OriginLabel)
+	require.Equal(t, frame.OriginLabel, snap.OriginLabel)
+}
