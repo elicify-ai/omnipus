@@ -15,18 +15,19 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
+// persistLocked publishes the session state. Its error means the state was
+// NOT published. Receipt cleanup for records retention just removed is
+// maintenance after publication: a cleanup failure never un-publishes the
+// state, it is logged and retried (retryReceiptMaintenanceLocked).
 func (r *Registry) persistLocked(sessionID string) error {
 	pruned, err := r.persistStateLocked(sessionID)
 	if err != nil {
 		return err
 	}
-	if len(pruned) > 0 && r.opts.Credentials != nil {
-		store, storeErr := r.opts.Credentials()
-		if storeErr != nil {
-			return storeErr
-		}
-		return store.PruneCardReceipts(pruned)
+	for _, id := range pruned {
+		r.receiptRetry[id] = sessionID
 	}
+	r.retryReceiptMaintenanceLocked()
 	return nil
 }
 

@@ -61,10 +61,16 @@ type Registry struct {
 	inFlight  map[string]bool
 	initErr   error
 	recovered bool
+	// receiptRetry holds receipts of terminal requests that retention already
+	// removed from published session state but whose encrypted-store receipt
+	// cleanup failed (request id -> session id). It is retried on later state
+	// operations; a restart retries it through the full-inventory orphan sweep.
+	receiptRetry map[string]string
 }
 
 func NewRegistry(opts Options) *Registry {
-	return &Registry{opts: opts, entries: make(map[string]Record), inFlight: make(map[string]bool)}
+	return &Registry{opts: opts, entries: make(map[string]Record), inFlight: make(map[string]bool),
+		receiptRetry: make(map[string]string)}
 }
 
 func (r *Registry) SetSink(sink func(Record)) {
@@ -209,6 +215,7 @@ func (r *Registry) getLocked(id, owner string) (Record, error) {
 	if r.initErr != nil {
 		return Record{}, failure(http.StatusServiceUnavailable, "saved secret request state is unavailable")
 	}
+	r.retryReceiptMaintenanceLocked()
 	if err := r.reconcilePendingLocked(); err != nil {
 		return Record{}, failure(http.StatusServiceUnavailable, "secret request state could not be reconciled")
 	}
