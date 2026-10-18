@@ -72,7 +72,7 @@ The same one-reminder rule applies when a background update started the turn. St
 
 - **Approving the request itself.** If an agent's `send_message` permission is Allow, the request reaches that agent without approval. If it is Deny, the request is refused. If it is Ask, the request needs your approval unless a standing grant already covers `send_message` for that agent; then no new card is raised. When a card is raised, it belongs to that agent and is labelled "for group <name>", and the group shows the member as awaiting your approval.
 - **Approvals during the work.** Approvals and questions the agent raises while working on a group request belong to its main chat, not to the group. While one is open, the group shows the member as waiting for you.
-- **Where they appear in this version.** Approvals still appear in the app-wide approval dialog. That dialog does not show the "for group <name>" label. The card inside the agent's main chat is switched off until later work lands.
+- **Where they appear.** The approval card appears inside the agent's main chat, labelled "for group <name>" when a group request raised it. While it waits, that main chat needs your attention in the sidebar.
 - **Not supported yet.** Secret requests from group work are not handled in this version.
 
 An agent's message in a group is only ever text for the other members. It can never approve anything, answer a question card or run a command.
@@ -186,7 +186,9 @@ You can delete squads and ad-hoc rooms. The team room cannot be deleted. When yo
 
 ## Opening a group: "Earlier messages aren't shown"
 
-When a group is opened or reconnects, the server sends at most the newest 10,000 messages after the last received position. A reconnect normally adds those messages to the ones already on screen, in order and without duplicates. If the server leaves out earlier messages, the returned messages replace the displayed list so it contains no hidden gap. The room then shows a quiet line, "Earlier messages aren't shown", above that list. The line does not block sending. Sending waits only for the first live snapshot (the server's current view of the group) after each opening or reconnect, unless the connection is down or the group is read-only. There is no scrolling back to older messages. The full history stays saved on the server.
+When a group is opened or reconnects, the server sends at most the newest 10,000 messages after the last received position. A reconnect normally adds those messages to the ones already on screen, in order and without duplicates. If the server leaves out earlier messages, the returned messages replace the displayed list so it contains no hidden gap. The room then shows a quiet line, "Earlier messages aren't shown", above that list. The line does not block sending. Sending waits only for the first live snapshot (the server's current view of the group) after each opening or reconnect, unless the connection is down or the group is read-only. The full history stays saved on the server.
+
+**Scrolling back.** Scroll to the top of the room to load the previous page of messages, up to 100 at a time. Each page is loaded only when you reach the top — opening a group never loads its whole history. The room keeps your place while older messages are added above it, and the "Earlier messages aren't shown" line stays until the beginning of the group is reached. While a page loads, the room shows "Loading earlier messages…". If loading fails, "Could not load earlier messages." appears with **Retry**, which asks for the same page again; the messages already shown stay. Loading older messages never blocks sending.
 
 The snapshot always includes every request that is still open. When there are more than 10,000 member states, older finished ones give way first; an open request is never left out.
 
@@ -208,9 +210,7 @@ Group changes are written to the audit log as `room.changed` events. Each event 
 
 | Limit | Detail |
 |---|---|
-| No older history | Only the newest 10,000 messages are sent when a group opens; there is no scrolling back |
 | Informational commands | `/members` and `/help` are accepted no-ops. Their on-screen notices are not implemented yet |
-| Approvals | Shown in the app-wide approval dialog, without the "for group" label |
 | Secret requests | Not handled for group work |
 | Deleting a workspace | Does not remove its separately stored group-chat files yet. The missing workspace makes those groups unavailable through the room API; the retained files are not a promise that the groups can still be opened |
 
@@ -225,13 +225,14 @@ For developers. These routes use gateway authentication: a signed-in browser use
 | `GET /api/v1/rooms/{id}` | Reads one group's metadata |
 | `DELETE /api/v1/rooms/{id}` | Deletes a squad or an ad-hoc room |
 | `PATCH /api/v1/rooms/{id}/members` | Adds, removes, mutes or unmutes members |
+| `GET /api/v1/rooms/{id}/messages` | Returns one page of older messages, oldest first. `before_seq` is an exclusive entry sequence (omit it for the newest page); `limit` is 1 to 1000 (default 100). The response has `entries`, `has_older` and, only when `has_older` is true, `next_before_seq` — the `before_seq` for the page before it. Invalid query values and a `before_seq` beyond the newest entry return 400; a missing group returns 404 |
 | `POST /api/v1/rooms/{id}/messages` | Accepts a message or one of the six room commands; returns an empty 202 on acceptance. A normal message has been saved, but individual members can still be held, refused or unavailable. Commands need not create transcript entries |
 
 A message request needs `client_message_id`, `text` and `mentions`, all present and not null. Use an empty array for `mentions` to rely on typed names or the default. Ids in `mentions` select current members (the reserved value `all` selects every unmuted member); when any are given, the text is not read for names. Keep the original id and payload when retrying (see the retry rules above). Missing fields are rejected with 400, room-rule refusals generally use 422, and missing groups or workspaces use 404. If the gateway cannot read, list or save the group operation itself because of a server or storage failure, it returns a 500 error, not an invented empty list. A message already saved in the group can still return 202 when delivery to an individual member fails on storage; inspect that member's request state as well as the HTTP response.
 
 If a team room has already been created, the workspace room list keeps returning it with `hidden: true` and a read-only reason when the team drops below two conversation agents. A workspace that has never reached two conversation agents has no team room yet. Hidden does not mean deleted. A room GET returns its metadata; use the WebSocket for its messages and current request states.
 
-To read live traffic, attach the web app's WebSocket to the room with `type: "attach_room"`, `room_id` and a non-negative `after_seq` (`0` for the first load). The server answers with a snapshot, then sends live room-entry, member-state and metadata frames. The snapshot holds at most the newest 10,000 entries after the cursor, in order. `has_older: true` means entries after that cursor were left out; `complete` is always true and reserved, not evidence of full history. There is no older-history paging endpoint in this version.
+To read live traffic, attach the web app's WebSocket to the room with `type: "attach_room"`, `room_id` and a non-negative `after_seq` (`0` for the first load). The server answers with a snapshot, then sends live room-entry, member-state and metadata frames. The snapshot holds at most the newest 10,000 entries after the cursor, in order. `has_older: true` means entries after that cursor were left out; `complete` is always true and reserved, not evidence of full history. Older entries are read page by page with `GET /api/v1/rooms/{id}/messages` (above).
 
 The exact request and response shapes are in `contracts/openapi.yaml` and `contracts/asyncapi.yaml`. Clients need the matching response validators: older validators that cap outputs at 256 members or 10,000 live request states reject valid larger responses. This server's generated response schemas have no such output caps.
 

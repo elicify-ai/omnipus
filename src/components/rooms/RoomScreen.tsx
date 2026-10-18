@@ -101,6 +101,8 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
   useEffect(() => {
     if (connected && connection) useRoomStore.getState().attachRoom(roomId)
   }, [roomId, connected, connection])
+  // #1332 D6: leaving the room invalidates its in-flight older-page request.
+  useEffect(() => () => useRoomStore.getState().abandonOlder(roomId), [roomId])
 
   const agents = agentsQuery.data
   const agentName = useMemo(() => {
@@ -132,7 +134,16 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
         memberStates={latestDeliveryByMember(live)}
         onAskAgain={(agentId) => setAskAgain({ agentId, nonce: Date.now() })}
       />
-      <RoomTranscript entries={live?.entries ?? []} agentName={agentName} hasOlder={live?.hasOlder} />
+      <RoomTranscript
+        entries={live?.entries ?? []}
+        agentName={agentName}
+        hasOlder={live?.hasOlder}
+        history={{
+          status: live?.historyStatus ?? 'idle',
+          failed: live?.historyFailed ?? false,
+          loadOlder: () => void useRoomStore.getState().loadOlder(roomId),
+        }}
+      />
       <SendNotice send={send} members={members} workspace={workspaceQuery.data} />
       <RoomComposer
         members={members}

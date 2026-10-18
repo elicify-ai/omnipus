@@ -11,6 +11,15 @@
 // Room frames arrive through slices/room-frames.ts, which consumes them
 // before the chat store's session routing (a room frame's `seq` is a room
 // sequence, not a session sequence).
+//
+// Older history (#1332, ROOM-HISTORY-PAGING-1332-20261018.md D6): `loadOlder`
+// pages backward through GET getRoomHistory from the earliest displayed
+// entry. A page is merged by seq with the CURRENT list (displayed entries win
+// collisions) and never moves the reconnect cursor, members, mutes, pause,
+// generation, cost or the first-snapshot send gate. One older-page request is
+// in flight per room; a new attach (any room), a truncating snapshot or
+// leaving the room invalidates it, and its late success or failure changes
+// nothing.
 
 import { create } from 'zustand'
 import type {
@@ -21,6 +30,8 @@ import type {
   RoomMetaFrame,
   RoomSnapshotFrame,
 } from '@/lib/api/generated/asyncapi-types'
+import type { RoomHistoryResponse } from '@/lib/api/generated/openapi-types'
+import { fetchRoomHistory } from '@/lib/api/rooms'
 import { useConnectionStore } from '@/store/connection'
 
 /**
@@ -50,8 +61,16 @@ export interface RoomLiveState { // not-wire-format: in-browser projection of th
   allocatedCostUnpriced: boolean
   /** A snapshot has arrived since the latest attach; complete is reserved (ruling Q2). */
   snapshotReceived: boolean
-  /** Older history was omitted from the displayed snapshot. */
+  /** Older history exists before the earliest displayed entry. */
   hasOlder: boolean
+  /** #1332: the older-page request state for this room. */
+  historyStatus: 'idle' | 'loading' | 'error'
+  /** #1332: the last older-page request failed (kept while its Retry is loading). */
+  historyFailed: boolean
+  /** #1332: the next before_seq; undefined once the old end is reached (or unknown). */
+  olderBoundary?: number
+  /** #1332: token of the one in-flight older-page request; undefined when none. */
+  historyToken?: number
   deliveries: Record<string, TrackedDelivery>
 }
 
@@ -62,14 +81,27 @@ interface RoomStore {
   /** Attach a room on the existing hub connection, resuming after its cursor. */
   attachRoom: (roomId: string) => boolean
   applyRoomFrame: (frame: RoomFrame) => void
+  /** #1332: load the page before the earliest displayed entry (one in flight per room). */
+  loadOlder: (roomId: string) => Promise<void>
+  /** #1332: the room is no longer shown — invalidate its in-flight older-page request. */
+  abandonOlder: (roomId: string) => void
 }
 
 function emptyRoom(): RoomLiveState {
   return {
     seq: 0, entries: [], members: [], muted: [], paused: false, generation: 0,
-    allocatedCostMicroUsd: 0, allocatedCostUnpriced: false, snapshotReceived: false, hasOlder: false, deliveries: {},
+    allocatedCostMicroUsd: 0, allocatedCostUnpriced: false, snapshotReceived: false, hasOlder: false,
+    historyStatus: 'idle', historyFailed: false, deliveries: {},
   }
 }
+
+/** Drop a room's in-flight older-page request: its late result is ignored. */
+function withoutHistoryRequest(room: RoomLiveState): RoomLiveState {
+  if (room.historyToken === undefined) return room
+  return { ...room, historyToken: undefined, historyStatus: room.historyFailed ? 'error' : 'idle' }
+}
+
+let lastHistoryToken = 0
 
 /**
  * `authoritative` states (member_states, room_member_state) replace a known
@@ -119,13 +151,25 @@ function reduce(room: RoomLiveState, frame: RoomFrame): RoomLiveState {
     case 'room_snapshot': {
       trackEntryDeliveries(deliveries, frame.entries)
       for (const delivery of frame.member_states) track(deliveries, delivery, frame.seq, true)
-      return {
-        ...room, ...metaOf(frame), seq, deliveries,
-        // A cursor snapshot extends the list; truncation starts a new, gap-free window (Q2).
-        entries: mergeEntries(frame.has_older ? [] : room.entries, frame.entries),
-        snapshotReceived: true,
-        hasOlder: frame.has_older === true,
+      const base = { ...room, ...metaOf(frame), seq, deliveries, snapshotReceived: true }
+      if (frame.has_older === true) {
+        // Truncation starts a new, gap-free window (Q2): exactly the snapshot,
+        // older paging restarts before its first entry, and a page requested
+        // for the previous window is invalidated (#1332 D6).
+        const entries = mergeEntries([], frame.entries)
+        return {
+          ...withoutHistoryRequest(base), entries, hasOlder: true,
+          olderBoundary: entries[0]?.seq, historyFailed: false,
+          historyStatus: 'idle', historyToken: undefined,
+        }
       }
+      if (room.entries.length === 0) {
+        // First view of the room: nothing was left out (absent = false).
+        return { ...base, entries: mergeEntries([], frame.entries), hasOlder: false, olderBoundary: undefined }
+      }
+      // A cursor catch-up only proves nothing was omitted AFTER the cursor —
+      // not that the beginning is loaded: merge, and keep the old-end state.
+      return { ...base, entries: mergeEntries(room.entries, frame.entries) }
     }
     case 'room_entry': {
       trackEntryDeliveries(deliveries, [frame.entry])
@@ -143,18 +187,76 @@ function reduce(room: RoomLiveState, frame: RoomFrame): RoomLiveState {
 export const useRoomStore = create<RoomStore>()((set, get) => ({
   rooms: {},
   attachRoom: (roomId) => {
+    // Keep cached entries/cursor, but wait for this attach's first snapshot
+    // before sending. Any attach (this room or another) invalidates every
+    // in-flight older-page request (#1332 D6 stale-response fence).
+    set((state) => {
+      const rooms: Record<string, RoomLiveState> = {}
+      for (const [id, room] of Object.entries(state.rooms)) rooms[id] = withoutHistoryRequest(room)
+      rooms[roomId] = { ...(rooms[roomId] ?? emptyRoom()), snapshotReceived: false }
+      return { rooms }
+    })
     const connection = useConnectionStore.getState().connection
     if (!connection) return false
-    // Keep cached entries/cursor, but wait for this attach's first snapshot before sending.
-    set((state) => ({
-      rooms: { ...state.rooms, [roomId]: { ...(state.rooms[roomId] ?? emptyRoom()), snapshotReceived: false } },
-    }))
     return connection.send({ type: 'attach_room', room_id: roomId, after_seq: get().rooms[roomId]?.seq ?? 0 })
   },
   applyRoomFrame: (frame) => {
     set((state) => ({
       rooms: { ...state.rooms, [frame.room_id]: reduce(state.rooms[frame.room_id] ?? emptyRoom(), frame) },
     }))
+  },
+  loadOlder: async (roomId) => {
+    const room = get().rooms[roomId] ?? emptyRoom()
+    if (room.historyToken !== undefined) return // one in flight per room
+    // The old end is known reached: nothing to request.
+    if (room.snapshotReceived && !room.hasOlder) return
+    const beforeSeq = room.olderBoundary ?? room.entries[0]?.seq
+    const token = ++lastHistoryToken
+    set((state) => ({
+      rooms: { ...state.rooms, [roomId]: { ...(state.rooms[roomId] ?? emptyRoom()), historyToken: token, historyStatus: 'loading' } },
+    }))
+    let page: RoomHistoryResponse | undefined
+    let failed = false
+    try {
+      page = await fetchRoomHistory(roomId, beforeSeq === undefined ? {} : { beforeSeq })
+      if (!page || !Array.isArray(page.entries)) failed = true
+    } catch (error) {
+      failed = true
+      console.warn('[rooms] could not load earlier group-chat messages', { roomId, beforeSeq, error })
+    }
+    set((state) => {
+      const current = state.rooms[roomId]
+      // Invalidated (attach, truncation, leaving the room): change nothing.
+      if (!current || current.historyToken !== token) return state
+      if (failed || !page) {
+        return { rooms: { ...state.rooms, [roomId]: { ...current, historyToken: undefined, historyStatus: 'error', historyFailed: true } } }
+      }
+      const deliveries = { ...current.deliveries }
+      trackEntryDeliveries(deliveries, page.entries)
+      return {
+        rooms: {
+          ...state.rooms,
+          [roomId]: {
+            ...current,
+            deliveries,
+            // Displayed entries win collisions with the older page.
+            entries: mergeEntries(page.entries, current.entries),
+            hasOlder: page.has_older,
+            olderBoundary: page.has_older ? (page.next_before_seq ?? page.entries[0]?.seq) : undefined,
+            historyToken: undefined,
+            historyStatus: 'idle',
+            historyFailed: false,
+          },
+        },
+      }
+    })
+  },
+  abandonOlder: (roomId) => {
+    set((state) => {
+      const room = state.rooms[roomId]
+      if (!room || room.historyToken === undefined) return state
+      return { rooms: { ...state.rooms, [roomId]: withoutHistoryRequest(room) } }
+    })
   },
 }))
 
