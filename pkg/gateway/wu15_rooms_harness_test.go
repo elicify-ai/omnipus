@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -90,31 +92,71 @@ func wu15Boot(t *testing.T, home string, cfg *config.Config) *wu15RoomHarness {
 	t.Helper()
 	// Use the actual gateway listener, not hand-registered room handlers. The
 	// ephemeral port probe is a transport fixture; no fixed/shared gateway port.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr, ok := ln.Addr().(*net.TCPAddr)
-	require.True(t, ok)
-	cfg.Gateway.Port = addr.Port
-	require.NoError(t, ln.Close())
-	require.NoError(t, config.SaveConfig(filepath.Join(home, "config.json"), cfg))
-	b := bus.NewMessageBus()
-	al, loopErr := agent.NewAgentLoop(cfg, b, &wu15ScriptProvider{answer: "room answer"})
-	require.NoError(t, loopErr, "SETUP: real agent-loop construction")
-	ctx, cancel := context.WithCancel(context.Background())
-	rs, bootErr := setupAndStartServices(ctx, cfg, credentials.SecretBundle{}, al, b, home,
-		newUnlockedStore(t, home), &SandboxApplyResult{}, wu15BuiltinCatalog(), tools.NewMCPRegistry(), false)
-	if bootErr != nil {
+	//
+	// The port comes from the listen/close/reuse idiom, and the window between
+	// our close and the gateway's bind is a real TOCTOU race: another test
+	// binary in the same `go test` run can be handed the same number. Train 3
+	// PR CI lost it on 7be3eecbf — a SETUP crash naming an innocent test
+	// ("bind shared HTTP server at 127.0.0.1:44991: bind: address already in
+	// use"). Mirror pkg/agent/testutil's bootUntilReady: retry the WHOLE
+	// allocate -> configure -> boot cycle, ONLY on EADDRINUSE, bounded, and
+	// fail loudly with the last error — never a blanket try-again that could
+	// mask a real boot bug. A draw that cannot even listen is a squatted
+	// port; it redraws for free.
+	const maxBindAttempts = 5
+	var lastErr error
+	var lastPort int
+	for attempt := 1; attempt <= maxBindAttempts; attempt++ {
+		ln, listenErr := net.Listen("tcp", "127.0.0.1:0")
+		if listenErr != nil {
+			lastErr = listenErr
+			continue
+		}
+		addr, ok := ln.Addr().(*net.TCPAddr)
+		if !ok {
+			_ = ln.Close()
+			lastErr = fmt.Errorf("listener address is %T, want *net.TCPAddr", ln.Addr())
+			continue
+		}
+		port := addr.Port
+		require.NoError(t, ln.Close())
+		lastPort = port
+		if wu15BootPortDrawnForTest != nil {
+			wu15BootPortDrawnForTest(port)
+		}
+
+		cfg.Gateway.Port = port
+		require.NoError(t, config.SaveConfig(filepath.Join(home, "config.json"), cfg))
+		b := bus.NewMessageBus()
+		al, loopErr := agent.NewAgentLoop(cfg, b, &wu15ScriptProvider{answer: "room answer"})
+		require.NoError(t, loopErr, "SETUP: real agent-loop construction")
+		ctx, cancel := context.WithCancel(context.Background())
+		rs, bootErr := setupAndStartServices(ctx, cfg, credentials.SecretBundle{}, al, b, home,
+			newUnlockedStore(t, home), &SandboxApplyResult{}, wu15BuiltinCatalog(), tools.NewMCPRegistry(), false)
+		if bootErr == nil {
+			h := &wu15RoomHarness{t: t, home: home, cfg: cfg, al: al, bus: b, rs: rs, api: rs.restAPIRef,
+				baseURL: fmt.Sprintf("http://127.0.0.1:%d", port), ctx: ctx, cancel: cancel}
+			t.Cleanup(h.shutdown)
+			require.NotNil(t, h.api, "SETUP: production boot must expose its REST API")
+			// A known route is the positive transport/auth control even on the RED base.
+			status, body := h.http(http.MethodGet, "/api/v1/workspaces/"+wu15Workspace, nil)
+			require.Equal(t, http.StatusOK, status, "SETUP: healthy workspace route: %s", body)
+			return h
+		}
+		// The attempt failed: release the partial boot's context-bound loops
+		// before deciding whether this is the bind race or a real defect.
 		cancel()
-		t.Fatalf("SETUP: real gateway boot failed: %v", bootErr)
+		lastErr = bootErr
+		if !errors.Is(bootErr, syscall.EADDRINUSE) {
+			break // only the bind race retries
+		}
+		t.Logf("wu15Boot: port %d lost the bind race (attempt %d/%d): %v — redrawing a fresh port",
+			port, attempt, maxBindAttempts, bootErr)
+		time.Sleep(100 * time.Millisecond)
 	}
-	h := &wu15RoomHarness{t: t, home: home, cfg: cfg, al: al, bus: b, rs: rs, api: rs.restAPIRef,
-		baseURL: fmt.Sprintf("http://127.0.0.1:%d", addr.Port), ctx: ctx, cancel: cancel}
-	t.Cleanup(h.shutdown)
-	require.NotNil(t, h.api, "SETUP: production boot must expose its REST API")
-	// A known route is the positive transport/auth control even on the RED base.
-	status, body := h.http(http.MethodGet, "/api/v1/workspaces/"+wu15Workspace, nil)
-	require.Equal(t, http.StatusOK, status, "SETUP: healthy workspace route: %s", body)
-	return h
+	t.Fatalf("SETUP: real gateway boot failed in %d attempts (last port %d): %v",
+		maxBindAttempts, lastPort, lastErr)
+	return nil
 }
 
 func (h *wu15RoomHarness) shutdown() {
