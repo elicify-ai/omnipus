@@ -288,6 +288,9 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 		c.wg.Add(1)
 		c.pairingActive.Store(true)
 		c.reconnectMu.Unlock()
+		// A new pairing starts: "waiting" evicts any terminal frame a
+		// previous chat-started pairing left cached (BDD-8.8).
+		c.emitPairing(channels.PairingStatusWaiting, "", "")
 		go func() {
 			defer c.wg.Done()
 			defer c.pairingActive.Store(false)
@@ -636,6 +639,7 @@ func (c *WhatsAppNativeChannel) handleLoggedOut() {
 
 	c.pairingActive.Store(true)
 	defer c.pairingActive.Store(false)
+	c.emitPairing(channels.PairingStatusWaiting, "", "")
 	for {
 		select {
 		case <-c.runCtx.Done():

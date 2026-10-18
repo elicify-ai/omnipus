@@ -439,7 +439,8 @@ func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, activ
 		return
 	}
 	// Re-emit the last-seen QR frame for this channel, if one is cached and the
-	// QR is still "live" (terminal states are deleted from the map by the
+	// QR is still "live", or a chat-started pairing's final status (other
+	// terminal states are deleted from the map by the
 	// eventForwarder). Delivered through the connection's own ordered queue
 	// like every other frame (#823 ws_conn_queue.go).
 	if cached, ok := h.lastPairingState.Load(channelID); ok {

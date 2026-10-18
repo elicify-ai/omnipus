@@ -77,9 +77,10 @@ type CommandRegistrarCapable interface {
 type PairingStatus string
 
 const (
-	// PairingStatusWaiting is reserved for a pre-QR connecting state. It is not
-	// currently emitted; the SPA renders its initial prompt from the absence of
-	// any pairing state.
+	// PairingStatusWaiting is the pre-QR connecting state. The WhatsApp channel
+	// emits it when a pairing loop starts, which also evicts a terminal frame a
+	// previous chat-started pairing left cached (BDD-8.8); the SPA renders it
+	// exactly like the absence of any pairing state.
 	PairingStatusWaiting PairingStatus = "waiting"
 	// PairingStatusCode means a QR code is available to scan (qr is set).
 	PairingStatusCode PairingStatus = "code"
