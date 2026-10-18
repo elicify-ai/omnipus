@@ -931,8 +931,13 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 	// and failed AC-01's "every driven reason must be known"
 	// guard. A headless scheduled run has no operator by
 	// construction, for the whole run, so Permanent: true is
-	// the correct classification (ADR D1 row 9).
-	const denialReason = autoDenyHeadlessReason
+	// the correct classification (ADR D1 row 9). A task or plan
+	// chain (#1263 R4) refuses with its own row instead; the
+	// turn's attendance classification chose which.
+	denialReason := ex.rx.rr.rq.ri.rf.rt.ts.opts.askRefusalReason
+	if denialReason == "" {
+		denialReason = autoDenyHeadlessReason
+	}
 	cls, _ := ClassifyDenial(denialReason)
 	denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
 	// Build optional extra Details for the deny.attempted entry so
@@ -949,8 +954,14 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 	ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason, denyExtra)
 	// O-3 / F-13 / issue #342: emit the canonical tool.policy.ask.denied
 	// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
-	// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
-	ex.rx.rr.rq.ri.rf.rt.al.emitScheduledAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, tc.ID)
+	// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit. A
+	// task or plan refusal (#1263 R4) carries AskDenyReasonTaskRun and no
+	// schedule identity.
+	if denialReason == autoDenyTaskPlanReason {
+		ex.rx.rr.rq.ri.rf.rt.al.emitTaskRunAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName)
+	} else {
+		ex.rx.rr.rq.ri.rf.rt.al.emitScheduledAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, tc.ID)
+	}
 	// Persist the refusal as a real tool_call entry. This path
 	// never blocks (there is no approver on a headless run), so
 	// there is no pending placeholder to settle — but without

@@ -208,6 +208,9 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 // newTurnStateForAdmission preserves the ordinary routing/history key. The
 // canonical lifecycle identity comes only from its admitted execution carrier.
 func (al *AgentLoop) newTurnStateForAdmission(agent *AgentInstance, opts processOptions) (*turnState, error) {
+	// #1263 R1/R5: the persisted root origin of the session chain decides
+	// whether anybody can answer an approval, for every ordinary entry.
+	al.applyTurnAttendance(&opts)
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, opts.SessionKey))
 	d := opts.executionDisposition
 	if d == nil {

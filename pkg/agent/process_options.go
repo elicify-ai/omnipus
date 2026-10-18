@@ -80,6 +80,12 @@ type processOptions struct {
 	// this; interactive paths leave it false so `ask` keeps prompting.
 	AutoDenyAsk bool
 
+	// askRefusalReason is the denial reason an unattended turn refuses an
+	// unsettled Ask-policy call with (#1263 R4). Set only by
+	// applyTurnAttendance when the turn is built; empty means the headless
+	// scheduled reason.
+	askRefusalReason string
+
 	// Metadata carries the inbound message metadata (bus.InboundMessage.Metadata)
 	// through to the turn flow. The agent loop reads Metadata["model_name"] to
 	// detect a per-thread model switch (FR-011) and apply switch-time
