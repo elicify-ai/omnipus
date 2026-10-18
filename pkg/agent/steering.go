@@ -1234,6 +1234,7 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 					logger.ErrorCF("agent", "saved helper input could not be looked up; restored to the steering queue",
 						map[string]any{"scope": scope, "session_id": item.wake.transcriptSessionID,
 							"outcome_id": item.wake.messageID, "error": savedErr.Error()})
+					al.publishSavedWakeReadPending(item.wake.transcriptSessionID, item.wake.messageID)
 					return msgs, correlationIDs, consumedItems, savedErr
 				}
 				if addr.EntryID != "" {
@@ -1246,6 +1247,7 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 						logger.ErrorCF("agent", "question card unreadable; saved helper input restored to the steering queue",
 							map[string]any{"scope": scope, "session_id": item.wake.transcriptSessionID,
 								"outcome_id": item.wake.messageID, "error": cardErr.Error()})
+						al.publishSavedWakeReadPending(item.wake.transcriptSessionID, item.wake.messageID)
 						return msgs, correlationIDs, consumedItems, cardErr
 					}
 					if open {
@@ -1253,7 +1255,7 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 						continue
 					}
 					msgs = append(msgs, item.message)
-					correlationIDs = append(correlationIDs, savedWakeCorrelationPrefix+item.wake.messageID)
+					correlationIDs = append(correlationIDs, savedWakeCorrelation(item.wake.transcriptSessionID, item.wake.messageID))
 					consumedItems = append(consumedItems, item)
 					continue
 				}

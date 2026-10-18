@@ -37,30 +37,50 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 		return ArchiveAddress{}, err
 	}
 	var existing ArchiveAddress
-	var conflict bool
+	var conflict, indexed, consumed bool
 	if entry, ok := idx[id]; ok {
 		rec, readErr := archive.ReadAt(entry.Address)
 		if readErr != nil {
 			return ArchiveAddress{}, fmt.Errorf("saved input %q: read indexed record: %w", id, readErr)
 		}
-		existing = entry.Address
+		existing, indexed = entry.Address, true
 		conflict = rec.ID != id || rec.ViewMembership != ViewMembershipChat || rec.ModelMessage == nil || rec.Content != body
 	} else if err = archive.ScanAll(func(addr ArchiveAddress, rec ArchiveRecord) bool {
 		// Wake path only (once per outcome): a retried save of an input that
 		// was already placed and left the pending directory must not append a
-		// second copy.
-		if rec.ID != id {
-			return true
+		// second copy. The scan also learns whether it was consumed — placed
+		// into model history, or received by a poll's consumed marker.
+		switch {
+		case rec.ID == id:
+			existing = addr
+			conflict = rec.ViewMembership != ViewMembershipChat || rec.ModelMessage == nil || rec.Content != body
+		case rec.ModelRef != nil && rec.ModelRef.EntryID == id:
+			consumed = true
+		case rec.ID == "consumed-"+strings.TrimPrefix(id, "saved-input-"):
+			consumed = true
 		}
-		existing = addr
-		conflict = rec.ViewMembership != ViewMembershipChat || rec.ModelMessage == nil || rec.Content != body
-		return false
+		return true
 	}); err != nil {
 		return ArchiveAddress{}, err
 	}
 	if existing.EntryID != "" {
 		if conflict {
 			return ArchiveAddress{}, fmt.Errorf("saved input %q already exists with different content or membership", id)
+		}
+		if !indexed && !consumed {
+			// R2-1: the archive append landed but the pending entry did not
+			// (a failed index write, or a stop between the two writes). The
+			// input is still unconsumed, so restore its pending entry before
+			// reporting the save as complete; otherwise no ordinary fence
+			// would ever find it again.
+			fromOrdinal, countErr := archive.OrdinalCount()
+			if countErr != nil {
+				return ArchiveAddress{}, countErr
+			}
+			idx[id] = savedInputIndexEntry{Address: existing, FromOrdinal: fromOrdinal, Seq: time.Now().UnixNano()}
+			if saveErr := us.saveSavedInputIndexLocked(sessionID, idx); saveErr != nil {
+				return ArchiveAddress{}, saveErr
+			}
 		}
 		return existing, nil
 	}

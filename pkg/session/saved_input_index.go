@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
@@ -60,7 +61,27 @@ func (us *UnifiedStore) loadSavedInputIndexLocked(sessionID string) (savedInputI
 	return idx, nil
 }
 
+// savedInputIndexWriteFault, when set, fails pending-index writes. Tests only:
+// it reproduces a crash or disk failure between the archive append and the
+// index write. Set it through SetSavedInputIndexWriteFaultForTest.
+var savedInputIndexWriteFault atomic.Pointer[func(sessionID string) error]
+
+// SetSavedInputIndexWriteFaultForTest installs (fn != nil) or clears (nil) the
+// pending-index write fault. Never call this outside tests.
+func SetSavedInputIndexWriteFaultForTest(fn func(sessionID string) error) {
+	if fn == nil {
+		savedInputIndexWriteFault.Store(nil)
+		return
+	}
+	savedInputIndexWriteFault.Store(&fn)
+}
+
 func (us *UnifiedStore) saveSavedInputIndexLocked(sessionID string, idx savedInputIndex) error {
+	if fault := savedInputIndexWriteFault.Load(); fault != nil {
+		if err := (*fault)(sessionID); err != nil {
+			return fmt.Errorf("saved input index %q: write: %w", sessionID, err)
+		}
+	}
 	path := us.savedInputIndexPath(sessionID)
 	if len(idx) == 0 {
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {

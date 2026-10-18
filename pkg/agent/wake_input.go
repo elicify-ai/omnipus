@@ -18,6 +18,28 @@ import (
 // a provider-message field or a public steering receipt.
 const savedWakeCorrelationPrefix = "\x00saved-wake:"
 
+// savedWakeCorrelation carries the saved input's own recipient transcript
+// with its outcome id, so a consumer whose turn has no transcript binding (a
+// post-turn steering continuation) still addresses the right saved record and
+// releases the right claim (R2-2).
+func savedWakeCorrelation(transcriptSessionID, outcomeID string) string {
+	return savedWakeCorrelationPrefix + outcomeID + "\x00" + transcriptSessionID
+}
+
+// parseSavedWakeCorrelation returns the outcome id and the transcript it
+// belongs to; fallbackSession is used only when none was carried.
+func parseSavedWakeCorrelation(correlationID, fallbackSession string) (outcomeID, sessionID string, ok bool) {
+	rest, ok := strings.CutPrefix(correlationID, savedWakeCorrelationPrefix)
+	if !ok {
+		return "", "", false
+	}
+	outcomeID, sessionID, _ = strings.Cut(rest, "\x00")
+	if sessionID == "" {
+		sessionID = fallbackSession
+	}
+	return outcomeID, sessionID, true
+}
+
 var errSavedWakeHeld = errors.New("saved wake input is held by Stop")
 
 // errSavedWakeHeldForQuestion holds a saved input while the session has an
@@ -62,8 +84,8 @@ func questionCardOpen(sessionID, pendingAskJSON string) (bool, error) {
 // for the rest of the process.
 func (al *AgentLoop) releaseSavedWakeClaims(sessionID string, correlationIDs []string) {
 	for _, id := range correlationIDs {
-		if outcomeID, ok := strings.CutPrefix(id, savedWakeCorrelationPrefix); ok {
-			al.releaseWakePublication(sessionID, outcomeID)
+		if outcomeID, owner, ok := parseSavedWakeCorrelation(id, sessionID); ok {
+			al.releaseWakePublication(owner, outcomeID)
 		}
 	}
 }
@@ -176,21 +198,20 @@ func (al *AgentLoop) placePendingSavedWakeInputs(ctx context.Context, ts *turnSt
 }
 
 func (al *AgentLoop) admitSteeringInput(ts *turnState, msg providers.Message, correlationID string) (bool, error) {
-	if strings.HasPrefix(correlationID, savedWakeCorrelationPrefix) {
+	if outcomeID, sessionID, ok := parseSavedWakeCorrelation(correlationID, ts.transcriptSessionID); ok {
 		ctx := ts.ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		outcomeID := strings.TrimPrefix(correlationID, savedWakeCorrelationPrefix)
-		include, err := al.placeSavedWakeInput(ctx, ts.transcriptSessionID, outcomeID, ts.agent.ID)
+		include, err := al.placeSavedWakeInput(ctx, sessionID, outcomeID, ts.agent.ID)
 		if err != nil {
 			// Held (Stop or an unanswered card) or failed before placement: the
 			// saved record stays pending for the next legitimate fence, and this
 			// consumer gives back its claim instead of stranding it.
-			al.releaseWakePublication(ts.transcriptSessionID, outcomeID)
+			al.releaseWakePublication(sessionID, outcomeID)
 			if errors.Is(err, errSavedWakeHeld) || errors.Is(err, errSavedWakeHeldForQuestion) {
 				logger.InfoCF("agent", "saved helper input held at the live fence; it stays pending",
-					map[string]any{"session_id": ts.transcriptSessionID, "outcome_id": outcomeID, "reason": err.Error()})
+					map[string]any{"session_id": sessionID, "outcome_id": outcomeID, "reason": err.Error()})
 				return false, nil
 			}
 		}

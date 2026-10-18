@@ -149,11 +149,9 @@ func restartResumeWorkspaceRefusal(agentID, workspaceID string) error {
 	}
 	home := omnipusHome()
 	if !workspace.Exists(home, workspaceID) {
-		// No workspace record to hold authority against (a record from before
-		// workspaces, or a deleted one). Residual: a deleted workspace still
-		// falls back like every ordinary turn does; reported for security
-		// review rather than guessed here.
-		return nil
+		// A deleted workspace holds no authority to continue in: refuse rather
+		// than let turn rooting fall back to another membership.
+		return fmt.Errorf("restart resume: workspace %q no longer exists; refusing to continue its saved work elsewhere", workspaceID)
 	}
 	resolved, ok := workspace.FindForAgentPreferring(home, agentID, workspaceID)
 	if ok && resolved == workspaceID {

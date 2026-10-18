@@ -178,6 +178,24 @@ func (al *AgentLoop) repairHelperEvents(childID string) error {
 
 const helperEventPendingText = "A helper event could not be saved in this chat. Omnipus will retry. This is not a failure of the helper's work."
 
+// savedWakeReadPendingText is the chat's existing nonfatal pending line,
+// worded for a helper report that is saved but could not be read at a live
+// fence. The report stays queued and is retried; nothing was lost.
+const savedWakeReadPendingText = "A helper report for this chat could not be read yet. Omnipus will retry. This is not a failure of the helper's work."
+
+// publishSavedWakeReadPending (SFH-07) tells the open chat, through the same
+// repair-pending helper-event line, that a saved helper report missed this
+// live fence. The operator log and the queue retry are the caller's.
+func (al *AgentLoop) publishSavedWakeReadPending(sessionID, outcomeID string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	event := generated.HelperEvent{HelperSessionId: strings.SplitN(outcomeID, ":", 2)[0],
+		Kind: generated.HelperEventKindBlocker, Text: savedWakeReadPendingText, CreatedAt: time.Now().UTC()}
+	al.emitEvent(EventKindHelperEvent, EventMeta{Source: "helper_event"},
+		HelperEventFrameFor(sessionID, "repair-pending-saved-input-"+outcomeID, event))
+}
+
 func (al *AgentLoop) publishHelperEventRepairPending(destination, sourceID string, event generated.HelperEvent) {
 	id := "repair-pending-" + helperEventMessageID(destination, sourceID, event.Kind)
 	event.Text = helperEventPendingText
