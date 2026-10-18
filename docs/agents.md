@@ -33,7 +33,7 @@ The three built-in chat agents cover the everyday jobs.
 |---|---|---|
 | Mia | Assistant | Your everyday starting point. Answers questions and connects you with the right specialist. |
 | Jim | Planner and Orchestrator | Turns a complex goal into tasks, delegates them to the right agents, and tracks the work to completion. |
-| Omnipus | System agent | Sets up and changes your agents, teams, skills, connectors, providers and channels, for every workspace, from one conversation. |
+| Omnipus | System agent | Sets up and changes your agents, workspaces, teams, skills, connectors, providers and channels, from one conversation. |
 
 Any chat colleague can ask a teammate for help: start a message with `@` and pick the agent, and the request is delivered to that agent's own chat. Omnipus no longer moves your conversation over to another agent.
 
@@ -42,7 +42,8 @@ Any chat colleague can ask a teammate for help: start a message with `@` and pic
 Omnipus is your system agent for setup and configuration. It lives in your default workspace only: it cannot be added to another workspace or removed from the default one, and its chats live there. It works from its own folder, and its file tools can still reach the work folders of every workspace (and their mounts) to set them up — never a workspace's record or its private memory folder. Other agents keep to their own workspace.
 
 - **Protected name.** No other agent can be created or renamed to "Omnipus", ignoring letter case and leading or trailing whitespace. A different name such as "Omnipus Helper" is allowed.
-- **Approvals.** Under the shipped non-God-Mode policy, deleting an agent, removing a skill or connector, adding a connector, configuring a provider, and enabling or configuring a channel ask for your approval, as does changing an agent's permissions (`set_agent_permissions`). These calls keep asking when their effective policy is Ask, even with Auto-approve on.
+- **Workspaces.** On a fresh install with the shipped policies, Omnipus can create a workspace without a tool-approval prompt. Deleting one asks for your approval, even with Auto-approve on. These defaults do not replace existing saved permissions; a per-agent Deny still blocks either tool.
+- **Approvals.** Under the shipped non-God-Mode policy, deleting an agent or workspace, removing a skill or connector, adding a connector, configuring a provider, and enabling or configuring a channel ask for your approval, as does changing an agent's permissions (`set_agent_permissions`). These calls keep asking when their effective policy is Ask, even with Auto-approve on.
 - **No per-agent Ask for Omnipus.** You can set any of Omnipus's tools to Deny, but not to Ask on Omnipus itself; set Ask on the global tool policy instead. Every path that changes per-agent permissions refuses it with "Omnipus takes no per-agent Ask; set Ask globally or use Deny".
 - **God Mode.** While God Mode is on, Omnipus is told so in every turn; it then proceeds without approvals.
 

@@ -64,7 +64,7 @@ If the sidebar shows **Could not load workspaces**, select **Retry** to reload t
 
 ## Omnipus
 
-Omnipus is the system agent that sets up and changes your agents, teams, skills, connectors, providers and channels. It has one ongoing conversation, reached from the **Omnipus** entry at the top of the sidebar, above the workspaces.
+Omnipus is the system agent that sets up and changes your agents, workspaces, teams, skills, connectors, providers and channels. It has one ongoing conversation, reached from the **Omnipus** entry at the top of the sidebar, above the workspaces. On a fresh install, its workspace-creation tool runs without a tool-approval prompt; deleting a workspace asks for approval, even with Auto-approve on. God Mode removes that global approval. See [workspace creation and deletion](workspaces.md#how-to-create-a-workspace).
 
 - **It never changes your workspace.** Opening Omnipus from Sales leaves Sales as the active workspace; going back to Sales returns you to Sales's own conversation.
 - **Buttons start a workflow.** **Add agent** (under a workspace in the sidebar, or **Team → Add agent → Create with Omnipus**) opens the Omnipus chat and sends "Create an agent in <workspace>". **Set up a team** (on an empty Team or an empty workspace) sends "Set up a team for <workspace>". The message carries which workspace it is for; Omnipus's own chat stays where it is. If you are offline, nothing is sent and a notice asks you to press the button again once you are reconnected.
