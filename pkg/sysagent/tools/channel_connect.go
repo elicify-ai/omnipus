@@ -146,11 +146,13 @@ func (t *ChannelConnectTool) validateBinding(ws, agentID string) *tools.ToolResu
 	if err := validateID(ws); err != nil {
 		return fail("invalid workspace_id")
 	}
-	state, err := workspacepkg.ReadState(t.deps.Home, ws)
-	if err != nil {
+	w, err := readWorkspaceFromDisk(t.deps.Home, ws)
+	switch {
+	case err != nil && strings.HasPrefix(err.Error(), "NOT_FOUND"):
 		return fail("workspace " + ws + " was not found")
-	}
-	if state.Workspace.Status == "archived" {
+	case err != nil:
+		return fail("workspace " + ws + " could not be read")
+	case strings.EqualFold(strings.TrimSpace(w.Status), "archived"):
 		return fail("workspace " + ws + " is archived")
 	}
 	var agent *config.AgentConfig
