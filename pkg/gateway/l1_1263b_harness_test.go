@@ -125,7 +125,7 @@ type l11263Harness struct {
 	workDir string
 }
 
-func newL11263Harness(t *testing.T, auto bool, policy config.ToolPolicy, scripts map[string]*l11263Provider) *l11263Harness {
+func newL11263Harness(t *testing.T, auto bool, policy config.ToolPolicy, scripts map[string]*l11263Provider, configure ...func(*config.Config)) *l11263Harness {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
@@ -137,9 +137,15 @@ func newL11263Harness(t *testing.T, auto bool, policy config.ToolPolicy, scripts
 	cfg.Agents.Defaults.MaxToolIterations = 10
 	cfg.Sandbox.AutoApprove = auto
 	cfg.Sandbox.AuditLog = true
-	cfg.Sandbox.ToolPolicies = map[string]string{
+	cfg.Sandbox.ToolPolicies = config.DefaultConfig().Sandbox.ToolPolicies
+	for name, value := range map[string]string{
 		"write_file": "ask", "bash": "ask", "goal_claim": "allow",
-		"delegate": "allow", "message_parent": "allow", "run_task": "allow", "execute_plan": "allow",
+		"delegate": "allow", "message_parent": "allow", "run_task": "allow", "execute_plan": "allow", "send_message": "allow",
+	} {
+		cfg.Sandbox.ToolPolicies[name] = value
+	}
+	for _, apply := range configure {
+		apply(cfg)
 	}
 	for _, id := range []string{"mia", l11263Agent, l11263Middle, l11263Leaf} {
 		cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
@@ -159,6 +165,9 @@ func newL11263Harness(t *testing.T, auto bool, policy config.ToolPolicy, scripts
 		require.True(t, ok, "fixture agent %s must exist", id)
 		inst.Provider = script
 	}
+	// The common REST fixture installs the launcher on TaskExecutor only.
+	// Production also installs it on delegate tools (gateway_boot.go).
+	al.SetSteerSessionLauncher(agent.NewSteerLauncher(al))
 	classifier := agent.NewSteerRecordClassifier(al.GetSessionLifecycleStore(), al.GetSessionStore())
 	al.SetSteerAudienceDeps(agent.NewSteerAudienceResolver(classifier), steer.NopBoundaryObserver{}, agent.NewSteerUpwardDeliverer())
 	ps := plan.New(filepath.Join(home, "plans"))
@@ -169,7 +178,8 @@ func newL11263Harness(t *testing.T, auto bool, policy config.ToolPolicy, scripts
 	pe := agent.NewPlanEngine(al, ps, api.taskStore, te)
 	al.SetPlanEngine(pe)
 	reg := newApprovalRegistryV2(64, 10*time.Minute)
-	ws := &WSHandler{agentLoop: al, approvalRegV2: reg}
+	ws := newWSHandler(msgBus, al, "http://localhost:3000")
+	ws.approvalRegV2 = reg
 	al.SetToolApprover(newPolicyApproverAdapter(reg, ws))
 	tab := apprResAttachConns(t, ws, 1)[0]
 	tab.sendCh = make(chan []byte, 256)

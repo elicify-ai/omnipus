@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
@@ -176,7 +176,7 @@ func TestL11263B_RefusalIsVisibleAndAudited(t *testing.T) {
 		case "tool.policy.deny.attempted":
 			details, ok := rec["details"].(map[string]any)
 			require.True(t, ok)
-			if details["tool"] == "write_file" || rec["target"] == "write_file" {
+			if rec["tool"] == "write_file" {
 				attempted++
 				assert.Equal(t, l11263Reason, details["context"])
 			}
@@ -187,9 +187,10 @@ func TestL11263B_RefusalIsVisibleAndAudited(t *testing.T) {
 				askDenied++
 				// R4 deliberately prescribes no serialized spelling for the
 				// new audit reason constant. Its distinction is what is binding.
-				assert.NotEmpty(t, fields["reason"])
-				assert.NotEqual(t, "scheduled", fields["reason"])
-				assert.NotEqual(t, "user", fields["reason"])
+				reason, ok := fields["reason"].(string)
+				require.True(t, ok)
+				assert.True(t, audit.IsValidAskDenyReason(audit.AskDenyReason(reason)), "R4 requires a real new audit reason constant")
+				assert.NotContains(t, []string{"scheduled", "user", "timeout", "cancel", "restart", "saturated", "batch_short_circuit"}, reason, "task/plan refusal must not reuse another denial class")
 				assert.Empty(t, fields["approval_id"])
 				assert.Empty(t, fields["approver_user_id"])
 			}
