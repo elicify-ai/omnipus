@@ -106,6 +106,11 @@ func l1332SeedDense(t *testing.T, rh *roomsHarness, roomID string, count int) {
 	dir := filepath.Join(rooms.DefaultDir(rh.api.homePath), roomID)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, rooms.StreamEntries+".jsonl"), []byte(b.String()), 0o600))
+	// The live service caches opened rooms and replays the journal only on
+	// first load — serve the seeded room through a FRESH hub over the same
+	// home, the production restart shape (never a per-request journal read).
+	rh.hub = newRoomsHub(rh.h, rh.api.homePath)
+	rh.api.rooms.Store(rh.hub)
 }
 
 // l1332Texts extracts the page's entry texts in returned order.
@@ -432,6 +437,10 @@ func TestIssue1332RoomHistory_HistoryReadsDoNotMutateTheRoom(t *testing.T) {
 	// unchanged — one valid locked view per read.
 	page := l1332GetPage(t, rh, roomID, "?limit=3")
 	require.Equal(t, []string{"entry 6", "entry 7", "entry 8"}, l1332Texts(t, page))
+	// D2: below the exclusive cursor the page is the newest min(limit,
+	// eligible) entries — all five of 1..5, ascending, terminal.
 	older := l1332GetPage(t, rh, roomID, fmt.Sprintf("?before_seq=%d", page.Entries[0].Seq))
-	require.Equal(t, []string{"entry 5"}, l1332Texts(t, older))
+	require.Equal(t, []string{"entry 1", "entry 2", "entry 3", "entry 4", "entry 5"}, l1332Texts(t, older))
+	require.False(t, older.HasOlder)
+	l1332RequireContinuation(t, older)
 }
