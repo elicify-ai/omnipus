@@ -20,7 +20,9 @@ func Assertion(message, model string) bool {
 // Neutral explanatory clauses may precede the subject, separated by :;,.!?
 // with or without spaces. A model-only colon heading may introduce the actual
 // subject ("Model m:image input ..."). Input-type subjects never assert model
-// absence. Clauses carrying model/input/availability/negation evidence are not
+// absence. Clauses carrying model/input/availability/negation evidence, or a
+// fronted request-shape qualifier (condition markers such as with/for/when and
+// nouns such as attachments/files/tools — availabilityRequestQualifier), are not
 // skipped as explanations, and trailing qualifiers or additional diagnostic
 // clauses decline a positive assertion. This is a finite grammar, not an English
 // parser: unsupported subjects, identifiers, verbs, contractions and compound
@@ -121,7 +123,8 @@ func (p *modelAvailabilityParser) neutralExplanation() bool {
 		t := p.next()
 		switch t.kind {
 		case availabilityWord:
-			if t.isWord("model", "input", "inputs", "image", "images", "pdf", "pdfs", "audio", "video", "document", "documents", "not", "available", "offered") {
+			if t.isWord("model", "input", "inputs", "image", "images", "pdf", "pdfs", "audio", "video", "document", "documents", "not", "available", "offered") ||
+				availabilityRequestQualifier(t) {
 				return false
 			}
 			words = true
@@ -131,6 +134,24 @@ func (p *modelAvailabilityParser) neutralExplanation() bool {
 			return false
 		}
 	}
+}
+
+// availabilityRequestQualifier reports whether an explanatory-clause word makes
+// the following availability sentence conditional on the request's shape: a
+// condition/scope marker ("With attachments,", "For file uploads,", "When tools
+// are enabled,") or a request-shape noun (attachments, files, tools, media).
+// Such a fronted clause is not neutral, so it is never skipped to reach a model
+// subject: "With attachments, model m is not available." is a capability or
+// format verdict, not unconditional model absence. Neutral phrases ("Sorry,",
+// "Error:", "Request rejected:") contain none of these words.
+func availabilityRequestQualifier(t availabilityToken) bool {
+	return t.isWord(
+		// condition / scope markers
+		"with", "without", "for", "when", "whenever", "if", "unless", "while", "using", "via", "given",
+		// request-shape nouns
+		"attachment", "attachments", "attached", "file", "files", "upload", "uploads", "uploaded",
+		"tool", "tools", "function", "functions", "media", "vision", "multimodal",
+	)
 }
 
 func (p *modelAvailabilityParser) takeModelID(model string) bool {
