@@ -6990,6 +6990,14 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/tools/ConnectChannelTool.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/ConnectChannelToolUI.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/tools/DraftLink.tsx",
       "lane": 3
     },
@@ -7855,6 +7863,10 @@
     },
     {
       "source": "src/components/skills/WhatsAppPairingBody.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/useWhatsAppPairingInterest.ts",
       "lane": 5
     },
     {

@@ -36,7 +36,6 @@ const { sendSpy, connectionState } = vi.hoisted(() => {
     isConnected: true,
     connection: { send: vi.fn() },
   }
-  connectionState.connection.send = connectionState.connection.send
   return { sendSpy: connectionState.connection.send, connectionState }
 })
 vi.mock('@/lib/api', () => ({
