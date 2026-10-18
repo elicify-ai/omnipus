@@ -147,9 +147,11 @@ func newL11263Harness(t *testing.T, auto bool, policy config.ToolPolicy, scripts
 	for _, apply := range configure {
 		apply(cfg)
 	}
-	for _, id := range []string{"mia", l11263Agent, l11263Middle, l11263Leaf} {
+	for _, agentCfg := range []struct{ id, name string }{
+		{"mia", "Mia"}, {l11263Agent, "Approval Worker"}, {l11263Middle, "Approval Middle"}, {l11263Leaf, "Approval Leaf"},
+	} {
 		cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
-			ID: id, Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", id),
+			ID: agentCfg.id, Name: agentCfg.name, Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", agentCfg.id),
 			Tools: &config.AgentToolsCfg{Builtin: config.AgentBuiltinToolsCfg{
 				Policies: map[string]config.ToolPolicy{"write_file": policy},
 			}},
