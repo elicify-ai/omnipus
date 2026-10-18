@@ -1,0 +1,51 @@
+Warning: Route file "/private/tmp/b3-failproof/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/private/tmp/b3-failproof/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/private/tmp/b3-failproof/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/private/tmp/b3-failproof/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /private/tmp/b3-failproof
+
+ ❯ src/lib/featureSwitches.stage1.test.ts (3 tests | 1 failed) 23ms
+     × [S1-g approvals] ships INLINE_TOOL_APPROVALS_ENABLED as exactly true 12ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/featureSwitches.stage1.test.ts > founder decision 2026-10-14 — stage-1 shipped switches > [S1-g approvals] ships INLINE_TOOL_APPROVALS_ENABLED as exactly true
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ src/lib/featureSwitches.stage1.test.ts:27:43
+     25|   // ToolApprovalModal. CHECK mutant: true → false.
+     26|   it('[S1-g approvals] ships INLINE_TOOL_APPROVALS_ENABLED as exactly …
+     27|     expect(INLINE_TOOL_APPROVALS_ENABLED).toBe(true)
+       |                                           ^
+     28|   })
+     29| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 passed (3)
+   Start at  18:52:32
+   Duration  2.40s (transform 123ms, setup 337ms, import 26ms, tests 23ms, environment 1.49s)
+

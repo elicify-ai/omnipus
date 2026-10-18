@@ -17930,9 +17930,9 @@ export const AskUserAnswerFrame = z
 
 export const SessionStatePendingApproval = z
   .object({
-    tool_call_id: z.string().min(1).optional(),
-    turn_id: z.string().min(1).optional(),
-    args: z.record(z.unknown()).optional(),
+    tool_call_id: z.string().min(1),
+    turn_id: z.string().min(1),
+    args: z.record(z.unknown()),
     segments: z.array(CommandSegmentInfo).optional(),
     root_session_id: z.string().min(1).max(255).optional(),
     acting_agent_name: z.string().min(1).max(128).optional(),

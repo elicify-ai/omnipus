@@ -9,6 +9,9 @@ required:
   - tool_name
   - agent_id
   - expires_in_ms
+  - tool_call_id
+  - turn_id
+  - args
 additionalProperties: false
 properties:
   approval_id:
@@ -47,19 +50,18 @@ properties:
     description: >
       L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as
       ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete
-      and approvable. Optional until bundle B3 (WU-8) makes it required.
+      and approvable.
   turn_id:
     type: string
     minLength: 1
     description: >
-      Same value as ToolApprovalRequiredFrame.turn_id. Optional until
-      bundle B3 (WU-8).
+      Same value as ToolApprovalRequiredFrame.turn_id.
   args:
     type: object
     additionalProperties: true
     description: >
       Same value as ToolApprovalRequiredFrame.args — an object, never null.
-      Optional until bundle B3 (WU-8). The snapshot reaches exactly the
+      The snapshot reaches exactly the
       connections the live frame reaches (same audience rule).
   segments:
     type: array

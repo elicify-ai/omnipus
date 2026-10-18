@@ -210,12 +210,11 @@ func TestWU15Rooms_ReceiverHelperApprovalReloadRestoresCompleteApprovableCard(t 
 	require.Equal(t, h.main("mia"), *snap.RootSessionId)
 	require.NotNil(t, snap.ActingAgentName)
 	require.Equal(t, "Jim", *snap.ActingAgentName)
-	// At this base the B3 requiredness has not landed: the snapshot fields
-	// are optional pointers. Presence + equality is the B3 oracle either way.
-	require.NotNil(t, snap.ToolCallId, "B3: the snapshot carries the tool call id")
-	require.Equal(t, frame.ToolCallId, *snap.ToolCallId)
-	require.NotNil(t, snap.TurnId, "B3: the snapshot carries the turn id")
-	require.Equal(t, frame.TurnId, *snap.TurnId)
+	// B3 (required on this branch): the snapshot fields are plain strings.
+	require.NotEmpty(t, snap.ToolCallId, "B3: the snapshot carries the tool call id")
+	require.Equal(t, frame.ToolCallId, snap.ToolCallId)
+	require.NotEmpty(t, snap.TurnId, "B3: the snapshot carries the turn id")
+	require.Equal(t, frame.TurnId, snap.TurnId)
 	require.NotNil(t, snap.Args, "B3: args present, never null")
 	require.Equal(t, frame.Args, snap.Args)
 	require.Equal(t, frame.Segments, snap.Segments)

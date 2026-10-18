@@ -403,22 +403,23 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 // pendingApprovalSnapshot is one reload-snapshot entry (bundle B3, amendment
 // §1.3): the complete request, equal field for field to the live
 // tool_approval_required frame, so a reloaded card is complete and
-// approvable — never a Deny-only stub.
+// approvable — never a Deny-only stub. tool_call_id, turn_id and args are
+// required by the contract; the registry never admits an entry without a
+// turn id (approvals.go::requestApproval, D-03).
 func (h *WSHandler) pendingApprovalSnapshot(e *approvalEntry) generated.SessionStatePendingApproval {
 	args := e.Args
 	if args == nil {
 		args = map[string]any{}
 	}
 	ctx := h.approvalSessionContext(e.SessionID)
-	toolCallID, turnID := e.ToolCallID, e.TurnID
 	return generated.SessionStatePendingApproval{
 		ApprovalId:      e.ApprovalID,
 		SessionId:       e.SessionID,
 		ToolName:        e.ToolName,
 		AgentId:         e.AgentID,
 		ExpiresInMs:     int(e.expiresInMs()),
-		ToolCallId:      &toolCallID,
-		TurnId:          &turnID,
+		ToolCallId:      e.ToolCallID,
+		TurnId:          e.TurnID,
 		Args:            args,
 		Segments:        h.bashApprovalSegments(e),
 		WorkspaceId:     ctx.workspaceField(),

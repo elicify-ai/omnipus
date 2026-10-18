@@ -7074,10 +7074,6 @@
       "lane": 7
     },
     {
-      "source": "src/components/layout/CrossWorkspaceApprovalBanner.tsx",
-      "lane": 8
-    },
-    {
       "source": "src/components/layout/GodModeIndicators.tsx",
       "lane": 7
     },

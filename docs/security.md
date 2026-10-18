@@ -296,7 +296,7 @@ On a host without an enforcing kernel sandbox (Windows, or the process sandbox n
 
 ### Approve a request
 
-When a tool needs your decision, Omnipus opens an approval pop-up over the app. It accepts pending approvals from every workspace and conversation, not only the workspace or chat you are viewing. Requests are shown one at a time; a count indicates when more are queued. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
+When a tool needs your decision, an approval card appears in the chat the request belongs to, above the message box. A helper's request appears in the chat that started the helper, for example an Omnipus helper's in Omnipus's chat. Requests in one chat are shown one at a time; **+N more** indicates when more are queued. While a request waits, that main chat needs your attention: its agent's row in the sidebar shows the attention halo, and a collapsed workspace counts it among the main chats that need you (see [the sidebar](using-omnipus-ui.md#the-sidebar)). There is no separate notice; open that chat to answer. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
 
 | Button | What it does |
 |---|---|
@@ -305,9 +305,9 @@ When a tool needs your decision, Omnipus opens an approval pop-up over the app. 
 | **Deny** | Refuses the call. |
 | **Cancel** | Closes the request without running it. |
 
-Escape, the close control or clicking outside an unexpired pop-up dismisses it locally and sends Deny; it never approves the request. After reconnecting, a request whose original details are unavailable offers Deny only.
+The card never takes focus, and pressing Enter in the message box or Escape never answers it: a request is answered only when you select one of its buttons. A request nobody answers in time expires; the card then says so (a timeout, not a denial by you) and offers **Dismiss**. After a page reload or a reconnect, a request that is still pending comes back as a complete card you can approve, deny or always allow.
 
-**Sidebar cue (changed 2026-10-18).** While a request is pending, the sidebar entry of the asking agent's main chat in that workspace is marked as needing attention. This also happens when the request comes from another of that agent's chats, from a per-person channel conversation, or from a helper working for one of them; a helper's request marks the main chat of the agent whose chat started the work. Known limit: when that agent has no main chat in the workspace, or the conversation belongs to no workspace, no sidebar entry is marked — the request still shows in its own chat.
+**Which sidebar entry is marked (changed 2026-10-18).** It is the asking agent's main chat in that workspace. This also holds when the request comes from another of that agent's chats, from a per-person channel conversation, or from a helper working for one of them; a helper's request marks the main chat of the agent whose chat started the work. Known limit: when that agent has no main chat in the workspace, or the conversation belongs to no workspace, no sidebar entry is marked — the request still shows in its own chat.
 
 What **Always Allow** remembers lasts only for that chat and ends with it. Agents that this chat hands work to inherit it. Nobody else's chats are affected, and there is no list of remembered approvals to review. For most tools it remembers the exact call, with the same arguments. For a shell command it offers a choice; see "Command rules compared with one-time approvals" below.
 

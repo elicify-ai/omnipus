@@ -797,9 +797,9 @@ export interface AskUserAnswerFrame {
 }
 
 export interface SessionStatePendingApproval {
-  tool_call_id?: string;
-  turn_id?: string;
-  args?: {
+  tool_call_id: string;
+  turn_id: string;
+  args: {
     [key: string]: unknown;
   };
   segments?: Array<CommandSegmentInfo>;

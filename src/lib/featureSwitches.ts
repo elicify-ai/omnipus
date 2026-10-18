@@ -12,8 +12,8 @@ export const AGENT_PRIVATE_SECRETS_ENABLED = false
 
 /**
  * Inline tool approvals (#1263 unit 3: the card in the chat plus the "waiting in
- * another chat" banner). Hidden until WU-8 (stage 2): founder design = card in
- * parent chat, no banner, menu-bar attention animation. While off, the release
- * app-wide ToolApprovalModal shows every pending approval.
+ * another chat" banner). On since WU-8 / bundle B3: the card shows in its chat
+ * and a reload restores it complete from the session_state snapshot. While
+ * off, the release app-wide ToolApprovalModal shows every pending approval.
  */
-export const INLINE_TOOL_APPROVALS_ENABLED = false
+export const INLINE_TOOL_APPROVALS_ENABLED = true

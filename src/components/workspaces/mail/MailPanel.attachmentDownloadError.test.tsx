@@ -68,7 +68,8 @@ vi.mock('@/components/layout/Sidebar', () => ({ Sidebar: () => null }))
 vi.mock('@/components/layout/NotificationPanel', () => ({ NotificationPanel: () => null }))
 vi.mock('@/components/chat/MediaLightbox', () => ({ MediaLightbox: () => null }))
 vi.mock('@/components/search/SearchModal', () => ({ SearchModal: () => null }))
-vi.mock('@/components/layout/CrossWorkspaceApprovalBanner', () => ({ CrossWorkspaceApprovalBanner: () => null }))
+// The CrossWorkspaceApprovalBanner mock is deleted with the banner itself
+// (founder ruling 2026-10-18, bundle B3) — MailPanel never rendered it.
 vi.mock('@/components/layout/GodModeIndicators', () => ({ GodModeCornerDot: () => null }))
 vi.mock('@/components/panel-shell/PanelTabPresenceBridge', () => ({ PanelTabPresenceBridge: () => null }))
 vi.mock('@/components/panel-shell/SidePanelShell', () => ({ SidePanelShell: () => null }))
