@@ -205,18 +205,6 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
     until: '2026-10-24',
     note: 'Temporary isolation-webkit-only quarantine: current CI D-106 top-level refusal failure. Chromium and Firefox remain enabled; security verification gap accepted, not evidence isolation works. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
   },
-  {
-    test: 'W9 — reload does not restore the Browser panel',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/1325',
-    until: '2026-10-22',
-    note: 'Founder ruling 2026-10-15 (conclude the L1 stage-1 landing): non-showstopper live-browser case. Name-only workspace has no team under L1 (FR-048); the core_team fixture fix on work/omnipus-l1-e2e-w9w10 re-enables it after landing.',
-  },
-  {
-    test: 'W10 — Back then Forward follows the store, not a stale panel value',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/1325',
-    until: '2026-10-22',
-    note: 'Founder ruling 2026-10-15 (conclude the L1 stage-1 landing): non-showstopper live-browser case. Name-only workspace has no team under L1 (FR-048); the core_team fixture fix on work/omnipus-l1-e2e-w9w10 re-enables it after landing.',
-  },
 ];
 
 
