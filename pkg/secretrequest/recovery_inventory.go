@@ -29,6 +29,9 @@ func (r *Registry) loadRequestInventoryLocked() (map[string][]Record, error) {
 		return nil, err
 	}
 	if len(unreadable) != 0 {
+		for _, id := range unreadable {
+			logStorageFault("recover_inventory", "", id, errInvalidRequestMetadata, repairRecovery)
+		}
 		return nil, errors.New("secret recovery refused: some session metadata is unreadable")
 	}
 	inventory := make(map[string][]Record, len(sessions))
@@ -36,15 +39,18 @@ func (r *Registry) loadRequestInventoryLocked() (map[string][]Record, error) {
 	for _, meta := range sessions {
 		raw, readErr := r.opts.Sessions.ReadSecretRequestState(meta.ID)
 		if readErr != nil {
+			logStorageFault("recover_inventory", "", meta.ID, readErr, repairRecovery)
 			return nil, readErr
 		}
 		var records []Record
 		if decodeErr := json.Unmarshal(raw, &records); decodeErr != nil {
+			logStorageFault("recover_inventory", "", meta.ID, decodeErr, repairRecovery)
 			return nil, decodeErr
 		}
 		for _, rec := range records {
 			if rec.Card.SessionId != meta.ID || rec.Card.RequestId == "" || seen[rec.Card.RequestId] || len(rec.Recipients) != len(rec.Card.Fields) {
-				return nil, errors.New("invalid saved secret request metadata")
+				logStorageFault("recover_inventory", rec.Card.RequestId, meta.ID, errInvalidRequestMetadata, repairRecovery)
+				return nil, errInvalidRequestMetadata
 			}
 			seen[rec.Card.RequestId] = true
 		}

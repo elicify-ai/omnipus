@@ -501,6 +501,8 @@ When an agent needs a provider key, an MCP server environment secret, or a chann
 | Stop after submitting | The saved version remains in the vault. The stopped continuation does not restart on a later reload, explicit chat revival or gateway restart. This also applies when you press Stop after a restart has already interrupted the session. Stop does not undo an integration change already completed. |
 | Gateway restarts before submission | The request becomes unavailable. Ask the agent for a new card. |
 | The destination changes while the card is open | Submission is refused. Ask for a new card showing the current destination. |
+| Saving fails before anything is stored | The card says the request is still pending and what to check: that the credential store is unlocked, readable and writable, and that there is free disk space. Fix that, then submit again. The gateway log records the request, the failed step and a safe cause, never the value. |
+| Saving succeeds but the follow-up is not confirmed | The card says the secret is saved. Do not enter it again; reopen the chat to retry the continuation. |
 
 Each card transition is recorded in the audit log without the values. If the gateway stopped after saving a submission but before recording it, the restart finds the saved submission and records it as `secret.request.recovered_submitted`.
 

@@ -88,8 +88,8 @@ func (r *Registry) Recover() error {
 	}
 	inventory, err := r.loadRequestInventoryLocked()
 	if err != nil {
-		r.initErr = err
-		return err
+		r.initErr = recoveryFault(err)
+		return r.initErr
 	}
 	for sessionID, records := range inventory {
 		changed := false
@@ -97,8 +97,9 @@ func (r *Registry) Recover() error {
 			if rec.Card.State == "pending" {
 				recovered, recoverErr := r.recoverPendingLocked(rec)
 				if recoverErr != nil {
-					r.initErr = recoverErr
-					return recoverErr
+					logStorageFault("recover_receipt", rec.Card.RequestId, sessionID, recoverErr, repairRecovery)
+					r.initErr = recoveryFault(recoverErr)
+					return r.initErr
 				}
 				rec, changed = recovered, true
 			}
@@ -106,8 +107,9 @@ func (r *Registry) Recover() error {
 		}
 		if changed {
 			if _, persistErr := r.persistStateLocked(sessionID); persistErr != nil {
-				r.initErr = persistErr
-				return persistErr
+				logStorageFault("recover_state_publication", "", sessionID, persistErr, repairRecovery)
+				r.initErr = recoveryFault(persistErr)
+				return r.initErr
 			}
 			for _, rec := range records {
 				recovered := r.entries[rec.Card.RequestId]
@@ -123,10 +125,17 @@ func (r *Registry) Recover() error {
 		}
 	}
 	if sweepErr := r.pruneOrphanReceiptsLocked(); sweepErr != nil {
-		r.initErr = sweepErr
-		return sweepErr
+		logStorageFault("recover_receipt_sweep", "", "", sweepErr, repairRecovery)
+		r.initErr = recoveryFault(sweepErr)
+		return r.initErr
 	}
 	return nil
+}
+
+// recoveryFault is the value-free boot error: a fixed repair sentence whose
+// typed cause stays reachable for errors.Is/As.
+func recoveryFault(cause error) error {
+	return &storageFault{message: "saved secret request state could not be recovered — " + repairRecovery, cause: cause}
 }
 
 // Snapshot contains only generated, value-free wire shapes visible to the

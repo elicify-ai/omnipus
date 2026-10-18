@@ -206,7 +206,8 @@ func (r *Registry) Create(ctx context.Context, sessionID, agentID, chatID, origi
 	r.entries[rec.Card.RequestId] = rec
 	if err := r.persistLocked(sessionID); err != nil {
 		delete(r.entries, rec.Card.RequestId)
-		return Record{}, errors.New("secret request could not be saved")
+		logStorageFault("state_publication", rec.Card.RequestId, sessionID, err, repairSessionStorage)
+		return Record{}, &storageFault{message: "secret request could not be saved; " + repairSessionStorage, cause: err}
 	}
 	r.notifyLocked(rec, "requested")
 	return cloneRecord(rec), nil
@@ -233,11 +234,11 @@ func (r *Registry) Get(id, owner string) (Record, error) {
 
 func (r *Registry) getLocked(id, owner string) (Record, error) {
 	if r.initErr != nil {
-		return Record{}, failure(http.StatusServiceUnavailable, "saved secret request state is unavailable")
+		return Record{}, failure(http.StatusServiceUnavailable, msgStateUnavailable)
 	}
 	r.retryReceiptMaintenanceLocked()
 	if err := r.reconcilePendingLocked(); err != nil {
-		return Record{}, failure(http.StatusServiceUnavailable, "secret request state could not be reconciled")
+		return Record{}, failure(http.StatusServiceUnavailable, msgStateUnreconciled)
 	}
 	rec, ok := r.entries[id]
 	if !ok || (rec.Owner != "" && rec.Owner != owner) {
@@ -280,15 +281,20 @@ func (r *Registry) Submit(id, owner string, input gen.SecretSubmitRequest) (Reco
 		values = append(values, credentials.CardValue{BaseName: ReferenceBase(rec.Recipients[i]), Recipient: rec.Recipients[i], Value: value})
 	}
 	if r.opts.Credentials == nil {
-		return rec, failure(http.StatusInternalServerError, "secret store is unavailable; request is still pending")
+		return rec, failure(http.StatusInternalServerError, msgValuesNotSaved)
 	}
 	store, err := r.opts.Credentials()
-	if err != nil || store == nil {
-		return rec, failure(http.StatusInternalServerError, "secret values could not be saved; request is still pending")
+	if err == nil && store == nil {
+		err = errors.New("secret store is unavailable")
+	}
+	if err != nil {
+		logStorageFault("store_open", id, rec.Card.SessionId, err, repairCredentialStore)
+		return rec, failure(http.StatusInternalServerError, msgValuesNotSaved)
 	}
 	receipt, err := store.CommitCard(id, rec.Card.SessionId, values, time.Now())
 	if err != nil && !errors.Is(err, credentials.ErrCardAlreadySubmitted) {
-		return rec, failure(http.StatusInternalServerError, "secret values could not be saved; request is still pending")
+		logStorageFault("credential_commit", id, rec.Card.SessionId, err, repairCredentialStore)
+		return rec, failure(http.StatusInternalServerError, msgValuesNotSaved)
 	}
 	// Nothing beyond this point may claim the request is pending. A failed
 	// metadata write is repairable from the receipt, not a failed submit.
@@ -296,10 +302,16 @@ func (r *Registry) Submit(id, owner string, input gen.SecretSubmitRequest) (Reco
 	rec.Card.UpdatedAt = receipt.SubmittedAt.Format(time.RFC3339Nano)
 	r.entries[id] = rec
 	persistErr := r.persistLocked(rec.Card.SessionId)
+	if persistErr != nil {
+		logStorageFault("state_publication", id, rec.Card.SessionId, persistErr, repairSessionStorage)
+	}
 	r.notifyLocked(rec, "submitted")
 	resumeErr := r.resumeLocked(rec)
+	if resumeErr != nil {
+		logStorageFault("continuation_dispatch", id, rec.Card.SessionId, resumeErr, "reopen this chat to retry the saved continuation")
+	}
 	if persistErr != nil || resumeErr != nil {
-		return cloneRecord(rec), &RequestError{Status: http.StatusServiceUnavailable, Message: "secret saved; continuation is not confirmed — check request state", State: statePointer(rec)}
+		return cloneRecord(rec), &RequestError{Status: http.StatusServiceUnavailable, Message: msgSavedUnconfirmed, State: statePointer(rec)}
 	}
 	return cloneRecord(rec), nil
 }
@@ -365,7 +377,8 @@ func (r *Registry) finishLocked(rec Record, state string) (Record, error) {
 	r.entries[rec.Card.RequestId] = rec
 	if err := r.persistLocked(rec.Card.SessionId); err != nil {
 		r.entries[rec.Card.RequestId] = previous
-		return previous, failure(http.StatusInternalServerError, "secret request state could not be saved")
+		logStorageFault("state_publication", rec.Card.RequestId, rec.Card.SessionId, err, repairSessionStorage)
+		return previous, failure(http.StatusInternalServerError, "secret request state could not be saved; "+repairSessionStorage)
 	}
 	r.notifyLocked(rec, state)
 	return cloneRecord(rec), nil
