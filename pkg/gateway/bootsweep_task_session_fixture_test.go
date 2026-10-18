@@ -22,8 +22,8 @@ const bootsweepTaskReceiptEnv = "OMNIPUS_BOOTSWEEP_TASK_RECEIPT"
 
 // not-wire-format: private subprocess receipt, never a gateway payload.
 type bootsweepTaskCrashReceipt struct {
-	Boot   i1CrashReceipt
-	TaskID string
+	Boot   i1CrashReceipt `json:"Boot"`
+	TaskID string         `json:"TaskID"`
 }
 
 // bootsweepWriteTaskReceipt runs the real MAIN task path and publishes its
