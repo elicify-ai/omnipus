@@ -73,6 +73,9 @@ type wu4PreclaimFixture struct {
 func newWU4PreclaimFixture(t *testing.T, restart bool) *wu4PreclaimFixture {
 	t.Helper()
 	h := &wu4PreclaimFixture{f: newSecretWakeAcceptanceFixture(t, false, true)}
+	// The shared raw-config fixture leaves this operator setting off. Exercise
+	// the real masking path instead of changing its exact masking assertion.
+	h.f.al.GetConfig().Tools.FilterSensitiveData = true
 	h.captureSafety(t)
 	if restart {
 		h.installRevivalReadCut(t)
