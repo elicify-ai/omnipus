@@ -166,8 +166,8 @@
 
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
-import { chatInput, assistantMessages, selectAgent } from './fixtures/selectors';
-import { freshChat } from './fixtures/session-setup';
+import { chatInput, assistantMessages } from './fixtures/selectors';
+import { freshChat, type FreshChat } from './fixtures/session-setup';
 import { completedDelegation, type DelegationFrame } from './fixtures/delegation-completion';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
@@ -223,15 +223,24 @@ function requireApiKey(): void {
 // Helper: start a fresh chat session and route to Jim (delegate-capable —
 // mirrors subagent.spec.ts's startFreshChat; Mia's guide persona refuses to
 // delegate, see that file's own comment).
-async function startFreshChat(page: import('@playwright/test').Page): Promise<void> {
+async function startFreshChat(page: import('@playwright/test').Page): Promise<FreshChat> {
   // The banner "New Chat" button this guarded click targeted is REMOVED
   // (founder decision D7 — no New-chat UI entry anywhere), so the
   // isVisible guard had stopped firing and this helper had silently lost
   // its empty-thread guarantee. freshChat (public REST create + the SPA's
   // own deep-link route) restores it unconditionally.
-  await freshChat(page);
+  //
+  // 2026-10-18 (release run 39029558027): create the empty chat FOR the
+  // delegating agent, exactly as subagent.spec.ts's startFreshChat does. The
+  // old shape — freshChat for the selected agent, THEN selectAgent(Jim) —
+  // checked the empty thread on the fresh session and then clicked Jim's row,
+  // which navigates to Jim's MAIN chat (selectors.ts::selectAgent), so the test
+  // ran in a long-lived thread shared with every earlier attempt: retry #1
+  // counted 4 delegate badges (attempt 0's two plus its own two). The
+  // empty-transcript assertion now runs on the session the test sends into.
+  const chat = await freshChat(page, process.env.E2E_DELEGATION_AGENT_NAME || /Jim/i);
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
-  await selectAgent(page, process.env.E2E_DELEGATION_AGENT_NAME || /Jim/i);
+  return chat;
 }
 
 test(
@@ -247,7 +256,7 @@ test(
     // suite load (see handoff.spec.ts's (b) comment for the same figure).
     test.setTimeout(300_000);
 
-    await startFreshChat(page);
+    const chat = await startFreshChat(page);
 
     const label = `delegation-hidden-${Date.now()}`;
     const frames = framesByPage.get(page)!;
@@ -272,9 +281,21 @@ test(
     // command to General Purpose and polled twice more, emitting 5 delegate
     // calls where this test pins exactly one. A no-tool task is
     // agent-independent: any child can reply "done" unaided.
+    //
+    // agent_id is named explicitly (2026-10-18, release run 39029558027):
+    // since 7ed881cbf (2026-10-09) delegate REQUIRES an explicit target
+    // (pkg/tools/delegate_run.go::validateRequest — "agent_id is required and
+    // must be a non-empty string"); there is no implicit caller substitution
+    // any more. The old argument list named no target, so the model's first
+    // call was refused, it retried with an agent_id of its own choosing, and
+    // the thread carried two delegate calls where this test pins exactly
+    // one. The delegating agent's OWN id keeps the child the same agent the
+    // old untargeted call ran (the seeded self-edge,
+    // pkg/coreagent/seed.go), so the child's no-tool task is unchanged.
     await input.fill(
       [
         'Call the `delegate` tool exactly once, right now, with these arguments:',
+        `  agent_id: "${chat.agentId}"`,
         `  label: "${label}"`,
         '  task: "You are the subagent. Reply with the single word \\"done\\". Do not use any tool."',
         'Do not reply in prose. Do not call any other tool. Call delegate now.',
@@ -379,11 +400,14 @@ test(
     await expect(verboseSwitch).toHaveAttribute('aria-checked', 'true');
 
     // And when: navigating back to the SAME chat (browser back — restores
-    // the workspace-scoped chat URL Jim's session lives at, no session id in
-    // the URL per cancel-cross-channel.spec.ts's own comment on this IA — no
-    // re-fetch, no re-open, no replay).
+    // the chat route this test's session was opened at by freshChat's deep
+    // link; no re-open by the test).
     await page.goBack();
     await expect(input).toBeVisible({ timeout: 15_000 });
+    // The counts below are about THIS test's session, so pin that the back
+    // navigation landed on it (the same binding attribute freshChat's deep
+    // link waits on — fixtures/session-setup.ts::openSessionByDeepLink).
+    await expect(page.locator(`[data-active-session-id="${chat.sessionId}"]`)).toBeVisible({ timeout: 15_000 });
 
     // Then: the deleted subagent-collapsed card does NOT come back under
     // verbose chat either (CONFIRMED CI FAILURE, GitHub run 35997069836 —
