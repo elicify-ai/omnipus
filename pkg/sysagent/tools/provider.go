@@ -88,7 +88,11 @@ func (t *ProviderConfigureTool) Description() string {
 		"Wait for the person to submit the secure web card. Submit stores a version; this approved change selects it. " +
 		"A reference stored for a different recipient is refused: request a new card for the intended recipient. " +
 		"Cloud providers require api_key_ref; local providers need no key. Use catalog ids such as " +
-		"amazon-bedrock or google, not bedrock or gemini. After saving, this tool will check the SAVED entry by requesting a " +
+		"amazon-bedrock or google, not bedrock or gemini. " +
+		"This tool connects API-key and keyless local providers only: account sign-in (for example openai-chatgpt), " +
+		"coding-plan variants and providers needing more than one credential (for example amazon-bedrock: access key, secret, region) " +
+		"cannot be connected here — they are Settings → Providers paths; see the provider-config skill. " +
+		"After saving, this tool will check the SAVED entry by requesting a " +
 		"model list from the configured endpoint using its saved credential and protocol. This does not prove that a chosen model runs. " +
 		"A failed reload or saved-entry check after commit is \"saved but not working\" with the reason; " +
 		"never report it as working or unsaved. Pass expected_revision from list_providers (\"absent\" for a new entry); " +

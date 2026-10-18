@@ -4,6 +4,7 @@ import type { ToolCall } from '@/lib/api'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { GenericToolCall } from './GenericToolCall'
+import { ConnectChannelReplay } from './ConnectChannelToolUI'
 import { WebServeBlock } from './WebServeUI'
 import { SetGoalCardBlock } from './SetGoalToolUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './BrowserTool'
@@ -205,6 +206,28 @@ export function renderHistoricalToolCall({
         isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
         error={tc.error} sessionId={activeSessionId ?? ''}
       />
+    ))
+  }
+  // BDD-8.4 (K10, FR-081): a connect_channel row keeps the usual tool card
+  // and adds the WhatsApp pairing card — the live QR only for a call this
+  // page saw live, else the static Connectors pointer (Q6 = A). Mirrors the
+  // live ConnectChannelToolUI registration.
+  if (tc.tool === 'connect_channel') {
+    return delegationSlotted(callId, inlineEvents, (
+      <div key={callId} className="flex flex-col gap-[var(--space-2)]">
+        <GenericToolCall
+          toolName={tc.tool}
+          args={tc.params}
+          result={tc.result}
+          status={replayPartStatus(tc.status)}
+          error={tc.error}
+          isError={tc.status === 'error'}
+          durationMs={tc.duration_ms}
+          defaultCollapsed={liteMode}
+          sessionId={activeSessionId ?? ''}
+        />
+        <ConnectChannelReplay toolCallId={callId} args={tc.params} sessionId={activeSessionId ?? ''} />
+      </div>
     ))
   }
   // Operator-reported UX fix, 2026-09-08: same narrow override as

@@ -6,6 +6,7 @@ import { useConnectionStore } from '@/store/connection'
 import { disableChannel, enableChannel } from '@/lib/api'
 import { logError } from '@/lib/telemetry'
 import { WhatsAppPairingBody } from './WhatsAppPairingBody'
+import { useWhatsAppPairingInterest } from './useWhatsAppPairingInterest'
 import { Card } from '@/components/ui/card'
 
 // RETRY_TIMEOUT_MS is the bounded window after a user presses Retry during which
@@ -39,10 +40,16 @@ const TIMEOUT_STATE: WhatsAppPairingState = {
 // keyed by instanceID), NOT by the old registry name "whatsapp_native". Each
 // instance has its own whatsmeow store and its own QR, so pairing state,
 // subscribe interest and cleanup are all scoped per instance id.
-export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
-  const pairing = useWhatsAppPairingStore((s) => s.byChannel[channelId])
+//
+// The same component renders the QR in the requesting chat (K10, FR-081):
+// `requestId`/`sessionId` are the connect_channel call's ids. They ride on the
+// subscribe frame, and a stored pairing that belongs to a DIFFERENT chat
+// request is not shown in this card. A pairing without a request id (re-armed
+// by Retry, or started on Connectors) is shown.
+export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { channelId: string; requestId?: string; sessionId?: string }) {
+  const stored = useWhatsAppPairingStore((s) => s.byChannel[channelId])
+  const pairing = requestId && stored?.requestId && stored.requestId !== requestId ? undefined : stored
   const clear = useWhatsAppPairingStore((s) => s.clear)
-  const isConnected = useConnectionStore((s) => s.isConnected)
 
   // retryFallbackState holds the status to revert to if the bounded retry timer
   // fires without a fresh `code` frame arriving. null = not in retry mode.
@@ -101,20 +108,12 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
 
   // #283 (Option B): tell the gateway this connection is viewing WhatsApp
   // pairing so the QR is delivered only here, not broadcast to every admin tab.
-  // Re-subscribe whenever the socket (re)connects while the panel is open —
-  // per-connection interest is lost across a reconnect.
-  useEffect(() => {
-    if (!isConnected) return
-    useConnectionStore.getState().connection?.send({
-      type: 'whatsapp_pairing_subscribe',
-      channel_id: channelId,
-      active: true,
-    })
-  }, [isConnected, channelId])
+  // Shared with the requesting chat and ref-counted per channel: every viewer
+  // re-subscribes on (re)connect, and the LAST viewer to close unsubscribes
+  // and drops the QR secret from the store (#283).
+  useWhatsAppPairingInterest(channelId, requestId, sessionId)
 
-  // On unmount (panel closed): cancel any pending timers, unsubscribe and
-  // drop the QR/pairing secret from the store so it doesn't linger in memory
-  // past the pairing flow (#283).
+  // On unmount: cancel any pending timers.
   useEffect(
     () => () => {
       if (retryTimerRef.current !== null) {
@@ -125,14 +124,8 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
         clearTimeout(initialTimerRef.current)
         initialTimerRef.current = null
       }
-      useConnectionStore.getState().connection?.send({
-        type: 'whatsapp_pairing_subscribe',
-        channel_id: channelId,
-        active: false,
-      })
-      clear(channelId)
     },
-    [clear, channelId],
+    [],
   )
 
   async function handleRetry() {
@@ -209,6 +202,8 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
       type: 'whatsapp_pairing_subscribe',
       channel_id: channelId,
       active: true,
+      ...(requestId ? { request_id: requestId } : {}),
+      ...(sessionId ? { session_id: sessionId } : {}),
     })
 
     // Bounded timeout: if no `code` frame arrives within RETRY_TIMEOUT_MS, revert

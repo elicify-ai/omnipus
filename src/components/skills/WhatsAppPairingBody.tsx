@@ -3,6 +3,7 @@ import {
   Clock,
   ArrowsClockwise,
   Spinner,
+  StopCircle,
   Warning,
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -10,25 +11,33 @@ import { QRCodeSVG } from 'qrcode.react'
 import { Button } from '@/components/ui/button'
 import type { WhatsAppPairingState } from '@/store/whatsappPairing'
 
-// RetryableState: shared layout for the timeout and error cases — both show an
-// icon + message line above a Retry button. Deduplicates the two identical blocks.
+// RetryableState: shared layout for the timeout, error and stopped cases — an
+// icon + message line, the server's own detail when it adds one (e.g. the
+// connect result "saved but not working: pairing timed out", BDD-8.5), and a
+// Retry button when the caller offers one.
 function RetryableState({
   icon: IconComponent,
   iconProps,
   message,
+  detail,
   onRetry,
 }: {
   icon: Icon
   iconProps?: React.ComponentProps<Icon>
   message: string
+  detail?: string
   onRetry?: () => void
 }) {
+  const extra = detail && detail.trim() !== '' && detail.trim() !== message ? detail : undefined
   return (
     <div className="flex flex-col items-center gap-[var(--space-2-5)]">
       <div className={`flex items-center gap-[var(--space-2)] ${iconProps?.className ?? ''}`}>
         <IconComponent size={14} {...iconProps} className={undefined} />
         <p className="text-[length:var(--type-utility-xs-size)]">{message}</p>
       </div>
+      {extra && (
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] text-center">{extra}</p>
+      )}
       {onRetry && (
         <Button
           type="button"
@@ -47,8 +56,8 @@ function RetryableState({
 }
 
 // WhatsAppPairingBody renders the inner QR/status block for the linked-device
-// notice (#283 / US-C3). Implements the full 5-state machine by real wire names:
-// waiting | code | linked | timeout | error
+// notice (#283 / US-C3). Implements the full state machine by real wire names:
+// waiting | code | linked | timeout | error | stopped (K10, BDD-8.8)
 export function WhatsAppPairingBody({
   pairing,
   onRetry,
@@ -101,6 +110,7 @@ export function WhatsAppPairingBody({
           icon={Clock}
           iconProps={{ className: 'text-[var(--color-muted)]' }}
           message="QR expired — select to get a fresh one."
+          detail={pairing.message}
           onRetry={onRetry}
         />
       )
@@ -110,6 +120,18 @@ export function WhatsAppPairingBody({
           icon={Warning}
           iconProps={{ weight: 'fill', className: 'text-[var(--color-error)]' }}
           message="Pairing failed — select to retry."
+          detail={pairing.message}
+          onRetry={onRetry}
+        />
+      )
+    case 'stopped':
+      // Terminal: Stop in the requesting chat ended the pairing (BDD-8.8).
+      return (
+        <RetryableState
+          icon={StopCircle}
+          iconProps={{ className: 'text-[var(--color-muted)]' }}
+          message="Pairing stopped."
+          detail={pairing.message}
           onRetry={onRetry}
         />
       )
