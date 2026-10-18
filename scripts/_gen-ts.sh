@@ -110,7 +110,7 @@ echo "▸ Generating schemas.ts (Zod) from contracts/openapi.yaml …"
 # list is a deliberate manual mapping (W2-9 fix). The runtime result is the
 # same as if the YAML were `additionalProperties: false` AND we chained
 # `.strict()`: unknown fields are rejected.
-STRICT_SCHEMAS=${STRICT_SCHEMAS:-"FallbackModel AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p MediaLibraryEntry MediaAttachmentRequest IntegrationProviderUpdateRequest SearchProviderCheckRequest SearchProviderCheckResponse"}
+STRICT_SCHEMAS=${STRICT_SCHEMAS:-"FallbackModel AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p MediaLibraryEntry MediaAttachmentRequest IntegrationProviderUpdateRequest SearchProviderCheckRequest SearchProviderCheckResponse RoomHistoryResponse"}
 STRICT_RAW="$GEN/_schemas.generated.tmp.ts"
 for name in $STRICT_SCHEMAS; do
   # Match either a typed (export const Name: z.ZodType<Name> = …) or untyped
@@ -373,6 +373,10 @@ ASYNCAPI_FRAG_STRIPPED=$(grep -v '^// @ts-nocheck' "$ASYNCAPI_FRAG" | grep -v '^
   printf '%s\n' "$ASYNCAPI_FRAG_STRIPPED"
 } > "$GEN/schemas.ts"
 rm -f "$GEN/_schemas.generated.tmp.ts"
+
+# External x-go-type array items owned by AsyncAPI must use the same validator,
+# not a weaker OpenAPI inline copy. The helper also probes the generated result.
+node "$REPO_ROOT/scripts/_gen-ts-shared-refs.mjs" "$GEN/schemas.ts" "$CONTRACTS" "$NODE_MODULES"
 
 # ── Inject rationale comments for schemas with a non-default validation policy.
 # The codegen faithfully reflects the YAML, but the rationale for *why* a
