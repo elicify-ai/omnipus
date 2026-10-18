@@ -1596,12 +1596,12 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 // restorableSteeringItems excludes wakes whose consumed marker was already
 // written before their turn ran. Restoring those items would append the same
 // marker again and could later abandon a wake that recovery already treats as
-// consumed. Plain steering messages have no durable marker and remain safe to
-// restore after a failed turn.
+// consumed. Room inputs were settled by their failed continuation too and
+// cannot be restored as new work. Other plain steering remains restorable.
 func restorableSteeringItems(items []steeringQueueItem) []steeringQueueItem {
 	restored := make([]steeringQueueItem, 0, len(items))
 	for _, item := range items {
-		if item.wake == nil {
+		if item.wake == nil && !strings.HasPrefix(item.correlationID, roomSteerCorrelationPrefix) {
 			restored = append(restored, item)
 		}
 	}

@@ -1204,6 +1204,12 @@ func (te *TaskExecutor) StartTaskNowAs(ctx context.Context, taskID string, initi
 		return "", ErrExecutorDraining
 	}
 	defer te.wg.Done()
+	// #1263 R5 (founder 2026-10-13, supersedes D-08/FR-057's attended
+	// exception): a task run never asks a person, whatever started it —
+	// Board "Start Task" / "Create & Run now" and an agent's run_task alike.
+	// Stamped at entry so the launched session is unattended before its
+	// first turn; the turn's root-origin classification enforces the same.
+	ctx = tools.WithAutoDenyAsk(ctx, true)
 	t, err := te.store.Get(taskID)
 	if err != nil {
 		return "", fmt.Errorf("task_executor: StartTaskNow get task %q: %w", taskID, err)
@@ -1511,14 +1517,13 @@ func (te *TaskExecutor) StartOccurrenceRun(_ context.Context, taskID string, occ
 	if _, err := te.store.SpawnReset(taskID); err != nil {
 		return fmt.Errorf("task_executor: StartOccurrenceRun: reset task %q: %w", taskID, err)
 	}
-	// D-08/FR-057: this IS the "run now" a user clicks while watching
-	// (handleTaskRunNow, POST /api/v1/tasks/{id}/runs) — RunKindManual is
-	// exactly that per its own doc. context.Background() here is deliberate,
-	// not an oversight (the caller's ctx is even named `_` above): it carries
-	// no AutoDenyAsk marker, so ToolAutoDenyAsk defaults false and the run
-	// stays attended — cards keep showing, matching FR-057's "a turn a person
-	// actually started must keep showing cards."
-	return te.executeTask(context.Background(), taskID, occurrenceMs, task.RunKindManual, false, nil)
+	// Calendar "Run now" (handleTaskRunNow, POST /api/v1/tasks/{id}/runs) —
+	// RunKindManual. The run is detached from the request (Background, the
+	// caller's ctx is `_` above) and, by #1263 R5 (founder 2026-10-13,
+	// supersedes D-08/FR-057's attended exception), unattended like every
+	// other task run: an Ask call Auto, a rule or a grant does not settle is
+	// refused at once, never raised as an approval.
+	return te.executeTask(tools.WithAutoDenyAsk(context.Background(), true), taskID, occurrenceMs, task.RunKindManual, false, nil)
 }
 
 // ResizeDispatchSema updates the global dispatch semaphore capacity.
@@ -1954,15 +1959,14 @@ func (al *AgentLoop) NotifyTaskDeleted(taskID string) {
 // taskChatID identifies the WebSocket chat for event forwarding (defaults to "task:" + sessionKey).
 // Channel is "webchat" for streaming; tool context is "system" so exec/cron tools are permitted.
 //
-// D-08 (founder decision 2026-09-24, FR-057): AutoDenyAsk is read off ctx
-// rather than hardcoded — every genuinely unattended dispatcher (the
+// AutoDenyAsk is read off ctx: every dispatcher stamps
+// tools.WithAutoDenyAsk(ctx, true) before reaching this function — the
 // Calendar/task-trigger fire, the queued-task drain, the auto-advance
-// cascade, plan-member dispatch, the parent follow-up wake) stamps
-// tools.WithAutoDenyAsk(ctx, true) onto the context BEFORE it reaches this
-// function; a literal REST "Run now" click (StartOccurrenceRun/StartTaskNow)
-// leaves it unstamped, so ToolAutoDenyAsk defaults to false and the run stays
-// attended (cards show), matching runAgentLoop's identical
-// ProcessScheduled(ctx) convention (loop.go).
+// cascade, plan-member dispatch, the parent follow-up wake and, since #1263
+// R5 (founder 2026-10-13, superseding D-08/FR-057's attended exception), the
+// person-started Calendar "Run now" and Board start too. The turn's
+// root-origin classification (applyTurnAttendance) makes the run unattended
+// even if a future caller forgets the stamp.
 func (al *AgentLoop) processTaskDirect(
 	ctx context.Context,
 	agentID, prompt, sessionKey, taskChatID string,

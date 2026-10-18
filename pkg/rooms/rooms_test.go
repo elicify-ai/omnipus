@@ -22,7 +22,7 @@ import (
 
 type fakeDeps struct {
 	mu        sync.Mutex
-	ws        Workspace
+	ws        WorkspaceInfo
 	wsErr     error
 	names     map[string]string
 	admits    []Admission
@@ -36,24 +36,33 @@ type fakeDeps struct {
 	frames    []any
 	audits    []AuditEvent
 	rate      int
+	body      int
+	// rewakes counts admissions of a delivery the member already had (the
+	// real AdmitRoomRequest writes nothing then and only wakes the member).
+	rewakes []string
+	// gate, when set for an agent, blocks that agent's admission until it is
+	// closed; entered receives the delivery id as the admission starts.
+	gate    map[string]chan struct{}
+	entered chan string
 }
 
 func newFakeDeps() *fakeDeps {
 	return &fakeDeps{
-		ws:       Workspace{ID: "sales", Name: "Sales", Agents: []Agent{{"mia", "Mia"}, {"jim", "Jim"}, {"r2", "Researcher2"}}},
+		ws:       WorkspaceInfo{ID: "sales", Name: "Sales", Agents: []Agent{{"mia", "Mia"}, {"jim", "Jim"}, {"r2", "Researcher2"}}},
 		names:    map[string]string{"mia": "Mia", "jim": "Jim", "r2": "Researcher2", "ray": "Ray"},
 		admitErr: map[string]error{}, held: map[string]bool{}, facts: map[string]ReceiverFacts{}, factsErr: map[string]error{}, rate: 60,
+		body: 65536, gate: map[string]chan struct{}{},
 	}
 }
 
-func (f *fakeDeps) Workspace(id string) (Workspace, bool, error) {
+func (f *fakeDeps) LookupWorkspace(id string) (WorkspaceInfo, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.wsErr != nil {
-		return Workspace{}, false, f.wsErr
+		return WorkspaceInfo{}, false, f.wsErr
 	}
 	if id != f.ws.ID {
-		return Workspace{}, false, nil
+		return WorkspaceInfo{}, false, nil
 	}
 	ws := f.ws
 	ws.Agents = slices.Clone(f.ws.Agents)
@@ -61,6 +70,15 @@ func (f *fakeDeps) Workspace(id string) (Workspace, bool, error) {
 }
 
 func (f *fakeDeps) Admit(_ context.Context, a Admission) (AdmitResult, error) {
+	f.mu.Lock()
+	gate, entered := f.gate[a.Receiver.AgentID], f.entered
+	f.mu.Unlock()
+	if entered != nil {
+		entered <- a.DeliveryID
+	}
+	if gate != nil {
+		<-gate
+	}
 	if a.BeforeCommit != nil {
 		if err := a.BeforeCommit(); err != nil {
 			return AdmitResult{}, err
@@ -70,6 +88,12 @@ func (f *fakeDeps) Admit(_ context.Context, a Admission) (AdmitResult, error) {
 	defer f.mu.Unlock()
 	if err := f.admitErr[a.Receiver.AgentID]; err != nil {
 		return AdmitResult{}, err
+	}
+	if prior := f.facts[a.DeliveryID]; prior.Found && !prior.Discarded {
+		// Like AdmitRoomRequest: a capture the member already has is
+		// acknowledged, never written or counted again.
+		f.rewakes = append(f.rewakes, a.DeliveryID)
+		return AdmitResult{ReceiverSessionID: prior.SessionID, Held: prior.Held, AlreadyAdmitted: true}, nil
 	}
 	f.admits = append(f.admits, a)
 	f.facts[a.DeliveryID] = ReceiverFacts{Found: true, SessionID: "main-" + a.Receiver.AgentID, Held: f.held[a.Receiver.AgentID]}
@@ -115,7 +139,7 @@ func (f *fakeDeps) Audit(e AuditEvent) {
 }
 
 func (f *fakeDeps) SessionInWorkspace(sessionID, _ string) bool { return sessionID == "main-mia" }
-func (f *fakeDeps) Limits() (int, int)                          { return f.rate, 65536 }
+func (f *fakeDeps) Limits() (int, int)                          { return f.rate, f.body }
 func (f *fakeDeps) AgentName(id string) (string, bool)          { n, ok := f.names[id]; return n, ok }
 func (f *fakeDeps) CancelApproval(string)                       {}
 
@@ -583,7 +607,7 @@ func bigRoom(n int) *room {
 func TestSnapshot_NewestEntriesWithHasOlder(t *testing.T) {
 	f := newFixture(t)
 	r := bigRoom(10050)
-	ws, _, _ := f.deps.Workspace("sales")
+	ws, _, _ := f.deps.LookupWorkspace("sales")
 	snap := f.svc.snapshot(r, ws, 0)
 	if len(snap.Entries) != 10000 || snap.Entries[0].Seq != 51 || snap.Entries[9999].Seq != 10050 {
 		t.Fatalf("got %d entries, first seq %d, last seq %d; want 10000, 51..10050",

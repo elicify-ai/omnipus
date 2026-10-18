@@ -22,15 +22,19 @@ import (
 // cancelled) or it is waiting for the member's approval card. A caller (the
 // POST that recorded the message, the answer that named members) thus returns
 // with each member's state already decided, except for a pending approval.
-func (s *Service) admitAll(r *room, ws Workspace, ids []string) {
+func (s *Service) admitAll(r *room, ws WorkspaceInfo, ids []string) {
 	var settled sync.WaitGroup
 	for _, id := range ids {
+		done := make(chan struct{})
+		if _, inFlight := s.admitting.LoadOrStore(id, done); inFlight {
+			// One admission per delivery at a time: an overlapping Retry of
+			// the same message never admits (or asks to approve) it twice.
+			continue
+		}
 		s.inflight.Add(1)
 		settled.Add(1)
 		var once sync.Once
 		settle := func() { once.Do(settled.Done) }
-		done := make(chan struct{})
-		s.admitting.Store(id, done)
 		go func(id string) {
 			defer s.inflight.Done()
 			defer settle()
@@ -88,7 +92,7 @@ func (s *Service) AdmitPendingForTest(roomID string) error {
 
 // admitDelivery runs one delivery through the agent loop's room admission
 // and records the outcome (§6.11 state machine).
-func (s *Service) admitDelivery(r *room, ws Workspace, requestID string, settle func()) {
+func (s *Service) admitDelivery(r *room, ws WorkspaceInfo, requestID string, settle func()) {
 	adm, ctx, ok := s.prepareAdmission(r, ws, requestID, settle)
 	if !ok {
 		return
@@ -116,28 +120,48 @@ func (s *Service) admitDelivery(r *room, ws Workspace, requestID string, settle 
 
 // prepareAdmission checks the delivery is still current and builds the
 // admission under the room lock.
-func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string, settle func()) (Admission, context.Context, bool) {
+func (s *Service) prepareAdmission(r *room, ws WorkspaceInfo, requestID string, settle func()) (Admission, context.Context, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d := r.deliveries[requestID]
-	if d == nil || r.deleted || (d.State != StateRecorded && d.State != StateUnknown && d.State != StateUnavailable) {
+	if d == nil || r.deleted || !admittable(d.State) {
+		return Admission{}, nil, false
+	}
+	idx, saved := r.byEntryID[d.EntryID]
+	if !saved {
+		// The delivery was recorded but its message never was (a write cut
+		// between the two): there is nothing to deliver. Re-sending that same
+		// message completes it; nothing else ever admits it.
+		return Admission{}, nil, false
+	}
+	// Every admission path, including original-message Retry, obeys the
+	// room -> mirror -> mention barrier (FR-216).
+	if source := r.entries[idx]; source.AnswersRequest != "" && !r.mirrored[source.Entry.Id] {
 		return Admission{}, nil, false
 	}
 	if !s.deliveryCurrent(r, d) {
 		s.cancelStale(r, d)
 		return Admission{}, nil, false
 	}
-	if facts, err := s.deps.Facts(s.receiver(r, d), d.RequestID); err == nil && facts.Found && !facts.Discarded {
-		// FR-216: the member already has it; record the acknowledgement only.
-		s.recordAdmission(r, d, AdmitResult{ReceiverSessionID: facts.SessionID, Held: facts.Held && !facts.Delivered, AlreadyAdmitted: true}, nil)
+	facts, factsErr := s.deps.Facts(s.receiver(r, d), d.RequestID)
+	known := factsErr == nil && facts.Found && !facts.Discarded
+	if known && facts.Delivered {
+		// FR-216: a turn of the member already took it; record the
+		// acknowledgement only.
+		s.recordAdmission(r, d, AdmitResult{ReceiverSessionID: facts.SessionID, AlreadyAdmitted: true}, nil)
 		return Admission{}, nil, false
 	}
-	rate, _ := s.deps.Limits()
-	if !s.rate.allow(d.SenderAgentID+"\x00"+d.AgentID, rate, s.now()) {
-		s.updateState(r, d, StateUnavailable, ReasonRateLimit)
-		return Admission{}, nil, false
+	// A capture the member has not been given yet goes through the admission
+	// again: it writes nothing twice and only makes sure the member is woken.
+	// That is not a new request, so it does not count against the pace.
+	if !known {
+		rate, _ := s.deps.Limits()
+		if !s.rate.allow(d.SenderAgentID+"\x00"+d.AgentID, rate, s.now()) {
+			s.updateState(r, d, StateUnavailable, ReasonRateLimit)
+			return Admission{}, nil, false
+		}
 	}
-	if d.State != StateRecorded {
+	if d.State != StateRecorded && d.State != StateAdmitted {
 		// A Retry of a member that never received the message (unavailable,
 		// unknown) starts over as "sending…": the admission's wake can reach
 		// the dequeue fence before this admission returns, and the fence must
@@ -166,6 +190,15 @@ func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string, sett
 	return adm, ctx, true
 }
 
+// admittable: the delivery has not started a turn and may be (re)admitted.
+func admittable(state string) bool {
+	switch state {
+	case StateRecorded, StateUnknown, StateUnavailable, StateAdmitted, StateHeld:
+		return true
+	}
+	return false
+}
+
 // deliveryCurrent: the room is not paused past it, and the member is still a
 // member (FR-217). The caller holds r.mu.
 func (s *Service) deliveryCurrent(r *room, d *deliveryRecord) bool {
@@ -178,7 +211,9 @@ func (s *Service) cancelStale(r *room, d *deliveryRecord) {
 	if !slices.Contains(r.rec.Members, d.AgentID) {
 		reason = ReasonRemoved
 	}
-	s.cancelDelivery(r, d, reason)
+	if err := s.cancelDelivery(r, d, reason); err != nil {
+		logRoomError("a fenced-off request could not be marked cancelled; it never runs", r.rec.ID, err)
+	}
 }
 
 func (s *Service) receiver(r *room, d *deliveryRecord) addressing.Pair {
@@ -205,6 +240,9 @@ func (s *Service) recordAdmission(r *room, d *deliveryRecord, res AdmitResult, e
 	state := StateAdmitted
 	if res.Held {
 		state = StateHeld
+	}
+	if d.State == state && d.Reason == "" {
+		return // a re-woken capture: nothing changed
 	}
 	s.updateState(r, d, state, "")
 }
@@ -234,7 +272,7 @@ func (s *Service) updateState(r *room, d *deliveryRecord, state, reason string) 
 // buildAdmission composes what the member receives: the message, who wrote
 // it, and the room messages since that member's previous room request (at
 // most 20 entries and 8,192 bytes, FR-200).
-func (s *Service) buildAdmission(r *room, ws Workspace, d *deliveryRecord) Admission {
+func (s *Service) buildAdmission(r *room, ws WorkspaceInfo, d *deliveryRecord) Admission {
 	idx, ok := r.byEntryID[d.EntryID]
 	var se storedEntry
 	if ok {
@@ -260,7 +298,7 @@ func (s *Service) buildAdmission(r *room, ws Workspace, d *deliveryRecord) Admis
 	}
 }
 
-func authorName(se storedEntry, ws Workspace) string {
+func authorName(se storedEntry, ws WorkspaceInfo) string {
 	if se.Entry.Author.Kind == "agent" && se.Entry.Author.AgentId != nil {
 		return agentName(ws, *se.Entry.Author.AgentId)
 	}
@@ -269,7 +307,7 @@ func authorName(se storedEntry, ws Workspace) string {
 
 // roomContext is the quoted room history the member has not been sent yet:
 // the entries after its previous room request, before this one.
-func (s *Service) roomContext(r *room, ws Workspace, d *deliveryRecord, idx int) string {
+func (s *Service) roomContext(r *room, ws WorkspaceInfo, d *deliveryRecord, idx int) string {
 	start := 0
 	for i := idx - 1; i >= 0; i-- {
 		if slices.ContainsFunc(r.byEntry[r.entries[i].Entry.Id], func(id string) bool {

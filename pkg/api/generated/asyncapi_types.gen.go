@@ -1185,7 +1185,7 @@ type RoomSnapshotFrame struct {
 	Generation int64       `json:"generation"`
 	// True when entries after the cursor older than the ones served were left out (a snapshot carries at most the newest 10,000 entries).
 	HasOlder *bool `json:"has_older,omitempty"`
-	// Current delivery states of outstanding requests. Never null.
+	// Every outstanding (non-terminal) delivery state plus the latest terminal state of each member. Never null. Live states are never dropped (ruling Q2), so this array has no fixed upper bound.
 	MemberStates   []RoomDeliveryState `json:"member_states"`
 	Members        []string            `json:"members"`
 	Muted          []string            `json:"muted"`

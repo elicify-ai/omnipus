@@ -36,10 +36,12 @@ type PolicyApprovalReq struct {
 	AgentID    string
 	SessionID  string
 	TurnID     string
-	// RoomRef and OriginLabel are set only on a room's pre-admission card
-	// (omnipus-system-agent FR-251, K7): the card is raised in the
-	// RECEIVER's main chat, names the group ("for group <name>") and carries
-	// the room delivery id as request id. Empty for every other approval.
+	// RoomRef is set only on a room's pre-admission card (omnipus-system-agent
+	// FR-251, K7): the card is raised in the RECEIVER's main chat and carries
+	// the room delivery id as request id. OriginLabel is the server-derived
+	// turn origin (spec §6.18): "for group <name>" on that card, "asked by
+	// <Agent>" when the asking turn consumed a peer request; empty for a
+	// plain web turn.
 	RoomRef     *generated.RoomRef
 	OriginLabel string
 }

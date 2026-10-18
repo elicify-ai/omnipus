@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
 func (h *wu15RoomHarness) listRooms(workspaceID string) []gen.Room {
@@ -191,35 +190,12 @@ func wu15ReadAuditLines(t *testing.T, home string) [][]byte {
 
 func wu15RequireMutationAudit(t *testing.T, before, after [][]byte, roomID string, agents []string, action string) {
 	t.Helper()
-	old := map[string]int{}
-	for _, line := range before {
-		old[string(line)]++
+	exactAction := "members_" + action
+	switch action {
+	case "create":
+		exactAction = "created"
+	case "delete":
+		exactAction = "deleted"
 	}
-	matched := false
-	for _, line := range after {
-		if old[string(line)] > 0 {
-			old[string(line)]--
-			continue
-		}
-		var entry audit.Entry
-		require.NoError(t, json.Unmarshal(line, &entry), "FR-172: actual audit row parses")
-		if entry.User != "wu15-tester" || entry.Timestamp.IsZero() || entry.Event == "" {
-			continue
-		}
-		details, err := json.Marshal(entry.Details)
-		require.NoError(t, err)
-		if !bytes.Contains(details, []byte(`"`+roomID+`"`)) {
-			continue
-		}
-		allAgents := true
-		for _, id := range agents {
-			if !bytes.Contains(details, []byte(`"`+id+`"`)) {
-				allAgents = false
-			}
-		}
-		if allAgents {
-			matched = true
-		}
-	}
-	require.True(t, matched, "FR-172: %s appended a new attributed audit receipt for room %s and affected agents %v", action, roomID, agents)
+	requireRoomAudit(t, wu15NewAuditRows(t, before, after), roomID, exactAction, "wu15-tester", agents...)
 }

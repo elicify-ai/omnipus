@@ -17,8 +17,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
-// Workspace is what the rooms need to know about one workspace.
-type Workspace struct {
+// WorkspaceInfo is what the rooms need to know about one workspace.
+type WorkspaceInfo struct {
 	ID   string
 	Name string
 	// Agents are the workspace's conversation agents in team order: members
@@ -74,9 +74,9 @@ type AuditEvent struct {
 
 // Directory is what the room service reads about workspaces and agents.
 type Directory interface {
-	// Workspace loads a workspace; found=false when it does not exist. A
+	// LookupWorkspace loads a workspace; found=false when it does not exist. A
 	// read failure is an error, never "not found".
-	Workspace(workspaceID string) (ws Workspace, found bool, err error)
+	LookupWorkspace(workspaceID string) (ws WorkspaceInfo, found bool, err error)
 	// AgentName returns an agent's display name (any agent, member or not).
 	AgentName(agentID string) (string, bool)
 	// SessionInWorkspace reports whether sessionID is a main chat of a
@@ -139,10 +139,17 @@ type Service struct {
 	// id in flight to a channel closed when its admission finished.
 	inflight  sync.WaitGroup
 	admitting sync.Map
+	// Failed allocation reads retain the incomplete mark until storage can
+	// save it. Reads never serve a complete total while that repair is pending.
+	incompleteCosts    sync.Map // room id -> true
+	pendingSettlements sync.Map // settlementKey -> settlementRecord; completion bookkeeping only
 
-	mu        sync.Mutex
-	rooms     map[string]*room
-	loadedAll bool
+	// workspaceMu excludes on-read system reconciliation while a user save
+	// commits and applies its room memberships with that user's principal.
+	workspaceMu sync.RWMutex
+	mu          sync.Mutex
+	rooms       map[string]*room
+	loadedAll   bool
 	// sessions maps a member main session to the room requests it is
 	// working on (for waiting_on_user) and the cards pending there.
 	// cardMu guards working and pending; it is a leaf lock (never held
@@ -167,6 +174,8 @@ type room struct {
 	turns      map[string]bool
 	seq        int64
 	deleted    bool
+	// resumed: the unsent mentions found on load were handed to admission.
+	resumed bool
 	// cancels holds the approval-wait cancel of each delivery in flight.
 	cancels map[string]context.CancelFunc
 	// commands remembers the client ids of commands already applied in this
@@ -257,7 +266,27 @@ func (s *Service) readRoom(roomID string) (*room, error) {
 	if err := s.readJournals(roomID, r); err != nil {
 		return nil, storageError("the group chat could not be read", err)
 	}
-	s.recover(r)
+	if r.rec.Deleted {
+		// A deletion saved before a crash or a failed cleanup: finish it.
+		r.deleted = true
+		s.finishDeletion(r)
+		return nil, notFound("no such group chat")
+	}
+	if err := s.repairReleasedConsumes(r); err != nil {
+		return nil, err
+	}
+	if err := s.repairIncompleteCost(r); err != nil {
+		return nil, err
+	}
+	if err := s.repairSettlements(r); err != nil {
+		return nil, err
+	}
+	if err := s.recover(r); err != nil {
+		// Never serve states that could not be made true (a "working" member
+		// whose turn died with the process): the room is unreadable until
+		// its recovery can be saved.
+		return nil, storageError("the group chat could not be recovered after a restart", err)
+	}
 	return r, nil
 }
 
@@ -271,7 +300,42 @@ func (s *Service) readJournals(roomID string, r *room) error {
 	if err := readStream(s.journal, roomID, StreamMirrors, func(m mirrorRecord) { r.mirrored[m.AnswerID] = true }); err != nil {
 		return err
 	}
-	return readStream(s.journal, roomID, StreamTurns, func(t turnRecord) { r.turns[t.TurnID] = true })
+	var settlementErr error
+	if err := readStream(s.journal, roomID, StreamSettlements, func(intent settlementRecord) {
+		if err := validateSettlement(intent); err != nil {
+			settlementErr = err
+			return
+		}
+		s.pendingSettlements.Store(settlementKey{roomID, intent.RequestID}, intent)
+	}); err != nil {
+		return err
+	}
+	if settlementErr != nil {
+		return settlementErr
+	}
+	// The turn journal is the allocated cost's source of truth (§6.14): each
+	// counted turn's share and unpriced flag are summed here, so a share is
+	// never lost when the room record could not be saved after its turn line.
+	var cost int64
+	unpriced := false
+	err := readStream(s.journal, roomID, StreamTurns, func(t turnRecord) {
+		if r.turns[t.TurnID] {
+			return // a repeated line counts once
+		}
+		r.turns[t.TurnID] = true
+		cost += t.MicroUSD
+		unpriced = unpriced || t.Unpriced
+	})
+	if err != nil {
+		return err
+	}
+	if err := readStream(s.journal, roomID, StreamCostGaps, func(t turnRecord) { unpriced = unpriced || t.Unpriced }); err != nil {
+		return err
+	}
+	// The record's own mark stays: it also says a turn line could not be
+	// written (AddTurnCost), which no turn line can say.
+	r.rec.CostMicroUSD, r.rec.CostUnpriced = cost, r.rec.CostUnpriced || unpriced
+	return nil
 }
 
 // readStream decodes every line of one journal stream, in order, into fn.
@@ -315,19 +379,28 @@ func (r *room) putDelivery(d *deliveryRecord) {
 
 // recover restores the states the previous process left in flight: nothing
 // that cannot be proven is shown as working (§6.11). It also completes the
-// answer mirrors a crash cut off (FR-216).
-func (s *Service) recover(r *room) {
+// answer mirrors a crash cut off (FR-216). A recovered state that cannot be
+// saved is an error: the room is not served with a state that is not true.
+func (s *Service) recover(r *room) error {
+	answered := map[string]bool{}
+	for _, e := range r.entries {
+		if e.AnswersRequest != "" {
+			answered[e.AnswersRequest] = true
+		}
+	}
 	for _, id := range r.order {
 		d := r.deliveries[id]
 		if terminal(d.State) {
 			continue
 		}
-		next, reason := s.recoveredState(r, d)
+		next, reason := s.recoveredState(r, d, answered[d.RequestID])
 		if next == StateInterrupted && d.SessionID != "" {
 			// Interrupted work is never replayed (§6.11): the member's request
-			// is discarded so no later turn picks it up again.
+			// is discarded so no later turn picks it up again. A failed
+			// discard is safe once "interrupted" is saved: the dequeue fence
+			// refuses a settled request.
 			if err := s.deps.Discard(d.SessionID, d.RequestID); err != nil {
-				slog.Error("rooms: an interrupted request could not be discarded; the dequeue fence still refuses it",
+				slog.Error("rooms: an interrupted request could not be discarded; the dequeue fence refuses it",
 					"room_id", r.rec.ID, "request_id", d.RequestID, "error", err)
 			}
 		}
@@ -335,8 +408,7 @@ func (s *Service) recover(r *room) {
 			continue
 		}
 		if err := s.setState(r, d, next, reason); err != nil {
-			slog.Error("rooms: restart state could not be recorded; the room shows it after the next change",
-				"room_id", r.rec.ID, "request_id", d.RequestID, "error", err)
+			return fmt.Errorf("request %s could not be moved to %s: %w", d.RequestID, next, err)
 		}
 	}
 	for _, e := range r.entries {
@@ -347,11 +419,17 @@ func (s *Service) recover(r *room) {
 			}
 		}
 	}
+	return nil
 }
 
-// recoveredState decides a delivery's state after a restart from the
-// member's ledger (the receiver facts).
-func (s *Service) recoveredState(r *room, d *deliveryRecord) (string, string) {
+// recoveredState decides a delivery's state after a restart from the room's
+// own durable facts first (an answer in the room means it was answered),
+// then from the member's ledger (the receiver facts).
+func (s *Service) recoveredState(r *room, d *deliveryRecord, hasAnswer bool) (string, string) {
+	if hasAnswer {
+		// The answer reached the room before the crash cut its state write.
+		return StateAnswered, ""
+	}
 	if d.Consumed {
 		// The room recorded that a turn had taken it; the restart cut that
 		// turn off.
@@ -420,7 +498,7 @@ func (s *Service) setState(r *room, d *deliveryRecord, state, reason string) err
 
 // publishMeta persists the record and publishes a room_meta frame. The
 // caller holds r.mu.
-func (s *Service) publishMeta(r *room, ws Workspace) error {
+func (s *Service) publishMeta(r *room, ws WorkspaceInfo) error {
 	r.nextSeq()
 	if err := s.persistRecord(r); err != nil {
 		r.seq--
@@ -446,7 +524,7 @@ func deliveryWire(d *deliveryRecord) generated.RoomDeliveryState {
 }
 
 // roomView is the K23 Room projection. The caller holds r.mu.
-func (s *Service) roomView(r *room, ws Workspace) generated.Room {
+func (s *Service) roomView(r *room, ws WorkspaceInfo) generated.Room {
 	out := generated.Room{
 		Id: r.rec.ID, WorkspaceId: r.rec.WorkspaceID, Kind: generated.RoomKind(r.rec.Kind), Name: r.rec.Name,
 		Members: nonNil(r.rec.Members), Muted: nonNil(r.rec.Muted), Paused: r.rec.Paused, Generation: r.rec.Generation,
@@ -460,9 +538,12 @@ func (s *Service) roomView(r *room, ws Workspace) generated.Room {
 		out.ReadOnlyReason = &reason
 	}
 	out.Hidden = r.rec.Kind == KindTeam && len(r.rec.Members) < 2
-	for _, d := range latestByMember(r) {
-		if d.State == StateAwaitingApproval || d.State == StateWaitingOnUser {
+	// Attention is any outstanding decision, not only each member's latest
+	// request: a newer settled request never hides an older pending card.
+	for _, id := range r.order {
+		if d := r.deliveries[id]; d.State == StateAwaitingApproval || d.State == StateWaitingOnUser {
 			out.NeedsAttention = true
+			break
 		}
 	}
 	return out
@@ -470,7 +551,7 @@ func (s *Service) roomView(r *room, ws Workspace) generated.Room {
 
 // readOnlyReason: a room with fewer than two current members is read-only
 // until another agent joins (FR-160, FR-204).
-func readOnlyReason(r *room, _ Workspace) string {
+func readOnlyReason(r *room, _ WorkspaceInfo) string {
 	if len(r.rec.Members) >= 2 {
 		return ""
 	}

@@ -685,7 +685,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 
 	response, agent, err := al.processMessage(ctx, msg)
 	activeAgent = agent
-	al.roomTurnEnded(msg, err)
+	err = errors.Join(err, al.roomTurnEnded(msg, err))
 	if err != nil {
 		// ADR-051 §RD5: never surface raw err text in the assistant-facing
 		// reply. Route through the classifier so provider-originated body /

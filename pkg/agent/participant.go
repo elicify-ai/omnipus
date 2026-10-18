@@ -7,6 +7,8 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -139,4 +141,63 @@ func (al *AgentLoop) publishUserEntry(sessionID string, entry session.Transcript
 			p.PublishUserEntry(sessionID, entry)
 		}
 	}
+}
+
+// turnApprovalOriginLabel derives the origin label every approval card of a
+// turn carries (spec §6.18, K7 origin_label) from the input that started it:
+//   - a connector (channel) message: "while answering <person> on
+//     <connection>" — the person is the adapter-stamped sender display name,
+//     the connection is the channel instance the message arrived on
+//     (BDD-16.33 "while answering Anna on tg-1");
+//   - the wake of a request a peer agent sent (address_router.go
+//     publishRequestWake: ChatID "request:<id>", TranscriptEntryID = the
+//     request id): "asked by <Agent>", naming the sender by its display name
+//     from the request ledger — the server-recorded sender, never the request
+//     text.
+//
+// Any other turn (the web user, an automatic wake) gets no label; so does a
+// request capture that cannot be read (logged).
+func (al *AgentLoop) turnApprovalOriginLabel(msg bus.InboundMessage, sessionID string) string {
+	if isConnectorChannel(msg.Channel) {
+		person := strings.TrimSpace(msg.Sender.DisplayName)
+		if person == "" {
+			person = strings.TrimSpace(msg.Sender.Username)
+		}
+		if person == "" {
+			person = strings.TrimSpace(msg.Sender.CanonicalID)
+		}
+		if person == "" {
+			person = "a person"
+		}
+		return "while answering " + person + " on " + inboundInstanceID(msg)
+	}
+	requestID := msg.TranscriptEntryID
+	if sessionID == "" || requestID == "" || msg.ChatID != "request:"+requestID {
+		return ""
+	}
+	if msg.Metadata[roomIDMetadataKey] != "" {
+		// A group-chat room request is not a peer ask: its turn is labelled
+		// "for group <name>" (§6.18), which lands with the WU-15 room
+		// approval work. Until then it carries no label rather than a
+		// wrong "asked by".
+		return ""
+	}
+	ledger := al.RequestLedger()
+	if ledger == nil {
+		return ""
+	}
+	capture, found, err := ledger.Get(sessionID, requestID)
+	if err != nil {
+		logger.WarnCF("agent", "approval origin label: request capture unreadable; approvals of this turn carry no label",
+			map[string]any{"session_id": sessionID, "request_id": requestID, "error": err.Error()})
+		return ""
+	}
+	if !found || capture.Sender.Agent.AgentID == "" {
+		return ""
+	}
+	name := al.agentDisplayName(capture.Sender.Agent)
+	if name == "" {
+		name = capture.Sender.Agent.AgentID
+	}
+	return "asked by " + name
 }

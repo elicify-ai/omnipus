@@ -38,6 +38,7 @@ type wu15RoomHarness struct {
 	home    string
 	cfg     *config.Config
 	al      *agent.AgentLoop
+	bus     *bus.MessageBus
 	rs      *services
 	api     *restAPI
 	baseURL string
@@ -100,7 +101,7 @@ func wu15Boot(t *testing.T, home string, cfg *config.Config) *wu15RoomHarness {
 		cancel()
 		t.Fatalf("SETUP: real gateway boot failed: %v", bootErr)
 	}
-	h := &wu15RoomHarness{t: t, home: home, cfg: cfg, al: al, rs: rs, api: rs.restAPIRef,
+	h := &wu15RoomHarness{t: t, home: home, cfg: cfg, al: al, bus: b, rs: rs, api: rs.restAPIRef,
 		baseURL: fmt.Sprintf("http://127.0.0.1:%d", addr.Port), ctx: ctx, cancel: cancel}
 	t.Cleanup(h.shutdown)
 	require.NotNil(t, h.api, "SETUP: production boot must expose its REST API")

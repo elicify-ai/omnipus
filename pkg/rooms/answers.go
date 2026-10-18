@@ -42,6 +42,12 @@ type AnswerReceipt struct {
 // for an "after pause" answer, FR-170). No agent owner is woken (a room has
 // none). Ids are derived from the request and the answer occurrence.
 func (s *Service) DeliverAnswer(_ context.Context, a Answer) (AnswerReceipt, error) {
+	if limit := s.bodyLimit(); len(a.Content) > limit {
+		// FR-176: the same effective limit as a person's room message. Nothing
+		// is posted, mirrored or passed on.
+		return AnswerReceipt{}, fmt.Errorf("%w: your answer is %d bytes; a group message can be at most %d bytes. "+
+			"Shorten it and call answer_request again", ErrAnswerTooLarge, len(a.Content), limit)
+	}
 	r, ws, err := s.openRoom(a.RoomID)
 	if err != nil {
 		if StatusOf(err) == 404 {
@@ -68,6 +74,9 @@ func (s *Service) DeliverAnswer(_ context.Context, a Answer) (AnswerReceipt, err
 	return receipt, nil
 }
 
+// ErrAnswerTooLarge: an answer over the room's message size limit (FR-176).
+var ErrAnswerTooLarge = errors.New("the answer was not posted: it is too long")
+
 // ErrMirrorFailed: the answer is in the room, but its copy in the member's
 // main chat could not be written. Sending the same answer again repairs it.
 var ErrMirrorFailed = errors.New("your answer was posted in the group, but it could not be saved in your main chat; " +
@@ -75,7 +84,7 @@ var ErrMirrorFailed = errors.New("your answer was posted in the group, but it co
 
 // recordAnswer appends the answer and its mention deliveries. The caller
 // holds r.mu.
-func (s *Service) recordAnswer(r *room, ws Workspace, a Answer) (storedEntry, []string, error) {
+func (s *Service) recordAnswer(r *room, ws WorkspaceInfo, a Answer) (storedEntry, []string, error) {
 	d := r.deliveries[a.RequestID]
 	if r.deleted || d == nil || d.AgentID != a.Responder.AgentID || a.Responder.WorkspaceID != r.rec.WorkspaceID {
 		return storedEntry{}, nil, ErrRoomUnavailable
@@ -174,45 +183,71 @@ func (s *Service) mirrorAnswer(r *room, se storedEntry) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.mirrored[se.Entry.Id] = true
 	if err := s.journal.Append(r.rec.ID, StreamMirrors, &mirrorRecord{AnswerID: se.Entry.Id, At: s.now()}); err != nil {
-		// The mirror is written; a repeat after a restart finds it by its
-		// derived id and writes nothing (AppendTranscriptOnce).
+		// The main-chat copy is written, but the room could not record that
+		// it was: the answer is not counted as mirrored, so the same answer
+		// sent again (or the next load) records it once - the copy itself
+		// is written at most once (its id is derived) - and only then are its
+		// mentions passed on.
 		logRoomError("an answer mirror could not be recorded", r.rec.ID, err)
+		return err
 	}
+	r.mirrored[se.Entry.Id] = true
 	return nil
 }
 
-// BeginConsume is the FR-217 dequeue fence: under the room lock, the request
-// may run only while it is current (same generation, member still there,
-// room not deleted). It then shows "working".
+// BeginConsume is the run/not-run form of DecideConsume: true only when the
+// request may run now.
 func (s *Service) BeginConsume(roomID, requestID, sessionID string) bool {
+	return s.DecideConsume(roomID, requestID, sessionID) == ConsumeRun
+}
+
+// DecideConsume is the FR-217 dequeue fence: under the room lock, the request
+// may run only while it is current (same generation, member still there,
+// room not deleted). It then shows "working". A room that cannot be read, or
+// a "working" state that cannot be saved, never lets the request run: it is
+// deferred (kept in the member's queue, offered again on the member's next
+// turn or a Retry), never run unchecked and never discarded on a passing
+// fault. A request a turn already took is deferred too: a second wake for it
+// is a duplicate, not a second run.
+func (s *Service) DecideConsume(roomID, requestID, sessionID string) ConsumeDecision {
 	r, _, err := s.openRoom(roomID)
 	if err != nil {
 		if StatusOf(err) == 404 {
-			return false
+			return ConsumeCancel
 		}
-		// The room cannot be read now: refusing would discard the request for
-		// good on a passing fault, so it runs; its answer reports the room.
-		slog.Error("rooms: dequeue fence could not read the room; the request runs", "room_id", roomID, "error", err)
-		return true
+		slog.Error("rooms: dequeue fence could not read the room; the request is not run and stays queued",
+			"room_id", roomID, "request_id", requestID, "error", err)
+		return ConsumeDefer
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d := r.deliveries[requestID]
 	if d == nil || d.State == StateCancelled {
-		return false
+		return ConsumeCancel
 	}
 	if terminal(d.State) {
-		return false
+		// A duplicate wake may arrive after completion. Settled work never
+		// runs again, but an unfinished answer mirror still needs its capture.
+		if answerNeedsMirror(r, requestID) {
+			return ConsumeDefer
+		}
+		return ConsumeCancel
 	}
-	if !s.deliveryCurrent(r, d) && !d.Consumed {
+	if d.Consumed {
+		return ConsumeDefer
+	}
+	if !s.deliveryCurrent(r, d) {
 		s.cancelStale(r, d)
-		return false
+		return ConsumeCancel
 	}
+	prevSession := d.SessionID
 	d.SessionID = sessionID
-	if d.State != StateWorking && d.State != StateWaitingOnUser {
-		s.updateState(r, d, StateWorking, "")
+	if err := s.setState(r, d, StateWorking, ""); err != nil {
+		d.SessionID = prevSession
+		slog.Error("rooms: dequeue fence could not save the working state; the request is not run and stays queued",
+			"room_id", roomID, "request_id", requestID, "error", err)
+		return ConsumeDefer
 	}
 	s.cardMu.Lock()
 	if s.working[sessionID] == nil {
@@ -224,56 +259,82 @@ func (s *Service) BeginConsume(roomID, requestID, sessionID string) bool {
 	if waiting {
 		s.updateState(r, d, StateWaitingOnUser, "")
 	}
-	return true
+	return ConsumeRun
+}
+
+// ReleaseConsume undoes a consume whose turn never received the request (it
+// could not be handed to the turn): the request is queued again, not
+// running, so its next delivery runs it.
+func (s *Service) ReleaseConsume(roomID, requestID string) error {
+	r, err := s.loadRoom(roomID)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d := r.deliveries[requestID]
+	if d == nil || r.deleted || terminal(d.State) || !d.Consumed {
+		return nil
+	}
+	if r.rec.PendingReleases == nil {
+		r.rec.PendingReleases = map[string]bool{}
+	}
+	r.rec.PendingReleases[requestID] = true
+	// Save intent independently of the delivery append. If the latter fails,
+	// live reads and restart both repair the unstarted request before serving it.
+	intentErr := s.persistRecord(r)
+	repairErr := s.repairReleasedConsumes(r)
+	if repairErr != nil {
+		return errors.Join(intentErr, repairErr)
+	}
+	return nil
 }
 
 // ConsumeHeld puts a consumed request back to held: it met a stopped member.
 func (s *Service) ConsumeHeld(roomID, requestID string) {
 	s.withDelivery(roomID, requestID, func(r *room, d *deliveryRecord) {
-		if !terminal(d.State) {
+		if !terminal(d.State) && !r.rec.PendingReleases[requestID] && !s.settlementPending(r, requestID) {
 			s.forgetWorking(d.SessionID, requestID)
 			s.updateState(r, d, StateHeld, "")
 		}
 	})
 }
 
-// ConsumeEnded records the end of the turn that consumed the request. A turn
-// that ended without an error leaves the state as it is (the answer arrived,
-// or the one reminder is on its way).
-func (s *Service) ConsumeEnded(roomID, requestID string, turnErr error) {
-	if turnErr == nil {
-		return
-	}
-	s.withDelivery(roomID, requestID, func(r *room, d *deliveryRecord) {
-		if terminal(d.State) {
-			return
-		}
-		s.forgetWorking(d.SessionID, requestID)
-		if errors.Is(turnErr, context.Canceled) {
-			s.updateState(r, d, StateInterrupted, "")
-			return
-		}
-		s.updateState(r, d, StateFailed, ReasonTurnFailed)
-	})
-}
-
 // ReminderTurnEnded fails the room requests of sessionID still unanswered
 // after their one reminder turn.
-func (s *Service) ReminderTurnEnded(sessionID string) {
+func (s *Service) ReminderTurnEnded(sessionID string) error {
 	s.cardMu.Lock()
 	reqs := make(map[string]string, len(s.working[sessionID]))
 	for req, roomID := range s.working[sessionID] {
 		reqs[req] = roomID
 	}
 	s.cardMu.Unlock()
+	var result error
 	for req, roomID := range reqs {
-		s.withDelivery(roomID, req, func(r *room, d *deliveryRecord) {
-			if !terminal(d.State) && d.Consumed {
-				s.forgetWorking(sessionID, req)
-				s.updateState(r, d, StateFailed, ReasonNoAnswer)
-			}
-		})
+		r, err := s.loadRoom(roomID)
+		if err != nil {
+			result = errors.Join(result, err)
+			continue
+		}
+		r.mu.Lock()
+		if r.rec.PendingReleases[req] || s.settlementPending(r, req) {
+			r.mu.Unlock()
+			continue
+		}
+		d := r.deliveries[req]
+		if d == nil || terminal(d.State) || !d.Consumed {
+			r.mu.Unlock()
+			continue
+		}
+		intent := settlementRecord{RequestID: req, State: StateFailed, Reason: ReasonNoAnswer}
+		_, err = s.applySettlement(r, intent)
+		if err != nil {
+			err = errors.Join(err, s.rememberSettlement(roomID, intent))
+		}
+		r.mu.Unlock()
+		result = errors.Join(result, err)
 	}
+	return result
 }
 
 // TurnCost is one consumed room request's turn (§6.14).
@@ -286,13 +347,24 @@ type TurnCost struct {
 
 // AddTurnCost allocates a turn's cost to the room: turn cost × (this room's
 // inputs ÷ all inputs the turn consumed), in micro-dollars, each turn once.
+// The turn line is the source of truth (it is summed again on every load), so
+// the share survives a failed room-record save. A turn line that cannot be
+// written leaves the header marked incomplete ("plus unpriced turns") instead
+// of silently low.
 func (s *Service) AddTurnCost(c TurnCost) {
 	if c.TurnID == "" || c.Inputs <= 0 {
 		return
 	}
 	r, ws, err := s.openRoom(c.RoomID)
 	if err != nil {
-		return // a deleted room has no cost to show
+		if StatusOf(err) != 404 { // a deleted room has no cost to show
+			slog.Error("rooms: a turn's cost could not be allocated: the room could not be read; the room's cost omits it",
+				"room_id", c.RoomID, "turn_id", c.TurnID, "error", err)
+		}
+		if StatusOf(err) != 404 {
+			s.markCostIncomplete(c.RoomID)
+		}
+		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -301,18 +373,23 @@ func (s *Service) AddTurnCost(c TurnCost) {
 	}
 	share := allocate(c)
 	if err := s.journal.Append(r.rec.ID, StreamTurns, &turnRecord{TurnID: c.TurnID, MicroUSD: share, Unpriced: !c.Priced, At: s.now()}); err != nil {
-		logRoomError("a turn's cost could not be recorded; the room's cost omits it", r.rec.ID, err)
+		logRoomError("a turn's cost could not be recorded; the room's cost is marked incomplete", r.rec.ID, err)
+		s.recordCostGap(r.rec.ID)
+		r.rec.CostUnpriced = true
+		if pErr := s.publishMeta(r, ws); pErr != nil {
+			logRoomError("the room's incomplete-cost mark could not be saved", r.rec.ID, pErr)
+		}
 		return
 	}
 	r.turns[c.TurnID] = true
-	before := r.rec.clone()
 	r.rec.CostMicroUSD += share
 	if !c.Priced {
 		r.rec.CostUnpriced = true
 	}
 	if err := s.publishMeta(r, ws); err != nil {
-		r.rec = before
-		logRoomError("the room's cost could not be saved", r.rec.ID, err)
+		// The turn line is saved and is what the next load sums: the share
+		// is kept in memory too, and the next room change publishes it.
+		logRoomError("the room's cost could not be published; it is kept and shown on the next change", r.rec.ID, err)
 	}
 }
 
@@ -362,6 +439,9 @@ func (s *Service) cardChanged(sessionID, cardID string, pending bool) {
 	s.cardMu.Unlock()
 	for req, roomID := range reqs {
 		s.withDelivery(roomID, req, func(r *room, d *deliveryRecord) {
+			if r.rec.PendingReleases[req] || s.settlementPending(r, req) {
+				return
+			}
 			switch {
 			case waiting && d.State == StateWorking:
 				s.updateState(r, d, StateWaitingOnUser, "")
@@ -387,6 +467,10 @@ func (s *Service) forgetWorking(sessionID, requestID string) {
 func (s *Service) withDelivery(roomID, requestID string, fn func(r *room, d *deliveryRecord)) {
 	r, err := s.loadRoom(roomID)
 	if err != nil {
+		if StatusOf(err) != 404 {
+			slog.Error("rooms: a request's state change could not be applied: the room could not be read",
+				"room_id", roomID, "request_id", requestID, "error", err)
+		}
 		return
 	}
 	r.mu.Lock()

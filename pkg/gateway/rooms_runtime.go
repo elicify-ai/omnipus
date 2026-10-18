@@ -105,15 +105,15 @@ var (
 	_ rooms.Effects   = (*gatewayRoomDeps)(nil)
 )
 
-// Workspace lists the workspace's conversation agents: team members that are
+// LookupWorkspace lists the workspace's conversation agents: team members that are
 // chat targets, never workers, system agents or Omnipus (FR-160, FR-162).
-func (d *gatewayRoomDeps) Workspace(workspaceID string) (rooms.Workspace, bool, error) {
+func (d *gatewayRoomDeps) LookupWorkspace(workspaceID string) (rooms.WorkspaceInfo, bool, error) {
 	ws, found, err := loadWorkspaceForMain(d.home, workspaceID)
 	if err != nil || !found {
-		return rooms.Workspace{}, found, err
+		return rooms.WorkspaceInfo{}, found, err
 	}
 	cfg := d.h.agentLoop.GetConfig()
-	out := rooms.Workspace{ID: ws.ID, Name: ws.Name}
+	out := rooms.WorkspaceInfo{ID: ws.ID, Name: ws.Name}
 	for _, id := range ws.CoreTeam {
 		if id == string(coreagent.IDOmnipus) || !mainAgentEligible(cfg, ws, id) {
 			continue
@@ -215,7 +215,7 @@ func (d *gatewayRoomDeps) SessionInWorkspace(sessionID, workspaceID string) bool
 	if !ok || wsID != workspaceID {
 		return false
 	}
-	ws, found, err := d.Workspace(workspaceID)
+	ws, found, err := d.LookupWorkspace(workspaceID)
 	if err != nil || !found {
 		return false
 	}
@@ -253,20 +253,37 @@ type agentRoomRuntime struct{ svc *rooms.Service }
 
 var _ agent.RoomRuntime = agentRoomRuntime{}
 
+var _ agent.RoomFence = agentRoomRuntime{}
+
 func (rt agentRoomRuntime) BeginRoomConsume(roomID, requestID, sessionID string) bool {
 	return rt.svc.BeginConsume(roomID, requestID, sessionID)
+}
+
+func (rt agentRoomRuntime) DecideRoomConsume(roomID, requestID, sessionID string) agent.RoomConsumeDecision {
+	switch rt.svc.DecideConsume(roomID, requestID, sessionID) {
+	case rooms.ConsumeRun:
+		return agent.RoomConsumeRun
+	case rooms.ConsumeCancel:
+		return agent.RoomConsumeCancel
+	default:
+		return agent.RoomConsumeDefer
+	}
+}
+
+func (rt agentRoomRuntime) RoomConsumeReleased(roomID, requestID string) error {
+	return rt.svc.ReleaseConsume(roomID, requestID)
 }
 
 func (rt agentRoomRuntime) RoomConsumeHeld(roomID, requestID string) {
 	rt.svc.ConsumeHeld(roomID, requestID)
 }
 
-func (rt agentRoomRuntime) RoomConsumeEnded(roomID, requestID string, turnErr error) {
-	rt.svc.ConsumeEnded(roomID, requestID, turnErr)
+func (rt agentRoomRuntime) RoomConsumeEnded(roomID, requestID string, turnErr error) (bool, error) {
+	return rt.svc.ConsumeEnded(roomID, requestID, turnErr)
 }
 
-func (rt agentRoomRuntime) RoomReminderTurnEnded(sessionID string) {
-	rt.svc.ReminderTurnEnded(sessionID)
+func (rt agentRoomRuntime) RoomReminderTurnEnded(sessionID string) error {
+	return rt.svc.ReminderTurnEnded(sessionID)
 }
 
 func (rt agentRoomRuntime) RoomTurnCost(c agent.RoomTurnCost) {

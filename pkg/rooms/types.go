@@ -70,6 +70,11 @@ const (
 	ReasonRestart         = "restart"
 )
 
+// PrincipalSystem is the audited actor of a room change no signed-in person
+// made (the boot-time or on-read reconciliation of a room with its
+// workspace's team).
+const PrincipalSystem = "system"
+
 // Fixed user-facing texts (spec copy).
 const (
 	teamRoomName           = "Team room"
@@ -155,9 +160,33 @@ type roomRecord struct { // not-wire-format: the room's on-disk record; the wire
 	CreatedAt       time.Time `json:"created_at"`
 	CostMicroUSD    int64     `json:"cost_micro_usd"`
 	CostUnpriced    bool      `json:"cost_unpriced,omitempty"`
+	// Deleted is the durable deletion intent: written before any pending
+	// request is cancelled, so a failed or interrupted deletion never leaves
+	// a live room with cancelled work. A deleted record is finished (its
+	// directory removed) on the next load and is never served.
+	Deleted bool `json:"deleted,omitempty"`
+	// PendingReleases journals handoffs that failed after working was saved.
+	// Replay these BEFORE restart recovery so unstarted work is queued, not interrupted.
+	PendingReleases map[string]bool `json:"pending_releases,omitempty"`
 	// Seq is the room stream position when the record was written.
 	Seq int64 `json:"seq"`
 }
+
+// ConsumeDecision is the dequeue fence's answer (FR-217).
+type ConsumeDecision int
+
+const (
+	// ConsumeRun: the request is current and is now "working"; run it.
+	ConsumeRun ConsumeDecision = iota
+	// ConsumeCancel: the room cancelled the request (pause, removal,
+	// deletion) or it is already settled; discard it, never run it.
+	ConsumeCancel
+	// ConsumeDefer: the room could not decide or record now (a read or
+	// write failure), or a turn already took the request. Neither run nor
+	// discard it: it stays in the member's queue and is offered again on
+	// the member's next turn or on a Retry.
+	ConsumeDefer
+)
 
 func (r roomRecord) clone() roomRecord {
 	r.Members = append([]string(nil), r.Members...)

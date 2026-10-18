@@ -71,7 +71,7 @@ func (s *Service) Create(workspaceID string, req generated.RoomCreateRequest, pr
 
 // roomName validates a squad name or composes an ad-hoc room's name from its
 // members (the Room schema requires a name).
-func roomName(kind string, name *string, members []string, ws Workspace) (string, error) {
+func roomName(kind string, name *string, members []string, ws WorkspaceInfo) (string, error) {
 	if name != nil {
 		n := strings.TrimSpace(*name)
 		if n == "" || utf8.RuneCountInString(n) > maxRoomNameRunes || !utf8.ValidString(n) || strings.ContainsRune(n, 0) {
@@ -100,7 +100,10 @@ func truncateName(n string) string {
 // Delete deletes a squad or an ad-hoc room: its pending requests are
 // cancelled; work already running finishes in the members' main chats and
 // its answer is reported "room unavailable" (§6.11). The team room is not
-// deletable (422).
+// deletable (422). The deletion is saved first (the record's deletion
+// intent); only then is pending work cancelled and the directory removed, so
+// a failed deletion never leaves a live room with cancelled work, and an
+// interrupted one is finished on the next load.
 func (s *Service) Delete(roomID, principal string) error {
 	r, ws, err := s.openRoom(roomID)
 	if err != nil {
@@ -111,12 +114,9 @@ func (s *Service) Delete(roomID, principal string) error {
 	if r.rec.Kind == KindTeam {
 		return unprocessable("the team room cannot be deleted")
 	}
-	for _, id := range r.order {
-		if d := r.deliveries[id]; cancellable(d) {
-			s.cancelDelivery(r, d, ReasonRoomDeleted)
-		}
-	}
-	if err := s.journal.Remove(r.rec.ID); err != nil {
+	r.rec.Deleted = true
+	if err := s.persistRecord(r); err != nil {
+		r.rec.Deleted = false
 		return storageError("the group chat could not be deleted", err)
 	}
 	r.deleted = true
@@ -124,13 +124,49 @@ func (s *Service) Delete(roomID, principal string) error {
 	delete(s.rooms, r.rec.ID)
 	s.mu.Unlock()
 	s.deps.Audit(AuditEvent{RoomID: r.rec.ID, WorkspaceID: ws.ID, Action: "deleted", AgentIDs: r.rec.Members, Principal: principal})
+	s.finishDeletion(r)
 	return nil
+}
+
+// finishDeletion ends a deleted room's pending requests (their approval
+// cards are withdrawn and their captures discarded, so none of them can run)
+// and removes its directory. A failure is logged: the deletion itself is
+// saved, the room is never served again, and the next load finishes it. The
+// caller holds r.mu.
+func (s *Service) finishDeletion(r *room) {
+	for _, id := range r.order {
+		d := r.deliveries[id]
+		if !cancellable(d) {
+			continue
+		}
+		if cancel, ok := r.cancels[d.RequestID]; ok {
+			cancel()
+			delete(r.cancels, d.RequestID)
+		}
+		if d.State == StateAwaitingApproval {
+			s.deps.CancelApproval(d.RequestID)
+		}
+		if d.SessionID != "" {
+			if err := s.deps.Discard(d.SessionID, d.RequestID); err != nil {
+				logRoomError("a deleted group's request could not be discarded from the member's ledger; the dequeue fence refuses it", r.rec.ID, err)
+			}
+		}
+	}
+	if err := s.journal.Remove(r.rec.ID); err != nil {
+		logRoomError("a deleted group's files could not be removed; the next load retries", r.rec.ID, err)
+	}
 }
 
 // UpdateMembers adds, removes, mutes or unmutes members (K24). The team room
 // accepts only mute and unmute; removing below two agents is refused
-// (FR-204); every change is audited (FR-172).
+// (FR-204); a room never grows past 256 agents and a request names at most
+// 256 (both whatever the inbound validation setting); every change is
+// audited (FR-172). A removal is saved before the removed members' pending
+// requests are cancelled.
 func (s *Service) UpdateMembers(roomID string, req generated.RoomMembersUpdateRequest, principal string) (generated.Room, error) {
+	if len(req.AgentIds) > maxMembers {
+		return generated.Room{}, unprocessable("a membership change names at most %d agents", maxMembers)
+	}
 	r, ws, err := s.openRoom(roomID)
 	if err != nil {
 		return generated.Room{}, err
@@ -147,19 +183,25 @@ func (s *Service) UpdateMembers(roomID string, req generated.RoomMembersUpdateRe
 		r.rec = before
 		return generated.Room{}, err
 	}
-	if len(changed) > 0 {
-		if err := s.publishMeta(r, ws); err != nil {
-			r.rec = before
-			return generated.Room{}, err
+	if len(changed) == 0 {
+		return s.roomView(r, ws), nil
+	}
+	if err := s.publishMeta(r, ws); err != nil {
+		r.rec = before
+		return generated.Room{}, err
+	}
+	s.deps.Audit(AuditEvent{RoomID: r.rec.ID, WorkspaceID: ws.ID, Action: "members_" + action, AgentIDs: changed, Principal: principal})
+	if action == "remove" {
+		if err := s.cancelMembers(r, changed, ReasonRemoved); err != nil {
+			return generated.Room{}, storageError("The members are removed and their pending requests will not run, but some of those requests could not be marked cancelled", err)
 		}
-		s.deps.Audit(AuditEvent{RoomID: r.rec.ID, WorkspaceID: ws.ID, Action: "members_" + action, AgentIDs: changed, Principal: principal})
 	}
 	return s.roomView(r, ws), nil
 }
 
 // applyMemberAction changes the record in memory and returns the agent ids
 // it changed. The caller holds r.mu and persists.
-func (s *Service) applyMemberAction(r *room, ws Workspace, action string, ids []string) ([]string, error) {
+func (s *Service) applyMemberAction(r *room, ws WorkspaceInfo, action string, ids []string) ([]string, error) {
 	switch action {
 	case "add":
 		add, err := s.validateNewMembers(ws, ids)
@@ -172,6 +214,9 @@ func (s *Service) applyMemberAction(r *room, ws Workspace, action string, ids []
 				r.rec.Members = append(r.rec.Members, id)
 				changed = append(changed, id)
 			}
+		}
+		if len(r.rec.Members) > maxMembers {
+			return nil, unprocessable("a room has at most %d agents", maxMembers)
 		}
 		return changed, nil
 	case "remove":
@@ -198,9 +243,6 @@ func (s *Service) removeMembers(r *room, ids []string) ([]string, error) {
 	}
 	r.rec.Members = slices.DeleteFunc(r.rec.Members, func(id string) bool { return slices.Contains(gone, id) })
 	r.rec.Muted = keep(r.rec.Muted, r.rec.Members)
-	for _, id := range gone {
-		s.cancelMember(r, id, ReasonRemoved)
-	}
 	return gone, nil
 }
 

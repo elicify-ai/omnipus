@@ -384,13 +384,18 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		return true, "", false
 	}
 	approver := al.loadToolApprover()
+	var originLabel string
+	if ts := turnStateFromContext(ctx); ts != nil {
+		originLabel = ts.opts.approvalOriginLabel
+	}
 	return approver.RequestApproval(ctx, PolicyApprovalReq{
-		ToolCallID: toolCallID,
-		ToolName:   toolName,
-		Args:       cloneStringAnyMap(args),
-		AgentID:    agentID,
-		SessionID:  sessionID,
-		TurnID:     turnID,
+		ToolCallID:  toolCallID,
+		ToolName:    toolName,
+		Args:        cloneStringAnyMap(args),
+		AgentID:     agentID,
+		SessionID:   sessionID,
+		TurnID:      turnID,
+		OriginLabel: originLabel,
 	})
 }
 
@@ -532,6 +537,27 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 			},
 		)
 	}
+}
+
+// emitTaskRunAutoDenyAudit writes the tool.policy.ask.denied entry for an
+// Ask-policy call refused in a task or plan chain (#1263 R4). Like the
+// scheduled variant it names no approval and no approver — none was ever
+// requested — but its reason is AskDenyReasonTaskRun, and it never warns about
+// a missing schedule identity: a task run has none.
+func (al *AgentLoop) emitTaskRunAutoDenyAudit(ctx context.Context, ts *turnState, toolName string) {
+	audit.EmitToolPolicyAskDenied(
+		ctx,
+		al.auditLogger,
+		"", // approvalID — no approval request was made
+		"", // approverUserID — no human actor
+		toolName,
+		ts.agentID,
+		ts.sessionKey,
+		ts.turnID,
+		audit.AskDenyReasonTaskRun,
+		"",  // argsHash — not available at this call site
+		nil, // cancelledToolCallIDs — not applicable
+	)
 }
 
 // ShellPermissionGate implements tools.ShellModeResolver and

@@ -13,7 +13,7 @@ import (
 // no private fields, unsafe access, invented implementation symbols or skips.
 // The pre-room base still compiles its existing gateway tests and fails loudly.
 type wu15RoomCommitWriter interface {
-	AppendTranscriptOnce(string, session.TranscriptEntry) (bool, error)
+	AppendTranscriptOnce(sessionID string, entry session.TranscriptEntry) (bool, error)
 }
 
 func (h *wu15RoomHarness) roomWriter(writer wu15RoomCommitWriter) {

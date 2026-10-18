@@ -44,24 +44,24 @@ properties:
     description: Entries after the cursor, in seq order. Never null.
   members:
     type: array
-    maxItems: 256
     items:
       type: string
       minLength: 1
       maxLength: 128
   muted:
     type: array
-    maxItems: 256
     items:
       type: string
       minLength: 1
       maxLength: 128
   member_states:
     type: array
-    maxItems: 10000
     items:
       $ref: './RoomDeliveryState.yaml'
-    description: Current delivery states of outstanding requests. Never null.
+    description: >-
+      Every outstanding (non-terminal) delivery state plus the latest terminal
+      state of each member. Never null. Live states are never dropped (ruling
+      Q2), so this array has no fixed upper bound.
   paused:
     type: boolean
   generation:

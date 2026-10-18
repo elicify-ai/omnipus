@@ -121,19 +121,19 @@ func (f *fixture) post(roomID, clientID, text string, ids ...string) error {
 
 // Directory reads actual workspace bytes and actual registered agent names.
 // It is only the external directory dependency, not a fake fan-out/receiver.
-func (f *fixture) Workspace(id string) (rooms.Workspace, bool, error) {
+func (f *fixture) LookupWorkspace(id string) (rooms.WorkspaceInfo, bool, error) {
 	data, err := os.ReadFile(filepath.Join(f.home, "workspaces", id+".json"))
 	if errors.Is(err, os.ErrNotExist) {
-		return rooms.Workspace{}, false, nil
+		return rooms.WorkspaceInfo{}, false, nil
 	}
 	if err != nil {
-		return rooms.Workspace{}, false, err
+		return rooms.WorkspaceInfo{}, false, err
 	}
 	var stored gen.Workspace
 	if err = json.Unmarshal(data, &stored); err != nil {
-		return rooms.Workspace{}, false, err
+		return rooms.WorkspaceInfo{}, false, err
 	}
-	ws := rooms.Workspace{ID: stored.Id, Name: stored.Name}
+	ws := rooms.WorkspaceInfo{ID: stored.Id, Name: stored.Name}
 	if stored.CoreTeam != nil {
 		for _, agentID := range *stored.CoreTeam {
 			if instance, ok := f.loop.GetRegistry().GetAgent(agentID); ok {
@@ -156,7 +156,7 @@ func (f *fixture) SessionInWorkspace(sid, ws string) bool {
 }
 func (*fixture) Limits() (int, int) { return 60, 65536 } // FR-176.
 func (f *fixture) PairEligible(ws, id string) (bool, error) {
-	workspace, found, err := f.Workspace(ws)
+	workspace, found, err := f.LookupWorkspace(ws)
 	if err != nil || !found {
 		return false, err
 	}
@@ -211,10 +211,10 @@ func (f *fixture) BeginRoomConsume(room, request, sid string) bool {
 	return f.service.BeginConsume(room, request, sid)
 }
 func (f *fixture) RoomConsumeHeld(room, request string) { f.service.ConsumeHeld(room, request) }
-func (f *fixture) RoomConsumeEnded(room, request string, err error) {
-	f.service.ConsumeEnded(room, request, err)
+func (f *fixture) RoomConsumeEnded(room, request string, err error) (bool, error) {
+	return f.service.ConsumeEnded(room, request, err)
 }
-func (f *fixture) RoomReminderTurnEnded(sid string) { f.service.ReminderTurnEnded(sid) }
+func (f *fixture) RoomReminderTurnEnded(sid string) error { return f.service.ReminderTurnEnded(sid) }
 func (f *fixture) RoomTurnCost(c agent.RoomTurnCost) {
 	f.service.AddTurnCost(rooms.TurnCost{RoomID: c.RoomID, RequestID: c.RequestID, TurnID: c.TurnID, CostUSD: c.CostUSD, Priced: c.Priced, Inputs: c.Inputs, RoomInputs: c.RoomInputs})
 }

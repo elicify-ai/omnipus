@@ -80,6 +80,18 @@ type processOptions struct {
 	// this; interactive paths leave it false so `ask` keeps prompting.
 	AutoDenyAsk bool
 
+	// askRefusalReason is the denial reason an unattended turn refuses an
+	// unsettled Ask-policy call with (#1263 R4). Set only by
+	// applyTurnAttendance when the turn is built; empty means the headless
+	// scheduled reason.
+	askRefusalReason string
+
+	// approvalOriginLabel is the server-derived origin label every approval
+	// this turn raises carries (spec §6.18, K7 origin_label): "while
+	// answering <person> on <connection>" for a channel message, "asked by
+	// <Agent>" for a peer agent's request. Empty for a plain web turn.
+	approvalOriginLabel string
+
 	// Metadata carries the inbound message metadata (bus.InboundMessage.Metadata)
 	// through to the turn flow. The agent loop reads Metadata["model_name"] to
 	// detect a per-thread model switch (FR-011) and apply switch-time
@@ -153,9 +165,8 @@ type processOptions struct {
 	// from routing, transcript containment and delegate tool authority.
 	executionDisposition *executionDisposition
 
-	// roomCost is set only for the ordinary turn that consumes a group-chat
-	// room request (room_request.go): it accumulates the turn's billed cost and
-	// the inputs the turn consumed, so the room's allocated cost can be
-	// computed (omnipus-system-agent §6.14). Nil for every other turn.
+	// roomCost owns handed-over room inputs before execution, independently
+	// of later pricing polls. Ordinary, system-wake and continuation turns all
+	// collect inputs/cost and settle their owned requests on exit (§6.14).
 	roomCost *roomCostMeter
 }

@@ -177,8 +177,9 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 		return "", agent, nil
 	}
 	opts.roomCost = al.newTurnRoomMeter(msg)
+	defer func() { runErr = errors.Join(runErr, al.finishRoomTurn(opts.roomCost, runErr)) }()
 	preparation, prepErr := al.prepareOrdinaryExecution(ctx, msg, opts)
-	room.prepared(prepErr)
+	prepErr = errors.Join(prepErr, room.prepared(prepErr))
 	if errors.Is(prepErr, errOwnerWakeRetained) {
 		// F8: the chat was stopped; the answer stays in its transcript and the
 		// owner is not run. Nothing is reported - a Stop is not a failure.
@@ -205,6 +206,5 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	}
 	resp, runErr = al.runAgentLoop(ctx, agent, opts)
 	d.recordTurnOutcome(runErr)
-	al.reportRoomCost(opts.roomCost, msg.SessionID)
 	return resp, agent, runErr
 }

@@ -1528,62 +1528,53 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 		return
 	}
 
-	rw.ws.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-
-	if err := writeWorkspaceFile(rw.a.homePath, rw.ws); err != nil {
-		logsafeError("rest: update workspace: write", "id", rw.id, "error", err)
-		jsonErr(rw.w, http.StatusInternalServerError, "internal server error")
+	// Both revisions can be derived before writing from validated typed data.
+	// Refuse a derivation error before commit; never fabricate a saved revision.
+	savedRevision, revisionErr := workspace.RevisionForState(rw.ws, rw.state.Delegation)
+	if revisionErr != nil {
+		logsafeError("rest: workspace revision", "id", rw.id, "error", revisionErr)
+		rw.writeWorkspaceSaveFailure(rw.state.Revision, false, "revision", "The workspace changes could not be prepared; read the workspace before retrying.", nil)
 		return
 	}
-	// FR-160/FR-162: the workspace's group chats follow its team now (every
-	// room read reconciles again, so a failure here only delays it).
-	if hub := rw.a.rooms.Load(); hub != nil && hub.svc != nil {
-		hub.svc.SyncWorkspace(rw.id)
+	// Saving an empty graph removes its file; read-back represents it as nil.
+	// The partial-save envelope must describe that persisted representation.
+	persistedDelegation := rw.delegation
+	if len(persistedDelegation) == 0 {
+		persistedDelegation = nil
 	}
+	completeRevision, revisionErr := workspace.RevisionForState(rw.ws, persistedDelegation)
+	if revisionErr != nil {
+		logsafeError("rest: workspace graph revision", "id", rw.id, "error", revisionErr)
+		rw.writeWorkspaceSaveFailure(rw.state.Revision, false, "revision", "The workspace changes could not be prepared; read the workspace before retrying.", nil)
+		return
+	}
+	rw.ws.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	saved, roomErr := rw.persistWorkspaceAndRooms()
+	if !saved {
+		rw.writeWorkspaceSaveFailure(rw.state.Revision, false, "workspace", "The workspace changes were not saved; read the workspace before retrying.", nil)
+		return
+	}
+	// Independent effects must follow the saved roster even when the rooms
+	// could not synchronize. In particular a removed member stops scheduling.
+	rw.reconcileSavedWorkspace()
 	if rw.delegationChanged {
-		rw.changedFields = append(rw.changedFields, "delegation")
 		if err := workspaceSaveDelegationFn(rw.a.homePath, rw.id, rw.delegation); err != nil {
 			logsafeError("rest: update workspace: delegation write", "id", rw.id, "error", err)
-			revision, _ := workspace.RevisionForState(rw.ws, rw.state.Delegation)
 			stage := "delegation"
 			message := "workspace fields were saved, but the delegation graph could not be saved; read the workspace again before retrying"
-			writeJSON(rw.w, http.StatusInternalServerError, gen.ConfigurationMutationState{
-				PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusPartial,
-				ActivationStatus:  gen.ConfigurationMutationStateActivationStatusNotAttempted,
-				Revision:          revision, ChangedFields: append([]string{}, rw.changedFields[:len(rw.changedFields)-1]...), ErrorStage: &stage, Message: &message,
-			})
+			if roomErr != nil {
+				stage = "delegation_and_room_sync"
+				message = "Workspace fields were saved, but the delegation graph and groups could not be updated; read the workspace and groups again before retrying."
+			}
+			rw.writeWorkspaceSaveFailure(savedRevision, true, stage, message, rw.changedFields)
 			return
 		}
+		rw.changedFields = append(rw.changedFields, "delegation")
+		savedRevision = completeRevision
 	}
-
-	// FR-002/BDD-01.1: the team this write established now owns one main per
-	// eligible member. Runs AFTER the workspace file is persisted so a failed
-	// write cannot leave an identity for a membership that was never stored.
-	// Best-effort and idempotent: the get-or-create reuses an existing main,
-	// and a pair whose stored identity is unreadable or mismatched is logged
-	// and skipped here — its refusal is served on the main's own lookup/attach.
-	if mainsErr := rw.a.ensureMainsForTeam(rw.ws); mainsErr != nil {
-		logsafeError("rest: workspace team update: some team mains were not created; each is re-attempted when its chat is opened",
-			"workspace_id", rw.ws.ID, "error", mainsErr)
-	}
-
-	// FR-007: after persisting, reconcile cron schedules to reflect the new
-	// member_configs. Best-effort: a failure is logged but does not prevent
-	// the 200 response (the data is already safely on disk).
-	if rw.mcPresent || rw.coreTeamChanged {
-		rw.a.reconcileHeartbeatSchedules()
-	}
-
-	if rw.a.auditor != nil {
-		if err := rw.a.auditor.Log(
-			&audit.Entry{
-				Event:    "workspace.update",
-				Decision: audit.DecisionAllow,
-				Details:  map[string]any{"id": rw.id},
-			},
-		); err != nil {
-			logsafeWarn("audit write failed", "event", "workspace.update", "id", rw.id, "error", err)
-		}
+	if roomErr != nil {
+		rw.writeWorkspaceSaveFailure(savedRevision, true, "room_sync", "The workspace changes were saved, but its groups or pending-request labels could not be updated. Read the workspace and groups again after storage recovers before retrying.", rw.changedFields)
+		return
 	}
 	wire := workspaceToWireFrom(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id), workspacePutGraph(rw), rw.a.mainSessionAddress)
 	wire.ChangedFields = &rw.changedFields

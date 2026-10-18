@@ -1,12 +1,12 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,7 +116,7 @@ func TestTaskTriggerRestart(t *testing.T) {
 		}
 		beforeTask, err := os.ReadFile(filepath.Join(home, "tasks", tk.ID+".json"))
 		require.NoError(t, err)
-		var logs bytes.Buffer
+		var logs raceFreeLogBuffer
 		old := slog.Default()
 		slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 		defer slog.SetDefault(old)
@@ -133,7 +133,9 @@ func TestTaskTriggerRestart(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, beforeTask, afterTask, "duplicate repair must not edit the user's task")
 		var logged []string
-		decoder := json.NewDecoder(&logs)
+		// Unrelated session-store flushers can still log through the global handler.
+		// Decode a locked snapshot, never the concurrently written sink itself.
+		decoder := json.NewDecoder(strings.NewReader(logs.String()))
 		for decoder.More() {
 			var record map[string]any
 			require.NoError(t, decoder.Decode(&record))

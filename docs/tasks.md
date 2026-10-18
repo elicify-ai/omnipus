@@ -48,6 +48,10 @@ Task tags are shown in the info panel and List, not on Board cards or Graph node
 
 To start a saved task later, press **Run** on its card (a play symbol), drag it into **In Progress**, or press **Start Task** in the panel. The engine then drives it: the agent works toward the goal, each run is judged against your criteria, and the card's status follows.
 
+### Task runs never ask for approval
+
+A task run never stops to ask you for approval, however you started it (changed 2026-10-13). Tool calls that Auto-approve, an operator `command_rules` rule or an "Always Allow" grant cover run as usual. Any other call that would need approval is refused at once: the task's conversation shows "Not run: needs approval, and task and plan runs never ask.", the agent reports what was blocked, and the task ends **Failed** with that explanation. Helpers the agent starts follow the same rule, and writing into the task's conversation does not change it. To let a task use such a tool, turn Auto-approve on, add a rule, or set the tool to Allow — see [security](security.md#task-plan-scheduled-and-other-unattended-runs). On a host without an enforcing kernel sandbox, Auto-approve runs only read-only shell commands and rule-covered ones, so more runs end blocked there.
+
 ### If the task conversation cannot be created
 
 A queued dispatch, or a new manual start that uses the assigned agent's conversation store, must create its task conversation before handing work to the agent. If that store is unavailable, or creating the conversation returns an error, the start is refused instead of running without a conversation. This applies to both native agents and external command-line agents on those start paths. The refused start consumes no execution attempt, creates no run-history entry, and starts no model request, tool call, or external command.

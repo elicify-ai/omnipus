@@ -35,8 +35,8 @@ func TestWU15Rooms_CreateValidationOnAndOffSavesNothingForInvalidBodies(t *testi
 		for _, tc := range cases {
 			t.Run(fmt.Sprintf("validation_%t/%s", validation, tc.name), func(t *testing.T) {
 				h := wu15NewHarness(t)
-				h.create("squad", "Control", "mia", "jim")
 				h.cfg.Gateway.ValidateInbound = validation
+				h.create("squad", "Control", "mia", "jim")
 				before := h.listRooms(wu15Workspace)
 				status, body := h.rawHTTP(http.MethodPost, "/api/v1/workspaces/sales/rooms", []byte(tc.body))
 				if validation && tc.status == 422 {
@@ -68,6 +68,10 @@ func TestWU15Rooms_MessageValidationOnAndOffHasNoTranscriptOrAdmissionSideEffect
 				h := wu15NewHarness(t)
 				room := h.create("squad", "Launch", "mia", "jim")
 				h.cfg.Gateway.ValidateInbound = validation
+				h.post(room.Id, "valid-control", "VALID_MESSAGE_CONTROL", "mia")
+				control := wu15FindEntry(t, h.snapshot(room.Id), "valid-control")
+				require.Equal(t, "VALID_MESSAGE_CONTROL", control.Text)
+				require.Equal(t, []string{"mia"}, control.Addressees)
 				before := h.snapshot(room.Id)
 				mia, jim := h.messages("mia"), h.messages("jim")
 				status, body := h.rawHTTP(http.MethodPost, "/api/v1/rooms/"+room.Id+"/messages", []byte(tc.body))

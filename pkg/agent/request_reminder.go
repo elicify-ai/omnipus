@@ -202,6 +202,10 @@ func (al *AgentLoop) receiverStopped(sessionID string) bool {
 // logged instead, never delivered into a void. A request whose asker could not
 // be read (a transient error) stays held and is retried by the next turn.
 func (al *AgentLoop) deliverHeldRequests(sessionID string, skipRequestID ...string) {
+	al.deliverHeldRequestsWithMeter(sessionID, nil, skipRequestID...)
+}
+
+func (al *AgentLoop) deliverHeldRequestsWithMeter(sessionID string, meter *roomCostMeter, skipRequestID ...string) {
 	ledger := al.RequestLedger()
 	if ledger == nil || sessionID == "" {
 		return
@@ -237,6 +241,10 @@ func (al *AgentLoop) deliverHeldRequests(sessionID string, skipRequestID ...stri
 			continue
 		}
 		al.pendingRequests.Store(c.RequestID, sessionID)
+		if c.Source.Kind == addressing.SourceRoom {
+			al.deliverHeldRoomRequest(sessionID, c, meter)
+			continue
+		}
 		if c.Text == "" {
 			// No stored text (a connector capture, whose message already
 			// arrived as an inbound turn): nothing to republish.
@@ -288,11 +296,6 @@ func (al *AgentLoop) claimWakeSlot(requestID string) bool {
 func (al *AgentLoop) publishHeldRequestWake(c addressing.Capture) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if c.Source.Kind == addressing.SourceRoom {
-		// A held room request keeps its room id; it joins the turn that
-		// revived its member, behind the room fence (publishRoomRequestWake).
-		return al.publishRoomRequestWake(ctx, c, false)
-	}
 	return al.publishRequestWake(ctx, c.Receiver, c.RequestID, c.ReceiverSessionID, c.Text)
 }
 

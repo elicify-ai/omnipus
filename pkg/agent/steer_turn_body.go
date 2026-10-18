@@ -53,7 +53,7 @@ import (
 // (steer_launcher.go::resolveLaunchDispatchKind). A resolver error must never
 // degrade into a native run: that is exactly the class of drift this file
 // exists to close.
-func (al *AgentLoop) runSteeredTurnBody(ctx context.Context, rec *session.LifecycleRecord, ts *turnState) (turnResult, error) {
+func (al *AgentLoop) runSteeredTurnBodyInner(ctx context.Context, rec *session.LifecycleRecord, ts *turnState) (turnResult, error) {
 	ctx = withSteeredDelegationDepth(ctx, rec)
 	kind, dispatchErr := runner.ResolveDispatch(executorConfigOf(ts.agent))
 	if dispatchErr != nil {
