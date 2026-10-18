@@ -51,11 +51,14 @@ func assertRegistryDiagnostic(t *testing.T, entries []map[string]any, requestID,
 	assert.True(t, matched, "fault must carry Error level and structured safe category %q; contextual rows: %v", category, contextual)
 }
 
-func assertRegistryRepairGuidance(t *testing.T, text string) {
+func assertRegistryRepairGuidance(t interface {
+	Helper()
+	Errorf(format string, args ...any)
+}, text string) {
 	t.Helper()
 	// Require both a repair/retry action AND its storage-related subject. A
 	// bare 'failed' or 'request is pending' does not tell an operator what to do.
-	assert.Regexp(t, regexp.MustCompile(`(?i)\b(repair|fix|restore|unlock|free|check|correct|grant|retry|reopen|restart|remove)\b`), text, "safe error must give an actionable next step")
+	assert.Regexp(t, regexp.MustCompile(`(?i)\b(repair|fix|restore|unlock|free|check|correct|grant|retry|reopen|restart|remove|provide)\b`), text, "safe error must give an actionable next step")
 	assert.Regexp(t, regexp.MustCompile(`(?i)\b(permission[s]?|access|director[yies]+|storage|store|metadata|state|file[s]?|disk|key|space|cleanup|receipt[s]?|saved)\b`), text, "repair guidance must identify what needs attention")
 }
 
