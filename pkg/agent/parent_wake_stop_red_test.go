@@ -42,10 +42,10 @@ func TestStopNotice_IntentionalStopNoWake(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load child: %v", err)
 			}
-			if _, err := al.deliverLandedStopNotices(context.Background(), rec); err != nil {
+			if _, err = al.deliverLandedStopNotices(context.Background(), rec); err != nil {
 				t.Fatalf("deliverLandedStopNotices: %v", err)
 			}
-			if _, err := al.deliverLandedStopNotices(context.Background(), rec); err != nil {
+			if _, err = al.deliverLandedStopNotices(context.Background(), rec); err != nil {
 				t.Fatalf("boot-replay deliverLandedStopNotices: %v", err)
 			}
 			trs, err := lifecycle.ListStoppedTransitions(childID)
@@ -92,7 +92,7 @@ func TestStopNotice_RestartWakesIdleParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load child: %v", err)
 	}
-	if _, err := al.deliverLandedStopNotices(context.Background(), rec); err != nil {
+	if _, err = al.deliverLandedStopNotices(context.Background(), rec); err != nil {
 		t.Fatalf("deliverLandedStopNotices: %v", err)
 	}
 	trs, err := lifecycle.ListStoppedTransitions(childID)
@@ -129,7 +129,7 @@ func TestStopNotice_HistoricalTimeoutWakesNoResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load child: %v", err)
 	}
-	if _, err := al.deliverLandedStopNotices(context.Background(), rec); err != nil {
+	if _, err = al.deliverLandedStopNotices(context.Background(), rec); err != nil {
 		t.Fatalf("deliverLandedStopNotices: %v", err)
 	}
 	trs, err := lifecycle.ListStoppedTransitions(childID)

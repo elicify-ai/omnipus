@@ -157,7 +157,7 @@ func pwStampParent(t *testing.T, g *goalClaimAwaitingJudge) string {
 	if err != nil {
 		t.Fatalf("NewSession parent: %v", err)
 	}
-	if err := g.store.SetMeta(g.sid, session.MetaPatch{ParentSessionID: &parent.ID}); err != nil {
+	if err = g.store.SetMeta(g.sid, session.MetaPatch{ParentSessionID: &parent.ID}); err != nil {
 		t.Fatalf("SetMeta parent: %v", err)
 	}
 	ls := g.al.GetSessionLifecycleStore()
@@ -172,18 +172,18 @@ func pwStampParent(t *testing.T, g *goalClaimAwaitingJudge) string {
 	pwWireRuntime(t, g.al)
 	ws := testHarnessWorkspaceMembershipID
 	for _, id := range []string{parent.ID, g.sid} {
-		if err := g.store.SetMeta(id, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+		if err = g.store.SetMeta(id, session.MetaPatch{WorkspaceID: &ws}); err != nil {
 			t.Fatalf("SETUP: goal-session workspace: %v", err)
 		}
 	}
-	if err := ls.Persist(&session.LifecycleRecord{
+	if err = ls.Persist(&session.LifecycleRecord{
 		SessionID: parent.ID, Generation: 1, State: session.LifecycleCompleted,
 		Origin: &session.Origin{Kind: session.OriginKindChat}, OwnerScopeKind: session.OwnerScopeHuman,
 		WorkspaceID: ws, AgentID: g.agent.ID,
 	}); err != nil {
 		t.Fatalf("persist parent: %v", err)
 	}
-	if err := ls.Persist(&session.LifecycleRecord{
+	if err = ls.Persist(&session.LifecycleRecord{
 		SessionID: g.sid, Generation: 1, State: session.LifecycleRunning,
 		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: parent.ID,

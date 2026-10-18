@@ -68,8 +68,8 @@ func TestQAGate2Restart_OldSameGenerationStopIntentCannotExemptReplacementRun(t 
 		t.Fatalf("reopen real conversation store: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := freshSessions.Close(); err != nil {
-			t.Errorf("close reopened conversation store: %v", err)
+		if cerr := freshSessions.Close(); cerr != nil {
+			t.Errorf("close reopened conversation store: %v", cerr)
 		}
 	})
 	f.al.SetSessionMessagingStores(f.inbox, freshLifecycle)
@@ -81,10 +81,10 @@ func TestQAGate2Restart_OldSameGenerationStopIntentCannotExemptReplacementRun(t 
 	recovery := u1BootRecovery(t, f.al, &operatorNotices)
 	recovery.Sessions = freshSessions
 	recovery.Classifier = NewSteerRecordClassifier(freshLifecycle, freshSessions)
-	if err := recovery.Run(context.Background()); err != nil {
+	if err = recovery.Run(context.Background()); err != nil {
 		t.Fatalf("real first gateway boot stage failed: %v; notices=%v", err, operatorNotices)
 	}
-	if err := f.al.FinishUnfinishedStopIntents(context.Background()); err != nil {
+	if err = f.al.FinishUnfinishedStopIntents(context.Background()); err != nil {
 		t.Fatalf("real second gateway boot stage failed: %v", err)
 	}
 

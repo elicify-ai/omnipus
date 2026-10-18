@@ -123,7 +123,7 @@ func TestBoot_UserStopNotResumed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if err := h.recovery().Run(context.Background()); err != nil {
+	if err = h.recovery().Run(context.Background()); err != nil {
 		t.Fatalf("boot recovery Run: %v", err)
 	}
 	afterRec, err := h.lifecycle.Load(child)
@@ -153,7 +153,7 @@ func TestBoot_ExternalHelperNotReplaced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if err := h.recovery().Run(context.Background()); err != nil {
+	if err = h.recovery().Run(context.Background()); err != nil {
 		t.Fatalf("boot recovery Run: %v", err)
 	}
 	afterSessions, err := h.sessions.ListSessions()

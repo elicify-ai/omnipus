@@ -60,7 +60,7 @@ func TestWakeSession_CreatorNoticeOneWebchatTurn(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	wakes := pwObserveNotifier(t, al)
-	if err := pwWakeSession(t, al, meta.ID, "creator_notice", "run-1", "the scheduled task finished"); err != nil {
+	if err = pwWakeSession(t, al, meta.ID, "creator_notice", "run-1", "the scheduled task finished"); err != nil {
 		t.Fatalf("WakeSession(creator_notice): %v", err)
 	}
 	after, err := al.GetSessionStore().GetMeta(meta.ID)
@@ -83,11 +83,11 @@ func TestWakeSession_NeverTurnedMain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := al.GetSessionLifecycleStore().Load(meta.ID); err == nil {
+	if _, err = al.GetSessionLifecycleStore().Load(meta.ID); err == nil {
 		t.Fatal("setup: a never-turned main must not already have a lifecycle record")
 	}
 	wakes := pwObserveNotifier(t, al)
-	if err := pwWakeSession(t, al, meta.ID, "finished", "child-1:1:final", "the helper finished"); err != nil {
+	if err = pwWakeSession(t, al, meta.ID, "finished", "child-1:1:final", "the helper finished"); err != nil {
 		t.Fatalf("WakeSession(never-turned): %v", err)
 	}
 	rec, err := al.GetSessionLifecycleStore().Load(meta.ID)
@@ -116,7 +116,7 @@ func TestWakeSession_GoneParentNoSubstitute(t *testing.T) {
 		t.Fatalf("ListSessions: %v", err)
 	}
 	wakes := pwObserveNotifier(t, al)
-	if err := pwWakeSession(t, al, "gone-parent-pw", "finished", "child:1:final", "the helper finished"); err == nil {
+	if err = pwWakeSession(t, al, "gone-parent-pw", "finished", "child:1:final", "the helper finished"); err == nil {
 		t.Fatal("WakeSession(gone parent) error = nil, want an error and no substitute session (PW-D12 / FR-019)")
 	}
 	after, err := al.GetSessionStore().ListSessions()

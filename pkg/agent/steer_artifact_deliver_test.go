@@ -228,10 +228,14 @@ func TestMessageParentHandbackPause_DeliversThroughRealDeliverer(t *testing.T) {
 
 // TestDeliver_PauseHandbackWakesParent: a pause handback is wake-eligible
 // (session.classifyEnvelope) — unlike an artifact, the parent is woken.
+// §9.4 recipient table, last row (PW-D12 / FR-019): the fixture seeds the
+// parent's real unified session metadata — a delegating parent has one, and
+// without it the wake is correctly refused as missing-metadata.
 func TestDeliver_PauseHandbackWakesParent(t *testing.T) {
-	_, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
+	seedUnifiedSession(t, al, parentID)
 
 	delivery, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
 		ChildSessionID: childID, Outcome: steer.OutcomeBlocker, Message: pauseHandbackMessage(t, childID, "pause-wake"),
