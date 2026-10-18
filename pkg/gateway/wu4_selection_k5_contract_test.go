@@ -96,19 +96,27 @@ func TestWU4Selection_K5BindingShapeUsesOnlyExistingInternalComponents(t *testin
 	require.NoError(t, err)
 	var doc map[string]any
 	require.NoError(t, yaml.Unmarshal(raw, &doc))
-	paths := doc["paths"].(map[string]any)
+	paths, ok := doc["paths"].(map[string]any)
+	require.True(t, ok, "K5 contract paths must be an object")
 	for _, method := range []string{"post", "get"} {
 		t.Run(method, func(t *testing.T) {
 			path := "/secret-requests/{id}"
 			if method == "post" {
 				path += "/submit"
 			}
-			op := paths[path].(map[string]any)[method].(map[string]any)
-			response, exists := op["responses"].(map[string]any)["503"].(map[string]any)
-			if !assert.True(t, exists, "binding ruling declares GET and POST unavailable HTTP 503") {
-				return
-			}
-			schema := response["content"].(map[string]any)["application/json"].(map[string]any)["schema"]
+			item, ok := paths[path].(map[string]any)
+			require.True(t, ok, "K5 path %s must be an object", path)
+			op, ok := item[method].(map[string]any)
+			require.True(t, ok, "K5 operation %s %s must be an object", method, path)
+			responses, ok := op["responses"].(map[string]any)
+			require.True(t, ok, "K5 operation responses must be an object")
+			response, ok := responses["503"].(map[string]any)
+			require.True(t, ok, "binding ruling declares GET and POST unavailable HTTP 503")
+			content, ok := response["content"].(map[string]any)
+			require.True(t, ok, "K5 503 response content must be an object")
+			jsonContent, ok := content["application/json"].(map[string]any)
+			require.True(t, ok, "K5 503 must declare application/json content")
+			schema := jsonContent["schema"]
 			if method == "post" {
 				assert.Equal(t, map[string]any{"oneOf": []any{
 					map[string]any{"$ref": "#/components/schemas/SecretRequestState"},
