@@ -21,6 +21,13 @@
     "source": "builtin"
   },
   {
+    "name": "connect_channel",
+    "description": "Connect a channel in one approved call: save its configuration, bind the instance's main agent in a workspace, enable it and live-test it. Supply id (the instance key: a bare type such as telegram for the default instance, or a namespaced key such as telegram.eu for an additional one), workspace_id, and agent_id for the main agent, who must be a member of that workspace — a valid token with a non-member target fails and nothing is saved. Credentials travel as stored references only, never plaintext: first request_secret for the instance's fields, wait for the person's card, then pass the returned references through the matching reference parameters; each must match that exact instance and field. WhatsApp needs no credentials here — the call starts QR pairing and the code and progress render in the chat, and a pairing timeout is reported as saved but not working. The result lists the facts proven by real platform calls and everything not tested; a rejected token is reported as saved but not working: token rejected, or failed: nothing saved when validation stopped the save — never working. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode.",
+    "scope": "core",
+    "category": "channels",
+    "source": "builtin"
+  },
+  {
     "name": "create_agent",
     "description": "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague) and 'Subagent' (native delegation-only worker) require soul; 'subagent_3p' is a delegation-only worker on an external CLI — it takes no soul, requires cli, and its cli_path is optional (empty means the CLI's default binary on PATH). name, description and model are required; soul is required for native agents ('Main'/'Subagent') and must be omitted for 'subagent_3p' (an external CLI worker has no soul; supplying one is refused). A set cli_path must name an executable file this machine can run for the current user (an existing regular file with execute access on Unix; a PATHEXT-admitted extension on Windows); leave it empty to use the CLI's default binary on PATH. color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team when membership succeeds; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — the response's status field (joined_workspace vs metadata_only) reports membership, persistence_status reports durable-save completion (complete, partial, or none), and activation_status reports live publication (active, failed, or not_attempted); joined_workspace alone does not prove the agent is live or runnable — check persistence_status, activation_status and any publish_warning before reporting it ready.",
     "scope": "core",
@@ -168,6 +175,13 @@
     "source": "builtin"
   },
   {
+    "name": "remove_secret",
+    "description": "Remove one stored secret reference after the person has seen who depends on it. Supply the full reference name as list_secrets reports it, version suffix included. The consumers are listed on the approval card before anything is deleted. Removal of an in-use reference proceeds behind the approval; the result names every consumer, reports the stale live value truthfully, and the next boot starts with the affected integrations degraded. Removing an older version that a replacement superseded leaves the integration unaffected and working. The result reports three separate facts and they must stay separate: whether the value is durably deleted, what the live effect on running connections is, and whether the configuration still starts on the next boot. Never summarise them into a single ok. Values are never an input or an output. Only Omnipus holds this tool — an agent that wants a reference removed asks Omnipus. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode.",
+    "scope": "core",
+    "category": "platform",
+    "source": "builtin"
+  },
+  {
     "name": "remove_skill",
     "description": "Remove an installed skill. IRREVERSIBLE — the skill's whole directory, including any version history it holds, is permanently deleted; there is no undo. This only reaches a skill in the operator's installed-skills directory (populated by installing from the marketplace) — it does NOT reach a skill authored with create_skill or a user override created with edit_skill, which live in a separate directory: naming one here returns NOT_FOUND even though list_skills reports it as available. If the removed skill was shadowing a lower-priority skill of the same id (an override or a built-in), that one becomes visible again. Parameters: name (required, the skill id as reported by list_skills — no path separators), revision (required from the reviewed skill read), confirm (bool, must be true). A conflict requires a fresh read; do not retry the stale deletion.",
     "scope": "core",
@@ -177,6 +191,13 @@
   {
     "name": "run_doctor",
     "description": "Run a narrow set of security diagnostic checks (exec egress config, credentials.json/config.json file permissions, audit log directory presence) and return checks_failed_pct — the percentage of THESE FEW checks that failed — plus actionable recommendations. This is NOT a comprehensive security audit: it never looks at sandbox.mode, god-mode, dev_mode_bypass, or Landlock/seccomp availability, so an install with every real protection disabled can still score 0% (\"no risk\"). A low checks_failed_pct means only these specific checks passed, not that the install is secure. No parameters required.",
+    "scope": "core",
+    "category": "platform",
+    "source": "builtin"
+  },
+  {
+    "name": "select_secret_version",
+    "description": "Select a stored version of a secret reference as the version in use; the previously selected version becomes superseded, listed and removable. Call it when the person asks to roll an agent's private variable back to an earlier one — a private replacement is always selected on submit on the owner's card, so a private variable only ever moves backwards through this tool. Supply reference_name and version as list_secrets reports them; for a private variable also supply the target workspace and agent. A reference stored for a different recipient is refused with nothing selected — request a fresh card for the current recipient instead; the same applies to a private selection that does not match the owner pair. Values are never an input or an output: reference names and version numbers only. Only Omnipus holds this tool — an agent that wants its own variable rolled back asks Omnipus. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode.",
     "scope": "core",
     "category": "platform",
     "source": "builtin"
