@@ -144,7 +144,8 @@
         "tests/e2e/about.spec.ts",
         "tests/e2e/api-errors.spec.ts",
         "tests/e2e/fresh-install.spec.ts",
-        "tests/e2e/iframe-preview-warmup.spec.ts"
+        "tests/e2e/iframe-preview-warmup.spec.ts",
+        "tests/e2e/room-history-paging.spec.ts"
       ]
     },
     {
