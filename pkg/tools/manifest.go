@@ -173,12 +173,15 @@ var administrativeToolNames = map[string]struct{}{
 	"remove_mcp_server": {},
 	// remove_secret (omnipus-system-agent FR-077, WU-6): deletes a stored
 	// credential version install-wide; Omnipus only, ships ask.
-	"remove_secret":      {},
-	"remove_skill":       {},
-	"disable_channel":    {},
-	"enable_channel":     {},
-	"add_mcp_server":     {},
-	"configure_channel":  {},
+	"remove_secret":     {},
+	"remove_skill":      {},
+	"disable_channel":   {},
+	"enable_channel":    {},
+	"add_mcp_server":    {},
+	"configure_channel": {},
+	// connect_channel (omnipus-system-agent FR-080, WU-7): saves, binds,
+	// enables and live-starts a channel install-wide; Omnipus only, ships ask.
+	"connect_channel":    {},
 	"configure_provider": {},
 	"set_config":         {},
 	"stop_plan":          {},

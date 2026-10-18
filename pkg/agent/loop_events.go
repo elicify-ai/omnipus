@@ -134,7 +134,8 @@ func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.Pairi
 			payload.RequestID, payload.SessionID = corr.requestID, corr.sessionID
 		}
 		switch status {
-		case channels.PairingStatusLinked, channels.PairingStatusError, channels.PairingStatusTimeout:
+		case channels.PairingStatusLinked, channels.PairingStatusError, channels.PairingStatusTimeout,
+			channels.PairingStatusStopped:
 			al.pairingRequests.Delete(channelID) // the chat-started pairing ended
 		}
 	}

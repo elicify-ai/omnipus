@@ -40,5 +40,6 @@ func (al *AgentLoop) cancelPendingAskForScope(sessionID string) error {
 	if r := al.getAskUserRegistry(); r != nil {
 		r.CancelOnSessionStop(sessionID)
 	}
+	al.stopPairingsForSession(sessionID)
 	return al.stopSecretRequests(sessionID)
 }

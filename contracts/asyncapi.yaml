@@ -6264,6 +6264,7 @@ components:
           - linked
           - timeout
           - error
+          - stopped
         qr:
           type: string
         message:

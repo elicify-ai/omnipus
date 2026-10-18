@@ -282,8 +282,9 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 	// #368: maintain the per-channel QR cache so late subscribers (e.g.
 	// a tab that opens the pairing UI after the first QR fires) receive
 	// the last-seen code immediately on subscribe rather than waiting for
-	// the next QR rotation.  Only "code" (QR available) is cached;
-	// terminal states are evicted so stale QRs are not re-emitted.
+	// the next QR rotation.  "code" (QR available) is cached; terminal
+	// states are evicted so stale QRs are not re-emitted, except a
+	// chat-started pairing's final status (see below).
 	switch p.Status {
 	case channels.PairingStatusCode:
 		if frameBytes, merr := json.Marshal(pairF); merr == nil {
@@ -293,10 +294,27 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 				"channel_id", p.ChannelID, "error", merr)
 		}
 	case channels.PairingStatusLinked, channels.PairingStatusTimeout, channels.PairingStatusError,
-		channels.PairingStatusWaiting:
-		// PairingStatusWaiting and any other status that is not
-		// "code" must not leave a stale QR in the cache — evict so a
-		// late subscriber is not shown an outdated code.
+		channels.PairingStatusStopped:
+		// A chat-started pairing (request_id set) keeps its LAST TERMINAL
+		// frame, status only, so a reconnecting chat sees the final state
+		// (BDD-8.8, chief ruling 2026-10-18); the channel's next code frame
+		// replaces it. A Settings-started pairing keeps #368: evict, so a
+		// late subscriber is never shown an outdated code.
+		if p.RequestID == "" {
+			f.h.lastPairingState.Delete(p.ChannelID)
+			break
+		}
+		terminal := pairF
+		terminal.Qr = nil // never cache a code with a terminal state
+		if frameBytes, merr := json.Marshal(terminal); merr == nil {
+			f.h.lastPairingState.Store(p.ChannelID, frameBytes)
+		} else {
+			slog.Error("ws: failed to marshal terminal whatsapp_pairing frame for cache",
+				"channel_id", p.ChannelID, "error", merr)
+			f.h.lastPairingState.Delete(p.ChannelID)
+		}
+	case channels.PairingStatusWaiting:
+		// Not "code": must not leave a stale QR in the cache.
 		f.h.lastPairingState.Delete(p.ChannelID)
 	default:
 		// Any future status not yet in this switch: same fail-safe

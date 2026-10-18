@@ -77,9 +77,10 @@ type CommandRegistrarCapable interface {
 type PairingStatus string
 
 const (
-	// PairingStatusWaiting is reserved for a pre-QR connecting state. It is not
-	// currently emitted; the SPA renders its initial prompt from the absence of
-	// any pairing state.
+	// PairingStatusWaiting is the pre-QR connecting state. The WhatsApp channel
+	// emits it when a pairing loop starts, which also evicts a terminal frame a
+	// previous chat-started pairing left cached (BDD-8.8); the SPA renders it
+	// exactly like the absence of any pairing state.
 	PairingStatusWaiting PairingStatus = "waiting"
 	// PairingStatusCode means a QR code is available to scan (qr is set).
 	PairingStatusCode PairingStatus = "code"
@@ -89,6 +90,9 @@ const (
 	PairingStatusTimeout PairingStatus = "timeout"
 	// PairingStatusError means pairing failed; message carries the reason.
 	PairingStatusError PairingStatus = "error"
+	// PairingStatusStopped means the user pressed Stop in the chat that started
+	// the pairing; the pairing was ended and no further codes follow (BDD-8.8).
+	PairingStatusStopped PairingStatus = "stopped"
 )
 
 // AllPairingStatuses is the authoritative set of pairing statuses, kept next to
@@ -100,6 +104,7 @@ var AllPairingStatuses = []PairingStatus{
 	PairingStatusLinked,
 	PairingStatusTimeout,
 	PairingStatusError,
+	PairingStatusStopped,
 }
 
 // PairingObservable is implemented by channels that produce linked-device
@@ -110,4 +115,13 @@ var AllPairingStatuses = []PairingStatus{
 // qr is non-empty only when status == PairingStatusCode.
 type PairingObservable interface {
 	SetPairingObserver(fn func(status PairingStatus, qr, message string))
+}
+
+// PairingStoppable is implemented by channels whose in-flight linked-device
+// pairing can be ended on request (omnipus-system-agent BDD-8.8: Stop in the
+// chat that started the pairing). StopPairing ends the pairing and releases
+// the pairing client so no further codes are produced; it reports false when
+// no pairing was in flight (already linked, or not started), changing nothing.
+type PairingStoppable interface {
+	StopPairing(ctx context.Context) bool
 }

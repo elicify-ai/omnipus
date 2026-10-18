@@ -34,6 +34,7 @@ You can also ask Omnipus in chat to connect a platform. Omnipus first asks you f
 - The result separates what was proven from what was not tested. **Working** means only that the connection started with the saved credentials and the platform accepted them; incoming message delivery and outgoing replies are listed as not tested.
 - A connection that did not start is reported as **saved but not working**, with the reason — for example a rejected token. It is never reported as working. Fix the credential and try again, or open **Configure** on its card.
 - WhatsApp needs no credentials. The connection is saved and pairing starts; the result says **saved but not working: pairing not finished** until you scan the QR code. Open the WhatsApp connection on **Connectors** to see the code.
+- Pressing **Stop** in the chat that started a WhatsApp pairing ends the pairing: no new codes are produced. The connection stays saved but not working.
 
 ## Choosing which agent answers
 
