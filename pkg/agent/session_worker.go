@@ -872,7 +872,7 @@ func (w *sessionWorker) publishContinuationTargetFailureNotice(msg bus.InboundMe
 func (w *sessionWorker) continueDrainRetry(ctx context.Context, target *continuationTarget) (continued string, attemptsMade int, continueErr error) {
 	al := w.parent
 	return retrySteeringContinuation(ctx, func() (string, error) {
-		return al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+		return al.continueSession(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID, target.SessionID)
 	}, func(err error) bool {
 		return errors.Is(err, errContinuePostDequeueFailure)
 	})

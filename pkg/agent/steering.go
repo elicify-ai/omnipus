@@ -1442,22 +1442,36 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	steeringMsgs []providers.Message,
 	steeringCorrelationIDs []string,
 ) (string, error) {
-	return al.continueWithConsumedSteering(ctx, agent, sessionKey, channel, chatID, workspaceID,
+	return al.continueWithConsumedSteering(ctx, agent, sessionKey, channel, chatID, workspaceID, "",
 		steeringMsgs, steeringCorrelationIDs, nil)
 }
 
 // continueWithConsumedSteering runs the ordinary continuation turn for
 // dequeued steering, recording the consumed items' origins on that new turn
 // (§6.18 / FR-240) — the turn that consumed them did not exist at dequeue.
+// transcriptSessionID is the conversation the continuation belongs to; like
+// processMessage it gives the turn its transcript context (tool recording,
+// secret cards, approval session ids). Empty keeps the context unset.
 func (al *AgentLoop) continueWithConsumedSteering(
 	ctx context.Context,
 	agent *AgentInstance,
-	sessionKey, channel, chatID, workspaceID string,
+	sessionKey, channel, chatID, workspaceID, transcriptSessionID string,
 	steeringMsgs []providers.Message,
 	steeringCorrelationIDs []string,
 	consumedOrigins []inputOrigin,
 ) (string, error) {
+	var transcriptStore *session.UnifiedStore
+	if transcriptSessionID != "" {
+		transcriptStore = al.ResolveSessionStore(transcriptSessionID)
+		if transcriptStore == nil {
+			logger.WarnCF("agent", "continuation session_id present but store not found — tool calls will not be recorded",
+				map[string]any{"session_id": transcriptSessionID})
+			transcriptSessionID = ""
+		}
+	}
 	resp, err := al.runAgentLoop(ctx, agent, processOptions{
+		TranscriptSessionID:           transcriptSessionID,
+		TranscriptStore:               transcriptStore,
 		SessionKey:                    sessionKey,
 		Channel:                       channel,
 		ChatID:                        chatID,
@@ -1665,10 +1679,17 @@ func restorableSteeringItems(items []steeringQueueItem) []steeringQueueItem {
 // own to resolve it from (only the already-collapsed sessionKey/channel/
 // chatID), so it cannot recompute this value itself.
 func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, workspaceID string) (string, error) {
+	return al.continueSession(ctx, sessionKey, channel, chatID, workspaceID, "")
+}
+
+// continueSession is Continue for a known conversation: transcriptSessionID
+// (the continuation target's session id) gives the continuation turn the same
+// transcript context processMessage gives a direct turn.
+func (al *AgentLoop) continueSession(ctx context.Context, sessionKey, channel, chatID, workspaceID, transcriptSessionID string) (string, error) {
 	return al.continuePendingSteering(ctx, sessionKey,
 		func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string, origins []inputOrigin) (string, error) {
 			return al.continueWithConsumedSteering(
-				ctx, agent, sessionKey, channel, chatID, workspaceID,
+				ctx, agent, sessionKey, channel, chatID, workspaceID, transcriptSessionID,
 				steeringMsgs, steeringCorrelationIDs, origins,
 			)
 		})
