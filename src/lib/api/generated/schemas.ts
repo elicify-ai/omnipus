@@ -1504,7 +1504,7 @@ type AgentUpdateRequest = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  fallback_models?: Array<FallbackModel> | undefined;
+  fallback_models?: Array<FallbackModelPair> | undefined;
   model_params?:
     | Partial<{
         temperature: number;
@@ -1516,6 +1516,10 @@ type AgentUpdateRequest = {
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
   memory_enabled?: boolean | undefined;
+};
+type FallbackModelPair = {
+  model: string;
+  provider: string;
 };
 type ExecutorDefaults = {
   cli: ExternalCliTool;
@@ -4052,6 +4056,10 @@ export const AgentCreateRequest =
     AgentCreateRequestSubagent,
     AgentCreateRequestSubagent3p,
   ]) satisfies z.ZodType<AgentCreateRequest>;
+export const FallbackModelPair: z.ZodType<FallbackModelPair> = z.object({
+  model: z.string().max(256),
+  provider: z.string().min(1).max(64),
+});
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   mcp_servers: z.array(AgentMCPBinding).optional(),
@@ -4066,7 +4074,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   figure: AgentFigure.optional(),
   role: AgentRole.optional(),
   color: AgentColor.optional(),
-  fallback_models: z.array(FallbackModel).max(2).optional(),
+  fallback_models: z.array(FallbackModelPair).max(2).optional(),
   model_params: z
     .object({ temperature: z.number(), max_tokens: z.number().int() })
     .partial()

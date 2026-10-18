@@ -1450,6 +1450,8 @@ components:
       $ref: ./components/schemas/AgentUpdateRequest.yaml
     FallbackModel:
       $ref: ./components/schemas/FallbackModel.yaml
+    FallbackModelPair:
+      $ref: ./components/schemas/FallbackModelPair.yaml
     ExternalCliTool:
       $ref: ./components/schemas/ExternalCli.yaml
     ExecutorConfig:
