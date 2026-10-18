@@ -1673,7 +1673,7 @@ func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
 	// workspace file. If this config write fails the delete aborts with 500,
 	// leaving the workspace + bindings fully consistent (no orphan). Ordering
 	// guarantee: config unbind → workspace file delete.
-	if err := unbindChannelInstancesForWorkspace(rd.a, rd.id); err != nil {
+	if _, err := unbindChannelInstancesForWorkspace(rd.a, rd.id); err != nil {
 		unlock()
 		logsafeError("rest: delete workspace: cascade channel unbind", "id", rd.id, "error_type", fmt.Sprintf("%T", err))
 		jsonErr(rd.w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
@@ -2013,13 +2013,13 @@ func deduplicateStrings(in []string) []string {
 	return out
 }
 
-// unbindChannelInstancesForWorkspace disables and unbinds every channel instance
-// bound to workspaceID. Called from handleWorkspaceDelete BEFORE the workspace
-// file is removed (ADR-029 FR-025/MAJ-005) so that a config-write failure aborts
-// the delete cleanly with no orphan. "Unbind" clears BOTH WorkspaceID AND Identity
-// (leaving Identity would make the next inbound drift on a now-missing workspace)
-// and sets Enabled=false. If no instances are bound this is a no-op returning nil.
-func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) error {
+// unbindChannelInstancesForWorkspace is the one hard channel-cleanup path for
+// HTTP and tool workspace deletion, called BEFORE workspace removal (ADR-029
+// FR-025/MAJ-005). It clears BOTH WorkspaceID and Identity and sets Enabled=false.
+// Returns sorted IDs whose cleanup was persisted. A refresh error returns those
+// IDs with the error: the saved channel changes must not be reported as undone.
+// With no bound instances this is a no-op, including no config-file write.
+func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) ([]string, error) {
 	cfg := a.agentLoop.GetConfig()
 	// Identify bound instances.
 	var boundKeys []string
@@ -2029,11 +2029,11 @@ func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) error {
 		}
 	}
 	if len(boundKeys) == 0 {
-		return nil // nothing to do
+		return nil, nil // nothing to do
 	}
-	sort.Strings(boundKeys) // deterministic order for logging
-
-	return a.safeUpdateConfigJSON(func(m map[string]any) error {
+	sort.Strings(boundKeys) // deterministic order for logging and tool reporting
+	var changedKeys []string
+	err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		channels, _ := m["channels"].(map[string]any)
 		if channels == nil {
 			// No channels section in raw JSON — nothing to unbind.
@@ -2049,13 +2049,21 @@ func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) error {
 			delete(ch, "identity")
 			ch["enabled"] = false
 			channels[key] = ch
+			changedKeys = append(changedKeys, key)
 		}
 		m["channels"] = channels
-
-		logsafeInfo("rest: workspace delete: disabled and unbound channel instances",
-			"workspace_id", workspaceID, "instance_ids", boundKeys)
 		return nil
 	})
+	if err != nil {
+		var refreshErr *configRefreshError
+		if errors.As(err, &refreshErr) {
+			return changedKeys, err // durable write; the workspace must still remain
+		}
+		return nil, err
+	}
+	logsafeInfo("rest: workspace delete: disabled and unbound channel instances",
+		"workspace_id", workspaceID, "instance_ids", changedKeys)
+	return changedKeys, nil
 }
 
 // removeMailboxesForWorkspace removes every (agent, workspace) mailbox pair

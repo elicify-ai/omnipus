@@ -1557,13 +1557,19 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 		unlock()
 		return tools.ErrorResult(errorJSON("CONFLICT", refusal.Error(), ""))
 	}
+	changedChannels, cleanupErr := unbindWorkspaceChannels(t.deps, id)
+	if cleanupErr != nil {
+		unlock()
+		return workspaceDeleteChannelFailure(id, changedChannels,
+			"could not disable and unbind workspace channels; workspace was not deleted: "+cleanupErr.Error())
+	}
 
 	// Step 1: cascade-delete tasks
 	tasks, err := listEntities[unifiedTask](tasksDir(t.deps.Home))
 	if err != nil {
 		unlock()
 		slog.Error("sysagent: workspace cascade delete: failed to list tasks", "workspace_id", id, "error", err)
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", "could not list tasks for cascade delete: "+err.Error(), ""))
+		return workspaceDeleteChannelFailure(id, changedChannels, "could not list tasks for cascade delete: "+err.Error())
 	}
 	tasksDeleted := 0
 	var cleanupFailures []string
@@ -1588,14 +1594,14 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 		unlock()
 		if tasksDeleted > 0 {
 			return changeErrorWithOutcome(map[string]any{
-				"success":       false,
-				"error":         map[string]any{"code": "SAVE_FAILED", "message": err.Error()},
-				"id":            id,
-				"tasks_deleted": tasksDeleted,
+				"success": false,
+				"error":   map[string]any{"code": "SAVE_FAILED", "message": err.Error()},
+				"id":      id, "tasks_deleted": tasksDeleted,
+				"channels_disabled_and_unbound": append([]string{}, changedChannels...),
 			}, partlySaved(fmt.Sprintf("%d task(s) were deleted but the workspace record was not: %v", tasksDeleted, err),
 				"", []string{"workspace record deletion"}))
 		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+		return workspaceDeleteChannelFailure(id, changedChannels, err.Error())
 	}
 
 	// The workspace file is gone — release the lock now. Step 3 below is
@@ -1636,11 +1642,17 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 		cleanupFailures = append(cleanupFailures, "workspace folder")
 	}
 
+	changedFields := []string{"workspace"}
+	scope := "workspace record deleted; its tasks, mount store, delegation store and folder removed"
+	if len(changedChannels) > 0 {
+		changedFields = append(changedFields, "channels")
+		scope += "; bound channel configuration disabled and unbound"
+	}
 	resp := map[string]any{
 		"id": id, "deleted": true, "tasks_deleted": tasksDeleted,
-		"changed_fields": []string{"workspace"},
+		"changed_fields":                changedFields,
+		"channels_disabled_and_unbound": append([]string{}, changedChannels...),
 	}
-	const scope = "workspace record deleted; its tasks, mount store, delegation store and folder removed"
 	if len(cleanupFailures) > 0 {
 		return changeSuccess(resp, partlySaved("the workspace is deleted but some of its data could not be removed",
 			scope, cleanupFailures))
