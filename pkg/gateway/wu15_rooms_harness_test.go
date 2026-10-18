@@ -73,6 +73,12 @@ func wu15NewHarness(t *testing.T) *wu15RoomHarness {
 		},
 	}
 	cfg.Sandbox.AuditLog = true
+	// Pin the admission cap: under host memory pressure the live gate floors
+	// the auto-detected cap (observed effective_concurrent_cap=2), which
+	// rejects the third warmed main and stalls these fixtures at "did not
+	// enter its model edge". An explicit value always wins outright, so the
+	// fixture no longer depends on host memory.
+	cfg.Performance.MaxParallelAgents = 8
 	cfg.Sandbox.ToolPolicies = map[string]string{"send_message": "allow", "answer_request": "allow", tools.AskUserQuestionToolName: "allow", "goal_claim": "allow"}
 	require.NoError(t, os.MkdirAll(cfg.Agents.Defaults.Home, 0o700))
 	seedBindingWorkspace(t, home, wu15Workspace, "mia", "jim", "researcher2", "gp")
