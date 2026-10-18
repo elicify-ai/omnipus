@@ -97,9 +97,12 @@ describe('stage 1 — rooms hidden through the real application shell', () => {
   })
 })
 
-describe('stage 1 — private secrets hidden through the shell-owned agent profile', () => {
-  // CHECK mutant for S1-b: featureSwitches.ts::AGENT_PRIVATE_SECRETS_ENABLED = true.
-  it('[S1-b; dispatch 2(b)] a conversation agent Tools panel has no Private secrets section and never reads secrets', async () => {
+describe('WU-5 — private secrets reachable through the shell-owned agent profile', () => {
+  // Founder 2026-10-14 rule: the switch hid this UI only until its work unit
+  // landed; WU-5 is in Train 2, so AGENT_PRIVATE_SECRETS_ENABLED is true and
+  // the section renders for a conversation agent (architect F02, Train 2 gate).
+  // CHECK mutant for S1-b: featureSwitches.ts::AGENT_PRIVATE_SECRETS_ENABLED = false.
+  it('[S1-b; WU-5] a conversation agent Tools panel shows the Private secrets section and reads it through the authenticated endpoint', async () => {
     await mountStage1App(SETTINGS_PATH)
     // Open the shell's single profile through the real sidebar row menu.
     const user = userEvent.setup()
@@ -116,8 +119,11 @@ describe('stage 1 — private secrets hidden through the shell-owned agent profi
     expect(net.requests.filter((request) => request.method === 'GET' && request.path === '/api/v1/agents/mia/tools')).toHaveLength(1)
     expect(within(panel).queryByTestId('agent-tools-load-error')).toBeNull()
     expect(within(panel).getByTestId('mcp-assignment-section')).toHaveTextContent('Assigned connectors')
-    expect(within(profile).queryByText('Private secrets', { exact: true })).toBeNull()
-    expect(net.requests.filter((request) => request.method === 'GET' && /^\/api\/v1\/secrets(?:\/|$)/.test(request.path))).toEqual([])
+    // WU-5 reachable: the section mounts and its list read went through the
+    // real API client (the harness serves GET /api/v1/secrets deliberately so
+    // this read is observable). Render-only: no secret write is issued.
+    expect(within(panel).getByTestId('agent-private-secrets')).toHaveTextContent('No private secrets')
+    expect(net.requests.filter((request) => request.method === 'GET' && /^\/api\/v1\/secrets(?:\/|$)/.test(request.path))).toHaveLength(1)
     expect(net.writes()).toEqual([])
   })
 })

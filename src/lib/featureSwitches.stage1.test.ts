@@ -22,9 +22,12 @@ describe('founder decision 2026-10-14 — stage-1 shipped switches', () => {
     expect(featureSwitches.SECRET_CARDS_ENABLED).toBe(true)
   })
 
-  // CHECK mutant: featureSwitches.ts::AGENT_PRIVATE_SECRETS_ENABLED false → true.
-  it('[S1-g secrets] ships AGENT_PRIVATE_SECRETS_ENABLED as exactly false', () => {
-    expect(AGENT_PRIVATE_SECRETS_ENABLED).toBe(false)
+  // WU-5 landed in Train 2, so its switch is back ON under the founder's
+  // 2026-10-14 rule: hide unfinished UI only until its work unit lands
+  // (Train 2 gate architect F02; Train 3 did the same for rooms).
+  // CHECK mutant: featureSwitches.ts::AGENT_PRIVATE_SECRETS_ENABLED true → false.
+  it('[S1-g secrets] ships AGENT_PRIVATE_SECRETS_ENABLED as exactly true', () => {
+    expect(AGENT_PRIVATE_SECRETS_ENABLED).toBe(true)
   })
 
   // CHECK mutant: featureSwitches.ts::INLINE_TOOL_APPROVALS_ENABLED false → true.
