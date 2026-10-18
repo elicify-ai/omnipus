@@ -166,11 +166,14 @@ var administrativeToolNames = map[string]struct{}{
 	// state. Classifying it here narrows only ToolSearch's speculative
 	// cross-category promotion; it is NOT a policy mechanism (the tool's
 	// policy is the ordinary two-level ask) and does not make it Admin-only.
-	"environment_setup":  {},
-	"delete_agent":       {},
-	"delete_task":        {},
-	"delete_workspace":   {},
-	"remove_mcp_server":  {},
+	"environment_setup": {},
+	"delete_agent":      {},
+	"delete_task":       {},
+	"delete_workspace":  {},
+	"remove_mcp_server": {},
+	// remove_secret (omnipus-system-agent FR-077, WU-6): deletes a stored
+	// credential version install-wide; Omnipus only, ships ask.
+	"remove_secret":      {},
 	"remove_skill":       {},
 	"disable_channel":    {},
 	"enable_channel":     {},
@@ -188,14 +191,7 @@ var administrativeToolNames = map[string]struct{}{
 // NOT in administrativeToolNames — so a future tool matching the pattern
 // fails the build until a human records why it's exempt, rather than
 // silently passing it through.
-var administrativeExemptNames = map[string]string{
-	// Implemented in WU-6 (omnipus-system-agent FR-077) as an Omnipus system
-	// tool. Its guard is policy: it ships ask and is on the Auto ask-list
-	// (FR-021), and only Omnipus holds it. Re-adjudication into
-	// administrativeToolNames is pending, together with
-	// TestAdministrativeToolNames_Drift's literal list.
-	"remove_secret": "implemented (FR-077, WU-6), Omnipus only; guarded by ask + Auto ask-list (FR-021); re-adjudication pending",
-}
+var administrativeExemptNames = map[string]string{}
 
 // isAdministrativeToolName reports whether name is in the drift-tested
 // destructive-and-install-wide set (ADR-071 §3.2.1).

@@ -63,14 +63,10 @@ func (t *RemoveSecretTool) consumers(ref string) []string {
 	return append([]string{}, secretrequest.ReferenceConsumers(t.deps.GetCfg())[ref]...)
 }
 
-// removalReference accepts reference_name, or the older reference spelling.
+// removalReference reads reference_name (no aliases).
 func removalReference(args map[string]any) string {
-	for _, key := range []string{"reference_name", "reference"} {
-		if ref, ok := args[key].(string); ok && strings.TrimSpace(ref) != "" {
-			return strings.TrimSpace(ref)
-		}
-	}
-	return ""
+	ref, _ := args["reference_name"].(string)
+	return strings.TrimSpace(ref)
 }
 
 func (t *RemoveSecretTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
