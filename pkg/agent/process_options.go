@@ -86,6 +86,12 @@ type processOptions struct {
 	// scheduled reason.
 	askRefusalReason string
 
+	// approvalOriginLabel is the server-derived origin label every approval
+	// this turn raises carries (spec §6.18, K7 origin_label): "while
+	// answering <person> on <connection>" for a channel message, "asked by
+	// <Agent>" for a peer agent's request. Empty for a plain web turn.
+	approvalOriginLabel string
+
 	// Metadata carries the inbound message metadata (bus.InboundMessage.Metadata)
 	// through to the turn flow. The agent loop reads Metadata["model_name"] to
 	// detect a per-thread model switch (FR-011) and apply switch-time

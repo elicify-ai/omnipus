@@ -112,7 +112,7 @@ type approvalEntry struct {
 	// (child) session id, never the chat's. The chat the inline approval
 	// renders in is carried separately by the optional `root_session_id`
 	// (server-derived root of the ParentSessionID chain, omitted when equal
-	// to session_id), filled by WU-8.
+	// to session_id; ws_tool_approval.go::approvalSessionContext).
 	//
 	// What is load-bearing: this field is read in-process (never round-tripped through
 	// the wire frame) by cancelAllPendingForSessions and by the approve/deny
@@ -132,9 +132,11 @@ type approvalEntry struct {
 	CreatedAt time.Time
 	ExpiresAt time.Time
 
-	// RoomRef and OriginLabel are set only on a group chat's pre-admission
-	// card (omnipus-system-agent FR-251, K7): raised in the member's main
-	// chat, labelled "for group <name>". Immutable after creation.
+	// RoomRef is set only on a group chat's pre-admission card
+	// (omnipus-system-agent FR-251, K7), raised in the member's main chat.
+	// OriginLabel is the server-derived turn origin (spec §6.18): "for group
+	// <name>" on that card, "asked by <Agent>" for a turn that consumed a
+	// peer request; empty for a plain web turn. Immutable after creation.
 	RoomRef     *generated.RoomRef
 	OriginLabel string
 
@@ -149,7 +151,7 @@ type approvalEntry struct {
 	timer *time.Timer
 }
 
-// approvalExtras are the optional, room-only fields of a new approval.
+// approvalExtras are the optional origin fields of a new approval.
 type approvalExtras struct {
 	RoomRef     *generated.RoomRef
 	OriginLabel string

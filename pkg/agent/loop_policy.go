@@ -384,13 +384,18 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		return true, "", false
 	}
 	approver := al.loadToolApprover()
+	var originLabel string
+	if ts := turnStateFromContext(ctx); ts != nil {
+		originLabel = ts.opts.approvalOriginLabel
+	}
 	return approver.RequestApproval(ctx, PolicyApprovalReq{
-		ToolCallID: toolCallID,
-		ToolName:   toolName,
-		Args:       cloneStringAnyMap(args),
-		AgentID:    agentID,
-		SessionID:  sessionID,
-		TurnID:     turnID,
+		ToolCallID:  toolCallID,
+		ToolName:    toolName,
+		Args:        cloneStringAnyMap(args),
+		AgentID:     agentID,
+		SessionID:   sessionID,
+		TurnID:      turnID,
+		OriginLabel: originLabel,
 	})
 }
 
