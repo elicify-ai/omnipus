@@ -301,7 +301,15 @@ func (mat *mcpAddToolExecute) reconcileAndRespond() *tools.ToolResult {
 	}
 	var note string
 	var verdict changeOutcome
-	if mat.t.deps.MCPStatus != nil {
+	if reconcileAttempted && reconcileErr != nil {
+		// The saved configuration was not applied. A still-connected server is
+		// the PREVIOUS connection, so its status cannot prove these changes
+		// work; it is deliberately not read or reported here.
+		note = fmt.Sprintf(
+			"Server saved but live reconciliation failed: %s. The saved change was not applied; any existing connection is still the previous configuration.",
+			reconcileErr)
+		verdict = savedNotWorking("live reconciliation failed: "+reconcileErr.Error(), "", "the live connection")
+	} else if mat.t.deps.MCPStatus != nil {
 		status, toolCount, errMsg := mat.t.deps.MCPStatus(mat.name)
 		result["status"] = status
 		switch status {
@@ -323,12 +331,6 @@ func (mat *mcpAddToolExecute) reconcileAndRespond() *tools.ToolResult {
 				"(server disabled, or live reconciliation is unavailable)."
 			verdict = savedNotWorking("the server is not connected", scope, notTested...)
 		}
-	} else if reconcileAttempted && reconcileErr != nil {
-		// Reconciliation actually ran and failed, but there is no MCPStatus
-		// readback to report a live status from.
-		note = fmt.Sprintf(
-			"Server saved but live reconciliation failed: %s. Connection status is unknown.", reconcileErr)
-		verdict = savedNotWorking("live reconciliation failed: "+reconcileErr.Error(), "", "the live connection")
 	} else {
 		// Live status readback is not wired (tests, or a partially wired
 		// gateway): the connection was not checked.
