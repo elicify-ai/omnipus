@@ -256,7 +256,15 @@ export const selectAgent = async (
   try {
     await expect(mainButton).toHaveAttribute('aria-current', 'true', { timeout: 5_000 });
   } catch (err) {
-    if (!(err instanceof errors.TimeoutError)) throw err;
+    // An expect() matcher that runs out of time throws a plain matcher error
+    // carrying `matcherResult` — NOT errors.TimeoutError (verified on the
+    // pinned Playwright 1.61.1). The old `instanceof errors.TimeoutError`
+    // check therefore rethrew every lost aria-current poll, and this
+    // documented fallback never ran (CI run 39143775263, job 117725852235:
+    // the chat had switched, the sidebar had closed, the test failed here).
+    // Any other error still propagates; a closed page also fails loudly at
+    // the second surface below.
+    if (!(err instanceof Error && 'matcherResult' in err)) throw err;
     // Fall through to the second surface whether the sidebar closed OR the
     // row was transiently replaced while it stayed open — both lose the
     // aria-current poll without the switch having failed.

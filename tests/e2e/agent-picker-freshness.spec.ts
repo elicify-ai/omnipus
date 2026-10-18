@@ -121,3 +121,60 @@ test.describe("agent roster freshness after a raw-REST agent creation (row 55 bu
     await selectAgent(page, probeAgentName, DEFAULT_WORKSPACE_NAME);
   });
 });
+
+// Harness-only regression for selectors.ts::selectAgent (static DOM, no
+// gateway). A real row click closes the unpinned sidebar, so the row can
+// unmount before its aria-current is read; selectAgent then reopens the
+// sidebar and reads the selected row instead. CI run 39143775263 (job
+// 117725852235) failed THIS spec's acceptance test exactly there: the chat
+// had switched ("Browser Probe 41894 - Main Session" in the header, sidebar
+// closed), but the fallback never ran, because an expect() matcher that runs
+// out of time throws a plain matcher error, not errors.TimeoutError.
+test.describe("selectAgent when the row click closes the sidebar (static harness)", () => {
+  test("confirms the switch through the reopened sidebar's selected row", async ({ page }) => {
+    await page.setContent(`
+      <button id="show" aria-label="Show sidebar" style="display:none">menu</button>
+      <div id="host"></div>
+      <script>
+        const nav = (selected) => \`
+          <nav aria-label="Main navigation">
+            <button aria-label="Hide My Workspace agents" aria-expanded="true">My Workspace</button>
+            <div role="group" aria-label="My Workspace">
+              <div role="group" aria-label="Probe Agent" data-selected="\${selected}">
+                <div class="sidebar-agent-row"><button id="main">Probe Agent</button></div>
+              </div>
+            </div>
+          </nav>\`;
+        const host = document.getElementById('host');
+        const show = document.getElementById('show');
+        host.innerHTML = nav('false');
+        // The row click selects the agent and closes the sidebar at once: the
+        // row (and its aria-current) is gone before anyone can read it.
+        host.addEventListener('click', (e) => {
+          if (e.target.id !== 'main') return;
+          host.innerHTML = '';
+          show.style.display = '';
+        });
+        show.addEventListener('click', () => {
+          host.innerHTML = nav('true');
+          show.style.display = 'none';
+        });
+      </script>`);
+    await selectAgent(page, "Probe Agent", "My Workspace");
+  });
+
+  test("still fails when the click did not move the selection", async ({ page }) => {
+    await page.setContent(`
+      <nav aria-label="Main navigation">
+        <button aria-label="Hide My Workspace agents" aria-expanded="true">My Workspace</button>
+        <div role="group" aria-label="My Workspace">
+          <div role="group" aria-label="Probe Agent" data-selected="false">
+            <div class="sidebar-agent-row"><button>Probe Agent</button></div>
+          </div>
+        </div>
+      </nav>`);
+    await expect(selectAgent(page, "Probe Agent", "My Workspace")).rejects.toThrow(
+      /neither its aria-current nor the selected row confirmed the switch/,
+    );
+  });
+});
