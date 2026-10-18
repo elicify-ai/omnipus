@@ -39,12 +39,13 @@ func AllTools(d *Deps) []tools.Tool {
 		// which now carry the optional workspace_id. There is no task section
 		// here any more: one family, one implementation.
 
-		// Channel management (5)
+		// Channel management (6)
 		NewChannelEnableTool(d),
 		NewChannelConfigureTool(d),
 		NewChannelDisableTool(d),
 		NewChannelListTool(d),
 		NewChannelTestTool(d),
+		NewChannelConnectTool(d),
 
 		// Skill management (4: install and search retired)
 		NewSkillRemoveTool(d),
@@ -80,7 +81,7 @@ func AllTools(d *Deps) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 34 system tools.
+// BuildRegistry creates a ToolRegistry containing all 35 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()

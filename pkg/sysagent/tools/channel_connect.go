@@ -1,0 +1,212 @@
+// Omnipus — System Agent Tools
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package systools
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
+)
+
+// ChannelConnectTool connects a channel in one approved call (FR-080,
+// US-8): save its configuration with stored references, bind its main agent
+// in a workspace, enable it and live-test it. The result separates the facts
+// a real platform start proved from everything not tested (BDD-8.1–8.3).
+type ChannelConnectTool struct {
+	deps *Deps
+	secretSelectionAudit
+}
+
+func NewChannelConnectTool(d *Deps) *ChannelConnectTool { return &ChannelConnectTool{deps: d} }
+
+func (t *ChannelConnectTool) Name() string                 { return "connect_channel" }
+func (t *ChannelConnectTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (t *ChannelConnectTool) Category() tools.ToolCategory { return tools.CategoryChannels }
+func (t *ChannelConnectTool) ReportsChangeOutcome()        {}
+
+// Description is prometheus's connect_channel.md text.
+func (t *ChannelConnectTool) Description() string {
+	return "Connect a channel in one approved call: save its configuration, bind the instance's main agent in a workspace, enable it and live-test it. Supply id (the instance key: a bare type such as telegram for the default instance, or a namespaced key such as telegram.eu for an additional one), workspace_id, and agent_id for the main agent, who must be a member of that workspace — a valid token with a non-member target fails and nothing is saved. Credentials travel as stored references only, never plaintext: first request_secret for the instance's fields, wait for the person's card, then pass the returned references through the matching reference parameters; each must match that exact instance and field. WhatsApp needs no credentials here — the call starts QR pairing and the code and progress render in the chat, and a pairing timeout is reported as saved but not working. The result lists the facts proven by real platform calls and everything not tested; a rejected token is reported as saved but not working: token rejected, or failed: nothing saved when validation stopped the save — never working. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode."
+}
+
+func (t *ChannelConnectTool) Parameters() map[string]any {
+	properties := map[string]any{
+		"id":                  map[string]any{"type": "string", "description": "Channel instance key to connect: the bare type for the default instance, or type.suffix for an additional connection, as list_channels reports them"},
+		"workspace_id":        map[string]any{"type": "string", "description": "Workspace to bind the connection to"},
+		"agent_id":            map[string]any{"type": "string", "description": "Main agent for the instance; must already be a member of the target workspace, otherwise the connect fails and nothing is saved"},
+		expectedRevisionParam: map[string]any{"type": "string", "description": "The channel's revision from list_channels; \"absent\" when the instance is not configured yet"},
+	}
+	for _, binding := range channelReferenceBindings {
+		properties[binding.parameter] = map[string]any{
+			"type": "string",
+			"description": "Stored reference for field=" + binding.field + "; first request_secret with purpose and the instance recipient, then wait for the person's secure-card Submit. " +
+				"Must match that exact instance and field; otherwise request a new card for that recipient. Never pass a plaintext value",
+		}
+	}
+	return map[string]any{
+		"type": "object", "properties": properties,
+		"required":             []string{"id", "workspace_id", "agent_id", expectedRevisionParam},
+		"additionalProperties": false,
+	}
+}
+
+// whatsappChannel reports a QR-paired channel type: no credentials, pairing
+// progress renders in the requesting chat (BDD-8.4).
+func whatsappChannel(chType string) bool {
+	return chType == "whatsapp" || chType == "whatsapp_native"
+}
+
+func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
+	if refusal := tools.ToolArgumentRefusal(t, args); refusal != nil {
+		return refusal
+	}
+	id, _ := args["id"].(string)
+	ws, _ := args["workspace_id"].(string)
+	agentID, _ := args["agent_id"].(string)
+	id, ws, agentID = strings.TrimSpace(id), strings.TrimSpace(ws), strings.TrimSpace(agentID)
+	if id == "" || ws == "" || agentID == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id, workspace_id and agent_id are required; nothing saved", ""))
+	}
+	if _, ok := findChannelInstance(id); !ok {
+		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q; nothing saved", id), "Read list_channels for valid ids"))
+	}
+	in, err := readChannelReferenceInput(args)
+	if err != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error()+"; nothing saved", "Use request_secret for channel credentials"))
+	}
+	expected, missing := expectedRevisionArg(args, "list_channels")
+	if missing != nil {
+		return missing
+	}
+	if refusal := t.validateBinding(ws, agentID); refusal != nil {
+		return refusal
+	}
+	chType, _ := config.ParseInstanceKey(id)
+	configure := &ChannelConfigureTool{deps: t.deps}
+	var saved config.ChannelInstanceConfig
+	writeErr := t.deps.withSharedResourceWrite(sharedChannel, id, expected, func() error {
+		return t.deps.WithConfig(func(cfg *config.Config) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			before, exists := cfg.Channels[id]
+			if !exists {
+				before = config.ChannelInstanceConfig{Type: chType}
+			}
+			saved = before
+			in.apply(&saved)
+			if err := configure.validateChannelReferences(id, before, saved, in); err != nil {
+				return err
+			}
+			saved.WorkspaceID = ws
+			saved.Identity = &config.ChannelIdentity{Kind: "agent", ID: agentID}
+			saved.Enabled = true
+			if cfg.Channels == nil {
+				cfg.Channels = make(map[string]config.ChannelInstanceConfig)
+			}
+			cfg.Channels[id] = saved
+			return nil
+		})
+	})
+	if r, ok := revisionConflictResult(writeErr, "list_channels"); ok {
+		return r
+	}
+	if r, ok := referenceSelectionRefusal(writeErr); ok {
+		return r
+	}
+	if writeErr != nil {
+		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED", "the channel could not be saved; nothing saved", "Stored credential values were not changed"))
+	}
+	refs := make([]string, 0, len(in.references))
+	for _, binding := range channelReferenceBindings {
+		if ref, supplied := in.references[binding.parameter]; supplied {
+			refs = append(refs, ref)
+		}
+	}
+	t.selected(ctx, t.Name(), id, refs)
+	if whatsappChannel(chType) && t.deps.NotePairingRequest != nil {
+		t.deps.NotePairingRequest(id, tools.ToolCallID(ctx), tools.ToolTranscriptSessionID(ctx))
+	}
+	return t.liveResult(id, ws, agentID, chType)
+}
+
+// validateBinding refuses a target that is not a valid main agent of the
+// workspace BEFORE anything is saved (BDD-8.7).
+func (t *ChannelConnectTool) validateBinding(ws, agentID string) *tools.ToolResult {
+	fail := func(msg string) *tools.ToolResult {
+		return tools.ErrorResult(errorJSON("INVALID_BINDING", msg+"; failed: nothing saved", "Choose a workspace member as the main agent"))
+	}
+	if err := validateID(ws); err != nil {
+		return fail("invalid workspace_id")
+	}
+	state, err := workspacepkg.ReadState(t.deps.Home, ws)
+	if err != nil {
+		return fail("workspace " + ws + " was not found")
+	}
+	if state.Workspace.Status == "archived" {
+		return fail("workspace " + ws + " is archived")
+	}
+	var agent *config.AgentConfig
+	if cfg := t.deps.GetCfg(); cfg != nil {
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == agentID {
+				agent = &cfg.Agents.List[i]
+			}
+		}
+	}
+	switch {
+	case agent == nil:
+		return fail("agent " + agentID + " was not found")
+	case agent.IsSystem():
+		return fail("system agents cannot be a channel's main agent")
+	case agent.IsWorker():
+		return fail("workers cannot be a channel's main agent")
+	}
+	if found, member := workspacepkg.FindForAgentPreferring(t.deps.Home, agentID, ws); !member || found != ws {
+		return fail("agent " + agentID + " is not a member of workspace " + ws)
+	}
+	return nil
+}
+
+// liveResult reloads, then reports what the real start proved and what was
+// not tested. A channel that did not start is never "working" (BDD-8.3).
+func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType string) *tools.ToolResult {
+	fields := map[string]any{"id": id, "workspace_id": ws, "agent_id": agentID,
+		"revision": channelRevision(t.deps.GetCfg(), id), "saved": "configuration, binding and enable saved"}
+	notTested := []string{"inbound message delivery and routing to the agent", "outbound replies"}
+	const scope = "the channel's start after the configuration reload"
+	wait := t.deps.WaitForReloadFunc
+	if wait == nil {
+		wait = t.deps.ReloadAndWaitFallback
+	}
+	if wait == nil {
+		return changeSuccess(fields, savedNotWorking("not live-tested: no live reload is wired", scope, notTested...))
+	}
+	if err := wait(); err != nil {
+		return changeSuccess(fields, savedNotWorking("the reload after saving did not complete", scope, notTested...))
+	}
+	if t.deps.ChannelLiveStatus == nil {
+		return changeSuccess(fields, savedNotWorking("not live-tested: channel status is unavailable", scope, notTested...))
+	}
+	running, failure, known := t.deps.ChannelLiveStatus(id)
+	switch {
+	case whatsappChannel(chType) && running:
+		fields["pairing"] = "QR pairing started; the connection works only after the QR code is scanned"
+		return changeSuccess(fields, savedNotWorking("pairing not finished: scan the WhatsApp QR code", scope, append([]string{"device pairing"}, notTested...)...))
+	case running:
+		fields["proven"] = []string{"the channel started after the reload with the saved configuration and credentials"}
+		return changeSuccess(fields, working(scope, notTested...))
+	case !known:
+		return changeSuccess(fields, savedNotWorking("not live-tested: channel status is unavailable", scope, notTested...))
+	case failure == "":
+		failure = "the channel did not start"
+	}
+	return changeSuccess(fields, savedNotWorking(failure, scope, notTested...))
+}

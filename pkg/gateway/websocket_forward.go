@@ -270,6 +270,15 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 		msg := p.Message
 		pairF.Message = &msg
 	}
+	// K10 / FR-081: a chat-started pairing correlates to its request and chat.
+	if p.RequestID != "" {
+		rid := p.RequestID
+		pairF.RequestId = &rid
+	}
+	if p.SessionID != "" {
+		sid := p.SessionID
+		pairF.SessionId = &sid
+	}
 	// #368: maintain the per-channel QR cache so late subscribers (e.g.
 	// a tab that opens the pairing UI after the first QR fires) receive
 	// the last-seen code immediately on subscribe rather than waiting for

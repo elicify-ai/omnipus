@@ -778,6 +778,11 @@ type WhatsAppPairingPayload struct {
 	Status    channels.PairingStatus `json:"status"`
 	QR        string                 `json:"qr,omitempty"`
 	Message   string                 `json:"message,omitempty"`
+	// RequestID and SessionID correlate a chat-started pairing with the
+	// request and chat that started it (K10, FR-081). Empty for a pairing
+	// started elsewhere (e.g. the Channels screen).
+	RequestID string `json:"request_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // TaskStatusChangedPayload carries a workflow task status transition for the

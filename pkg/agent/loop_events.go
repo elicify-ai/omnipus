@@ -123,12 +123,22 @@ func (al *AgentLoop) emitEvent(kind EventKind, meta EventMeta, payload any) {
 // the bus drops to a full subscriber rather than blocking. Wired into the
 // WhatsApp native channel at gateway boot via SetPairingObserver.
 func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.PairingStatus, qr, message string) {
-	al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, WhatsAppPairingPayload{
+	payload := WhatsAppPairingPayload{
 		ChannelID: channelID,
 		Status:    status,
 		QR:        qr,
 		Message:   message,
-	})
+	}
+	if v, ok := al.pairingRequests.Load(channelID); ok {
+		if corr, ok := v.(pairingCorrelation); ok {
+			payload.RequestID, payload.SessionID = corr.requestID, corr.sessionID
+		}
+		switch status {
+		case channels.PairingStatusLinked, channels.PairingStatusError, channels.PairingStatusTimeout:
+			al.pairingRequests.Delete(channelID) // the chat-started pairing ended
+		}
+	}
+	al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, payload)
 	// FR-111 (#358): audit-log device-pairing lifecycle transitions so linking a new
 	// WhatsApp device leaves a tamper-evident trail. We deliberately do NOT log the
 	// `code`/`connecting` states (high-frequency, and the QR itself is a scannable
