@@ -26,6 +26,22 @@ shipped `ROOMS_ENABLED = false` each re-aimed pin FAILS; with a temporary local 
 `true` (never committed) each PASSES. CHECK mutants for the re-aimed pins invert
 accordingly (`ROOMS_ENABLED true → false`).
 
+### Switch-flip proof receipts (stream C)
+
+Two-sided proof, one file at a time by explicit path, serial:
+
+| Direction | Tree | Result | Log (in `tests/l1-room-ui/retarget-logs/`) |
+|---|---|---|---|
+| Must FAIL with the switch off | `94977f1c0` (shipped `ROOMS_ENABLED = false`), scratch clone, only the two re-aimed test files applied | `featureSwitches.stage1.test.ts`: **1 failed / 2 passed** (S1-g rooms), exit 1; `AppShell.stage1.test.tsx`: **7 failed / 11 passed** (S1-a1, S1-a2, S1-a3, four S1-a traffic rows — exactly the steered set), exit 1 | `fail-switch-off-featureSwitches.log`, `fail-switch-off-AppShell.log` |
+| Must PASS with the switch on | `470d56f54` merged (the dev's real flip, `ROOMS_ENABLED = true`), no test-side switch mock | `featureSwitches.stage1.test.ts`: 3/3, exit 0; `AppShell.stage1.test.tsx`: **18/18** (all 7 re-aimed pins green, all 11 untouched pins still green), exit 0 | `pass-switch-on-featureSwitches.log`, `pass-switch-on-AppShell.log` |
+
+Every off-switch failure names its superseded pole: missing `group-chats-sales` /
+`add-participant` / `room-traffic-entry`, and S1-a3's redirect observed as
+`expected '/workspaces/sales/chat' to be '/workspaces/sales/rooms/launch'`. `npm run
+typecheck` exit 0 on the merged tree (`typecheck.log`). No production file was authored
+or reverted by QA: the switch flip arrives only through the merged dev commit, and the
+branch delta over `470d56f54` touches test files, the ledger and its logs only.
+
 
 
 ## Accepted scope and tested states

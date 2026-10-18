@@ -1,0 +1,575 @@
+Warning: Route file "/private/tmp/wu15-failproof/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/private/tmp/wu15-failproof/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/private/tmp/wu15-failproof/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/private/tmp/wu15-failproof/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /private/tmp/wu15-failproof
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — rooms switched on through the real application shell > [S1-a1; dispatch 2(a)] a populated expanded workspace shows its Group chats section and reads its room collection exactly once
+[ws] Web Worker construction failed — WS frame parsing will run inline on the main thread; this is a performance regression under burst input ReferenceError: Worker is not defined
+    at WsConnection._startWorker (/private/tmp/wu15-failproof/src/lib/ws.ts:507:26)
+    at WsConnection.connect (/private/tmp/wu15-failproof/src/lib/ws.ts:467:10)
+    at /private/tmp/wu15-failproof/src/components/chat/OmnipusRuntimeProvider.tsx:250:10
+    at Object.react_stack_bottom_frame (/private/tmp/wu15-failproof/node_modules/react-dom/cjs/react-dom-client.development.js:25989:20)
+    at runWithFiberInDEV (/private/tmp/wu15-failproof/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+    at commitHookEffectListMount (/private/tmp/wu15-failproof/node_modules/react-dom/cjs/react-dom-client.development.js:13249:29)
+    at commitHookPassiveMountEffects (/private/tmp/wu15-failproof/node_modules/react-dom/cjs/react-dom-client.development.js:13336:11)
+    at reconnectPassiveEffects (/private/tmp/wu15-failproof/node_modules/react-dom/cjs/react-dom-client.development.js:15832:11)
+    at recursivelyTraverseReconnectPassiveEffects (/private/tmp/wu15-failproof/node_modules/react-dom/cjs/react-dom-client.development.js:15784:9)
+    at reconnectPassiveEffects (/private/tmp/wu15-failproof/node_modules/react-dom/cjs/react-dom-client.development.js:15885:11)
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — rooms switched on through the real application shell > [S1-a1; dispatch 2(a)] a populated expanded workspace shows its Group chats section and reads its room collection exactly once
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — rooms switched on through the real application shell > [S1-a2; dispatch 2(a)] a member main chat shows the Add participant entry point without any room attach or room-detail read
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — rooms switched on through the real application shell > [S1-a3; dispatch 2(a)] a direct room URL mounts the room, attaches it and reads it without redirecting
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'plain' 'request' carrying room_ref renders its room-traffic entry
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'plain' 'request' carrying room_ref renders its room-traffic entry
+[chat] ResizeObserver unavailable — rendering full message list without virtualization
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'plain' 'request' carrying room_ref renders its room-traffic entry
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'request' carrying room_ref renders its room-traffic entry
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'request' carrying room_ref renders its room-traffic entry
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'streaming answer' carrying room_ref renders its room-traffic entry
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'streaming answer' carrying room_ref renders its room-traffic entry
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'completed answer' carrying room_ref renders its room-traffic entry
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'completed answer' carrying room_ref renders its room-traffic entry
+[api] GET /api/v1/commands?surface=web: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+ ❯ src/components/layout/AppShell.stage1.test.tsx (18 tests | 7 failed) 6621ms
+     × [S1-a1; dispatch 2(a)] a populated expanded workspace shows its Group chats section and reads its room collection exactly once 514ms
+     × [S1-a2; dispatch 2(a)] a member main chat shows the Add participant entry point without any room attach or room-detail read 508ms
+     × [S1-a3; dispatch 2(a)] a direct room URL mounts the room, attaches it and reads it without redirecting 288ms
+     × [S1-a traffic; added dispatch] a 'plain' 'request' carrying room_ref renders its room-traffic entry 436ms
+     × [S1-a traffic; added dispatch] a 'virtual' 'request' carrying room_ref renders its room-traffic entry 392ms
+     × [S1-a traffic; added dispatch] a 'virtual' 'streaming answer' carrying room_ref renders its room-traffic entry 463ms
+     × [S1-a traffic; added dispatch] a 'virtual' 'completed answer' carrying room_ref renders its room-traffic entry 473ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — rooms switched on through the real application shell > [S1-a1; dispatch 2(a)] a populated expanded workspace shows its Group chats section and reads its room collection exactly once
+TestingLibraryElementError: Unable to find an element by: [data-testid="group-chats-sales"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] font-[var(--font-weight-regular)]"[39m
+                  [33mdata-action-state[39m=[32m"idle"[39m
+                  [33mdata-ds-action[39m=[32m""[39m
+                  [33mdata-testid[39m=[32m"sidebar-omnipus-entry"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"b...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/layout/AppShell.stage1.test.tsx:82:31
+     80|     await settledReads()
+     81|     expect(router.state.location.pathname).toBe('/settings')
+     82|     const groupChats = screen.getByTestId(`group-chats-${WS}`)
+       |                               ^
+     83|     expect(groupChats).toBeVisible()
+     84|     expect(within(groupChats).getByText('Group chats', { exact: true }…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — rooms switched on through the real application shell > [S1-a2; dispatch 2(a)] a member main chat shows the Add participant entry point without any room attach or room-detail read
+TestingLibraryElementError: Unable to find an element by: [data-testid="add-participant"]
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] font-[var(--font-weight-regular)]"[39m
+                  [33mdata-action-state[39m=[32m"idle"[39m
+                  [33mdata-ds-action[39m=[32m""[39m
+                  [33mdata-testid[39m=[32m"sidebar-omnipus-entry"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"b...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/layout/AppShell.stage1.test.tsx:106:19
+    104|     await settledReads()
+    105|     expect(router.state.location.pathname).toBe(MAIN_PATH)
+    106|     expect(screen.getByTestId('add-participant')).toBeVisible()
+       |                   ^
+    107|     expect(screen.getByRole('button', { name: 'Add participant' })).to…
+    108|     expect(roomRequests().map((request) => `${request.method} ${reques…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — rooms switched on through the real application shell > [S1-a3; dispatch 2(a)] a direct room URL mounts the room, attaches it and reads it without redirecting
+AssertionError: expected '/workspaces/sales/chat' to be '/workspaces/sales/rooms/launch' // Object.is equality
+
+Expected: "/workspaces/sales/rooms/launch"
+Received: "/workspaces/sales/chat"
+
+ ❯ src/components/layout/AppShell.stage1.test.tsx:125:44
+    123|     const { router, socket } = await mountStage1App(roomPath)
+    124|     await settledReads()
+    125|     expect(router.state.location.pathname).toBe(roomPath)
+       |                                            ^
+    126|     expect(roomRequests().map((request) => `${request.method} ${reques…
+    127|     expect(roomRequests().filter((request) => request.method !== 'GET'…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'plain' 'request' carrying room_ref renders its room-traffic entry
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'request' carrying room_ref renders its room-traffic entry
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'completed answer' carrying room_ref renders its room-traffic entry
+TestingLibraryElementError: Unable to find an element by: [data-testid="room-traffic-entry"]
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mstyle[39m=[32m""[39m
+[36m>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transiti...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:109:15
+ ❯ src/components/layout/AppShell.stage1.test.tsx:287:30
+    285|       })
+    286|       await settledReads()
+    287|       const entries = screen.getAllByTestId('room-traffic-entry')
+       |                              ^
+    288|       expect(entries).toHaveLength(1)
+    289|       expect(entries[0]).toBeVisible()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — room traffic rendered in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'streaming answer' carrying room_ref renders its room-traffic entry
+TestingLibraryElementError: Unable to find an element by: [data-testid="room-traffic-entry"]
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mstyle[39m=[32m""[39m
+[36m>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transiti...
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:109:15
+ ❯ src/components/layout/AppShell.stage1.test.tsx:287:30
+    285|       })
+    286|       await settledReads()
+    287|       const entries = screen.getAllByTestId('room-traffic-entry')
+       |                              ^
+    288|       expect(entries).toHaveLength(1)
+    289|       expect(entries[0]).toBeVisible()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  7 failed | 11 passed (18)
+   Start at  14:23:14
+   Duration  17.07s (transform 5.57s, setup 232ms, import 9.36s, tests 6.62s, environment 679ms)
+
