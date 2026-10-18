@@ -6866,6 +6866,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/HelperEventRow.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/IframePreview.tsx",
       "lane": 4
     },
@@ -6894,6 +6898,10 @@
       "lane": 6
     },
     {
+      "source": "src/components/chat/OutcomeDisclosure.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/RowDeliveryStatus.tsx",
       "lane": 3
     },
@@ -6920,6 +6928,10 @@
     {
       "source": "src/components/chat/SubagentQuestionMessage.tsx",
       "lane": 5
+    },
+    {
+      "source": "src/components/chat/SystemMessageRows.tsx",
+      "lane": 3
     },
     {
       "source": "src/components/chat/ToolCallBadge.tsx",
