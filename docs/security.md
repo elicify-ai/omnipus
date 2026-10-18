@@ -502,6 +502,8 @@ When an agent needs a provider key, an MCP server environment secret, or a chann
 | Gateway restarts before submission | The request becomes unavailable. Ask the agent for a new card. |
 | The destination changes while the card is open | Submission is refused. Ask for a new card showing the current destination. |
 
+Each card transition is recorded in the audit log without the values. If the gateway stopped after saving a submission but before recording it, the restart finds the saved submission and records it as `secret.request.recovered_submitted`.
+
 The card does **not** ask you to re-type your account password: submitting that exact destination-bound card is consent for that write only. It cannot choose an arbitrary vault entry or delete one. Raw Credential Vault changes in Settings still require password confirmation where applicable.
 
 A turn that consumed a message from a channel person cannot open this card, even when that message arrived in an agent's main chat. The agent instead asks you to open the web app and ask it there. Unattended runs cannot open a card either.

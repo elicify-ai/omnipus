@@ -113,6 +113,11 @@ func (r *Registry) Recover() error {
 				if recovered.Card.State == "interrupted" && r.opts.Audit != nil {
 					r.opts.Audit(recovered, "interrupted")
 				}
+				// A receipt proves the values were committed before the crash
+				// cut the normal submitted transition: record it truthfully.
+				if rec.Card.State == "pending" && recovered.Card.State == "submitted" && r.opts.Audit != nil {
+					r.opts.Audit(cloneRecord(recovered), "recovered_submitted")
+				}
 			}
 		}
 	}
