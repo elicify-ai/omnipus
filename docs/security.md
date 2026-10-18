@@ -539,6 +539,21 @@ Attaching references does not enable a disabled server, change the global MCP sw
 
 Cancelling the card leaves the non-secret server entry in place and stores no secret. Stopping after submission leaves the new version stored but does not attach it automatically. You can continue the setup later with a fresh confirmation or remove the server deliberately; Omnipus does not silently roll it back or remove and recreate it.
 
+### Private variables for one agent
+
+An agent can also ask for a **private variable**: a named secret, such as `WEATHER_TOKEN`, that only that agent's own commands receive. It belongs to one agent in one workspace. Mia's `WEATHER_TOKEN` in Sales is not visible to Ray in Sales, and not to Mia in Marketing (Marketing can have its own value).
+
+The card shows the owner as "Mia in Sales" and the variable name. Omnipus can request a private variable for another agent, but only for an agent that is a member of that workspace.
+
+| What you should know | Details |
+|---|---|
+| Promise | Never typed into the chat, never in tool arguments, hidden in output where possible; **a command you let the agent run can still reveal it**. Output filtering hides the exact value only: a transformed copy (for example base64) is not guaranteed to be hidden. |
+| Where it is available | Only as an environment variable in that agent's own commands in that workspace: `bash` (foreground and background) and `environment_setup`. It is added after Omnipus's own environment settings, so the document toolchain does not remove it. It is never placed in the gateway's own environment, and external-program workers do not receive it. |
+| Names | Uppercase letters, digits and `_`, 1 to 64 characters, starting with a letter. Names Omnipus sets for commands are refused, with the reason: for example `PATH`, `HOME`, `TMPDIR`, `HTTP_PROXY`, `PIP_CACHE_DIR`, `PYTHONPATH`, `NODE_PATH`, and any name starting with `LC_`, `XDG_`, `OMNIPUS_`, `LD_` or `DYLD_`. |
+| Replacing it | Submitting a new value on the owner's card takes effect at once for the next command, with no second approval. The previous version stays stored and listed as superseded. |
+| Turns started by a channel person | Private variables are **not** added to commands in a turn that read a message from someone on a connected channel, unless you marked that variable "available in channel conversations". This is off by default; only a signed-in web user can change it, and each change is recorded in the audit log. |
+| If it cannot be read | The command still runs without it, and the result says which private variable could not be read. Replace it on a new card. |
+
 ## How to manage saved secrets
 
 1. Open **Settings**, then select **Security**.

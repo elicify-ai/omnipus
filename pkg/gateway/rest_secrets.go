@@ -47,21 +47,21 @@ func (a *restAPI) HandleSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *restAPI) secretStore() (*credentials.Store, error) {
+func (a *restAPI) secretStore() (*credentials.Store, bool, error) {
 	if a.agentLoop == nil {
-		return nil, errors.New("secret store is unavailable")
+		return nil, false, errors.New("secret store is unavailable")
 	}
 	return a.agentLoop.CardSecretStore()
 }
 
 func (a *restAPI) listSecrets(w http.ResponseWriter, r *http.Request) {
-	store, err := a.secretStore()
+	store, exists, err := a.secretStore()
 	if err != nil {
 		jsonErr(w, http.StatusServiceUnavailable, "the secret store is unavailable")
 		return
 	}
 	entries := []gen.SecretNameEntry{}
-	if store != nil {
+	if exists {
 		inventory, invErr := store.CardInventory()
 		if invErr != nil {
 			jsonErr(w, http.StatusServiceUnavailable, "the secret store could not be read")
@@ -91,12 +91,12 @@ func (a *restAPI) updateSecretOptions(w http.ResponseWriter, r *http.Request, re
 		jsonErr(w, http.StatusBadRequest, "send exactly {\"available_in_channel_turns\": true|false}")
 		return
 	}
-	store, err := a.secretStore()
+	store, exists, err := a.secretStore()
 	if err != nil {
 		jsonErr(w, http.StatusServiceUnavailable, "the secret store is unavailable")
 		return
 	}
-	if store == nil {
+	if !exists {
 		jsonErr(w, http.StatusNotFound, "secret reference not found")
 		return
 	}

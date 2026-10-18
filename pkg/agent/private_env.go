@@ -66,12 +66,15 @@ func (al *AgentLoop) logPrivateEnvFailure(sessionID, agentID, category string) {
 }
 
 // CardSecretStore is the encrypted store secret cards commit into, for the
-// gateway's value-free secret listing and options routes. It returns
-// (nil, nil) on a fresh install with no credential store yet.
-func (al *AgentLoop) CardSecretStore() (*credentials.Store, error) {
-	store, err := al.secretRecoveryCredentialStore()
+// gateway's value-free secret listing and options routes. exists is false on
+// a fresh install with no credential store yet (not an error).
+func (al *AgentLoop) CardSecretStore() (store *credentials.Store, exists bool, err error) {
+	store, err = al.secretRecoveryCredentialStore()
 	if errors.Is(err, secretrequest.ErrRecoveryStoreAbsent) {
-		return nil, nil
+		return nil, false, nil
 	}
-	return store, err
+	if err != nil {
+		return nil, false, err
+	}
+	return store, store != nil, nil
 }
