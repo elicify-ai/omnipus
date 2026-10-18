@@ -243,7 +243,7 @@ Retention does not advertise every allowed tool on the first request.
 | Config               | Type | Default | Description                                                                                                                       |
 |----------------------|------|---------|-----------------------------------------------------------------------------------------------------------------------------------|
 | `enabled`            | bool | false   | Global default: if `true`, all MCP tools are hidden and loaded on-demand via search; if `false`, all tools are loaded into context. Individual servers can override this with the per-server `deferred` field. |
-| `ttl`                | int  | 5       | Discovery promotion lifetime in conversational turns; a tool retained by a session stays advertised for that session beyond this lifetime |
+| `ttl`                | int  | 5       | Discovery promotion lifetime in tool rounds — one round is one pass of tool execution inside an agent's turn, so a turn with several tool steps burns several. A tool a session has loaded stays advertised for that session beyond this lifetime. |
 | `max_search_results` | int  | 5       | Maximum number of tools returned per search query                                                                                 |
 | `use_bm25`           | bool | true    | Let `ToolSearch` match natural-language and keyword queries. **Warning**: consumes more resources than regex search |
 | `use_regex`          | bool | false   | Let `ToolSearch` match regular-expression queries |
