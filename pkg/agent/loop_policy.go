@@ -545,7 +545,16 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 // scheduled variant it names no approval and no approver — none was ever
 // requested — but its reason is AskDenyReasonTaskRun, and it never warns about
 // a missing schedule identity: a task run has none.
+//
+// The row names the ACTING session — the concrete transcript the call was
+// refused in — not the turn's history scope: a task run's scope is
+// agent:<agent>:task:<task>, shared by every run of that task (gate round 1,
+// security S1; adr-057 session-unification spec, regression row 6).
 func (al *AgentLoop) emitTaskRunAutoDenyAudit(ctx context.Context, ts *turnState, toolName string) {
+	sessionID := ts.transcriptSessionID
+	if sessionID == "" {
+		sessionID = ts.sessionKey
+	}
 	audit.EmitToolPolicyAskDenied(
 		ctx,
 		al.auditLogger,
@@ -553,7 +562,7 @@ func (al *AgentLoop) emitTaskRunAutoDenyAudit(ctx context.Context, ts *turnState
 		"", // approverUserID — no human actor
 		toolName,
 		ts.agentID,
-		ts.sessionKey,
+		sessionID,
 		ts.turnID,
 		audit.AskDenyReasonTaskRun,
 		"",  // argsHash — not available at this call site
