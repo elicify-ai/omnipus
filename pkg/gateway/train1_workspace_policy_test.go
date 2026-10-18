@@ -18,9 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Founder 2026-10-18: "Create yes, delete asks". Only the model and browser
-// transport are scripted. Seed, ToolSearch, loop policy gates, executable
-// tools, workspace storage and the gateway approval adapter are all real.
+// Founder 2026-10-18: creation stays allowed; deletion is denied pending
+// #1363. Only model/browser transport is scripted. Seed, discovery, policy,
+// registered tool bodies, workspace storage and the approval adapter are real.
 func train1WorkspacePolicyHarness(t *testing.T, provider *testutil.ScenarioProvider) (*restAPI, *approvalRegistryV2, *wsConn, *bus.MessageBus, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -119,69 +119,72 @@ func TestTrain1OmnipusWorkspaceTools_CreateWithoutApprovalPersistsWorkspace(t *t
 	assert.Equal(t, 1, created, "a provider's scripted success text is not proof of a workspace write")
 }
 
-func TestTrain1OmnipusWorkspaceTools_DeleteWaitsForApproval(t *testing.T) {
-	for _, action := range []ApprovalAction{ApprovalActionApprove, ApprovalActionDeny} {
-		t.Run(string(action), func(t *testing.T) {
+// Founder 2026-10-18: "delete later, track" (#1363). A fresh Omnipus
+// cannot turn deletion into an approval request; the Deny refuses it first.
+func TestTrain1OmnipusWorkspaceTools_DeleteDeniedWithoutApproval(t *testing.T) {
+	for _, defaultTarget := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non_default", true: "default"}[defaultTarget], func(t *testing.T) {
 			provider := testutil.NewScenario()
 			api, reg, tab, msgBus, mainID := train1WorkspacePolicyHarness(t, provider)
-			const targetID = "train1-delete-target"
-			require.NoError(t, workspace.SaveRecord(api.homePath, workspace.Workspace{
-				ID: targetID, Name: "Delete only after approval", Status: "active",
-			}))
-			before, readErr := workspace.ReadState(api.homePath, targetID)
-			require.NoError(t, readErr)
-			args := map[string]any{"id": targetID, "revision": before.Revision, "confirm": true}
-			encoded, encodeErr := json.Marshal(args)
-			require.NoError(t, encodeErr)
+			targetID, err := workspace.ResolveDefaultID(api.homePath)
+			require.NoError(t, err)
+			if !defaultTarget {
+				targetID = train1ChannelDeleteTarget
+				train1SeedBoundDeletionChannels(t, api)
+				unlock := workspace.LockID(targetID)
+				err = workspace.SaveDelegation(api.homePath, targetID, []workspace.DelegationEdge{
+					{FromAgent: "mia", ToAgent: "mia", Modes: []workspace.DelegationMode{workspace.ModeDirect}},
+				})
+				unlock()
+				require.NoError(t, err)
+			}
+			before, err := workspace.ReadState(api.homePath, targetID)
+			require.NoError(t, err)
+			configBefore, err := api.agentLoop.GetConfig().Clone()
+			require.NoError(t, err)
+			files := train1DefaultDeleteSentinels(t, api.homePath, targetID)
+			args, err := json.Marshal(map[string]any{"id": targetID, "revision": before.Revision, "confirm": true})
+			require.NoError(t, err)
 			provider.WithToolCall("ToolSearch", `{"names":["delete_workspace"]}`).
-				WithToolCall("delete_workspace", string(encoded)).
-				WithText("Deletion request handled.")
-
-			ctx := train1StartMainTurn(t, api, msgBus, mainID, "Delete the target workspace")
-
-			var frame gen.ToolApprovalRequiredFrame
+				WithToolCall("delete_workspace", string(args)).WithText("Use workspace Settings to delete it.")
+			ctx := train1StartMainTurn(t, api, msgBus, mainID, "Delete the workspace")
 			select {
 			case raw := <-tab.sendCh:
-				require.NoError(t, json.Unmarshal(raw, &frame))
+				var unexpected gen.ToolApprovalRequiredFrame
+				require.NoError(t, json.Unmarshal(raw, &unexpected))
+				reg.resolve(unexpected.ApprovalId, ApprovalActionCancel, false)
+				t.Fatalf("#1363: a denied deletion must not ask for approval: %s", raw)
 			case reply := <-msgBus.OutboundChan():
-				t.Fatalf("delete_workspace finished without raising an approval: %s", reply.Content)
+				require.Equal(t, "Use workspace Settings to delete it.", reply.Content)
+				require.Equal(t, mainID, reply.SessionID)
 			case <-ctx.Done():
-				t.Fatal("delete_workspace neither raised an approval nor finished")
+				t.Fatal("denied deletion did not return")
 			}
-			assert.Equal(t, string(gen.WsFrameTypeToolApprovalRequired), frame.Type)
-			assert.Equal(t, "delete_workspace", frame.ToolName)
-			assert.Equal(t, "delete_workspace-0", frame.ToolCallId)
-			assert.Equal(t, "omnipus", frame.AgentId)
-			assert.Equal(t, args, frame.Args)
-			pending := reg.pendingApprovals()
-			require.Len(t, pending, 1, "the frame must correspond to one real pending approval")
-			assert.Equal(t, pending[0].ApprovalID, frame.ApprovalId)
-			assert.Equal(t, mainID, frame.SessionId, "approval must be reachable in Omnipus's real main chat")
-			assert.NotEmpty(t, frame.TurnId)
-			assert.Equal(t, 2, provider.CallCount(), "the model must wait for approval, not receive a fake completion")
-			waiting, waitingErr := workspace.ReadState(api.homePath, targetID)
-			require.NoError(t, waitingErr)
-			assert.Equal(t, before, waiting, "nothing may be deleted before the user decides")
-
-			resolved, gone := reg.resolve(frame.ApprovalId, action, false)
-			require.True(t, resolved)
-			require.False(t, gone)
-			select {
-			case reply := <-msgBus.OutboundChan():
-				assert.Equal(t, "Deletion request handled.", reply.Content)
-				assert.Equal(t, mainID, reply.SessionID)
-			case <-ctx.Done():
-				t.Fatal("the turn did not continue after the approval decision")
-			}
-			assert.Equal(t, 3, provider.CallCount())
+			require.Equal(t, 3, provider.CallCount())
+			assert.Empty(t, tab.sendCh, "no deferred approval may be emitted")
 			assert.Empty(t, reg.pendingApprovals())
-			if action == ApprovalActionApprove {
-				assert.False(t, workspace.Exists(api.homePath, targetID), "approval must execute the real delete tool")
-			} else {
-				after, afterErr := workspace.ReadState(api.homePath, targetID)
-				require.NoError(t, afterErr)
-				assert.Equal(t, before, after, "a refused deletion must leave the complete workspace state unchanged")
+			reg.mu.Lock()
+			requests := len(reg.entries)
+			reg.mu.Unlock()
+			assert.Zero(t, requests, "Deny must not enter the approval registry")
+			var denial gen.PermissionDenied
+			found := 0
+			for _, message := range provider.LastMessages() {
+				if message.Role == "tool" && message.ToolCallID == "delete_workspace-0" {
+					found++
+					require.NoError(t, json.Unmarshal([]byte(message.Content), &denial))
+				}
 			}
+			require.Equal(t, 1, found, "the actual policy refusal must reach the model")
+			assert.Equal(t, "permission_denied", denial.Error)
+			assert.Equal(t, "policy_denied", denial.Reason)
+			assert.Equal(t, "delete_workspace", denial.Tool)
+			assert.True(t, denial.Permanent)
+			after, err := workspace.ReadState(api.homePath, targetID)
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "no workspace mutation on a denied tool call")
+			assert.Equal(t, configBefore.Channels, api.agentLoop.GetConfig().Channels, "denied deletion cannot unbind or disable channels")
+			train1AssertDefaultDeleteFilesUnchanged(t, files)
 		})
 	}
 }

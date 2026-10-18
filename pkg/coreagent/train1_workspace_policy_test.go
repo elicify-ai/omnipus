@@ -10,34 +10,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Founder 2026-10-18: "Create yes, delete asks". Expectations come from that
-// decision, not from either production policy map. FR-022 forbids storing Ask
-// on Omnipus itself; the two tools must inherit the global ceiling instead.
-func TestTrain1OmnipusWorkspacePolicies_FreshInstallRidesCeiling(t *testing.T) {
+// Founder 2026-10-18: "delete later, track" (#1363) supersedes "delete asks".
+// Creation rides the allow ceiling; deletion is an explicit per-agent Deny,
+// including under God Mode. FR-022 still forbids a per-agent Ask for Omnipus.
+func TestTrain1OmnipusWorkspacePolicies_CreateAllowedDeleteDenied(t *testing.T) {
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 	omnipus := l1WU2SeededAgent(t, cfg, "omnipus")
 	require.NotNil(t, omnipus.Tools)
 	inventory := coreagent.ADR090RolePolicyInventory(coreagent.IDOmnipus)
+	pc, agentType := tools.BuildFallbackPolicyCfg(cfg, "omnipus")
+	require.Equal(t, "core", agentType)
 
-	for _, tc := range []struct {
-		name string
-		want config.ToolPolicy
-	}{
-		{"create_workspace", config.ToolPolicyAllow},
-		{"delete_workspace", config.ToolPolicyAsk},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, string(tc.want), cfg.Sandbox.ToolPolicies[tc.name], "shipped global policy")
-			assert.NotContains(t, omnipus.Tools.Builtin.Policies, tc.name, "supported tools have no per-agent override")
-			assert.Equal(t, tc.want, inventory[tc.name], "role inventory must match the founder's decision")
-			pc, agentType := tools.BuildFallbackPolicyCfg(cfg, "omnipus")
-			assert.Equal(t, "core", agentType)
-			// This exported entry point calls resolveEffectivePolicyWith, the
-			// same strictest-wins merge used by the runtime approval gate.
-			assert.Equal(t, string(tc.want), tools.ResolveEffectivePolicy(pc, tc.name))
-			pc.GlobalPolicies[tc.name] = config.ToolPolicyDeny
-			assert.Equal(t, "deny", tools.ResolveEffectivePolicy(pc, tc.name), "operator tightening must still win")
-		})
+	assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["create_workspace"])
+	assert.Equal(t, "ask", cfg.Sandbox.ToolPolicies["delete_workspace"], "the shared global ceiling is unchanged")
+	assert.NotContains(t, omnipus.Tools.Builtin.Policies, "create_workspace")
+	assert.Equal(t, config.ToolPolicyDeny, omnipus.Tools.Builtin.Policies["delete_workspace"], "#1363: stored Omnipus Deny, not an approval")
+	assert.Equal(t, config.ToolPolicyAllow, inventory["create_workspace"])
+	assert.Equal(t, config.ToolPolicyDeny, inventory["delete_workspace"])
+	assert.Equal(t, "allow", tools.ResolveEffectivePolicy(pc, "create_workspace"))
+	assert.Equal(t, "deny", tools.ResolveEffectivePolicy(pc, "delete_workspace"))
+	pc.GodMode = true
+	assert.Equal(t, "allow", tools.ResolveEffectivePolicy(pc, "create_workspace"))
+	assert.Equal(t, "deny", tools.ResolveEffectivePolicy(pc, "delete_workspace"), "God Mode cannot lift Omnipus's own Deny")
+	pc.GodMode = false
+	pc.GlobalPolicies["create_workspace"] = config.ToolPolicyDeny
+	assert.Equal(t, "deny", tools.ResolveEffectivePolicy(pc, "create_workspace"), "operator tightening still wins")
+	for name, policy := range omnipus.Tools.Builtin.Policies {
+		assert.NotEqual(t, config.ToolPolicyAsk, policy, "FR-022: no per-agent Ask on %s", name)
 	}
 }

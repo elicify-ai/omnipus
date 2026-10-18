@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,27 +11,26 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// Founder follow-up 2026-10-18: approving delete_workspace must not bypass
-// the HTTP handler's default-workspace refusal. Both paths are real; the
-// exact reason is pinned independently, not read from a production helper.
-func TestTrain1OmnipusWorkspaceTools_DefaultDeleteRefusedAfterApproval(t *testing.T) {
+// Retained lower-layer hardening for #1363. The actual registered BODY is
+// called directly; fresh Omnipus is still Deny and cannot invoke it in a turn.
+// HTTP and body must preserve the same exact default-workspace refusal.
+func TestTrain1WorkspaceDeleteTool_DefaultRefusalMatchesHTTP(t *testing.T) {
 	const reason = "cannot delete the default workspace"
 	provider := testutil.NewScenario()
-	api, reg, tab, msgBus, mainID := train1WorkspacePolicyHarness(t, provider)
+	api, _, _, _, _ := train1WorkspacePolicyHarness(t, provider)
 	defaultID, err := workspace.ResolveDefaultID(api.homePath)
 	require.NoError(t, err)
 	before, err := workspace.ReadState(api.homePath, defaultID)
 	require.NoError(t, err)
-	require.True(t, before.Workspace.IsDefault, "the target must be the actual default, not a similarly named workspace")
+	require.True(t, before.Workspace.IsDefault)
 	files := train1DefaultDeleteSentinels(t, api.homePath, defaultID)
 
-	// Positive refusal control: exercise the existing HTTP handler against
-	// this same record and current revision before attempting the tool call.
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, defaultID), nil)
 	api.HandleWorkspaces(response, withAdminRole(request))
@@ -40,64 +40,29 @@ func TestTrain1OmnipusWorkspaceTools_DefaultDeleteRefusedAfterApproval(t *testin
 	require.Equal(t, reason, httpRefusal.Error)
 	train1AssertDefaultDeleteFilesUnchanged(t, files)
 
-	args := map[string]any{"id": defaultID, "revision": before.Revision, "confirm": true}
-	encoded, err := json.Marshal(args)
-	require.NoError(t, err)
-	provider.WithToolCall("ToolSearch", `{"names":["delete_workspace"]}`).
-		WithToolCall("delete_workspace", string(encoded)).
-		WithText("Deletion request handled.")
-	ctx := train1StartMainTurn(t, api, msgBus, mainID, "Delete the default workspace")
-
-	var frame gen.ToolApprovalRequiredFrame
-	select {
-	case raw := <-tab.sendCh:
-		require.NoError(t, json.Unmarshal(raw, &frame))
-	case reply := <-msgBus.OutboundChan():
-		t.Fatalf("default-workspace delete finished without raising its approval: %s", reply.Content)
-	case <-ctx.Done():
-		t.Fatal("default-workspace delete neither raised an approval nor finished")
-	}
-	require.Equal(t, string(gen.WsFrameTypeToolApprovalRequired), frame.Type)
-	require.Equal(t, "delete_workspace", frame.ToolName)
-	require.Equal(t, "omnipus", frame.AgentId)
-	require.Equal(t, mainID, frame.SessionId)
-	require.Equal(t, args, frame.Args)
-	pending := reg.pendingApprovals()
-	require.Len(t, pending, 1)
-	require.Equal(t, pending[0].ApprovalID, frame.ApprovalId)
-	require.Equal(t, 2, provider.CallCount(), "the delete is waiting on a real approval")
-	train1AssertDefaultDeleteFilesUnchanged(t, files)
-
-	resolved, gone := reg.resolve(frame.ApprovalId, ApprovalActionApprove, false)
-	require.True(t, resolved, "explicitly approve the destructive call; denial would not test the tool's own protection")
-	require.False(t, gone)
-	select {
-	case reply := <-msgBus.OutboundChan():
-		require.Equal(t, "Deletion request handled.", reply.Content)
-		require.Equal(t, mainID, reply.SessionID)
-	case <-ctx.Done():
-		t.Fatal("the approved deletion call did not return")
-	}
-	require.Equal(t, 3, provider.CallCount())
-	assert.Empty(t, reg.pendingApprovals())
-
-	var result map[string]any
-	results := 0
-	for _, message := range provider.LastMessages() {
-		if message.Role == "tool" && message.ToolCallID == "delete_workspace-0" {
-			results++
-			require.NoError(t, json.Unmarshal([]byte(message.Content), &result))
-		}
-	}
-	require.Equal(t, 1, results, "the real tool's result must reach the model")
-	assert.Equal(t, false, result["success"], "approval cannot make the default workspace deletable")
+	policy, covered := api.agentLoop.ResolveRegisteredToolPolicy("omnipus", "delete_workspace")
+	require.True(t, covered)
+	require.Equal(t, "deny", policy, "no test-fixture policy loosening")
+	instance, found := api.agentLoop.GetRegistry().GetAgent("omnipus")
+	require.True(t, found)
+	body, registered := instance.Tools.Get("delete_workspace")
+	require.True(t, registered)
+	result := body.Execute(tools.WithAgentID(context.Background(), "omnipus"), map[string]any{
+		"id": defaultID, "revision": before.Revision, "confirm": true,
+	})
+	require.NotNil(t, result)
+	require.True(t, result.IsError, "the actual tool body must refuse the default workspace")
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &payload))
+	assert.Equal(t, false, payload["success"])
 	assert.Equal(t, map[string]any{
 		"code": "CONFLICT", "message": httpRefusal.Error, "suggestion": "",
-	}, result["error"], "the tool must return the HTTP handler's exact refusal reason")
+	}, payload["error"])
 	train1AssertDefaultDeleteFilesUnchanged(t, files)
 	after, err := workspace.ReadState(api.homePath, defaultID)
 	require.NoError(t, err)
-	assert.Equal(t, before, after, "default record, team, graph and revision stay unchanged after approval")
+	assert.Equal(t, before, after, "default record, team, graph and revision stay unchanged")
+	assert.Zero(t, provider.CallCount(), "body hardening is not a claim of agent invocation")
 }
 
 // Real cascade targets make a late refusal detectable: checking only the
