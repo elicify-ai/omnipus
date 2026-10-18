@@ -26,6 +26,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -161,8 +162,12 @@ func (a *restAPI) getRoom(w http.ResponseWriter, roomID string) {
 // syntax, then the room read, which applies the room-dependent cursor bound.
 // The rules hold with inbound validation on and off — a GET has no body.
 func (a *restAPI) getRoomHistory(w http.ResponseWriter, r *http.Request, roomID string) {
-	query := r.URL.Query()
+	query, malformed := parseHistoryQuery(r.URL.RawQuery)
 	limit := rooms.HistoryDefaultLimit
+	if malformed["limit"] {
+		jsonErr(w, http.StatusBadRequest, "limit must be an integer from 1 to 1000")
+		return
+	}
 	if values, present := query["limit"]; present {
 		n, ok := parseHistoryInt(values)
 		if !ok || n < 1 || n > rooms.HistoryMaxLimit {
@@ -172,6 +177,10 @@ func (a *restAPI) getRoomHistory(w http.ResponseWriter, r *http.Request, roomID 
 		limit = int(n)
 	}
 	var beforeSeq *int64
+	if malformed["before_seq"] {
+		jsonErr(w, http.StatusBadRequest, "before_seq must be a positive int64 integer")
+		return
+	}
 	if values, present := query["before_seq"]; present {
 		n, ok := parseHistoryInt(values)
 		if !ok || n < 1 {
@@ -190,6 +199,36 @@ func (a *restAPI) getRoomHistory(w http.ResponseWriter, r *http.Request, roomID 
 		return
 	}
 	writeRoomJSON(w, http.StatusOK, page)
+}
+
+// parseHistoryQuery decodes the raw query like url.ParseQuery, but reports a
+// malformed pair instead of silently dropping it (url.URL.Query discards it,
+// which would turn a broken before_seq into "omitted" and serve the newest
+// page — gate round 1, SF-04). malformed is keyed by field: a pair whose
+// value cannot be decoded marks its own field; a pair whose KEY cannot be
+// decoded cannot be attributed and marks "limit" (validated first, D3). Pairs
+// for other keys are ignored, as before.
+func parseHistoryQuery(raw string) (url.Values, map[string]bool) {
+	values := url.Values{}
+	malformed := map[string]bool{}
+	for _, pair := range strings.Split(raw, "&") {
+		if pair == "" {
+			continue
+		}
+		rawKey, rawValue, _ := strings.Cut(pair, "=")
+		key, err := url.QueryUnescape(rawKey)
+		if err != nil {
+			malformed["limit"] = true
+			continue
+		}
+		value, err := url.QueryUnescape(rawValue)
+		if err != nil {
+			malformed[key] = true
+			continue
+		}
+		values[key] = append(values[key], value)
+	}
+	return values, malformed
 }
 
 // parseHistoryInt parses one query value as a non-negative decimal int64:
