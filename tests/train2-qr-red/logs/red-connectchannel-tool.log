@@ -1,0 +1,103 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat
+
+ ❯ src/components/chat/tools/ConnectChannelTool.chat.test.tsx (3 tests | 3 failed) 106ms
+     × a live WhatsApp call subscribes with request_id = the tool call id, and a code frame renders the QR below it 13ms
+     × a non-live connect_channel render points at Connectors > WhatsApp and sends nothing 3ms
+     × WhatsAppPairingBody renders the stopped state instead of falling through to the default spinner 84ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/chat/tools/ConnectChannelTool.chat.test.tsx > Row 1 — a LIVE connect_channel call mounts the same notice under the tool call (BDD-8.4) > a live WhatsApp call subscribes with request_id = the tool call id, and a code frame renders the QR below it
+AssertionError: BLOCKED: src/components/chat/tools/ConnectChannelTool.tsx::ConnectChannelTool not implemented — required by BDD-8.4/FR-081 (connect_channel tool UI mounts WhatsAppNativeNotice; approved plan, Train 2 WU-7)
+ ❯ renderConnectChannelTool src/components/chat/tools/ConnectChannelTool.chat.test.tsx:62:12
+     60|   const load = plannedModules['/src/components/chat/tools/ConnectChann…
+     61|   if (!load) {
+     62|     expect.fail(
+       |            ^
+     63|       'BLOCKED: src/components/chat/tools/ConnectChannelTool.tsx::Conn…
+     64|         'not implemented — required by BDD-8.4/FR-081 (connect_channel…
+ ❯ src/components/chat/tools/ConnectChannelTool.chat.test.tsx:89:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  src/components/chat/tools/ConnectChannelTool.chat.test.tsx > Row 7 — a replayed call shows the static pointer and sends no subscribe (BDD-8.4 guard) > a non-live connect_channel render points at Connectors > WhatsApp and sends nothing
+AssertionError: BLOCKED: src/components/chat/tools/ConnectChannelTool.tsx::ConnectChannelTool not implemented — required by BDD-8.4/FR-081 (connect_channel tool UI mounts WhatsAppNativeNotice; approved plan, Train 2 WU-7)
+ ❯ renderConnectChannelTool src/components/chat/tools/ConnectChannelTool.chat.test.tsx:62:12
+     60|   const load = plannedModules['/src/components/chat/tools/ConnectChann…
+     61|   if (!load) {
+     62|     expect.fail(
+       |            ^
+     63|       'BLOCKED: src/components/chat/tools/ConnectChannelTool.tsx::Conn…
+     64|         'not implemented — required by BDD-8.4/FR-081 (connect_channel…
+ ❯ src/components/chat/tools/ConnectChannelTool.chat.test.tsx:112:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  src/components/chat/tools/ConnectChannelTool.chat.test.tsx > Row 4 (Connectors half) — BDD-8.8: a stopped pairing renders a proper stopped state > WhatsAppPairingBody renders the stopped state instead of falling through to the default spinner
+TestingLibraryElementError: Unable to find an element with the text: /stopped/i. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] text-[var(--color-muted)]"[39m
+    [36m>[39m
+      [36m<svg[39m
+        [33mclass[39m=[32m"animate-spin"[39m
+        [33mfill[39m=[32m"currentColor"[39m
+        [33mheight[39m=[32m"14"[39m
+        [33mviewBox[39m=[32m"0 0 256 256"[39m
+        [33mwidth[39m=[32m"14"[39m
+        [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+      [36m>[39m
+        [36m<path[39m
+          [33md[39m=[32m"M136,32V64a8,8,0,0,1-16,0V32a8,8,0,0,1,16,0Zm37.25,58.75a8,8,0,0,0,5.66-2.35l22.63-22.62a8,8,0,0,0-11.32-11.32L167.6,77.09a8,8,0,0,0,5.65,13.66ZM224,120H192a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Zm-45.09,47.6a8,8,0,0,0-11.31,11.31l22.62,22.63a8,8,0,0,0,11.32-11.32ZM128,184a8,8,0,0,0-8,8v32a8,8,0,0,0,16,0V192A8,8,0,0,0,128,184ZM77.09,167.6,54.46,190.22a8,8,0,0,0,11.32,11.32L88.4,178.91A8,8,0,0,0,77.09,167.6ZM72,128a8,8,0,0,0-8-8H32a8,8,0,0,0,0,16H64A8,8,0,0,0,72,128ZM65.78,54.46A8,8,0,0,0,54.46,65.78L77.09,88.4A8,8,0,0,0,88.4,77.09Z"[39m
+        [36m/>[39m
+      [36m</svg>[39m
+      [36m<p[39m
+        [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)]"[39m
+      [36m>[39m
+        [0mGenerating your QR code…[0m
+      [36m</p>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/chat/tools/ConnectChannelTool.chat.test.tsx:133:19
+    131|     render(<WhatsAppPairingBody pairing={stopped} />)
+    132|
+    133|     expect(screen.getByText(/stopped/i)).toBeInTheDocument()
+       |                   ^
+    134|     // No fallback spinner: a terminal stopped state is never "Generat…
+    135|     expect(screen.queryByText(/Generating your QR code/)).not.toBeInTh…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  3 failed (3)
+   Start at  21:39:43
+   Duration  10.57s (transform 672ms, setup 727ms, import 6.35s, tests 106ms, environment 2.68s)
+

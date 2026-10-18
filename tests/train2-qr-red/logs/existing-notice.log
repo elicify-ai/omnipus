@@ -1,0 +1,27 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat
+
+
+ Test Files  1 passed (1)
+      Tests  12 passed (12)
+   Start at  21:31:10
+   Duration  22.81s (transform 530ms, setup 566ms, import 16.89s, tests 1.72s, environment 3.17s)
+

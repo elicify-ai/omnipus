@@ -5,13 +5,20 @@ import type { WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
 // Per-channel WhatsApp linked-device pairing state (#283). Fed by the
 // whatsapp_pairing WS frame (see chatStore.handleFrame) and read by the
 // Channels config panel to render the QR + live status in-browser, replacing the
-// old "check the gateway terminal" notice.
+// old "check the gateway terminal" notice. The same state also feeds the QR in
+// the requesting chat (K10, FR-081): a chat-started pairing's frames carry the
+// request_id/session_id of the connect_channel call, kept here so a chat card
+// shows only its own pairing.
 
 export type WhatsAppPairingState = {
   status: WhatsAppPairingFrame['status']
   /** QR payload to render; present only when status === 'code'. */
   qr: string
   message: string
+  /** K10: the chat request that started this pairing; absent for a Connectors-started one. */
+  requestId?: string
+  /** K10: the chat session of that request. */
+  sessionId?: string
 }
 
 type WhatsAppPairingStore = {
@@ -33,6 +40,8 @@ export const useWhatsAppPairingStore = create<WhatsAppPairingStore>((set) => ({
           status: frame.status,
           qr: frame.qr ?? '',
           message: frame.message ?? '',
+          ...(frame.request_id ? { requestId: frame.request_id } : {}),
+          ...(frame.session_id ? { sessionId: frame.session_id } : {}),
         },
       },
     })),
