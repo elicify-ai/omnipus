@@ -384,10 +384,14 @@ function ToolApprovalCard({
       data-testid="tool-approval-panel"
       aria-labelledby={titleId}
       aria-describedby={descId}
-      className="my-[var(--space-2)] overflow-hidden rounded-[var(--radius-medium)] border border-[var(--color-warning)]/40 bg-[var(--color-surface-1)]"
+      // Train 3 gate F05: height-bounded column. The header and the decision
+      // row stay fixed; everything between them scrolls inside the card, so
+      // a long script or segment list never pushes Approve/Deny (or the
+      // composer below) out of reach.
+      className="my-[var(--space-2)] flex max-h-[60vh] flex-col overflow-hidden rounded-[var(--radius-medium)] border border-[var(--color-warning)]/40 bg-[var(--color-surface-1)]"
     >
         {/* Header */}
-        <div className="flex flex-row items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left">
+        <div className="flex shrink-0 flex-row items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left">
           <Shield
             size={20}
             weight="bold"
@@ -424,6 +428,7 @@ function ToolApprovalCard({
           )}
         </div>
 
+        <div data-testid="tool-approval-details" className="min-h-0 flex-1 overflow-y-auto">
         {/* FR-034: a helper or run asked, not the chat in front of the user.
             Names where it is acting and opens that run's own session. */}
         {sessionId && sessionId !== viewedSessionId && (
@@ -599,6 +604,7 @@ function ToolApprovalCard({
             </RadioGroup>
           </div>
         )}
+        </div>
 
         {/* Action buttons.
             Approve/Deny carry equal visual weight as the primary decision.
@@ -610,7 +616,7 @@ function ToolApprovalCard({
             action. flex-wrap keeps all four usable at phone widths (<768px)
             without any button clipping. */}
         {!hasExpired && (
-          <div className="flex flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
+          <div className="flex shrink-0 flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
             <>
                 <Button
                   size="sm"
@@ -662,7 +668,7 @@ function ToolApprovalCard({
         )}
 
         {hasExpired && (
-          <div className="px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
+          <div className="shrink-0 px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
             <Button
               size="sm"
               variant="ghost"
