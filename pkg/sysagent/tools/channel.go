@@ -436,8 +436,7 @@ func (t *ChannelListTool) Execute(_ context.Context, _ map[string]any) *tools.To
 			if ch, ok := cfg.Channels[c.ID]; ok {
 				e.Enabled = ch.Enabled
 				e.Status = "configured"
-				if ch.TokenRef == "" && ch.AppSecretRef == "" &&
-					(ch.Identity == nil || ch.Identity.ID == "") {
+				if !channelHasCredentials(ch) {
 					e.Status = "needs_credentials"
 				}
 			} else {
@@ -464,13 +463,30 @@ func (t *ChannelListTool) Execute(_ context.Context, _ map[string]any) *tools.To
 			ch := cfg.Channels[key]
 			e := channelEntry{ID: key, Name: meta.Name, Tier: meta.Tier, Implementation: meta.Implementation,
 				Enabled: ch.Enabled, Status: "configured", Revision: channelRevision(cfg, key)}
-			if ch.TokenRef == "" && ch.AppSecretRef == "" && (ch.Identity == nil || ch.Identity.ID == "") {
+			if !channelHasCredentials(ch) {
 				e.Status = "needs_credentials"
 			}
 			out = append(out, e)
 		}
 	}
 	return tools.NewToolResult(successJSON(map[string]any{"channels": out}))
+}
+
+// channelHasCredentials reports whether a channel instance has credentials
+// present in its configuration: any reference field the configure_channel
+// write path can set (the shared channelReferenceBindings inventory, e.g.
+// Slack's bot_token_ref/app_token_ref pair) or a bound identity. Presence is
+// not proof the credentials authenticate with the platform.
+func channelHasCredentials(ch config.ChannelInstanceConfig) bool {
+	if ch.Identity != nil && ch.Identity.ID != "" {
+		return true
+	}
+	for _, binding := range channelReferenceBindings {
+		if *binding.target(&ch) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- system.channel.test ----
@@ -512,9 +528,7 @@ func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools
 			"message": fmt.Sprintf("Channel %q is not configured. Use configure_channel to set it up.", id),
 		}))
 	}
-	hasCreds := ch.TokenRef != "" || ch.AppSecretRef != "" ||
-		(ch.Identity != nil && ch.Identity.ID != "")
-	if !hasCreds {
+	if !channelHasCredentials(ch) {
 		return tools.NewToolResult(successJSON(map[string]any{
 			"id":      id,
 			"success": false,
