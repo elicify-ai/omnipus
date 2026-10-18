@@ -146,7 +146,7 @@ func recipientLines(r credentials.CardRecipient) []string {
 	case "channel_credential":
 		return []string{"Channel instance: " + r.Instance, "Channel type: " + r.ChannelType, "Field: " + r.Field}
 	case credentials.KindAgentPrivate:
-		return []string{"Agent: " + r.AgentID, "Workspace: " + r.WorkspaceID, "Variable: " + r.Field}
+		return []string{r.AgentID + " in " + r.WorkspaceID, "Variable: " + r.Field}
 	}
 	return []string{r.Endpoint, "Field: " + r.Field}
 }

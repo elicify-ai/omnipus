@@ -34,16 +34,16 @@ const receiptCleanupRepair = "Check that the credential store file is a readable
 // not a valid request record (its typed cause for diagnostics).
 var errInvalidRequestMetadata = errors.New("invalid saved secret request metadata")
 
-// storageFault is a value-free error: Error() is a fixed, safe sentence with
+// storageFaultError is a value-free error: Error() is a fixed, safe sentence with
 // repair guidance; the typed lower-level cause stays reachable through
 // errors.Is/As but its text is never shown or logged.
-type storageFault struct {
+type storageFaultError struct {
 	message string
 	cause   error
 }
 
-func (e *storageFault) Error() string { return e.message }
-func (e *storageFault) Unwrap() error { return e.cause }
+func (e *storageFaultError) Error() string { return e.message }
+func (e *storageFaultError) Unwrap() error { return e.cause }
 
 // logStorageFault writes one Error-level, value-free diagnostic for a failed
 // storage stage: the request and session ids (when known), the stage, a safe

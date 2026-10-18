@@ -6,26 +6,26 @@ package tools
 
 import "context"
 
-// PrivateEnvSource returns the "NAME=value" entries of the agent-private
-// variables the turn in ctx may use (FR-076, FR-241) and a value-free notice
-// naming any variable that could not be loaded. The agent loop supplies it;
-// it resolves the owner pair from the trusted turn context only.
-type PrivateEnvSource func(ctx context.Context) (env []string, notice string)
+// PrivateVariable is one agent-private variable for a child environment.
+type PrivateVariable struct {
+	Name  string
+	Value string
+}
 
-// appendPrivateEnv appends the private entries AFTER every managed layer of
-// a composed child environment (R2-MAJ-007: the document layer strips names
-// containing TOKEN/KEY/SECRET, so an earlier injection would be lost). A nil
-// env means "inherit the scrubbed base" on the sandboxed foreground path,
-// whose spawner merges the caller entries after that base, so the private
-// entries alone are passed there.
-func appendPrivateEnv(env, private []string) []string {
-	if len(private) == 0 {
-		return env
-	}
-	if env == nil {
-		return append([]string(nil), private...)
-	}
-	return append(env, private...)
+// PrivateEnvSource returns the agent-private variables the turn in ctx may
+// use (FR-076, FR-241) and a value-free notice naming any variable that could
+// not be loaded. The agent loop supplies it; it resolves the owner pair from
+// the trusted turn context only.
+type PrivateEnvSource func(ctx context.Context) (vars []PrivateVariable, notice string)
+
+// withPrivateVariable appends one private variable AFTER every managed layer
+// of a composed child environment (R2-MAJ-007: the document layer strips
+// names containing TOKEN/KEY/SECRET, so an earlier injection would be lost).
+// The entry is an explicit site value, not inherited parent environment. A
+// nil env means "inherit the scrubbed base" on the sandboxed foreground path,
+// whose spawner merges caller entries after that base.
+func withPrivateVariable(env []string, name, value string) []string {
+	return append(env, name+"="+value)
 }
 
 // joinNotice adds a notice paragraph to an existing one.
@@ -40,8 +40,8 @@ func joinNotice(existing, add string) string {
 	}
 }
 
-// privateEnvFor resolves the turn's private entries through src (nil-safe).
-func privateEnvFor(ctx context.Context, src PrivateEnvSource) ([]string, string) {
+// privateEnvFor resolves the turn's private variables through src (nil-safe).
+func privateEnvFor(ctx context.Context, src PrivateEnvSource) ([]PrivateVariable, string) {
 	if src == nil {
 		return nil, ""
 	}

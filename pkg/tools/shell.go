@@ -661,8 +661,10 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 	// FR-076: the owner pair's selected private variables reach this child
 	// only, appended after every managed layer; never the gateway env.
-	privateEnv, privateNotice := privateEnvFor(ctx, t.privateEnv)
-	execEnv = appendPrivateEnv(execEnv, privateEnv)
+	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
+	for _, private := range privateVars {
+		execEnv = withPrivateVariable(execEnv, private.Name, private.Value)
+	}
 	turnNotice = joinNotice(turnNotice, privateNotice)
 
 	if runInBackground {

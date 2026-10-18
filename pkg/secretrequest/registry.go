@@ -207,7 +207,7 @@ func (r *Registry) Create(ctx context.Context, sessionID, agentID, chatID, origi
 	if err := r.persistLocked(sessionID); err != nil {
 		delete(r.entries, rec.Card.RequestId)
 		logStorageFault("state_publication", rec.Card.RequestId, sessionID, err, repairSessionStorage)
-		return Record{}, &storageFault{message: "secret request could not be saved; " + repairSessionStorage, cause: err}
+		return Record{}, &storageFaultError{message: "secret request could not be saved; " + repairSessionStorage, cause: err}
 	}
 	r.notifyLocked(rec, "requested")
 	return cloneRecord(rec), nil

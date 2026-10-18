@@ -22,7 +22,7 @@ import (
 // consumed a channel person's input gets only variables marked available in
 // channel conversations. Failures never block the command; they return a
 // value-free notice naming the variables that were not loaded.
-func (al *AgentLoop) privateEnvForTurn(ctx context.Context) ([]string, string) {
+func (al *AgentLoop) privateEnvForTurn(ctx context.Context) ([]tools.PrivateVariable, string) {
 	agentID := tools.ToolAgentID(ctx)
 	sessionID := tools.ToolTranscriptSessionID(ctx)
 	if agentID == "" || sessionID == "" {
@@ -45,14 +45,18 @@ func (al *AgentLoop) privateEnvForTurn(ctx context.Context) ([]string, string) {
 		al.logPrivateEnvFailure(sessionID, agentID, "session_context_unavailable")
 		return nil, "Private variables were not loaded for this command: the chat's workspace could not be resolved."
 	}
-	env, err := store.PrivateEnvironment(ancestry.WorkspaceID, agentID, tools.ToolTurnOrigin(ctx).ChannelTriggered())
+	values, err := store.PrivateEnvironment(ancestry.WorkspaceID, agentID, tools.ToolTurnOrigin(ctx).ChannelTriggered())
+	vars := make([]tools.PrivateVariable, 0, len(values))
+	for _, v := range values {
+		vars = append(vars, tools.PrivateVariable{Name: v.Name, Value: v.Value})
+	}
 	if err == nil {
-		return env, ""
+		return vars, ""
 	}
 	var damaged *credentials.PrivateVariableError
 	if errors.As(err, &damaged) {
 		al.logPrivateEnvFailure(sessionID, agentID, "private_variable_unreadable")
-		return env, "Private variables could not be read and were not set for this command: " +
+		return vars, "Private variables could not be read and were not set for this command: " +
 			strings.Join(damaged.Variables, ", ") + ". Replace them on a new secret card."
 	}
 	al.logPrivateEnvFailure(sessionID, agentID, "store_unreadable")

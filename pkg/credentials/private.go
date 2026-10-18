@@ -151,11 +151,17 @@ func (e *PrivateVariableError) Error() string {
 
 func (e *PrivateVariableError) Unwrap() []error { return e.Errs }
 
-// PrivateEnvironment returns "NAME=value" entries for the selected private
-// variables of (workspaceID, agentID), sorted by name. A channel-triggered
-// turn receives only variables marked available in channel turns (FR-241).
-// The values must only ever be placed into that pair's own child processes.
-func (s *Store) PrivateEnvironment(workspaceID, agentID string, channelTurn bool) ([]string, error) {
+// PrivateValue is one selected private variable: its name and value. The
+// value must only ever be placed into its owner pair's own child processes.
+type PrivateValue struct {
+	Name  string
+	Value string
+}
+
+// PrivateEnvironment returns the selected private variables of
+// (workspaceID, agentID), sorted by name. A channel-triggered turn receives
+// only variables marked available in channel turns (FR-241).
+func (s *Store) PrivateEnvironment(workspaceID, agentID string, channelTurn bool) ([]PrivateValue, error) {
 	if workspaceID == "" || agentID == "" {
 		return nil, nil
 	}
@@ -168,7 +174,7 @@ func (s *Store) PrivateEnvironment(workspaceID, agentID string, channelTurn bool
 	if err != nil {
 		return nil, err
 	}
-	var env []string
+	var env []PrivateValue
 	failures := &PrivateVariableError{}
 	for key, ref := range sf.PrivateSelected {
 		secret, ok := sf.CardSecrets[ref]
@@ -193,9 +199,9 @@ func (s *Store) PrivateEnvironment(workspaceID, agentID string, channelTurn bool
 			failures.Errs = append(failures.Errs, decryptErr)
 			continue
 		}
-		env = append(env, secret.Recipient.Field+"="+value)
+		env = append(env, PrivateValue{Name: secret.Recipient.Field, Value: value})
 	}
-	sort.Strings(env)
+	sort.Slice(env, func(i, j int) bool { return env[i].Name < env[j].Name })
 	if len(failures.Variables) > 0 {
 		sort.Strings(failures.Variables)
 		return env, failures

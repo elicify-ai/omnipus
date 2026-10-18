@@ -135,7 +135,7 @@ func (r *Registry) Recover() error {
 // recoveryFault is the value-free boot error: a fixed repair sentence whose
 // typed cause stays reachable for errors.Is/As.
 func recoveryFault(cause error) error {
-	return &storageFault{message: "saved secret request state could not be recovered — " + repairRecovery, cause: cause}
+	return &storageFaultError{message: "saved secret request state could not be recovered — " + repairRecovery, cause: cause}
 }
 
 // Snapshot contains only generated, value-free wire shapes visible to the

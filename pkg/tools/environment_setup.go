@@ -483,8 +483,10 @@ func (t *EnvironmentSetupTool) startRun(ctx context.Context, args map[string]any
 	}
 
 	env := t.setupEnv(lim, area, runtimeEnv)
-	privateEnv, privateNotice := privateEnvFor(ctx, t.privateEnv)
-	env = appendPrivateEnv(env, privateEnv)
+	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
+	for _, private := range privateVars {
+		env = withPrivateVariable(env, private.Name, private.Value)
+	}
 	return appendRuntimeNotice(t.startSession(ctx, startPlan{
 		command:        command,
 		purpose:        purpose,
