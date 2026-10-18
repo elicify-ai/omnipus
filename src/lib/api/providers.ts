@@ -340,8 +340,7 @@ export function signOutProvider(id: string): Promise<OperationResult> {
 }
 
 // fetchCliDetect probes the host for installed external CLIs (claude-code /
-// codex / opencode), used by the Agents screen to gate the "+ External
-// subagent" runtime choices. UAT fix: this MUST go through the authed
+// codex / opencode), used by the agent editor's runtime choices. UAT fix: this MUST go through the authed
 // `request()` wrapper so the omnipus-session cookie rides along
 // (credentials:'include') — the previous raw
 // `fetch('/api/v1/system/cli-detect')` sent no credentials and got a 401,

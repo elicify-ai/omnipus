@@ -565,13 +565,13 @@ export function setEdgeDepth(
   }
 }
 
-const NON_TEAM_AGENT_IDS = new Set(['admin', 'judge', 'plansupervisor'])
+const NON_TEAM_AGENT_IDS = new Set(['judge', 'plansupervisor'])
 
 /** Immutably add an agent to the team (node only; no edges). No-op if present. */
 export function addMember(state: TeamEditState, agentId: string): TeamEditState {
   if (state.members.includes(agentId)) return state
-  // ADR-090: Admin is standalone (never a teammate). Hidden Judge / Plan
-  // Supervisor are engine-owned and cannot join a workspace team.
+  // Hidden Judge / Plan Supervisor are engine-owned and cannot join a
+  // workspace team.
   if (NON_TEAM_AGENT_IDS.has(agentId)) return state
   return { ...state, members: [...state.members, agentId] }
 }

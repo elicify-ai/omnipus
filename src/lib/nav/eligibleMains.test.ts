@@ -36,10 +36,9 @@ type EligibleInput = {
   isDefaultWorkspace: boolean
   rosterState: 'fresh' | 'failed-no-cache' | 'failed-stale-cache'
   roster: Array<{ agent: ReturnType<typeof makeAgent>; member: WorkspaceMemberConfig }>
-  /** Default-workspace Admin: the agent plus the seam-read Admin main id
-   *  (Workspace.admin_main_session_id), or undefined when unavailable.
-   *  Admin is not a member, so there is no member config to read. */
-  adminDefault: { agent: ReturnType<typeof makeAgent>; mainSessionId: string | undefined } | null
+  // WU-11 GREEN (FR-008): EligibleInput no longer carries adminDefault — the
+  // retired Admin entry is deleted with the feature, and no input can mint an
+  // Admin row.
   sessions: Session[]
   cachedRows: EligibleRow[]
 }
@@ -66,8 +65,8 @@ const seam = vi.hoisted(() => {
 })
 
 vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
-  // Real seam for everything the stubs don't override (notably
-  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
+  // Real seam for everything the stubs don't override. (WU-11 GREEN removed the
+  // Admin-main seam reader with the retired Admin row — FR-008.)
   ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
   mainSessionIdOfMember: (member: object) => seam.mainSessionIdOfMember(member),
   isMainSession: (session: unknown) => seam.isMainSession(session),
@@ -129,7 +128,6 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
       workspaceId: 'product-launch',
       isDefaultWorkspace: false,
       rosterState: 'fresh',
-      adminDefault: null,
       roster: [{ agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: miaMember }],
       cachedRows: [],
       sessions: [
@@ -144,7 +142,7 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
     }, expected, 'FR-003, BDD-01.1, dataset N01')
   })
 
-  it('BDD-01.2 / N10 default workspace keeps Mia and validated Admin only', async () => {
+  it('BDD-01.2 / N10 default workspace keeps Mia (validated members only)', async () => {
     const miaMember = member()
     const nativeMember = member()
     const externalMember = member()
@@ -160,9 +158,10 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
       retry: false,
       reason: null,
       missingMainAgentIds: [],
+      // WU-11 GREEN retarget (FR-008): the validated-Admin row is retired —
+      // a cached Admin agent never becomes a row on any workspace.
       rows: [
         { agentId: 'mia', workspaceId: 'default', name: 'Mia', mainSessionId: 'seam-opaque-mia' },
-        { agentId: 'admin', workspaceId: 'default', name: 'Admin', mainSessionId: 'seam-opaque-admin' },
       ],
     }
     await expectEligible({
@@ -171,8 +170,6 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
       rosterState: 'fresh',
       cachedRows: [],
       sessions: [],
-      // Admin's main id rides the default workspace itself (seam-read), not a member config.
-      adminDefault: { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), mainSessionId: 'seam-opaque-admin' },
       roster: [
         { agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: miaMember },
         { agent: makeAgent({ id: 'native-worker', name: 'Native worker', type: 'Subagent' }), member: nativeMember },
@@ -183,34 +180,13 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
     }, expected, 'FR-001, BDD-01.2, BDD-12.2, dataset N10')
   })
 
-  it('N10 other workspace hides Admin even when the roster lists Admin', async () => {
-    const miaMember = member()
-    const adminMember = member()
-    seam.mains.set(miaMember, 'seam-opaque-mia-ops')
-    seam.mains.set(adminMember, 'seam-opaque-admin-must-not-show')
-    const expected: EligibleResult = {
-      status: 'ready',
-      retry: false,
-      reason: null,
-      missingMainAgentIds: [],
-      rows: [{ agentId: 'mia', workspaceId: 'operations', name: 'Mia', mainSessionId: 'seam-opaque-mia-ops' }],
-    }
-    await expectEligible({
-      workspaceId: 'operations',
-      isDefaultWorkspace: false,
-      rosterState: 'fresh',
-      cachedRows: [],
-      sessions: [],
-      // The seam id exists, but Admin is a default-workspace-only main: a
-      // non-default workspace shows no Admin row, membership or not.
-      adminDefault: { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), mainSessionId: 'seam-opaque-admin-must-not-show' },
-      roster: [
-        { agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: miaMember },
-        { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), member: adminMember },
-      ],
-    }, expected, 'FR-001, FR-038, BDD-01.2, BDD-12.2, dataset N10')
-  })
-
+  // The "other workspace hides Admin even when the roster lists Admin" test
+  // was deleted with the feature (FR-008): Admin workspace-scoping was an
+  // identity branch of the retired Admin entry. Retirement is now enforced
+  // once, at eligibility (lib/omnipus.ts::isTeamEligible ->
+  // lib/agentKind.ts::isChatEligibleAgent — a retired built-in a stale cache
+  // carries is never OFFERED); the roster renders membership, and no input of
+  // eligibleMainAgents can mint an Admin row any more.
   it('N02 / BDD-E01 returns the roster identity, not the same-name agent in another workspace', async () => {
     const opsMember = member()
     seam.mains.set(opsMember, 'seam-opaque-mia-ops')
@@ -225,7 +201,6 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
       workspaceId: 'operations',
       isDefaultWorkspace: false,
       rosterState: 'fresh',
-      adminDefault: null,
       cachedRows: [],
       roster: [{ agent: makeAgent({ id: 'mia-ops', name: 'Mia', type: 'Main' }), member: opsMember }],
       sessions: [
@@ -259,7 +234,6 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
       workspaceId: 'operations',
       isDefaultWorkspace: false,
       rosterState: 'fresh',
-      adminDefault: null,
       cachedRows: [],
       roster: [
         { agent: makeAgent({ id: 'zoe', name: 'Zoe', type: 'Main' }), member: zoeMember },
@@ -286,7 +260,6 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
       workspaceId: 'operations',
       isDefaultWorkspace: false,
       rosterState: 'fresh',
-      adminDefault: null,
       cachedRows: [],
       sessions: [],
       roster: [{ agent: makeAgent({ id: 'native-worker', name: 'Native worker', type: 'Subagent' }), member: workerMember }],
@@ -309,7 +282,6 @@ describe('eligibleMainAgents failure and missing-ID states (T-01, N01, N10)', ()
       workspaceId: 'product-launch',
       isDefaultWorkspace: false,
       rosterState: 'failed-no-cache',
-      adminDefault: null,
       cachedRows: [],
       roster: [{ agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: miaMember }],
       sessions: [
@@ -333,7 +305,6 @@ describe('eligibleMainAgents failure and missing-ID states (T-01, N01, N10)', ()
       workspaceId: 'product-launch',
       isDefaultWorkspace: false,
       rosterState: 'failed-stale-cache',
-      adminDefault: null,
       cachedRows: cached,
       roster: [
         { agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: miaMember },
@@ -357,7 +328,6 @@ describe('eligibleMainAgents failure and missing-ID states (T-01, N01, N10)', ()
       workspaceId: 'product-launch',
       isDefaultWorkspace: false,
       rosterState: 'failed-stale-cache',
-      adminDefault: null,
       sessions: [],
       roster: [
         { agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: member() },
@@ -384,7 +354,6 @@ describe('eligibleMainAgents failure and missing-ID states (T-01, N01, N10)', ()
       workspaceId: 'product-launch',
       isDefaultWorkspace: false,
       rosterState: 'fresh',
-      adminDefault: null,
       cachedRows: [],
       roster: [{ agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: miaMember }],
       sessions: [
@@ -409,7 +378,6 @@ describe('eligibleMainAgents failure and missing-ID states (T-01, N01, N10)', ()
       workspaceId: 'operations',
       isDefaultWorkspace: false,
       rosterState: 'fresh',
-      adminDefault: null,
       cachedRows: [],
       sessions: [],
       roster: [
@@ -419,25 +387,8 @@ describe('eligibleMainAgents failure and missing-ID states (T-01, N01, N10)', ()
     }, expected, 'BDD-01.2 no main-ID guess; known mains stay, the gap is named')
   })
 
-  it('default-workspace Admin without a seam id is a named gap, not a fabricated Admin main', async () => {
-    const expected: EligibleResult = {
-      status: 'unavailable',
-      retry: true,
-      reason: 'main-id-missing',
-      rows: [],
-      missingMainAgentIds: ['admin'],
-    }
-    await expectEligible({
-      workspaceId: 'default',
-      isDefaultWorkspace: true,
-      rosterState: 'fresh',
-      cachedRows: [],
-      sessions: [],
-      roster: [],
-      // The seam read found no Workspace.admin_main_session_id on the default
-      // workspace: Admin is listed as missing (unavailable + Retry), and no
-      // main id is built or guessed.
-      adminDefault: { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), mainSessionId: undefined },
-    }, expected, 'BDD-12.2 validated main only; FR-038 no fake Admin main; ARCHITECT-ANSWER-ADMIN-MAIN-BOUND Q1')
-  })
+  // The "default-workspace Admin without a seam id is a named gap" test was
+  // deleted with the mechanism (FR-008): EligibleInput no longer carries an
+  // adminDefault entry, so no input can produce a missing-Admin gap; the
+  // never-fabricate-a-main rule stays pinned by the main-id-missing cases.
 })

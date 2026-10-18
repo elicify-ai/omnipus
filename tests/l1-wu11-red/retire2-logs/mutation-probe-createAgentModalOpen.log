@@ -1,0 +1,53 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa
+
+ ❯ src/routes/_app/-wu11-no-manual-create.test.ts (5 tests | 1 failed) 337ms
+     × no SPA source carries the create-modal store wiring (createAgentModalOpen / openCreateAgentModal) 91ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/routes/_app/-wu11-no-manual-create.test.ts > WU-11 RED — no manual create action exists (FR-108, BDD-12.8) > no SPA source carries the create-modal store wiring (createAgentModalOpen / openCreateAgentModal)
+AssertionError: FR-108/BDD-12.8: the manual-create modal's store keys must be gone: expected [ 'src/store/ui.ts' ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/store/ui.ts",
++ ]
+
+ ❯ src/routes/_app/-wu11-no-manual-create.test.ts:93:94
+     91|       }
+     92|     }
+     93|     expect(violations, `FR-108/BDD-12.8: the manual-create modal's sto…
+       |                                                                                              ^
+     94|   })
+     95|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 4 passed (5)
+   Start at  16:47:52
+   Duration  1.80s (transform 77ms, setup 243ms, import 26ms, tests 337ms, environment 961ms)
+

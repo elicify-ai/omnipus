@@ -57,7 +57,6 @@ const ADMIN_MAIN = 'seam-main-admin'
 
 const miaMember: WorkspaceMemberConfig = {}
 const jimMember: WorkspaceMemberConfig = {}
-const adminMember: WorkspaceMemberConfig = {}
 
 const { apiMocks, seam, entrySpy, entryResult, telemetryMocks } = vi.hoisted(() => ({
   apiMocks: {
@@ -115,8 +114,8 @@ vi.mock('@tanstack/react-router', () => ({
 }))
 
 vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
-  // Real seam for everything the stubs don't override (notably
-  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
+  // Real seam for everything the stubs don't override. (WU-11 GREEN removed the
+  // Admin-main seam reader with the retired Admin row — FR-008.)
   ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
   mainSessionIdOfMember: (member: object) => seam.mains.get(member),
   isMainSession: (session: unknown) => {
@@ -184,7 +183,7 @@ function workspaceWith(
 
 const mia = makeAgent({ id: 'mia', name: 'Mia', type: 'core' })
 const jim = makeAgent({ id: 'jim', name: 'Jim', type: 'core' })
-const admin = makeAgent({ id: 'admin', name: 'Admin', type: 'core' })
+// The retired Admin agent fixture is deleted with the Admin row (FR-008).
 
 function chatSession(id: string, agentId: string): Session {
   return {
@@ -573,8 +572,9 @@ describe('D4/D8 — Remove · dialog and the Team-tab PUT', () => {
     })
     const dialog = screen.getByRole('alertdialog', { name: 'Remove Mia from Product launch?' })
     const description = dialog.textContent ?? ''
-    expect(description).toContain('Agents list')
-    expect(description).toContain('chat history')
+    // Copy re-pin (WU-11 GREEN 9871cbc66, FR-108): the dialog no longer names
+    // the retired Agents list; it states exactly what ends and what remains.
+    expect(description).toContain("Mia leaves only this workspace's team; the agent still exists, stays in its other workspaces and keeps its chat history.")
   })
 
   it('cancel closes the dialog and calls nothing', async () => {
@@ -911,31 +911,10 @@ describe('D4/D8 — Remove · disabled with a visible reason', () => {
   // (omnipus-system-agent K11/K12, bundle B1): there is no default agent any
   // more, so `removeDisabledReason` no longer carries that clause and the
   // Team-panel parity it asserted has no subject.
-
-  it('the Admin row gets History and Edit but no Hide, and a Remove disabled with a reason', async () => {
-    register(adminMember, ADMIN_MAIN)
-    renderList({
-      workspace: workspaceWith(
-        { mia: miaMember },
-        {
-          is_default: true,
-          core_team: ['mia'],
-          admin_main_session_id: ADMIN_MAIN,
-        },
-      ),
-      agents: [mia, admin],
-      sessions: [chatSession(MIA_MAIN, 'mia'), chatSession(ADMIN_MAIN, 'admin')],
-    })
-    await openRowMenu('Admin')
-
-    const names = menuItems().map((item) => item.textContent)
-    expect(names).toContain('History')
-    expect(names).toContain('Edit')
-    expect(names).not.toContain('Hide from sidebar')
-    const remove = screen.getByRole('menuitem', { name: /Remove/ })
-    expect(remove).toHaveAttribute('data-disabled')
-    expect(remove.textContent).toContain('not a workspace member')
-  })
+  // The "Admin row gets History and Edit but no Hide" test was deleted with
+  // the Admin row itself (FR-008): post-GREEN the sidebar renders no Admin row
+  // at all, so its menu has no subject; the member-row menu contract it
+  // shared is pinned by the D1/D2, D3, D5 and locked-default cases above.
 })
 
 describe('D6 — Edit', () => {
@@ -949,23 +928,9 @@ describe('D6 — Edit', () => {
     expect(useUiStore.getState().editAgentWorkspaceId).toBe(WS)
   })
 
-  it("opens Admin's GLOBAL profile — no workspace-member context, so no Heartbeat tab saving member_configs.admin", async () => {
-    register(adminMember, ADMIN_MAIN)
-    renderList({
-      workspace: workspaceWith(
-        { mia: miaMember },
-        { is_default: true, core_team: ['mia'], admin_main_session_id: ADMIN_MAIN },
-      ),
-      agents: [mia, admin],
-      sessions: [chatSession(MIA_MAIN, 'mia'), chatSession(ADMIN_MAIN, 'admin')],
-    })
-    await openRowMenu('Admin')
-    await act(async () => {
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
-    })
-    expect(useUiStore.getState().editAgentId).toBe('admin')
-    expect(useUiStore.getState().editAgentWorkspaceId, 'Admin is not a member: no workspace context').toBeNull()
-  })
+  // The "Admin's GLOBAL profile" test was deleted with the Admin row (FR-008):
+  // the isAdminRow branch that opened the editor without workspace context is
+  // removed, and every surviving row opens the editor with its workspace.
 })
 
 describe('S4-11/T4 — Remove, remembered-but-not-selected', () => {

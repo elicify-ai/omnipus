@@ -24,9 +24,8 @@ export interface UseSelectSessionOptions {
   onSelected?: (session: Session) => void
   /**
    * Replace the current history entry instead of pushing (default: push).
-   * Only redirect stubs want this (e.g. /admin/chat → Admin's default-
-   * workspace main, team-lead ruling 2026-10-11): a pushed dead route would
-   * trap the back button, bouncing off the stub's redirect forever. Sidebar
+   * Only redirect-style callers want this: a pushed dead route would trap
+   * the back button, bouncing off the redirect forever. Sidebar
    * rows and the search modal keep the default push — a real click there is
    * a place the user came from, and Back should return to it.
    */

@@ -508,12 +508,15 @@ test.describe('D4 — Remove: confirm, cancel, workspace-only removal', () => {
         0,
         { timeout: 15_000 },
       )
-      // …but the agent SURVIVES in the Agents list (D4: not a global delete).
-      await page.goto('/#/agents')
-      await expect(
-        page.getByRole('button', { name: `View agent ${agentName}` }),
-        'the removed agent must survive in the Agents list (D4: workspace-membership removal, not agent deletion)',
-      ).toBeVisible({ timeout: 20_000 })
+      // …but the agent SURVIVES the removal (D4: not a global delete).
+      // WU-11 (FR-108): the Agents list is retired — survival is read from
+      // the same REST the list consumed.
+      const survived = await page.request.get(`/api/v1/agents/${agentId}`, { headers: await csrfHeaders(page) })
+      expect(
+        survived.ok(),
+        'the removed agent must survive (D4: workspace-membership removal, not agent deletion)',
+      ).toBeTruthy()
+      expect(((await survived.json()) as { name?: string }).name).toBe(agentName)
     } finally {
       await deleteAgentBestEffort(page, agentId, agentName)
     }

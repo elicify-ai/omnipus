@@ -26,9 +26,8 @@ import { useGodModeOn } from '@/hooks/useGodModeLiveStatus'
  *     GodModeControl).
  *
  *   GodModeCornerDot — rendered ONCE from the AppShell SHELL ROOT (not
- *     inside <main>), so every route is covered — including Library, the
- *     live-browser view and the /admin/chat redirect stub, which have no
- *     sidebar-open button to carry a dot — and phone-width takeover panels
+ *     inside <main>), so every route is covered — including Library and the
+ *     live-browser view, which have no sidebar-open button to carry a dot — and phone-width takeover panels
  *     cannot clip or inert it. It shows only while god-mode is on AND the sidebar (and its pill)
  *     is off screen: a small red dot at the left edge of the screen, just
  *     below the 44px chrome-header band (clear of the sidebar-open

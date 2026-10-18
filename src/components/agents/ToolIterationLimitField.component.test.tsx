@@ -1,16 +1,17 @@
 // ToolIterationLimitField.component.test.tsx — #904 tool-iteration-limit
 // spec, frontend-lead's own component tests for the extracted per-agent
-// control (FR-003, FR-004, FR-016, D1, D9) and the wizard's Advanced step
-// (US-3 AS-2, D14). Expected strings come from the spec's "UI Screens and
-// States" table and BDD scenarios, not from the implementation.
+// control (FR-003, FR-004, FR-016, D1, D9). Expected strings come from the
+// spec's "UI Screens and States" table and BDD scenarios, not from the
+// implementation.
 // (qa-lead's RED pack owns ToolIterationLimitField.test.tsx.)
+// WU-11 (omnipus-system-agent FR-108): the wizard's Advanced-step describe
+// and its wizard/CreateAgentWizard imports are deleted with the manual
+// create form; the field itself survives (AgentProfile hosts it).
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { useState } from 'react'
 import { ToolIterationLimitField, type ToolIterationLimitServerState } from './ToolIterationLimitField'
-import { Advanced } from './wizard/Advanced'
-import type { WizardSubmitPayload } from './CreateAgentWizard'
 
 function input(testId = 'agent-max-tool-calls-input') {
   return screen.getByTestId(testId) as HTMLInputElement
@@ -150,29 +151,5 @@ describe('ToolIterationLimitField — editing', () => {
     render(<ToolIterationLimitField value={50} onChange={vi.fn()} disabled />)
     expect(input().disabled).toBe(true)
     expect(screen.queryByTestId('tool-iteration-limit-reset')).toBeNull()
-  })
-})
-
-describe('wizard Advanced — Max tool calls per turn (US-3 AS-2, D14)', () => {
-  // Placeholder-from-server is covered by qa-lead's
-  // wizard/Advanced.toolIterationLimit.test.tsx; this covers the payload
-  // edits and the query-client-free render the wizard steps rely on.
-  function renderAdvanced(initialType: WizardSubmitPayload['type']) {
-    const setField = vi.fn()
-    const payload = { type: initialType, name: '', description: '', color: '', model: '', soul: '' } as WizardSubmitPayload
-    render(<Advanced payload={payload} setField={setField} initialType={initialType} />)
-    fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
-    return setField
-  }
-
-  it.each(['Main', 'Subagent', 'subagent_3p'] as const)('%s: renders without a QueryClientProvider; a value is set, clearing unsets it', (type) => {
-    const setField = renderAdvanced(type)
-    const field = input('wizard-max-tool-calls-input')
-    expect(field.value).toBe('')
-    expect(field.placeholder).toBe('Global limit')
-    fireEvent.change(field, { target: { value: '30' } })
-    expect(setField).toHaveBeenLastCalledWith('max_tool_iterations', 30)
-    fireEvent.change(field, { target: { value: '' } })
-    expect(setField).toHaveBeenLastCalledWith('max_tool_iterations', undefined)
   })
 })

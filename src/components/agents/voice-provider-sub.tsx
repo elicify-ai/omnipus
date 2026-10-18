@@ -3,7 +3,7 @@
 // detectVoiceProvider() result.
 //
 // W5 of agent-form-requirements delivery. Co-located per the codebase
-// convention (ExecutorSelector.tsx / WorkerCard.tsx) — the spec's §8.3 calls
+// convention (ExecutorSelector.tsx) — the spec's §8.3 calls
 // for .ts but the codebase uses .tsx for React components.
 //
 // Per spec §4.10 + §6.5: built-in Main agents have an EDITABLE Voice field

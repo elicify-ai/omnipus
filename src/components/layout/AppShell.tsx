@@ -201,8 +201,8 @@ export function AppShell() {
 
       {/* The ONE store-driven agent editor (AgentProfile). It reads
           editAgentId, so it must be hosted exactly once at the shell level:
-          the sidebar's row-menu Edit, the Team tab, and the Agents screen all
-          open this same instance, and a second host anywhere would open a
+          the sidebar's row-menu Edit, the Team tab, and Settings → System
+          agents all open this same instance, and a second host anywhere would open a
           second simultaneous sheet (CR F6). */}
       <AgentProfile />
 

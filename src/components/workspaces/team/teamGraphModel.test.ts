@@ -537,9 +537,11 @@ describe('addMember / removeMember', () => {
     const s: TeamEditState = state({ members: ['mia'], edges: [] })
     expect(addMember(s, 'mia')).toBe(s)
   })
-  it('refuses Admin and hidden engine agents', () => {
+  // WU-11 GREEN retarget (FR-008): the Admin refusal assert is deleted with
+  // the retired agent — a cached admin id can no longer exist to add; the
+  // hidden-engine refusal rule stays.
+  it('refuses hidden engine agents', () => {
     const s: TeamEditState = state({ members: ['mia'], edges: [] })
-    expect(addMember(s, 'admin')).toBe(s)
     expect(addMember(s, 'judge')).toBe(s)
     expect(addMember(s, 'plansupervisor')).toBe(s)
   })

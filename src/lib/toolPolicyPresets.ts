@@ -136,10 +136,7 @@ export function applyRolePreset(role: RolePreset, tools: RegistryTool[]): ToolPo
 
 /**
  * Resolve a (possibly partial or absent) `tools_cfg` into a complete,
- * wire-ready `AgentToolsCfg` — the ONE piece of logic behind both the create
- * wizard's uncommitted-default render (Step3Tools.tsx's tools-policy display)
- * and its commit-on-submit default (CreateAgentModal.tsx's create-request
- * payload). Sharing this function is deliberate: two independently
+ * wire-ready `AgentToolsCfg`. One shared function is deliberate: two independently
  * maintained copies of "what counts as already-set vs. needs-a-default" is
  * exactly how this codebase's original commit-on-submit bug happened —
  * the display path and the submit path silently disagreed.

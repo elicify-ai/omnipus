@@ -1,16 +1,11 @@
 import type { Agent, Session, Workspace } from '@/lib/api'
 import {
   eligibleMainAgents,
-  type EligibleAdminEntry,
   type EligibleResult,
   type EligibleRosterEntry,
   type EligibleRow,
 } from '@/lib/nav/eligibleMains'
 import { projectMainAttention, type Signal } from '@/lib/nav/mainAttention'
-import { adminMainSessionIdOfWorkspace } from '@/lib/nav/sessionCoreSeam'
-
-/** Built-in Admin. Rendered only from the default workspace's admin_main_session_id, never via membership. */
-export const ADMIN_AGENT_ID = 'admin'
 
 export type RosterState = 'fresh' | 'failed-no-cache' | 'failed-stale-cache'
 
@@ -58,14 +53,6 @@ function memberRoster(workspace: Workspace, agents: Agent[]): EligibleRosterEntr
   return roster
 }
 
-function adminDefault(workspace: Workspace, agents: Agent[]): EligibleAdminEntry | null {
-  if (!workspace.is_default) return null
-  const agent = agents.find((candidate) => candidate.id === ADMIN_AGENT_ID)
-  if (!agent) return null
-  // Admin is not a member: its main id rides on the default workspace itself.
-  return { agent, mainSessionId: adminMainSessionIdOfWorkspace(workspace) }
-}
-
 export function workspaceMains(
   workspace: Workspace,
   agents: Agent[],
@@ -78,12 +65,10 @@ export function workspaceMains(
     isDefaultWorkspace: workspace.is_default === true,
     rosterState,
     roster: memberRoster(workspace, agents),
-    adminDefault: adminDefault(workspace, agents),
     sessions,
     cachedRows,
   })
-  // D5 split: hidden is a DISPLAY flag on the member config. Admin's row is
-  // not a member entry, so it can never land in `hidden`.
+  // D5 split: hidden is a DISPLAY flag on the member config.
   const hiddenIds = new Set(
     Object.entries(workspace.member_configs ?? {})
       .filter(([, member]) => member.hidden_from_sidebar === true)

@@ -2,7 +2,6 @@ import { useEffect, useCallback, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Robot,
   PlugsConnected,
   PuzzlePiece,
   Buildings,
@@ -54,12 +53,9 @@ import { GodModeSidebarPill } from './GodModeIndicators'
 // two meaning different things under the same label).
 // (Per-workspace work — chat, tasks, calendar, team — lives inside the
 // workspace tabs, not the sidebar.)
-// No "Admin chat" entry here anymore (founder request 2026-10-11): Admin has
-// ONE main chat, in the default workspace (ADR-20261007), reached from that
-// workspace's agent rows below like any other agent — never a standalone
-// Assets link. /admin/chat survives only as a redirect stub for old links.
+// No "Agents" entry (omnipus-system-agent FR-108): there is no Agents screen;
+// a workspace's Team is the home of its agents.
 const ASSET_ITEMS = [
-  { to: '/agents', label: 'Agents', Icon: Robot },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
   { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },
 ] as const

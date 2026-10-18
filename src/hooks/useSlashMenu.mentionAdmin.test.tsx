@@ -1,13 +1,9 @@
-// @ mention menu — Admin is offered only in the default workspace
-// (combined-review R2-S2-DV-07, team-lead decision: FIX in code).
-//
-// The gateway refuses an @ request to Admin from any workspace but the
-// default: pkg/gateway/main_session.go::mainAgentEligible returns ws.IsDefault
-// for Admin (Admin owns a main only there and sits on no team). Until now the
-// picker still offered a ready Admin everywhere (useChatAgents' ADR-090
-// standalone-operator exemption is workspace-blind), so a user in a
-// non-default workspace was offered a choice that could only fail with
-// "that agent cannot be reached from here right now".
+// @ mention menu — the retired Admin agent is offered NOWHERE
+// (R2-S2-DV-07 origin; superseded by WU-11 GREEN, omnipus-system-agent
+// FR-008: Ava/Admin UI removed, founder 2026-10-18 Train 3 keeps rooms not
+// Admin). The gateway-side workspace rule this file pinned is moot: the
+// @ menu offers no Admin in ANY workspace, default included, even on a stale
+// cache that still carries the record.
 //
 // Harness copied from useSlashMenu.navCutover.test.tsx (useQuery mocked by
 // query key; the workspaces list is a mutable fixture so each test picks the
@@ -128,7 +124,7 @@ beforeEach(() => {
   })
 })
 
-describe('@ mention menu — Admin only in the default workspace (R2-S2-DV-07)', () => {
+describe('@ mention menu — no Admin anywhere (FR-008; origin R2-S2-DV-07)', () => {
   it('hides Admin from the picker in a NON-default workspace', () => {
     fixture.workspaces = [workspace({ is_default: false })]
     const { result } = renderMenu('@')
@@ -140,12 +136,17 @@ describe('@ mention menu — Admin only in the default workspace (R2-S2-DV-07)',
     expect(result.current.slashItems).toEqual([])
   })
 
-  it('still lists Admin in the DEFAULT workspace (ADR-090 standalone operator, unchanged there)', () => {
+  // WU-11 GREEN retarget (FR-008): the once-unchanged default-workspace offer
+  // flips with the retired agent — the default workspace offers no Admin
+  // either.
+  it('lists no Admin in the DEFAULT workspace either (FR-008)', () => {
     fixture.workspaces = [workspace({ is_default: true })]
     const { result } = renderMenu('@')
     act(() => result.current.onInputChange('@'))
-    // Alphabetical: Admin before Mia.
-    expect(result.current.slashItems.map((item) => item.key)).toEqual(['admin', 'mia'])
+    expect(result.current.slashItems.map((item) => item.key)).toEqual(['mia'])
+    // Even typing Admin's name matches nothing here too.
+    act(() => result.current.onInputChange('@admin'))
+    expect(result.current.slashItems).toEqual([])
   })
 
   it('teammates are unaffected by the workspace kind — Mia lists in both', () => {

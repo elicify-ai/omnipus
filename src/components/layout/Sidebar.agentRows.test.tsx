@@ -144,8 +144,8 @@ const seam = vi.hoisted(() => {
 })
 
 vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
-  // Real seam for everything the stubs don't override (notably
-  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
+  // Real seam for everything the stubs don't override. (WU-11 GREEN removed
+  // the Admin-main seam reader with the retired Admin row — FR-008.)
   ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
   mainSessionIdOfMember: (member: object) => seam.mainSessionIdOfMember(member),
   isMainSession: (session: unknown) => seam.isMainSession(session),
@@ -186,9 +186,9 @@ const home = workspace({
   id: 'default',
   name: 'Default',
   is_default: true,
-  // ARCHITECT-ANSWER-ADMIN-MAIN-BOUND Q1: Admin's main id rides the default
-  // workspace itself (admin_main_session_id), never member_configs['admin'] —
-  // which is why the admin entry below carries no main and the row still shows.
+  // Deliberately kept stale fixture (FR-008 retarget): the old
+  // admin_main_session_id field and the member_configs['admin'] entry stay —
+  // post-GREEN neither may mint a sidebar row (asserted by N10).
   admin_main_session_id: 'seam-opaque-admin',
   core_team: ['mia'],
   member_configs: { mia: miaMember, admin: adminMember },
@@ -231,9 +231,8 @@ beforeEach(() => {
   seam.mains.set(miaMember, 'seam-opaque-mia')
   seam.mains.set(jimMember, 'seam-opaque-jim')
   // No mains.set(adminMember, …): the membership-supplied Admin main was the
-  // pre-ruling mechanism. Admin's main comes only from home.admin_main_session_id
-  // (seam-read by workspaceRoster.adminDefault), so the admin member-config
-  // entry must stay mainless and the Admin row must still render.
+  // pre-ruling mechanism, and the Admin row itself is retired (FR-008) — the
+  // admin member-config entry stays mainless and NO row may render for it.
   seam.attention.set('seam-opaque-mia', 'on')
   seam.attention.set('seam-opaque-jim', 'on')
   seam.attention.set('seam-opaque-admin', 'off')
@@ -382,13 +381,17 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
   // so the menu can only be exercised for real against the component with the
   // catalogued primitive mounted.
 
-  it('N10 Admin is a row in the default workspace and not in Product launch', async () => {
+  // WU-11 GREEN retarget (FR-008: Ava/Admin UI removed): N10's still-valid
+  // rule is that a retired/system agent in the cache never becomes a
+  // workspace row — in EITHER workspace, even on a stale cache that still
+  // carries the Admin agent and the old admin_main_session_id field.
+  it('N10 a retired Admin agent in the cache is never a row in any workspace', async () => {
     renderSidebar()
     await expandAgents('Default')
     await expandAgents('Product launch')
     const homeGroup = await screen.findByRole('group', { name: 'Default' })
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
-    expect(within(homeGroup).getByRole('button', { name: 'Admin' })).toBeTruthy()
+    expect(within(homeGroup).queryByRole('button', { name: 'Admin' })).toBeNull()
     expect(within(productGroup).queryByRole('button', { name: 'Admin' })).toBeNull()
     expect(within(productGroup).queryByRole('button', { name: 'Native worker' })).toBeNull()
     expect(within(productGroup).queryByRole('button', { name: 'Judge' })).toBeNull()
