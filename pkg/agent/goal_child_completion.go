@@ -546,8 +546,8 @@ func (al *AgentLoop) wakeMetVerdictEntry(sessionID, goalID string, round int) er
 	if err != nil {
 		return err
 	}
-	if blocked, err := al.wakeBlocked(parent); err != nil || blocked {
-		return errors.Join(err, errors.New("goal: met ending is held by Stop"))
+	if blocked, blockErr := al.wakeBlocked(parent); blockErr != nil || blocked {
+		return errors.Join(blockErr, errors.New("goal: met ending is held by Stop"))
 	}
 	_, found, err := findUnackedInboxMessage(inbox, parentID, sessionID, goalVerdictUpwardMessageID(goalID, round))
 	if err != nil || !found {

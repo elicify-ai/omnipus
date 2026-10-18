@@ -404,7 +404,7 @@ func (b *archiveBackend) PlaceSavedInput(ctx context.Context, key string, source
 	// archive's body-free references rather than treating the active window
 	// as the lifetime consumed set (PW-D16). No second index/store is needed.
 	alreadyPlaced := false
-	if err := store.ScanAll(func(_ ArchiveAddress, rec ArchiveRecord) bool {
+	if err = store.ScanAll(func(_ ArchiveAddress, rec ArchiveRecord) bool {
 		if rec.ModelRef != nil && rec.ModelRef.EntryID == source.EntryID &&
 			rec.ModelRef.PartitionKey == source.PartitionKey && rec.ModelRef.ByteOffset == source.ByteOffset {
 			alreadyPlaced = true

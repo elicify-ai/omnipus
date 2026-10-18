@@ -1018,9 +1018,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		rec = running
 	}
 
-	if err := al.placeSavedWakeAtEntry(ctx, ts, messageID, saved); err != nil {
+	if placeErr := al.placeSavedWakeAtEntry(ctx, ts, messageID, saved); placeErr != nil {
 		abort()
-		return "", err
+		return "", placeErr
 	}
 
 	// The consumed marker and the acknowledgement are written only once the

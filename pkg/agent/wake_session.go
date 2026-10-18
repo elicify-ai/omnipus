@@ -63,7 +63,7 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 		return result, err
 	}
 	body = al.filterWakeText(body)
-	if err := al.saveWakeEvent(ctx, recipientSessionID, reason, outcomeID, body); err != nil {
+	if err = al.saveWakeEvent(ctx, recipientSessionID, reason, outcomeID, body); err != nil {
 		var pending *helperEventRowPendingError
 		if !errors.As(err, &pending) {
 			return result, err
@@ -72,11 +72,11 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 		// reported as pending, not as shown, without losing the input/wake.
 		rowErr = err
 	}
-	if _, err := al.GetSessionStore().SaveChatInput(recipientSessionID, "saved-input-"+outcomeID, rec.AgentID, body); err != nil {
+	if _, err = al.GetSessionStore().SaveChatInput(recipientSessionID, "saved-input-"+outcomeID, rec.AgentID, body); err != nil {
 		return result, fmt.Errorf("wake session: save input: %w", err)
 	}
 	if source, ok := ctx.Value(wakeSourceKey{}).(wakeSource); ok {
-		if err := al.ackSavedEndingVerdict(source, recipientSessionID, outcomeID); err != nil {
+		if err = al.ackSavedEndingVerdict(source, recipientSessionID, outcomeID); err != nil {
 			return result, err
 		}
 	}
@@ -145,7 +145,6 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 			(current.Terminal() && !justCompletedRoot) {
 			return result, fmt.Errorf("wake session: join live turn: %w", errors.Join(err, loadErr))
 		}
-		rec = current
 	}
 	// Re-read Stop authority after the live-turn race, before publication.
 	if rec, err = al.GetSessionLifecycleStore().Load(recipientSessionID); err != nil {
@@ -193,9 +192,9 @@ func (al *AgentLoop) wakeRecipient(id string) (*session.UnifiedMeta, *session.Li
 		if deps == nil {
 			return nil, nil, fmt.Errorf("wake session: main eligibility unavailable")
 		}
-		eligible, err := deps.PairEligible(meta.WorkspaceID, meta.AgentID)
-		if err != nil || !eligible {
-			return nil, nil, fmt.Errorf("wake session: main recipient is not eligible: %w", errors.Join(err, errors.New("hidden or removed main")))
+		eligible, eligibleErr := deps.PairEligible(meta.WorkspaceID, meta.AgentID)
+		if eligibleErr != nil || !eligible {
+			return nil, nil, fmt.Errorf("wake session: main recipient is not eligible: %w", errors.Join(eligibleErr, errors.New("hidden or removed main")))
 		}
 	}
 	rec, err := lifecycle.Load(id)

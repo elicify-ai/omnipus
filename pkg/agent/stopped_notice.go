@@ -234,7 +234,7 @@ func noticeSender(rec *session.LifecycleRecord) string {
 }
 
 func (al *AgentLoop) wakeParentForStoppedNotice(ctx context.Context, rec *session.LifecycleRecord, parentID, id string, tr session.StoppedTransition) error {
-	reason := ""
+	var reason string
 	switch tr.Cause {
 	case session.StopCauseRestart:
 		reason = "restart"

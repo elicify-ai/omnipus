@@ -23,7 +23,7 @@ func isMetGoalMessage(msg generated.SessionMessage) bool {
 func upwardWakeDetails(child *session.LifecycleRecord, msg generated.SessionMessage) (string, *generated.HelperEvent) {
 	kind, _ := msg.Discriminator()
 	event := &generated.HelperEvent{HelperSessionId: child.SessionID, Text: deliverySummary(msg)}
-	reason := ""
+	var reason string
 	switch kind {
 	case "handback":
 		if child.GoalRef != "" {

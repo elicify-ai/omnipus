@@ -36,7 +36,7 @@ func (r *SteerBootRecovery) resumeRestartHelper(ctx context.Context, stopped *se
 			steer.Principal{Kind: steer.PrincipalKindAgent, ID: "restart-recovery"}, stopped, nil)
 	}
 	if err == nil {
-		var launcher steer.SessionLauncher = al.getSteerSessionLauncher()
+		launcher := al.getSteerSessionLauncher()
 		if launcher == nil {
 			// The gateway wires exactly NewSteerLauncher(agentLoop), which is
 			// stateless; the loop's own instance is the same launch primitive,

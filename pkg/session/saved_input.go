@@ -31,7 +31,7 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 	}
 	var existing ArchiveAddress
 	var conflict bool
-	if err := archive.ScanAll(func(addr ArchiveAddress, rec ArchiveRecord) bool {
+	if err = archive.ScanAll(func(addr ArchiveAddress, rec ArchiveRecord) bool {
 		if rec.ID != id {
 			return true
 		}
@@ -67,20 +67,21 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 // SavedChatInput resolves the durable address and whether it has already been
 // placed. The scan includes evicted references: eviction is not permission to
 // place the same logical event again after a process restart.
-func (us *UnifiedStore) SavedChatInput(sessionID, id string) (addr ArchiveAddress, placed bool, err error) {
-	if err = validateSessionID(sessionID); err != nil {
-		return
+func (us *UnifiedStore) SavedChatInput(sessionID, id string) (ArchiveAddress, bool, error) {
+	if err := validateSessionID(sessionID); err != nil {
+		return ArchiveAddress{}, false, err
 	}
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
-	if _, err = us.readMetaLocked(sessionID); err != nil {
-		return
+	if _, err := us.readMetaLocked(sessionID); err != nil {
+		return ArchiveAddress{}, false, err
 	}
-	archive, openErr := us.archiveStore(sessionID)
-	if openErr != nil {
-		err = openErr
-		return
+	archive, err := us.archiveStore(sessionID)
+	if err != nil {
+		return ArchiveAddress{}, false, err
 	}
+	var addr ArchiveAddress
+	placed := false
 	err = archive.ScanAll(func(a ArchiveAddress, rec ArchiveRecord) bool {
 		if rec.ID == id && rec.ViewMembership == ViewMembershipChat && rec.ModelMessage != nil {
 			addr = a
@@ -90,7 +91,7 @@ func (us *UnifiedStore) SavedChatInput(sessionID, id string) (addr ArchiveAddres
 		}
 		return true
 	})
-	return
+	return addr, placed, err
 }
 
 // PendingChatInputs returns only saved wake inputs that have neither a model
