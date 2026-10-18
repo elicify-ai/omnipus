@@ -31,11 +31,11 @@ import (
 func TestRegistry_AllSysagentToolsCategory(t *testing.T) {
 	all := AllTools(nil)
 
-	if len(all) != 32 {
-		t.Errorf("expected exactly 32 system tools (omnipus-system-agent FR-024 added set_agent_permissions), got %d", len(all))
+	if len(all) != 35 {
+		t.Errorf("expected exactly 35 system tools (omnipus-system-agent FR-024 added set_agent_permissions; the secret/connect work added select_secret_version (FR-086), remove_secret (WU-6) and connect_channel (WU-7)), got %d", len(all))
 	}
 	if !hasToolNamed(all, "set_agent_permissions") {
-		t.Errorf("FR-024: set_agent_permissions must be one of the 32 system tools")
+		t.Errorf("FR-024: set_agent_permissions must be one of the 35 system tools")
 	}
 
 	for _, tool := range all {
@@ -131,8 +131,8 @@ func TestRegistry_AllSysagentToolsCategory_CentralRegistry(t *testing.T) {
 	reg := BuildRegistry(nil)
 	allTools := reg.GetAll()
 
-	if len(allTools) != 32 {
-		t.Errorf("central BuiltinRegistry has %d tools; want == 32 (FR-001; the four *_in_workspace tools retired by DEL-23; omnipus-system-agent FR-024 added set_agent_permissions)", len(allTools))
+	if len(allTools) != 35 {
+		t.Errorf("central BuiltinRegistry has %d tools; want == 35 (FR-001; the four *_in_workspace tools retired by DEL-23; omnipus-system-agent FR-024 added set_agent_permissions; the secret/connect work added select_secret_version (FR-086), remove_secret (WU-6) and connect_channel (WU-7))", len(allTools))
 	}
 	if !hasToolNamed(allTools, "set_agent_permissions") {
 		t.Errorf("FR-024: the central registry must carry set_agent_permissions")

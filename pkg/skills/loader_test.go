@@ -212,28 +212,41 @@ func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
 		bySlug[s.ID] = s
 	}
 
+	// The WU-9 workflow set (FR-010): the Ava/Admin-era skills are removed
+	// from the embedded set and the W1–W18 workflow skills ship instead,
+	// alongside the four pinned Elicify document packages and the shared
+	// helpers. Labels are each skill's metadata display_name (the Elicify
+	// document packages keep their H1 labels by design).
 	want := map[string]string{
-		"agent-authoring":  "Agent Authoring",
-		"channel-setup":    "Channel Setup",
-		"deep-research":    "Deep Research",
-		"define-goal":      "Define Goal",
-		"delegation-graph": "Delegation Graph",
-		"doctor":           "Doctor",
-		"elicify-docx":     "DOCX",
-		"elicify-pdf":      "PDF",
-		"elicify-pptx":     "PPTX",
-		"elicify-xlsx":     "XLSX",
-		"inbox-triage":     "Inbox Triage",
-		"interview":        "Interview",
-		"mcp-install":      "MCP Install",
-		"orchestrate":      "Orchestrate",
-		"plan":             "Plan",
-		"provider-setup":   "Provider Setup",
-		"skill-authoring":  "Skill Authoring",
-		"skill-mapping":    "Skill Mapping",
-		"tool-mapping":     "Tool Mapping",
-		"verify":           "Verify",
-		"workspace-team":   "Workspace Team",
+		"add-connector":     "Add Connector (W10)",
+		"add-provider":      "Add or Change Provider (W12)",
+		"capability-plan":   "Capability Plan",
+		"change-agent":      "Change Agent (W3)",
+		"connect-channel":   "Connect Channel (W13)",
+		"create-agent":      "Create Agent (W1)",
+		"deep-research":     "Deep Research",
+		"define-goal":       "Define Goal",
+		"dependency-check":  "Dependency Check",
+		"disable-channel":   "Disable Channel (W14)",
+		"doctor-usage":      "Doctor and Usage (W16)",
+		"elicify-docx":      "DOCX",
+		"elicify-pdf":       "PDF",
+		"elicify-pptx":      "PPTX",
+		"elicify-xlsx":      "XLSX",
+		"inbox-triage":      "Inbox Triage",
+		"install-skill":     "Install Skill (W6)",
+		"interview":         "Interview",
+		"orchestrate":       "Orchestrate",
+		"plan":              "Plan",
+		"provider-config":   "Provider Config",
+		"remove-agent":      "Remove or Delete Agent (W4)",
+		"remove-connector":  "Remove Connector (W11)",
+		"shell-diagnosis":   "Shell Diagnosis (W17)",
+		"team-delegation":   "Team and Delegation (W7)",
+		"team-setup":        "Set Up a Team (W18)",
+		"verify":            "Verify",
+		"welcome-workspace": "Welcome a Workspace (W8)",
+		"write-skill":       "Write or Edit Skill (W5)",
 	}
 	for slug, display := range want {
 		got, ok := bySlug[slug]
