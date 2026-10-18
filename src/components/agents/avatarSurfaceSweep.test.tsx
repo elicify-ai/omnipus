@@ -136,19 +136,16 @@ function expectNoInitialCircle(container: HTMLElement, initial: string): void {
 
 // ── 1–2: roster cards ────────────────────────────────────────────────────────
 
-describe('surface sweep — AgentCard and WorkerCard (roster)', () => {
+// WU-11 (omnipus-system-agent FR-108): the WorkerCard sweep case is deleted
+// with the component itself (WorkerCard rendered only on the retired Agents
+// screen); the Team card (AgentCard) sweep stays.
+
+describe('surface sweep — AgentCard (roster)', () => {
   it('AgentCard draws the agent mark with the agent figure', async () => {
     const { AgentCard } = await import('./AgentCard')
     const { container } = render(<AgentCard agent={RIVET} onClick={() => {}} />)
     expectAgentMarkFigure(container, 'Robot', 1)
     expect(container.querySelectorAll('[data-testid="agent-icon"]')).toHaveLength(1)
-    expectNoInitialCircle(container, 'R')
-  })
-
-  it('WorkerCard draws the agent mark with the agent figure', async () => {
-    const { WorkerCard } = await import('./WorkerCard')
-    const { container } = render(<WorkerCard agent={RIVET} />)
-    expectAgentMarkFigure(container, 'Robot', 1)
     expectNoInitialCircle(container, 'R')
   })
 })

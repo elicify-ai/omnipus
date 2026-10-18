@@ -21,8 +21,9 @@ const ROOT = resolve(__dirname, '..', '..')
 
 const FILES: { path: string; known: string }[] = [
   { path: 'components/agents/AgentProfile.tsx', known: 'export function AgentProfile' },
-  { path: 'components/agents/CreateAgentWizard.tsx', known: 'export function CreateAgentWizard' },
-  { path: 'components/agents/wizard/Advanced.tsx', known: 'export function Advanced' },
+  // WU-11 (omnipus-system-agent FR-108): CreateAgentWizard.tsx and
+  // wizard/Advanced.tsx are deleted with the manual create form — the guard's
+  // no-literal rule now covers the surviving surfaces only.
   { path: 'hooks/useCommandPreview.ts', known: 'useCommandPreview' },
   // The #904 surfaces added since RED (8-reviewer gate: the guard must cover them).
   { path: 'components/agents/ToolIterationLimitField.tsx', known: 'export function ToolIterationLimitField' },

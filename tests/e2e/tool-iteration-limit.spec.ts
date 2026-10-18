@@ -81,10 +81,16 @@ test.describe('#904 tool iteration limit', () => {
   let agentName = '';
 
   test.beforeEach(async ({ page }) => {
-    await page.goto('/#/agents');
+    // WU-11 (omnipus-system-agent FR-108): the /agents screen is removed, so
+    // this spec reaches the SAME agent profile through the Team panel — the
+    // surviving host of the unified editor. The agent is created and added to
+    // the default workspace's team via the public REST API (the same
+    // revision-guarded core_team PUT the Team tab saves), then opened from
+    // the Team card's actions menu.
     agentName = `IterLimit-${Date.now()}`;
+    const headers = await csrfHeaders(page);
     const resp = await page.request.post('/api/v1/agents', {
-      headers: await csrfHeaders(page),
+      headers,
       data: {
         name: agentName,
         soul: 'Tool iteration limit e2e soul',
@@ -95,6 +101,25 @@ test.describe('#904 tool iteration limit', () => {
     });
     expect(resp.ok(), `create agent failed: ${resp.status()} ${await resp.text()}`).toBeTruthy();
     agentId = ((await resp.json()) as { id: string }).id;
+
+    const wsListResp = await page.request.get('/api/v1/workspaces', { headers });
+    expect(wsListResp.ok(), 'GET /workspaces failed').toBeTruthy();
+    const workspaces = (await wsListResp.json()) as Array<{
+      id: string;
+      revision?: string;
+      core_team?: string[];
+      is_default?: boolean;
+    }>;
+    const ws = workspaces.find((w) => w.is_default === true);
+    expect(ws?.id, 'no default workspace to host the team member').toBeTruthy();
+    const putResp = await page.request.put(`/api/v1/workspaces/${ws!.id}`, {
+      headers,
+      data: {
+        revision: ws!.revision,
+        core_team: [...(ws!.core_team ?? []), agentId],
+      },
+    });
+    expect(putResp.ok(), `add agent to team failed: ${putResp.status()} ${await putResp.text()}`).toBeTruthy();
   });
 
   test.afterEach(async ({ page }) => {
@@ -116,7 +141,18 @@ test.describe('#904 tool iteration limit', () => {
     expect(agent.max_tool_iterations_override).toBe(50);
     expect(agent.max_tool_iterations_override_ignored).toBe(false);
 
-    await page.goto(`/#/agents/${agentId}`);
+    // WU-11 FR-108 retarget: open the SAME unified editor from the Team panel
+    // (the retired /#/agents/{id} deep link is gone by spec — BDD-12.7).
+    const wsListResp = await page.request.get('/api/v1/workspaces', { headers: await csrfHeaders(page) });
+    expect(wsListResp.ok(), 'GET /workspaces failed').toBeTruthy();
+    const def = ((await wsListResp.json()) as Array<{ id?: string; is_default?: boolean }>).find(
+      (w) => w.is_default === true,
+    );
+    expect(def?.id, 'no default workspace').toBeTruthy();
+    await page.goto(`/#/workspaces/${def!.id}/chat?panel=team`);
+    await expect(page.getByTestId(`team-card-actions-${agentId}`)).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId(`team-card-actions-${agentId}`).click();
+    await page.getByRole('button', { name: `Edit ${agentName}` }).click();
     await expect(page.getByText(agentName).first()).toBeVisible({ timeout: 20_000 });
     await page.getByTestId('tab-advanced').click();
     // "Lowered for this agent: 50" (+ " (global limit N)" when the global is readable;

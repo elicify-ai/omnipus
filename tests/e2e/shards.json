@@ -64,7 +64,6 @@
       "port": 6063,
       "specs": [
         "tests/e2e/accessibility.spec.ts",
-        "tests/e2e/agents.spec.ts",
         "tests/e2e/auth.spec.ts",
         "tests/e2e/burst-resilience.spec.ts",
         "tests/e2e/side-panel-deeplink.spec.ts",
@@ -79,7 +78,6 @@
         "tests/e2e/calendar-recurrence.spec.ts",
         "tests/e2e/calendar.spec.ts",
         "tests/e2e/contract-counters.spec.ts",
-        "tests/e2e/create-agent.spec.ts",
         "tests/e2e/sidebar-agent-row-menu.spec.ts",
         "tests/e2e/side-panel-signin-return.spec.ts"
       ]
