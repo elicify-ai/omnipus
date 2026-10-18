@@ -175,6 +175,13 @@ func (al *AgentLoop) turnApprovalOriginLabel(msg bus.InboundMessage, sessionID s
 	if sessionID == "" || requestID == "" || msg.ChatID != "request:"+requestID {
 		return ""
 	}
+	if msg.Metadata[roomIDMetadataKey] != "" {
+		// A group-chat room request is not a peer ask: its turn is labelled
+		// "for group <name>" (§6.18), which lands with the WU-15 room
+		// approval work. Until then it carries no label rather than a
+		// wrong "asked by".
+		return ""
+	}
 	ledger := al.RequestLedger()
 	if ledger == nil {
 		return ""
