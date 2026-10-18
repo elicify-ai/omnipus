@@ -254,6 +254,7 @@ func TestU1StoppedNoticeEveryTransitionIntoStopped(t *testing.T) {
 	t.Run("restart boot sweep", func(t *testing.T) {
 		al, cleanup := newSteerAL(t)
 		defer cleanup()
+		provisionTestWorkspace(t, "ws-u1-restart", testDefaultAgentID) // PW-SEC-01 fixture provisioning
 		parent := newTestSteeringSession(t, al, "ws-u1-restart")
 		resumeGate := newGoalRunGate("native helper resumed", nil)
 		installGoalRunProvider(t, al, resumeGate)

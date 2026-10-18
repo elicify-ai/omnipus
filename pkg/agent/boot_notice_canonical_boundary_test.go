@@ -57,6 +57,9 @@ func newBootNoticeControlFixture(t *testing.T) *bootNoticeControlFixture {
 	if !ok {
 		t.Fatal("SETUP: real model-edge gate was not installed")
 	}
+	// PW-SEC-01 fixture provisioning: restart resume continues saved work only
+	// in a workspace that exists and still holds the helper's agent.
+	provisionTestWorkspace(t, "ws-boot-canonical-boundary", testDefaultAgentID)
 	parent := newTestSteeringSession(t, al, "ws-boot-canonical-boundary")
 	otherParent := newTestSteeringSession(t, al, "ws-boot-unrelated-parent")
 	wakes := observeU1ParentNoticeWakes(t, al, parent)

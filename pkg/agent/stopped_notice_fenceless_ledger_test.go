@@ -394,6 +394,7 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 	t.Cleanup(releaseTurns)
 	lifecycle := al.GetSessionLifecycleStore()
 
+	provisionTestWorkspace(t, "ws-c5-boot", testDefaultAgentID) // PW-SEC-01 fixture provisioning
 	parentID := newTestSteeringSession(t, al, "ws-c5-boot")
 	wakes := w1hObserveWakes(t, al)
 	rec := w1hLaunchLiveChild(t, al, provider.entered, parentID, "call-c5-boot")
