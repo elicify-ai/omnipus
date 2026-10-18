@@ -230,10 +230,29 @@ func TestWU15Rooms_ReceiverHelperApprovalReloadRestoresCompleteApprovableCard(t 
 		gen.ToolApprovalActionRequest{Action: gen.ToolApprovalActionRequestActionAllowOnce})
 	require.Equal(t, http.StatusOK, status, "%s", body)
 
-	var cleared gen.SessionStateFrame
-	require.NoError(t, json.Unmarshal(wu15ReadFrame(t, reloaded, "session_state"), &cleared))
-	for _, pending := range cleared.PendingApprovals {
-		require.NotEqual(t, frame.ApprovalId, pending.ApprovalId, "the resolved approval leaves the snapshot")
+	// Resolution is learned from the resolved frame, never from "the next
+	// session_state on this connection": the server pushes no session_state
+	// on resolution (mechanism probe 2026-10-18), so that next frame is the
+	// STALE attach-time frame — built before the approval — whenever the
+	// attach answer beat the approval, and absent otherwise. Intermittent
+	// full-suite failure go-packs2.log 2026-10-18. K7: the resolved frame
+	// still names the chain root so the root chat's card clears without a
+	// lookup.
+	resolved := l1WU8RoomsFrame[gen.ToolApprovalResolvedFrame](t, wu15ReadFrame(t, reloaded, "tool_approval_resolved"))
+	require.Equal(t, frame.ApprovalId, resolved.ApprovalId)
+	require.Equal(t, "approved", resolved.State)
+	require.NotNil(t, resolved.RootSessionId, "K7: the resolved frame names the chain root")
+	require.Equal(t, h.main("mia"), *resolved.RootSessionId)
+
+	// A FRESH attach's session_state is built after the resolution, so it
+	// cannot be stale: the resolved approval must have left the snapshot.
+	after := h.connect()
+	require.NoError(t, after.WriteJSON(gen.AttachSessionFrame{Type: "attach_session", SessionId: h.main("mia")}))
+	var post gen.SessionStateFrame
+	require.NoError(t, json.Unmarshal(wu15ReadFrame(t, after, "session_state"), &post))
+	for _, pending := range post.PendingApprovals {
+		require.NotEqual(t, frame.ApprovalId, pending.ApprovalId,
+			"a fresh attach's snapshot no longer lists the resolved approval")
 	}
 }
 
