@@ -97,12 +97,12 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	if err := caller.Err(); err != nil {
 		return realInputError("browser live: input canceled: %w", err)
 	}
-	if in, result = lv.preflightNavigate(caller, in); result != nil {
+	if in, result = lv.preflightNavigate(caller, viewerID, in); result != nil {
 		return result
 	}
 	budget := lv.inputBudget(caller)
 	lv.mu.Lock()
-	targetCtx := lv.tabCtx
+	targetCtx := lv.inputTargetLocked(in)
 	state := lv.inputStateLocked()
 	if targetCtx == nil {
 		allowed := lv.allowInputLocked(in.Kind)
@@ -266,17 +266,30 @@ func (lv *LiveView) inputBudget(caller context.Context) time.Duration {
 // with no attached tab keeps dispatch's ordinary "not attached" refusal and
 // costs no lookup. dispatchInputContext calls this first, and
 // dispatchTrackedInput refuses any navigate that skipped it.
-func (lv *LiveView) preflightNavigate(caller context.Context, in LiveInput) (LiveInput, error) {
+func (lv *LiveView) preflightNavigate(caller context.Context, viewerID string, in LiveInput) (LiveInput, error) {
 	if in.Kind != "navigate" {
 		return in, nil
 	}
 	lv.mu.Lock()
-	attached := lv.tabCtx != nil
+	target := lv.tabCtx
 	lv.mu.Unlock()
-	if !attached {
+	if target == nil {
 		return in, nil
 	}
-	return lv.validateNavigateURL(caller, in)
+	return lv.validateNavigateURL(caller, viewerID, target, in)
+}
+
+// inputTargetLocked is the tab an input is dispatched to. A validated
+// navigate stays bound to the tab it was validated for: if the shared
+// browser moved to another tab meanwhile, dispatch's retirement check then
+// refuses it instead of navigating the newly selected page (browser-input
+// connection spec R3 — Lifetime). Every other input targets the current tab.
+// Must be called with mu held.
+func (lv *LiveView) inputTargetLocked(in LiveInput) context.Context {
+	if in.validatedTarget != nil {
+		return in.validatedTarget
+	}
+	return lv.tabCtx
 }
 
 // validateNavigateURL runs a live navigate's SSRF/scheme pre-check
@@ -286,9 +299,11 @@ func (lv *LiveView) preflightNavigate(caller context.Context, in LiveInput) (Liv
 // shared with the gate waits — a lookup slower than that refused the user's
 // navigation as "blocked by SSRF policy" (release run 39029558027, UAT-09b).
 // The check stays bounded: by the caller (the gateway's command deadline),
-// the input source, and PageTimeout. On success the returned input carries
-// the validated URL, which dispatchTrackedInput requires.
-func (lv *LiveView) validateNavigateURL(caller context.Context, in LiveInput) (LiveInput, error) {
+// the input source, PageTimeout, and the target tab — the pending check is
+// registered as a request on target, so retiring that tab cancels it like
+// any other input bound to it. On success the returned input carries the
+// validated URL and target, which dispatch requires.
+func (lv *LiveView) validateNavigateURL(caller context.Context, viewerID string, target context.Context, in LiveInput) (LiveInput, error) {
 	// Shape first, exactly as dispatch did before the URL gate: a malformed
 	// navigate (empty URL, stray x/y) keeps its own refusal and costs no
 	// lookup.
@@ -308,10 +323,24 @@ func (lv *LiveView) validateNavigateURL(caller context.Context, in LiveInput) (L
 		stopSource := context.AfterFunc(in.SourceContext, cancel)
 		defer stopSource()
 	}
-	if err := lv.mgr.ValidateURL(ctx, in.URL); err != nil {
+	lv.mu.Lock()
+	state := lv.inputStateLocked()
+	request := &liveInputRequest{viewer: viewerID, target: target, cancel: cancel}
+	state.requests[request] = struct{}{}
+	lv.mu.Unlock()
+	defer func() { lv.mu.Lock(); delete(state.requests, request); lv.mu.Unlock() }()
+	err := lv.mgr.ValidateURL(ctx, in.URL)
+	lv.mu.Lock()
+	targetChanged := state.retired[target] || lv.tabCtx != target
+	lv.mu.Unlock()
+	if targetChanged {
+		return in, benignInputError("browser live: input target changed; retry on the current tab")
+	}
+	if err != nil {
 		return in, realInputError("browser live: navigate blocked: %w", err)
 	}
 	in.validatedNavigateURL = in.URL
+	in.validatedTarget = target
 	return in, nil
 }
 

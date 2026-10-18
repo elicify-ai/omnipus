@@ -85,7 +85,10 @@ type LiveInput struct {
 	// SSRF/scheme gate; dispatch refuses a navigate whose URL does not match
 	// it. Unexported, so no wire decode or other package can set it.
 	validatedNavigateURL string
-	Modifiers            int // bit field: Alt=1, Ctrl=2, Meta=4, Shift=8 — clamped to [0,15] by buildInputAction.
+	// validatedTarget is the tab validatedNavigateURL was checked for; the
+	// navigate is dispatched to that tab or refused (inputTargetLocked).
+	validatedTarget context.Context
+	Modifiers       int // bit field: Alt=1, Ctrl=2, Meta=4, Shift=8 — clamped to [0,15] by buildInputAction.
 
 	// CaptureWidth/CaptureHeight are the intrinsic pixel size of the capture
 	// frame the client mapped X/Y into (0/0 = absent, meaning an older
