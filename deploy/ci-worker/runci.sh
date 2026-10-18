@@ -83,6 +83,60 @@ fi
 echo "worker lock acquired (pid $$)"
 fi
 TAGS="goolm,stdjson"
+# WU-23 Landlock kernel-receipt tests are EXCLUDED on this worker, explicitly.
+#
+# The receipt suite (pkg/sandbox/wu23_landlock_linux_test.go,
+# wu23_agenthome_creation_linux_test.go, wu23_r1_runtime_inventory_linux_test.go
+# and pkg/tools/wu23_god_spawns_linux_test.go) needs a REAL Landlock kernel:
+# its shared helper wu23KernelCommand fatals
+#   "BLOCKED: real Landlock unavailable — D8 requires a non-skip Linux receipt"
+# the moment NewLinuxBackend() fails, and Fly's Firecracker VMs run a kernel
+# without a usable Landlock (worker log 2026-10-18: "Landlock not available.
+# Using application-level enforcement. backend=fallback
+# kernel_version=6.12.105-fly"). Amendment D8 (L1-AMENDMENTS-20261013.md
+# §2.2 D8) rules "the Fly cluster is not accepted as kernel evidence", so on
+# this worker those tests could never go green — an always-red gate is an
+# instrument that proves nothing and hides every OTHER real failure.
+#
+# This script is the FLY WORKER's gate runner and runs nowhere else (GitHub's
+# pr.yml never invokes it), so the exclusion below is Fly-only by
+# construction. GitHub's Linux runners DO provide Landlock and still run and
+# pass every receipt test there — GitHub CI stays the receipt authority, and
+# this is a deliberate, DOCUMENTED divergence of what the two surfaces
+# measure (see deploy/ci-worker/CLAUDE.md trap 9).
+#
+# Never a silent skip:
+#   * run_gotest/run_gorace print the NOT RUN ON FLY line below in the gate
+#     output, which ci-cluster.sh collects; and
+#   * -skip OMITTS the matched tests from the go test output entirely (no
+#     `--- SKIP` line is printed — verified on go 1.27; without -v the log
+#     shows only the package's `ok` line). So no `--- PASS` line ever exists
+#     for them and no verdict in this script can count them as passed (the
+#     only pass-counting anywhere is records-no-sqlite's floor, a different
+#     gate whose tests do not match this pattern). The NOT RUN ON FLY line is
+#     the log's only marker that these tests were left out — keep it.
+#
+# The pattern is LEFT-anchored on the WU-23 prefix and requires "Landlock"
+# somewhere in the name — verified against the full repo test inventory to
+# match EXACTLY the eight receipt tests (the six TestWU23_Landlock* tests in
+# pkg/sandbox, TestWU23_GodModeNativeSpawns_Landlock in pkg/tools and
+# TestWU23R1_RuntimeAllowRootsNeverReopenInventory_Landlock). A right anchor
+# would be WRONG here: it would miss the six TestWU23_Landlock* names, which
+# do not END in "Landlock". The other 14 Landlock-named tests
+# (TestLandlock_*, TestLandlockRightsForABI_*, TestAccessToLandlockRights_*,
+# TestSandboxBackend_LandlockFallbackChain, …) do not start with TestWU23,
+# do NOT match, and still run here.
+# All four `go test` invocations in run_gotest/run_gorace carry the flag —
+# the contended run AND the flake filter's isolated re-run: without it there,
+# a re-run of any package containing a receipt test would fail on the BLOCKED
+# fatal and stamp the package "REAL FAILURE (failed twice)", silently undoing
+# the skip.
+WU23_LANDLOCK_SKIP='^TestWU23.*Landlock'
+# Printed by run_gotest/run_gorace so the exclusion is visible in the gate
+# output, never a silent skip.
+note_landlock_skip() {
+  echo "NOT RUN ON FLY: WU-23 Landlock receipt tests (no Landlock in Fly VMs; GitHub Linux CI is the authority, amendment §2.2 D8)"
+}
 export PATH=/usr/local/go/bin:/cache/go/bin:$PATH
 export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.sh uses set -u
 
@@ -361,6 +415,7 @@ run_lint() {
 # is proved by the CGO_ENABLED=0 build/test gates, not by this one.
 run_gorace() {
   ensure_spa_stub
+  note_landlock_skip
   local out
   # CI=true is REQUIRED here, and is the single thing that makes this gate
   # predict GitHub's. GitHub Actions always sets CI, so pkg/tools/browser's
@@ -414,7 +469,7 @@ run_gorace() {
     return 1
   fi
   out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -p 2 -timeout 2700s \
-    "${race_pkgs[@]}" 2>&1)
+    -skip "$WU23_LANDLOCK_SKIP" "${race_pkgs[@]}" 2>&1)
   local code=$?
   echo "$out"
   # Checked BEFORE the exit-code short-circuit, for the same reason pr.yml and
@@ -502,7 +557,9 @@ run_gorace() {
     # re-run must measure the SAME thing, or a package that only "fails" here
     # because it launched a real Chrome would be re-run without one and
     # stamped a flake — or vice versa.
-    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 2700s -p 1 "$p" >"$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
+    # -skip here too (same reason as run_gotest's isolated re-run): the
+    # re-run must measure the same thing as the contended run above.
+    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 2700s -p 1 -skip "$WU23_LANDLOCK_SKIP" "$p" >"$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
        && ! grep -aq "DATA RACE" "$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log"; then
       # Excused — but say WHAT was excused. After the `--- FAIL` carve-out
       # above, reaching this point means the contended run produced a bare
@@ -527,6 +584,7 @@ run_gorace() {
 
 run_gotest() {
   ensure_spa_stub
+  note_landlock_skip
   # CI=true for the same reason run_gorace sets it: this gate exists to predict
   # GitHub's "Tests" job, and GitHub always sets CI. After #615 converted
   # pkg/tools/browser's real-Chrome tests to the package's own skipIfNoBrowser(t)
@@ -554,7 +612,7 @@ run_gotest() {
   # innocent test with nothing to do with the real timing. 2700s matches
   # run_gorace's 45-minute package budget so a loaded shared worker measures
   # the same finite ceiling as GitHub CI.
-  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 2 ./... 2>&1)
+  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 2 -skip "$WU23_LANDLOCK_SKIP" ./... 2>&1)
   local code=$?
   echo "$out"
   # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
@@ -642,7 +700,11 @@ run_gotest() {
     # uncontended) is just as exposed to go test's 10m-per-binary default,
     # and this IS the exact re-run that would otherwise stamp such a package
     # a REAL FAILURE on a timeout artifact rather than a genuine repeat.
-    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 1 "$p" >"$TMPDIR/rr.log" 2>&1; then
+    # -skip here too: the isolated re-run measures the same thing as the
+    # contended run, or a receipt test's BLOCKED fatal would stamp a flaky
+    # package "REAL FAILURE (failed contended AND isolated)" and silently
+    # undo the exclusion.
+    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 1 -skip "$WU23_LANDLOCK_SKIP" "$p" >"$TMPDIR/rr.log" 2>&1; then
       # Excused — but say WHAT was excused. Reaching this point means the
       # contended run produced a bare `FAIL <pkg>` with no named test failure,
       # i.e. the hang/timeout signature, and the package passed alone.
