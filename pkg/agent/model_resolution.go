@@ -455,25 +455,18 @@ func resolveAgentCandidatesWithPrimaryProvider(
 		out = append(out, providers.FallbackCandidate{Provider: pinned, Model: model})
 	}
 
-	// Append the fallback chain (provider-aware when available), skipping any
-	// candidate that duplicates the pinned primary. The first element returned by
-	// the fallback resolver is the primary re-resolved through the default path —
-	// drop it so the pinned primary above wins.
-	var rest, reresolved []providers.FallbackCandidate
+	// Append ONLY the configured fallback chain (provider-aware when
+	// available), in configured order. The primary is not handed to the
+	// fallback resolver: re-resolving a vendor-prefixed pinned id
+	// ("deepseek/m" under openrouter) would yield a different pair
+	// ("deepseek", "m") — a phantom fallback the agent never configured.
+	// The only de-duplication is against the actual pinned primary pair (and
+	// earlier fallbacks), so a configured fallback is never dropped.
+	var rest []providers.FallbackCandidate
 	if len(fallbackModels) > 0 {
-		rest = resolveModelCandidatesFromList(cfg, defaultProvider, primary, fallbackModels)
-		reresolved = resolveModelCandidatesFromList(cfg, defaultProvider, primary, nil)
+		rest = resolveModelCandidatesFromList(cfg, defaultProvider, "", fallbackModels)
 	} else {
-		rest = resolveModelCandidates(cfg, defaultProvider, primary, fallbacks)
-		reresolved = resolveModelCandidates(cfg, defaultProvider, primary, nil)
-	}
-	// Drop that re-resolved primary by position, not only by pair key: a
-	// vendor-prefixed pinned id ("deepseek/m" under openrouter) re-resolves
-	// to a DIFFERENT pair ("deepseek", "m") and would otherwise survive as a
-	// phantom fallback the agent never declared. Both resolvers add the
-	// primary first, so the primary-only resolution names exactly rest[0].
-	if len(reresolved) == 1 && len(rest) > 0 && rest[0] == reresolved[0] {
-		rest = rest[1:]
+		rest = resolveModelCandidates(cfg, defaultProvider, "", fallbacks)
 	}
 	for _, c := range rest {
 		key := providers.ModelKey(c.Provider, c.Model)
