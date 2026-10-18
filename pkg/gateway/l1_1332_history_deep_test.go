@@ -41,7 +41,11 @@ func l1332bAttach(t *testing.T, rh *roomsHarness, roomID string, afterSeq int64)
 // against the seeded list, never against service internals.
 func l1332bWalkAll(t *testing.T, rh *roomsHarness, roomID string) []gen.RoomEntry {
 	t.Helper()
-	var out []gen.RoomEntry
+	// Pages arrive newest-first; PREPEND each older page so the union is
+	// ascending. cursor tracks the previously used boundary for the
+	// strictly-decreasing check; it is only set after the first page, so
+	// there is no nil dereference on the first pass.
+	var walked []gen.RoomEntry
 	cursor := (*int64)(nil)
 	for i := 0; i < 32; i++ {
 		query := "?limit=1000"
@@ -49,22 +53,18 @@ func l1332bWalkAll(t *testing.T, rh *roomsHarness, roomID string) []gen.RoomEntr
 			query = fmt.Sprintf("?before_seq=%d&limit=1000", *cursor)
 		}
 		page := l1332GetPage(t, rh, roomID, query)
-		require.NotEmpty(t, page.Entries, "a walk must terminate by empty pages, not loop")
-		out = append(out, page.Entries...)
+		require.NotEmpty(t, page.Entries, "a walk must terminate by pages, not loop")
+		walked = append(page.Entries, walked...)
 		if !page.HasOlder {
 			require.Nil(t, page.NextBeforeSeq)
-			return out
+			return walked
 		}
 		require.NotNil(t, page.NextBeforeSeq)
 		next := *page.NextBeforeSeq
-		require.Less(t, next, *cursor, "the cursor must strictly decrease")
-		if cursor == nil {
-			c := page.Entries[0].Seq
-			cursor = &c
-		} else {
-			c := next
-			cursor = &c
+		if cursor != nil {
+			require.Less(t, next, *cursor, "the cursor must strictly decrease")
 		}
+		cursor = &next
 	}
 	t.Fatal("the walk exceeded 32 pages for 10,500 entries")
 	return nil
