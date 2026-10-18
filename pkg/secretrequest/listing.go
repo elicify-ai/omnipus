@@ -76,38 +76,41 @@ func elementLabel(node any, index int) string {
 	return "[" + strconv.Itoa(index) + "]"
 }
 
+// UnboundRecipientLine is the one fixed display line of an unbound entry.
+const UnboundRecipientLine = "Stored in Settings; no recipient recorded"
+
 // NameEntries builds the value-free K6 entries for a store inventory. Private
 // versions are selected or superseded by the store's selection (FR-086). An
 // integration version is selected when configuration references it,
 // superseded when a newer version of the same destination is referenced, and
 // stored otherwise (FR-072). A plain (Settings-stored) entry has no recorded
-// recipient: it is listed only when the configuration uses it, with the kind
-// of its consumer (provisional, pending the K6 kind ruling).
+// recipient and is listed as kind unbound (architect WU-6 K6 ruling).
 func NameEntries(cfg *config.Config, home string, inventory []credentials.CardInventoryEntry) []gen.SecretNameEntry {
 	consumers := ReferenceConsumers(cfg)
 	entries := make([]gen.SecretNameEntry, 0, len(inventory))
 	for _, item := range inventory {
-		if entry, ok := NameEntry(cfg, home, item, inventory, consumers); ok {
-			entries = append(entries, entry)
-		}
+		entries = append(entries, NameEntry(cfg, home, item, inventory, consumers))
 	}
 	return entries
 }
 
-// NameEntry builds one K6 entry; ok is false for an entry K6 cannot describe.
-func NameEntry(cfg *config.Config, home string, item credentials.CardInventoryEntry, all []credentials.CardInventoryEntry, consumers map[string][]string) (gen.SecretNameEntry, bool) {
+// NameEntry builds one K6 entry.
+func NameEntry(cfg *config.Config, home string, item credentials.CardInventoryEntry, all []credentials.CardInventoryEntry, consumers map[string][]string) gen.SecretNameEntry {
 	used := append([]string{}, consumers[item.Reference]...)
 	entry := gen.SecretNameEntry{Reference: item.Reference, Version: int64(item.Secret.Version), Consumers: used}
 	if item.Plain {
-		kind := consumerKind(used)
-		if kind == "" {
-			return entry, false
+		// Architect WU-6 K6 ruling: no recipient recorded → kind unbound,
+		// version 1, one fixed line; where it is used is stated only by
+		// consumers. Never infer a kind.
+		entry.Kind = gen.SecretNameEntryKindUnbound
+		entry.Recipient.Kind = gen.SecretNameEntryRecipientKindUnbound
+		entry.Recipient.Lines = []string{UnboundRecipientLine}
+		entry.Version = 1
+		entry.State = gen.SecretNameEntryStateStored
+		if len(used) > 0 {
+			entry.State = gen.SecretNameEntryStateSelected
 		}
-		entry.Kind = gen.SecretNameEntryKind(kind)
-		entry.Recipient.Kind = gen.SecretNameEntryRecipientKind(kind)
-		entry.Recipient.Lines = []string{"Stored in Settings", "Used by: " + strings.Join(used, ", ")}
-		entry.State = gen.SecretNameEntryStateSelected
-		return entry, true
+		return entry
 	}
 	recipient := item.Secret.Recipient
 	entry.Kind = gen.SecretNameEntryKind(recipient.Kind)
@@ -124,12 +127,12 @@ func NameEntry(cfg *config.Config, home string, item credentials.CardInventoryEn
 		if item.Selected {
 			entry.State = gen.SecretNameEntryStateSelected
 		}
-		return entry, true
+		return entry
 	}
 	entry.State = gen.SecretNameEntryStateStored
 	if len(used) > 0 {
 		entry.State = gen.SecretNameEntryStateSelected
-		return entry, true
+		return entry
 	}
 	for _, other := range all {
 		if other.Plain || other.Reference == item.Reference || other.Secret.Version <= item.Secret.Version {
@@ -140,24 +143,7 @@ func NameEntry(cfg *config.Config, home string, item credentials.CardInventoryEn
 			break
 		}
 	}
-	return entry, true
-}
-
-// consumerKind derives a plain entry's kind from where configuration uses it.
-func consumerKind(labels []string) string {
-	for _, label := range labels {
-		switch {
-		case strings.HasPrefix(label, "providers."):
-			return "provider_key"
-		case strings.HasPrefix(label, "channels."):
-			return "channel_credential"
-		case strings.HasPrefix(label, "tools.mcp."):
-			return "mcp_env"
-		case strings.Contains(label, "mailbox"):
-			return "mailbox_password"
-		}
-	}
-	return ""
+	return entry
 }
 
 func sameDestination(a, b credentials.CardRecipient) bool {

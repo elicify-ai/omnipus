@@ -7,7 +7,6 @@ package credentials
 import (
 	"errors"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -40,8 +39,7 @@ type CardInventoryEntry struct {
 	Reference string
 	Secret    CardSecret
 	// Plain marks an entry stored outside a secret card (Settings, boot
-	// migration): it has no recorded recipient; Secret.Version is parsed
-	// from a ".v<n>" suffix, else 1.
+	// migration): it has no recorded recipient and Secret.Version is 1.
 	// Selected is meaningful for the private kind only: whether this version
 	// is the one injected into its owner pair's children.
 	Selected bool
@@ -77,23 +75,12 @@ func (s *Store) CardInventory() ([]CardInventoryEntry, error) {
 		if _, card := sf.CardSecrets[ref]; card {
 			continue
 		}
-		out = append(out, CardInventoryEntry{Reference: ref, Plain: true, Secret: CardSecret{Version: referenceVersion(ref)}})
+		// A plain row's version is 1: only a metadata row records versions,
+		// never the name's shape (architect WU-6 K6 ruling).
+		out = append(out, CardInventoryEntry{Reference: ref, Plain: true, Secret: CardSecret{Version: 1}})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Reference < out[j].Reference })
 	return out, nil
-}
-
-// referenceVersion parses a ".v<n>" suffix; a name without one is version 1.
-func referenceVersion(ref string) int {
-	i := strings.LastIndex(ref, ".v")
-	if i < 0 {
-		return 1
-	}
-	n, err := strconv.Atoi(ref[i+2:])
-	if err != nil || n < 1 {
-		return 1
-	}
-	return n
 }
 
 // RemoveReference durably deletes one stored version — its encrypted value,
@@ -116,7 +103,7 @@ func (s *Store) RemoveReference(ref string) (CardInventoryEntry, error) {
 	}
 	entry := CardInventoryEntry{Reference: ref, Secret: secret, Plain: !card}
 	if !card {
-		entry.Secret.Version = referenceVersion(ref)
+		entry.Secret.Version = 1
 	}
 	delete(sf.Credentials, ref)
 	delete(sf.CardSecrets, ref)
