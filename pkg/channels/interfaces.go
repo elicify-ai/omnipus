@@ -89,6 +89,9 @@ const (
 	PairingStatusTimeout PairingStatus = "timeout"
 	// PairingStatusError means pairing failed; message carries the reason.
 	PairingStatusError PairingStatus = "error"
+	// PairingStatusStopped means the user pressed Stop in the chat that started
+	// the pairing; the pairing was ended and no further codes follow (BDD-8.8).
+	PairingStatusStopped PairingStatus = "stopped"
 )
 
 // AllPairingStatuses is the authoritative set of pairing statuses, kept next to
@@ -100,6 +103,7 @@ var AllPairingStatuses = []PairingStatus{
 	PairingStatusLinked,
 	PairingStatusTimeout,
 	PairingStatusError,
+	PairingStatusStopped,
 }
 
 // PairingObservable is implemented by channels that produce linked-device

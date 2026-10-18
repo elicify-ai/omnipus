@@ -893,7 +893,7 @@ export interface WhatsAppPairingFrame {
   session_id?: string;
   type: "whatsapp_pairing";
   channel_id: string;
-  status: "waiting" | "code" | "linked" | "timeout" | "error";
+  status: "waiting" | "code" | "linked" | "timeout" | "error" | "stopped";
   qr?: string;
   message?: string;
 }
