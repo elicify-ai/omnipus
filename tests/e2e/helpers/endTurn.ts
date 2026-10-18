@@ -34,6 +34,35 @@ export interface ServerFrameLog {
 const logsByPage = new WeakMap<Page, ServerFrameLog>()
 
 /**
+ * Pin the ROOT session for a page whose chat was NOT started by a
+ * session-less first send. A session created over REST and opened by deep
+ * link (fixtures/session-setup.ts::freshChat) never produces a
+ * `session_started` frame: the gateway sends that ack only when it mints a
+ * session for a frame that carried no session_id
+ * (pkg/gateway/websocket_chat.go — acknowledgeNewSession runs on the mint
+ * path, never on adoptExistingSession). Without this pin every scoped
+ * cancel answer is ignored and endTurnDeterministically times out against a
+ * cancel the server did answer (CI run 39029558027: goal_status
+ * waiting_on_user, cancel_stage and done all arrived for the session).
+ *
+ * The id must come from the test's own setup (freshChat's REST create
+ * response), never from a server frame — the same reason rootSessionId is
+ * not taken from arbitrary frames (review finding F). A later
+ * `session_started` still re-pins, exactly as before.
+ */
+export function pinRootSession(page: Page, sessionId: string): void {
+  const log = logsByPage.get(page)
+  if (!log) {
+    throw new Error(
+      'pinRootSession: trackServerFrames(page) was never called for this page. ' +
+        'Call it in the spec’s beforeEach BEFORE page.goto(\'/\').',
+    )
+  }
+  if (!sessionId) throw new Error('pinRootSession: empty session id')
+  log.rootSessionId = sessionId
+}
+
+/**
  * Start recording the page's server frames. MUST run before the page's
  * websocket opens — call it in beforeEach BEFORE page.goto('/'):
  * Playwright's `page.on('websocket')` only fires for sockets opened after

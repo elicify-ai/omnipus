@@ -435,6 +435,12 @@ func restoreConfig(cfg *config.Config, snapshotJSON []byte) error {
 //
 // Use this for all sysagent tool paths that mutate any part of the config.
 func (d *Deps) WithConfig(fn func(*config.Config) error) error {
+	// An unwired mutator is a wiring fault: refuse with the reason, never a
+	// nil-func panic that crashes the calling tool (same rule as the
+	// SaveConfigLocked check below).
+	if d.MutateConfig == nil {
+		return errors.New("config mutation is not wired (Deps.MutateConfig is nil); nothing was saved")
+	}
 	return d.MutateConfig(func(cfg *config.Config) error {
 		// Snapshot the JSON-serializable fields before mutation so any mutation
 		// can be rolled back without copying the sync.RWMutex field.
