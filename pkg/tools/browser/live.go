@@ -80,8 +80,15 @@ type LiveInput struct {
 	// a future refactor accidentally reading X/Y (or skipping the SSRF gate)
 	// for what the wire actually meant as a navigate. If LiveInput is ever
 	// split into a real discriminated union, preserve this invariant.
-	URL       string
-	Modifiers int // bit field: Alt=1, Ctrl=2, Meta=4, Shift=8 — clamped to [0,15] by buildInputAction.
+	URL string
+	// validatedNavigateURL is set by validateNavigateURL once URL passed the
+	// SSRF/scheme gate; dispatch refuses a navigate whose URL does not match
+	// it. Unexported, so no wire decode or other package can set it.
+	validatedNavigateURL string
+	// validatedTarget is the tab validatedNavigateURL was checked for; the
+	// navigate is dispatched to that tab or refused (inputTargetLocked).
+	validatedTarget context.Context
+	Modifiers       int // bit field: Alt=1, Ctrl=2, Meta=4, Shift=8 — clamped to [0,15] by buildInputAction.
 
 	// CaptureWidth/CaptureHeight are the intrinsic pixel size of the capture
 	// frame the client mapped X/Y into (0/0 = absent, meaning an older

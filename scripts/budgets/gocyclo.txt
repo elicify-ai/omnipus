@@ -43,7 +43,7 @@ pkg/agent/goal_flow_integration_test.go	TestGoalClarify_WebCardRoundtrip	57
 pkg/agent/task_trigger_rrule_test.go	TestTriggerScheduler_RruleRearmAllPaths	57
 pkg/gateway/browser_webrtc.go	BrowserWSHandler.handleWebRTCOffer	56
 pkg/gateway/rest_agents_update.go	restAPIUpdateAgentFlow.validateTarget	54
-pkg/tools/browser/live_input_context.go	LiveView.dispatchInputContext	54
+pkg/tools/browser/live_input_context.go	LiveView.dispatchInputContext	51
 pkg/agent/subturn.go	spawnSubTurn	53
 pkg/tools/browser/webrtc/dedicated_input_peer_test.go	TestDedicatedInputPeerChannelsAndRetirement	52
 pkg/tools/browser/live_viewport_frame.go	LiveView.applyViewportContextWithConvergence	50

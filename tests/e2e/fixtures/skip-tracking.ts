@@ -172,53 +172,43 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
   {
     test: 'W7 — a manually opened Library tab is not duplicated; the switch affordance shows',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1180',
-    until: '2026-10-17',
+    until: '2026-10-24',
     note: 'Temporary quarantine: current CI attempt failed before passing on retry. W4 and W5 remain enabled; this is not restored coverage. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
   },
   {
     test: 'UAT-13 — video is smooth, and it is really video',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1142',
-    until: '2026-10-17',
+    until: '2026-10-24',
     note: 'Temporary quarantine: current CI live-browser video failure; all other browser-panel tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
   },
   {
     test: 'UAT-14 — a click lands where you clicked, and the page responds',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1142',
-    until: '2026-10-17',
+    until: '2026-10-24',
     note: 'Temporary quarantine: current CI live-browser click failure; all other browser-panel tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
   },
   {
     test: 'UAT-15 (human half) — taking the wheel and handing it back is visible and matches reality',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1142',
-    until: '2026-10-17',
+    until: '2026-10-24',
     note: 'Temporary quarantine: current CI live-browser human-control handover failure; ownership tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
   },
   {
     test: 'UAT-15 (agent half) — after you release, the agent acts with no take-over step and no prompt',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1142',
-    until: '2026-10-17',
+    until: '2026-10-24',
     note: 'Temporary quarantine: current CI live-browser agent handback failure; ownership tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
   },
   {
     test: 'D-106 — the same token URL opened as its own tab is refused, carries the isolation policy, and never renders the page',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1181',
-    until: '2026-10-17',
+    until: '2026-10-24',
     note: 'Temporary isolation-webkit-only quarantine: current CI D-106 top-level refusal failure. Chromium and Firefox remain enabled; security verification gap accepted, not evidence isolation works. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
-  },
-  {
-    test: 'W9 — reload does not restore the Browser panel',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/1325',
-    until: '2026-10-22',
-    note: 'Founder ruling 2026-10-15 (conclude the L1 stage-1 landing): non-showstopper live-browser case. Name-only workspace has no team under L1 (FR-048); the core_team fixture fix on work/omnipus-l1-e2e-w9w10 re-enables it after landing.',
-  },
-  {
-    test: 'W10 — Back then Forward follows the store, not a stale panel value',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/1325',
-    until: '2026-10-22',
-    note: 'Founder ruling 2026-10-15 (conclude the L1 stage-1 landing): non-showstopper live-browser case. Name-only workspace has no team under L1 (FR-048); the core_team fixture fix on work/omnipus-l1-e2e-w9w10 re-enables it after landing.',
   },
 ];
 
+
+// Extended 2026-10-17 by founder ruling (land-now batch): the six expiries lapsed at 2026-10-17T00:00Z and reddened all CI; renewal continues the existing quarantines unchanged under their issues.
 // ── Validation ──────────────────────────────────────────────────────────────────
 //
 // Runs at module load time. Any malformed SKIP_ALLOWLIST entry causes an

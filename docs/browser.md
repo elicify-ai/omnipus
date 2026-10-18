@@ -88,6 +88,7 @@ Other things to watch:
 - The operator setting `tools.browser.cache_trim_interval` controls how often closed browser profiles are swept. It does not bound a profile's size. A workspace driven continuously, with no idle gap, keeps growing its cache because Omnipus never trims a live browser.
 - Locked-down networks can block the live media stream. You get the error above, not a lower-quality fallback.
 - Sound starts muted. Click the mute button to hear the page.
+- Before the address bar opens an address, Omnipus checks where it leads, which needs a name lookup. It waits up to about 5 seconds for that check. The page is not opened, and the panel shows the reason as an error, when the lookup takes longer than that, when the address leads to a private or internal network address that an operator has not allowed, or when it is not an `http://` or `https://` address. While that check is running, pressing Enter on a new address replaces the one being checked, and if the browser switches to another tab before the check finishes, the address is not opened on the new tab; enter it again if you still want it there.
 - Your input pauses while the picture is not safe to click on — while the panel reconnects, resizes, or waits for the page to settle. A notice at the bottom says so, and input has its own Retry button when its connection drops.
 - Watching or closing the panel never stops the agent's run. Only the chat Stop button cancels a turn.
 
