@@ -1018,30 +1018,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		rec = running
 	}
 
-	if placeErr := al.placeSavedWakeAtEntry(ctx, ts, messageID, saved); placeErr != nil {
+	if consumeErr := al.consumeSteeredWake(ctx, ts, store, sessionID, messageID, marker, rec.AgentID, saved); consumeErr != nil {
 		abort()
-		return "", placeErr
-	}
-
-	// The consumed marker and the acknowledgement are written only once the
-	// turn is certain to run: a wake refused above must leave its entry
-	// pending for I-6's Revive (FR-B-013), never swallow it. A saved wake
-	// input's placement above already wrote this same marker and ack; one
-	// logical event keeps exactly one durable consumption marker.
-	if !saved {
-		if appendErr := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
-			ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
-			Content: marker, AgentID: rec.AgentID, Timestamp: time.Now().UTC(),
-		}); appendErr != nil {
-			abort()
-			return "", fmt.Errorf("steer: wake: append consumed marker: %w", appendErr)
-		}
-	}
-	if inbox := al.GetMessageInboxStore(); inbox != nil && !saved {
-		if ackErr := inbox.Ack(sessionID, []string{messageID}); ackErr != nil {
-			abort()
-			return "", fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, ackErr)
-		}
+		return "", consumeErr
 	}
 	defer release()
 
@@ -1061,6 +1040,31 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	rootExecution.recordTurnOutcome(err)
 	return result.finalContent, err
+}
+
+// consumeSteeredWake writes the wake's one durable consumption marker and its
+// inbox acknowledgement, only once the turn is certain to run: a wake refused
+// earlier must leave its entry pending for I-6's Revive (FR-B-013), never
+// swallow it. A saved wake input is placed here, and its placement writes
+// that same marker and ack, so one logical event keeps exactly one marker.
+func (al *AgentLoop) consumeSteeredWake(ctx context.Context, ts *turnState, store *session.UnifiedStore,
+	sessionID, messageID, marker, agentID string, saved bool,
+) error {
+	if saved {
+		return al.placeSavedWakeAtEntry(ctx, ts, messageID, saved)
+	}
+	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+		ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
+		Content: marker, AgentID: agentID, Timestamp: time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("steer: wake: append consumed marker: %w", err)
+	}
+	if inbox := al.GetMessageInboxStore(); inbox != nil {
+		if err := inbox.Ack(sessionID, []string{messageID}); err != nil {
+			return fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, err)
+		}
+	}
+	return nil
 }
 
 // admitOrdinaryRootWake admits the wake of an ordinary root as an ordinary
