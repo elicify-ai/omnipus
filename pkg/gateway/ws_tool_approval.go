@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"time"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
@@ -43,8 +44,8 @@ import (
 const approvalChainMaxHops = 16
 
 // Wire maxLength limits of the approval carriers (contracts/asyncapi.yaml,
-// ToolApprovalRequiredFrame / SessionStatePendingApproval). A longer value is
-// omitted rather than emitted schema-invalid.
+// ToolApprovalRequiredFrame / SessionStatePendingApproval), in characters. A
+// longer value is omitted rather than emitted schema-invalid.
 const (
 	approvalWorkspaceIDMaxLen = 128
 	approvalRootSessionMaxLen = 255
@@ -116,6 +117,14 @@ func (h *WSHandler) approvalSessionContext(sessionID string) approvalContext {
 	return fallback(sid, "parent chain longer than the hop bound", nil)
 }
 
+// withinChars reports whether s fits a contract maxLength. JSON Schema and
+// the generated validators count characters, not UTF-8 bytes: a valid
+// 80-character non-ASCII room name makes a "for group" label of well over 200
+// bytes that the contract still accepts (gate round 1, architect F3 / SF-06).
+func withinChars(s string, max int) bool {
+	return utf8.RuneCountInString(s) <= max
+}
+
 // rootSessionField returns the wire root_session_id: omitted (nil) when the
 // root is the acting session itself or too long for the schema (K7).
 func (c approvalContext) rootSessionField(actingSessionID string) *string {
@@ -146,7 +155,7 @@ func (h *WSHandler) approvalActingAgentName(agentID string) *string {
 		return nil
 	}
 	name, ok := reg.GetAgentName(agentID)
-	if !ok || name == "" || len(name) > approvalActingNameMaxLen {
+	if !ok || name == "" || !withinChars(name, approvalActingNameMaxLen) {
 		return nil
 	}
 	return &name
@@ -445,7 +454,7 @@ func approvalRoomRef(e *approvalEntry) *generated.RoomRef {
 // <Agent>" for a turn that consumed a peer request. Absent for a plain web
 // turn, or when longer than the schema allows.
 func approvalOriginLabel(e *approvalEntry) *string {
-	if e == nil || e.OriginLabel == "" || len(e.OriginLabel) > approvalOriginLabelMaxLen {
+	if e == nil || e.OriginLabel == "" || !withinChars(e.OriginLabel, approvalOriginLabelMaxLen) {
 		return nil
 	}
 	l := e.OriginLabel
