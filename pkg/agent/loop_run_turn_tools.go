@@ -1363,6 +1363,12 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// field, not a second discriminator: two independently-computed
 	// answers to "is anyone there" would eventually disagree.
 	execCtx = tools.WithAutoDenyAsk(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk)
+	if ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk && ex.rx.rr.rq.ri.rf.rt.ts.opts.askRefusalReason == autoDenyTaskPlanReason {
+		// #1263 R4 / gate round 1 SF-03: a tool that refuses its OWN
+		// escalation (the shell's pre-flights) refuses with the task/plan
+		// reason, and the loop settles it as the canonical refusal below.
+		execCtx = tools.WithAskRefusalReason(execCtx, autoDenyTaskPlanReason)
+	}
 	if ex.shellModePin != "" {
 		execCtx = withPinnedShellMode(execCtx, ex.shellModePin)
 	}
@@ -1397,6 +1403,15 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurn(ex.rx.rr.rq.ri.rf.rt.ts, "after_tool_exec", hardInterruptAbortReason)
 		ex.ret0 = agentLoopRunTurnToolsReturn
 		return agentLoopRunTurnToolsExecuteReturn
+	}
+
+	if ex.toolResult != nil && ex.toolResult.IsError && errors.Is(ex.toolResult.Err, tools.ErrUnattendedAskRefused) {
+		// The tool refused its own escalation because nobody can approve it
+		// in this task or plan chain: settle it exactly like an Ask call the
+		// loop refused (fixed model message, transcript row, audit pair —
+		// #1263 R4, gate round 1 SF-03), not as an ordinary tool error.
+		ex.releaseAsyncCallback()
+		return ex.autoDenyHeadlessAsk(tc)
 	}
 
 	if ex.rx.rr.rq.ri.rf.rt.al.hooks != nil {

@@ -364,8 +364,9 @@ func (t *ExecTool) requestRuleApproval(
 		// ToolApprovalTimeout — the SAME posture loop_run_turn_tools.go's
 		// classic ask-policy branch already applies via ts.opts.AutoDenyAsk,
 		// now extended to this ADR-092 call site.
-		t.emitApprovalDecision(ctx, sessionID, agentID, command, "rule_ask", false, headlessShellDenyReason, false)
-		return false, headlessShellDenyReason
+		reason := unattendedShellDenyReason(ctx)
+		t.emitApprovalDecision(ctx, sessionID, agentID, command, "rule_ask", false, reason, false)
+		return false, reason
 	}
 	if t.approvalRequester == nil {
 		t.emitApprovalDecision(ctx, sessionID, agentID, command, "rule_ask", false, "no_approver_configured", false)
@@ -428,6 +429,29 @@ func preflightDenialMessage(kind, reason string) string {
 // prompt... is auto-DENIED headless, with a clear error."
 const headlessShellDenyReason = "auto-denied: no operator attached to this headless/scheduled run to approve it"
 
+// unattendedShellDenyReason is the reason an unattended turn's shell
+// escalation is refused with: the turn's own stamped refusal reason (a task
+// or plan chain, #1263 R4), else the headless/scheduled text above.
+func unattendedShellDenyReason(ctx context.Context) string {
+	if reason := ToolAskRefusalReason(ctx); reason != "" {
+		return reason
+	}
+	return headlessShellDenyReason
+}
+
+// shellDenialResult is the ErrorResult for a refused shell escalation. When
+// the refusal is the turn's stamped unattended reason, the result is marked
+// ErrUnattendedAskRefused so the agent loop settles it as its one canonical
+// task/plan refusal (gate round 1, SF-03); every other refusal is the plain
+// error result it always was.
+func shellDenialResult(ctx context.Context, reason, message string) *ToolResult {
+	result := ErrorResult(message)
+	if stamped := ToolAskRefusalReason(ctx); stamped != "" && reason == stamped {
+		result.Err = ErrUnattendedAskRefused
+	}
+	return result
+}
+
 // requestPreflightApproval is FR-039's third new CheckGrantOrRequestApproval
 // call site: a D7 or D8 pre-flight verdict needs more than the sandbox's
 // current grant already covers.
@@ -440,7 +464,7 @@ const headlessShellDenyReason = "auto-denied: no operator attached to this headl
 func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agentID, toolCallID, command, kind, note string, hosts []string) (approved bool, reason string, recordGrant bool) {
 	if ToolAutoDenyAsk(ctx) {
 		// Finding #7: see headlessShellDenyReason's doc comment.
-		return false, headlessShellDenyReason, false
+		return false, unattendedShellDenyReason(ctx), false
 	}
 	if t.approvalRequester == nil {
 		return false, "no_approver_configured", false
@@ -520,7 +544,7 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 		// there is nothing to persist either way here.
 		t.emitApprovalDecision(ctx, sessionID, agentID, command, "fs_preflight_blind", approved, reason, false)
 		if !approved {
-			return nil, ErrorResult(preflightDenialMessage("filesystem", reason))
+			return nil, shellDenialResult(ctx, reason, preflightDenialMessage("filesystem", reason))
 		}
 		return t.approvalGrants.PathGrantsFor(sessionID, agentID), nil
 	}
@@ -559,7 +583,7 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 		// emits the FR-032(c) shell.grant_recorded event.
 		t.emitApprovalDecision(ctx, sessionID, agentID, command, "fs_preflight", approved, reason, recordGrant)
 		if !approved {
-			return nil, ErrorResult(preflightDenialMessage("filesystem", reason))
+			return nil, shellDenialResult(ctx, reason, preflightDenialMessage("filesystem", reason))
 		}
 		grant := fspolicy.PathGrant{Path: resolved, Access: op.Access}
 		if recordGrant {
@@ -672,7 +696,7 @@ func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, session
 	// fix, 2026-09-24).
 	t.emitApprovalDecision(ctx, sessionID, agentID, command, "network_preflight", approved, reason, recordGrant)
 	if !approved {
-		return false, "", ErrorResult(preflightDenialMessage("network", reason))
+		return false, "", shellDenialResult(ctx, reason, preflightDenialMessage("network", reason))
 	}
 	if recordGrant {
 		// D-13 fix: "Always Allow adds them for this chat session only,
@@ -755,7 +779,7 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 	if mode != ShellModeGod && VerdictHasGenuineAskRuleMatch(verdict) && !RuleAskSettled(ctx) {
 		approved, reason := t.requestRuleApproval(ctx, sessionID, agentID, toolCallID, command, verdict)
 		if !approved {
-			return nil, ErrorResult(fmt.Sprintf(
+			return nil, shellDenialResult(ctx, reason, fmt.Sprintf(
 				"Command blocked: the ADR-092 D3 operator rule requires approval, and it was not approved (%s).", reason))
 		}
 	}
@@ -809,14 +833,14 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 		if _, ok := ClassifyPathOperations(command); !ok {
 			approved, reason := t.requestNoSandboxApproval(ctx, sessionID, agentID, toolCallID, command)
 			if !approved {
-				return nil, ErrorResult(noSandboxDenialMessage(reason))
+				return nil, shellDenialResult(ctx, reason, noSandboxDenialMessage(reason))
 			}
 			return result, nil
 		}
 		if !verdict.FullyAllowed() && !t.commandTriggersExistingPreflight(ctx, command, sessionID, agentID) {
 			approved, reason := t.requestNoSandboxApproval(ctx, sessionID, agentID, toolCallID, command)
 			if !approved {
-				return nil, ErrorResult(noSandboxDenialMessage(reason))
+				return nil, shellDenialResult(ctx, reason, noSandboxDenialMessage(reason))
 			}
 		}
 	}

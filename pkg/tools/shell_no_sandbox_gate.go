@@ -256,8 +256,9 @@ func (t *ExecTool) requestNoSandboxApproval(ctx context.Context, sessionID, agen
 		// dialog, so it is auto-denied rather than stalled — the same
 		// headless posture every other ADR-092 approval call site in this
 		// package already applies.
-		t.emitApprovalDecision(ctx, sessionID, agentID, command, "no_sandbox_ask", false, headlessShellDenyReason, false)
-		return false, headlessShellDenyReason
+		reason := unattendedShellDenyReason(ctx)
+		t.emitApprovalDecision(ctx, sessionID, agentID, command, "no_sandbox_ask", false, reason, false)
+		return false, reason
 	}
 	if t.approvalRequester == nil {
 		t.emitApprovalDecision(ctx, sessionID, agentID, command, "no_sandbox_ask", false, "no_approver_configured", false)
