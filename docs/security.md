@@ -296,7 +296,7 @@ On a host without an enforcing kernel sandbox (Windows, or the process sandbox n
 
 ### Approve a request
 
-When a tool needs your decision, an approval card appears in the chat the request belongs to, above the message box. A helper's request appears in the chat that started the helper, for example an Omnipus helper's in Omnipus's chat. Requests in one chat are shown one at a time; **+N more** indicates when more are queued. When requests are waiting in a chat you are not viewing, a notice at the top of the app says how many and where, for example "1 approval waiting in Mia's chat in Sales"; select **Go there** to open that chat. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
+When a tool needs your decision, an approval card appears in the chat the request belongs to, above the message box. A helper's request appears in the chat that started the helper, for example an Omnipus helper's in Omnipus's chat. Requests in one chat are shown one at a time; **+N more** indicates when more are queued. While a request waits, that main chat needs your attention: its agent's row in the sidebar shows the attention halo, and a collapsed workspace counts it among the main chats that need you (see [the sidebar](using-omnipus-ui.md#the-sidebar)). There is no separate notice; open that chat to answer. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
 
 | Button | What it does |
 |---|---|
