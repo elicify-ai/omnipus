@@ -59,10 +59,12 @@ func TestWU5PrivateSecret_ChannelTurn_DefaultOff_WebControlPresent(t *testing.T)
 	f.webTurn(sales, "check the weather in the app")
 	f.waitForCalls(sales, 2, "web control turn ran its command")
 
-	results := f.provider.toolResultsFor(sales)
+	// Count each tool call ONCE: every later prompt re-includes earlier
+	// results as history, so the raw walk multiplies one read by the number
+	// of subsequent model rounds.
+	results := f.provider.uniqueToolResultsFor(sales)
 	joined := strings.Join(results, "\n")
-	// Assert per-result rather than on the concatenation so the two origins
-	// cannot mask each other. lenRe extracts every `len=<digits>` read.
+	// lenRe extracts every `len=<digits>` read, one per origin turn.
 	var lenLines []string
 	for _, r := range results {
 		for _, m := range lenRe.FindAllStringSubmatch(r, -1) {

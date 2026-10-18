@@ -144,12 +144,6 @@ type wu5GatewayFixture struct {
 	home     string
 }
 
-// loopHome derives the loop's real data home from the session store (the same
-// derivation secret_request_wire uses for the store path).
-func (f *wu5GatewayFixture) loopHome() string {
-	return filepath.Dir(f.al.GetSessionStore().BaseDir())
-}
-
 func newWU5GatewayFixture(t *testing.T, bypass bool) *wu5GatewayFixture {
 	t.Helper()
 	withEdition(t, config.EditionCore)
@@ -174,7 +168,12 @@ func newWU5GatewayFixture(t *testing.T, bypass bool) *wu5GatewayFixture {
 			},
 		},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096, MaxToolIterations: 8},
+			// The PRODUCTION shape: Defaults.Home sits UNDER the data home
+			// (<OMNIPUS_HOME>/workspace). The loop's own home is
+			// Dir(Defaults.Home) (loop_construct.go) — the audit log's
+			// system/ directory — so a flat tmpDir here would put the audit
+			// log in tmpDir's PARENT.
+			Defaults: config.AgentDefaults{Home: filepath.Join(tmpDir, "workspace"), DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096, MaxToolIterations: 8},
 			List:     []config.AgentConfig{{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom}, {ID: "omnipus", Name: "Omnipus", Type: config.AgentTypeCore}},
 		},
 	}

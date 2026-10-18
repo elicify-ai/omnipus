@@ -12,6 +12,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestWU5PrivateSecret_AllChildPaths_NeverGatewayEnv is BDD-7.9 / US-7 AS-1 /
@@ -40,13 +42,21 @@ func TestWU5PrivateSecret_AllChildPaths_NeverGatewayEnv(t *testing.T) {
 	f.resumeAfterSubmit(submitted.Card.RequestId)
 
 	// Turn 1: foreground bash, background bash, and environment_setup's run.
-	// The background bash writes its report into the agent's own workspace
-	// (the exec tool's cwd root); the run reports its background session id,
-	// which turn 2 then polls and reads.
-	bgReport := filepath.Join(f.home, "agents", "mia", "bg-report.txt")
+	// The background bash is a REAL background call (run_in_background) and
+	// writes its report INSIDE the turn's working directory — the workspace
+	// work dir (<home>/workspaces/sales/work); a write outside it is refused
+	// by the workspace path guard. The run reports its background session
+	// id, which turn 2 then polls and reads.
+	workDir := filepath.Join(f.home, "workspaces", "sales", "work")
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+	bgReport := filepath.Join(workDir, "bg-report.txt")
 	f.provider.setScript(sales, []providers.LLMResponse{
 		wu5Bash(`printf 'fg=%s' "${#WEATHER_TOKEN}"`),
-		wu5Bash(`printf 'bg=%s' "${#WEATHER_TOKEN}" > ` + bgReport),
+		{ToolCalls: []providers.ToolCall{{ID: "wu5-bash-bg", Type: "function", Name: "bash",
+			Arguments: map[string]any{
+				"command":           `printf 'bg=%s' "${#WEATHER_TOKEN}" > ` + bgReport,
+				"run_in_background": true,
+			}}}},
 		{ToolCalls: []providers.ToolCall{{ID: "wu5-es-run", Type: "function", Name: "environment_setup",
 			Arguments: map[string]any{"action": "run", "purpose": "probe the install child env",
 				"command": `printf 'es=%s' "${#WEATHER_TOKEN}"`}}}},
@@ -64,9 +74,10 @@ func TestWU5PrivateSecret_AllChildPaths_NeverGatewayEnv(t *testing.T) {
 	require.Equal(t, "bg=16", string(bgData), "background bash sees the selected value (BDD-7.9)")
 
 	// Turn 2: poll and read the environment_setup background session. The
-	// session id comes from the run result recorded above (test plumbing —
-	// the run's own notice carries it, exactly what the model would use).
-	setupSession := extractWU5SetupSession(t, results)
+	// session id comes from the run's OWN tool result (keyed by its call id
+	// — the background bash result is ExecResponse JSON too, so the id is
+	// what tells the two apart).
+	setupSession := extractWU5SetupSession(t, f.provider.resultForCall(sales, "wu5-es-run"))
 	require.NotEmpty(t, setupSession, "the environment_setup run must report its background session id")
 	f.provider.setScript(sales, []providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{{ID: "wu5-es-poll", Type: "function", Name: "environment_setup",
@@ -92,22 +103,15 @@ func TestWU5PrivateSecret_AllChildPaths_NeverGatewayEnv(t *testing.T) {
 }
 
 // extractWU5SetupSession pulls the environment_setup background session id
-// out of a run result (test plumbing: the run notice carries it, and that id
-// is exactly what the poll/read calls address).
-func extractWU5SetupSession(t *testing.T, results string) string {
+// out of the run's own tool result (test plumbing): the result leads with
+// the session JSON (tools.ExecResponse), and that id is exactly what the
+// poll/read calls address.
+func extractWU5SetupSession(t *testing.T, runResult string) string {
 	t.Helper()
-	for _, line := range strings.Split(results, "\n") {
-		if !strings.Contains(line, "setup-") {
-			continue
-		}
-		i := strings.Index(line, "setup-")
-		rest := line[i:]
-		end := strings.IndexAny(rest, " \t\"'},;")
-		if end > 0 {
-			return rest[:end]
-		}
-	}
-	return ""
+	dec := json.NewDecoder(strings.NewReader(runResult))
+	var resp tools.ExecResponse
+	require.NoError(t, dec.Decode(&resp), "the run result must lead with the session JSON; got %q", runResult)
+	return resp.SessionID
 }
 
 // TestWU5PrivateSecret_DocumentRuntime_NamesSurvive is BDD-7.10 / R2-MAJ-007
