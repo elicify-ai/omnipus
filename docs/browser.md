@@ -76,7 +76,6 @@ Every failure is shown as an error with its reason and a Retry button.
 |---|---|
 | Live video is turned off for this installation | An operator disabled it; they can enable it in Settings |
 | Live video is not available because the managed Chrome build cannot capture the browser tab | Run the gateway installer to download a full Chrome build, or set `tools.browser.exec_path` to a local full Chrome binary. See gateway logs for the exact cause |
-| Live video isn't available in this lite build | This install was built without video |
 | Live video is already in use by another agent | Close that other live view, then Retry |
 | The browser's video capture didn't start in time | Retry; restart the live view if it repeats |
 | Live video connection failed | Retry; reload the page if it repeats |
