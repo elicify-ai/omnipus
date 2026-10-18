@@ -151,11 +151,29 @@ func (h *issue1296Harness) stop(t *testing.T) {
 	h.cancel = nil
 }
 
-func (h *issue1296Harness) awaitTurn(t *testing.T, sessionID string) {
+// issue1296AdmittedReceiverTurns is the exact number of receiver turns one
+// admitted peer request produces in this fixture: the request turn itself plus
+// exactly ONE reminder turn. Every scripted reply is plain text — the provider
+// never calls answer_request — so when the request turn ends,
+// pkg/agent/request_reminder.go::remindUnansweredRequests publishes its one
+// per-request reminder inbound, the receiver runs a second turn, and that turn
+// finds nothing left to remind (the reminder is sent once per request). An
+// admitted request is therefore only settled once BOTH turns have ended; a
+// receiver-transcript snapshot taken before that races the reminder turn
+// (GH CI on PR #1345: the deny path's before==after saw the previous allowed
+// request's reminder turn as one extra assistant entry,
+// TurnID policy-receiver-turn-3, ~31 ms after the request turn).
+const issue1296AdmittedReceiverTurns = 2
+
+// awaitTurns waits, on the same real turn-event stream awaitTurn always used,
+// until exactly want turns of sessionID have ended completed. It fails rather
+// than tolerates fewer: in this fixture an admitted request owes exactly
+// issue1296AdmittedReceiverTurns completed receiver turns.
+func (h *issue1296Harness) awaitTurns(t *testing.T, sessionID string, want int) {
 	t.Helper()
 	deadline := time.NewTimer(busDeliveryTimeout)
 	defer deadline.Stop()
-	for {
+	for seen := 0; seen < want; {
 		select {
 		case event, ok := <-h.events.C:
 			require.True(t, ok, "turn event stream must stay connected")
@@ -164,16 +182,22 @@ func (h *issue1296Harness) awaitTurn(t *testing.T, sessionID string) {
 			}
 			end, typed := event.Payload.(agent.TurnEndPayload)
 			require.True(t, typed)
-			if end.SessionID == sessionID {
-				require.Equal(t, agent.TurnEndStatusCompleted, end.Status, "real policy-probe turn must complete")
-				return
+			if end.SessionID != sessionID {
+				continue
 			}
+			require.Equal(t, agent.TurnEndStatusCompleted, end.Status, "real policy-probe turn must complete")
+			seen++
 		case runErr := <-h.runDone:
 			t.Fatalf("issue1296 fixture: loop exited before the next decision: %v", runErr)
 		case <-deadline.C:
-			t.Fatal("issue1296 fixture: no completed real turn; not RED evidence about permissions")
+			t.Fatalf("issue1296 fixture: %d of %d expected completed turns arrived; not RED evidence about permissions", seen, want)
 		}
 	}
+}
+
+func (h *issue1296Harness) awaitTurn(t *testing.T, sessionID string) {
+	t.Helper()
+	h.awaitTurns(t, sessionID, 1)
 }
 
 func (h *issue1296Harness) peerSend(t *testing.T, content string) *tools.ToolResult {
@@ -189,7 +213,10 @@ func (h *issue1296Harness) peerSend(t *testing.T, content string) *tools.ToolRes
 	result := tool.Execute(ctx, map[string]any{"workspace_id": issue1296Workspace, "agent_id": "policy-receiver", "content": content})
 	require.NotNil(t, result)
 	if !result.IsError {
-		h.awaitTurn(t, h.recvID)
+		// The request turn alone is not settled: its one reminder turn is
+		// still to come, and the next receiver-transcript snapshot must not
+		// race it.
+		h.awaitTurns(t, h.recvID, issue1296AdmittedReceiverTurns)
 	}
 	return result
 }
