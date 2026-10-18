@@ -52,7 +52,7 @@ const (
 	wu6VariableName = "WEATHER_TOKEN"
 	wu6PrivateValue = "WU6_PRIVATE_V1_VALUE"
 	wu6PrivateAlt   = "WU6_PRIVATE_V2_VALUE"
-	wu6Owner        = "wu6-owner"
+	wu6Owner        = "_dev_bypass" // the identity DevModeBypass authenticates as (auth.go); the session ancestry owner must match it
 )
 
 // wu6ScriptedProvider returns a fixed script of responses per transcript

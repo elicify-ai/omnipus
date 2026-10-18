@@ -17,7 +17,9 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -36,6 +38,18 @@ import (
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// seedWU5WorkspaceMembership writes a real workspace membership file (the
+// shape pkg/workspace.FindForAgent reads), claiming the given agents for the
+// workspace — the resume/continuation turn admission resolves membership.
+func seedWU5WorkspaceMembership(t *testing.T, home, workspace string, agentIDs ...string) {
+	t.Helper()
+	dir := filepath.Join(home, "workspaces")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	team, err := json.Marshal(map[string]any{"id": workspace, "core_team": agentIDs})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, workspace+".json"), team, 0o644))
+}
 
 // wu5RequestPrivateSecret is the model's real request_secret call for the
 // agent-private kind: purpose + the variable name (US-7; the recipient is the
@@ -90,10 +104,14 @@ func newWU5ScriptedProvider() *wu5ScriptedProvider {
 }
 
 // setScript installs the response sequence for one transcript session.
+// setScript installs the response sequence for one transcript session and
+// RESTARTS that session's call counter — every phase of a test scripts its
+// own segment from index 0, never inheriting an earlier phase's offset.
 func (p *wu5ScriptedProvider) setScript(sessionID string, script []providers.LLMResponse) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.scripts[sessionID] = script
+	p.calls[sessionID] = 0
 }
 
 func (p *wu5ScriptedProvider) GetDefaultModel() string { return "test-model" }
@@ -183,6 +201,10 @@ func newWU5FixtureOpts(t *testing.T, provisionDocRuntime bool) *wu5Fixture {
 		_, err = documentruntime.ProvisionFirstParty(layout)
 		require.NoError(t, err)
 	}
+	// Membership for the workspaces the tests use (the resume/continuation
+	// turn admission resolves the agent's workspace membership).
+	seedWU5WorkspaceMembership(t, home, "sales", "mia")
+	seedWU5WorkspaceMembership(t, home, "marketing", "mia")
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
 	cfg := &config.Config{Agents: config.AgentsConfig{
@@ -209,8 +231,11 @@ func newWU5FixtureOpts(t *testing.T, provisionDocRuntime bool) *wu5Fixture {
 	require.NoError(t, store.UnlockWithKey(bytes.Repeat([]byte{0x39}, 32)))
 	t.Cleanup(store.Close)
 	al.WireSysagentDeps(&systools.Deps{Home: home, GetCfg: al.GetConfig, CredStore: store})
-	registerAgent(t, al, home, "mia", provider)
-	registerAgent(t, al, home, "ray", provider)
+	// The loop-wired agents (from cfg.Agents.List, carrying the loop's exec
+	// deps and full tool surface) run the turns with the fixture's scripted
+	// provider — deliberately NO registerAgent here: a bare AgentInstance
+	// replacement drops request_secret and the loop's exec-tool deps and
+	// makes every turn refuse mid-turn.
 	return &wu5Fixture{t: t, al: al, bus: msgBus, provider: provider, home: home}
 }
 

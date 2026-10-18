@@ -80,7 +80,7 @@ func TestWU5PrivateSecret_AllChildPaths_NeverGatewayEnv(t *testing.T) {
 		wu5Stop("setup child checked"),
 	})
 	f.webTurn(sales, "read the install output")
-	f.waitForCalls(sales, 9, "the setup child was polled and read")
+	f.waitForCalls(sales, 5, "the setup child was polled and read")
 
 	results = strings.Join(f.provider.toolResultsFor(sales), "\n")
 	require.Contains(t, results, "es=16",
@@ -147,7 +147,7 @@ func TestWU5PrivateSecret_DocumentRuntime_NamesSurvive(t *testing.T) {
 		wu5Stop("document runtime checked"),
 	})
 	f.webTurn(sales, "print the document runtime environment")
-	f.waitForCalls(sales, 4, "the document-runtime command ran")
+	f.waitForCalls(sales, 2, "the document-runtime command ran")
 
 	results := strings.Join(f.provider.toolResultsFor(sales), "\n")
 	require.Contains(t, results, "tok=16",

@@ -49,16 +49,15 @@ func TestWU5PrivateSecret_ChannelTurn_DefaultOff_WebControlPresent(t *testing.T)
 	f.resumeAfterSubmit(submitted.Card.RequestId)
 
 	// Channel-triggered turn: command runs, value unset (flag default off).
-	// Web control turn: value present. Same session, same variable.
-	f.provider.setScript(sales, []providers.LLMResponse{
-		wu5Bash(ownerLenCommand), // consumed by the channel-triggered turn
-		wu5Bash(ownerLenCommand), // consumed by the web control turn
-		wu5Stop("checked both origins"),
-	})
+	// Web control turn: value present. Same session, same variable; each
+	// phase scripts its own segment (setScript restarts the session's call
+	// counter).
+	f.provider.setScript(sales, []providers.LLMResponse{wu5Bash(ownerLenCommand), wu5Stop("channel check done")})
 	f.channelTurn(sales, "check the weather for me")
 	f.waitForCalls(sales, 2, "channel-triggered turn ran its command")
+	f.provider.setScript(sales, []providers.LLMResponse{wu5Bash(ownerLenCommand), wu5Stop("web check done")})
 	f.webTurn(sales, "check the weather in the app")
-	f.waitForCalls(sales, 3, "web control turn ran its command")
+	f.waitForCalls(sales, 2, "web control turn ran its command")
 
 	results := f.provider.toolResultsFor(sales)
 	joined := strings.Join(results, "\n")
