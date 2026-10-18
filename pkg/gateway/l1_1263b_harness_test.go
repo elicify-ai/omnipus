@@ -183,6 +183,10 @@ func newL11263Harness(t *testing.T, auto bool, policy config.ToolPolicy, scripts
 	ws := newWSHandler(msgBus, al, "http://localhost:3000")
 	ws.approvalRegV2 = reg
 	al.SetToolApprover(newPolicyApproverAdapter(reg, ws))
+	// Production wires the registry's resolution listener to the WS handler
+	// (gateway_boot.go: setResolutionListener(broadcastToolApprovalResolved));
+	// without it no tool_approval_resolved frame ever reaches the tab.
+	reg.setResolutionListener(ws.broadcastToolApprovalResolved)
 	tab := apprResAttachConns(t, ws, 1)[0]
 	tab.sendCh = make(chan []byte, 256)
 	workDir, err := workspace.EnsureWorkDir(home, testHarnessWorkspaceMembershipID)
