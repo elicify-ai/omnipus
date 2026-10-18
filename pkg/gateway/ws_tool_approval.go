@@ -74,21 +74,32 @@ func (h *WSHandler) approvalSessionContext(sessionID string) approvalContext {
 	if h == nil || h.agentLoop == nil || sessionID == "" {
 		return out
 	}
+	// fallback keeps the card in the acting chat (never nowhere) and says so
+	// loudly: it only happens on an unreadable or corrupt chain, never on a
+	// normal path, and a helper's card then shows outside its root chat.
+	fallback := func(hopID, reason string, err error) approvalContext {
+		attrs := []any{"acting_session_id", sessionID, "failing_session_id", hopID, "reason", reason}
+		if err != nil {
+			attrs = append(attrs, "error", err)
+		}
+		slog.Error("ws: approval root chat could not be derived; the card is shown in the acting session's chat instead", attrs...)
+		return approvalContext{WorkspaceID: out.WorkspaceID, RootSessionID: sessionID}
+	}
 	seen := make(map[string]struct{}, 4)
 	sid := sessionID
 	workspaceKnown := false
 	for hop := 0; hop < approvalChainMaxHops && sid != ""; hop++ {
 		if _, dup := seen[sid]; dup {
-			return approvalContext{WorkspaceID: out.WorkspaceID, RootSessionID: sessionID}
+			return fallback(sid, "parent chain has a cycle", nil)
 		}
 		seen[sid] = struct{}{}
 		store := h.resolveSessionStore(sid)
 		if store == nil {
-			return approvalContext{WorkspaceID: out.WorkspaceID, RootSessionID: sessionID}
+			return fallback(sid, "session not found in any store", nil)
 		}
 		meta, err := store.GetMeta(sid)
 		if err != nil || meta == nil {
-			return approvalContext{WorkspaceID: out.WorkspaceID, RootSessionID: sessionID}
+			return fallback(sid, "session meta unreadable", err)
 		}
 		if !workspaceKnown && meta.WorkspaceID != "" {
 			workspaceKnown = true
@@ -102,8 +113,7 @@ func (h *WSHandler) approvalSessionContext(sessionID string) approvalContext {
 		}
 		sid = meta.ParentSessionID
 	}
-	// Hop bound hit: the root is unknown; render in the acting chat.
-	return approvalContext{WorkspaceID: out.WorkspaceID, RootSessionID: sessionID}
+	return fallback(sid, "parent chain longer than the hop bound", nil)
 }
 
 // rootSessionField returns the wire root_session_id: omitted (nil) when the
