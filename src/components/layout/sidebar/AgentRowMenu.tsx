@@ -146,7 +146,7 @@ export function AgentRowMenu({
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={`Remove ${agentName} from ${workspace.name}?`}
-        description={`${agentName} leaves this workspace's team. ${agentName} stays in the Agents list and in other workspaces; chat history is kept.`}
+        description={`${agentName} leaves only this workspace's team; the agent still exists, stays in its other workspaces and keeps its chat history.`}
         confirmLabel="Remove"
         destructive
         onConfirm={confirmRemove}
