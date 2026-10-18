@@ -127,13 +127,65 @@ live navigation). WU-10's Team suite (`WorkspaceTeamTab.omnipus.test.tsx`,
 `AddAgentPicker*.test.tsx`, `TeamAddAgent.disclosure.test.tsx`, …) tests surviving
 surfaces and stays.
 
+### GREEN follow-up — round 2 retirement (stream C, after 88c63303e + 9871cbc66)
+
+The dev's from-scratch gate (`coordination/wu11-spa/gates-r2/`) left typecheck red in 4
+test files and 12 unit files failing at runtime, plus 9 e2e sites navigating retired
+routes. Disposition below; receipts in `tests/l1-wu11-red/retire2-logs/`.
+
+Deleted (spec §9.4 — the subject is the removed feature itself):
+
+| File/case | Spec line that retires it |
+|---|---|
+| `src/lib/nav/adminMainSession.test.ts` (whole file: `adminMainSessionIdOfWorkspace`, the Admin roster row, the Admin named-gap) | FR-008 (Admin UI + identity branches removed); the seam reader is deleted |
+| `src/hooks/useChatAgents.adminStandalone.test.ts` (whole file: the `isStandaloneChatOperator` predicate) | FR-008 (Admin identity branch removed with GREEN) |
+| `adminMainSession` describe's Admin cases inside it — see file deletion above | FR-008 |
+| `eligibleMains.test.ts` "default-workspace Admin without a seam id is a named gap" | FR-008 (no adminDefault input exists; no gap can be produced) |
+| `eligibleMains.test.ts` "N10 other workspace hides Admin even when the roster lists Admin" | FR-008 (Admin workspace-scoping was an identity branch of the retired entry; retirement is enforced once at eligibility — `lib/omnipus.ts::isTeamEligible` → `lib/agentKind.ts::isChatEligibleAgent` — and the roster renders membership) |
+| `WorkspaceAgentList.rowMenu.test.tsx` "the Admin row gets History and Edit but no Hide…" | FR-008 (no Admin row renders; the shared member-menu contract stays pinned by the D1/D2/D3/D5 and locked-default cases) |
+| `WorkspaceAgentList.rowMenu.test.tsx` "opens Admin's GLOBAL profile…" | FR-008 (the `isAdminRow` global-profile branch is removed; every surviving row opens the editor with its workspace) |
+| `workspaceRoster.hidden.test.ts` "Admin's default-workspace row is never hidden…" | FR-008 (no Admin row exists in the visible/hidden split) |
+| e2e `uat-shell-and-screens.spec.ts` Agents row of the SCREENS walk | FR-108 (screen retired; the walk covers surviving screens) |
+
+Retargeted (a still-valid rule buried in a retired subject — same strength, new pole):
+
+| File/case | Before → After | Spec line |
+|---|---|---|
+| `-wu11-add-agent-entrypoints.test.tsx` (keep-green guard) | seeded/asserted `createAgentModalOpen: false` → asserts `Object.hasOwn(useUiStore.getState(), 'createAgentModalOpen')` is false | FR-108 (key removed; same "no manual create opens" behaviour) |
+| `WorkspaceTeamTab.omnipus.test.tsx` | `createAgentModalOpen` seeded ×1, asserted ×2 → same `Object.hasOwn` absence assertions | FR-108 |
+| `sessionCoreSeam.test.ts` | passed `adminDefault: null` in two `EligibleInput` literals → key dropped (property removed from the wire-of-tests type) | FR-008 |
+| `avatarSurfaceSweep.test.tsx` "WorkspaceAgentList draws the Admin mark from the workspace-carried main" → "…draws the member mark from the agent figure" | Admin-row avatar pin → the same figure-not-initial-circle rule on an ordinary member row (real roster: core_team + validated main) | FR-008; avatar rule unchanged |
+| `Sidebar.agentRows.test.tsx` "N10 Admin is a row in the default workspace and not in Product launch" → "N10 a retired Admin agent in the cache is never a row in any workspace" | default-workspace Admin row present, absent elsewhere → Admin absent from BOTH workspaces even on a stale cache (kept Judge/worker exclusions; stale fixture deliberately kept) | FR-008 |
+| `Sidebar.m5.test.tsx` "Agents library link has aria-label" → "the surviving global-library links carry accessible names and the retired Agents entry is gone" | Agents link name pin → Skills & Tools + Connectors names, Agents link `null` | FR-108 |
+| `Sidebar.m5.test.tsx` "library links are NOT active at /" | Agents + Connectors aria-current null → Skills & Tools + Connectors aria-current null | FR-108 (route-accuracy rule pinned on survivors) |
+| `Sidebar.test.tsx` "renders the Workspaces section + Assets" | `getByText('Agents')` present → `queryByText('Agents')` null, Skills & Tools + Connectors present | FR-108 |
+| `WorkspaceAgentList.rowMenu.test.tsx` Remove-dialog copy | `toContain('Agents list')` + `toContain('chat history')` → the exact new sentence pinned: "Mia leaves only this workspace's team; the agent still exists, stays in its other workspaces and keeps its chat history." (matches `docs/using-omnipus-ui.md`'s Remove paragraph; commit 9871cbc66) | FR-108; docs match |
+| `teamGraphModel.test.ts` "refuses Admin and hidden engine agents" → "refuses hidden engine agents" | admin refusal (id can no longer exist) dropped; judge/plansupervisor refusal kept | FR-008 |
+| `useChatAgents.test.ts` "includes Admin but excludes a retired locked Ray record" → "excludes retired built-in records (Admin, Ray) from chatAgents by identity" | `chatAgents === ['admin']` → `chatAgents === []` on the same stale cache | FR-008 |
+| `useSlashMenu.mentionAdmin.test.tsx` "still lists Admin in the DEFAULT workspace" → "lists no Admin in the DEFAULT workspace either (FR-008)" | `['admin', 'mia']` → `['mia']` + `@admin` matches nothing | FR-008 |
+| `eligibleMains.test.ts` "BDD-01.2 / N10 default workspace keeps Mia and validated Admin only" → "…keeps Mia; a cached Admin never becomes a row" | expected rows dropped the Admin entry; `adminDefault` input removed from the local type + all literals | FR-008 |
+| e2e `accessibility.spec.ts` ROUTES | `'/#/agents'` removed from the sweep | FR-108 |
+| e2e `nav-wave1.spec.ts` "a built-in agent shows locked figure…" | `/#/agents` → agent-card click replaced by default-workspace Team panel → card actions → Edit (same locked-identity editor assertions unchanged) | FR-108 |
+| e2e `sidebar-agent-row-menu.spec.ts` D4 survival check | Agents-list visibility check → REST read `GET /api/v1/agents/{id}` returns the agent (D4: removal is not deletion) | FR-108; D4 unchanged |
+| e2e `bug-regression.spec.ts` ×2 navigate-away-and-back replay tests | away surface `/#/agents` → `/#/skills` | FR-108 |
+| e2e `csp-assumptions.spec.ts` inline-style sweep | `/#/agents` → `/#/skills` | FR-108 |
+| e2e `auth.spec.ts` dev-mode banner persistence | navigation target `/#/agents` → `/#/skills` | FR-108 |
+| e2e `sidebar.spec.ts` LIBRARY_NAV_ITEMS | Agents entry removed; every surviving nav item still routes | FR-108 |
+
+Kept after verification: `src/lib/api/configuration.test.ts`'s `createAgent` case — the
+REST client stays (FR-108's "documented as a non-UI API"); 36/36 green.
+
 ## 5. Notes for GREEN and CHECK
 
 - `src/components/agents/CLAUDE.md` still documents "Creation has one path" via
   `CreateAgentWizard` and the built-in Mia/Jim/Ava/Admin roster — the module-doc update
   belongs to frontend-lead's GREEN (module CLAUDE.md is not a test file; listed here so
   it is not missed, together with its byte-identical AGENTS.md twin per
-  `scripts/check-agents-md-sync.sh`).
+  `scripts/check-agents-md-sync.sh`). UPDATE round 2: the dev's GREEN (88c63303e)
+  rewrote this module doc — the note is satisfied; retirement is now documented as
+  enforced once at eligibility (`lib/omnipus.ts::isTeamEligible` →
+  `lib/agentKind.ts::isChatEligibleAgent`), which is the design the round-2
+  eligibleMains deletion above relies on.
 - File B's no-importer invariant counts comment mentions on purpose (e.g.
   `src/components/ui/sheet.tsx:76`, `src/hooks/useCliDetect.ts:22`,
   `src/components/shared/AdvancedDisclosure.tsx:9`, `AgentProfile.tsx:355,2421`) — the

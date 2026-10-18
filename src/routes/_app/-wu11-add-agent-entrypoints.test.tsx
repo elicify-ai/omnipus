@@ -87,7 +87,9 @@ beforeEach(() => {
   useConnectionStore.setState({ connection: socket, isConnected: true, connectionError: null })
   useWorkspacesStore.setState({ activeWorkspaceId: 'sales' })
   useSessionStore.setState({ ...useSessionStore.getInitialState(), sessionByWorkspace: {} })
-  useUiStore.setState({ editAgentId: null, editAgentWorkspaceId: null, toasts: [], createAgentModalOpen: false })
+  // WU-11 GREEN: the create-modal store keys are removed (FR-108) — the guard
+  // asserts their absence below instead of seeding them.
+  useUiStore.setState({ editAgentId: null, editAgentWorkspaceId: null, toasts: [] })
   // useOpenOmnipus reads the workspace list from the query cache (the sidebar
   // keeps it warm); with no provider here that is the app singleton.
   queryClient.setQueryData(workspacesQueryKeys.list({ status: 'active' }), [DEFAULT, SALES])
@@ -115,7 +117,9 @@ function expectW1ForSales() {
     { type: 'attach_session', session_id: OMNIPUS_MAIN },
   ])
   expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('sales')
-  expect(useUiStore.getState().createAgentModalOpen).toBe(false)
+  // Same behaviour without the removed key (FR-108): no manual-create flow
+  // exists in the store for the entry point to open.
+  expect(Object.hasOwn(useUiStore.getState(), 'createAgentModalOpen')).toBe(false)
 }
 
 describe('WU-11 keep-green — every Add agent entry opens Omnipus with W1 (FR-045, FR-103, BDD-4.1, BDD-12.8)', () => {

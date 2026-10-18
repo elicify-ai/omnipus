@@ -268,13 +268,14 @@ describe('Sidebar — overlay rendering when open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // + an Assets section (Agents, Skills & Tools, Connectors, Library) + username trigger.
+    // + an Assets section (Skills & Tools, Connectors, Library) + username trigger.
     // library-spec.md D-7: "Library" renamed the SECTION to "Assets"; the new
     // nav entry (opens the Library panel) took the "Library" name instead.
+    // WU-11 (FR-108): the Agents entry is retired with the Agents screen.
     expect(screen.getByRole('group', { name: 'Workspaces' })).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Assets' })).toBeTruthy()
 
-    expect(screen.getByText('Agents')).toBeTruthy()
+    expect(screen.queryByText('Agents')).toBeNull()
     expect(screen.getByText('Skills & Tools')).toBeTruthy()
     expect(screen.getByText('Connectors')).toBeTruthy()
     expect(screen.getByTestId('sidebar-library-button')).toBeTruthy()

@@ -6,7 +6,8 @@
  * shows a quiet 'N hidden · Show' line") and ADR-hide-from-sidebar.md
  * §"SPA read path" ("compute signals/onCount/unknown over ALL rows, hidden
  * included ... Hiding removes a row, it does not mute the 'a main chat needs
- * you' signal") and §"Rules" ("Admin's row ... is never hidden").
+ * you' signal"). (The retired Admin row's never-hidden pin was deleted with
+ * the row — FR-008, WU-11 GREEN.)
  *
  * Same harness as workspaceRoster.attention.test.ts: a generated-shape
  * GET /sessions body through the real request path (generated Zod) and the
@@ -19,7 +20,6 @@ import { workspaceMains } from './workspaceRoster'
 
 const MIA_MAIN = 'main-ws1-mia'
 const JIM_MAIN = 'main-ws1-jim'
-const ADMIN_MAIN = 'main-ws1-admin'
 
 /** Full generated Session wire shape (Session.yaml required fields). */
 function wireMainSession(id: string, agentId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -39,7 +39,7 @@ function wireMainSession(id: string, agentId: string, overrides: Record<string, 
   }
 }
 
-function makeWorkspace(memberConfigs: Workspace['member_configs'], adminMain?: string): Workspace {
+function makeWorkspace(memberConfigs: Workspace['member_configs']): Workspace {
   return {
     id: 'ws-1',
     name: 'Alpha',
@@ -51,9 +51,6 @@ function makeWorkspace(memberConfigs: Workspace['member_configs'], adminMain?: s
     updated_at: '2025-01-01T00:00:00Z',
     revision: '0'.repeat(64),
     member_configs: memberConfigs,
-    // Admin's row projects only on the default workspace.
-    is_default: adminMain !== undefined,
-    ...(adminMain ? { admin_main_session_id: adminMain } : {}),
   }
 }
 
@@ -133,19 +130,8 @@ describe('workspaceMains splits hidden rows but keeps their attention (D5, ADR �
     expect(mains.visible).toEqual(mains.result.rows)
   })
 
-  it("Admin's default-workspace row is never hidden, even when a member is", async () => {
-    const sessions = await loadSessions([
-      wireMainSession(MIA_MAIN, 'mia', { needs_attention: false }),
-      wireMainSession(ADMIN_MAIN, 'admin', { needs_attention: false }),
-    ])
-    const workspace = makeWorkspace(
-      { mia: { main_session_id: MIA_MAIN, hidden_from_sidebar: true } },
-      ADMIN_MAIN,
-    )
-
-    const mains = workspaceMains(workspace, agents, sessions, 'fresh', [])
-
-    expect(mains.visible.map((row) => row.agentId)).toEqual(['admin'])
-    expect(mains.hidden.map((row) => row.agentId)).toEqual(['mia'])
-  })
+  // The "Admin's default-workspace row is never hidden" test was deleted with
+  // the Admin row itself (FR-008): no adminDefault input exists any more, so
+  // no Admin row can be part of the visible/hidden split; the split rule is
+  // pinned by the hidden-member cases above.
 })

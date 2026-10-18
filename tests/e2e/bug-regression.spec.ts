@@ -412,8 +412,9 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       // Capture the URL of the current session to return to it.
       const sessionURL = page.url()
 
-      // Navigate away.
-      await page.goto('/#/agents')
+      // Navigate away. (WU-11 FR-108: away-surface is a surviving library
+      // route — the retired /#/agents no longer navigates.)
+      await page.goto('/#/skills')
       await page.waitForLoadState('networkidle')
 
       // Navigate back to the session.
@@ -484,8 +485,8 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       const originalTexts = await assistantMessages(page).allTextContents()
       const sessionURL = page.url()
 
-      // Navigate away and back.
-      await page.goto('/#/agents')
+      // Navigate away and back. (WU-11 FR-108: surviving away-surface.)
+      await page.goto('/#/skills')
       await page.waitForLoadState('networkidle')
       await page.goto(sessionURL)
       await page.waitForLoadState('networkidle')

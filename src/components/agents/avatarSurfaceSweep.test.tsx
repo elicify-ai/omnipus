@@ -16,7 +16,7 @@ import { describe, expect, it, vi, beforeAll } from 'vitest'
 import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { Agent, Workspace } from '@/lib/api'
+import type { Agent, Session, Workspace } from '@/lib/api'
 import type { ChatMessage } from '@/store/chat'
 import type { TeamEditState } from '@/components/workspaces/team/teamGraphModel'
 import type { AgentActivityItem } from '@/hooks/useRunningActivity'
@@ -351,7 +351,10 @@ describe('surface sweep — sidebar', () => {
     expectNoInitialCircle(container, 'R')
   })
 
-  it('WorkspaceAgentList draws the Admin mark from the workspace-carried main', async () => {
+  // WU-11 GREEN retarget (FR-008: the Admin row is retired): the still-valid
+  // rule — WorkspaceAgentList draws the agent mark from the agent's figure,
+  // never an initial circle — now pins an ordinary member row.
+  it('WorkspaceAgentList draws the member mark from the agent figure', async () => {
     const { WorkspaceAgentList } = await import('@/components/layout/sidebar/WorkspaceAgentList')
     const workspace = {
       id: 'default',
@@ -364,23 +367,31 @@ describe('surface sweep — sidebar', () => {
       updated_at: '2026-01-01T00:00:00Z',
       revision: '0'.repeat(64),
       is_default: true,
-      admin_main_session_id: 'seam-opaque-admin-main',
+      core_team: ['mia'],
+      member_configs: { mia: { main_session_id: 'main-mia-avatar' } },
     } as Workspace
-    const admin = makeAgent({ id: 'admin', name: 'Admin', type: 'core', figure: 'Robot', role: 'security', color: '#CDBA96' })
+    // A roster row renders only with its validated main on the session list.
+    const miaMain = {
+      id: 'main-mia-avatar', agent_id: 'mia', title: 'Mia', type: 'main',
+      workspace_id: 'default', status: 'active', channel: 'web',
+      created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+      needs_attention: false, message_count: 0,
+    } as Session
+    const mia = makeAgent({ id: 'mia', name: 'Mia', type: 'core', figure: 'Robot', role: 'security', color: '#CDBA96' })
     const { container } = render(
       <WorkspaceAgentList
         projects={[workspace]}
         expandedIds={new Set([workspace.id])}
         activeId={null}
-        agents={[admin]}
+        agents={[mia]}
         rosterState="fresh"
-        sessions={[]}
+        sessions={[miaMain]}
         onToggle={() => {}}
         onOpen={() => {}}
         onOverlayClose={() => {}}
       />,
     )
     expectAgentMarkFigure(container, 'Robot', 1)
-    expectNoInitialCircle(container, 'A')
+    expectNoInitialCircle(container, 'M')
   })
 })
