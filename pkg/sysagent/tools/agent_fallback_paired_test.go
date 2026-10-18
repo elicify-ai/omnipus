@@ -15,11 +15,12 @@ import (
 // naming the entry, and write nothing.
 func TestAgentUpdateFallbackModelsRefusesUnpairedEntry(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		entry map[string]any
+		name, names, missing string
+		entry                map[string]any
 	}{
-		{"provider_missing", map[string]any{"model": "unpaired-model"}},
-		{"provider_empty", map[string]any{"model": "unpaired-model", "provider": ""}},
+		{"provider_missing", "unpaired-model", "provider", map[string]any{"model": "unpaired-model"}},
+		{"provider_empty", "unpaired-model", "provider", map[string]any{"model": "unpaired-model", "provider": ""}},
+		{"model_empty", "provider-b", "model", map[string]any{"model": "", "provider": "provider-b"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			deps, _ := newTestDeps(t)
@@ -33,8 +34,8 @@ func TestAgentUpdateFallbackModelsRefusesUnpairedEntry(t *testing.T) {
 			}
 			chain := []any{map[string]any{"model": "paired-model", "provider": "provider-a"}, tc.entry}
 			result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{"id": "paired-test", "revision": before.Revision, "fallback_models": chain})
-			if !result.IsError || !strings.Contains(result.ForLLM, "INVALID_INPUT") || !strings.Contains(result.ForLLM, "unpaired-model") || !strings.Contains(result.ForLLM, "provider") {
-				t.Fatalf("want INVALID_INPUT naming the unpaired entry and the missing provider, got %s", result.ForLLM)
+			if !result.IsError || !strings.Contains(result.ForLLM, "INVALID_INPUT") || !strings.Contains(result.ForLLM, tc.names) || !strings.Contains(result.ForLLM, tc.missing) {
+				t.Fatalf("want INVALID_INPUT naming the unpaired entry (%s) and the missing %s, got %s", tc.names, tc.missing, result.ForLLM)
 			}
 			after, err := store.ReadState("paired-test")
 			if err != nil {

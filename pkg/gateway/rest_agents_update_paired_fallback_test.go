@@ -16,9 +16,10 @@ import (
 // whose fallback_models carries an entry without a provider is refused with a
 // message naming that entry, and nothing is saved.
 func TestUpdateAgent_FallbackModels_RefusesUnpairedEntry(t *testing.T) {
-	for _, tc := range []struct{ name, entry string }{
-		{"provider_missing", `{"model":"gpt-4o-mini"}`},
-		{"provider_empty", `{"model":"gpt-4o-mini","provider":""}`},
+	for _, tc := range []struct{ name, entry, names, missing string }{
+		{"provider_missing", `{"model":"gpt-4o-mini"}`, "gpt-4o-mini", "provider"},
+		{"provider_empty", `{"model":"gpt-4o-mini","provider":""}`, "gpt-4o-mini", "provider"},
+		{"model_empty", `{"model":"","provider":"openai"}`, "fallback_models[1]", "model"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := buildExecutorTestAPI(t)
@@ -32,8 +33,8 @@ func TestUpdateAgent_FallbackModels_RefusesUnpairedEntry(t *testing.T) {
 			api.HandleAgents(w, r)
 
 			require.Equal(t, http.StatusBadRequest, w.Code, "an unpaired fallback must be refused; body: %s", w.Body.String())
-			assert.Contains(t, w.Body.String(), "gpt-4o-mini", "the refusal must name the offending entry")
-			assert.Contains(t, w.Body.String(), "provider", "the refusal must say what is missing")
+			assert.Contains(t, w.Body.String(), tc.names, "the refusal must name the offending entry")
+			assert.Contains(t, w.Body.String(), tc.missing, "the refusal must say what is missing")
 
 			after, err := agentstore.New(api.homePath).Get("test-agent")
 			require.NoError(t, err)
