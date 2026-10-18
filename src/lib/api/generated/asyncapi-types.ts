@@ -108,7 +108,7 @@ export interface WorkflowStart {
 }
 
 export interface SecretRecipientDisplay {
-  kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+  kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
   lines: Array<string>;
 }
 

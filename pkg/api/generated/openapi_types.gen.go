@@ -9714,6 +9714,7 @@ const (
 	SecretNameEntryKindMailboxPassword   SecretNameEntryKind = "mailbox_password"
 	SecretNameEntryKindMcpEnv            SecretNameEntryKind = "mcp_env"
 	SecretNameEntryKindProviderKey       SecretNameEntryKind = "provider_key"
+	SecretNameEntryKindUnbound           SecretNameEntryKind = "unbound"
 )
 
 // Valid indicates whether the value is a known member of the SecretNameEntryKind enum.
@@ -9729,6 +9730,8 @@ func (e SecretNameEntryKind) Valid() bool {
 		return true
 	case SecretNameEntryKindProviderKey:
 		return true
+	case SecretNameEntryKindUnbound:
+		return true
 	default:
 		return false
 	}
@@ -9741,6 +9744,7 @@ const (
 	SecretNameEntryRecipientKindMailboxPassword   SecretNameEntryRecipientKind = "mailbox_password"
 	SecretNameEntryRecipientKindMcpEnv            SecretNameEntryRecipientKind = "mcp_env"
 	SecretNameEntryRecipientKindProviderKey       SecretNameEntryRecipientKind = "provider_key"
+	SecretNameEntryRecipientKindUnbound           SecretNameEntryRecipientKind = "unbound"
 )
 
 // Valid indicates whether the value is a known member of the SecretNameEntryRecipientKind enum.
@@ -9755,6 +9759,8 @@ func (e SecretNameEntryRecipientKind) Valid() bool {
 	case SecretNameEntryRecipientKindMcpEnv:
 		return true
 	case SecretNameEntryRecipientKindProviderKey:
+		return true
+	case SecretNameEntryRecipientKindUnbound:
 		return true
 	default:
 		return false
@@ -24547,8 +24553,10 @@ type SecretNameEntry struct {
 	AvailableInChannelTurns *bool `json:"available_in_channel_turns,omitempty"`
 
 	// Consumers What uses this version (display labels). Never null.
-	Consumers []string            `json:"consumers"`
-	Kind      SecretNameEntryKind `json:"kind"`
+	Consumers []string `json:"consumers"`
+
+	// Kind Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
+	Kind SecretNameEntryKind `json:"kind"`
 
 	// Owner A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
 	Owner *struct {
@@ -24559,7 +24567,7 @@ type SecretNameEntry struct {
 		WorkspaceId string `json:"workspace_id"`
 	} `json:"owner,omitempty"`
 
-	// Recipient Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+	// Recipient Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
 	Recipient struct {
 		// Kind Recipient kind.
 		Kind SecretNameEntryRecipientKind `json:"kind"`
@@ -24574,7 +24582,7 @@ type SecretNameEntry struct {
 	Version   int64                `json:"version"`
 }
 
-// SecretNameEntryKind defines model for SecretNameEntry.Kind.
+// SecretNameEntryKind Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
 type SecretNameEntryKind string
 
 // SecretNameEntryRecipientKind Recipient kind.

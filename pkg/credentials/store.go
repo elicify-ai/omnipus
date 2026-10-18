@@ -540,6 +540,18 @@ func (s *Store) Delete(name string) error {
 		return &NotFoundError{Name: name}
 	}
 	delete(sf.Credentials, name)
+	// A card-stored version also carries a recipient metadata row (and, for
+	// a private variable, possibly its selection). Remove them in the same
+	// publication so no valueless "ghost" stays listed (architect WU-6 ruling).
+	if secret, card := sf.CardSecrets[name]; card {
+		delete(sf.CardSecrets, name)
+		if secret.Recipient.Kind == KindAgentPrivate {
+			key := privateKey(secret.Recipient)
+			if sf.PrivateSelected[key] == name {
+				delete(sf.PrivateSelected, key)
+			}
+		}
+	}
 
 	return s.saveFileNoLock(sf)
 }

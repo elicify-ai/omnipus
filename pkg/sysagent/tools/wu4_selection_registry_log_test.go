@@ -20,6 +20,7 @@ const selectionRegistryProtected = "WU4-SELECTION-REGISTRY-REJECTED-PLAINTEXT"
 
 type selectionRegistryEcho struct {
 	tools.BaseTool
+	t     *testing.T
 	calls int
 }
 
@@ -31,7 +32,9 @@ func (*selectionRegistryEcho) Parameters() map[string]any {
 }
 func (tool *selectionRegistryEcho) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
 	tool.calls++
-	return tools.NewToolResult(args["label"].(string))
+	label, ok := args["label"].(string)
+	require.True(tool.t, ok, "public registry control label must be a string")
+	return tools.NewToolResult(label)
 }
 
 // T2/Q2-A: invoke the real registry DIRECTLY, not through native turn
@@ -55,7 +58,7 @@ func TestWU4Selection_DirectRegistryRefusesBeforeItsOwnArgumentLog(t *testing.T)
 			registered, exists := registry.Get(name)
 			require.True(t, exists)
 			require.Same(t, tool, registered, "instrument executes the intended real integration tool")
-			public := &selectionRegistryEcho{}
+			public := &selectionRegistryEcho{t: t}
 			registry.Register(public)
 			path := filepath.Join(t.TempDir(), "direct-registry.jsonl")
 			level := logger.GetLevel()

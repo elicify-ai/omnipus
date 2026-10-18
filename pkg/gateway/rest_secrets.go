@@ -114,8 +114,7 @@ func (a *restAPI) updateSecretOptions(w http.ResponseWriter, r *http.Request, re
 	})
 	inventory, _ := store.CardInventory()
 	cfg := a.secretsConfig(r.Context())
-	entry, _ := secretrequest.NameEntry(cfg, a.secretsHome(), updated, inventory, secretrequest.ReferenceConsumers(cfg))
-	jsonOK(w, entry)
+	jsonOK(w, secretrequest.NameEntry(cfg, a.secretsHome(), updated, inventory, secretrequest.ReferenceConsumers(cfg)))
 }
 
 func (a *restAPI) secretsConfig(ctx context.Context) *config.Config {

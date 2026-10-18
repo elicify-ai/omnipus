@@ -3156,7 +3156,8 @@ type SecretNameEntry = {
     | "mcp_env"
     | "channel_credential"
     | "mailbox_password"
-    | "agent_private";
+    | "agent_private"
+    | "unbound";
   version: number;
   recipient: {
     kind:
@@ -3164,7 +3165,8 @@ type SecretNameEntry = {
       | "mcp_env"
       | "channel_credential"
       | "mailbox_password"
-      | "agent_private";
+      | "agent_private"
+      | "unbound";
     lines: Array<string>;
   };
   owner?: agent | undefined;
@@ -6792,6 +6794,7 @@ export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
     "channel_credential",
     "mailbox_password",
     "agent_private",
+    "unbound",
   ]),
   version: z.number().int().gte(1),
   recipient: z.object({
@@ -6801,6 +6804,7 @@ export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
       "channel_credential",
       "mailbox_password",
       "agent_private",
+      "unbound",
     ]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
   }),
@@ -16999,7 +17003,7 @@ export const WorkflowStart = z
 
 export const SecretRecipientDisplay = z
   .object({
-    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private"]),
+    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private", "unbound"]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
   })
   .strict();

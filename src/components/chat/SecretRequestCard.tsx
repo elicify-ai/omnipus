@@ -49,6 +49,7 @@ const RECIPIENT_KIND_LABEL: Record<SessionStateSecretRequest['recipient']['kind'
   channel_credential: 'Chat channel credential',
   mailbox_password: 'Mailbox password',
   agent_private: 'Private variable',
+  unbound: 'Stored in Settings',
 }
 
 /** Promise wording A (FA:OQ-1, §6.7) for the agent-private kind. */
