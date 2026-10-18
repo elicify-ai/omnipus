@@ -255,9 +255,21 @@ A refusal carrying `protected_internal_file` is displayed as **Protected Omnipus
 
 Each `grep` search that runs is recorded in the audit log — see "How to review security activity" below.
 
-### Scheduled and unattended runs
+### Task, plan, scheduled and other unattended runs
 
-An unattended run has nobody present to answer a prompt. The same rule applies there as in a chat: anything Auto-approve would run in a chat also runs in an unattended run. Anything that would need a person is refused straight away, with a clear error in the task's transcript:
+An unattended run has nobody present to answer a prompt. The same rule applies there as in a chat: anything Auto-approve would run in a chat also runs in an unattended run, and so does a call an operator `command_rules` rule or an existing "Always Allow" grant already covers. Anything that would still need a person is refused straight away; no approval card ever appears. In a task or plan run the agent is told:
+
+```
+Task and plan runs never ask a person for approval. This call needed approval and was refused. Do not retry; finish what you can and report what was blocked.
+```
+
+and the task's conversation shows the call as:
+
+```
+Not run: needs approval, and task and plan runs never ask.
+```
+
+The agent then reports what was blocked and the task ends **Failed** with its explanation. A scheduled run or a heartbeat shows its own wording instead:
 
 ```
 Not run: this is a headless scheduled run with no operator available to approve ask-policy tools.
@@ -265,19 +277,22 @@ Not run: this is a headless scheduled run with no operator available to approve 
 
 A shell command that would need a prompt (for example one that needs the network) is refused the same way; its error ends with `auto-denied: no operator attached to this headless/scheduled run to approve it`.
 
-For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. An unattended call must either clear Auto-approve or have an effective Allow policy. Setting one agent to Allow cannot override a global Ask or Deny. If a required tool still resolves to Ask, review both policy layers. Changing the global ceiling affects every agent; use per-agent restrictions to retain tighter access elsewhere. Do not assume that having the chat open makes an automatically dispatched run attended. See [tools](tools.md).
+For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. An unattended call must either clear Auto-approve, match an operator rule or grant, or have an effective Allow policy. An explicit Deny always stays a deny. Setting one agent to Allow cannot override a global Ask or Deny. If a required tool still resolves to Ask, review both policy layers. Changing the global ceiling affects every agent; use per-agent restrictions to retain tighter access elsewhere.
 
-**What counts as unattended (founder decision, 2026-09-24).** This is not only scheduled work. It is every run nobody sent live:
+**What counts as unattended (changed 2026-10-13).** Who answers an approval is decided by where the work started — the first conversation of the chain, not the helper doing the work and not whoever wrote last:
 
-- a task fired by its own Calendar trigger on a workspace Board (once, recurring, or an RRULE occurrence);
-- a queued task the task drain picks up on its own polling cycle;
-- a task's auto-advance dispatch, fired the moment a dependency it was blocked on finishes;
-- a plan's own member-task dispatch, driven by the plan engine's promotion loop;
-- a plan's automatic wake of its owner or supervisor agent, reacting to a plan-state change;
-- a parent task's automatic follow-up turn, fired once every child task reaches a terminal state;
-- a per-agent heartbeat, which runs on the cron engine.
+| Where the chain started | Approvals |
+|---|---|
+| A chat with an agent, an agent's main chat, a channel conversation | Asked inline. A helper the agent starts asks in that same chat. |
+| A task — however it was started: **Start Task**, **Create & Run now**, dragging to In Progress, the Calendar's **Run now**, an agent's `run_task`, its own Calendar trigger, the queue or an auto-advance | Never asked; refused as above. |
+| A plan — started from a chat with `execute_plan` or by the plan engine — including every member task and the plan's automatic wakes | Never asked; refused as above. |
+| A recurring schedule, a per-agent heartbeat, the Judge | Never asked; refused with the scheduled wording. |
 
-None of these ever shows a live approval card, even to an operator who happens to have that agent's chat window open at that moment — "someone was online" does not make a run attended. Only a turn a person actually started stays attended: a chat message, or clicking **Run now** on a task (`POST /api/v1/tasks/{id}/runs`, and the Board's "Start Task"/"Create & Run now" actions) while watching for the result. A task dispatched through the `run_task` or `execute_plan` agent tools inherits whichever of these two states the *calling* turn was already in — a chat-started delegation to `run_task` stays attended, one fired from inside an already-unattended run stays unattended.
+A helper started inside a task or plan run is unattended too, however many levels down it is. Writing into a task's conversation yourself, or reviving a finished helper of a task, does not make the run attended. A message from a task to another agent's main chat is different: the receiving agent works in its own main chat, so its approvals are asked there. If Omnipus cannot tell where a chain started (for example its saved records are damaged), it treats the run as unattended and refuses.
+
+This means the Omnipus agent's apply workflows — creating an agent or setting up a team — work from a chat only: if a task sends Omnipus to apply a plan, the run ends at the first step that needs your approval.
+
+On a host without an enforcing kernel sandbox (Windows, or the process sandbox not set to Enforce), Auto-approve runs only read-only shell commands and commands an operator `command_rules` allow rule covers, so more task runs end blocked there.
 
 ### Approve a request
 
