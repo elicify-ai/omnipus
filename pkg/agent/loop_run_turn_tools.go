@@ -951,6 +951,14 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 			"schedule_job_name": jobInfo.JobName,
 		}
 	}
+	if cause := ex.rx.rr.rq.ri.rf.rt.ts.opts.askRefusalCause; cause != "" {
+		// SF-05: an unresolved ancestry keeps its cause in the refusal's
+		// audit context, next to the fixed task/plan reason.
+		if denyExtra == nil {
+			denyExtra = map[string]any{}
+		}
+		denyExtra["attendance_cause"] = cause
+	}
 	ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason, denyExtra)
 	// O-3 / F-13 / issue #342: emit the canonical tool.policy.ask.denied
 	// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,

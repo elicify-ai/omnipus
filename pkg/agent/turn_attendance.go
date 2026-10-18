@@ -5,6 +5,9 @@
 package agent
 
 import (
+	"fmt"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -29,6 +32,9 @@ type turnAttendance struct {
 	// RootKind is the origin kind that decided the class (originUnresolved
 	// when the walk failed). Only meaningful when Unattended is true.
 	RootKind session.OriginKind
+	// Cause explains an unresolved walk: the ancestor that failed and why
+	// (gate round 1, SF-05). Empty for every resolved class.
+	Cause string
 }
 
 // unattendedOrigin reports whether an origin kind starts an unattended chain
@@ -63,29 +69,44 @@ func (al *AgentLoop) classifySessionChain(sessionID string) turnAttendance {
 		// classify, the caller's own AutoDenyAsk stands.
 		return turnAttendance{}
 	}
-	unresolved := turnAttendance{Unattended: true, RootKind: originUnresolved}
+	// unresolved fails toward the visible refusal (R1 last row) and keeps the
+	// cause: it is logged at error level and carried into the refusal's audit
+	// context, so an operator can tell a damaged ancestry from an intended
+	// task restriction (gate round 1, SF-05).
+	unresolved := func(ancestorID, reason string, err error) turnAttendance {
+		cause := fmt.Sprintf("ancestor %s: %s", ancestorID, reason)
+		if err != nil {
+			cause += ": " + err.Error()
+		}
+		logger.ErrorCF("agent", "approval ancestry unresolved; the turn is refused like a task run",
+			map[string]any{"session_id": sessionID, "ancestor_session_id": ancestorID, "reason": reason, "cause": cause})
+		return turnAttendance{Unattended: true, RootKind: originUnresolved, Cause: cause}
+	}
 	seen := make(map[string]struct{}, 4)
 	sid := sessionID
 	for hop := 0; hop < attendanceMaxHops; hop++ {
 		if _, dup := seen[sid]; dup {
-			return unresolved
+			return unresolved(sid, "parent chain has a cycle", nil)
 		}
 		seen[sid] = struct{}{}
 		meta, err := sessions.GetMeta(sid)
 		if err != nil || meta == nil {
-			return unresolved
+			return unresolved(sid, "session meta unreadable", err)
 		}
 		if meta.TaskID != "" {
 			return turnAttendance{Unattended: true, RootKind: session.OriginKindTask}
 		}
 		rec, err := lifecycle.Load(sid)
-		if err != nil || rec == nil || rec.Origin == nil {
-			return unresolved
+		if err != nil || rec == nil {
+			return unresolved(sid, "lifecycle record unreadable or missing", err)
+		}
+		if rec.Origin == nil {
+			return unresolved(sid, "lifecycle record has no origin", nil)
 		}
 		kind := rec.Origin.Kind
 		if kind == session.OriginKindDelegate {
 			if meta.ParentSessionID == "" {
-				return unresolved
+				return unresolved(sid, "helper lifecycle record has no parent session", nil)
 			}
 			sid = meta.ParentSessionID
 			continue
@@ -95,7 +116,7 @@ func (al *AgentLoop) classifySessionChain(sessionID string) turnAttendance {
 		}
 		return turnAttendance{}
 	}
-	return unresolved
+	return unresolved(sid, fmt.Sprintf("parent chain longer than %d hops", attendanceMaxHops), nil)
 }
 
 // applyTurnAttendance stamps the chain's class onto a turn's options before
@@ -126,4 +147,5 @@ func (al *AgentLoop) applyTurnAttendance(opts *processOptions) {
 	default:
 		opts.askRefusalReason = autoDenyTaskPlanReason
 	}
+	opts.askRefusalCause = att.Cause
 }

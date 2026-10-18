@@ -85,6 +85,9 @@ type processOptions struct {
 	// applyTurnAttendance when the turn is built; empty means the headless
 	// scheduled reason.
 	askRefusalReason string
+	// askRefusalCause explains an unresolved ancestry walk behind the refusal
+	// (gate round 1, SF-05); carried into the refusal's audit context.
+	askRefusalCause string
 
 	// approvalOrigin is the server-derived origin every approval this turn
 	// raises carries (spec §6.18, K7 origin_label / room_ref): "while
