@@ -115,3 +115,12 @@ var AllPairingStatuses = []PairingStatus{
 type PairingObservable interface {
 	SetPairingObserver(fn func(status PairingStatus, qr, message string))
 }
+
+// PairingStoppable is implemented by channels whose in-flight linked-device
+// pairing can be ended on request (omnipus-system-agent BDD-8.8: Stop in the
+// chat that started the pairing). StopPairing ends the pairing and releases
+// the pairing client so no further codes are produced; it reports false when
+// no pairing was in flight (already linked, or not started), changing nothing.
+type PairingStoppable interface {
+	StopPairing(ctx context.Context) bool
+}

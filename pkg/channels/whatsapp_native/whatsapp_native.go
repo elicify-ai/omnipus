@@ -68,8 +68,11 @@ type WhatsAppNativeChannel struct {
 	runCancel    context.CancelFunc
 	reconnectMu  sync.Mutex
 	reconnecting bool
-	stopping     atomic.Bool    // set once Stop begins; prevents new wg.Add calls
-	wg           sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
+	stopping     atomic.Bool // set once Stop begins; prevents new wg.Add calls
+	// pairingActive is true while a QR pairing loop runs and the device has
+	// not linked yet (BDD-8.8: only an in-flight pairing can be stopped).
+	pairingActive atomic.Bool
+	wg            sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
 
 	// pairingObserver, if set, receives linked-device pairing updates (QR code +
 	// status) so the gateway can surface them in the SPA (#283). Wired at boot
@@ -136,6 +139,9 @@ func (c *WhatsAppNativeChannel) handleQREvent(evt whatsmeow.QRChannelItem, repai
 
 	logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
 	status, message := mapQRLifecycle(evt.Event)
+	if status == channels.PairingStatusLinked {
+		c.pairingActive.Store(false)
+	}
 	c.emitPairing(status, "", message)
 }
 
@@ -280,9 +286,11 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 			return fmt.Errorf("channel stopped during QR setup")
 		}
 		c.wg.Add(1)
+		c.pairingActive.Store(true)
 		c.reconnectMu.Unlock()
 		go func() {
 			defer c.wg.Done()
+			defer c.pairingActive.Store(false)
 			for {
 				select {
 				case <-c.runCtx.Done():
@@ -305,6 +313,22 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 	c.SetRunning(true)
 	logger.InfoC("whatsapp", "WhatsApp native channel connected")
 	return nil
+}
+
+// StopPairing ends an in-flight QR pairing (BDD-8.8): it stops the channel,
+// which cancels the QR loop and disconnects and releases the whatsmeow client,
+// so no further codes are produced. A linked device or a channel with no
+// pairing in flight is left untouched and false is returned. The saved
+// configuration is not changed; the channel stays saved but not working
+// until it is started again.
+func (c *WhatsAppNativeChannel) StopPairing(ctx context.Context) bool {
+	if !c.pairingActive.Load() {
+		return false
+	}
+	if err := c.Stop(ctx); err != nil {
+		logger.WarnCF("whatsapp", "Stopping the in-flight pairing did not finish cleanly", map[string]any{"error": err.Error()})
+	}
+	return true
 }
 
 func (c *WhatsAppNativeChannel) Stop(ctx context.Context) error {
@@ -610,6 +634,8 @@ func (c *WhatsAppNativeChannel) handleLoggedOut() {
 		return
 	}
 
+	c.pairingActive.Store(true)
+	defer c.pairingActive.Store(false)
 	for {
 		select {
 		case <-c.runCtx.Done():

@@ -293,7 +293,7 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 				"channel_id", p.ChannelID, "error", merr)
 		}
 	case channels.PairingStatusLinked, channels.PairingStatusTimeout, channels.PairingStatusError,
-		channels.PairingStatusWaiting:
+		channels.PairingStatusWaiting, channels.PairingStatusStopped:
 		// PairingStatusWaiting and any other status that is not
 		// "code" must not leave a stale QR in the cache — evict so a
 		// late subscriber is not shown an outdated code.
