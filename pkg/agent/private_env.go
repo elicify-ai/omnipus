@@ -1,0 +1,77 @@
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package agent
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+)
+
+// privateEnvForTurn is the tools.PrivateEnvSource for bash and
+// environment_setup (FR-076, FR-241). The owner pair comes only from the
+// trusted turn context: the acting agent, and the workspace the turn's
+// session belongs to (the same ancestry the secret card used). A turn that
+// consumed a channel person's input gets only variables marked available in
+// channel conversations. Failures never block the command; they return a
+// value-free notice naming the variables that were not loaded.
+func (al *AgentLoop) privateEnvForTurn(ctx context.Context) ([]string, string) {
+	agentID := tools.ToolAgentID(ctx)
+	sessionID := tools.ToolTranscriptSessionID(ctx)
+	if agentID == "" || sessionID == "" {
+		return nil, ""
+	}
+	store, err := al.secretRecoveryCredentialStore()
+	if errors.Is(err, secretrequest.ErrRecoveryStoreAbsent) {
+		return nil, "" // no credential store yet: nothing private can exist
+	}
+	if err != nil || store == nil {
+		al.logPrivateEnvFailure(sessionID, agentID, "store_unavailable")
+		return nil, "Private variables were not loaded for this command: the credential store is unavailable."
+	}
+	sessions := al.GetSessionStore()
+	if sessions == nil {
+		return nil, ""
+	}
+	ancestry, err := sessions.ResolveInteractionContext(sessionID)
+	if err != nil {
+		al.logPrivateEnvFailure(sessionID, agentID, "session_context_unavailable")
+		return nil, "Private variables were not loaded for this command: the chat's workspace could not be resolved."
+	}
+	env, err := store.PrivateEnvironment(ancestry.WorkspaceID, agentID, tools.ToolTurnOrigin(ctx).ChannelTriggered())
+	if err == nil {
+		return env, ""
+	}
+	var damaged *credentials.PrivateVariableError
+	if errors.As(err, &damaged) {
+		al.logPrivateEnvFailure(sessionID, agentID, "private_variable_unreadable")
+		return env, "Private variables could not be read and were not set for this command: " +
+			strings.Join(damaged.Variables, ", ") + ". Replace them on a new secret card."
+	}
+	al.logPrivateEnvFailure(sessionID, agentID, "store_unreadable")
+	return nil, "Private variables were not loaded for this command: the credential store could not be read."
+}
+
+func (al *AgentLoop) logPrivateEnvFailure(sessionID, agentID, category string) {
+	logger.WarnCF("agent", "private variables not loaded for a command", map[string]any{
+		"session_id": sessionID, "agent_id": agentID, "cause_category": category,
+	})
+}
+
+// CardSecretStore is the encrypted store secret cards commit into, for the
+// gateway's value-free secret listing and options routes. It returns
+// (nil, nil) on a fresh install with no credential store yet.
+func (al *AgentLoop) CardSecretStore() (*credentials.Store, error) {
+	store, err := al.secretRecoveryCredentialStore()
+	if errors.Is(err, secretrequest.ErrRecoveryStoreAbsent) {
+		return nil, nil
+	}
+	return store, err
+}

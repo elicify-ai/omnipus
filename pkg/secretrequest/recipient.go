@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/childenv"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -29,6 +30,12 @@ type Input struct {
 	EnvKey   string `json:"env_key,omitempty"`
 	Instance string `json:"instance,omitempty"`
 	Field    string `json:"field,omitempty"`
+	// Variable selects the agent-private kind. WorkspaceID and AgentID are
+	// its owner pair; Registry.Create sets them from the trusted context (or
+	// Omnipus's validated target), never from an ordinary agent's input.
+	Variable    string `json:"variable,omitempty"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
 }
 
 var envKeyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
@@ -48,10 +55,22 @@ func ResolveRecipient(cfg *config.Config, in Input) ([]credentials.CardRecipient
 	if in.Instance != "" || in.Field != "" {
 		forms++
 	}
+	if in.Variable != "" {
+		forms++
+	}
 	if cfg == nil || forms != 1 || (in.Endpoint != "" && in.Provider != "") {
-		return nil, nil, gen.SecretRecipientDisplay{}, errors.New("request_secret needs exactly one recipient: endpoint or provider, server + env_key, or instance + field")
+		return nil, nil, gen.SecretRecipientDisplay{}, errors.New("request_secret needs exactly one recipient: endpoint or provider, server + env_key, instance + field, or a private variable")
 	}
 	switch {
+	case in.Variable != "":
+		if err := childenv.CheckPrivateVariableName(in.Variable); err != nil {
+			return nil, nil, gen.SecretRecipientDisplay{}, err
+		}
+		if in.WorkspaceID == "" || in.AgentID == "" {
+			return nil, nil, gen.SecretRecipientDisplay{}, errors.New("a private variable belongs to one agent in one workspace; ask from that agent's chat in the workspace")
+		}
+		recipient = credentials.CardRecipient{Kind: credentials.KindAgentPrivate, WorkspaceID: in.WorkspaceID, AgentID: in.AgentID, Field: in.Variable}
+		return []credentials.CardRecipient{recipient}, []gen.SecretRequestField{{Key: "value", Label: in.Variable}}, gen.SecretRecipientDisplay{Kind: recipient.Kind, Lines: recipientLines(recipient)}, nil
 	case in.Endpoint != "" || in.Provider != "":
 		var err error
 		recipient, err = resolveProvider(cfg, in)
@@ -99,14 +118,12 @@ func ResolveRecipient(cfg *config.Config, in Input) ([]credentials.CardRecipient
 		return nil, nil, gen.SecretRecipientDisplay{}, errors.New("recipient is incomplete")
 	}
 	key, label := "api_key", "API key"
-	lines := []string{recipient.Endpoint, "Field: api_key"}
+	lines := recipientLines(recipient)
 	if recipient.Kind == "mcp_env" {
 		key, label = "value", recipient.Field
-		lines = []string{"MCP server: " + recipient.Server, "Transport: " + recipient.Transport, "Command: " + recipient.Command, "Arguments: " + strings.Join(recipient.Args, " "), "Environment variable: " + recipient.Field}
 	}
 	if recipient.Kind == "channel_credential" {
 		key, label = recipient.Field, strings.ReplaceAll(recipient.Field, "_", " ")
-		lines = []string{"Channel instance: " + recipient.Instance, "Channel type: " + recipient.ChannelType, "Field: " + recipient.Field}
 	}
 	if recipient.Kind == "channel_credential" && recipient.ChannelType == "slack" && (recipient.Field == "token" || recipient.Field == "bot_token" || recipient.Field == "app_token") {
 		// Chief ruling 2026-10-16: the server expands Slack's mandatory
@@ -118,6 +135,20 @@ func ResolveRecipient(cfg *config.Config, in Input) ([]credentials.CardRecipient
 		return []credentials.CardRecipient{bot, app}, fields, gen.SecretRecipientDisplay{Kind: recipient.Kind, Lines: lines}, nil
 	}
 	return []credentials.CardRecipient{recipient}, []gen.SecretRequestField{{Key: key, Label: label}}, gen.SecretRecipientDisplay{Kind: recipient.Kind, Lines: lines}, nil
+}
+
+// recipientLines are K2's display lines for one integration recipient. The
+// agent-private kind is composed by DisplayLines, which knows display names.
+func recipientLines(r credentials.CardRecipient) []string {
+	switch r.Kind {
+	case "mcp_env":
+		return []string{"MCP server: " + r.Server, "Transport: " + r.Transport, "Command: " + r.Command, "Arguments: " + strings.Join(r.Args, " "), "Environment variable: " + r.Field}
+	case "channel_credential":
+		return []string{"Channel instance: " + r.Instance, "Channel type: " + r.ChannelType, "Field: " + r.Field}
+	case credentials.KindAgentPrivate:
+		return []string{"Agent: " + r.AgentID, "Workspace: " + r.WorkspaceID, "Variable: " + r.Field}
+	}
+	return []string{r.Endpoint, "Field: " + r.Field}
 }
 
 func resolveProvider(cfg *config.Config, in Input) (credentials.CardRecipient, error) {
@@ -188,6 +219,11 @@ func ReferenceBase(r credentials.CardRecipient) string {
 		base = "mcp_" + r.Server + "_" + r.Field
 	case "channel_credential":
 		base = r.ChannelType + "_" + r.Instance + "_" + r.Field
+	case credentials.KindAgentPrivate:
+		// The digest keeps two pairs whose ids differ only in characters the
+		// sanitizer folds from sharing one version family.
+		h := sha256.Sum256([]byte(r.WorkspaceID + "\x00" + r.AgentID + "\x00" + r.Field))
+		base = "private_" + r.Field + "_" + hex.EncodeToString(h[:6])
 	}
 	return referencePartPattern.ReplaceAllString(strings.ToLower(base), "_")
 }

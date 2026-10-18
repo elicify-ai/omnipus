@@ -158,6 +158,13 @@ type storeFile struct {
 	Credentials  map[string]encEntry    `json:"credentials"`
 	CardSecrets  map[string]CardSecret  `json:"card_secrets,omitempty"`
 	CardReceipts map[string]CardReceipt `json:"card_receipts,omitempty"`
+	// PrivateSelected maps one agent-private variable (privateKey) to the
+	// reference of its selected version. Only the selected version is
+	// injected into that pair's children (FR-076, FR-086).
+	PrivateSelected map[string]string `json:"private_selected,omitempty"`
+	// PrivateOptions holds per-variable options (FR-241), keyed like
+	// PrivateSelected.
+	PrivateOptions map[string]PrivateOptions `json:"private_options,omitempty"`
 }
 
 type encEntry struct {

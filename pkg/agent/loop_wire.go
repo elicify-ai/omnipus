@@ -70,6 +70,7 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry, cfg *config.Con
 		deps := tools.ExecToolDeps{
 			GodMode:         godMode,
 			AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
+			PrivateEnv:      al.privateEnvForTurn,
 		}
 		// Plumb the kernel-sandbox egress proxy into the bash tool so the
 		// hardened path (non-god-mode) injects HTTP_PROXY pointing at the

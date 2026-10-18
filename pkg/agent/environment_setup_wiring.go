@@ -93,6 +93,7 @@ func (al *AgentLoop) wireEnvironmentSetupDepsOn(registry *AgentRegistry, cfg *co
 			Proxy:           al.sandboxEgressProxy,
 			Store:           store,
 			AuditFailClosed: auditFailClosed,
+			PrivateEnv:      al.privateEnvForTurn,
 		}))
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/childenv"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -107,6 +108,13 @@ func (r *Registry) Create(ctx context.Context, sessionID, agentID, chatID, origi
 	if err := ctx.Err(); err != nil {
 		return Record{}, err
 	}
+	if in.Variable != "" {
+		// A malformed or protected name is refused with its rule before any
+		// session or pending-card state is consulted (US-7 AS-5).
+		if err := childenv.CheckPrivateVariableName(in.Variable); err != nil {
+			return Record{}, err
+		}
+	}
 	if r.opts.Sessions == nil || r.opts.Config == nil {
 		return Record{}, errors.New("secret request service is unavailable")
 	}
@@ -154,9 +162,15 @@ func (r *Registry) Create(ctx context.Context, sessionID, agentID, chatID, origi
 			return Record{}, errors.New("secret request session is stopped or unavailable")
 		}
 	}
+	if in, err = r.privateOwnerPairLocked(cfg, agentID, ancestry.WorkspaceID, in); err != nil {
+		return Record{}, err
+	}
 	recipients, fields, display, err := ResolveRecipient(cfg, in)
 	if err != nil {
 		return Record{}, err
+	}
+	if in.Variable != "" {
+		display.Lines = r.privateDisplayLines(cfg, in)
 	}
 	if len(display.Lines) < 1 || len(display.Lines) > 8 {
 		return Record{}, errors.New("recipient cannot be shown on a secure card")
@@ -176,6 +190,12 @@ func (r *Registry) Create(ctx context.Context, sessionID, agentID, chatID, origi
 	}
 	if ancestry.WorkspaceID != "" {
 		rec.Card.WorkspaceId = &ancestry.WorkspaceID
+	}
+	if in.Variable != "" {
+		rec.Card.Owner = &struct {
+			AgentId     string `json:"agent_id"`
+			WorkspaceId string `json:"workspace_id"`
+		}{AgentId: in.AgentID, WorkspaceId: in.WorkspaceID}
 	}
 	if originLabel != "" {
 		if runes := []rune(originLabel); len(runes) > 200 {

@@ -29,7 +29,7 @@ func (*RequestSecretTool) Description() string {
 }
 func (*RequestSecretTool) Parameters() map[string]any {
 	props := make(map[string]any)
-	for _, key := range []string{"purpose", "endpoint", "provider", "server", "env_key", "instance", "field"} {
+	for _, key := range []string{"purpose", "endpoint", "provider", "server", "env_key", "instance", "field", "variable", "workspace_id", "agent_id"} {
 		props[key] = map[string]any{"type": "string"}
 	}
 	return map[string]any{"type": "object", "properties": props, "required": []string{"purpose"}, "additionalProperties": false}
@@ -64,6 +64,7 @@ func (t *RequestSecretTool) Execute(ctx context.Context, args map[string]any) *T
 	text := func(key string) string { value, _ := args[key].(string); return value }
 	rec, err := reg.Create(ctx, ToolTranscriptSessionID(ctx), ToolAgentID(ctx), ToolChatID(ctx), ToolTurnOrigin(ctx).Label(), secretrequest.Input{
 		Purpose: text("purpose"), Endpoint: text("endpoint"), Provider: text("provider"), Server: text("server"), EnvKey: text("env_key"), Instance: text("instance"), Field: text("field"),
+		Variable: text("variable"), WorkspaceID: text("workspace_id"), AgentID: text("agent_id"),
 	})
 	if err != nil {
 		auditRefusal("request_refused")

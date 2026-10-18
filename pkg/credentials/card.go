@@ -105,6 +105,15 @@ func (s *Store) CommitCard(requestID, sessionID string, values []CardValue, at t
 		}
 		sf.Credentials[ref] = entry
 		sf.CardSecrets[ref] = CardSecret{Recipient: item.Recipient, Version: version}
+		if item.Recipient.Kind == KindAgentPrivate {
+			// Q7 A / FR-086: every version submitted on the owner pair's card
+			// is selected on submit, in this same publication; the store
+			// mutex makes the last committed submit the selected one.
+			if sf.PrivateSelected == nil {
+				sf.PrivateSelected = make(map[string]string)
+			}
+			sf.PrivateSelected[privateKey(item.Recipient)] = ref
+		}
 		receipt.References = append(receipt.References, ref)
 	}
 	sf.CardReceipts[requestID] = receipt
