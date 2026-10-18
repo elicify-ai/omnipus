@@ -37,8 +37,24 @@ but not now"). Every re-aimed file carries this note.
 - PASS side (29f78ee56, this tree): store 12/12, k7 5/5, resolution 13/13,
   readablePreviews 17/17, featureSwitches 3/3, AppShell.stage1 15/18 — the only 3
   failures are the founder-ruling reds above. `npm run typecheck` exit 0.
-- FAIL side (3ccfb2b0e, scratch clone carrying only the re-aimed test files): every
-  re-aimed pin fails (pre-B3 stub store, switch OFF, no inline card, permissive Zod).
+- FAIL side (3ccfb2b0e, scratch clone carrying only the re-aimed test files) — ACTUAL
+  results, and why they are the correct discriminators:
+  - `featureSwitches.stage1.test.ts`: **1 failed / 2 passed** (S1-g approvals pin fails —
+    the switch ships false there). exit 1.
+  - `AppShell.stage1.test.tsx`: **7 failed / 11 passed** — S1-c ×2, S1-d, S1-e, S1-q,
+    S1-exp, S1-exp zero all fail (switch OFF → no inline card exists to act on). exit 1.
+    S1-f passes there trivially (nothing renders, so its no-card part holds) and fails on
+    29f78ee56 on the banner — the founder-ruling red, discriminating in the follow-up's
+    direction by design.
+  - `toolApproval.test.ts` / `k7` / `resolution` / `readablePreviews`: **pass on BOTH
+    heads** — the pre-B3 store already full-restored COMPLETE snapshots (that is why the
+    old pack's discriminators were the THIN-snapshot stub cases, which bundle B3 deleted
+    along with the stub path: the dev's gate showed them red on the old test text). The
+    B3 store delta (3ccfb2b0e→29f78ee56, `git diff --stat`: featureSwitches + the stub
+    path's 71-line removal) removes what the old pins exercised; the re-aimed pins are
+    the regression guards for the behaviour both heads share, and the required-fields
+    contract is enforced by typecheck + the k7 Zod boundary pin (the generated schema at
+    3ccfb2b0e is already strict — the contract commit 64cb504e5 regenerated both sides).
   Receipts in `tests/train3-b3-logs/` (`pass-*.log`, `fail3cc-*`, `typecheck.log`).
 
 Kept: `ToolApprovalModal.test.tsx`'s non-literal assertions, every non-stub
