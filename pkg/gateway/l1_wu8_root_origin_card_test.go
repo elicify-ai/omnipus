@@ -136,10 +136,10 @@ func TestWU8_HelperApproval_ReloadSnapshotCarriesFullRequest(t *testing.T) {
 
 	// Bundle B3: the snapshot carries the full request, equal to the live
 	// card, so a reload restores a complete, approvable card.
-	require.NotNil(t, snap.ToolCallId, "B3: tool_call_id required in the snapshot")
-	require.Equal(t, frame.ToolCallId, *snap.ToolCallId)
-	require.NotNil(t, snap.TurnId, "B3: turn_id required in the snapshot")
-	require.Equal(t, frame.TurnId, *snap.TurnId)
+	require.NotEmpty(t, snap.ToolCallId, "B3: tool_call_id required in the snapshot")
+	require.Equal(t, frame.ToolCallId, snap.ToolCallId)
+	require.NotEmpty(t, snap.TurnId, "B3: turn_id required in the snapshot")
+	require.Equal(t, frame.TurnId, snap.TurnId)
 	require.NotNil(t, snap.Args, "B3: args required and never null in the snapshot")
 	require.Equal(t, frameRaw["args"], snapRaw["args"],
 		"the snapshot's args equal the live card's request arguments")
@@ -187,7 +187,7 @@ func TestWU8_DirectChatApproval_RootSessionOmittedWhenSelf(t *testing.T) {
 
 	snap, _ := wu8SnapshotPending(t, h, entry.ApprovalID)
 	require.Nil(t, snap.RootSessionId, "the omission holds on the snapshot too")
-	require.NotNil(t, snap.ToolCallId, "B3 completeness holds for a direct chat")
+	require.NotEmpty(t, snap.ToolCallId, "B3 completeness holds for a direct chat")
 	require.NotNil(t, snap.Args)
 }
 
