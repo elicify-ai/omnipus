@@ -1,7 +1,8 @@
 # Feature Specification: Parent wake and visibility for helper events
 
 **Created**: 2026-10-15
-**Status**: Draft — final correction round 2 of 2 done, 2026-10-15. No review PASS is claimed. There is no third grill.
+**Status**: Draft
+**Status note**: Final correction round 2 of 2 done, 2026-10-15. No review PASS is claimed. There is no third grill.
 **Input**: Founder interview 2026-10-15 (decisions D1–D4 below), root-cause matrix `coordination/designs/parent-wake-matrix-20261015.md`, Jarvis silent-stop investigation `coordination/designs/jarvis-silent-stops-20261015.md`, issue #1317, chief plan section 11 (`PLAN-omnipus-L1-v2-20261013.md`), and the R7 UAT packs. Verified against this branch at `a1eb083a4842886699740f1f2c5b93c6ba6b6974`, not against the matrix's cited tree.
 
 This document is the feature spec. No production code is changed by writing it. No new ADR is commissioned: the 2026-10-15 founder interview already settled the policy. Section 16 is the amendment map for the three existing decisions this spec narrows. Those dated ADR corrections are the architect's follow-up edit, not a second grill.
