@@ -219,6 +219,9 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 		rc.rx.rr.rq.ri.rf.rt.ts.origin = tools.NewTurnOrigin()
 	}
 	rc.rx.rr.rq.ri.rf.rt.ts.opts.InputOrigin.recordInto(rc.rx.rr.rq.ri.rf.rt.al, rc.rx.rr.rq.ri.rf.rt.ts.origin)
+	for _, consumed := range rc.rx.rr.rq.ri.rf.rt.ts.opts.ConsumedInputOrigins {
+		consumed.recordInto(rc.rx.rr.rq.ri.rf.rt.al, rc.rx.rr.rq.ri.rf.rt.ts.origin)
+	}
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTurnOrigin(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.origin)
 	// Inject the session key so tools can address the session.
 	if rc.rx.rr.rq.ri.rf.rt.ts.sessionKey == "" {

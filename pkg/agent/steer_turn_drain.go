@@ -122,7 +122,7 @@ func (al *AgentLoop) continueSteeredTurn(
 	attempt.ts = ts
 
 	_, err = al.continuePendingSteeringWithAgent(ctx, sessionID, ts.agent,
-		func(_ *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
+		func(_ *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string, origins []inputOrigin) (string, error) {
 			gate := al.steerAdmission()
 			gate.entryMu.Lock()
 			ts.opts.executionDisposition = al.executionDispositionFor(claim)
@@ -158,6 +158,7 @@ func (al *AgentLoop) continueSteeredTurn(
 			ts.opts.UserInitiated = false
 			ts.opts.InitialSteeringMessages = steeringMsgs
 			ts.opts.InitialSteeringCorrelationIDs = steeringCorrelationIDs
+			ts.opts.ConsumedInputOrigins = origins
 			ts.opts.SkipInitialSteeringPoll = true
 			// A queued follow-up instruction delivered on this drain is a
 			// CONTINUATION of the session's existing conversation: for an

@@ -1442,6 +1442,21 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	steeringMsgs []providers.Message,
 	steeringCorrelationIDs []string,
 ) (string, error) {
+	return al.continueWithConsumedSteering(ctx, agent, sessionKey, channel, chatID, workspaceID,
+		steeringMsgs, steeringCorrelationIDs, nil)
+}
+
+// continueWithConsumedSteering runs the ordinary continuation turn for
+// dequeued steering, recording the consumed items' origins on that new turn
+// (§6.18 / FR-240) — the turn that consumed them did not exist at dequeue.
+func (al *AgentLoop) continueWithConsumedSteering(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey, channel, chatID, workspaceID string,
+	steeringMsgs []providers.Message,
+	steeringCorrelationIDs []string,
+	consumedOrigins []inputOrigin,
+) (string, error) {
 	resp, err := al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:                    sessionKey,
 		Channel:                       channel,
@@ -1451,6 +1466,7 @@ func (al *AgentLoop) continueWithSteeringMessages(
 		InitialSteeringMessages:       steeringMsgs,
 		InitialSteeringCorrelationIDs: steeringCorrelationIDs,
 		SkipInitialSteeringPoll:       true,
+		ConsumedInputOrigins:          consumedOrigins,
 		executionDisposition:          ordinaryDispositionFromContext(ctx),
 		// FIX 1 (re-review): see AgentLoop.resolveWorkspaceIDForContinuation
 		// (loop.go) for the resolution this value is sourced from — this
@@ -1537,16 +1553,21 @@ func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 func (al *AgentLoop) continuePendingSteering(
 	ctx context.Context,
 	sessionKey string,
-	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
+	run continuationRunner,
 ) (string, error) {
 	return al.continuePendingSteeringWithAgent(ctx, sessionKey, al.agentForSession(sessionKey), run)
 }
+
+// continuationRunner runs the turn that consumes one dequeued batch. origins
+// are the trusted, server-derived origins of exactly the consumed items, in
+// the same order as steeringMsgs; the runner records them on its new turn.
+type continuationRunner func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string, origins []inputOrigin) (string, error)
 
 func (al *AgentLoop) continuePendingSteeringWithAgent(
 	ctx context.Context,
 	sessionKey string,
 	agent *AgentInstance,
-	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
+	run continuationRunner,
 ) (string, error) {
 	// Bug 1 fix (design note "Caller survey"): the active-turn guard must be
 	// scoped to THIS session's own key, not the whole activeTurnStates map —
@@ -1589,7 +1610,11 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 		}
 	}
 
-	resp, err := run(agent, steeringMsgs, steeringCorrelationIDs)
+	origins := make([]inputOrigin, 0, len(consumedItems))
+	for _, item := range consumedItems {
+		origins = append(origins, item.origin)
+	}
+	resp, err := run(agent, steeringMsgs, steeringCorrelationIDs, origins)
 	if err != nil {
 		// Gate finding, CRITICAL: continueWithSteeringMessages's own turn can
 		// fail with an ordinary error (provider error, mid-turn failure — the
@@ -1641,10 +1666,10 @@ func restorableSteeringItems(items []steeringQueueItem) []steeringQueueItem {
 // chatID), so it cannot recompute this value itself.
 func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, workspaceID string) (string, error) {
 	return al.continuePendingSteering(ctx, sessionKey,
-		func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
-			return al.continueWithSteeringMessages(
+		func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string, origins []inputOrigin) (string, error) {
+			return al.continueWithConsumedSteering(
 				ctx, agent, sessionKey, channel, chatID, workspaceID,
-				steeringMsgs, steeringCorrelationIDs,
+				steeringMsgs, steeringCorrelationIDs, origins,
 			)
 		})
 }
