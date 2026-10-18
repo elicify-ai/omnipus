@@ -445,6 +445,18 @@ func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 		jsonErr(uf.w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
 		return true
 	}
+	// Issue #1340 (founder rule 2026-10-18): a fallback is a (provider, model)
+	// pair — FallbackModelPair on the update body. An entry without a
+	// provider is refused before any write, naming the entry.
+	if uf.ru.req.FallbackModels != nil {
+		for i, fm := range *uf.ru.req.FallbackModels {
+			if fm.Provider == nil || strings.TrimSpace(*fm.Provider) == "" {
+				jsonErr(uf.w, http.StatusBadRequest, fmt.Sprintf(
+					"fallback_models[%d] (model %q) has no provider: every fallback must name both a provider and a model", i, fm.Model))
+				return true
+			}
+		}
+	}
 
 	if fieldErr := agentmutation.ValidateFields(uf.foundAgent, uf.suppliedFields()); fieldErr != nil {
 		var classified *agentmutation.FieldError
