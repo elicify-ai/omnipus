@@ -7,6 +7,7 @@ import (
 	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/stretchr/testify/require"
 )
@@ -239,42 +240,43 @@ func TestWU8_ResolvedFrame_CarriesRootSession(t *testing.T) {
 
 // TestWU8_ChannelApproval_OriginLabelNamesTheConversation closes the
 // channel-origin gap the map named: an approval inside a turn that answers a
-// person on a channel connection is labelled "while answering <sender> on
-// <channel>" (spec K7, §6.18 channel row; amendment §1.2 R6), live and on
-// the reload snapshot. The <sender> token is the channel conversation the
-// turn is answering (the fixture's chat id) — if the wire detail resolves
-// differently, that is a chief question, not a local guess.
+// person on a channel connection is labelled "while answering <person> on
+// <connection>" (spec K7, §6.18 channel row; amendment §1.2 R6), live and on
+// the reload snapshot. Per the spec's own BDD ("while answering Anna on
+// tg-1") and the chief's 2026-10-18 ruling: <person> is the inbound
+// message's sender display name and <connection> is the configured channel
+// connection name (the WU-4 P0-d oracle string), not the chat id and not the
+// channel kind. The fixture publishes the exact adapter/bus input shape.
 func TestWU8_ChannelApproval_OriginLabelNamesTheConversation(t *testing.T) {
 	h := newL11263Harness(t, false, config.ToolPolicyAsk, nil)
 	leaf := l11263Script(l11263Write())
 	inst, ok := h.api.agentLoop.GetRegistry().GetAgent(l11263Leaf)
 	require.True(t, ok)
 	inst.Provider = leaf
-	done := make(chan error, 1)
-	go func() {
-		_, err := h.api.agentLoop.ProcessDirectWithChannelAs(context.Background(),
-			l11263Leaf, "Write the file", "wu8-channel-chat", "telegram", "chat-42")
-		done <- err
-	}()
+	h.startPump(t)
+	require.NoError(t, h.ws.msgBus.PublishInbound(context.Background(), bus.InboundMessage{
+		Channel: "telegram", InstanceID: "telegram-ops", ChatID: "origin-chat",
+		Content:  "Write the file",
+		Sender:   bus.SenderInfo{DisplayName: "Anna", CanonicalID: "telegram:anna"},
+		Metadata: map[string]string{"agent_id": l11263Leaf, "workspace_id": testHarnessWorkspaceMembershipID},
+	}))
 	t.Cleanup(func() {
 		for _, e := range h.reg.pendingApprovals() {
 			h.reg.resolve(e.ApprovalID, ApprovalActionCancel, false)
 		}
-		select {
-		case <-done:
-		case <-time.After(15 * time.Second):
-			t.Error("channel turn cleanup did not join")
-		}
 	})
 	entry := h.awaitInteractiveApproval(t)
 	frame := wu8TypedFrame[gen.ToolApprovalRequiredFrame](t, apprResReadFrame(t, h.tab, "tool_approval_required"))
+	snap, _ := wu8SnapshotPending(t, h, entry.ApprovalID)
+	resolved, gone := h.reg.resolve(entry.ApprovalID, ApprovalActionApprove, false)
+	require.True(t, resolved && !gone)
+	h.awaitTurnSettled(t, entry.SessionID)
 
 	require.NotNil(t, frame.OriginLabel,
-		"§6.18/K7: a channel-origin ask names the conversation being answered")
-	require.Equal(t, "while answering chat-42 on telegram", *frame.OriginLabel)
+		"§6.18/K7: a channel-origin ask names the person and the connection")
+	require.Equal(t, "while answering Anna on telegram-ops", *frame.OriginLabel)
 
-	snap, _ := wu8SnapshotPending(t, h, entry.ApprovalID)
 	require.NotNil(t, snap.OriginLabel, "the channel label survives the reload")
-	require.Equal(t, "while answering chat-42 on telegram", *snap.OriginLabel)
+	require.Equal(t, "while answering Anna on telegram-ops", *snap.OriginLabel)
 	require.Equal(t, frame.OriginLabel, snap.OriginLabel)
 }
