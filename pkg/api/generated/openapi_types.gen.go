@@ -29373,6 +29373,11 @@ type GetProvidersCatalogParams struct {
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
 
+// SubmitSecretRequest503JSONResponseBody defines parameters for SubmitSecretRequest.
+type SubmitSecretRequest503JSONResponseBody struct {
+	union json.RawMessage
+}
+
 // ListSessionsParams defines parameters for ListSessions.
 type ListSessionsParams struct {
 	// AgentId Filter by agent ID.
@@ -32161,5 +32166,67 @@ func (t *SkillInstallRequest) UnmarshalJSON(b []byte) error {
 		}
 	}
 
+	return err
+}
+
+// AsSecretRequestState returns the union data inside the SubmitSecretRequest503JSONResponseBody as a SecretRequestState
+func (t SubmitSecretRequest503JSONResponseBody) AsSecretRequestState() (SecretRequestState, error) {
+	var body SecretRequestState
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSecretRequestState overwrites any union data inside the SubmitSecretRequest503JSONResponseBody as the provided SecretRequestState
+func (t *SubmitSecretRequest503JSONResponseBody) FromSecretRequestState(v SecretRequestState) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSecretRequestState performs a merge with any union data inside the SubmitSecretRequest503JSONResponseBody, using the provided SecretRequestState
+func (t *SubmitSecretRequest503JSONResponseBody) MergeSecretRequestState(v SecretRequestState) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsErrorResponse returns the union data inside the SubmitSecretRequest503JSONResponseBody as a ErrorResponse
+func (t SubmitSecretRequest503JSONResponseBody) AsErrorResponse() (ErrorResponse, error) {
+	var body ErrorResponse
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromErrorResponse overwrites any union data inside the SubmitSecretRequest503JSONResponseBody as the provided ErrorResponse
+func (t *SubmitSecretRequest503JSONResponseBody) FromErrorResponse(v ErrorResponse) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeErrorResponse performs a merge with any union data inside the SubmitSecretRequest503JSONResponseBody, using the provided ErrorResponse
+func (t *SubmitSecretRequest503JSONResponseBody) MergeErrorResponse(v ErrorResponse) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SubmitSecretRequest503JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *SubmitSecretRequest503JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
 	return err
 }
