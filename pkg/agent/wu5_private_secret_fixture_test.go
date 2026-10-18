@@ -29,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -159,13 +160,33 @@ type wu5Fixture struct {
 
 func newWU5Fixture(t *testing.T) *wu5Fixture {
 	t.Helper()
+	return newWU5FixtureOpts(t, false)
+}
+
+// newWU5FixtureWithDocRuntime builds the fixture with a HEALTHY provisioned
+// document runtime (BDD-7.10): the layout is provisioned before the loop is
+// built, so the loop's own resolve+provision pass finds it and wires the doc
+// layer onto the exec tool exactly as production does.
+func newWU5FixtureWithDocRuntime(t *testing.T) *wu5Fixture {
+	t.Helper()
+	return newWU5FixtureOpts(t, true)
+}
+
+func newWU5FixtureOpts(t *testing.T, provisionDocRuntime bool) *wu5Fixture {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("OMNIPUS_HOME", home)
+	if provisionDocRuntime {
+		layout, err := documentruntime.ResolveLayout(home, documentruntime.ManifestRevision, "shared")
+		require.NoError(t, err)
+		_, err = documentruntime.ProvisionFirstParty(layout)
+		require.NoError(t, err)
+	}
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
 	cfg := &config.Config{Agents: config.AgentsConfig{
-		Defaults: config.AgentDefaults{Home: home + "/workspace", DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096, MaxToolIterations: 8},
+		Defaults: config.AgentDefaults{Home: home + "/workspace", DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096, MaxToolIterations: 24},
 		List:     []config.AgentConfig{{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom}, {ID: "ray", Name: "Ray", Type: config.AgentTypeCustom}},
 	}}
 	// The WU-5 subject is injection scoping, not the approval machinery: the
