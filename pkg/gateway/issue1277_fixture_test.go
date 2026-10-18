@@ -147,6 +147,16 @@ func newIssue1277Fixture(t *testing.T) *issue1277Fixture {
 	f.cfg.Agents.Defaults.Home = filepath.Join(f.home, "agents")
 	f.cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Provider: "qa1277", Model: "health-probe"}
 	f.cfg.Tools.Browser.Enabled = false
+	// The fixture's model must have a context length: the qa1277 row is a
+	// loopback custom endpoint, and ADR-066 D3's pre-turn gate
+	// (pkg/agent/loop_run_turn.go) refuses ANY turn against a local endpoint
+	// with no reported window and no override (context_window_unknown) — a
+	// turn-running test would die before reaching its tool call. 128000 is
+	// the repo's documented window size (resolve_window.go cloudWindowFloor,
+	// SC-009); any positive value admits the turn, the scripted provider is
+	// what actually answers it.
+	f.cfg.Context.ModelOverrides = append(f.cfg.Context.ModelOverrides,
+		config.ContextModelOverride{Provider: "qa1277", Model: "health-probe", ContextWindow: 128000})
 	f.cfg.Providers = []*config.ModelConfig{{
 		Provider: "qa1277", Model: "health-probe", Models: []string{"health-probe"}, Custom: true,
 		Protocol: "openai-compatible", APIBase: server.URL + "/v1", APIKeyRef: issue1277ProviderRef,
