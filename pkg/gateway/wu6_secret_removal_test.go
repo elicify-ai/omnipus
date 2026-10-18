@@ -76,6 +76,17 @@ func (p *wu6ScriptedProvider) setDefaultScript(script []providers.LLMResponse) {
 	p.defaultScript = script
 }
 
+// appendDefaultScript extends the default script in place. The model-call
+// counter is cumulative across a session's resumed turns, so a mid-flow
+// step (the connect after two card resumes) must be APPENDED — replacing
+// the script would leave the counter past its end and the next model call
+// would read "script exhausted".
+func (p *wu6ScriptedProvider) appendDefaultScript(entries []providers.LLMResponse) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.defaultScript = append(p.defaultScript, entries...)
+}
+
 func (p *wu6ScriptedProvider) GetDefaultModel() string { return "test-model" }
 
 func (p *wu6ScriptedProvider) Chat(ctx context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
@@ -109,6 +120,28 @@ func (p *wu6ScriptedProvider) allToolResults() string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// lastToolResult returns the most recent tool message the model was shown —
+// the final tool step's report. The honest-result oracles judge THIS text:
+// a ToolSearch promotion result embeds whole tool schemas, whose
+// descriptions legitimately contain words like "working", so the
+// working/not-working word checks must read the step's own report, not the
+// catalog dump.
+func (p *wu6ScriptedProvider) lastToolResult() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out string
+	for _, turns := range p.prompts {
+		for _, msgs := range turns {
+			for _, m := range msgs {
+				if m.Role == "tool" {
+					out = m.Content
+				}
+			}
+		}
+	}
+	return out
 }
 
 // wu6Fixture: the #1277 fixture (real consumers, store, reload, boot) plus a
@@ -167,7 +200,19 @@ func newWU6Fixture(t *testing.T) *wu6Fixture {
 	hs := health.NewServer("127.0.0.1", 0)
 	mgr.SetupHTTPServer("127.0.0.1:0", hs)
 	al.SetChannelManager(mgr)
-	al.WireSysagentDeps(&systools.Deps{Home: f.home, GetCfg: al.GetConfig, CredStore: store})
+	// The Deps are wired the way production does (pkg/gateway/gateway.go::
+	// wireSystemTools): the config mutator and its persistence hook are part
+	// of the production wiring, and the connect/configure family refuses to
+	// run without them — a fixture that omits them never reaches the real
+	// oracles (BDD-8.1/8.3/8.7).
+	al.WireSysagentDeps(&systools.Deps{
+		Home:             f.home,
+		ConfigPath:       f.configPath,
+		GetCfg:           al.GetConfig,
+		MutateConfig:     al.MutateConfig,
+		SaveConfigLocked: func(c *config.Config) error { return config.SaveConfig(f.configPath, c) },
+		CredStore:        store,
+	})
 	api := &restAPI{agentLoop: al, homePath: f.home, credStore: store}
 	svc := &services{
 		homePath: f.home, ChannelManager: mgr, HealthServer: hs, bundle: bundle, credStore: store,
