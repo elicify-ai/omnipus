@@ -6,6 +6,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -133,7 +134,7 @@ func (al *AgentLoop) applyTurnAttendance(opts *processOptions) {
 	if opts == nil {
 		return
 	}
-	att := al.classifySessionChain(opts.TranscriptSessionID)
+	att := al.classifySessionChain(attendanceSessionID(opts))
 	if att.Unattended {
 		opts.AutoDenyAsk = true
 	}
@@ -148,4 +149,20 @@ func (al *AgentLoop) applyTurnAttendance(opts *processOptions) {
 		opts.askRefusalReason = autoDenyTaskPlanReason
 	}
 	opts.askRefusalCause = att.Cause
+}
+
+// attendanceSessionID is the concrete session a turn's chain is classified
+// from: its transcript session, or — for a turn built without one, such as
+// the ordinary worker's post-turn steering drain (AgentLoop.Continue) — the
+// session named by its session-scoped key "agent:<agent>:session:<id>".
+// Without this, a person's late instruction into a task conversation ran its
+// continuation attended (gate round 1, code-reviewer F01). A chat-scoped key
+// (a channel conversation with no session yet) names no session and is left
+// to the caller's own AutoDenyAsk.
+func attendanceSessionID(opts *processOptions) string {
+	if opts.TranscriptSessionID != "" {
+		return opts.TranscriptSessionID
+	}
+	_, sessionID, _ := strings.Cut(opts.SessionKey, ":session:")
+	return sessionID
 }
