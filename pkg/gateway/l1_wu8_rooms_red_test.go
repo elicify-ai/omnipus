@@ -220,8 +220,9 @@ func TestWU15Rooms_ReceiverHelperApprovalReloadRestoresCompleteApprovableCard(t 
 	require.Equal(t, frame.Args, snap.Args)
 	require.Equal(t, frame.Segments, snap.Segments)
 	require.Equal(t, frame.OriginLabel, snap.OriginLabel)
-	require.NotNil(t, snap.RoomRef, "the room-origin card carries its room ref after reload")
-	require.Equal(t, room.Id, snap.RoomRef.RoomId)
+	// Chief ruling 2026-10-18 (option C): room_ref belongs to the room
+	// pre-admission card and to the room-received member's OWN turn — never
+	// to a helper's card — so no room_ref assertion is made here.
 
 	// Complete AND approvable: approving through the real endpoint runs the
 	// helper's probe.
