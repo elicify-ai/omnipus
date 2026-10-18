@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 	"time"
 
@@ -26,11 +27,17 @@ func upwardWakeDetails(child *session.LifecycleRecord, msg generated.SessionMess
 	var reason string
 	switch kind {
 	case "handback":
+		v, _ := msg.AsSessionMessageHandback()
+		if v.Mode != generated.SessionMessageHandbackModeFinal {
+			// A pause hand-back is a non-ending report (outcomeForKind maps it
+			// to a blocker): its own row, never a goal ending (SFH-06).
+			reason, event.Kind, event.CreatedAt = "blocker", generated.HelperEventKindBlocker, v.CreatedAt
+			break
+		}
 		if child.GoalRef != "" {
 			return "finished", nil
 		}
 		reason, event.Kind = "finished", generated.HelperEventKindFinished
-		v, _ := msg.AsSessionMessageHandback()
 		event.CreatedAt = v.CreatedAt
 	case "question":
 		reason, event.Kind = "question", generated.HelperEventKindQuestion
@@ -82,6 +89,35 @@ func (al *AgentLoop) retainHelperEvent(childID, destination, sourceID string, ev
 		return &helperEventRowPendingError{cause: err}
 	}
 	return nil
+}
+
+// preRetainUpwardHelperEvent saves the helper-event row's repair payload for
+// an upward message before the message is appended to the inbox. It writes no
+// row and wakes nothing; the delivery's own retainHelperEvent finds the same
+// payload, applies it and retires it.
+func (al *AgentLoop) preRetainUpwardHelperEvent(child *session.LifecycleRecord, destination string, msg generated.SessionMessage) error {
+	_, event := upwardWakeDetails(child, msg)
+	if event == nil {
+		return nil
+	}
+	sourceID := messageIDOf(msg)
+	if sourceID == "" {
+		return nil
+	}
+	if store := al.GetSessionStore(); store == nil {
+		return nil
+	} else if _, err := store.GetMeta(destination); errors.Is(err, fs.ErrNotExist) {
+		// A recipient without metadata is refused by the wake entry (PW-D12);
+		// it gets no row, so no repair payload is owed to it.
+		return nil
+	} else if err != nil {
+		return err
+	}
+	event.Text = al.filterWakeText(event.Text)
+	return al.GetSessionLifecycleStore().SaveHelperEventRepair(child.SessionID, session.HelperEventRepair{
+		ID: "repair-" + helperEventMessageID(destination, sourceID, event.Kind), SourceID: sourceID,
+		Destinations: []string{destination}, Event: *event,
+	})
 }
 
 type helperEventRowPendingError struct{ cause error }
@@ -155,6 +191,9 @@ func (al *AgentLoop) combinedEndingInput(child *session.LifecycleRecord, msg gen
 	kind, _ := msg.Discriminator()
 	if kind != "handback" || child.GoalRef == "" {
 		return body, nil
+	}
+	if v, err := msg.AsSessionMessageHandback(); err == nil && v.Mode != generated.SessionMessageHandbackModeFinal {
+		return body, nil // a pause is not a goal ending
 	}
 	goal, err := resolveGoalRecordStore().Get(child.GoalRef)
 	if err != nil {

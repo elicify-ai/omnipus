@@ -1325,6 +1325,11 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 			}
 			include, err := ri.rf.rt.al.admitSteeringInput(ri.rf.rt.ts, pm, correlationID)
 			if err != nil {
+				// The rest of this dequeued batch is never attempted: give back
+				// the saved inputs' claims so they are not stranded in flight.
+				if i+1 < len(ri.pendingSteeringReceipts) {
+					ri.rf.rt.al.releaseSavedWakeClaims(ri.rf.rt.ts.transcriptSessionID, ri.pendingSteeringReceipts[i+1:])
+				}
 				var status TurnEndStatus
 				ri.ret0, status, ri.ret1 = ri.rf.rt.al.contextWindowTurnExit(ri.rf.rt.ts, ri.rf.rt.iteration, ri.rf.rt.llmModel, err)
 				ri.turnStatus = status

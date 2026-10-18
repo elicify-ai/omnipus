@@ -86,6 +86,9 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 		return result, err
 	}
 	if consumed {
+		if err = al.GetSessionStore().RetireSavedInput(recipientSessionID, "saved-input-"+outcomeID); err != nil {
+			return result, err
+		}
 		result.Disposition = "already_consumed"
 		return result, nil
 	}
@@ -101,12 +104,17 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 		result.Disposition = "suppressed_by_stop"
 		return result, nil
 	}
-	live := al.getActiveTurnState(recipientSessionID)
-	if live == nil || !live.IsAlive() {
-		if meta.PendingAskJSON != "" || rec.State == session.LifecycleNeedsInput {
-			result.Disposition = "held_for_question"
-			return result, nil
-		}
+	// PW-D15: only an UNANSWERED card holds the outcome (a retained answered
+	// or cancelled record does not), and it holds even while the turn that
+	// parked it is still unwinding. A live tool approval is not a card.
+	cardOpen, err := questionCardOpen(recipientSessionID, meta.PendingAskJSON)
+	if err != nil {
+		return result, err
+	}
+	live := al.liveTurnForSession(recipientSessionID)
+	if cardOpen || ((live == nil || !live.IsAlive()) && rec.State == session.LifecycleNeedsInput) {
+		result.Disposition = "held_for_question"
+		return result, nil
 	}
 	if al.asyncNotifier == nil {
 		return result, fmt.Errorf("wake session: notifier is not configured")
@@ -126,7 +134,9 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 		if steerUpwardDelivererAfterLiveTurnCheckTestHook != nil {
 			steerUpwardDelivererAfterLiveTurnCheckTestHook(recipientSessionID, rec.Generation)
 		}
-		err = al.EnqueueSteeringWake(recipientSessionID, rec.AgentID, recipientSessionID, outcomeID,
+		// Enqueue on the live turn's own scope: an ordinary root is registered
+		// under its agent-scoped key, not the bare session id.
+		err = al.EnqueueSteeringWake(live.sessionKey, rec.AgentID, recipientSessionID, outcomeID,
 			providers.Message{Role: "user", Content: body})
 		if err == nil {
 			published = true
@@ -257,4 +267,28 @@ func (al *AgentLoop) saveWakeEvent(ctx context.Context, recipient, reason, outco
 	return al.saveHelperEvent(recipient, outcomeID, generated.HelperEvent{
 		HelperSessionId: childID, Kind: kind, Text: body, CreatedAt: time.Now().UTC(),
 	})
+}
+
+// liveTurnForSession resolves the turn currently running for a transcript
+// session. A steered helper is registered under its bare session id; an
+// ordinary root is registered under its agent-scoped key
+// (agent:<agent>:session:<id>), so the exact lookup alone misses a working
+// main and would publish an idle wake instead of joining it.
+func (al *AgentLoop) liveTurnForSession(sessionID string) *turnState {
+	if ts := al.getActiveTurnState(sessionID); ts != nil {
+		return ts
+	}
+	var root *turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts, ok := value.(*turnState)
+		if !ok || ts.transcriptSessionID != sessionID {
+			return true
+		}
+		if ts.depth == 0 || ts.parentTurnID == "" {
+			root = ts
+			return false
+		}
+		return true
+	})
+	return root
 }

@@ -860,6 +860,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if savedErr != nil || consumed {
 		return "", savedErr
 	}
+	if held, holdErr := al.savedWakeHeldForQuestion(sessionID, messageID, saved); held || holdErr != nil {
+		return "", holdErr
+	}
 
 	// D6/D7: a stopped session (landed, or with its current-generation Stop
 	// in flight) does no compute until it is explicitly resumed. The wake
@@ -915,7 +918,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 			entry := &gate.queue[i]
 			queuedClaim := entry.executionClaim()
 			if entry.generation == generation && queuedClaim.matches(rec) {
-				appendErr := al.commitQueuedSystemWakeLocked(lifecycle, entry, generation, messageID, msg.Content, rec.AgentID)
+				appendErr := al.commitQueuedSystemWakeLocked(lifecycle, entry, generation, messageID, msg.Content, rec.AgentID, saved)
 				gate.mu.Unlock()
 				return "", appendErr
 			}
@@ -947,7 +950,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 			// the session. The promotion consumes the whole ordered list before
 			// starting; otherwise it would replay the launch instruction or
 			// lose an earlier wake when a second one arrives.
-			if commitErr := al.commitQueuedSystemWake(lifecycle, claim, generation, messageID, msg.Content, rec.AgentID); commitErr != nil {
+			if commitErr := al.commitQueuedSystemWakeInput(lifecycle, claim, generation, messageID, msg.Content, rec.AgentID, saved); commitErr != nil {
 				gate.removeQueuedExecution(claim)
 				return "", commitErr
 			}

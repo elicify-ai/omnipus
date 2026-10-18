@@ -12,6 +12,9 @@ import (
 // SaveChatInput saves an addressed, chat-only payload, without assigning a
 // model ordinal. PlaceSavedInput is the separate consumption-fence operation.
 // Retrying an id returns its original address; changing its bytes is refused.
+// The saved input is also entered in the session's content-free pending
+// directory (saved_input_index.go), so ordinary turns can find it without
+// reading the archive.
 func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (ArchiveAddress, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return ArchiveAddress{}, err
@@ -29,9 +32,23 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 	if err != nil {
 		return ArchiveAddress{}, err
 	}
+	idx, err := us.loadSavedInputIndexLocked(sessionID)
+	if err != nil {
+		return ArchiveAddress{}, err
+	}
 	var existing ArchiveAddress
 	var conflict bool
-	if err = archive.ScanAll(func(addr ArchiveAddress, rec ArchiveRecord) bool {
+	if entry, ok := idx[id]; ok {
+		rec, readErr := archive.ReadAt(entry.Address)
+		if readErr != nil {
+			return ArchiveAddress{}, fmt.Errorf("saved input %q: read indexed record: %w", id, readErr)
+		}
+		existing = entry.Address
+		conflict = rec.ID != id || rec.ViewMembership != ViewMembershipChat || rec.ModelMessage == nil || rec.Content != body
+	} else if err = archive.ScanAll(func(addr ArchiveAddress, rec ArchiveRecord) bool {
+		// Wake path only (once per outcome): a retried save of an input that
+		// was already placed and left the pending directory must not append a
+		// second copy.
 		if rec.ID != id {
 			return true
 		}
@@ -51,6 +68,10 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 	if err != nil {
 		return ArchiveAddress{}, err
 	}
+	fromOrdinal, err := archive.OrdinalCount()
+	if err != nil {
+		return ArchiveAddress{}, err
+	}
 	entry := TranscriptEntry{ID: id, Role: "user", Content: body, AgentID: agentID,
 		Timestamp: time.Now().UTC(), ViewMembership: ViewMembershipChat}
 	addr, err := archive.Append(ArchiveRecord{TranscriptEntry: entry, ModelMessage: &payload,
@@ -61,12 +82,18 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 	accumulateEntryStats(&meta.Stats, entry)
 	meta.UpdatedAt = entry.Timestamp
 	us.u6MarkStatsDirtyLocked(sessionID, meta)
+	idx[id] = savedInputIndexEntry{Address: addr, FromOrdinal: fromOrdinal, Seq: time.Now().UnixNano()}
+	if err := us.saveSavedInputIndexLocked(sessionID, idx); err != nil {
+		return ArchiveAddress{}, err
+	}
 	return addr, nil
 }
 
 // SavedChatInput resolves the durable address and whether it has already been
-// placed. The scan includes evicted references: eviction is not permission to
-// place the same logical event again after a process restart.
+// placed. A pending input is answered from the content-free directory. An id
+// that is not pending falls back to the archive (wake paths only, once per
+// outcome): eviction is not permission to place the same logical event again
+// after a process restart.
 func (us *UnifiedStore) SavedChatInput(sessionID, id string) (ArchiveAddress, bool, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return ArchiveAddress{}, false, err
@@ -75,6 +102,13 @@ func (us *UnifiedStore) SavedChatInput(sessionID, id string) (ArchiveAddress, bo
 	defer h.Unlock()
 	if _, err := us.readMetaLocked(sessionID); err != nil {
 		return ArchiveAddress{}, false, err
+	}
+	idx, err := us.loadSavedInputIndexLocked(sessionID)
+	if err != nil {
+		return ArchiveAddress{}, false, err
+	}
+	if entry, ok := idx[id]; ok {
+		return entry.Address, false, nil
 	}
 	archive, err := us.archiveStore(sessionID)
 	if err != nil {
@@ -94,44 +128,48 @@ func (us *UnifiedStore) SavedChatInput(sessionID, id string) (ArchiveAddress, bo
 	return addr, placed, err
 }
 
-// PendingChatInputs returns only saved wake inputs that have neither a model
-// reference nor a consumed marker (including a final consumed by polling).
-// They are placed by the next legitimate turn, never by an unanswered card.
+// PendingChatInputs returns the saved wake inputs still in the pending
+// directory, in arrival order. A session with none reads no archive record;
+// otherwise only each pending record's own address is read.
 func (us *UnifiedStore) PendingChatInputs(ctx context.Context, sessionID string) ([]TranscriptEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := validateSessionID(sessionID); err != nil {
+		return nil, err
+	}
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
-	if _, err := us.readMetaLocked(sessionID); err != nil {
+	idx, err := us.loadSavedInputIndexLocked(sessionID)
+	if err != nil || len(idx) == 0 {
 		return nil, err
 	}
 	archive, err := us.archiveStore(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	var inputs []TranscriptEntry
-	consumed := make(map[string]bool)
-	err = archive.ScanAll(func(_ ArchiveAddress, rec ArchiveRecord) bool {
-		if rec.ModelRef != nil {
-			consumed[rec.ModelRef.EntryID] = true
+	pending := make([]TranscriptEntry, 0, len(idx))
+	for _, id := range sortedSavedInputIDs(idx) {
+		rec, readErr := archive.ReadAt(idx[id].Address)
+		if readErr != nil {
+			return nil, fmt.Errorf("saved input %q: read pending record: %w", id, readErr)
 		}
-		if strings.HasPrefix(rec.ID, "consumed-") {
-			consumed["saved-input-"+strings.TrimPrefix(rec.ID, "consumed-")] = true
-		}
-		if strings.HasPrefix(rec.ID, "saved-input-") && rec.ModelMessage != nil && rec.ViewMembership == ViewMembershipChat {
-			inputs = append(inputs, rec.TranscriptEntry)
-		}
-		return true
-	})
-	if err != nil {
-		return nil, err
-	}
-	pending := inputs[:0]
-	for _, entry := range inputs {
-		if !consumed[entry.ID] {
-			pending = append(pending, entry)
-		}
+		pending = append(pending, rec.TranscriptEntry)
 	}
 	return pending, nil
+}
+
+// savedInputFromOrdinal returns the bounded once-only search start for an
+// indexed saved input, or ok=false for a source the directory does not track.
+func (us *UnifiedStore) savedInputFromOrdinalLocked(sessionID string, source ArchiveAddress) (int, bool, error) {
+	idx, err := us.loadSavedInputIndexLocked(sessionID)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, entry := range idx {
+		if entry.Address == source {
+			return entry.FromOrdinal, true, nil
+		}
+	}
+	return 0, false, nil
 }

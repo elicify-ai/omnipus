@@ -2,11 +2,14 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/askuser"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -16,6 +19,54 @@ import (
 const savedWakeCorrelationPrefix = "\x00saved-wake:"
 
 var errSavedWakeHeld = errors.New("saved wake input is held by Stop")
+
+// errSavedWakeHeldForQuestion holds a saved input while the session has an
+// unanswered question card (PW-D15). The person's correlated answer is the
+// continuation that places it.
+var errSavedWakeHeldForQuestion = errors.New("saved wake input is held for an unanswered question")
+
+// openQuestionCard reports whether sessionID has an UNANSWERED question card.
+// The retained record of an answered or cancelled card stays in the same
+// field for history, so presence alone is not "unanswered". A record that
+// cannot be read is returned as an error, never treated as a hold.
+func (al *AgentLoop) openQuestionCard(sessionID string) (bool, error) {
+	store := al.GetSessionStore()
+	if store == nil {
+		return false, nil
+	}
+	meta, err := store.GetMeta(sessionID)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return questionCardOpen(sessionID, meta.PendingAskJSON)
+}
+
+func questionCardOpen(sessionID, pendingAskJSON string) (bool, error) {
+	if strings.TrimSpace(pendingAskJSON) == "" {
+		return false, nil
+	}
+	var set askuser.PendingSet
+	if err := json.Unmarshal([]byte(pendingAskJSON), &set); err != nil {
+		return false, fmt.Errorf("session %s: question card record is unreadable: %w", sessionID, err)
+	}
+	return set.Status == askuser.StatusPending, nil
+}
+
+// releaseSavedWakeClaims ends the in-process publication claim of every saved
+// input in ids that a live consumer is giving back unplaced (held, failed, or
+// never attempted). The saved record stays pending, so the next legitimate
+// turn's fence places it; a claim left behind would make it look in flight
+// for the rest of the process.
+func (al *AgentLoop) releaseSavedWakeClaims(sessionID string, correlationIDs []string) {
+	for _, id := range correlationIDs {
+		if outcomeID, ok := strings.CutPrefix(id, savedWakeCorrelationPrefix); ok {
+			al.releaseWakePublication(sessionID, outcomeID)
+		}
+	}
+}
 
 func (al *AgentLoop) placeSavedWakeInput(ctx context.Context, sessionID, outcomeID, agentID string) (bool, error) {
 	store := al.GetSessionStore()
@@ -42,9 +93,27 @@ func (al *AgentLoop) placeSavedWakeInput(ctx context.Context, sessionID, outcome
 		if lifecycleInFlightStopFence(rec) || rec.State == session.LifecycleStopped || acceptedStopSelectsExecution(rec, intents) {
 			return false, errSavedWakeHeld
 		}
-		consumed, err := al.wakeInputConsumed(sessionID, outcomeID)
-		if err != nil || consumed {
+		// PW-D15 at the consumption boundary: a card parked after the
+		// producer's check still holds the outcome until the answer.
+		open, err := al.openQuestionCard(sessionID)
+		if err != nil {
 			return false, err
+		}
+		if open {
+			return false, errSavedWakeHeldForQuestion
+		}
+		consumed, err := al.wakeInputConsumed(sessionID, outcomeID)
+		if err != nil {
+			return false, err
+		}
+		if consumed {
+			// Already received through another consumer (a poll). It leaves
+			// the pending directory; it is not placed again.
+			if retireErr := store.RetireSavedInput(sessionID, "saved-input-"+outcomeID); retireErr != nil {
+				return false, retireErr
+			}
+			al.releaseWakePublication(sessionID, outcomeID)
+			return false, nil
 		}
 		if _, _, err := store.PlaceSavedInput(ctx, sessionID, addr); err != nil {
 			if !errors.Is(err, session.ErrAlreadyConsumed) {
@@ -72,22 +141,24 @@ func (al *AgentLoop) placePendingSavedWakeInputs(ctx context.Context, ts *turnSt
 	if ts.opts.NoHistory || ts.transcriptSessionID == "" || al.GetSessionStore() == nil {
 		return nil
 	}
-	meta, err := al.GetSessionStore().GetMeta(ts.transcriptSessionID)
+	// The content-free pending directory answers "none" without reading the
+	// archive; only pending records' own addresses are read otherwise.
+	inputs, err := al.GetSessionStore().PendingChatInputs(ctx, ts.transcriptSessionID)
 	if errors.Is(err, fs.ErrNotExist) {
 		// SaveChatInput refuses a recipient without metadata, so a session
 		// with no metadata cannot hold a saved wake input: nothing to place.
-		// Its turn proceeds exactly as it did before saved inputs existed.
 		return nil
 	}
+	if err != nil || len(inputs) == 0 {
+		return err
+	}
+	open, err := al.openQuestionCard(ts.transcriptSessionID)
 	if err != nil {
 		return err
 	}
-	if meta.PendingAskJSON != "" {
+	if open {
+		// PW-D15: retained until the correlated answer continues the session.
 		return nil
-	}
-	inputs, err := al.GetSessionStore().PendingChatInputs(ctx, ts.transcriptSessionID)
-	if err != nil {
-		return err
 	}
 	for _, input := range inputs {
 		id := strings.TrimPrefix(input.ID, "saved-input-")
@@ -110,10 +181,18 @@ func (al *AgentLoop) admitSteeringInput(ts *turnState, msg providers.Message, co
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		include, err := al.placeSavedWakeInput(ctx, ts.transcriptSessionID,
-			strings.TrimPrefix(correlationID, savedWakeCorrelationPrefix), ts.agent.ID)
-		if errors.Is(err, errSavedWakeHeld) {
-			return false, nil
+		outcomeID := strings.TrimPrefix(correlationID, savedWakeCorrelationPrefix)
+		include, err := al.placeSavedWakeInput(ctx, ts.transcriptSessionID, outcomeID, ts.agent.ID)
+		if err != nil {
+			// Held (Stop or an unanswered card) or failed before placement: the
+			// saved record stays pending for the next legitimate fence, and this
+			// consumer gives back its claim instead of stranding it.
+			al.releaseWakePublication(ts.transcriptSessionID, outcomeID)
+			if errors.Is(err, errSavedWakeHeld) || errors.Is(err, errSavedWakeHeldForQuestion) {
+				logger.InfoCF("agent", "saved helper input held at the live fence; it stays pending",
+					map[string]any{"session_id": ts.transcriptSessionID, "outcome_id": outcomeID, "reason": err.Error()})
+				return false, nil
+			}
 		}
 		return include, err
 	}
@@ -132,6 +211,23 @@ func (al *AgentLoop) prepareSavedSystemWake(ctx context.Context, sessionID, mess
 		return true, true, err
 	}
 	return addr.EntryID != "", false, nil
+}
+
+// savedWakeHeldForQuestion is the idle-wake receiver's PW-D15 check: a card
+// that became pending after the outcome was published still holds it. The
+// saved record stays pending and no outcome-only turn starts; the answer's
+// own continuation places it.
+func (al *AgentLoop) savedWakeHeldForQuestion(sessionID, messageID string, saved bool) (bool, error) {
+	if !saved {
+		return false, nil
+	}
+	open, err := al.openQuestionCard(sessionID)
+	if err != nil || !open {
+		return false, err
+	}
+	logger.InfoCF("agent", "helper outcome held for an unanswered question card; no outcome-only turn",
+		map[string]any{"session_id": sessionID, "outcome_id": messageID})
+	return true, nil
 }
 
 func (al *AgentLoop) placeSavedWakeAtEntry(ctx context.Context, ts *turnState, messageID string, saved bool) error {

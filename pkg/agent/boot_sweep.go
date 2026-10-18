@@ -155,6 +155,9 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 		}
 		switch class {
 		case steer.ClassOrdinaryRoot:
+			// A no-edge create_task root retains event rows for its captured
+			// recipients; repair them here too (delivery-only, no wake/resume).
+			r.repairRetainedRows(id, false, notice)
 			if err := r.recoverOrdinaryRoot(id, notice); err != nil {
 				refusals = append(refusals, err)
 			}
@@ -289,11 +292,7 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		// wake. The immutable restart row is still sourced from the ledger.
 		r.resumeRestartHelper(ctx, rec, notice)
 	}
-	if al, loopErr := r.noticeLoop(); loopErr == nil {
-		if repairErr := errors.Join(al.repairHelperEvents(id), al.repairGoalOutcome(id)); repairErr != nil {
-			notice("helper-event-repair:"+id, fmt.Sprintf("helper %s rows are pending repair: %v", id, repairErr))
-		}
-	}
+	r.repairRetainedRows(id, true, notice)
 	stopNoticeRecovered := r.recoverStoppedChildNotice(ctx, rec, notice)
 	if interruptedErr != nil {
 		// Historical replay is independent, but cannot erase a refused current
@@ -1671,4 +1670,24 @@ func (r *SteerBootRecovery) acceptedStopPending(rec *session.LifecycleRecord) (b
 		return false, err
 	}
 	return acceptedStopSelectsExecution(rec, intents), nil
+}
+
+// repairRetainedRows re-applies the durable row-repair payloads a session
+// retained for its destinations (helper events, including a failed goal-ending
+// copy). It is delivery-only: no turn, no resume, no wake. A failure stays
+// retained and is reported to the operator; the next boot or delivery retries.
+// Only a steered helper also rebuilds its goal-ending rows from the goal
+// record; an ordinary root's own retained payloads are its complete source.
+func (r *SteerBootRecovery) repairRetainedRows(id string, steered bool, notice func(string, string)) {
+	al, err := r.noticeLoop()
+	if err != nil {
+		return
+	}
+	repairErr := al.repairHelperEvents(id)
+	if steered {
+		repairErr = errors.Join(repairErr, al.repairGoalOutcome(id))
+	}
+	if repairErr != nil {
+		notice("helper-event-repair:"+id, fmt.Sprintf("session %s event rows are pending repair: %v", id, repairErr))
+	}
 }

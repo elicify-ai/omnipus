@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -475,6 +476,14 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	// ack tracking — except the wake itself; see UpwardEvent.SuppressWake.
 	wakeEligible := class.WakeEligible && !event.SuppressWake && !isMetGoalMessage(msg)
 
+	// SFH-04: the row's repair payload is retained BEFORE the inbox entry can
+	// be polled, so a crash after a poll consumes the result still leaves the
+	// lasting event row recoverable by boot (no second turn for the repair).
+	if wakeEligible {
+		if err := al.preRetainUpwardHelperEvent(childRec, ownerKey, msg); err != nil {
+			return steer.Delivery{}, fmt.Errorf("steer: deliver: retain event row source: %w", err)
+		}
+	}
 	var res *session.AppendResult
 	var appendErr error
 	if isSystemFinal(ctx) && isTerminalOutcome(event.Outcome) {
@@ -487,6 +496,12 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	}
 	if appendErr != nil {
 		return steer.Delivery{}, al.recordNotDelivered(lifecycle, ownerKey, childRec, class.Kind, appendErr)
+	}
+	if steerUpwardAfterInboxAppendTestHook != nil {
+		// Crash-injection seam: the inbox entry is durable and pollable here.
+		if hookErr := steerUpwardAfterInboxAppendTestHook(ownerKey, res.MessageID); hookErr != nil {
+			return steer.Delivery{}, hookErr
+		}
 	}
 
 	// Finding C (ADR-091 fix lane 1, CRITICAL): a deterministic duplicate at
@@ -510,8 +525,14 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	// the SAME frames + wake path a first delivery takes — safe to repeat:
 	// deliverSubagentMessage/State/End's frame ids are deterministic and
 	// AppendTranscriptStrict rejects (id-dedupes) a repeat write.
+	// Earlier rows this child still owes (possibly to OTHER recipients) are
+	// retried, but their failure never blocks this recipient's own delivery:
+	// one chat's failed row write must not cost another chat its outcome. The
+	// payloads stay retained for boot and the next delivery, and the failure
+	// is reported where it happens (ARCH-5 / PW-D18).
 	if err := al.repairHelperEvents(childRec.SessionID); err != nil {
-		return steer.Delivery{}, fmt.Errorf("steer: deliver: repair helper rows: %w", err)
+		logger.ErrorCF("agent", "steer: deliver: retained event rows still pending repair; delivering this outcome anyway",
+			map[string]any{"session_id": childRec.SessionID, "recipient": ownerKey, "error": err.Error()})
 	}
 	if err := al.repairGoalOutcome(childRec.SessionID); err != nil {
 		var pending *helperEventRowPendingError
@@ -741,6 +762,10 @@ func (d *SteerUpwardDeliverer) wakeOwnerOrStore(
 	}
 	return delivery.Delivery, err
 }
+
+// steerUpwardAfterInboxAppendTestHook simulates a crash right after an upward
+// message became durable in the recipient's inbox (SFH-04). Nil in production.
+var steerUpwardAfterInboxAppendTestHook func(recipient, messageID string) error
 
 // steerUpwardDelivererAfterLiveTurnCheckTestHook is a deterministic seam for
 // the IsAlive-to-enqueue boundary. It is nil in production.

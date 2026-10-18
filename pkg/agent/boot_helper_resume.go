@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // resumeRestartHelper admits only a native helper whose lasting state is a
@@ -29,6 +31,9 @@ func (r *SteerBootRecovery) resumeRestartHelper(ctx context.Context, stopped *se
 		if _, ok := al.GetRegistry().GetAgent(stopped.AgentID); !ok {
 			err = fmt.Errorf("restart resume: agent %q is not available", stopped.AgentID)
 		}
+	}
+	if err == nil {
+		err = restartResumeWorkspaceRefusal(stopped.AgentID, stopped.WorkspaceID)
 	}
 	var generation int
 	if err == nil {
@@ -122,4 +127,30 @@ func (al *AgentLoop) restartHistoryResume(rec *session.LifecycleRecord) (bool, e
 		}
 	}
 	return false, nil
+}
+
+// restartResumeWorkspaceRefusal (PW-SEC-01) refuses an automatic resume whose
+// saved work would no longer execute in its own recorded workspace. Turn
+// rooting falls back to another membership when the preferred one is gone,
+// so a helper removed from workspace A but still in B would continue A's
+// saved work in B's files. No person asked for that; the refusal is visible
+// (resume_refused row) and the parent is still told about the restart.
+func restartResumeWorkspaceRefusal(agentID, workspaceID string) error {
+	if strings.TrimSpace(workspaceID) == "" {
+		return nil
+	}
+	home := omnipusHome()
+	if !workspace.Exists(home, workspaceID) {
+		// No workspace record to hold authority against (a record from before
+		// workspaces, or a deleted one). Residual: a deleted workspace still
+		// falls back like every ordinary turn does; reported for security
+		// review rather than guessed here.
+		return nil
+	}
+	resolved, ok := workspace.FindForAgentPreferring(home, agentID, workspaceID)
+	if ok && resolved == workspaceID {
+		return nil
+	}
+	return fmt.Errorf("restart resume: agent %q no longer runs in workspace %q (would run in %q); refusing to continue its saved work elsewhere",
+		agentID, workspaceID, resolved)
 }

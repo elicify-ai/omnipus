@@ -1229,9 +1229,29 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 				addr, _, savedErr := store.SavedChatInput(item.wake.transcriptSessionID, "saved-input-"+item.wake.messageID)
 				if savedErr != nil {
 					al.steering.prependItemsScope(scope, items[i:])
+					// The live tool-boundary polls drop this error, so it is made
+					// visible here; the item stays queued and retryable.
+					logger.ErrorCF("agent", "saved helper input could not be looked up; restored to the steering queue",
+						map[string]any{"scope": scope, "session_id": item.wake.transcriptSessionID,
+							"outcome_id": item.wake.messageID, "error": savedErr.Error()})
 					return msgs, correlationIDs, consumedItems, savedErr
 				}
 				if addr.EntryID != "" {
+					// PW-D15: a card parked after this item was queued holds it.
+					// The saved record stays pending for the answer's fence; the
+					// claim goes back so nothing treats it as in flight.
+					open, cardErr := al.openQuestionCard(item.wake.transcriptSessionID)
+					if cardErr != nil {
+						al.steering.prependItemsScope(scope, items[i:])
+						logger.ErrorCF("agent", "question card unreadable; saved helper input restored to the steering queue",
+							map[string]any{"scope": scope, "session_id": item.wake.transcriptSessionID,
+								"outcome_id": item.wake.messageID, "error": cardErr.Error()})
+						return msgs, correlationIDs, consumedItems, cardErr
+					}
+					if open {
+						al.releaseWakePublication(item.wake.transcriptSessionID, item.wake.messageID)
+						continue
+					}
 					msgs = append(msgs, item.message)
 					correlationIDs = append(correlationIDs, savedWakeCorrelationPrefix+item.wake.messageID)
 					consumedItems = append(consumedItems, item)

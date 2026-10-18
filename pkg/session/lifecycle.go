@@ -390,6 +390,14 @@ type LifecycleRecord struct {
 	// wire SessionLifecycleRecord (this is not session status).
 	PendingUserMessages []string `json:"pending_user_messages,omitempty"`
 
+	// PendingSavedInputs lists queued wakes whose input is already a saved
+	// chat record (PW-D16). Their body is NOT copied into PendingUserMessages:
+	// the promoted turn places each saved record once at its consumption
+	// fence, so it never also arrives as a fresh user message.
+	//
+	// not-wire-format: internal steered-session bookkeeping.
+	PendingSavedInputs []string `json:"pending_saved_inputs,omitempty"`
+
 	NeedsInput *NeedsInput `json:"needs_input,omitempty"`
 
 	// FailedReason is set only when State==LifecycleFailed. Left open

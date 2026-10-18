@@ -24,16 +24,22 @@ func queuedSteeringWake(items []steeringQueueItem, messageID string) *steeringQu
 // just gained its reserved slot; its promotion still waits for entryMu, so the
 // same owner can finish accepting its first queued input before reconstruction.
 func (al *AgentLoop) commitQueuedSystemWake(lifecycle *session.LifecycleStore, claim executionClaim, generation int, messageID, content, agentID string) error {
+	return al.commitQueuedSystemWakeInput(lifecycle, claim, generation, messageID, content, agentID, false)
+}
+
+// commitQueuedSystemWakeInput is commitQueuedSystemWake for a wake that may
+// carry a saved input (saved == true keeps its identity, not its body).
+func (al *AgentLoop) commitQueuedSystemWakeInput(lifecycle *session.LifecycleStore, claim executionClaim, generation int, messageID, content, agentID string, saved bool) error {
 	gate := al.steerAdmission()
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	for i := range gate.queue {
 		if gate.queue[i].executionClaim() == claim {
-			return al.commitQueuedSystemWakeLocked(lifecycle, &gate.queue[i], generation, messageID, content, agentID)
+			return al.commitQueuedSystemWakeLocked(lifecycle, &gate.queue[i], generation, messageID, content, agentID, saved)
 		}
 	}
 	if entry, ok := gate.active[claim.SessionID]; ok && entry.executionClaim() == claim && al.getActiveTurnState(claim.SessionID) == nil {
-		if err := al.commitQueuedSystemWakeLocked(lifecycle, &entry, generation, messageID, content, agentID); err != nil {
+		if err := al.commitQueuedSystemWakeLocked(lifecycle, &entry, generation, messageID, content, agentID, saved); err != nil {
 			return err
 		}
 		gate.active[claim.SessionID] = entry
@@ -46,7 +52,9 @@ func (al *AgentLoop) commitQueuedSystemWake(lifecycle *session.LifecycleStore, c
 // admission, never in a session-wide dedup cache. Duplicate IDs validate the
 // same live lifecycle claim/fence without appending another pending message;
 // a conflicting payload leaves the accepted input untouched and fails visibly.
-func (al *AgentLoop) commitQueuedSystemWakeLocked(lifecycle *session.LifecycleStore, entry *steerQueueEntry, generation int, messageID, content, agentID string) error {
+// A saved wake (PW-D16) keeps its identity instead of its body: the promoted
+// turn places the saved record once, never also as a fresh user message.
+func (al *AgentLoop) commitQueuedSystemWakeLocked(lifecycle *session.LifecycleStore, entry *steerQueueEntry, generation int, messageID, content, agentID string, saved bool) error {
 	claim := entry.executionClaim()
 	if generation != claim.Generation || claim.BootSeq != al.bootEpochFor() {
 		return steer.ErrStaleGeneration
@@ -62,11 +70,14 @@ func (al *AgentLoop) commitQueuedSystemWakeLocked(lifecycle *session.LifecycleSt
 	if duplicate != nil && (!reflect.DeepEqual(duplicate.message, item.message) || *duplicate.wake != *item.wake) {
 		return fmt.Errorf("steer: queued wake %q conflicts with its accepted payload", messageID)
 	}
-	pendingMessage := content
+	pendingMessage, savedID := content, ""
+	if saved {
+		pendingMessage, savedID = "", messageID
+	}
 	if duplicate != nil {
 		pendingMessage = ""
 	}
-	if _, err := commitSteeredExecutionState(lifecycle, claim, session.LifecycleQueued, pendingMessage); err != nil {
+	if _, err := commitSteeredExecutionStateWithSaved(lifecycle, claim, session.LifecycleQueued, pendingMessage, savedID); err != nil {
 		return err
 	}
 	if duplicate == nil {

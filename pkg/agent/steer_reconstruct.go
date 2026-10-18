@@ -127,22 +127,30 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		// single durable mutation BEFORE the turn can start. If that write
 		// fails, return an error: running while the prompts remain persisted
 		// would replay the same content on a later promotion.
-		if len(rec.PendingUserMessages) > 0 {
+		if len(rec.PendingUserMessages) > 0 || len(rec.PendingSavedInputs) > 0 {
 			var pending []string
 			if persistErr := al.GetSessionLifecycleStore().Mutate(rec.SessionID, func(r *session.LifecycleRecord) error {
 				if r == nil {
 					return session.ErrLifecycleNotFound
 				}
-				if len(r.PendingUserMessages) == 0 {
+				if len(r.PendingUserMessages) == 0 && len(r.PendingSavedInputs) == 0 {
 					return fmt.Errorf("steer: reconstruct %q: queued wakes disappeared before promotion", rec.SessionID)
 				}
 				pending = append([]string(nil), r.PendingUserMessages...)
 				r.PendingUserMessages = nil
+				r.PendingSavedInputs = nil
 				return nil
 			}); persistErr != nil {
 				return nil, fmt.Errorf("steer: reconstruct %q: consume queued wakes: %w", rec.SessionID, persistErr)
 			}
 			opts.UserMessage = strings.Join(pending, "\n\n")
+			if len(pending) == 0 {
+				// Only saved wakes were queued: each is placed once from its
+				// saved record at the consumption fence (PW-D16). No fresh user
+				// message, and not a person's instruction.
+				opts.InputAlreadyArchived = true
+				opts.UserInitiated = false
+			}
 		} else {
 			resumeHistory, historyErr := al.restartHistoryResume(rec)
 			if historyErr != nil {
