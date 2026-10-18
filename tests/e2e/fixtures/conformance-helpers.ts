@@ -61,8 +61,8 @@
 // user-facing flow"): every test depends on OPENROUTER_API_KEY_CI.
 // The global-setup preflight throws immediately if it is unset.
 
-import { expect, type Page } from '@playwright/test'
-import { assistantMessages } from './selectors'
+import { expect, test, type Page } from '@playwright/test'
+import { assistantMessages, dismissStaleDialogOverlay } from './selectors'
 import { freshChat } from './session-setup'
 import { stubCliExecutor, type StubCliTexts } from './stub-external-cli'
 
@@ -633,6 +633,24 @@ export function extractPlanCorrectCalls(
  */
 export async function startFreshChatWithAgent(page: Page, agent: RegExp): Promise<void> {
   await page.goto('/')
+  // A tool approval left pending by EARLIER work on this shared gateway
+  // rehydrates on load as a modal approval dialog, and that modal blocks
+  // every click this helper makes (freshChat opens the sidebar). Release run
+  // 39098485072: Conformance_t2's worker kept running for a second after t2
+  // ended, asked to run a command with no page attached (approval
+  // 1c545776, 10-minute wait), and all four t3b attempts timed out on
+  // "Show sidebar" behind that dialog. Drain it first, exactly as
+  // subagent.spec.ts::startFreshChat and bug-regression.spec.ts do —
+  // Escape on a live approval is a server-side Deny — and record every
+  // Deny in the report so a drained approval is visible, never silent.
+  for (const dialogText of await dismissStaleDialogOverlay(page)) {
+    test.info().annotations.push({
+      type: 'approval-drained',
+      description:
+        'Stale approval dialog dismissed via Escape (server-side Deny) before ' +
+        `starting this test's chat: ${dialogText}`,
+    })
+  }
   // Fresh chat via freshChat (fixtures/session-setup.ts) — the agent row's
   // "New chat with <Agent>" button this used to click is REMOVED (founder
   // decision D7, DECISIONS.md squad nav-agent-row-menu-20261011: capability
