@@ -70,6 +70,9 @@ describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
       pending_approvals: [
         {
           approval_id: 'appr-a',
+          tool_call_id: 'call-a',
+          turn_id: 'turn-a',
+          args: {},
           session_id: 'sess-1',
           tool_name: 'fetch_url',
           agent_id: 'agent-main',
@@ -77,6 +80,9 @@ describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
         },
         {
           approval_id: 'appr-b',
+          tool_call_id: 'call-b',
+          turn_id: 'turn-b',
+          args: {},
           session_id: 'sess-1',
           tool_name: 'bash',
           agent_id: 'agent-main',
@@ -106,6 +112,9 @@ describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
       pending_approvals: [
         {
           approval_id: 'appr-zero',
+          tool_call_id: 'call-zero',
+          turn_id: 'turn-zero',
+          args: {},
           session_id: 'sess-1',
           tool_name: 'request_mount',
           agent_id: 'agent-jim',
@@ -154,6 +163,9 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
       pending_approvals: [
         {
           approval_id: 'appr-live',
+          tool_call_id: 'call-live',
+          turn_id: 'turn-1',
+          args: { url: 'https://example.com' },
           session_id: 'sess-1',
           tool_name: 'fetch_url',
           agent_id: 'agent-main',

@@ -7,11 +7,11 @@
 // - expires_in_ms is relative to receipt: expiresAt = Date.now() + expires_in_ms.
 // - session_state reset (FR-052, FR-073, FR-081): on WS connect, clear any
 //   queued approvals NOT present in the session_state payload, refresh
-//   expiresAt for those that are, and add a STUB entry for any approval the
-//   server still reports pending that this tab never saw a live
-//   tool_approval_required frame for — see reconcileWithSessionState's own
-//   comment for why (the reconnect-gap fix) and ToolApprovalModal.tsx's
-//   isReconnectStub for how the stub renders.
+//   expiresAt for those that are, and add a COMPLETE entry for any approval
+//   the server still reports pending that this tab never saw a live
+//   tool_approval_required frame for. The snapshot carries the full request
+//   (tool_call_id, turn_id, args — required since bundle B3), so a reload
+//   restores an approvable card, never a details-unavailable stub.
 // - Server-confirmed resolution: a tool_approval_resolved frame, or a 404/410
 //   answer to an action, means the server no longer holds the approval open.
 //   markResolved drops it AND remembers the id (resolvedIds), so a
@@ -45,8 +45,8 @@ export interface PendingToolApproval {
    * not an empty array — when the frame carried none (non-bash tool, an
    * unchained command, or a backend build that does not populate it yet);
    * ToolApprovalModal.tsx treats undefined/empty identically (no segment
-   * breakdown shown). A reconnect stub (see reconcileWithSessionState below)
-   * never has this — SessionStatePendingApproval carries no segments field.
+   * breakdown shown). A snapshot entry carries it when the server sent
+   * SessionStatePendingApproval.segments.
    */
   segments?: CommandSegmentInfo[]
   /**
@@ -117,7 +117,7 @@ interface ToolApprovalStore {
   /**
    * Remove an approval from THIS tab only. Does not claim the server resolved
    * it: if the server still holds it pending, the next session_state snapshot
-   * brings it back (as a reconnect stub), because the agent is still waiting.
+   * brings it back, because the agent is still waiting.
    */
   dequeue: (approvalId: string) => void
 
@@ -131,9 +131,9 @@ interface ToolApprovalStore {
   /**
    * Reconcile the queue with a session_state reset frame (FR-052, FR-081).
    * Removes any queued approvals NOT present in the session_state payload,
-   * refreshes expiresAt for those that are, and adds a stub entry for any
+   * refreshes expiresAt for those that are, and adds a complete entry for any
    * approval the server reports pending that this tab has no local entry for
-   * (see this method's own comment for the full reconnect-gap rationale).
+   * (see this method's own comment for the reconnect-gap rationale).
    * Ids in resolvedIds are ignored even if the snapshot still lists them.
    */
   reconcileWithSessionState: (frame: SessionStateFrame) => void
@@ -156,7 +156,6 @@ export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
           ...updated[existing],
           expiresAt,
           segments: frame.segments,
-          // A live frame is complete: it also upgrades a reconnect stub.
           toolCallId: frame.tool_call_id,
           turnId: frame.turn_id,
           args: frame.args,
@@ -225,57 +224,37 @@ export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
       // approvals pending even though THIS tab has never seen them — e.g.
       // the page was reloaded (the in-memory queue reset to empty) while an
       // approval was outstanding, or a second tab connected after the
-      // approval was already created. Before this, such an approval simply
-      // never entered the queue: not a blank dialog, no dialog at all, while
-      // the agent sat blocked for the full expiry window with no UI anywhere
-      // to act on it (ToolApprovalModal is the ONLY tool-approval surface).
+      // approval was already created. Without this, such an approval would
+      // never enter the queue and the agent would sit blocked with no UI to
+      // act on it.
       //
-      // SessionStatePendingApproval (this frame's pending_approvals shape)
-      // carries only approval_id/session_id/tool_name/agent_id/expires_in_ms
-      // (+ optional workspace_id) — no args, tool_call_id, or turn_id — so
-      // the original request cannot be reconstructed here. toolCallId and
-      // turnId are stubbed to '' rather than omitted or invented:
-      // ToolApprovalRequiredFrame (the WS frame enqueue() above consumes)
-      // requires BOTH at minLength 1, so a genuine live frame can never
-      // produce this shape. '' is therefore a collision-free sentinel, not
-      // merely an unlikely one — do not read the two empty strings below as a
-      // bug. ToolApprovalModal.tsx's isReconnectStub reads exactly this
-      // (toolCallId === '' && turnId === '') and renders an honest "can't
-      // show what's being asked" card with only Deny offered, instead of a
-      // normal-looking card with suspiciously empty arguments.
-      //
-      // omnipus-system-agent K7 (L1 amendment §1.3): a server that sends the
-      // complete snapshot (tool_call_id, turn_id, args, segments) restores a
-      // COMPLETE, approvable card after a reload. The stub below remains only
-      // for a snapshot without those fields; bundle B3 makes them required
-      // and deletes this fallback.
-      const newStubs: PendingToolApproval[] = livePending
+      // omnipus-system-agent K7 / bundle B3: SessionStatePendingApproval
+      // REQUIRES tool_call_id, turn_id and args, so the snapshot rebuilds the
+      // complete, approvable request — the same shape enqueue() builds from a
+      // live tool_approval_required frame.
+      const restored: PendingToolApproval[] = livePending
         .filter((s) => !existingIds.has(s.approval_id))
         .map((s) => ({
           approvalId: s.approval_id,
-          toolCallId: s.tool_call_id && s.turn_id ? s.tool_call_id : '',
+          toolCallId: s.tool_call_id,
           toolName: s.tool_name,
-          args: s.tool_call_id && s.turn_id ? (s.args ?? {}) : {},
+          args: s.args,
           agentId: s.agent_id,
           sessionId: s.session_id,
-          turnId: s.tool_call_id && s.turn_id ? s.turn_id : '',
-          ...(s.tool_call_id && s.turn_id && s.segments ? { segments: s.segments } : {}),
+          turnId: s.turn_id,
+          ...(s.segments ? { segments: s.segments } : {}),
           ...k7Fields(s),
           // Same relative-delta-to-absolute-clock conversion as enqueue()
           // above: expires_in_ms is relative to THIS frame's receipt, never
           // an absolute timestamp — treating it as one would place expiresAt
           // near the 1970 epoch and render every reconnected approval as
-          // already expired. The server only reports approvals it still
-          // considers open, so pending_approvals never carries one that
-          // already expired server-side; the Date.now() + delta conversion
-          // still matters so a delta that happens to arrive at/near 0 lands
-          // exactly on ToolApprovalModal.tsx's existing hasExpired state
-          // (Dismiss-only) rather than rendering as freshly askable.
+          // already expired. A delta at/near 0 lands exactly on the card's
+          // existing hasExpired state (Dismiss-only).
           expiresAt: Date.now() + s.expires_in_ms,
           workspaceId: s.workspace_id,
         }))
 
-      return { queue: [...refreshed, ...newStubs] }
+      return { queue: [...refreshed, ...restored] }
     })
   },
 }))

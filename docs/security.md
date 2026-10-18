@@ -296,7 +296,7 @@ On a host without an enforcing kernel sandbox (Windows, or the process sandbox n
 
 ### Approve a request
 
-When a tool needs your decision, Omnipus opens an approval pop-up over the app. It accepts pending approvals from every workspace and conversation, not only the workspace or chat you are viewing. Requests are shown one at a time; a count indicates when more are queued. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
+When a tool needs your decision, an approval card appears in the chat the request belongs to, above the message box. A helper's request appears in the chat that started the helper, for example an Omnipus helper's in Omnipus's chat. Requests in one chat are shown one at a time; **+N more** indicates when more are queued. When requests are waiting in a chat you are not viewing, a notice at the top of the app says how many and where, for example "1 approval waiting in Mia's chat in Sales"; select **Go there** to open that chat. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
 
 | Button | What it does |
 |---|---|
@@ -305,7 +305,7 @@ When a tool needs your decision, Omnipus opens an approval pop-up over the app. 
 | **Deny** | Refuses the call. |
 | **Cancel** | Closes the request without running it. |
 
-Escape, the close control or clicking outside an unexpired pop-up dismisses it locally and sends Deny; it never approves the request. After reconnecting, a request whose original details are unavailable offers Deny only.
+The card never takes focus, and pressing Enter in the message box or Escape never answers it: a request is answered only when you select one of its buttons. A request nobody answers in time expires; the card then says so (a timeout, not a denial by you) and offers **Dismiss**. After a page reload or a reconnect, a request that is still pending comes back as a complete card you can approve, deny or always allow.
 
 What **Always Allow** remembers lasts only for that chat and ends with it. Agents that this chat hands work to inherit it. Nobody else's chats are affected, and there is no list of remembered approvals to review. For most tools it remembers the exact call, with the same arguments. For a shell command it offers a choice; see "Command rules compared with one-time approvals" below.
 
