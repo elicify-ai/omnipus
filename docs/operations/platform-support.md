@@ -65,7 +65,7 @@ Each of these targets is deferred from v0.1; the linked tracking issue (where on
 
 ### macOS amd64 (Intel)
 
-The cross-compile path works (`GOOS=darwin GOARCH=amd64 go build ./cmd/omnipus`) and is explicitly excluded from `.goreleaser.yaml:60-64`. Adding a `macos-13` smoke runner to `cross-platform.yml` is a v0.1.1 task. The sandbox behaves as on arm64: Seatbelt confines spawned children, and the gateway process itself is not confined.
+The cross-compile path works (`GOOS=darwin GOARCH=amd64 go build -tags goolm,stdjson ./cmd/omnipus`) and is explicitly excluded from `.goreleaser.yaml:60-64`. Adding a `macos-13` smoke runner to `cross-platform.yml` is a v0.1.1 task. The sandbox behaves as on arm64: Seatbelt confines spawned children, and the gateway process itself is not confined.
 
 ### Windows amd64
 

@@ -9,8 +9,10 @@ Omnipus connects to WhatsApp directly using the [whatsmeow](https://github.com/t
 **Native mode ships in the default build — no build tag needed.** A standard build (and every official release binary) includes the whatsmeow stack:
 
 ```bash
-go build ./cmd/...        # native WhatsApp included
+make build                # canonical build; native WhatsApp included
 ```
+
+Build through the make targets — they inject the required `goolm,stdjson` build tags (a bare `go build ./cmd/...` fails with a "build constraints exclude all Go files" error).
 
 `modernc.org/sqlite` is pure Go and does not require CGo, so `CGO_ENABLED=0` builds are supported. The whatsmeow + SQLite stack adds roughly 58 MB to the binary.
 
