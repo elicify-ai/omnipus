@@ -517,3 +517,120 @@ func TestWU5PrivateVersion_ConcurrentSubmits_ExactlyOneSelected(t *testing.T) {
 	require.Equal(t, 1, states["selected"], "exactly one version ends selected (BDD-6.22)")
 	require.Equal(t, 1, states["superseded"], "the other version is listed as superseded (BDD-6.22)")
 }
+
+// seedWU5Membership writes real workspace membership files (the shape
+// pkg/workspace.FindForAgent reads): sales claims mia; marketing claims only
+// ray — so a target of (marketing, mia) is a target where Mia is not a member.
+func seedWU5Membership(t *testing.T, home string) {
+	t.Helper()
+	dir := filepath.Join(home, "workspaces")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sales.json"),
+		[]byte(`{"id":"sales","core_team":["mia"]}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "marketing.json"),
+		[]byte(`{"id":"marketing","core_team":["ray"]}`), 0o644))
+}
+
+// TestWU5PrivateSecret_OmnipusTargetValidated is BDD-7.8 / US-7 AS-1
+// (alternate path): Omnipus requests a private secret with target Sales/mia —
+// the card shows "Mia in Sales", the first version is selected on submit and
+// Mia's next Sales command sees it; a target where Mia is not a member is
+// refused (FR-065: the validated target; CRIT-001 scope).
+func TestWU5PrivateSecret_OmnipusTargetValidated(t *testing.T) {
+	f := newWU5GatewayFixture(t, true)
+	seedWU5Membership(t, f.home)
+
+	// Omnipus raises the card for the validated target (sales, mia).
+	omniSession := f.mainSession("sales", "omnipus")
+	requestID, err := f.requestPrivateCard(omniSession, "omnipus", map[string]any{"workspace_id": "sales", "agent_id": "mia"})
+	require.NoError(t, err, "BLOCKED: request_secret cannot request a private secret for a target pair — required by BDD-7.8, FR-065/FR-076")
+
+	// The card shows the target pair: "Mia in Sales" plus the variable (K2's
+	// display lines for the private kind: workspace + agent + variable).
+	var card gen.SessionStateSecretRequest
+	for _, c := range f.al.SecretRequests().Snapshot(wu5Owner, omniSession) {
+		if c.RequestId == requestID {
+			card = c
+		}
+	}
+	shown := card.Purpose + "\n" + strings.Join(card.Recipient.Lines, "\n")
+	require.Contains(t, shown, "Mia in Sales", "the card must show the target pair (BDD-7.8 quotes the wording); got %q", shown)
+	require.Contains(t, shown, wu5Variable, "the card must show the variable name (K2)")
+	require.NotNil(t, card.Owner, "the target pair is the card's owner pair (K1/K4)")
+	require.Equal(t, "mia", card.Owner.AgentId)
+	require.Equal(t, "sales", card.Owner.WorkspaceId)
+
+	// First version is selected on submit, and Mia's next Sales command sees it.
+	f.provider.setScript(omniSession, []providers.LLMResponse{wu5StopGW("store resume done")})
+	f.submitThroughREST(requestID, f.cardFieldKey(omniSession), wu5ValueV1)
+	refs := f.referenceNames(requestID)
+	require.Len(t, refs, 1)
+	entry := f.entryFor(refs)
+	require.Equal(t, "selected", entry.State, "as the first version it is selected at once (BDD-7.8)")
+
+	miaSession := f.mainSession("sales", "mia")
+	f.provider.setScript(miaSession, []providers.LLMResponse{
+		wu5BashGW(`printf 'len=%s' "${#WEATHER_TOKEN}"`), wu5StopGW("seen"),
+	})
+	f.webTurnGW(miaSession)
+	f.provider.waitFor(miaSession, 2, "Mia's next Sales command", t)
+	require.Contains(t, strings.Join(f.provider.toolResults(miaSession), "\n"), "len=16",
+		"Mia's next Sales command sees the Omnipus-set value (BDD-7.8)")
+
+	// A target where Mia is not a member is refused (marketing claims ray).
+	badSession := f.mainSession("marketing", "omnipus")
+	_, refusErr := f.requestPrivateCard(badSession, "omnipus", map[string]any{"workspace_id": "marketing", "agent_id": "mia"})
+	require.Error(t, refusErr, "a target where Mia is not a member must be refused (BDD-7.8)")
+}
+
+// webTurnGW drives a real web-app turn through the running loop consumer.
+func (f *wu5GatewayFixture) webTurnGW(sid string) {
+	f.t.Helper()
+	msg := bus.InboundMessage{Channel: "webchat", ChatID: sid, SessionID: sid, Content: "check the weather"}
+	require.NoError(f.t, f.bus.PublishInbound(context.Background(), msg))
+}
+
+// TestWU5PrivateVersion_OmnipusRollbackOnly is BDD-6.23 (FR-086): ordinary
+// agents have no select_secret_version; only Omnipus may select an older
+// version of a validated target pair, and only through its Ask-gated tool.
+//
+// Train-2 scope note (recorded in the acceptance map): the approval-driven
+// rollback leg rides the approval machinery the founder assigned to Train 3
+// (plan §11, 2026-10-18: approvals.go, ws_tool_approval.go, policy_approver.go
+// are Train-3 files), so the legs asserted here are the surface fact — the
+// tool exists in the central catalog (WU-5's deliverable) — plus the
+// ordinary-agent refusal; the approval-round-trip leg is driven in Train 3's
+// pack.
+func TestWU5PrivateVersion_OmnipusRollbackOnly(t *testing.T) {
+	f := newWU5GatewayFixture(t, true)
+
+	// The tool exists (WU-5's surface deliverable) — absence in the catalog
+	// is the missing implementation, reported BLOCKED. The catalog is built
+	// by the same builder gateway boot uses.
+	registry, _ := buildCentralBuiltinRegistry(nil)
+	found := false
+	for _, entry := range registry.Describe() {
+		if entry.Name == "select_secret_version" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("BLOCKED: select_secret_version is not in the central builtin catalog — required by BDD-6.23 / FR-086 (Omnipus-only rollback of a private version)")
+	}
+
+	// An ordinary agent (mia) has no select_secret_version: a real turn call
+	// must be refused by the execution gate, never executed.
+	sales := f.mainSession("sales", "mia")
+	f.provider.setScript(sales, []providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{ID: "wu5-rollback-attempt", Type: "function", Name: "select_secret_version",
+			Arguments: map[string]any{"reference": "WR-any", "version": int64(1)}}}},
+		wu5StopGW("after attempt"),
+	})
+	f.webTurnGW(sales)
+	f.provider.waitFor(sales, 2, "mia's rollback attempt", t)
+	for _, r := range f.provider.toolResults(sales) {
+		if strings.Contains(r, "selected") && strings.Contains(r, "WR-any") {
+			t.Fatalf("an ordinary agent's select_secret_version attempt must be refused (BDD-6.23), got a selection result: %q", r)
+		}
+	}
+}
