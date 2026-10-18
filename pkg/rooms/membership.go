@@ -19,18 +19,18 @@ import (
 func isNotExist(err error) bool { return errors.Is(err, os.ErrNotExist) }
 
 // workspace loads a workspace or returns 404 / storage errors.
-func (s *Service) workspace(workspaceID string) (Workspace, error) {
-	ws, found, err := s.deps.Workspace(workspaceID)
+func (s *Service) workspace(workspaceID string) (WorkspaceInfo, error) {
+	ws, found, err := s.deps.LookupWorkspace(workspaceID)
 	if err != nil {
-		return Workspace{}, storageError("the workspace could not be read", err)
+		return WorkspaceInfo{}, storageError("the workspace could not be read", err)
 	}
 	if !found {
-		return Workspace{}, notFound("no such workspace")
+		return WorkspaceInfo{}, notFound("no such workspace")
 	}
 	return ws, nil
 }
 
-func agentIDs(ws Workspace) []string {
+func agentIDs(ws WorkspaceInfo) []string {
 	out := make([]string, 0, len(ws.Agents))
 	for _, a := range ws.Agents {
 		out = append(out, a.ID)
@@ -38,7 +38,7 @@ func agentIDs(ws Workspace) []string {
 	return out
 }
 
-func agentName(ws Workspace, id string) string {
+func agentName(ws WorkspaceInfo, id string) string {
 	for _, a := range ws.Agents {
 		if a.ID == id {
 			return a.Name
@@ -82,44 +82,44 @@ func (s *Service) Get(roomID string) (generated.Room, error) {
 
 // openRoom loads a room and its workspace and brings its membership up to
 // date with the workspace (FR-160, FR-162).
-func (s *Service) openRoom(roomID string) (*room, Workspace, error) {
+func (s *Service) openRoom(roomID string) (*room, WorkspaceInfo, error) {
 	s.workspaceMu.RLock()
 	defer s.workspaceMu.RUnlock()
 	r, err := s.loadRoom(roomID)
 	if err != nil {
-		return nil, Workspace{}, err
+		return nil, WorkspaceInfo{}, err
 	}
 	ws, err := s.workspace(r.rec.WorkspaceID)
 	if err != nil {
 		if StatusOf(err) == 404 {
-			return nil, Workspace{}, notFound("no such group chat")
+			return nil, WorkspaceInfo{}, notFound("no such group chat")
 		}
-		return nil, Workspace{}, err
+		return nil, WorkspaceInfo{}, err
 	}
 	r.mu.Lock()
 	if r.deleted {
 		r.mu.Unlock()
-		return nil, Workspace{}, notFound("no such group chat")
+		return nil, WorkspaceInfo{}, notFound("no such group chat")
 	}
 	if err := s.repairIncompleteCost(r); err != nil {
 		r.mu.Unlock()
-		return nil, Workspace{}, err
+		return nil, WorkspaceInfo{}, err
 	}
 	if err := s.repairReleasedConsumes(r); err != nil {
 		r.mu.Unlock()
-		return nil, Workspace{}, err
+		return nil, WorkspaceInfo{}, err
 	}
 	if err := s.repairSettlements(r); err != nil {
 		r.mu.Unlock()
-		return nil, Workspace{}, err
+		return nil, WorkspaceInfo{}, err
 	}
 	if err := s.reconcile(r, ws, PrincipalSystem); err != nil {
 		r.mu.Unlock()
-		return nil, Workspace{}, err
+		return nil, WorkspaceInfo{}, err
 	}
 	if err := s.sweepStale(r); err != nil {
 		r.mu.Unlock()
-		return nil, Workspace{}, err
+		return nil, WorkspaceInfo{}, err
 	}
 	resume := s.unsentMentionsLocked(r)
 	r.mu.Unlock()
@@ -181,13 +181,13 @@ func (s *Service) sweepStale(r *room) error {
 
 // workspaceRooms loads, reconciles and orders the workspace's rooms, making
 // sure its team room exists once two conversation agents do (FR-160).
-func (s *Service) workspaceRooms(ws Workspace) ([]*room, error) {
+func (s *Service) workspaceRooms(ws WorkspaceInfo) ([]*room, error) {
 	return s.workspaceRoomsAs(ws, PrincipalSystem)
 }
 
 // workspaceRoomsAs is workspaceRooms with the actor its membership changes
 // are audited under (the signed-in user of a workspace change, FR-172).
-func (s *Service) workspaceRoomsAs(ws Workspace, principal string) ([]*room, error) {
+func (s *Service) workspaceRoomsAs(ws WorkspaceInfo, principal string) ([]*room, error) {
 	if err := s.loadAll(); err != nil {
 		return nil, err
 	}
@@ -266,7 +266,7 @@ func (s *Service) syncWorkspace(workspaceID, principal string) error {
 // ensureTeamRoom creates the workspace's one team room the first time it has
 // two conversation agents. Below two an existing team room stays (hidden,
 // read-only, history kept).
-func (s *Service) ensureTeamRoom(ws Workspace, principal string) error {
+func (s *Service) ensureTeamRoom(ws WorkspaceInfo, principal string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.rooms {
@@ -312,7 +312,7 @@ func (s *Service) createRecord(rec roomRecord) (*room, error) {
 // room loses members that left the workspace. Departures cancel their
 // not-yet-consumed requests ("cancelled — removed") and are audited. The
 // caller holds r.mu.
-func (s *Service) reconcile(r *room, ws Workspace, principal string) error {
+func (s *Service) reconcile(r *room, ws WorkspaceInfo, principal string) error {
 	current := agentIDs(ws)
 	var next []string
 	if r.rec.Kind == KindTeam {
@@ -421,7 +421,7 @@ func (s *Service) cancelDelivery(r *room, d *deliveryRecord, reason string) erro
 
 // validateNewMembers checks agent ids against the workspace: known
 // conversation agents of this workspace only (FR-162).
-func (s *Service) validateNewMembers(ws Workspace, ids []string) ([]string, error) {
+func (s *Service) validateNewMembers(ws WorkspaceInfo, ids []string) ([]string, error) {
 	var out []string
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
@@ -438,7 +438,7 @@ func (s *Service) validateNewMembers(ws Workspace, ids []string) ([]string, erro
 	return out, nil
 }
 
-func workspaceLabel(ws Workspace) string {
+func workspaceLabel(ws WorkspaceInfo) string {
 	if strings.TrimSpace(ws.Name) != "" {
 		return ws.Name
 	}

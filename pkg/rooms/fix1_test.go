@@ -471,7 +471,7 @@ func TestFix1_AttentionKeepsOlderPendingDecision(t *testing.T) {
 	r.mu.Lock()
 	r.putDelivery(&deliveryRecord{RequestID: "older", EntryID: "e1", AgentID: "mia", State: StateAwaitingApproval})
 	r.putDelivery(&deliveryRecord{RequestID: "newer", EntryID: "e2", AgentID: "mia", State: StateRefused})
-	ws, _, _ := f.deps.Workspace("sales")
+	ws, _, _ := f.deps.LookupWorkspace("sales")
 	view := f.svc.roomView(r, ws)
 	r.mu.Unlock()
 	if !view.NeedsAttention {
@@ -766,7 +766,7 @@ func TestFix1_SnapshotKeepsEveryLiveStatePastTenThousand(t *testing.T) {
 		r.putDelivery(&deliveryRecord{RequestID: fmt.Sprintf("l%05d", i), EntryID: "e1", AgentID: "mia", State: StateHeld})
 	}
 	r.putDelivery(&deliveryRecord{RequestID: "done", EntryID: "e1", AgentID: "jim", State: StateAnswered})
-	snap := (&Service{}).snapshot(r, Workspace{ID: "sales", Agents: []Agent{{"mia", "Mia"}, {"jim", "Jim"}}}, 0)
+	snap := (&Service{}).snapshot(r, WorkspaceInfo{ID: "sales", Agents: []Agent{{"mia", "Mia"}, {"jim", "Jim"}}}, 0)
 	live := 0
 	for _, d := range snap.MemberStates {
 		if d.State == StateHeld {

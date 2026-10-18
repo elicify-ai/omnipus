@@ -33,7 +33,7 @@ func (s *Service) Attach(roomID string, afterSeq int64, deliver func(generated.R
 // NEWEST entries after the cursor, at most maxSnapshotEntries, in seq order,
 // with has_older set when older ones after the cursor were left out;
 // `complete` is always true (reserved). The caller holds r.mu.
-func (s *Service) snapshot(r *room, ws Workspace, afterSeq int64) generated.RoomSnapshotFrame {
+func (s *Service) snapshot(r *room, ws WorkspaceInfo, afterSeq int64) generated.RoomSnapshotFrame {
 	view := s.roomView(r, ws)
 	out := generated.RoomSnapshotFrame{
 		Type: string(generated.WsFrameTypeRoomSnapshot), RoomId: r.rec.ID, Seq: r.seq,

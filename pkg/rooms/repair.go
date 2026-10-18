@@ -38,7 +38,7 @@ func (s *Service) markCostIncomplete(roomID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rec.CostUnpriced = true
-	if err := s.publishMeta(r, Workspace{ID: r.rec.WorkspaceID}); err != nil {
+	if err := s.publishMeta(r, WorkspaceInfo{ID: r.rec.WorkspaceID}); err != nil {
 		logRoomError("the room's incomplete-cost mark could not be saved", roomID, err)
 		return
 	}

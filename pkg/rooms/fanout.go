@@ -22,7 +22,7 @@ import (
 // cancelled) or it is waiting for the member's approval card. A caller (the
 // POST that recorded the message, the answer that named members) thus returns
 // with each member's state already decided, except for a pending approval.
-func (s *Service) admitAll(r *room, ws Workspace, ids []string) {
+func (s *Service) admitAll(r *room, ws WorkspaceInfo, ids []string) {
 	var settled sync.WaitGroup
 	for _, id := range ids {
 		done := make(chan struct{})
@@ -92,7 +92,7 @@ func (s *Service) AdmitPendingForTest(roomID string) error {
 
 // admitDelivery runs one delivery through the agent loop's room admission
 // and records the outcome (§6.11 state machine).
-func (s *Service) admitDelivery(r *room, ws Workspace, requestID string, settle func()) {
+func (s *Service) admitDelivery(r *room, ws WorkspaceInfo, requestID string, settle func()) {
 	adm, ctx, ok := s.prepareAdmission(r, ws, requestID, settle)
 	if !ok {
 		return
@@ -120,7 +120,7 @@ func (s *Service) admitDelivery(r *room, ws Workspace, requestID string, settle 
 
 // prepareAdmission checks the delivery is still current and builds the
 // admission under the room lock.
-func (s *Service) prepareAdmission(r *room, ws Workspace, requestID string, settle func()) (Admission, context.Context, bool) {
+func (s *Service) prepareAdmission(r *room, ws WorkspaceInfo, requestID string, settle func()) (Admission, context.Context, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d := r.deliveries[requestID]
@@ -272,7 +272,7 @@ func (s *Service) updateState(r *room, d *deliveryRecord, state, reason string) 
 // buildAdmission composes what the member receives: the message, who wrote
 // it, and the room messages since that member's previous room request (at
 // most 20 entries and 8,192 bytes, FR-200).
-func (s *Service) buildAdmission(r *room, ws Workspace, d *deliveryRecord) Admission {
+func (s *Service) buildAdmission(r *room, ws WorkspaceInfo, d *deliveryRecord) Admission {
 	idx, ok := r.byEntryID[d.EntryID]
 	var se storedEntry
 	if ok {
@@ -298,7 +298,7 @@ func (s *Service) buildAdmission(r *room, ws Workspace, d *deliveryRecord) Admis
 	}
 }
 
-func authorName(se storedEntry, ws Workspace) string {
+func authorName(se storedEntry, ws WorkspaceInfo) string {
 	if se.Entry.Author.Kind == "agent" && se.Entry.Author.AgentId != nil {
 		return agentName(ws, *se.Entry.Author.AgentId)
 	}
@@ -307,7 +307,7 @@ func authorName(se storedEntry, ws Workspace) string {
 
 // roomContext is the quoted room history the member has not been sent yet:
 // the entries after its previous room request, before this one.
-func (s *Service) roomContext(r *room, ws Workspace, d *deliveryRecord, idx int) string {
+func (s *Service) roomContext(r *room, ws WorkspaceInfo, d *deliveryRecord, idx int) string {
 	start := 0
 	for i := idx - 1; i >= 0; i-- {
 		if slices.ContainsFunc(r.byEntry[r.entries[i].Entry.Id], func(id string) bool {

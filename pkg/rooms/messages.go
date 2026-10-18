@@ -91,7 +91,7 @@ func validateMessage(req generated.RoomMessageRequest, bodyLimit int) error {
 // recordUserMessage records the entry and one delivery per addressee
 // (nothing is delivered while the room is paused, FR-170). It returns the
 // deliveries to admit. The caller holds r.mu.
-func (s *Service) recordUserMessage(r *room, ws Workspace, req generated.RoomMessageRequest) ([]string, error) {
+func (s *Service) recordUserMessage(r *room, ws WorkspaceInfo, req generated.RoomMessageRequest) ([]string, error) {
 	if reason := readOnlyReason(r, ws); reason != "" {
 		return nil, unprocessable("%s", reason)
 	}
@@ -123,7 +123,7 @@ func (s *Service) recordUserMessage(r *room, ws Workspace, req generated.RoomMes
 // label (each must still be a current member; `all` = every unmuted member).
 // Without picks, typed @Full Name resolves by exact unique match (ambiguity
 // refused); no @-name addresses every unmuted member.
-func (s *Service) userAddressees(r *room, ws Workspace, req generated.RoomMessageRequest) ([]string, error) {
+func (s *Service) userAddressees(r *room, ws WorkspaceInfo, req generated.RoomMessageRequest) ([]string, error) {
 	if len(req.Mentions) > 0 {
 		return s.pickedAddressees(r, req.Mentions)
 	}
@@ -176,7 +176,7 @@ func (s *Service) pickedAddressees(r *room, picked []string) ([]string, error) {
 // agentAddressees applies FR-165 to an agent's answer: only the members it
 // @-names (typed text, ambiguous names address nobody); `@all` addresses
 // every other unmuted member; never itself.
-func agentAddressees(r *room, ws Workspace, text, authorID string) []string {
+func agentAddressees(r *room, ws WorkspaceInfo, text, authorID string) []string {
 	typed := resolveTyped(text, memberAgents(r, ws))
 	var ids []string
 	for _, id := range typed.ids {
@@ -194,7 +194,7 @@ func agentAddressees(r *room, ws Workspace, text, authorID string) []string {
 	return ids
 }
 
-func memberAgents(r *room, ws Workspace) []Agent {
+func memberAgents(r *room, ws WorkspaceInfo) []Agent {
 	out := make([]Agent, 0, len(r.rec.Members))
 	for _, id := range r.rec.Members {
 		out = append(out, Agent{ID: id, Name: agentName(ws, id)})
@@ -336,7 +336,7 @@ func (s *Service) dependentDeliveries(r *room, entryID string) []string {
 
 // runCommand applies a room command (FR-205, FR-206). Only the user's text
 // reaches here; an agent's text is never a command (FR-168).
-func (s *Service) runCommand(r *room, ws Workspace, text string, req generated.RoomMessageRequest, principal string) error {
+func (s *Service) runCommand(r *room, ws WorkspaceInfo, text string, req generated.RoomMessageRequest, principal string) error {
 	fields := strings.Fields(text)
 	cmd := strings.ToLower(fields[0])
 	r.mu.Lock()
@@ -368,7 +368,7 @@ func (s *Service) runCommand(r *room, ws Workspace, text string, req generated.R
 // pause bumps the durable generation and cancels every not-yet-consumed
 // request of older generations under the room lock (FR-170, FR-217). Work a
 // member already took finishes; its answer is marked "after pause".
-func (s *Service) pause(r *room, ws Workspace) error {
+func (s *Service) pause(r *room, ws WorkspaceInfo) error {
 	if !r.rec.Paused {
 		before := r.rec.clone()
 		r.rec.Paused = true
@@ -396,7 +396,7 @@ func (s *Service) pause(r *room, ws Workspace) error {
 
 // resume starts sending new messages again; messages written while paused
 // stay undelivered (§0.10).
-func (s *Service) resume(r *room, ws Workspace) error {
+func (s *Service) resume(r *room, ws WorkspaceInfo) error {
 	if !r.rec.Paused {
 		return nil
 	}
@@ -409,7 +409,7 @@ func (s *Service) resume(r *room, ws Workspace) error {
 	return nil
 }
 
-func (s *Service) muteCommand(r *room, ws Workspace, mute bool, text string, picked []string, principal string) error {
+func (s *Service) muteCommand(r *room, ws WorkspaceInfo, mute bool, text string, picked []string, principal string) error {
 	targets := slices.DeleteFunc(slices.Clone(picked), func(id string) bool { return id == mentionAll })
 	if len(targets) == 0 {
 		typed := resolveTyped(text, memberAgents(r, ws))
@@ -443,7 +443,7 @@ func (s *Service) muteCommand(r *room, ws Workspace, mute bool, text string, pic
 // main chat", naming the @-named members (else every member), followed by the
 // link target of each main chat (its main session id) so the client can link
 // to them.
-func (s *Service) steerRefusal(r *room, ws Workspace, text string, picked []string) string {
+func (s *Service) steerRefusal(r *room, ws WorkspaceInfo, text string, picked []string) string {
 	ids := slices.DeleteFunc(slices.Clone(picked), func(id string) bool { return !slices.Contains(r.rec.Members, id) })
 	if len(ids) == 0 {
 		ids = resolveTyped(text, memberAgents(r, ws)).ids

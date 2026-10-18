@@ -22,7 +22,7 @@ import (
 
 type fakeDeps struct {
 	mu        sync.Mutex
-	ws        Workspace
+	ws        WorkspaceInfo
 	wsErr     error
 	names     map[string]string
 	admits    []Admission
@@ -48,21 +48,21 @@ type fakeDeps struct {
 
 func newFakeDeps() *fakeDeps {
 	return &fakeDeps{
-		ws:       Workspace{ID: "sales", Name: "Sales", Agents: []Agent{{"mia", "Mia"}, {"jim", "Jim"}, {"r2", "Researcher2"}}},
+		ws:       WorkspaceInfo{ID: "sales", Name: "Sales", Agents: []Agent{{"mia", "Mia"}, {"jim", "Jim"}, {"r2", "Researcher2"}}},
 		names:    map[string]string{"mia": "Mia", "jim": "Jim", "r2": "Researcher2", "ray": "Ray"},
 		admitErr: map[string]error{}, held: map[string]bool{}, facts: map[string]ReceiverFacts{}, factsErr: map[string]error{}, rate: 60,
 		body: 65536, gate: map[string]chan struct{}{},
 	}
 }
 
-func (f *fakeDeps) Workspace(id string) (Workspace, bool, error) {
+func (f *fakeDeps) LookupWorkspace(id string) (WorkspaceInfo, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.wsErr != nil {
-		return Workspace{}, false, f.wsErr
+		return WorkspaceInfo{}, false, f.wsErr
 	}
 	if id != f.ws.ID {
-		return Workspace{}, false, nil
+		return WorkspaceInfo{}, false, nil
 	}
 	ws := f.ws
 	ws.Agents = slices.Clone(f.ws.Agents)
@@ -607,7 +607,7 @@ func bigRoom(n int) *room {
 func TestSnapshot_NewestEntriesWithHasOlder(t *testing.T) {
 	f := newFixture(t)
 	r := bigRoom(10050)
-	ws, _, _ := f.deps.Workspace("sales")
+	ws, _, _ := f.deps.LookupWorkspace("sales")
 	snap := f.svc.snapshot(r, ws, 0)
 	if len(snap.Entries) != 10000 || snap.Entries[0].Seq != 51 || snap.Entries[9999].Seq != 10050 {
 		t.Fatalf("got %d entries, first seq %d, last seq %d; want 10000, 51..10050",

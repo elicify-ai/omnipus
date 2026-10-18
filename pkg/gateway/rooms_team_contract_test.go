@@ -18,14 +18,16 @@ import (
 
 type wholeTeamDeps struct {
 	mu     sync.Mutex
-	ws     rooms.Workspace
+	ws     rooms.WorkspaceInfo
 	frames []any
 }
 
-func (d *wholeTeamDeps) Workspace(string) (rooms.Workspace, bool, error) { return d.ws, true, nil }
-func (d *wholeTeamDeps) AgentName(id string) (string, bool)              { return id, true }
-func (*wholeTeamDeps) SessionInWorkspace(string, string) bool            { return false }
-func (*wholeTeamDeps) Limits() (int, int)                                { return 60, 65536 }
+func (d *wholeTeamDeps) LookupWorkspace(string) (rooms.WorkspaceInfo, bool, error) {
+	return d.ws, true, nil
+}
+func (d *wholeTeamDeps) AgentName(id string) (string, bool)   { return id, true }
+func (*wholeTeamDeps) SessionInWorkspace(string, string) bool { return false }
+func (*wholeTeamDeps) Limits() (int, int)                     { return 60, 65536 }
 func (*wholeTeamDeps) Admit(_ context.Context, a rooms.Admission) (rooms.AdmitResult, error) {
 	return rooms.AdmitResult{ReceiverSessionID: "main-" + a.Receiver.AgentID, Held: true}, nil
 }
@@ -60,7 +62,7 @@ func requireRoomContract(t *testing.T, name string, value any) {
 // only synthetic validator fixtures. Receivers are held to avoid 257 paid
 // turns; room fanout, journals, metadata and snapshot production stay real.
 func TestRoomsFix2_WholeTeamFramesValidateAbove256(t *testing.T) {
-	d := &wholeTeamDeps{ws: rooms.Workspace{ID: "sales", Name: "Sales"}}
+	d := &wholeTeamDeps{ws: rooms.WorkspaceInfo{ID: "sales", Name: "Sales"}}
 	ids := make([]string, 257)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("agent-%03d", i)

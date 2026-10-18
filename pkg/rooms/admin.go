@@ -71,7 +71,7 @@ func (s *Service) Create(workspaceID string, req generated.RoomCreateRequest, pr
 
 // roomName validates a squad name or composes an ad-hoc room's name from its
 // members (the Room schema requires a name).
-func roomName(kind string, name *string, members []string, ws Workspace) (string, error) {
+func roomName(kind string, name *string, members []string, ws WorkspaceInfo) (string, error) {
 	if name != nil {
 		n := strings.TrimSpace(*name)
 		if n == "" || utf8.RuneCountInString(n) > maxRoomNameRunes || !utf8.ValidString(n) || strings.ContainsRune(n, 0) {
@@ -201,7 +201,7 @@ func (s *Service) UpdateMembers(roomID string, req generated.RoomMembersUpdateRe
 
 // applyMemberAction changes the record in memory and returns the agent ids
 // it changed. The caller holds r.mu and persists.
-func (s *Service) applyMemberAction(r *room, ws Workspace, action string, ids []string) ([]string, error) {
+func (s *Service) applyMemberAction(r *room, ws WorkspaceInfo, action string, ids []string) ([]string, error) {
 	switch action {
 	case "add":
 		add, err := s.validateNewMembers(ws, ids)

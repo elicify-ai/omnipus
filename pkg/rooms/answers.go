@@ -84,7 +84,7 @@ var ErrMirrorFailed = errors.New("your answer was posted in the group, but it co
 
 // recordAnswer appends the answer and its mention deliveries. The caller
 // holds r.mu.
-func (s *Service) recordAnswer(r *room, ws Workspace, a Answer) (storedEntry, []string, error) {
+func (s *Service) recordAnswer(r *room, ws WorkspaceInfo, a Answer) (storedEntry, []string, error) {
 	d := r.deliveries[a.RequestID]
 	if r.deleted || d == nil || d.AgentID != a.Responder.AgentID || a.Responder.WorkspaceID != r.rec.WorkspaceID {
 		return storedEntry{}, nil, ErrRoomUnavailable

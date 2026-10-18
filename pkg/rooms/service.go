@@ -17,8 +17,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
-// Workspace is what the rooms need to know about one workspace.
-type Workspace struct {
+// WorkspaceInfo is what the rooms need to know about one workspace.
+type WorkspaceInfo struct {
 	ID   string
 	Name string
 	// Agents are the workspace's conversation agents in team order: members
@@ -74,9 +74,9 @@ type AuditEvent struct {
 
 // Directory is what the room service reads about workspaces and agents.
 type Directory interface {
-	// Workspace loads a workspace; found=false when it does not exist. A
+	// LookupWorkspace loads a workspace; found=false when it does not exist. A
 	// read failure is an error, never "not found".
-	Workspace(workspaceID string) (ws Workspace, found bool, err error)
+	LookupWorkspace(workspaceID string) (ws WorkspaceInfo, found bool, err error)
 	// AgentName returns an agent's display name (any agent, member or not).
 	AgentName(agentID string) (string, bool)
 	// SessionInWorkspace reports whether sessionID is a main chat of a
@@ -498,7 +498,7 @@ func (s *Service) setState(r *room, d *deliveryRecord, state, reason string) err
 
 // publishMeta persists the record and publishes a room_meta frame. The
 // caller holds r.mu.
-func (s *Service) publishMeta(r *room, ws Workspace) error {
+func (s *Service) publishMeta(r *room, ws WorkspaceInfo) error {
 	r.nextSeq()
 	if err := s.persistRecord(r); err != nil {
 		r.seq--
@@ -524,7 +524,7 @@ func deliveryWire(d *deliveryRecord) generated.RoomDeliveryState {
 }
 
 // roomView is the K23 Room projection. The caller holds r.mu.
-func (s *Service) roomView(r *room, ws Workspace) generated.Room {
+func (s *Service) roomView(r *room, ws WorkspaceInfo) generated.Room {
 	out := generated.Room{
 		Id: r.rec.ID, WorkspaceId: r.rec.WorkspaceID, Kind: generated.RoomKind(r.rec.Kind), Name: r.rec.Name,
 		Members: nonNil(r.rec.Members), Muted: nonNil(r.rec.Muted), Paused: r.rec.Paused, Generation: r.rec.Generation,
@@ -551,7 +551,7 @@ func (s *Service) roomView(r *room, ws Workspace) generated.Room {
 
 // readOnlyReason: a room with fewer than two current members is read-only
 // until another agent joins (FR-160, FR-204).
-func readOnlyReason(r *room, _ Workspace) string {
+func readOnlyReason(r *room, _ WorkspaceInfo) string {
 	if len(r.rec.Members) >= 2 {
 		return ""
 	}

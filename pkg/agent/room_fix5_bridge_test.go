@@ -23,8 +23,8 @@ type fix5RoomBridge struct {
 	workspace string
 }
 
-func (b *fix5RoomBridge) Workspace(id string) (rooms.Workspace, bool, error) {
-	return rooms.Workspace{ID: b.workspace, Name: "Test", Agents: []rooms.Agent{{ID: testDefaultAgentID, Name: "Mia"}, {ID: "jim", Name: "Jim"}}}, id == b.workspace, nil
+func (b *fix5RoomBridge) LookupWorkspace(id string) (rooms.WorkspaceInfo, bool, error) {
+	return rooms.WorkspaceInfo{ID: b.workspace, Name: "Test", Agents: []rooms.Agent{{ID: testDefaultAgentID, Name: "Mia"}, {ID: "jim", Name: "Jim"}}}, id == b.workspace, nil
 }
 func (*fix5RoomBridge) AgentName(id string) (string, bool) {
 	switch id {
