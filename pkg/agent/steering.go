@@ -74,6 +74,10 @@ type steeringQueueItem struct {
 	// web/channel input; Stop's FR-024 discard uses it to label the original
 	// message "discarded". Empty for every other item.
 	transcriptEntryID string
+	// origin is the approval origin of the input this item carries (a
+	// channel person, a group or a peer request); the turn that consumes it
+	// raises its own origin with it (spec §6.18). Zero for web input.
+	origin approvalOrigin
 }
 
 type steeringWake struct {
@@ -551,14 +555,17 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Content: msg.Content,
 		Media:   append([]string(nil), msg.Media...),
 	}
+	// Spec §6.18: the joined input's origin rides with it, so the turn that
+	// consumes it labels its later approvals accordingly.
+	origin := al.turnApprovalOrigin(msg, msg.SessionID)
 	if isRoomRequestWake(msg) {
 		// A held room request joining the turn that revived its member keeps
 		// its request id in the steering correlation, so the turn's cost
 		// meter can tell it is a room input (§6.14).
-		_, _, err = al.enqueueSteeringMessageEntry(route.SessionKey, ag.ID, pmsg, roomSteerCorrelation(msg.TranscriptEntryID), msg.TranscriptEntryID)
+		_, _, err = al.enqueueSteeringMessageEntryWithOrigin(route.SessionKey, ag.ID, pmsg, roomSteerCorrelation(msg.TranscriptEntryID), msg.TranscriptEntryID, origin)
 		return err
 	}
-	_, _, err = al.enqueueHumanSteeringMessage(route.SessionKey, ag.ID, pmsg, msg.TranscriptEntryID)
+	_, _, err = al.enqueueSteeringMessageEntryWithOrigin(route.SessionKey, ag.ID, pmsg, "", msg.TranscriptEntryID, origin)
 	return err
 }
 
@@ -975,11 +982,17 @@ func (al *AgentLoop) enqueueHumanSteeringMessage(scope, agentID string, msg prov
 }
 
 func (al *AgentLoop) enqueueSteeringMessageEntry(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string) (string, EnqueueStatus, error) {
+	return al.enqueueSteeringMessageEntryWithOrigin(scope, agentID, msg, correlationID, transcriptEntryID, approvalOrigin{})
+}
+
+// enqueueSteeringMessageEntryWithOrigin is enqueueSteeringMessageEntry for an
+// input with a server-derived approval origin (spec §6.18).
+func (al *AgentLoop) enqueueSteeringMessageEntryWithOrigin(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string, origin approvalOrigin) (string, EnqueueStatus, error) {
 	correlationID = strings.TrimSpace(correlationID)
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
-	item := steeringQueueItem{message: msg, correlationID: correlationID, transcriptEntryID: transcriptEntryID}
+	item := steeringQueueItem{message: msg, correlationID: correlationID, transcriptEntryID: transcriptEntryID, origin: origin}
 	// onPostFinish fires only when the closing hand-off's transition buffer
 	// accepted this item during a terminal transition with non-refusal; its
 	// return value becomes enqueueSteeringItemWithStatus's own returned
@@ -1155,7 +1168,8 @@ func (al *AgentLoop) dequeueSteeringMessagesForScope(scope string) ([]providers.
 		return nil, nil
 	}
 	actualScope, items := al.steering.dequeueItemsScope(scope)
-	msgs, correlationIDs, _ := al.consumeDequeuedSteering(actualScope, items)
+	msgs, correlationIDs, consumed := al.consumeDequeuedSteering(actualScope, items)
+	al.noteConsumedOriginsForScope(scope, consumed)
 	return msgs, correlationIDs
 }
 
@@ -1164,8 +1178,34 @@ func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) (
 		return nil, nil
 	}
 	actualScope, items := al.steering.dequeueItemsScopeWithFallback(scope)
-	msgs, correlationIDs, _ := al.consumeDequeuedSteering(actualScope, items)
+	msgs, correlationIDs, consumed := al.consumeDequeuedSteering(actualScope, items)
+	al.noteConsumedOriginsForScope(scope, consumed)
 	return msgs, correlationIDs
+}
+
+// noteConsumedOriginsForScope raises the live turn's approval origin with the
+// origins of the inputs it just consumed (spec §6.18; the turn polling its
+// own scope is the one registered under it).
+func (al *AgentLoop) noteConsumedOriginsForScope(scope string, consumed []steeringQueueItem) {
+	merged := mergedItemOrigin(consumed)
+	if merged.Label == "" {
+		return
+	}
+	if v, ok := al.activeTurnStates.Load(scope); ok {
+		if ts, ok := v.(*turnState); ok {
+			ts.noteConsumedOrigin(merged)
+		}
+	}
+}
+
+// mergedItemOrigin folds the origins of consumed items under the §6.18
+// precedence rule (first of the highest class wins).
+func mergedItemOrigin(items []steeringQueueItem) approvalOrigin {
+	var merged approvalOrigin
+	for _, item := range items {
+		merged = mergeApprovalOrigin(merged, item.origin)
+	}
+	return merged
 }
 
 // dequeueSteeringItemsForScopeWithFallback is dequeueSteeringMessagesForScopeWithFallback's
@@ -1424,7 +1464,23 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	steeringMsgs []providers.Message,
 	steeringCorrelationIDs []string,
 ) (string, error) {
+	return al.continueWithSteeringMessagesFrom(ctx, agent, sessionKey, channel, chatID, workspaceID,
+		steeringMsgs, steeringCorrelationIDs, approvalOrigin{})
+}
+
+// continueWithSteeringMessagesFrom is continueWithSteeringMessages whose
+// continuation turn starts with the approval origin of the inputs it
+// consumes (spec §6.18).
+func (al *AgentLoop) continueWithSteeringMessagesFrom(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey, channel, chatID, workspaceID string,
+	steeringMsgs []providers.Message,
+	steeringCorrelationIDs []string,
+	origin approvalOrigin,
+) (string, error) {
 	resp, err := al.runAgentLoop(ctx, agent, processOptions{
+		approvalOrigin:                origin,
 		SessionKey:                    sessionKey,
 		Channel:                       channel,
 		ChatID:                        chatID,
@@ -1519,7 +1575,7 @@ func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 func (al *AgentLoop) continuePendingSteering(
 	ctx context.Context,
 	sessionKey string,
-	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
+	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string, origin approvalOrigin) (string, error),
 ) (string, error) {
 	return al.continuePendingSteeringWithAgent(ctx, sessionKey, al.agentForSession(sessionKey), run)
 }
@@ -1528,7 +1584,7 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 	ctx context.Context,
 	sessionKey string,
 	agent *AgentInstance,
-	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
+	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string, origin approvalOrigin) (string, error),
 ) (string, error) {
 	// Bug 1 fix (design note "Caller survey"): the active-turn guard must be
 	// scoped to THIS session's own key, not the whole activeTurnStates map —
@@ -1571,7 +1627,9 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 		}
 	}
 
-	resp, err := run(agent, steeringMsgs, steeringCorrelationIDs)
+	// Spec §6.18: the continuation turn's origin is that of the inputs it
+	// consumes.
+	resp, err := run(agent, steeringMsgs, steeringCorrelationIDs, mergedItemOrigin(consumedItems))
 	if err != nil {
 		// Gate finding, CRITICAL: continueWithSteeringMessages's own turn can
 		// fail with an ordinary error (provider error, mid-turn failure — the
@@ -1623,10 +1681,10 @@ func restorableSteeringItems(items []steeringQueueItem) []steeringQueueItem {
 // chatID), so it cannot recompute this value itself.
 func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, workspaceID string) (string, error) {
 	return al.continuePendingSteering(ctx, sessionKey,
-		func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
-			return al.continueWithSteeringMessages(
+		func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string, origin approvalOrigin) (string, error) {
+			return al.continueWithSteeringMessagesFrom(
 				ctx, agent, sessionKey, channel, chatID, workspaceID,
-				steeringMsgs, steeringCorrelationIDs,
+				steeringMsgs, steeringCorrelationIDs, origin,
 			)
 		})
 }

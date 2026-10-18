@@ -149,6 +149,34 @@ func (al *AgentLoop) publishUserEntry(sessionID string, entry session.Transcript
 type approvalOrigin struct {
 	Label   string
 	RoomRef *generated.RoomRef
+	// Class ranks the origin for the "inputs consumed" rule below.
+	Class originClass
+}
+
+// originClass ranks a turn's origins. Spec §6.18: a turn's origin is the set
+// of inputs it consumed, and any consumed channel-person input makes it
+// channel-triggered. Chief ruling 2026-10-18 (gate round 1, Q1 A / Q2 yes):
+// precedence channel > room > peer > web; the label never moves down once a
+// higher class was consumed, and within a class the FIRST consumed input
+// keeps the label. Approvals already pending keep the label they were raised
+// with (amendment R6: a card is immutable once raised); only approvals
+// raised after the input joined carry the new label.
+type originClass int
+
+const (
+	originWeb originClass = iota
+	originPeer
+	originRoom
+	originChannel
+)
+
+// mergeApprovalOrigin returns the origin a turn carries after it consumed
+// next, under the precedence rule above.
+func mergeApprovalOrigin(current, next approvalOrigin) approvalOrigin {
+	if next.Label == "" || next.Class <= current.Class {
+		return current
+	}
+	return next
 }
 
 // roomRefCopy returns a copy of the room reference (nil when none), so an
@@ -189,7 +217,7 @@ func (al *AgentLoop) turnApprovalOrigin(msg bus.InboundMessage, sessionID string
 		if person == "" {
 			person = "a person"
 		}
-		return approvalOrigin{Label: "while answering " + person + " on " + inboundInstanceID(msg)}
+		return approvalOrigin{Label: "while answering " + person + " on " + inboundInstanceID(msg), Class: originChannel}
 	}
 	requestID := msg.TranscriptEntryID
 	if sessionID == "" || requestID == "" || msg.ChatID != "request:"+requestID {
@@ -213,6 +241,7 @@ func (al *AgentLoop) turnApprovalOrigin(msg bus.InboundMessage, sessionID string
 			return approvalOrigin{}
 		}
 		return approvalOrigin{
+			Class: originRoom,
 			Label: "for group " + capture.Source.RoomName,
 			RoomRef: &generated.RoomRef{
 				RoomId: capture.Source.RoomID, RoomName: capture.Source.RoomName,
@@ -227,5 +256,5 @@ func (al *AgentLoop) turnApprovalOrigin(msg bus.InboundMessage, sessionID string
 	if name == "" {
 		name = capture.Sender.Agent.AgentID
 	}
-	return approvalOrigin{Label: "asked by " + name}
+	return approvalOrigin{Label: "asked by " + name, Class: originPeer}
 }

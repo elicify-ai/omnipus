@@ -59,8 +59,11 @@ func (al *AgentLoop) newRoomMeterForOptions(opts processOptions) *roomCostMeter 
 func (al *AgentLoop) enqueueHeldRoomInput(msg bus.InboundMessage, meters []*roomCostMeter) error {
 	for _, m := range meters {
 		if m != nil && m.scope != "" {
-			_, _, err := al.enqueueSteeringMessageEntry(m.scope, msg.Metadata["agent_id"],
-				providers.Message{Role: "user", Content: msg.Content}, roomSteerCorrelation(msg.TranscriptEntryID), msg.TranscriptEntryID)
+			// Spec §6.18: the held group request carries its group origin
+			// into the turn that consumes it.
+			_, _, err := al.enqueueSteeringMessageEntryWithOrigin(m.scope, msg.Metadata["agent_id"],
+				providers.Message{Role: "user", Content: msg.Content}, roomSteerCorrelation(msg.TranscriptEntryID), msg.TranscriptEntryID,
+				al.turnApprovalOrigin(msg, msg.SessionID))
 			return err
 		}
 	}
