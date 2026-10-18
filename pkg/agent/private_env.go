@@ -8,7 +8,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/secretrequest"
@@ -81,4 +84,42 @@ func (al *AgentLoop) CardSecretStore() (store *credentials.Store, exists bool, e
 		return nil, false, err
 	}
 	return store, store != nil, nil
+}
+
+// newListSecretsTool wires list_secrets to the live store, configuration and
+// session workspaces (FR-073).
+func (al *AgentLoop) newListSecretsTool() *tools.ListSecretsTool {
+	return tools.NewListSecretsTool(tools.ListSecretsDeps{
+		Store:   al.CardSecretStore,
+		Config:  al.GetConfig,
+		Home:    config.OmnipusHomeDir,
+		SeesAll: func(agentID string) bool { return agentID == string(coreagent.IDOmnipus) },
+		WorkspaceOf: func(sessionID string) (string, error) {
+			sessions := al.GetSessionStore()
+			if sessions == nil || sessionID == "" {
+				return "", errors.New("no session")
+			}
+			ancestry, err := sessions.ResolveInteractionContext(sessionID)
+			return ancestry.WorkspaceID, err
+		},
+	})
+}
+
+// reloadAndWaitTimeout bounds reloadAndWait's wait for a queued reload.
+const reloadAndWaitTimeout = 60 * time.Second
+
+// reloadAndWait triggers a config reload and waits until it has landed (the
+// pending flag clears) or the bound elapses.
+func (al *AgentLoop) reloadAndWait() error {
+	if err := al.TriggerReload(); err != nil && !errors.Is(err, ErrReloadAlreadyInProgress) {
+		return err
+	}
+	deadline := time.Now().Add(reloadAndWaitTimeout)
+	for al.IsReloadPending() {
+		if time.Now().After(deadline) {
+			return errors.New("the live reload did not finish in time")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil
 }

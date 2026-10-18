@@ -11,7 +11,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -66,12 +65,7 @@ func (a *restAPI) listSecrets(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusServiceUnavailable, "the secret store could not be read")
 			return
 		}
-		cfg := a.secretsConfig(r.Context())
-		consumers := configReferenceConsumers(cfg)
-		home := a.secretsHome()
-		for _, item := range inventory {
-			entries = append(entries, secretNameEntry(cfg, home, item, inventory, consumers[item.Reference]))
-		}
+		entries = secretrequest.NameEntries(a.secretsConfig(r.Context()), a.secretsHome(), inventory)
 	}
 	jsonOK(w, entries)
 }
@@ -120,7 +114,8 @@ func (a *restAPI) updateSecretOptions(w http.ResponseWriter, r *http.Request, re
 	})
 	inventory, _ := store.CardInventory()
 	cfg := a.secretsConfig(r.Context())
-	jsonOK(w, secretNameEntry(cfg, a.secretsHome(), updated, inventory, configReferenceConsumers(cfg)[reference]))
+	entry, _ := secretrequest.NameEntry(cfg, a.secretsHome(), updated, inventory, secretrequest.ReferenceConsumers(cfg))
+	jsonOK(w, entry)
 }
 
 func (a *restAPI) secretsConfig(ctx context.Context) *config.Config {
@@ -140,103 +135,4 @@ func requestUsername(r *http.Request) string {
 		return user.Username
 	}
 	return ""
-}
-
-// secretNameEntry builds one K6 entry. Private versions are selected or
-// superseded by the store's selection (FR-086). An integration version is
-// selected when configuration references it, superseded when a newer version
-// of the same destination is referenced, and stored otherwise (FR-072).
-func secretNameEntry(cfg *config.Config, home string, item credentials.CardInventoryEntry, all []credentials.CardInventoryEntry, consumers []string) gen.SecretNameEntry {
-	recipient := item.Secret.Recipient
-	entry := gen.SecretNameEntry{
-		Reference: item.Reference,
-		Kind:      gen.SecretNameEntryKind(recipient.Kind),
-		Version:   int64(item.Secret.Version),
-		Consumers: append([]string{}, consumers...),
-	}
-	entry.Recipient.Kind = gen.SecretNameEntryRecipientKind(recipient.Kind)
-	entry.Recipient.Lines = secretrequest.DisplayLines(cfg, home, recipient)
-	if recipient.Kind == credentials.KindAgentPrivate {
-		entry.Owner = &struct {
-			AgentId     string `json:"agent_id"`
-			WorkspaceId string `json:"workspace_id"`
-		}{AgentId: recipient.AgentID, WorkspaceId: recipient.WorkspaceID}
-		available := item.Options.AvailableInChannelTurns
-		entry.AvailableInChannelTurns = &available
-		entry.State = gen.SecretNameEntryStateSuperseded
-		if item.Selected {
-			entry.State = gen.SecretNameEntryStateSelected
-		}
-		return entry
-	}
-	entry.State = gen.SecretNameEntryStateStored
-	if len(consumers) > 0 {
-		entry.State = gen.SecretNameEntryStateSelected
-		return entry
-	}
-	for _, other := range all {
-		if other.Reference != item.Reference && other.Secret.Version > item.Secret.Version &&
-			sameDestination(other.Secret.Recipient, recipient) && len(configReferenceConsumersFor(cfg, other.Reference)) > 0 {
-			entry.State = gen.SecretNameEntryStateSuperseded
-			break
-		}
-	}
-	return entry
-}
-
-func sameDestination(a, b credentials.CardRecipient) bool {
-	ra, _ := json.Marshal(a)
-	rb, _ := json.Marshal(b)
-	return bytes.Equal(ra, rb)
-}
-
-func configReferenceConsumersFor(cfg *config.Config, reference string) []string {
-	return configReferenceConsumers(cfg)[reference]
-}
-
-// configReferenceConsumers maps every reference name the configuration uses
-// to value-free labels of where it is used: any string field named *_ref and
-// every value of an env_refs map, labelled by its configuration path.
-func configReferenceConsumers(cfg *config.Config) map[string][]string {
-	out := map[string][]string{}
-	if cfg == nil {
-		return out
-	}
-	raw, err := json.Marshal(cfg)
-	if err != nil {
-		return out
-	}
-	var tree any
-	if json.Unmarshal(raw, &tree) != nil {
-		return out
-	}
-	var walk func(node any, path string, inRefs bool)
-	walk = func(node any, path string, inRefs bool) {
-		switch typed := node.(type) {
-		case map[string]any:
-			keys := make([]string, 0, len(typed))
-			for key := range typed {
-				keys = append(keys, key)
-			}
-			sort.Strings(keys)
-			for _, key := range keys {
-				child := typed[key]
-				label := key
-				if path != "" {
-					label = path + "." + key
-				}
-				if value, ok := child.(string); ok && value != "" && (inRefs || strings.HasSuffix(key, "_ref")) {
-					out[value] = append(out[value], label)
-					continue
-				}
-				walk(child, label, key == "env_refs")
-			}
-		case []any:
-			for i, child := range typed {
-				walk(child, path+"["+strconv.Itoa(i)+"]", false)
-			}
-		}
-	}
-	walk(tree, "", false)
-	return out
 }

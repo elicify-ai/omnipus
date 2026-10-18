@@ -7,6 +7,7 @@ package credentials
 import (
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -34,19 +35,24 @@ func privateKey(r CardRecipient) string {
 	return r.WorkspaceID + "\x1f" + r.AgentID + "\x1f" + r.Field
 }
 
-// CardInventoryEntry is one stored card secret version, value-free.
+// CardInventoryEntry is one stored secret version, value-free.
 type CardInventoryEntry struct {
 	Reference string
 	Secret    CardSecret
+	// Plain marks an entry stored outside a secret card (Settings, boot
+	// migration): it has no recorded recipient; Secret.Version is parsed
+	// from a ".v<n>" suffix, else 1.
 	// Selected is meaningful for the private kind only: whether this version
 	// is the one injected into its owner pair's children.
 	Selected bool
 	// Options is set for the private kind only.
 	Options PrivateOptions
+	Plain   bool
 }
 
-// CardInventory lists every stored card secret version with its private
-// selection state, sorted by reference. It never decrypts a value.
+// CardInventory lists every stored secret version — card-stored versions
+// with their recipient and private selection state, and plain entries — sorted
+// by reference. It never decrypts a value.
 func (s *Store) CardInventory() ([]CardInventoryEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -67,8 +73,64 @@ func (s *Store) CardInventory() ([]CardInventoryEntry, error) {
 		}
 		out = append(out, entry)
 	}
+	for ref := range sf.Credentials {
+		if _, card := sf.CardSecrets[ref]; card {
+			continue
+		}
+		out = append(out, CardInventoryEntry{Reference: ref, Plain: true, Secret: CardSecret{Version: referenceVersion(ref)}})
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Reference < out[j].Reference })
 	return out, nil
+}
+
+// referenceVersion parses a ".v<n>" suffix; a name without one is version 1.
+func referenceVersion(ref string) int {
+	i := strings.LastIndex(ref, ".v")
+	if i < 0 {
+		return 1
+	}
+	n, err := strconv.Atoi(ref[i+2:])
+	if err != nil || n < 1 {
+		return 1
+	}
+	return n
+}
+
+// RemoveReference durably deletes one stored version — its encrypted value,
+// its card recipient binding and, for a private variable, its selection when
+// it was the selected version — in one publication (FR-077). Other versions
+// of the same name and every receipt are untouched.
+func (s *Store) RemoveReference(ref string) (CardInventoryEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.key == nil {
+		return CardInventoryEntry{}, ErrStoreLocked
+	}
+	sf, err := s.loadFileInternal()
+	if err != nil {
+		return CardInventoryEntry{}, err
+	}
+	secret, card := sf.CardSecrets[ref]
+	if _, stored := sf.Credentials[ref]; !stored && !card {
+		return CardInventoryEntry{}, &NotFoundError{Name: ref}
+	}
+	entry := CardInventoryEntry{Reference: ref, Secret: secret, Plain: !card}
+	if !card {
+		entry.Secret.Version = referenceVersion(ref)
+	}
+	delete(sf.Credentials, ref)
+	delete(sf.CardSecrets, ref)
+	if card && secret.Recipient.Kind == KindAgentPrivate {
+		key := privateKey(secret.Recipient)
+		if sf.PrivateSelected[key] == ref {
+			entry.Selected = true
+			delete(sf.PrivateSelected, key)
+		}
+	}
+	if err := s.saveFileNoLock(sf); err != nil {
+		return CardInventoryEntry{}, err
+	}
+	return entry, nil
 }
 
 // SetPrivateChannelAvailability sets FR-241's option for the variable that

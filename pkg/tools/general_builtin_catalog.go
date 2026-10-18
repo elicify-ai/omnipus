@@ -153,6 +153,7 @@ func GeneralBuiltinMetadata() []Tool {
 	// (buildKnownBuiltinToolNames) see it, mirroring message_parent exactly.
 	out = append(out, NewAskUserQuestionTool(nil))
 	out = append(out, NewRequestSecretTool(nil, nil))
+	out = append(out, NewListSecretsTool(ListSecretsDeps{}))
 
 	// --- set_goal (CategoryTasks) — ADR-088 D2 (work-first-goal-flow-spec
 	// FR-004/FR-005/FR-006): the validated write-path over the goal record

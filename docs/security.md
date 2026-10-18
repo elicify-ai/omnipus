@@ -556,6 +556,12 @@ The card shows the owner as "Mia in Sales" and the variable name. Omnipus can re
 | Turns started by a channel person | Private variables are **not** added to commands in a turn that read a message from someone on a connected channel, unless you marked that variable "available in channel conversations". This is off by default; only a signed-in web user can change it, and each change is recorded in the audit log. |
 | If it cannot be read | The command still runs without it, and the result says which private variable could not be read. Replace it on a new card. |
 
+### Listing and removing secrets in chat
+
+Agents see stored secrets by **reference name**, never by value. `list_secrets` shows each entry's reference name, kind, version, destination, the integrations that use it, and whether it is in use; an ordinary agent sees only its own private variables in the current workspace, while Omnipus sees every stored reference. An entry saved in Settings that no integration uses yet is not listed there, but can still be removed by name.
+
+Only Omnipus can remove a secret, with `remove_secret`, and you approve it first. The approval card lists every integration that uses the reference before anything is deleted. Removing a reference that is still in use is allowed: after removal the configuration is reloaded, the integrations that used it stop using it and show as degraded, and the next start keeps running with them degraded until you give them a new secret. The result reports three separate facts — whether the value was durably deleted, what changed for running connections, and whether the configuration still starts. Removing an older version that a replacement superseded leaves the current version working. Each removal is recorded in the audit log as `secret.removed`, without the value.
+
 ## How to manage saved secrets
 
 1. Open **Settings**, then select **Security**.

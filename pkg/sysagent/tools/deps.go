@@ -167,6 +167,10 @@ type Deps struct {
 	// path uses WaitForPendingReloadFunc below instead, which only polls
 	// the pending flag and never triggers.
 	WaitForReloadFunc func() error
+	// ReloadAndWaitFallback is remove_secret's live-apply path when
+	// WaitForReloadFunc is not wired: the agent loop's own TriggerReload plus
+	// a bounded wait for the pending flag to clear. WireSysagentDeps fills it.
+	ReloadAndWaitFallback func() error
 	// WaitForPendingReloadFunc BLOCKS until any reload already queued by a
 	// prior publish hook (UpsertAgentFastFunc / ReloadFunc) has actually
 	// landed in memory, OR returns an error after reloadWaitTimeout elapses.

@@ -596,6 +596,9 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 		}
 		return id
 	}))
+	// list_secrets (FR-073): every native agent; an ordinary agent sees its
+	// own private variables in the current workspace, Omnipus sees all.
+	agent.Tools.RegisterReplacing(rw.rs.al.newListSecretsTool())
 
 	// set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004..FR-006):
 	// the validated write-path over this session's goal record.
@@ -2133,6 +2136,9 @@ func (al *AgentLoop) SetSysagentDeps(deps *systools.Deps) {
 // supply side; policy is the demand filter.
 func (al *AgentLoop) WireSysagentDeps(deps *systools.Deps) {
 	depsCopy := *deps
+	if depsCopy.ReloadAndWaitFallback == nil {
+		depsCopy.ReloadAndWaitFallback = al.reloadAndWait
+	}
 	al.sysagentDeps = &depsCopy
 	al.wireSysagentDepsLocked(al.registry, &depsCopy)
 }

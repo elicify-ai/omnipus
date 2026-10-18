@@ -189,13 +189,12 @@ var administrativeToolNames = map[string]struct{}{
 // fails the build until a human records why it's exempt, rather than
 // silently passing it through.
 var administrativeExemptNames = map[string]string{
-	// Forward-reserved by WU-2 in the static catalogue; the tool itself is
-	// implemented later (omnipus-system-agent FR-077). Until then it has no
-	// executable tool and no manifest entry, so ToolSearch cannot surface it,
-	// and its guard is policy: it ships ask and is on the Auto ask-list
-	// (FR-021). Re-adjudicate it into administrativeToolNames when the tool
-	// lands.
-	"remove_secret": "forward-reserved, not yet implemented (FR-077); guarded by ask + Auto ask-list (FR-021)",
+	// Implemented in WU-6 (omnipus-system-agent FR-077) as an Omnipus system
+	// tool. Its guard is policy: it ships ask and is on the Auto ask-list
+	// (FR-021), and only Omnipus holds it. Re-adjudication into
+	// administrativeToolNames is pending, together with
+	// TestAdministrativeToolNames_Drift's literal list.
+	"remove_secret": "implemented (FR-077, WU-6), Omnipus only; guarded by ask + Auto ask-list (FR-021); re-adjudication pending",
 }
 
 // isAdministrativeToolName reports whether name is in the drift-tested

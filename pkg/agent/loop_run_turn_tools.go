@@ -876,6 +876,14 @@ func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall
 		requestArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
 		decisionKind = "rule_ask"
 	}
+	// A tool may show server-derived facts on its approval card (e.g.
+	// remove_secret's consumers, FR-077); the call still executes with
+	// ex.toolArgs unchanged.
+	if rt.ts.agent != nil && rt.ts.agent.Tools != nil {
+		if tool, ok := rt.ts.agent.Tools.Get(ex.toolName); ok {
+			requestArgs = tools.WithApprovalContext(rt.turnCtx, tool, requestArgs)
+		}
+	}
 	// §5.7 fix: re-check the standing grant, with the SAME args
 	// CheckGrantOrRequestApproval below would, BEFORE writing the pending
 	// placeholder — closing the window between resolveAskPolicy's own grant
