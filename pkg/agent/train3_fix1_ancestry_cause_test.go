@@ -30,10 +30,10 @@ func TestTrain3Fix1_UnresolvedAncestryLogsItsCause(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession(child): %v", err)
 	}
-	if err := sessions.SetMeta(child.ID, session.MetaPatch{ParentSessionID: &parent}); err != nil {
+	if err = sessions.SetMeta(child.ID, session.MetaPatch{ParentSessionID: &parent}); err != nil {
 		t.Fatalf("SetMeta(parent): %v", err)
 	}
-	if err := lifecycle.Persist(&session.LifecycleRecord{
+	if err = lifecycle.Persist(&session.LifecycleRecord{
 		SessionID: child.ID, Generation: 1, State: session.LifecycleRunning,
 		AgentID: testDefaultAgentID, OwnerScopeKind: session.OwnerScopeHuman,
 		Origin: &session.Origin{Kind: session.OriginKindDelegate},
@@ -42,7 +42,7 @@ func TestTrain3Fix1_UnresolvedAncestryLogsItsCause(t *testing.T) {
 	}
 
 	logPath := filepath.Join(t.TempDir(), "agent.log")
-	if err := logger.EnableFileLogging(logPath); err != nil {
+	if err = logger.EnableFileLogging(logPath); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)
 	}
 	defer logger.DisableFileLogging()

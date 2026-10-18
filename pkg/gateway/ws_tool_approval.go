@@ -121,8 +121,8 @@ func (h *WSHandler) approvalSessionContext(sessionID string) approvalContext {
 // the generated validators count characters, not UTF-8 bytes: a valid
 // 80-character non-ASCII room name makes a "for group" label of well over 200
 // bytes that the contract still accepts (gate round 1, architect F3 / SF-06).
-func withinChars(s string, max int) bool {
-	return utf8.RuneCountInString(s) <= max
+func withinChars(s string, limit int) bool {
+	return utf8.RuneCountInString(s) <= limit
 }
 
 // rootSessionField returns the wire root_session_id: omitted (nil) when the
