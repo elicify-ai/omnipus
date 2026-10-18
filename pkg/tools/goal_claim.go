@@ -128,7 +128,8 @@ func (t *GoalClaimTool) Description() string {
 		"or cancel them, then claim again. With no queued or actively running direct child, a valid met claim " +
 		"proceeds to adjudication after your reply is delivered; adjudication may disagree with your " +
 		"claim. A met claim requires a non-empty evidence argument (your own one-line statement of what you " +
-		"verified) or the call is refused before anything is recorded — no partial credit for trying. " +
+		"verified) or the call is refused before anything is recorded — if the work is not finished yet, do " +
+		"not claim met: keep working, or claim blocked or waiting_on_user with the reason as evidence. " +
 		"status:waiting_on_user and status:blocked both end the turn without any adjudication: " +
 		"waiting_on_user means you need an answer from the operator to continue; blocked means you " +
 		"cannot proceed and it is not something the operator can answer directly — for either, give the " +
@@ -158,7 +159,8 @@ func (t *GoalClaimTool) Parameters() map[string]any {
 				"description": "Your own one-line statement of what you verified. Required and non-empty " +
 					"when status is met (whitespace-only counts as empty and the call is refused). For " +
 					"blocked and waiting_on_user it is optional: one line saying why you cannot proceed or " +
-					"what you need — it becomes the reason the operator sees.",
+					"what you need — it becomes the reason the operator sees. Example when status is met: " +
+					"\"Wrote the report to report.md and read it back; all three required sections are present.\"",
 			},
 		},
 		"required": []string{"status"},
@@ -248,7 +250,13 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	// to price a bare claim it can only detect after the turn has ended.
 	if status == GoalClaimStatusMet && evidence == "" {
 		return ErrorResult("goal_claim(status:met) rejected: evidence is required and must be non-empty — " +
-			"state, in one line, what you verified (ADR-084 JUDGE-FR-088)")
+			"nothing was recorded and the goal is unchanged, so retrying without evidence will be refused again. " +
+			"If the work is done and verified, call goal_claim again now with status \"met\" AND evidence — " +
+			"one line saying what you did and how you checked it, e.g. \"Wrote the report to report.md and read " +
+			"it back; all three required sections are present.\" If the work is NOT finished, do not claim met: " +
+			"keep working and claim later. If you cannot proceed or only the operator can unblock you, claim " +
+			"status \"blocked\" or \"waiting_on_user\" instead, with the reason as evidence. " +
+			"(ADR-084 JUDGE-FR-088)")
 	}
 
 	if status == GoalClaimStatusMet {
