@@ -12,12 +12,18 @@ import (
 //
 // Traces to: Spec-6 BDD "Default skills embedded and seeded on fresh install".
 func TestDefaultSkills_EmbeddedAndSeeded(t *testing.T) {
+	// The embedded default set after WU-9 (omnipus-system-agent FR-010): the
+	// Ava/Admin-era skills are removed and the W1–W18 workflow skills ship in
+	// their place, alongside the shared helpers and the four pinned Elicify
+	// document packages.
 	want := []string{
-		"agent-authoring", "channel-setup", "deep-research", "define-goal",
-		"delegation-graph", "doctor", "elicify-docx", "elicify-pdf", "elicify-pptx", "elicify-xlsx",
-		"inbox-triage", "interview",
-		"mcp-install", "orchestrate", "plan", "provider-setup", "skill-authoring",
-		"skill-mapping", "tool-mapping", "verify", "workspace-team",
+		"add-connector", "add-provider", "capability-plan", "change-agent",
+		"connect-channel", "create-agent", "deep-research", "define-goal",
+		"dependency-check", "disable-channel", "doctor-usage", "elicify-docx",
+		"elicify-pdf", "elicify-pptx", "elicify-xlsx", "inbox-triage",
+		"install-skill", "interview", "orchestrate", "plan", "provider-config",
+		"remove-agent", "remove-connector", "shell-diagnosis", "team-delegation",
+		"team-setup", "verify", "welcome-workspace", "write-skill",
 	}
 
 	// The embed FS must contain exactly the default set.

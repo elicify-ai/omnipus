@@ -324,7 +324,13 @@ func TestAskUserQuestion_DescriptionForbidsPlaceholderQuestions(t *testing.T) {
 	desc := NewAskUserQuestionTool(nil).Description()
 	for _, want := range []string{
 		"Ask only about a real unknown in the user's request whose answer changes what you will do next",
-		"never a placeholder, a test question, or a request for permission to proceed",
+		// WU-9 (FR-011) reworded the placeholder clause and folded the
+		// permission-to-proceed rule into the one plan-confirmation
+		// exception; both halves are pinned here.
+		"never a placeholder or a test question",
+		"may use exactly one card as its plan confirmation",
+		"approving an individual tool call, confirming another plan, or asking again after Go) is not a clarification and must not use this tool",
+		"Never set `default_safe` on a plan-confirmation question",
 		"never set_goal and a question together",
 	} {
 		if !strings.Contains(desc, want) {
