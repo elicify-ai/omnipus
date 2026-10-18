@@ -73,6 +73,22 @@ func TestRouting1340_PinnedVendorModelKeepsRealDeclaredFallback(t *testing.T) {
 	}
 }
 
+// Fix round 7 (R6-1): a configured fallback that happens to equal the pair the
+// pinned primary's vendor prefix would re-resolve to is a REAL fallback and
+// must be kept, in order, behind the pinned primary.
+func TestRouting1340_PinnedVendorModelKeepsCollidingDeclaredFallback(t *testing.T) {
+	cfg := routing1340PhantomConfig("https://openrouter.invalid/api/v1")
+	fallbacks := []config.FallbackModel{{Provider: "deepseek", Model: "deepseek-v4.1-flash-1017"}}
+	candidates := resolveAgentCandidatesWithPrimaryProvider(cfg, "openrouter", routing1340PhantomModel, "openrouter", fallbacks, nil)
+	want := []providers.FallbackCandidate{
+		{Provider: "openrouter", Model: routing1340PhantomModel},
+		{Provider: "deepseek", Model: "deepseek-v4.1-flash-1017"},
+	}
+	if !reflect.DeepEqual(candidates, want) {
+		t.Fatalf("candidates = %+v, want pinned primary then the configured (deepseek, model) fallback %+v", candidates, want)
+	}
+}
+
 // The real turn path: resolver → pool build (as published at construction) →
 // selection → provider call. The OpenRouter edge answers HTTP 503, a
 // fallback-eligible failure.
