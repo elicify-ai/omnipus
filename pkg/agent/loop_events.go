@@ -128,6 +128,7 @@ func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.Pairi
 		Status:    status,
 		QR:        qr,
 		Message:   message,
+		Seq:       al.pairingSeq.Add(1),
 	}
 	if v, ok := al.pairingRequests.Load(channelID); ok {
 		if corr, ok := v.(pairingCorrelation); ok {

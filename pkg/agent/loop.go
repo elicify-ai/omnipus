@@ -108,6 +108,9 @@ type AgentLoop struct {
 	// pairingRequests correlates a chat-started channel pairing with the
 	// request and chat that started it (K10, FR-081): channel id -> pairingCorrelation.
 	pairingRequests sync.Map
+	// pairingSeq numbers WhatsApp pairing events in emit order
+	// (WhatsAppPairingPayload.Seq).
+	pairingSeq atomic.Uint64
 	// pairingLastOwners keeps the chat request that owned a channel's last
 	// pairing after it timed out, failed or was stopped, so a Retry from that
 	// same chat can restore ownership (RestorePairingRequest); channel id ->

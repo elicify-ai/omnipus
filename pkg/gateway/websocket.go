@@ -261,6 +261,12 @@ type WSHandler struct {
 	// have to wait up to ~60 s before seeing any code.  The cache delivers the
 	// last-seen code immediately on subscribe via subscribePairingInterest.
 	lastPairingState sync.Map
+	// pairingCacheMu guards pairingCacheSeq: the emit sequence of the event
+	// each lastPairingState entry was written from, so a lagging per-
+	// connection forwarder never overwrites a newer outcome the sync tap
+	// already cached (gate r1 SFH T2-SF-06).
+	pairingCacheMu  sync.Mutex
+	pairingCacheSeq map[string]uint64
 
 	// streamOwners tracks, per sessionID, which turn currently "owns" live
 	// TokenFrame delivery to that session's bound connections. Keys are

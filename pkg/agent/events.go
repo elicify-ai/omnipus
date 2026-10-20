@@ -783,6 +783,11 @@ type WhatsAppPairingPayload struct {
 	// started elsewhere (e.g. the Channels screen).
 	RequestID string `json:"request_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
+	// Seq orders pairing events in emit order (never on the wire). The
+	// gateway's reconnect cache is written from two places — once per event
+	// by the sync tap, and by each connection's lagging forwarder — and keeps
+	// only the newest (gate r1 SFH T2-SF-06).
+	Seq uint64 `json:"-"`
 }
 
 // TaskStatusChangedPayload carries a workflow task status transition for the

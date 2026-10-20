@@ -257,6 +257,18 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 	if !ok {
 		return
 	}
+	pairF := pairingFrameFromPayload(p)
+	// The sync tap already cached this event once (hubWhatsAppPairing);
+	// the sequence guard makes this write a no-op unless it is the newest.
+	f.h.updatePairingCache(p, pairF)
+	if !f.wc.wantsPairing(p.ChannelID) {
+		return
+	}
+	sendConnGenFrame(f.wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
+}
+
+// pairingFrameFromPayload builds the K10 whatsapp_pairing frame for p.
+func pairingFrameFromPayload(p agent.WhatsAppPairingPayload) generated.WhatsAppPairingFrame {
 	pairF := generated.WhatsAppPairingFrame{
 		Type:      string(generated.WsFrameTypeWhatsappPairing),
 		ChannelId: p.ChannelID,
@@ -279,16 +291,38 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 		sid := p.SessionID
 		pairF.SessionId = &sid
 	}
-	// #368: maintain the per-channel QR cache so late subscribers (e.g.
-	// a tab that opens the pairing UI after the first QR fires) receive
-	// the last-seen code immediately on subscribe rather than waiting for
-	// the next QR rotation.  "code" (QR available) is cached; terminal
-	// states are evicted so stale QRs are not re-emitted, except a
-	// chat-started pairing's final status (see below).
+	return pairF
+}
+
+// hubWhatsAppPairing keeps the reconnect cache current from the sync tap,
+// which sees every pairing event exactly once even when no connection is
+// open (gate r1 SFH T2-SF-06). Delivery stays per connection.
+func (h *WSHandler) hubWhatsAppPairing(evt agent.Event) {
+	p, ok := evt.Payload.(agent.WhatsAppPairingPayload)
+	if !ok {
+		return
+	}
+	h.updatePairingCache(p, pairingFrameFromPayload(p))
+}
+
+// updatePairingCache maintains the per-channel reconnect cache (#368) from
+// one pairing event, ignoring an event older than the one already cached.
+// "code" (QR available) is cached; terminal states are evicted so stale QRs
+// are not re-emitted, except a chat-started pairing's final status.
+func (h *WSHandler) updatePairingCache(p agent.WhatsAppPairingPayload, pairF generated.WhatsAppPairingFrame) {
+	h.pairingCacheMu.Lock()
+	defer h.pairingCacheMu.Unlock()
+	if h.pairingCacheSeq == nil {
+		h.pairingCacheSeq = make(map[string]uint64)
+	}
+	if last, seen := h.pairingCacheSeq[p.ChannelID]; seen && p.Seq < last {
+		return
+	}
+	h.pairingCacheSeq[p.ChannelID] = p.Seq
 	switch p.Status {
 	case channels.PairingStatusCode:
 		if frameBytes, merr := json.Marshal(pairF); merr == nil {
-			f.h.lastPairingState.Store(p.ChannelID, frameBytes)
+			h.lastPairingState.Store(p.ChannelID, frameBytes)
 		} else {
 			slog.Error("ws: failed to marshal whatsapp_pairing frame for cache",
 				"channel_id", p.ChannelID, "error", merr)
@@ -301,31 +335,23 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 		// replaces it. A Settings-started pairing keeps #368: evict, so a
 		// late subscriber is never shown an outdated code.
 		if p.RequestID == "" {
-			f.h.lastPairingState.Delete(p.ChannelID)
+			h.lastPairingState.Delete(p.ChannelID)
 			break
 		}
 		terminal := pairF
 		terminal.Qr = nil // never cache a code with a terminal state
 		if frameBytes, merr := json.Marshal(terminal); merr == nil {
-			f.h.lastPairingState.Store(p.ChannelID, frameBytes)
+			h.lastPairingState.Store(p.ChannelID, frameBytes)
 		} else {
 			slog.Error("ws: failed to marshal terminal whatsapp_pairing frame for cache",
 				"channel_id", p.ChannelID, "error", merr)
-			f.h.lastPairingState.Delete(p.ChannelID)
+			h.lastPairingState.Delete(p.ChannelID)
 		}
-	case channels.PairingStatusWaiting:
-		// Not "code": must not leave a stale QR in the cache.
-		f.h.lastPairingState.Delete(p.ChannelID)
 	default:
-		// Any future status not yet in this switch: same fail-safe
-		// eviction as above, so an unrecognized status never leaves
-		// a stale QR behind.
-		f.h.lastPairingState.Delete(p.ChannelID)
+		// "waiting" and any status not yet in this switch: never leave a
+		// stale QR behind.
+		h.lastPairingState.Delete(p.ChannelID)
 	}
-	if !f.wc.wantsPairing(p.ChannelID) {
-		return
-	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
 }
 
 // onNotification forwards agent.EventKindNotification to this connection.
