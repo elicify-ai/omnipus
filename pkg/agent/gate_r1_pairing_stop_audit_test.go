@@ -47,13 +47,15 @@ func TestPairingAudit_StoppedHasItsOwnTerminalRow(t *testing.T) {
 			continue
 		}
 		details, _ := entry["details"].(map[string]any)
-		statuses[details["status"].(string)] = entry
+		status, _ := details["status"].(string)
+		statuses[status] = entry
 	}
 	require.Contains(t, statuses, "timeout", "control: timeout is audited")
 	require.Contains(t, statuses, "linked", "control: linked is audited")
 	stopped, ok := statuses["stopped"]
 	require.True(t, ok, "a stopped pairing must have its own terminal audit row")
-	details := stopped["details"].(map[string]any)
+	details, isMap := stopped["details"].(map[string]any)
+	require.True(t, isMap, "the stopped row carries details")
 	require.Equal(t, "whatsapp", details["channel"])
 	require.Equal(t, "req-stop", details["request_id"])
 	require.Equal(t, "sess-stop", details["session_id"])

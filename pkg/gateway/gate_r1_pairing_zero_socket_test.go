@@ -29,8 +29,10 @@ func TestPairingCache_OutcomeWithZeroSocketsIsKept(t *testing.T) {
 
 	v, ok := h.lastPairingState.Load("whatsapp")
 	require.True(t, ok, "the final status must be cached with zero sockets connected")
+	raw, isBytes := v.([]byte)
+	require.True(t, isBytes, "the cache holds marshaled frames")
 	var frame map[string]any
-	require.NoError(t, json.Unmarshal(v.([]byte), &frame))
+	require.NoError(t, json.Unmarshal(raw, &frame))
 	require.Equal(t, "timeout", frame["status"], "reconnect must see the outcome, not the old QR: %v", frame)
 	require.NotContains(t, frame, "qr")
 }
@@ -46,7 +48,9 @@ func TestPairingCache_LaggingOlderEventNeverOverwritesNewer(t *testing.T) {
 	h.updatePairingCache(older, pairingFrameFromPayload(older))
 	v, ok := h.lastPairingState.Load("whatsapp")
 	require.True(t, ok)
+	raw, isBytes := v.([]byte)
+	require.True(t, isBytes, "the cache holds marshaled frames")
 	var frame map[string]any
-	require.NoError(t, json.Unmarshal(v.([]byte), &frame))
+	require.NoError(t, json.Unmarshal(raw, &frame))
 	require.Equal(t, "timeout", frame["status"], "an older event must not overwrite the newer cached outcome")
 }
