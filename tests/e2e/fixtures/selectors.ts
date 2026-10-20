@@ -331,7 +331,11 @@ export const AGENT_ROW_MENU_ITEMS = [
  * assistant messages do not.
  */
 export const assistantMessages = (page: Page) =>
-  page.locator('[data-message-id]:not(.flex-row-reverse):not([data-status="running"])');
+  page.locator(
+    // System rows (helper hand-back, restart notice, clear-context divider)
+    // also carry data-message-id but are not assistant replies.
+    '[data-message-id]:not(.flex-row-reverse):not([data-status="running"]):not([data-message-role="system"])',
+  );
 
 /**
  * User messages — complement of assistantMessages; row uses `flex-row-reverse`.
