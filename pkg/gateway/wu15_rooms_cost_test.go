@@ -21,11 +21,15 @@ import (
 type wu15UsageProvider struct{ *wu15ScriptProvider }
 
 func (p *wu15UsageProvider) Chat(ctx context.Context, msgs []providers.Message, defs []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error) {
+	conversation, err := gatewayConversationBeforeVolatileTail(msgs)
+	if err != nil {
+		return nil, err
+	}
 	response, err := p.wu15ScriptProvider.Chat(ctx, msgs, defs, model, options)
 	if err != nil {
 		return nil, err
 	}
-	if len(msgs) == 0 || msgs[len(msgs)-1].Role != "tool" {
+	if len(conversation) == 0 || conversation[len(conversation)-1].Role != "tool" {
 		response.Usage = &providers.UsageInfo{PromptTokens: 3000, TotalTokens: 3000}
 	}
 	return response, nil
@@ -35,10 +39,16 @@ func (h *wu15RoomHarness) pricedProvider(id string, provider providers.LLMProvid
 	h.t.Helper()
 	inst, ok := h.al.GetRegistry().GetAgent(id)
 	require.True(h.t, ok)
+	// Catalog pricing keys on BOTH provider and model. A model-only candidate
+	// has provider="" and is unpriced; pin the catalog pair while keeping the
+	// external transport scripted and the real accounting/allocation intact.
+	const providerID, model = "openai", "gpt-4o"
+	require.True(h.t, providers.ProviderCatalog().Resolve(providerID, model).Found(),
+		"SETUP: the priced WU15 provider/model pair must exist in the catalog")
 	inst.Provider = provider
-	inst.Model = "gpt-4o" // A known model; no price literal is used as an expected result.
-	inst.Candidates = []providers.FallbackCandidate{{Model: "gpt-4o"}}
-	inst.StoreProviderPool(map[string]providers.LLMProvider{})
+	inst.Model = model // No price literal is used as an expected room cost.
+	inst.Candidates = []providers.FallbackCandidate{{Provider: providerID, Model: model}}
+	inst.StoreProviderPool(map[string]providers.LLMProvider{providerID: provider})
 }
 
 func TestWU15Rooms_AllocatedCostEqualsMainTurnInputAndIsNeverCountedTwice(t *testing.T) {
@@ -142,7 +152,11 @@ type wu15RelayProvider struct {
 
 func (*wu15RelayProvider) GetDefaultModel() string { return "gpt-4o" }
 func (p *wu15RelayProvider) Chat(_ context.Context, msgs []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
-	if len(msgs) > 0 && msgs[len(msgs)-1].Role == "tool" {
+	conversation, err := gatewayConversationBeforeVolatileTail(msgs)
+	if err != nil {
+		return nil, err
+	}
+	if len(conversation) > 0 && conversation[len(conversation)-1].Role == "tool" {
 		return &providers.LLMResponse{Content: "Finished.", FinishReason: "stop"}, nil
 	}
 	// Real request ids are disclosed to the receiver model by the existing
@@ -150,7 +164,7 @@ func (p *wu15RelayProvider) Chat(_ context.Context, msgs []providers.Message, _ 
 	// as a provider would; this is input decoding, never a room oracle.
 	var ids []string
 	pattern := regexp.MustCompile(`request_id="([^"]+)"`)
-	for _, msg := range msgs {
+	for _, msg := range conversation {
 		if msg.Role != "system" {
 			for _, match := range pattern.FindAllStringSubmatch(msg.Content, -1) {
 				ids = append(ids, match[1])
