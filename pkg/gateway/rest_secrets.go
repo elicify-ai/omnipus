@@ -80,7 +80,10 @@ func (a *restAPI) updateSecretOptions(w http.ResponseWriter, r *http.Request, re
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || len(fields) != 1 || fields["available_in_channel_turns"] == nil || decoder.Decode(&update) != nil {
+	// The contract's value is a non-null boolean (SecretOptionsUpdateRequest).
+	// Go's decoder leaves a bool unchanged for JSON null, so null would
+	// silently write false: accept only the literal tokens true and false.
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 1 || !isJSONBoolean(fields["available_in_channel_turns"]) || decoder.Decode(&update) != nil {
 		jsonErr(w, http.StatusBadRequest, "send exactly {\"available_in_channel_turns\": true|false}")
 		return
 	}
@@ -115,6 +118,12 @@ func (a *restAPI) updateSecretOptions(w http.ResponseWriter, r *http.Request, re
 	inventory, _ := store.CardInventory()
 	cfg := a.secretsConfig(r.Context())
 	jsonOK(w, secretrequest.NameEntry(cfg, a.secretsHome(), updated, inventory, secretrequest.ReferenceConsumers(cfg)))
+}
+
+// isJSONBoolean reports whether raw is exactly the JSON literal true or false.
+func isJSONBoolean(raw json.RawMessage) bool {
+	value := string(bytes.TrimSpace(raw))
+	return value == "true" || value == "false"
 }
 
 func (a *restAPI) secretsConfig(ctx context.Context) *config.Config {
