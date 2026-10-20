@@ -11,6 +11,8 @@
 
 package session
 
+import "slices"
+
 // ClearMarkerText is the content of the chat-view marker a successful /clear
 // appends (type system, role system, view membership chat). The marker is
 // identified by that type plus this exact content.
@@ -50,12 +52,15 @@ func sinceLastClear(entries []TranscriptEntry) TranscriptView {
 }
 
 // ReadTranscriptView is the chat-view read: the transcript since the last /clear
-// marker with the input-disposition labels applied, plus whether earlier
-// entries exist. A session with no marker returns the whole transcript.
+// marker with input-disposition labels applied and private saved inputs excluded,
+// plus whether earlier entries exist. ReadTranscript retains those inputs for
+// consumption and recovery; the independently saved event row remains visible.
 func (us *UnifiedStore) ReadTranscriptView(sessionID string) (TranscriptView, error) {
 	entries, err := us.ReadTranscriptWithDispositions(sessionID)
 	if err != nil {
 		return TranscriptView{}, err
 	}
-	return sinceLastClear(entries), nil
+	view := sinceLastClear(entries)
+	view.Entries = slices.DeleteFunc(view.Entries, isSavedChatInput)
+	return view, nil
 }
