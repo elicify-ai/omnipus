@@ -402,11 +402,11 @@ func skillWrittenResult(path, content string, fields map[string]any) *tools.Tool
 // hold a project copy of the slug and falling back to the global writer would
 // change a different, possibly byte-identical, skill.
 func resolveProjectShelf(deps *Deps, wsID string) (skills.ProjectShelf, *tools.ToolResult) {
-	shelf, _, refusal := resolveProjectShelfWithCollisions(deps, wsID)
+	shelf, _, refusal := resolveProjectShelfWithCollisions(deps, wsID, "")
 	return shelf, refusal
 }
 
-func resolveProjectShelfWithCollisions(deps *Deps, wsID string) (skills.ProjectShelf, []skills.SlugCollision, *tools.ToolResult) {
+func resolveProjectShelfWithCollisions(deps *Deps, wsID, name string) (skills.ProjectShelf, []skills.SlugCollision, *tools.ToolResult) {
 	if deps == nil || strings.TrimSpace(deps.Home) == "" {
 		return nil, nil, nil
 	}
@@ -435,10 +435,10 @@ func resolveProjectShelfWithCollisions(deps *Deps, wsID string) (skills.ProjectS
 	for _, m := range mounts {
 		pm = append(pm, skills.ProjectMount{Name: m.Name, Root: m.HostPath})
 	}
-	// Only a complete scan may prove a slug absent: a recorded project that
-	// could not be inspected refuses instead of falling back to a global copy
-	// (silent-failure-hunter SF-01).
-	shelf, collisions, err := skills.MergeProjectSkillsChecked(pm)
+	// Only a complete scan of the requested scope may prove a slug absent:
+	// named reads inspect that slug in every project; writes and full listings
+	// pass an empty name and still require a complete shelf scan.
+	shelf, collisions, err := skills.LookupProjectSkillChecked(pm, name)
 	if err != nil {
 		return nil, nil, tools.ErrorResult(errorJSON("READ_FAILED",
 			fmt.Sprintf("the project skills of workspace %q could not be inspected: %v", wsID, err),

@@ -332,7 +332,7 @@ type managedSkill struct {
 func (t *SkillListTool) executeManagement(wsID, name string) *tools.ToolResult {
 	items := make([]managedSkill, 0)
 	seen := make(map[string]struct{})
-	shelf, collisions, shelfRefusal := resolveProjectShelfWithCollisions(t.deps, wsID)
+	shelf, collisions, shelfRefusal := resolveProjectShelfWithCollisions(t.deps, wsID, name)
 	if shelfRefusal != nil {
 		return shelfRefusal
 	}
