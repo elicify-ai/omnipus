@@ -162,6 +162,26 @@ type wu6Fixture struct {
 	removeTurnDone chan error
 }
 
+// wireWU6ScriptedProviderPool replaces only the fixture agents' named
+// qa1277 connection, not model-selection rules or the HTTP protocol fixture.
+// A reload rebuilds the registry/pools, so newWU7LiveFixture calls this again
+// inside its reload executor before the completion flag is released.
+func wireWU6ScriptedProviderPool(al *agent.AgentLoop, provider *wu6ScriptedProvider) error {
+	registry := al.GetRegistry()
+	ids := registry.ListAgentIDs()
+	if len(ids) == 0 {
+		return fmt.Errorf("WU6 scripted provider wiring: no fixture agents are registered")
+	}
+	for _, id := range ids {
+		inst, exists := registry.GetAgent(id)
+		if !exists {
+			return fmt.Errorf("WU6 scripted provider wiring: agent %q disappeared", id)
+		}
+		inst.StoreProviderPool(map[string]providers.LLMProvider{"qa1277": provider})
+	}
+	return nil
+}
+
 func newWU6Fixture(t *testing.T) *wu6Fixture {
 	t.Helper()
 	f := newIssue1277Fixture(t)
@@ -194,6 +214,11 @@ func newWU6Fixture(t *testing.T) *wu6Fixture {
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
 	al := mustAgentLoop(t, cfg, msgBus, provider)
+	// #1340: turns use the agent's pinned (qa1277, health-probe)
+	// connection, never the injected default client. Keep the #1277 real
+	// HTTP fixture for integration probes, but route model turns to the
+	// session-aware script through that named connection explicitly.
+	require.NoError(t, wireWU6ScriptedProviderPool(al, provider))
 	al.SetCredentialResolver(store.Get)
 	mgr, err := channels.NewManager(cfg, bundle, msgBus, nil)
 	require.NoError(t, err, "credential-degraded channels must not abort manager construction")
