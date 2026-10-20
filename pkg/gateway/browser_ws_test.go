@@ -1321,7 +1321,14 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, navigateData))
 
-	navResp := readBrowserFrame(t, conn, 5*time.Second)
+	// Same skip-until-status read as attach and control above: the attach's
+	// browser_webrtc_state announcement is not ordered against later replies
+	// and can land after "controlling". Release run 39128073432 (job
+	// 117692905237) read that frame here while the gateway had already logged
+	// the SSRF refusal ("navigate blocked: ... 127.0.0.1"), so the old naive
+	// read failed on frame order, not on the gate. The assertions below are
+	// unchanged.
+	navResp := readBrowserStatusFrame(t, conn, 5*time.Second)
 	assert.Equal(t, "browser_status", navResp.Type)
 	assert.Equal(t, "error", navResp.State)
 	assert.Contains(t, navResp.Message, "navigate blocked",
