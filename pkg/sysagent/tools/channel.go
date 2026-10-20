@@ -243,7 +243,7 @@ func (t *ChannelConfigureTool) Description() string {
 		"Read list_channels and pass expected_revision (\"absent\" for a new entry); stale writes are refused. " +
 		"This does not enable or live-test the channel: call enable_channel separately; changes take effect on the next config reload. " +
 		"Report committed settings as \"saved but not working\" with the reason, never working or nothing saved. " +
-		"WhatsApp pairs by QR code in the Channels screen, not with credentials here."
+		"WhatsApp pairs by QR code under Connectors > WhatsApp, not with credentials here."
 }
 
 func (t *ChannelConfigureTool) Parameters() map[string]any {

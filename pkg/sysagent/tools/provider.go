@@ -93,7 +93,7 @@ func (t *ProviderConfigureTool) Description() string {
 		"coding-plan variants and providers needing more than one credential (for example amazon-bedrock: access key, secret, region) " +
 		"cannot be connected here — they are Settings → Providers paths; see the provider-config skill. " +
 		"After saving, this tool will check the SAVED entry by requesting a " +
-		"model list from the configured endpoint using its saved credential and protocol. This does not prove that a chosen model runs. " +
+		"model list from the configured endpoint using its saved credential and protocol — when the protocol has a model listing; a protocol without one is reported as \"not checked\", leaving the endpoint and the credential untested. This does not prove that a chosen model runs. " +
 		"A failed reload or saved-entry check after commit is \"saved but not working\" with the reason; " +
 		"never report it as working or unsaved. Pass expected_revision from list_providers (\"absent\" for a new entry); " +
 		"stale writes are refused. dry_run checks input shape only, without saving, recipient validation or network calls."

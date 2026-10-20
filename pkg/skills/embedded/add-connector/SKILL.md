@@ -11,11 +11,12 @@ metadata:
 
 ## Steps
 1. Ask which server or app to connect, and which agents get it.
-2. Need credentials, have the user enter them on the secret card — the value never appears in chat or tool arguments; you receive reference names.
-3. Load `dependency-check` for the runtime the server needs and list the install in the summary.
-4. Present one card: server name, that connector tools leave the sandbox for their server's scope, which agents get it, the exact launch command, needed installs.
-5. One Go / Change / Cancel question. Never call a change tool before Go.
-6. After Go: `tool:add_mcp_server` with references — its live readback returns status and tool count — then assign the server to the named agents.
+2. Load `dependency-check` for the runtime the server needs and list the install in the summary.
+3. Present one card: server name, that connector tools leave the sandbox for their server's scope, which agents get it, the exact launch command, needed installs.
+4. One Go / Change / Cancel question. Never call a change tool before Go.
+5. After Go: `tool:add_mcp_server` with `expected_revision="absent"` saves the server's descriptor without secrets (name, transport, command or URL) — when the server needs credentials, this provisional entry is the recipient the secret card names; with no credentials, this one call adds the server.
+6. Need credentials: `tool:request_secret` with purpose and server=name + env_key for each — the person enters each value on the secret card; the value never appears in chat or tool arguments; you receive reference names.
+7. `tool:add_mcp_server` again with the saved name, its current `expected_revision` from `tool:list_mcp_servers` and the returned `env_refs` — its live readback returns status and tool count — then assign the server to the named agents.
 
 ## Expected output
 The connector's own check: working (with tool count) or saved but not working: reason — and the assignment outcome. A failed connect offers fix or remove; it is never reported as done.
