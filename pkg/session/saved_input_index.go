@@ -52,9 +52,6 @@ func (us *UnifiedStore) loadSavedInputIndexLocked(sessionID string) (savedInputI
 		return nil, fmt.Errorf("saved input index %q: read: %w", sessionID, err)
 	}
 	idx := savedInputIndex{}
-	if len(data) == 0 {
-		return idx, nil
-	}
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return nil, fmt.Errorf("saved input index %q: parse: %w", sessionID, err)
 	}
