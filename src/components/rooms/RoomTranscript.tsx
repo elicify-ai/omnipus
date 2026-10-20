@@ -6,20 +6,25 @@
 // as a command (FR-168). An answer to work started before a pause keeps its
 // "after pause" mark, also after /resume (FR-170, FR-217).
 //
+// A group opens at the NEWEST message — on the first snapshot and again when
+// switching rooms — so the reader starts where the conversation is.
+//
 // Older history (#1332, ROOM-HISTORY-PAGING-1332-20261018.md D6): reaching
 // the top while earlier messages exist asks for the previous page — never on
 // mount, never an automatic walk to the beginning. The "Earlier messages
-// aren't shown" hint stays until the old end is reached. Loading shows a
-// status; a failure shows an inline error with Retry for the same boundary.
-// A prepended page keeps the reader's CURRENT place: the pending request is
-// anchored on the entry that was first visible when it started, and the
-// reader's scroll position at response time grows by the height added above
-// that entry — scrolling done while the page was in flight and live messages
-// appended below in the meantime never move the reader.
+// aren't shown" hint stays until the old end is reached and is itself the
+// trigger when the loaded window fits without scrolling (no scrollbar exists
+// to reach the top with). Loading shows a status; a failure shows an inline
+// error with Retry for the same boundary. A prepended page keeps the
+// reader's CURRENT place: the pending request is anchored on the entry that
+// was first visible when it started, and the reader's scroll position at
+// response time grows by the height added above that entry — scrolling done
+// while the page was in flight and live messages appended below in the
+// meantime never move the reader.
 
 import { useLayoutEffect, useRef } from 'react'
 import type { RoomEntry } from '@/lib/api/generated/asyncapi-types'
-import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/error-state'
 
 /** How close to the top (px) counts as "reached the top" for loading older messages. */
@@ -54,7 +59,8 @@ export interface RoomTranscriptHistory { // not-wire-format: React props for the
   loadOlder: () => void
 }
 
-export function RoomTranscript({ entries, agentName, hasOlder = false, history }: {
+export function RoomTranscript({ roomId, entries, agentName, hasOlder = false, history }: {
+  roomId: string
   entries: RoomEntry[]
   agentName: (agentId: string) => string
   hasOlder?: boolean
@@ -63,6 +69,25 @@ export function RoomTranscript({ entries, agentName, hasOlder = false, history }
   const logRef = useRef<HTMLDivElement>(null)
   const anchorRef = useRef<ReaderAnchor | null>(null)
   const firstSeq = entries[0]?.seq
+
+  // Open at the newest message: when the room changes (opened or switched
+  // to), land at the bottom as soon as this room's first content is on
+  // screen — immediately for a cached room, after the first snapshot
+  // otherwise. Later entries never re-jump.
+  const roomRef = useRef<string | undefined>(undefined)
+  const jumpPendingRef = useRef(false)
+  useLayoutEffect(() => {
+    if (roomRef.current !== roomId) {
+      roomRef.current = roomId
+      jumpPendingRef.current = true
+      // A place kept in another room is not a place here.
+      anchorRef.current = null
+    }
+    const log = logRef.current
+    if (!log || !jumpPendingRef.current || entries.length === 0) return
+    jumpPendingRef.current = false
+    log.scrollTop = log.scrollHeight
+  }, [roomId, entries])
 
   // Keep the reader's current place when older entries are prepended.
   useLayoutEffect(() => {
@@ -82,20 +107,32 @@ export function RoomTranscript({ entries, agentName, hasOlder = false, history }
     if (added > 0) log.scrollTop += added
   }, [firstSeq])
 
-  const onScroll = () => {
+  // One user action — reaching the top, or the hint when no scrollbar exists
+  // to reach it with — asks for one older page.
+  const requestOlder = () => {
     const log = logRef.current
-    if (!log || !history || !hasOlder || history.status === 'loading') return
-    if (log.scrollTop > TOP_THRESHOLD_PX) return
+    if (!log || !history || history.status === 'loading') return
     anchorRef.current = captureAnchor(log, firstSeq)
     history.loadOlder()
+  }
+
+  const onScroll = () => {
+    const log = logRef.current
+    if (!log || !hasOlder || log.scrollTop > TOP_THRESHOLD_PX) return
+    requestOlder()
   }
 
   return (
     <div ref={logRef} onScroll={onScroll} role="log" aria-label="Group conversation" className="flex flex-1 flex-col gap-[var(--space-3)] overflow-y-auto px-[var(--space-3)] py-[var(--space-3)]">
       {hasOlder && (
-        <Badge variant="muted" className="self-center font-[var(--font-weight-regular)]">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={requestOlder}
+          className="self-center font-[var(--font-weight-regular)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+        >
           Earlier messages aren&apos;t shown
-        </Badge>
+        </Button>
       )}
       {history?.status === 'loading' && (
         <p role="status" className="self-center text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
@@ -105,10 +142,7 @@ export function RoomTranscript({ entries, agentName, hasOlder = false, history }
       {history?.failed && (
         <ErrorState
           message="Could not load earlier messages."
-          onRetry={() => {
-            if (logRef.current) anchorRef.current = captureAnchor(logRef.current, firstSeq)
-            history.loadOlder()
-          }}
+          onRetry={() => requestOlder()}
           className="py-[var(--space-1)]"
         />
       )}

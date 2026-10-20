@@ -135,6 +135,7 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
         onAskAgain={(agentId) => setAskAgain({ agentId, nonce: Date.now() })}
       />
       <RoomTranscript
+        roomId={roomId}
         entries={live?.entries ?? []}
         agentName={agentName}
         hasOlder={live?.hasOlder}
