@@ -37,6 +37,13 @@ type wu15ScriptProvider struct {
 }
 
 func (p *wu15ScriptProvider) Chat(ctx context.Context, msgs []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	// Prompt caching appends a user-role volatile tail after the conversation.
+	// Keep recording the full request below, but inspect the validated
+	// conversation so a completed tool call does not trigger another answer.
+	conversation, err := gatewayConversationBeforeVolatileTail(msgs)
+	if err != nil {
+		return nil, err
+	}
 	p.mu.Lock()
 	p.calls = append(p.calls, append([]providers.Message(nil), msgs...))
 	first := len(p.calls) == 1
@@ -55,14 +62,14 @@ func (p *wu15ScriptProvider) Chat(ctx context.Context, msgs []providers.Message,
 	if failure != nil {
 		return nil, failure
 	}
-	if len(msgs) > 0 && msgs[len(msgs)-1].Role == "tool" {
+	if len(conversation) > 0 && conversation[len(conversation)-1].Role == "tool" {
 		return &providers.LLMResponse{Content: "Finished.", FinishReason: "stop"}, nil
 	}
 	if tool != "" {
 		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "wu15-tool", Type: "function", Name: tool, Arguments: args}}, FinishReason: "tool_calls"}, nil
 	}
 	if autoReply {
-		for _, msg := range msgs {
+		for _, msg := range conversation {
 			if msg.Role == "system" {
 				continue
 			}
