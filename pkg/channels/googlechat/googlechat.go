@@ -136,10 +136,9 @@ func (c *GoogleChatChannel) Start(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
 	if c.mode == "bot" {
-		if err := c.initBotAuth(); err != nil {
-			logger.WarnCF("google-chat", "Bot auth init failed (webhook-only features available)", map[string]any{
-				"error": err.Error(),
-			})
+		if err := c.checkBotCredentials(); err != nil {
+			c.cancel()
+			return err
 		}
 	}
 
@@ -647,6 +646,45 @@ func (c *GoogleChatChannel) processEvent(event googleChatEvent) {
 	c.HandleMessage(c.ctx, peer, msg.Name, senderID, chatID, content, nil, metadata, sender)
 }
 
+// errGoogleChatCredentialsRejected marks a token-endpoint answer that rejects
+// the service account itself (400 invalid_grant, 401, 403) — as opposed to a
+// network failure, which sends retry.
+var errGoogleChatCredentialsRejected = errors.New("the Google token endpoint rejected the service account")
+
+// checkBotCredentials is Start's one synchronous credential check in bot mode
+// (Train 2 gate r1, BDD-8.3): every bot-mode send needs a token, so an
+// unusable or rejected service account must fail Start ("saved but not
+// working") instead of leaving a running channel that can never send. A
+// network failure is not a rejection: it is logged and sends retry.
+func (c *GoogleChatChannel) checkBotCredentials() error {
+	if err := c.initBotAuth(); err != nil {
+		return fmt.Errorf("google chat service account is unusable: %w", err)
+	}
+	if _, err := c.getAccessToken(c.ctx); err != nil {
+		if errors.Is(err, errGoogleChatCredentialsRejected) {
+			return fmt.Errorf("google chat rejected the service account: %w", err)
+		}
+		logger.WarnCF("google-chat", "Could not reach the token endpoint to check the service account; sends will retry",
+			map[string]any{"error": err.Error()})
+	}
+	return nil
+}
+
+// tokenRejection reports whether a non-200 token-endpoint answer rejects the
+// credentials themselves (invalid_grant / unauthorized / forbidden).
+func tokenRejection(status int, body []byte) bool {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return true
+	}
+	if status != http.StatusBadRequest {
+		return false
+	}
+	var oauthErr struct {
+		Error string `json:"error"`
+	}
+	return json.Unmarshal(body, &oauthErr) == nil && oauthErr.Error == "invalid_grant"
+}
+
 // initBotAuth initializes bot mode authentication (JWT signing, token fetch).
 func (c *GoogleChatChannel) initBotAuth() error {
 	var saJSON string
@@ -707,9 +745,15 @@ func (c *GoogleChatChannel) getAccessToken(ctx context.Context) (string, error) 
 		return "", fmt.Errorf("sign JWT: %w", err)
 	}
 
-	// Exchange for access token
-	payload := fmt.Sprintf("grant_type=urn%%3Aietf%%3Aparams%%3Aoauth%%3Agrant-type%%3Ajwt-bearer&assertion=%s",
-		base64.URLEncoding.EncodeToString([]byte(signed)))
+	// Exchange for access token. The assertion is the signed JWT itself
+	// (header.claims.signature), never re-encoded: "The JWT, including
+	// signature" — https://developers.google.com/identity/protocols/oauth2/service-account
+	// ("Request an access token"). Base64-encoding it a second time made
+	// Google reject every exchange (Train 2 gate r1, Q2 = A).
+	payload := url.Values{
+		"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
+		"assertion":  {signed},
+	}.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, googleChatTokenURL, strings.NewReader(payload))
 	if err != nil {
 		return "", fmt.Errorf("create token request: %w", err)
@@ -726,6 +770,10 @@ func (c *GoogleChatChannel) getAccessToken(ctx context.Context) (string, error) 
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			respBody = []byte("(could not read response body)")
+		}
+		if tokenRejection(resp.StatusCode, respBody) {
+			return "", fmt.Errorf("%w: token endpoint returned %d: %s",
+				errGoogleChatCredentialsRejected, resp.StatusCode, string(respBody))
 		}
 		return "", fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(respBody))
 	}
