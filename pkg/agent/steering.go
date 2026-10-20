@@ -1617,6 +1617,12 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 	}
 
 	resp, err := run(agent, steeringMsgs, steeringCorrelationIDs)
+	// SFH-02: this consumer owns every saved input it dequeued until it exits.
+	// A run refused before its turn took the receipts (workspace, provider or
+	// model preparation) gives the claims back here; a placed input already
+	// released its own, so this is a no-op for it. Wake items are not restored
+	// below, so the saved record stays pending for the next legitimate fence.
+	al.releaseSavedWakeClaims("", steeringCorrelationIDs)
 	if err != nil {
 		// Gate finding, CRITICAL: continueWithSteeringMessages's own turn can
 		// fail with an ordinary error (provider error, mid-turn failure — the
