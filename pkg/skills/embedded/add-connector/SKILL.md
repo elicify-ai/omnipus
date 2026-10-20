@@ -15,7 +15,7 @@ metadata:
 3. Present one card: server name, that connector tools leave the sandbox for their server's scope, which agents get it, the exact launch command, needed installs.
 4. One Go / Change / Cancel question. Never call a change tool before Go.
 5. After Go: `tool:add_mcp_server` with `expected_revision="absent"` saves the server's descriptor without secrets (name, transport, command or URL) — when the server needs credentials, this provisional entry is the recipient the secret card names; with no credentials, this one call adds the server.
-6. Need credentials: `tool:request_secret` with purpose and server=name + env_key for each — the person enters each value on the secret card; the value never appears in chat or tool arguments; you receive reference names.
+6. Need secret environment variables (stdio MCP servers only): `tool:request_secret` with purpose and server=name + env_key for each — the person enters each value on the secret card; the value never appears in chat or tool arguments; you receive reference names.
 7. `tool:add_mcp_server` again with the saved name, its current `expected_revision` from `tool:list_mcp_servers` and the returned `env_refs` — its live readback returns status and tool count — then assign the server to the named agents.
 
 ## Expected output
