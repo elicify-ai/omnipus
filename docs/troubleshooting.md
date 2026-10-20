@@ -25,7 +25,9 @@ A kernel that is too old for a right Omnipus asks for is different: Omnipus star
 
 ### It exits with "bind: address already in use"
 
-The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port. Check what holds it:
+The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port.
+
+Before that error appears, the gateway stops the background services the failed start had already launched — scheduled jobs, the task and mail pollers, task triggers and the plan engine — so they do not keep running, or writing to the data directory, after it exits. A short pause between the bind retries and the error is that cleanup, not a hang; let it finish. The same cleanup runs when any other startup step fails. The recovery steps below are unchanged. Check what holds the port:
 
 ```bash
 lsof -i :5000 | grep LISTEN
