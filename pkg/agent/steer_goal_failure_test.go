@@ -304,13 +304,24 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 			} else if !strings.HasPrefix(e.Text, "stopped_child:") || !strings.Contains(e.Text, "cause: "+string(tc.cause)) {
 				t.Errorf("nonfatal notice=%q, want stopped_child: cause: %s", e.Text, tc.cause)
 			}
-			select {
-			case wake := <-al.bus.InboundChan():
-				if wake.AsyncTranscriptSessionID != parentID {
-					t.Errorf("wake session=%q, want direct parent %q", wake.AsyncTranscriptSessionID, parentID)
+			// PW-D13 (founder 2026-10-15): an intentional Stop of a helper
+			// never wakes its parent — only a fatal provider failure does.
+			// The stopped row above stays durable either way.
+			if tc.fatal {
+				select {
+				case wake := <-al.bus.InboundChan():
+					if wake.AsyncTranscriptSessionID != parentID {
+						t.Errorf("wake session=%q, want direct parent %q", wake.AsyncTranscriptSessionID, parentID)
+					}
+				default:
+					t.Error("disposed child did not wake its direct parent")
 				}
-			default:
-				t.Error("disposed child did not wake its direct parent")
+			} else {
+				select {
+				case wake := <-al.bus.InboundChan():
+					t.Errorf("intentional helper Stop woke its direct parent with %+v (PW-D13: a helper Stop never wakes)", wake)
+				default:
+				}
 			}
 			select {
 			case extra := <-al.bus.InboundChan():

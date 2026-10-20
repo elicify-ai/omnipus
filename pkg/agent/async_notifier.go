@@ -133,6 +133,9 @@ type asyncNotifierImpl struct {
 	wakeMu      sync.Mutex
 	wakeWindows map[string][]time.Time // key = channel + "\x00" + chatID
 	wakeNow     func() time.Time       // overridable for deterministic tests
+	// sessionWakes coalesces publications in this process only. Durable input,
+	// model placement and consumed markers remain the restart authority.
+	sessionWakes sync.Map
 }
 
 var _ AsyncNotifier = (*asyncNotifierImpl)(nil)

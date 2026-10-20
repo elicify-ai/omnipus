@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
 import { splitMessageParts } from '@/lib/messageParts'
 import { formatErrorDetail } from '@/lib/llm-error'
 import { getMessageStatusSuffix } from '@/lib/truncation'
-import { GoalOutcomeRow } from './GoalOutcomeRow'
+import { OutcomeMessageContent } from './SystemMessageRows'
 import { AgentReplyLabel, ParticipantMessageRow, usePairedReplyToIds, useParticipantLabelParts } from './ParticipantLabels'
 import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 
@@ -144,11 +144,11 @@ export function MessageItem({ message }: MessageItemProps) {
   }
 
   if (isSystem) {
-    // Goal outcome line (founder decision 2026-09-14) — always shown.
-    if (message.goalOutcome) {
+    // Lasting goal endings and helper events are never Verbose-chat gated.
+    if (message.goalOutcome || message.helperEvent) {
       return (
         <div className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
-          <GoalOutcomeRow outcome={message.goalOutcome} />
+          <OutcomeMessageContent message={message} />
         </div>
       )
     }

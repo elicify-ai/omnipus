@@ -1314,11 +1314,24 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		for i, pm := range ri.pendingMessages {
 			// Persist original compact media refs before using the resolved
 			// provider-only message. Failed admission cannot emit an applied receipt.
-			if _, err := ri.rf.rt.ts.appendWindowMessage(pm, ri.rf.rt.al.inputProducer(ri.rf.rt.ts)); err != nil {
+			correlationID := ""
+			if i < len(ri.pendingSteeringReceipts) {
+				correlationID = ri.pendingSteeringReceipts[i]
+			}
+			include, err := ri.rf.rt.al.admitSteeringInput(ri.rf.rt.ts, pm, correlationID)
+			if err != nil {
+				// The rest of this dequeued batch is never attempted: give back
+				// the saved inputs' claims so they are not stranded in flight.
+				if i+1 < len(ri.pendingSteeringReceipts) {
+					ri.rf.rt.al.releaseSavedWakeClaims(ri.rf.rt.ts.transcriptSessionID, ri.pendingSteeringReceipts[i+1:])
+				}
 				var status TurnEndStatus
 				ri.ret0, status, ri.ret1 = ri.rf.rt.al.contextWindowTurnExit(ri.rf.rt.ts, ri.rf.rt.iteration, ri.rf.rt.llmModel, err)
 				ri.turnStatus = status
 				return agentLoopRunTurnIterationReturn
+			}
+			if !include {
+				continue
 			}
 			ri.messages = append(ri.messages, resolvedPending[i])
 			totalContentLen += len(pm.Content)
@@ -1346,7 +1359,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		// deliverSteeringReceiptsForInjection is a no-op for a plain,
 		// unsteered session — the child lifecycle lookup it performs finds
 		// no steering parent, so nothing is emitted).
-		ri.rf.rt.al.deliverSteeringReceiptsForInjection(ri.rf.rt.ts.sessionKey, ri.pendingSteeringReceipts)
+		ri.rf.rt.al.deliverSteeringReceiptsForInjection(ri.rf.rt.ts.sessionKey, visibleSteeringReceiptIDs(ri.pendingSteeringReceipts))
 		ri.pendingMessages = nil
 		ri.pendingSteeringReceipts = nil
 	}

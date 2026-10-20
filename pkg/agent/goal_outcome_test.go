@@ -164,8 +164,16 @@ func TestGoalOutcome_Met_OneEntryAndTheLiveEventCarriesItsID(t *testing.T) {
 	if o.GoalText != "make the tests pass" {
 		t.Errorf("goal_text = %q; want the goal's own text", o.GoalText)
 	}
-	if o.JudgeReason != nil {
-		t.Errorf("judge_reason = %q; a met ending omits it", *o.JudgeReason)
+	// US-2 AS-1 ("one 'Goal met — …' row with the Judge summary"), §9.2 ("the
+	// two entries share goal_id, ending, rounds, and Judge reason") and
+	// GoalOutcome.yaml judge_reason ("for met, the deciding verdict's
+	// reasoning"): a met ending CARRIES the deciding verdict's reason. The
+	// fixture's deciding verdict records the reason "tests pass"
+	// (cannedJudgeVerdictJSON(true, "tests pass") -> pkg/goal RecordVerdict),
+	// so the row must show exactly it — never the "(no reason recorded)"
+	// sentinel and never an omission.
+	if o.JudgeReason == nil || *o.JudgeReason != "tests pass" {
+		t.Errorf("judge_reason = %v; want the deciding verdict's reason %q on the met row (US-2 AS-1 / §9.2)", o.JudgeReason, "tests pass")
 	}
 	if rec.LatestVerdict == nil || o.CriteriaTotal == nil || *o.CriteriaTotal != len(rec.LatestVerdict.PerCriterion) {
 		t.Errorf("criteria_total = %v; want the deciding verdict's per-criterion count", o.CriteriaTotal)

@@ -1297,18 +1297,12 @@ func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudica
 		ag.ret0 = true
 		return agentLoopRunGoalAdjudicationReturn
 	}
-	finalWoke := ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), ag.producer), ag.sessionID, ag.upwardAnswer(), nil)
-	// Q1=A (founder, #984 follow-up): the met verdict's inbox entry was
-	// delivered without a wake (deliverGoalVerdictUpward's SuppressWake);
-	// acknowledge it only after the deterministic final hand-back is known
-	// durable AND its delivery woke (or queued into) the parent. If the tail
-	// was gated, failed, or only stored the hand-back, re-deliver the still-
-	// unacknowledged verdict without suppression so the parent is never silent.
-	if finalWoke {
-		ag.al.ackMetVerdictEntry(ag.sessionID, ag.rec.GoalID, ag.verdict.Round)
-	} else if err := ag.al.wakeMetVerdictEntry(ag.sessionID, ag.rec.GoalID, ag.verdict.Round); err != nil {
-		logger.WarnCF("agent", "goal: met verdict fallback wake failed — the verdict remains unacknowledged for boot recovery",
-			map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID, "error": err.Error()})
+	ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), ag.producer), ag.sessionID, ag.upwardAnswer(), nil)
+	// PW-D16/PW-D17: acknowledge only after the exact combined chat input
+	// exists, even when Stop or a parked card holds its later placement. The
+	// final id owns the only wake; never fall back under the verdict-round id.
+	if err := ag.al.ackMetVerdictEntry(ag.sessionID, ag.rec.GoalID, ag.verdict.Round); err != nil {
+		ag.al.emitJudgeConclusionFailed(ag.sessionID, "The verdict remains unread and will be retried: "+err.Error())
 	}
 	ag.ret0 = true
 	return agentLoopRunGoalAdjudicationReturn

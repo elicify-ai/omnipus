@@ -302,19 +302,22 @@ func TestStopDisplay_HistoricalNoticeAfterSameGenerationResumeDoesNotOverwriteCu
 		}
 	}
 oldWakeDrained:
+	// PW-D13 (founder 2026-10-15): the untaken original notice of an
+	// intentional Stop stays stored on first delivery and on replay, and
+	// NEVER rings its parent — the rings below assert the refusal, while
+	// every "a replay must not touch the fresh run / rewrite the notice /
+	// overwrite the current display" assertion keeps guarding the row the
+	// original Stop did leave behind.
 	for ring := 0; ring < 2; ring++ {
 		eventStart := len(tap.snapshot())
 		pending, ringErr := al.deliverLandedStopNotices(context.Background(), stopped)
-		if ringErr != nil || !pending {
-			t.Fatalf("actual untaken original notice did not ring: pending=%v err=%v", pending, ringErr)
+		if ringErr != nil || pending {
+			t.Fatalf("intentional Stop replay left pending ring work: pending=%v err=%v (PW-D13: a helper Stop never wakes, never re-rings)", pending, ringErr)
 		}
 		select {
 		case wake := <-al.bus.InboundChan():
-			if wake.AsyncTranscriptSessionID != parentID || wake.Metadata["steer_message_id"] != noticeID {
-				t.Errorf("historical ring identity/parent=%+v, want original %s to direct parent %s", wake, noticeID, parentID)
-			}
+			t.Errorf("historical intentional-Stop notice re-rang its parent: %+v (PW-D13)", wake)
 		default:
-			t.Error("untaken original historical notice did not re-ring its parent")
 		}
 		nowNotice := stopDisplayNotice(t, al, parentID, child.SessionID, noticeID)
 		if !reflect.DeepEqual(original, nowNotice) {

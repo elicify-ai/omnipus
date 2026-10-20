@@ -4987,8 +4987,9 @@ export interface components {
              * @example browser_handover_notice
              * @enum {string}
              */
-            system_subtype?: "browser_handover_notice" | "expiry_notice" | "goal_outcome" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
+            system_subtype?: "browser_handover_notice" | "expiry_notice" | "goal_outcome" | "helper_event" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
             goal_outcome?: components["schemas"]["GoalOutcome"];
+            helper_event?: components["schemas"]["HelperEvent"];
             subagent_start?: components["schemas"]["SubagentStartFrame"];
             subagent_state?: components["schemas"]["SubagentStateFrame"];
             subagent_message?: components["schemas"]["SubagentMessageFrame"];
@@ -15992,7 +15993,7 @@ export interface components {
         };
         /**
          * GoalOutcome
-         * @description How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+         * @description How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written once per goal ending on the helper transcript and, when a parent exists, once on the parent transcript, with different message ids but the same goal id, ending, rounds and Judge reason. Written by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
          */
         GoalOutcome: {
             /**
@@ -17212,6 +17213,21 @@ export interface components {
              * @example 123456789
              */
             route_chat_id?: string;
+        };
+        /**
+         * HelperEvent
+         * @description An immutable helper event shown in the addressed chat independently of the model's reply. Source-event identity plus destination transcript determines the message id. Live, replay and cold load carry the same filtered payload.
+         */
+        HelperEvent: {
+            helper_session_id: string;
+            helper_title?: string;
+            /** @enum {string} */
+            kind: "verdict_unmet" | "not_verified" | "stopped" | "restarted" | "resume_refused" | "timed_out" | "finished" | "question" | "blocker" | "failed";
+            /** @description Sensitive-data-filtered sentence saved before live publication. */
+            text: string;
+            goal_id?: string;
+            /** Format: date-time */
+            created_at: string;
         };
         /**
          * PlanRestartResponse
@@ -27705,6 +27721,7 @@ export type SessionMessageRespond = components["schemas"]["SessionMessageRespond
 export type RevisionEntry = components["schemas"]["RevisionEntry"];
 export type SessionLifecycleRecord = components["schemas"]["SessionLifecycleRecord"];
 export type Goal = components["schemas"]["Goal"];
+export type HelperEvent = components["schemas"]["HelperEvent"];
 export type PlanRestartResponse = components["schemas"]["PlanRestartResponse"];
 export type DelegateActionRequest = components["schemas"]["DelegateActionRequest"];
 export type DelegateRunAction = components["schemas"]["DelegateRunAction"];

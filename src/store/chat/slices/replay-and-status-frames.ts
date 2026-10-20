@@ -6,6 +6,7 @@ import type { StoreApi } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
+import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
 import type {
   WhatsAppPairingFrame,
@@ -33,6 +34,7 @@ import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { logDiagnostic } from '@/lib/telemetry'
 import { clearRedirectedTurnMarker, findPrecedingAssistantIndex, isRedirectInstructionId, normalizeTruncationReason } from '@/lib/truncation'
 import { buildGoalOutcomeInsertion } from '@/lib/goalOutcome'
+import { buildHelperEventInsertion } from '@/lib/helperEvent'
 import { buildJudgeVerdictInsertion } from '@/lib/judgeVerdictThread'
 import {
   getLLMErrorDisplay,
@@ -1276,6 +1278,13 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           if (!targetSid) break
           const outcomeFrame = frame as GoalOutcomeFrame
           withBucket(targetSid, (b) => buildGoalOutcomeInsertion(b, outcomeFrame) ?? {})
+          break
+        }
+
+        case 'helper_event': {
+          if (!targetSid) break
+          const inForeground = useSessionStore.getState().activeSessionId === targetSid
+          withBucket(targetSid, (b) => buildHelperEventInsertion(b, frame, inForeground))
           break
         }
 

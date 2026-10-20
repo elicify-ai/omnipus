@@ -89,6 +89,10 @@ A billing or key error is never retried, because every attempt would be billed a
 
 If the agent reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice that remains when you reopen the conversation. Closing the originating browser connection does not cancel the turn or redirect that notice to another conversation: terminal delivery retains the conversation's session ID. Conflicting tool names produce the standard “This turn didn’t finish, and we can’t tell why” failure notice rather than silence.
 
+## A helper finished but the open parent chat is blank
+
+After upgrading, reload the page once to refresh an older open chat. On the current version, a helper's outcome and the parent's new reply appear without a reload, and the Judge's outcome row also appears in the parent chat. If they appear only in the helper's chat, that is the old behaviour. Do not restart the gateway as a workaround. If the problem persists on the updated page, report the parent and helper session ids and whether a reload shows the missing reply.
+
 ## A task is refused before work starts
 
 Errors saying the assigned agent's store was not found, or that a task session could not be created, mean Omnipus could not create the task's conversation. A queued dispatch or manual start refuses to hand work to either a native agent or an external command-line agent in that case. It does not consume an execution attempt or add a run-history entry.
