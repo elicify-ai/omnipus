@@ -40,6 +40,34 @@ func parseSavedWakeCorrelation(correlationID, fallbackSession string) (outcomeID
 	return outcomeID, sessionID, true
 }
 
+// errReservedSteeringCorrelation refuses a caller-supplied steering
+// correlation in the engine's saved-wake format (PW-SEC-R3). Only the engine
+// mints that form, from a queued wake item; accepted from a caller it would
+// name another session's saved input.
+var errReservedSteeringCorrelation = errors.New("steering refused: correlation_id uses a reserved internal format")
+
+// callerSteeringCorrelation trims a caller's correlation id and refuses the
+// reserved saved-wake form.
+func callerSteeringCorrelation(correlationID string) (string, error) {
+	correlationID = strings.TrimSpace(correlationID)
+	if strings.HasPrefix(correlationID, savedWakeCorrelationPrefix) {
+		return "", errReservedSteeringCorrelation
+	}
+	return correlationID, nil
+}
+
+// errSavedWakeForeignRecipient marks a saved-wake correlation whose recipient
+// is not the consuming turn's own session. Nothing is placed or released.
+var errSavedWakeForeignRecipient = errors.New("saved wake input belongs to another session")
+
+// savedWakeOwnedBy reports whether a consumer bound to consumerSession may act
+// on recipient's saved input. A consumer with no transcript binding (a
+// post-turn continuation) only ever receives engine-minted correlations from
+// its own queue (consumeDequeuedSteeringResult).
+func savedWakeOwnedBy(recipient, consumerSession string) bool {
+	return consumerSession == "" || recipient == consumerSession
+}
+
 var errSavedWakeHeld = errors.New("saved wake input is held by Stop")
 
 // errSavedWakeHeldForQuestion holds a saved input while the session has an
@@ -84,7 +112,7 @@ func questionCardOpen(sessionID, pendingAskJSON string) (bool, error) {
 // for the rest of the process.
 func (al *AgentLoop) releaseSavedWakeClaims(sessionID string, correlationIDs []string) {
 	for _, id := range correlationIDs {
-		if outcomeID, owner, ok := parseSavedWakeCorrelation(id, sessionID); ok {
+		if outcomeID, owner, ok := parseSavedWakeCorrelation(id, sessionID); ok && savedWakeOwnedBy(owner, sessionID) {
 			al.releaseWakePublication(owner, outcomeID)
 		}
 	}
@@ -199,6 +227,10 @@ func (al *AgentLoop) placePendingSavedWakeInputs(ctx context.Context, ts *turnSt
 
 func (al *AgentLoop) admitSteeringInput(ts *turnState, msg providers.Message, correlationID string) (bool, error) {
 	if outcomeID, sessionID, ok := parseSavedWakeCorrelation(correlationID, ts.transcriptSessionID); ok {
+		if !savedWakeOwnedBy(sessionID, ts.transcriptSessionID) {
+			return false, fmt.Errorf("%w: turn session %s, recipient %s, outcome %s",
+				errSavedWakeForeignRecipient, ts.transcriptSessionID, sessionID, outcomeID)
+		}
 		ctx := ts.ctx
 		if ctx == nil {
 			ctx = context.Background()

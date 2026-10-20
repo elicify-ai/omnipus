@@ -932,7 +932,9 @@ func (al *AgentLoop) enqueueDelegateSteer(scope, agentID string, msg providers.M
 	if err != nil {
 		return "", EnqueueStatusNormal, fmt.Errorf("check steering session lifecycle: %w", err)
 	}
-	correlationID = strings.TrimSpace(correlationID)
+	if correlationID, err = callerSteeringCorrelation(correlationID); err != nil {
+		return "", EnqueueStatusNormal, err
+	}
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
@@ -968,7 +970,10 @@ func (al *AgentLoop) enqueueHumanSteeringMessage(scope, agentID string, msg prov
 }
 
 func (al *AgentLoop) enqueueSteeringMessageEntry(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string) (string, EnqueueStatus, error) {
-	correlationID = strings.TrimSpace(correlationID)
+	correlationID, err := callerSteeringCorrelation(correlationID)
+	if err != nil {
+		return "", EnqueueStatusNormal, err
+	}
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
@@ -1299,8 +1304,18 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 				return msgs, correlationIDs, consumedItems, ackErr
 			}
 		}
+		correlationID := item.correlationID
+		if item.wake == nil && strings.HasPrefix(correlationID, savedWakeCorrelationPrefix) {
+			// PW-SEC-R3: only a wake item mints the saved-wake form. An ordinary
+			// item carrying it (an intake that bypassed callerSteeringCorrelation)
+			// is delivered as plain text with no receipt, never as another
+			// session's saved input.
+			logger.ErrorCF("agent", "ordinary steering item carried a reserved saved-wake correlation; receipt dropped",
+				map[string]any{"scope": scope})
+			correlationID = ""
+		}
 		msgs = append(msgs, item.message)
-		correlationIDs = append(correlationIDs, item.correlationID)
+		correlationIDs = append(correlationIDs, correlationID)
 		consumedItems = append(consumedItems, item)
 	}
 	return msgs, correlationIDs, consumedItems, nil
