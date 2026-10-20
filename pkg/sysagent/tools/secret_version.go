@@ -92,6 +92,13 @@ func (t *SelectSecretVersionTool) Execute(ctx context.Context, args map[string]a
 		if errors.Is(err, credentials.ErrCardSecretNotFound) {
 			return tools.ErrorResult(errorJSON("NOT_FOUND", "no stored version "+ref+"; nothing was selected", ""))
 		}
+		var authErr *credentials.EntryAuthError
+		var encErr *credentials.EntryEncodingError
+		if errors.As(err, &authErr) || errors.As(err, &encErr) {
+			return tools.ErrorResult(errorJSON("UNREADABLE",
+				"stored version "+ref+" cannot be read; the current selection was kept",
+				"Choose another version, or request a new value with request_secret"))
+		}
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", "the selection could not be saved; nothing was selected", ""))
 	}
 	t.selected(ctx, t.Name(), recipient.WorkspaceID+"/"+recipient.AgentID+"/"+recipient.Field, []string{ref})

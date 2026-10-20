@@ -172,8 +172,15 @@ func (s *Store) SelectPrivateVersion(ref string) (CardInventoryEntry, error) {
 	if secret.Recipient.Kind != KindAgentPrivate {
 		return CardInventoryEntry{}, ErrNotPrivateSecret
 	}
-	if _, stored := sf.Credentials[ref]; !stored {
+	entry, stored := sf.Credentials[ref]
+	if !stored {
 		return CardInventoryEntry{}, ErrCardSecretNotFound
+	}
+	// Metadata presence does not prove the value is usable: a version that
+	// cannot be decrypted is refused here, keeping the current selection,
+	// rather than displacing a readable one (gate r1 SFH T2-SF-05).
+	if _, err := decrypt(s.key, ref, entry); err != nil {
+		return CardInventoryEntry{}, err
 	}
 	key := privateKey(secret.Recipient)
 	if sf.PrivateSelected == nil {
