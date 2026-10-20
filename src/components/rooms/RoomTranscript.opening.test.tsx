@@ -147,6 +147,7 @@ describe('1 — a group opens at the newest message', () => {
     const view = render(
       <RoomTranscript
         roomId="alpha"
+        snapshotReceived
         entries={[
           entry({ seq: 3, id: 'a-3', client_message_id: 'a3', text: 'entry-3' }),
           entry({ seq: 4, id: 'a-4', client_message_id: 'a4', text: 'entry-4' }),
@@ -159,6 +160,7 @@ describe('1 — a group opens at the newest message', () => {
     view.rerender(
       <RoomTranscript
         roomId="beta"
+        snapshotReceived
         entries={[
           entry({ seq: 1, id: 'b-1', client_message_id: 'b1', room_id: 'beta', text: 'beta-1' }),
           entry({ seq: 2, id: 'b-2', client_message_id: 'b2', room_id: 'beta', text: 'beta-2' }),
@@ -177,6 +179,7 @@ describe('2 — the older page stays reachable when the window fits without scro
     render(
       <RoomTranscript
         roomId="alpha"
+        snapshotReceived
         entries={[entry({ seq: 3, id: 'a-3', client_message_id: 'a3', text: 'entry-3' })]}
         agentName={(id) => id}
         hasOlder
@@ -193,6 +196,7 @@ describe('2 — the older page stays reachable when the window fits without scro
     render(
       <RoomTranscript
         roomId="alpha"
+        snapshotReceived
         entries={[entry({ seq: 3, id: 'a-3', client_message_id: 'a3', text: 'entry-3' })]}
         agentName={(id) => id}
         hasOlder

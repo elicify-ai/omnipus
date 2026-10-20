@@ -120,10 +120,18 @@ describe('T18 — older merge, duplicate/overlap idempotence, live-state invaria
   })
 
   it('reapplying a duplicate page or an overlapping retry still shows one row per seq, and the EXISTING representation wins collisions', async () => {
-    act(() => useRoomStore.getState().applyRoomFrame(snapshotFrame(9, [entry(5, 'live five'), entry(9)], true)))
-    fetchRoomHistory.mockResolvedValue(page([entry(2, 'old two'), entry(5, 'stale five')], false))
+    act(() => useRoomStore.getState().applyRoomFrame(snapshotFrame(9, [entry(9)], true)))
+    const pending = deferredPage()
+    fetchRoomHistory.mockReturnValueOnce(pending.promise)
+    const loading = loadOlder(ROOM)
+    // Overlap is legal when a live entry arrives while a valid page before
+    // seq 9 is pending, not when a page violates its exclusive before_seq.
+    act(() => useRoomStore.getState().applyRoomFrame({
+      type: 'room_entry', room_id: ROOM, seq: 5, entry: entry(5, 'live five'),
+    }))
+    pending.resolve(page([entry(2, 'old two'), entry(5, 'stale five')], false))
 
-    await loadOlder(ROOM)
+    await loading
     await loadOlder(ROOM) // a retry / duplicate application
 
     const room = useRoomStore.getState().rooms[ROOM]!
