@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -20,6 +21,34 @@ import (
 )
 
 var errWU15WriterFailure = errors.New("wu15 injected persistence failure")
+
+// wu15AwaitAnswerMirror polls the receiver main's history until the answer
+// mirror for requestId exists, then asserts the exact mirror contract. The
+// order is designed (spec K27 §6.11; FR-215 append → mirror → fan-out):
+// pkg/rooms/answers.go::recordAnswer sets "answered" under the room lock and
+// mirrorAnswer writes the main-chat mirror afterwards, outside the lock — so
+// "answered" is observable before the mirror exists, and a mirror read
+// without this wait races the write under load. The deadline bounds a real
+// regression (a mirror that never comes fails the test naming the missing
+// mirror); wu15RequireMirrors still requires EXACTLY one mirror, so a
+// duplicate mirror fails the test just as before.
+func wu15AwaitAnswerMirror(t *testing.T, h *wu15RoomHarness, room gen.Room, requestID, answer string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		messages := h.messages("mia")
+		for _, msg := range messages {
+			if msg.RoomRef != nil && msg.RoomRef.RequestId == requestID && msg.RoomRef.Role == gen.MessageRoomRefRoleAnswer {
+				wu15RequireMirrors(t, messages, room, requestID, answer)
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the answer mirror for request %s never reached the receiver main within 30s — FR-215 orders the mirror after the answered state, so the test must wait for it before asserting", requestID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 // Q-D: fault the exact named RoomReceiverWriter append, not inst.Sessions.
 // The underlying store remains real and every unrelated append is forwarded.
@@ -64,7 +93,7 @@ func TestWU15Rooms_FailedReceiverWriterNeverCountsAsSuccessfulAnswer(t *testing.
 				h.roomWriter(nil)
 				h.post(room.Id, "writer-fault", "@Mia test durable write")
 				h.waitState(room.Id, request.RequestId, "answered")
-				wu15RequireMirrors(t, h.messages("mia"), room, request.RequestId, p.answer)
+				wu15AwaitAnswerMirror(t, h, room, request.RequestId, p.answer)
 				return
 			}
 			h.post(room.Id, "writer-fault", "@Mia test durable mirror")
