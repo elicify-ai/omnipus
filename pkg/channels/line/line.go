@@ -102,8 +102,17 @@ func (c *LINEChannel) Start(ctx context.Context) error {
 
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
-	// Fetch bot profile to get bot's userId for mention detection
+	// Fetch bot profile to get bot's userId for mention detection. The same
+	// call is the start's only credential check: a rejected access token
+	// (401/403) fails the start, so the channel is never reported as running
+	// on credentials the platform refused (BDD-8.3, gate r1). Other failures
+	// (network) still only disable mention detection: webhook mode works
+	// without the bot profile.
 	if err := c.fetchBotInfo(); err != nil {
+		if errors.Is(err, errLINECredentialsRejected) {
+			c.cancel()
+			return fmt.Errorf("LINE rejected the channel access token: %w", err)
+		}
 		logger.WarnCF("line", "Failed to fetch bot info (mention detection disabled)", map[string]any{
 			"error": err.Error(),
 		})
@@ -120,6 +129,10 @@ func (c *LINEChannel) Start(ctx context.Context) error {
 	return nil
 }
 
+// errLINECredentialsRejected marks a bot-info response that rejected the
+// channel access token.
+var errLINECredentialsRejected = errors.New("the LINE platform rejected the channel access token")
+
 // fetchBotInfo retrieves the bot's userId, basicId, and displayName from the LINE API.
 func (c *LINEChannel) fetchBotInfo() error {
 	req, err := http.NewRequest(http.MethodGet, lineBotInfoEndpoint, nil)
@@ -134,6 +147,9 @@ func (c *LINEChannel) fetchBotInfo() error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("%w: bot info API returned status %d", errLINECredentialsRejected, resp.StatusCode)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("bot info API returned status %d", resp.StatusCode)
 	}
