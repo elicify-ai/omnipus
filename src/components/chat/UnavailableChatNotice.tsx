@@ -3,14 +3,27 @@
  * Retains the committed chat with send off; Retry rechecks the target workspace.
  */
 import { Button } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/error-state'
 import { useSessionStore } from '@/store/session'
 import { runWorkspaceEntry } from '@/store/session/workspaceEntryFlow'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 
 export function UnavailableChatNotice() {
-  const status = useSessionStore((state) => state.workspaceEntry?.status)
+  const entry = useSessionStore((state) => state.workspaceEntry)
   const workspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
+  const status = entry?.status
   if (status !== 'unavailable' && status !== 'failed-attempt') return null
+  if (entry?.status === 'unavailable' && entry.mainSessionError) {
+    return (
+      <div data-testid="unavailable-chat-notice">
+        <ErrorState
+          message={entry.mainSessionError}
+          onRetry={workspaceId ? () => { void runWorkspaceEntry(workspaceId) } : undefined}
+          className="px-[var(--space-3)] py-[var(--space-2)] text-center"
+        />
+      </div>
+    )
+  }
   return (
     <div
       role="status"
