@@ -15474,7 +15474,7 @@ type AgentUpdateRequest struct {
 	} `json:"executor,omitempty"`
 
 	// FallbackModels Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
-	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
+	// Wire format is always the object form `[{model, provider}]`, and every entry must name both: an entry missing its provider or its model is refused 400, naming the entry (issue #1340).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
 	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
@@ -17987,6 +17987,15 @@ type FallbackModel struct {
 
 	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
 	Provider *string `json:"provider,omitempty"`
+}
+
+// FallbackModelPair One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry missing its provider or its model, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected.
+type FallbackModelPair struct {
+	// Model Model id exactly as the provider names it (a `/` inside it is data).
+	Model string `json:"model"`
+
+	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). The fallback uses this provider's connection — independent of the primary's provider.
+	Provider string `json:"provider"`
 }
 
 // FileSearchHit One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.

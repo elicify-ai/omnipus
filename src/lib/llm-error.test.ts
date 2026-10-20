@@ -66,6 +66,10 @@ const ALL_CODES: LLMErrorCode[] = [
   'judge_conclusion_failed',
   'delegated_task_limit',
   'context_window_unknown',
+  // Issue #1340: distinguish bad models, rejected requests, and unavailable routes.
+  'bad_model',
+  'provider_request_rejected',
+  'model_route_unavailable',
   'unknown',
 ]
 
@@ -385,10 +389,10 @@ describe('llm-error — sanitizeLegacyErrorMessage (D5)', () => {
 //     provider_message subtype flag — never keyed on error code alone.
 //     Own-limiter rate_limited rows never carry the flag, so their replay
 //     string stays byte-identical catalogue copy (RG-2/MIN-007 oracle).
-//   - Row 12 (RG-3): the templated codes (llmErrorProviderMessages keys:
-//     provider_auth_failed, rate_limited, quota_billing, model_retired)
-//     render le.message WHEN FLAGGED; every non-flagged code keeps catalogue
-//     copy.
+//   - Row 12 (RG-3), extended by issue #1340: the templated codes
+//     (provider_auth_failed, rate_limited, quota_billing, model_retired,
+//     bad_model, provider_request_rejected, model_route_unavailable) render
+//     le.message WHEN FLAGGED; every non-flagged code keeps catalogue copy.
 //   - MAJ-104/C-17: the flag rides the replay carrier (LLMErrorReplay), so
 //     the frame readers must propagate it — live (readLLMErrorFromFrame) and
 //     replay (readLLMErrorFromReplayFrame).
@@ -405,7 +409,7 @@ describe('provider-messages — subtype trust gate (rows 12, 30)', () => {
   const TEMPLATED = Object.keys(llmErrorProviderMessages) as LLMErrorCode[]
 
   it('row 12/RG-3: a flagged entry renders le.message for every templated code', () => {
-    expect(TEMPLATED.length).toBe(4) // guard: the template map must not silently shrink
+    expect(TEMPLATED.length).toBe(7) // #1340 contract: the template map must not silently shrink
     for (const code of TEMPLATED) {
       const assembled = `PROBE-ASSEMBLED-SENTENCE-${code}`
       const le: LLMError = {
@@ -491,25 +495,36 @@ describe('provider-messages — subtype trust gate (rows 12, 30)', () => {
 // provider-messages spec RED tests — TDD row 6, TS half (C-3/C-4, OBS-002,
 // MAJ-103). Go half: pkg/api/generated/provider_messages_catalogue_test.go.
 //
-// Oracles from the SPEC ONLY (§6 + §7.1 item 5):
+// Oracles from the SPEC ONLY (§6 + §7.1 item 5), extended by the #1340
+// LLMError contract:
 //   - Bijection (C-3/C-4): the codes carrying a provider_message variant are
-//     exactly the spec §6 templated set — provider_auth_failed, rate_limited,
-//     quota_billing, model_retired — both directions.
+//     exactly provider_auth_failed, rate_limited, quota_billing, model_retired,
+//     bad_model, provider_request_rejected, model_route_unavailable — both
+//     directions.
 //   - Closed-slot token check (OBS-002): every template's slots come from the
-//     closed set {provider}, {answered_model}, {unavailable_model}.
+//     contract's closed set {provider}, {model}, {attempt}, {max}, {countdown},
+//     {answered_model}, {unavailable_model}.
 //
-// CHARACTERIZATION PIN, green-today-by-design: Wave 1 (contracts) landed this
-// contract data; these assertions guard it against drift. Expected values
-// derive from §6, not from the implementation.
+// CHARACTERIZATION PIN, green-today-by-design: the contracts landed this
+// data; these assertions guard it against drift. Expected literals derive
+// from the contract, never from the generated catalogue being checked.
 // ═══════════════════════════════════════════════════════════════════════════
 describe('provider-messages — row 6 TS half: provider_message catalogue bijection + closed slots (C-3/C-4, OBS-002)', () => {
-  const SPEC_TEMPLATED = ['provider_auth_failed', 'rate_limited', 'quota_billing', 'model_retired']
-  const CLOSED_SLOTS = ['provider', 'answered_model', 'unavailable_model']
+  const SPEC_TEMPLATED = [
+    'provider_auth_failed',
+    'rate_limited',
+    'quota_billing',
+    'model_retired',
+    'bad_model',
+    'provider_request_rejected',
+    'model_route_unavailable',
+  ]
+  const CLOSED_SLOTS = ['provider', 'model', 'attempt', 'max', 'countdown', 'answered_model', 'unavailable_model']
 
   it('C-3/C-4 bijection: exactly the §6 templated codes carry a provider_message variant, both directions', () => {
     const keys = Object.keys(llmErrorProviderMessages).sort()
     expect(keys).toEqual([...SPEC_TEMPLATED].sort())
-    expect(keys.length).toBe(4)
+    expect(keys.length).toBe(7) // #1340 contract: exactly seven provider-message variants
   })
 
   it('OBS-002 closed-slot check: every template uses only the closed slot vocabulary', () => {

@@ -10,9 +10,9 @@
 // recovery). MAJ-003 (sub-agent control plane) retires the FD1=A pair-end:
 // NO terminal session write ends the session-owned goal — only natural
 // met/round-exhaustion adjudication and an explicit clear (/goal clear,
-// authorized clear_goal) do. The judge-unavailable arm of the
-// deferred adjudication is re-driven a bounded number of times inside the
-// already-off-critical-path goroutine, then the child is failed visibly.
+// authorized clear_goal) do. A transient judge-unavailable outcome is re-driven
+// a bounded number of times inside the already-off-critical-path goroutine,
+// then the child is failed visibly. Operator-only refusals conclude at once.
 //
 // This file deliberately does NOT add a wall-clock reaper (FD2=A): completion
 // is event-driven, and the boot sweep repairs crash residuals.
@@ -51,7 +51,7 @@ const goalJudgeRedriveAttempts = 3
 var goalJudgeRedriveBackoff = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second} //nolint:gochecknoglobals
 
 // redriveGoalAdjudication is decision (c)'s bounded re-drive: it wraps the
-// single shared adjudication body (runGoalAdjudication) so a judge-unavailable
+// single shared adjudication body (runGoalAdjudicationOutcome) so a judge-unavailable
 // round no longer strands the pair. Each attempt is bounded by
 // goalJudgeRoundTimeout exactly as the pre-fix dispatch was; between attempts
 // the wrapper waits through judgeSleepFn, treating a failed wait as "retry
@@ -70,9 +70,9 @@ var goalJudgeRedriveBackoff = []time.Duration{5 * time.Second, 15 * time.Second,
 // A registry concurrency back-off (#984) is NOT re-driven: runGoalAdjudication
 // resolves JudgeCriteriaResult.ConcurrencyBackoff to (false, false) — a
 // final, silent stop for THIS wrapper, with no retry (the in-flight
-// adjudication resolves the goal) and no child failure. Only a genuine
-// judge outage (unavailable=true, reason != the concurrency sentinel) is
-// retried and, on exhaustion, fails the child visibly.
+// adjudication resolves the goal) and no child failure. An unavailable outcome
+// that needs an operator ends immediately with its safe corrective action;
+// other unavailable outcomes keep the bounded retry and visible conclusion.
 func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork) {
 	if al == nil || work == nil || work.sessionID == "" {
 		return
@@ -83,6 +83,7 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 			map[string]any{"session_id": work.sessionID})
 		return
 	}
+	var lastOutcome goalAdjudicationOutcome
 	for attempt := 1; attempt <= goalJudgeRedriveAttempts; attempt++ {
 		if attempt > 1 {
 			al.waitGoalRedriveBackoff(attempt - 1)
@@ -115,22 +116,29 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 		// reported as ErrJudgeTimeLimit, never as a provider timeout.
 		ctx, cancel := context.WithTimeoutCause(withGoalAnswer(withGoalProducer(context.Background(), work.producer), work.answer),
 			goalJudgeRoundTimeout, ErrJudgeTimeLimit)
-		met, unavailable := al.runGoalAdjudication(ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
+		lastOutcome = al.runGoalAdjudicationOutcome(ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
 			al.idleSteerDeliverer(work.sessionID, rec.GoalID, goalClaimDeferredSourceKind))
 		cancel()
-		if met || !unavailable {
+		if lastOutcome.met || !lastOutcome.unavailable {
 			return
+		}
+		if lastOutcome.needsOperator {
+			break // another unchanged check cannot fix the Judge's settings
 		}
 		logger.WarnCF("agent", "goal: judge unavailable on a re-drive attempt — retrying while attempts remain",
 			map[string]any{"session_id": work.sessionID, "goal_id": rec.GoalID,
 				"attempt": attempt, "max_attempts": goalJudgeRedriveAttempts})
 	}
 	reason := fmt.Sprintf("judge unavailable after %d attempts: the completion claim could not be adjudicated", goalJudgeRedriveAttempts)
+	nextStep := "The goal stays active: claim completion again once the Judge is available."
+	if lastOutcome.needsOperator {
+		reason = lastOutcome.reason // already safe, provider/model-specific guidance
+		nextStep = "The goal stays active: correct the Judge's settings, then claim completion again."
+	}
 	// Issue #1306 (founder): the Judge must conclude. The conclusion names the
 	// verdict AND carries the worker's claim, so the parent (or the chat user)
 	// gets the actual work result with "not verified" — never a bare failure.
-	conclusion := notVerifiedConclusion(reason,
-		"The goal stays active: claim completion again once the Judge is available.", work.upwardAnswer())
+	conclusion := notVerifiedConclusion(reason, nextStep, work.upwardAnswer())
 	// SFH F1: the audience is decided from the lifecycle record; a read
 	// failure is retried and then reported loudly — it never silently picks
 	// the interactive (no-parent) audience.
@@ -145,7 +153,7 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 	}
 	logger.ErrorCF("agent", "goal: "+reason+" — failing the goal-bearing child visibly",
 		map[string]any{"session_id": work.sessionID})
-	al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), work.producer), work.sessionID, "", errors.New(conclusion))
+	al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), work.producer), work.sessionID, "", &curatedTurnError{text: conclusion})
 }
 
 // goalConclusionAudienceAttempts bounds the lifecycle re-reads before an

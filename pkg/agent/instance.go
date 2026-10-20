@@ -107,11 +107,15 @@ type AgentInstance struct {
 	// Model + Provider + Candidates + ProviderPool flip so an in-flight turn
 	// never sees a torn (newModel, oldPool) state — the lock ensures the
 	// tuple of fields swaps as one unit.
-	providerPool   atomic.Pointer[map[string]providers.LLMProvider]
-	Sessions       session.SessionStore
-	ContextBuilder *ContextBuilder
-	Tools          *tools.ToolRegistry
-	Subagents      *config.SubagentsConfig
+	providerPool atomic.Pointer[map[string]providers.LLMProvider]
+	// Pair-specific construction results prevent two model rows on one provider
+	// from sharing the wrong endpoint. Published with the model/pool tuple.
+	providerRoutes       atomic.Pointer[map[providers.FallbackCandidate]providers.LLMProvider]
+	providerPoolFailures atomic.Pointer[map[providers.FallbackCandidate]error]
+	Sessions             session.SessionStore
+	ContextBuilder       *ContextBuilder
+	Tools                *tools.ToolRegistry
+	Subagents            *config.SubagentsConfig
 	// SkillsFilter mirrors agentCfg.Skills (the agent's per-agent skill grant
 	// list) for callers that want to inspect the raw configured grant.
 	// ADR-072 D1/D3: this is NOT unioned into a turn's active skills any more
@@ -154,6 +158,8 @@ type AgentInstance struct {
 	// LightProvider is the concrete provider instance for the configured light model.
 	// It is only used when routing selects the light tier for a turn.
 	LightProvider providers.LLMProvider
+	// The constructor binds LightProvider to this exact resolved pair.
+	lightProviderPair providers.FallbackCandidate
 	// sourceConfigJSON is the immutable configuration snapshot used to build
 	// this particular registered instance. It proves publication independently
 	// of AgentLoop's mutable config pointer.
@@ -195,6 +201,7 @@ type newAgentInstance struct {
 	router              *routing.Router
 	lightCandidates     []providers.FallbackCandidate
 	lightProvider       providers.LLMProvider
+	lightProviderPair   providers.FallbackCandidate
 	documentRuntime     *documentruntime.Layout
 }
 
@@ -237,8 +244,8 @@ func (nai *newAgentInstance) prepareWorkspace() {
 	}
 
 	nai.model = resolveAgentModel(nai.agentCfg, nai.defaults)
-	nai.fallbacks = resolveAgentFallbacks(nai.agentCfg, nai.defaults)
-	nai.fallbackModels = resolveAgentFallbackModels(nai.agentCfg, nai.defaults)
+	nai.fallbacks = resolveAgentFallbacks(nai.agentCfg)
+	nai.fallbackModels = resolveAgentFallbackModels(nai.agentCfg)
 
 	nai.restrict = nai.defaults.RestrictToWorkspace
 	nai.readRestrict = nai.restrict && !nai.defaults.AllowReadOutsideWorkspace
@@ -485,6 +492,7 @@ func (nai *newAgentInstance) resolveCandidates() {
 	// primary candidate routes through it directly (never inferred). Empty
 	// provider preserves the pre-O3 selection exactly.
 	primaryProvider := resolveAgentPrimaryProvider(nai.agentCfg, nai.defaults)
+	warnUnpairedFallbacks(nai.agentID, nai.fallbackModels)
 	nai.candidates = resolveAgentCandidatesWithPrimaryProvider(
 		nai.cfg, nai.defaults.DefaultModel.Provider, nai.model, primaryProvider, nai.fallbackModels, nai.fallbacks)
 
@@ -517,25 +525,22 @@ func (nai *newAgentInstance) configureRouting() {
 	// to avoid repeated model_list lookups on every incoming message.
 
 	if rc := nai.defaults.Routing; rc != nil && rc.Enabled && rc.LightModel != "" {
-		resolved := resolveModelCandidates(nai.cfg, nai.defaults.DefaultModel.Provider, rc.LightModel, nil)
+		resolved := resolveModelCandidates(nai.cfg, nai.defaults.DefaultModel.Provider, rc.LightModel)
 		if len(resolved) > 0 {
-			lightModelCfg, err := resolvedModelConfig(nai.cfg, rc.LightModel, nai.workspace)
+			// Use the already-resolved pair, rather than resolving the model
+			// again and potentially choosing another provider row/account.
+			lp, err := buildCandidateProvider(nai.cfg, resolved[0], make(map[*config.ModelConfig]providers.LLMProvider))
 			if err != nil {
-				logger.WarnCF("agent", "Routing light model config invalid; routing disabled",
+				logger.WarnCF("agent", "Routing light model provider init failed; routing disabled",
 					map[string]any{"light_model": rc.LightModel, "agent_id": nai.agentID, "error": err.Error()})
 			} else {
-				lp, _, err := providers.CreateProviderFromConfig(lightModelCfg)
-				if err != nil {
-					logger.WarnCF("agent", "Routing light model provider init failed; routing disabled",
-						map[string]any{"light_model": rc.LightModel, "agent_id": nai.agentID, "error": err.Error()})
-				} else {
-					nai.router = routing.New(routing.RouterConfig{
-						LightModel: rc.LightModel,
-						Threshold:  rc.Threshold,
-					})
-					nai.lightCandidates = resolved
-					nai.lightProvider = lp
-				}
+				nai.router = routing.New(routing.RouterConfig{
+					LightModel: rc.LightModel,
+					Threshold:  rc.Threshold,
+				})
+				nai.lightCandidates = resolved
+				nai.lightProvider = lp
+				nai.lightProviderPair = resolved[0]
 			}
 		} else {
 			logger.WarnCF("agent", "Routing light model not found; routing disabled",
@@ -590,6 +595,7 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 		Router:              nai.router,
 		LightCandidates:     nai.lightCandidates,
 		LightProvider:       nai.lightProvider,
+		lightProviderPair:   nai.lightProviderPair,
 		DocumentRuntime:     nai.documentRuntime,
 		AgentType:           resolvedAgentType,
 	}
@@ -599,7 +605,7 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the
 	// publish path identical to the model-switch path in ApplyAgentModel.
-	inst.StoreProviderPool(nai.poolBuild.pool)
+	inst.storeProviderPoolBuild(nai.poolBuild)
 	// O7: thread the global sandbox tool policies into the runtime policy
 	// snapshot so FilterToolsByPolicy enforces global × agent merge at call
 	// time. Build the policy even when the agent has no per-agent tools
@@ -716,6 +722,8 @@ func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider)
 		publish = &buf
 	}
 	a.providerPool.Store(publish)
+	a.providerRoutes.Store(nil)
+	a.providerPoolFailures.Store(nil)
 }
 
 // snapshotForExternalDispatch returns a private copy of a suitable for handing
@@ -759,42 +767,48 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	needsProvider := a.needsProvider
 	needsProviderID := a.needsProviderID
 	pool := a.providerPool.Load()
+	routes := a.providerRoutes.Load()
+	failures := a.providerPoolFailures.Load()
 	a.mu.RUnlock()
 
 	out := &AgentInstance{
-		ID:              a.ID,
-		Name:            a.Name,
-		Model:           model,
-		Fallbacks:       a.Fallbacks,
-		FallbackModels:  a.FallbackModels,
-		Home:            a.Home,
-		MaxIterations:   a.MaxIterations,
-		MaxTokens:       a.MaxTokens,
-		Temperature:     a.Temperature,
-		ThinkingLevel:   thinkingLevel,
-		ContextWindow:   contextWindow,
-		WindowSource:    windowSource,
-		WindowClamped:   windowClamped,
-		WindowExempt:    windowExempt,
-		WindowUnknown:   windowUnknown,
-		needsProvider:   needsProvider,
-		needsProviderID: needsProviderID,
-		Provider:        provider,
-		Sessions:        a.Sessions,
-		ContextBuilder:  a.ContextBuilder,
-		Tools:           a.Tools,
-		Subagents:       a.Subagents,
-		SkillsFilter:    a.SkillsFilter,
-		Candidates:      candidates,
-		AgentType:       a.AgentType,
-		Router:          a.Router,
-		LightCandidates: a.LightCandidates,
-		LightProvider:   a.LightProvider,
-		DocumentRuntime: a.DocumentRuntime,
+		ID:                a.ID,
+		Name:              a.Name,
+		Model:             model,
+		Fallbacks:         a.Fallbacks,
+		FallbackModels:    a.FallbackModels,
+		Home:              a.Home,
+		MaxIterations:     a.MaxIterations,
+		MaxTokens:         a.MaxTokens,
+		Temperature:       a.Temperature,
+		ThinkingLevel:     thinkingLevel,
+		ContextWindow:     contextWindow,
+		WindowSource:      windowSource,
+		WindowClamped:     windowClamped,
+		WindowExempt:      windowExempt,
+		WindowUnknown:     windowUnknown,
+		needsProvider:     needsProvider,
+		needsProviderID:   needsProviderID,
+		Provider:          provider,
+		Sessions:          a.Sessions,
+		ContextBuilder:    a.ContextBuilder,
+		Tools:             a.Tools,
+		Subagents:         a.Subagents,
+		SkillsFilter:      a.SkillsFilter,
+		Candidates:        candidates,
+		AgentType:         a.AgentType,
+		Router:            a.Router,
+		LightCandidates:   a.LightCandidates,
+		LightProvider:     a.LightProvider,
+		lightProviderPair: a.lightProviderPair,
+		DocumentRuntime:   a.DocumentRuntime,
 	}
 	if pool != nil {
 		out.StoreProviderPool(*pool)
 	}
+	// Published maps are immutable; preserve the exact routing snapshot.
+	out.providerRoutes.Store(routes)
+	out.providerPoolFailures.Store(failures)
 	out.StoreToolPolicy(a.LoadToolPolicy())
 	return out
 }
@@ -807,7 +821,9 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 // FALLBACK is not: it is dropped from the pool and the agent runs on the
 // rest (DS-8 rows 3 and 6).
 type providerPoolBuild struct {
-	pool map[string]providers.LLMProvider
+	pool     map[string]providers.LLMProvider
+	routes   map[providers.FallbackCandidate]providers.LLMProvider
+	failures map[providers.FallbackCandidate]error
 	// primaryUnknown and primaryProvider name the FR-016 degrade. The id is
 	// carried so the refusal can name the operator's own spelling — and only
 	// that, never a canonical alternative (SC-010).
@@ -820,10 +836,9 @@ type providerPoolBuild struct {
 // Returns a nil pool when the candidate chain has no explicit providers
 // (every candidate routes through the agent primary — no pool needed).
 //
-// Build failures are non-fatal: a missing entry for a pinned provider name
-// degrades to "use the primary's provider" via GetProviderForCandidate's
-// fallback path. We log at WARN so operators can see the cause of a
-// degraded fallback path at startup.
+// Build failures do not prevent gateway startup, but remain attached to the
+// exact named pair. A turn refuses an unavailable pair; it never substitutes
+// the injected global-default client or a different passthrough provider.
 //
 // ADR-067 FR-016 splits one of those failures out of the generic skip. A
 // candidate whose provider id is UNKNOWN — neither a catalog id nor a
@@ -848,91 +863,39 @@ func buildProviderPool(
 	if cfg == nil || len(candidates) == 0 {
 		return providerPoolBuild{}
 	}
-	// Collect distinct provider names. Empty Provider names share the
-	// primary's provider via the legacy path — no pool entry needed.
-	seen := make(map[string]struct{})
-	for _, c := range candidates {
-		name := strings.TrimSpace(c.Provider)
-		if name == "" {
-			continue
-		}
-		seen[name] = struct{}{}
-	}
-	if len(seen) == 0 {
-		return providerPoolBuild{}
-	}
-	// unknown holds the FR-016 classification for every distinct candidate
-	// provider id. It is computed BEFORE any construction so a decision that
-	// belongs to the catalog is never inferred from a client-build failure
-	// (a missing credential is not an unknown provider).
+	// Resolve each named pair in declared order. Multiple models may use
+	// different rows/endpoints on the same provider; clients are deduplicated
+	// by the actual selected config row, never just by provider id.
 	unknown := make(map[string]struct{})
-	pool := make(map[string]providers.LLMProvider, len(seen))
-	for name := range seen {
-		if providers.IsUnknownProviderID(cfg, name) {
-			unknown[name] = struct{}{}
+	pool := make(map[string]providers.LLMProvider)
+	routes := make(map[providers.FallbackCandidate]providers.LLMProvider)
+	failures := make(map[providers.FallbackCandidate]error)
+	cache := make(map[*config.ModelConfig]providers.LLMProvider)
+	for _, candidate := range candidates {
+		candidate.Provider = strings.TrimSpace(candidate.Provider)
+		if candidate.Provider == "" {
 			continue
 		}
-		mc, err := findModelConfigForProvider(cfg, name)
+		key := candidate // model ids are exact, case-sensitive pair keys
+		if _, ok := routes[key]; ok {
+			continue
+		}
+		if providers.IsUnknownProviderID(cfg, candidate.Provider) {
+			unknown[candidate.Provider] = struct{}{}
+			failures[key] = fmt.Errorf("provider %q is not configured", candidate.Provider)
+			routes[key] = nil
+			continue
+		}
+		p, err := buildCandidateProvider(cfg, candidate, cache)
+		routes[key] = p
 		if err != nil {
-			logger.WarnCF("agent", "buildProviderPool: no ModelConfig for candidate provider; pool entry skipped",
-				map[string]any{"provider": name, "error": err.Error()})
+			failures[key] = err
+			logger.WarnCF("agent", "named provider route unavailable; turns will refuse this pair",
+				map[string]any{"agent_id": agentID, "provider": candidate.Provider, "model": candidate.Model, "error": err.Error()})
 			continue
 		}
-		p, _, err := providers.CreateProviderFromConfig(mc)
-		if err != nil {
-			logger.WarnCF("agent", "buildProviderPool: CreateProviderFromConfig failed; pool entry skipped",
-				map[string]any{"provider": name, "error": err.Error()})
-			continue
-		}
-		pool[name] = p
-	}
-
-	// Defensive fallback: if a candidate's Provider (which may be a vendor
-	// namespace like "zai" or "z-ai" leaked from re-parsing the slash in
-	// mc.Model) doesn't match any configured provider, scan cfg.Providers
-	// for a passthrough entry whose Model matches the candidate's Model.
-	// This is the safety net behind the resolver fix — if any future
-	// change reintroduces the seeded-agent bug, the agent still routes
-	// through the openrouter entry that has the matching model.
-	// The original candidate's name is preserved as the pool key so the
-	// agent's GetProviderForCandidate lookup still works.
-	for _, c := range candidates {
-		name := strings.TrimSpace(c.Provider)
-		if name == "" {
-			continue
-		}
-		if _, ok := pool[name]; ok {
-			continue
-		}
-		if _, bad := unknown[name]; bad {
-			// FR-016: an UNKNOWN id is never rescued through a passthrough.
-			// The net exists for a vendor NAMESPACE that leaked out of a
-			// slash-separated model id (the id is a real catalog provider,
-			// just not a configured row); routing an id the catalog has
-			// never heard of through someone else's credentials would be an
-			// alias, which is exactly what the greenfield rule removed.
-			continue
-		}
-		if mc := findPassthroughForModel(cfg, c.Model); mc != nil {
-			p, _, err := providers.CreateProviderFromConfig(mc)
-			if err != nil {
-				logger.WarnCF(
-					"agent",
-					"buildProviderPool: passthrough fallback CreateProviderFromConfig failed; pool entry skipped",
-					map[string]any{"provider": name, "model": c.Model, "error": err.Error()},
-				)
-				continue
-			}
-			pool[name] = p
-			logger.InfoCF(
-				"agent",
-				"buildProviderPool: candidate provider not configured; routed through passthrough entry with matching model",
-				map[string]any{
-					"candidate_provider":   name,
-					"candidate_model":      c.Model,
-					"passthrough_provider": mc.Provider,
-				},
-			)
+		if pool[candidate.Provider] == nil {
+			pool[candidate.Provider] = p
 		}
 	}
 
@@ -967,40 +930,17 @@ func buildProviderPool(
 	}
 	return providerPoolBuild{
 		pool:            pool,
+		routes:          routes,
+		failures:        failures,
 		primaryUnknown:  primaryUnknown,
 		primaryProvider: primary,
 	}
 }
 
-// findPassthroughForModel scans cfg.Providers for a passthrough entry
-// (openrouter, vivgrid) whose Model field equals or contains the given
-// model string. Returns nil if no passthrough carries the model. Used as a
-// defensive fallback in buildProviderPool when a candidate's Provider
-// (e.g. a vendor namespace) doesn't match any configured provider entry.
-func findPassthroughForModel(cfg *config.Config, model string) *config.ModelConfig {
-	if cfg == nil || strings.TrimSpace(model) == "" {
-		return nil
-	}
-	for _, mc := range cfg.Providers {
-		if mc == nil {
-			continue
-		}
-		if !providers.IsPassthroughProvider(strings.TrimSpace(mc.Provider), mc.APIBase) {
-			continue
-		}
-		// Exact match — e.g. mc.Model = "z-ai/glm-5.2", model = "z-ai/glm-5.2".
-		if strings.EqualFold(strings.TrimSpace(mc.Model), model) {
-			clone := *mc
-			return &clone
-		}
-	}
-	return nil
-}
-
 // findModelConfigForProvider returns a clone of the ModelConfig whose
-// Provider field matches the given provider name. Used by buildProviderPool
-// at agent construction to locate the right ModelConfig for a candidate's
-// pinned provider.
+// Provider field matches the given provider name. This provider-only lookup
+// does not select a runtime client; candidate construction uses the model-aware
+// usable-row selection in buildCandidateProvider.
 func findModelConfigForProvider(cfg *config.Config, providerName string) (*config.ModelConfig, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
@@ -1287,39 +1227,52 @@ func resolveAgentPrimaryProvider(agentCfg *config.AgentConfig, defaults *config.
 	return strings.TrimSpace(defaults.DefaultModel.Provider)
 }
 
-// resolveAgentFallbacks resolves the fallback models for an agent.
-func resolveAgentFallbacks(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) []string {
-	if agentCfg != nil && agentCfg.Model != nil && agentCfg.Model.Fallbacks != nil {
-		return agentCfg.Model.Fallbacks
+// warnUnpairedFallbacks reports every configured fallback that does not name
+// BOTH a provider and a model. Such an entry is never routed (founder rule
+// 2026-10-18, issue #1340: provider and model always come in pairs) and must
+// not disappear silently, so each one is named with its agent at load.
+func warnUnpairedFallbacks(agentID string, fallbacks []config.FallbackModel) {
+	for i, fb := range fallbacks {
+		model, provider := strings.TrimSpace(fb.Model), strings.TrimSpace(fb.Provider)
+		if model != "" && provider != "" {
+			continue
+		}
+		if model == "" && provider == "" {
+			continue // an empty slot, not a configured entry
+		}
+		logger.WarnCF("agent",
+			"fallback ignored: a fallback must name both a provider and a model; set the missing half in the agent's fallback settings",
+			map[string]any{"agent_id": agentID, "fallback_index": i, "model": model, "provider": provider})
 	}
-	return defaults.ModelFallbacks
 }
 
-// resolveAgentFallbackModels resolves the provider-aware fallback chain for
-// an agent. It prefers the modern AgentConfig.FallbackModels (FR-005) when
-// populated and falls back to deriving one from the legacy sources in order:
-//  1. agentCfg.Model.Fallbacks (the legacy []string on the agent's model block)
-//  2. defaults.ModelFallbacks (the agent-defaults model_fallbacks list)
-//
-// Each returned entry is a config.FallbackModel with Provider populated by
-// config.NormalizeFallbacks (which has already run at config-load time for
-// the AgentConfig path). The defaults path is normalized here so the
-// downstream resolveModelCandidatesFromList can treat every entry uniformly.
-func resolveAgentFallbackModels(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) []config.FallbackModel {
-	if agentCfg != nil && len(agentCfg.FallbackModels) > 0 {
-		// Already normalized at config load — Provider is populated for every
-		// entry that matched a configured provider or passthrough.
-		return agentCfg.FallbackModels
+// resolveAgentFallbacks returns the agent's own legacy fallback strings. There
+// is no global default fallback list to inherit (agents.defaults.model_fallbacks
+// was removed, issue #1340, founder ruling 2026-10-19).
+func resolveAgentFallbacks(agentCfg *config.AgentConfig) []string {
+	if agentCfg != nil && agentCfg.Model != nil {
+		return agentCfg.Model.Fallbacks
 	}
-	var legacy []string
-	switch {
-	case agentCfg != nil && agentCfg.Model != nil && len(agentCfg.Model.Fallbacks) > 0:
-		legacy = agentCfg.Model.Fallbacks
-	case len(defaults.ModelFallbacks) > 0:
-		legacy = defaults.ModelFallbacks
-	default:
+	return nil
+}
+
+// resolveAgentFallbackModels returns the agent's OWN fallback chain: the
+// modern AgentConfig.FallbackModels (FR-005) when populated, else the agent's
+// legacy agentCfg.Model.Fallbacks strings as model-only entries (unpaired, so
+// reported and never routed). Nothing is inherited from a global default —
+// agents.defaults.model_fallbacks was removed (issue #1340, founder ruling
+// 2026-10-19).
+func resolveAgentFallbackModels(agentCfg *config.AgentConfig) []config.FallbackModel {
+	if agentCfg == nil {
 		return nil
 	}
+	if len(agentCfg.FallbackModels) > 0 {
+		return agentCfg.FallbackModels
+	}
+	if agentCfg.Model == nil || len(agentCfg.Model.Fallbacks) == 0 {
+		return nil
+	}
+	legacy := agentCfg.Model.Fallbacks
 	out := make([]config.FallbackModel, len(legacy))
 	for i, s := range legacy {
 		out[i] = config.FallbackModel{Model: s}

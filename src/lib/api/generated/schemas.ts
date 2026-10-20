@@ -1528,7 +1528,7 @@ type AgentUpdateRequest = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  fallback_models?: Array<FallbackModel> | undefined;
+  fallback_models?: Array<FallbackModelPair> | undefined;
   model_params?:
     | Partial<{
         temperature: number;
@@ -1540,6 +1540,10 @@ type AgentUpdateRequest = {
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
   memory_enabled?: boolean | undefined;
+};
+type FallbackModelPair = {
+  model: string;
+  provider: string;
 };
 type ExecutorDefaults = {
   cli: ExternalCliTool;
@@ -4105,6 +4109,10 @@ export const AgentCreateRequest =
     AgentCreateRequestSubagent,
     AgentCreateRequestSubagent3p,
   ]) satisfies z.ZodType<AgentCreateRequest>;
+export const FallbackModelPair: z.ZodType<FallbackModelPair> = z.object({
+  model: z.string().min(1).max(256),
+  provider: z.string().min(1).max(64),
+});
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   mcp_servers: z.array(AgentMCPBinding).optional(),
@@ -4119,7 +4127,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   figure: AgentFigure.optional(),
   role: AgentRole.optional(),
   color: AgentColor.optional(),
-  fallback_models: z.array(FallbackModel).max(2).optional(),
+  fallback_models: z.array(FallbackModelPair).max(2).optional(),
   model_params: z
     .object({ temperature: z.number(), max_tokens: z.number().int() })
     .partial()
@@ -17379,7 +17387,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -17396,7 +17404,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     provider_message: z.boolean().optional(),

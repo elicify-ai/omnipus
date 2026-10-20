@@ -49,8 +49,8 @@ func TestFallbackModels_LegacyString_NormalizedToObject(t *testing.T) {
 	if fb.Model != "glm-5-turbo" {
 		t.Errorf("FallbackModels[0].Model = %q, want glm-5-turbo", fb.Model)
 	}
-	if fb.Provider != "openrouter" {
-		t.Errorf("FallbackModels[0].Provider = %q, want openrouter (passthrough lookup)", fb.Provider)
+	if fb.Provider != "" {
+		t.Errorf("FallbackModels[0].Provider = %q, want \"\" (kept as written: unpaired, never guessed — #1340)", fb.Provider)
 	}
 }
 
@@ -135,8 +135,8 @@ func TestFallbackModels_BothFormsOrdered_NormalizedInPlace(t *testing.T) {
 	if agent.FallbackModels[0].Model != "glm-5-turbo" {
 		t.Errorf("FallbackModels[0].Model = %q, want glm-5-turbo", agent.FallbackModels[0].Model)
 	}
-	if agent.FallbackModels[0].Provider != "openrouter" {
-		t.Errorf("FallbackModels[0].Provider = %q, want openrouter", agent.FallbackModels[0].Provider)
+	if agent.FallbackModels[0].Provider != "" {
+		t.Errorf("FallbackModels[0].Provider = %q, want \"\" (kept as written: unpaired, never guessed — #1340)", agent.FallbackModels[0].Provider)
 	}
 
 	// Second: object unchanged.
@@ -229,7 +229,7 @@ func TestFallbackModels_UnmarshalExactMatchProvider(t *testing.T) {
 	if len(agent.FallbackModels) != 1 {
 		t.Fatalf("len = %d, want 1", len(agent.FallbackModels))
 	}
-	if agent.FallbackModels[0].Provider != "anthropic" {
-		t.Errorf("Provider = %q, want anthropic (exact match, not passthrough)", agent.FallbackModels[0].Provider)
+	if agent.FallbackModels[0].Provider != "" {
+		t.Errorf("Provider = %q, want \"\" (kept as written: unpaired, never guessed — #1340)", agent.FallbackModels[0].Provider)
 	}
 }

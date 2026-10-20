@@ -294,8 +294,13 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 				t.Errorf("parent fatal=%v, want %v (Stop/timeout are not provider failures)", e.Fatal, tc.fatal)
 			}
 			if tc.fatal {
-				if !strings.HasPrefix(e.Text, "failed:") || !strings.Contains(e.Text, tc.providerErr.Error()) {
-					t.Errorf("provider failure text=%q, want failed: plus actual provider error", e.Text)
+				// SFH F2: unclassified provider text is untrusted. The fixed
+				// unknown-failure sentence survives the real durable handback.
+				if want := "failed: " + UserMessageForCode(CodeUnknown); e.Text != want {
+					t.Errorf("provider failure text=%q, want exact safe translated sentence %q", e.Text, want)
+				}
+				if strings.Contains(e.Text, tc.providerErr.Error()) {
+					t.Errorf("raw provider failure reached the parent: %q", e.Text)
 				}
 				raw, marshalErr := msgs[0].MarshalJSON()
 				if marshalErr != nil || !bytes.Equal(raw, got.FinalDelivery.Payload) {
@@ -497,7 +502,8 @@ func TestGoalDelegation_DeadChildUnblocksTheWaitingParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("root handback: %v", err)
 	}
-	if !strings.Contains(handback.ResultSoFar, "failed:") || !strings.Contains(handback.ResultSoFar, "downstream provider failure") || strings.Contains(handback.ResultSoFar, "stale parent answer must not reach root") {
-		t.Errorf("root received %q, want real re-entry's child failure, never stale parent text", handback.ResultSoFar)
+	wantFailure := "failed: " + UserMessageForCode(CodeUnknown)
+	if !strings.Contains(handback.ResultSoFar, wantFailure) || strings.Contains(handback.ResultSoFar, "downstream provider failure") || strings.Contains(handback.ResultSoFar, "stale parent answer must not reach root") {
+		t.Errorf("root received %q, want the real re-entry's safe child failure %q, never raw provider or stale parent text", handback.ResultSoFar, wantFailure)
 	}
 }
