@@ -13,6 +13,10 @@
  *              handling.
  *   K10      — WhatsAppPairingFrame/SubscribeFrame gain optional request_id
  *              and session_id (status now includes "stopped").
+ *   Train 2 M8 — the gateway restores a chat's pairing ownership at the
+ *              id-carrying subscribe, so Retry sends that subscribe BEFORE the
+ *              enable call; a failed enable shows its error and drops the
+ *              subscription (Retry ordering rows below).
  * Approved plan (frontend dev): WhatsAppNativeNotice gains optional
  * requestId/sessionId props sent on the subscribe frame; the store keeps
  * request_id and session_id from frames; subscription lifetime is
@@ -28,7 +32,8 @@
  * and no stopped state exists.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, act, waitFor } from '@testing-library/react'
+import { render, screen, act, waitFor, fireEvent } from '@testing-library/react'
+import { enableChannel } from '@/lib/api'
 import type { WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
 
 const { sendSpy, connectionState } = vi.hoisted(() => {
@@ -180,5 +185,53 @@ describe('Row 6 — two mount sites: ref-counted subscription per channel', () =
     const unsubscribe = subscribeCalls().filter((frame) => frame.active === false)
     expect(unsubscribe).toHaveLength(1)
     expect(unsubscribe[0]).toMatchObject({ channel_id: CHANNEL, active: false })
+  })
+})
+
+// Train 2 M8 rows: the gateway restores a chat's pairing ownership at the
+// id-carrying subscribe, so the subscribe must reach it BEFORE the restarted
+// channel emits its first waiting/QR frames — i.e. before the enable REST call,
+// in the stopped gap after disable. A failed enable must surface its visible
+// error AND drop the subscription, leaving nothing that claims a pairing.
+describe('Retry ordering — the id-carrying subscribe precedes the enable call (Train 2 M8)', () => {
+  it('a Retry click sends the id-carrying subscribe BEFORE the enable REST call', async () => {
+    mountNotice({ channelId: CHANNEL, requestId: REQ_A, sessionId: SESSION })
+    apply(pairingFrame('timeout', REQ_A, { message: 'saved but not working: pairing timed out' }))
+
+    // Only post-click traffic counts: the mount-time subscribe is cleared away.
+    sendSpy.mockClear()
+    vi.mocked(enableChannel).mockClear()
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(enableChannel).toHaveBeenCalledTimes(1))
+
+    const subIndex = subscribeCalls().findIndex(
+      (frame) => frame.active === true && frame.request_id === REQ_A && frame.session_id === SESSION,
+    )
+    expect(subIndex, 'the id-carrying subscribe must be sent on Retry').toBeGreaterThanOrEqual(0)
+    expect(sendSpy.mock.invocationCallOrder[subIndex]).toBeLessThan(
+      vi.mocked(enableChannel).mock.invocationCallOrder[0],
+    )
+  })
+
+  it('a failed enable shows its visible error and drops the subscription (nothing left claiming the pairing)', async () => {
+    mountNotice({ channelId: CHANNEL, requestId: REQ_A, sessionId: SESSION })
+    apply(pairingFrame('timeout', REQ_A, { message: 'saved but not working: pairing timed out' }))
+    vi.mocked(enableChannel).mockRejectedValueOnce(new Error('reload failed'))
+
+    sendSpy.mockClear()
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
+
+    // Visible error, not an endless spinner (enable leg: channel left disabled).
+    expect(
+      await screen.findByText(/the channel was disabled but could not restart/),
+    ).toBeInTheDocument()
+
+    // The id-carrying subscribe already went out before the failed enable, so
+    // the error path must end the subscription: the LAST subscribe frame is
+    // the active:false drop, leaving no claim on a pairing that never started.
+    const subscribes = subscribeCalls()
+    expect(subscribes.length, 'the failure path must still manage the subscription').toBeGreaterThan(0)
+    expect(subscribes[subscribes.length - 1]).toMatchObject({ channel_id: CHANNEL, active: false })
   })
 })
