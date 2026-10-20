@@ -520,46 +520,61 @@ func TestIsImageSizeError(t *testing.T) {
 	}
 }
 
-// TestClassifyError_ToolArgumentsErrorNeverClassifiedByFragmentContent is the
-// ADR-087 Finding #8 regression. ToolArgumentsError.Error() embeds up to 256
-// bytes of the refused argument fragment verbatim (ADR-087 D3 /
-// maxUndecodableArgumentsQuoted) — that fragment is model-controlled text,
-// and it can coincidentally contain a classifier keyword. Before the typed
-// short-circuit, a fragment like this one would substring-match
-// authPatterns ("authentication"), timeoutPatterns ("timeout"), and
-// rateLimitPatterns ("429", "rate limit") and get classified as a
-// retriable/failoverable provider fault — cooling down (or failing over
-// away from) a perfectly healthy candidate for a deterministic content
-// fault that has nothing to do with its health.
-//
-// ClassifyError must return nil for ANY *common.ToolArgumentsError,
-// regardless of what the fragment says, so FallbackChain.Execute treats it
-// as non-retriable/non-failoverable (see TestFallback_UnclassifiedError's
-// sibling test for *ToolArgumentsError, TestFallbackChain_ToolArgumentsErrorIsNotFailoverable).
+// TestClassifyError_ToolArgumentsErrorNeverClassifiedByFragmentContent keeps
+// the ADR-087 Finding #8 invariant: a refused tool call must not trigger
+// provider cooldown/failover. Founder ruling 2026-10-20, M24 (security W1),
+// deliberately changed the diagnostic: it names the tool, byte size, parser
+// stop offset and cutoff/malformed state, but never quotes the refused
+// payload. The fixture must therefore KEEP trap words in its input while
+// proving they are ABSENT from the error, not require the old leak.
+// ClassifyError must still return nil for any reachable ToolArgumentsError.
 func TestClassifyError_ToolArgumentsErrorNeverClassifiedByFragmentContent(t *testing.T) {
-	// Unterminated string literal containing every classifier trap word this
-	// package matches on, so this test would fail against the old
-	// substring-first behavior no matter which pattern list "won" the race.
-	fragment := `{"note":"authentication timeout 429 rate limit 503 overloaded`
-
+	const sentinel = "M24-CLASSIFIER-PRIVATE-SENTINEL"
+	fragment := `{"note":"` + sentinel + ` authentication timeout 429 rate limit 503 overloaded`
 	_, err := common.DecodeToolCallArguments(json.RawMessage(fragment), "write_file")
 	if err == nil {
 		t.Fatal("expected DecodeToolCallArguments to refuse the fragment")
 	}
 
-	// Sanity: prove the trap is real — the raw error message DOES contain
-	// the keywords a naive substring classifier would match on.
 	msg := strings.ToLower(err.Error())
 	for _, trap := range []string{"authentication", "timeout", "429", "rate limit", "503", "overloaded"} {
-		if !strings.Contains(msg, trap) {
-			t.Fatalf("test fixture is broken: error message %q does not contain trap word %q", msg, trap)
+		if !strings.Contains(fragment, trap) {
+			t.Errorf("test input lost classifier trap word %q", trap)
 		}
+		if strings.Contains(msg, trap) {
+			t.Errorf("value-free diagnostic leaked payload trap word %q (M24 forbids quoting)", trap)
+		}
+	}
+	if strings.Contains(msg, strings.ToLower(sentinel)) {
+		t.Error("value-free diagnostic leaked the planted payload sentinel")
+	}
+	for _, want := range []string{
+		"invalid tool arguments", `tool "write_file"`, "cut off before the end",
+		fmt.Sprintf("%d bytes", len(fragment)),
+		fmt.Sprintf("parsing stopped at byte %d", len(fragment)),
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("value-free diagnostic lacks %q: %s", want, msg)
+		}
+	}
+
+	// Positive instrument: the very same text is a classifier trap when it
+	// arrives as an ordinary, untyped provider error. A classifier that
+	// simply returns nil for everything must not satisfy this test.
+	if ClassifyError(errors.New(fragment), "openai", "gpt-4") == nil {
+		t.Error("untyped trap control was not classified; the fixture must exercise a real classifier trap")
 	}
 
 	result := ClassifyError(err, "openai", "gpt-4")
 	if result != nil {
 		t.Errorf("ClassifyError(*ToolArgumentsError) = %+v, want nil — "+
 			"a refused tool call must never be classified as a retriable/failoverable provider fault", result)
+	}
+	// The typed short-circuit must also survive an outer wrapper containing
+	// classifier-like text, independently of the decoder's no-echo guard.
+	wrapped := fmt.Errorf("authentication timeout 429 rate limit 503 overloaded: %w", err)
+	if result := ClassifyError(wrapped, "openai", "gpt-4"); result != nil {
+		t.Errorf("wrapped ToolArgumentsError classified as %+v, want nil regardless of wrapper text", result)
 	}
 }
 
