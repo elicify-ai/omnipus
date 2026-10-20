@@ -91,6 +91,7 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 	chType, _ := config.ParseInstanceKey(id)
 	configure := &ChannelConfigureTool{deps: t.deps}
 	var saved config.ChannelInstanceConfig
+	var savedRevision string
 	writeErr := t.deps.withSharedResourceWrite(sharedChannel, id, expected, func() error {
 		return t.deps.WithConfig(func(cfg *config.Config) error {
 			if err := ctx.Err(); err != nil {
@@ -112,6 +113,9 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 				cfg.Channels = make(map[string]config.ChannelInstanceConfig)
 			}
 			cfg.Channels[id] = saved
+			// The revision of the entry THIS call saved: the live result may
+			// certify only this configuration (gate r1 SFH T2-SF-03).
+			savedRevision = channelRevision(cfg, id)
 			return nil
 		})
 	})
@@ -134,7 +138,7 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 	if whatsappChannel(chType) && t.deps.NotePairingRequest != nil {
 		t.deps.NotePairingRequest(id, tools.ToolCallID(ctx), tools.ToolTranscriptSessionID(ctx))
 	}
-	return t.liveResult(id, ws, agentID, chType)
+	return t.liveResult(id, ws, agentID, chType, savedRevision)
 }
 
 // validateBinding refuses a target that is not a valid main agent of the
@@ -179,9 +183,9 @@ func (t *ChannelConnectTool) validateBinding(ws, agentID string) *tools.ToolResu
 
 // liveResult reloads, then reports what the real start proved and what was
 // not tested. A channel that did not start is never "working" (BDD-8.3).
-func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType string) *tools.ToolResult {
+func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision string) *tools.ToolResult {
 	fields := map[string]any{"id": id, "workspace_id": ws, "agent_id": agentID,
-		"revision": channelRevision(t.deps.GetCfg(), id), "saved": "configuration, binding and enable saved"}
+		"revision": savedRevision, "saved": "configuration, binding and enable saved"}
 	notTested := []string{"inbound message delivery and routing to the agent", "outbound replies"}
 	const scope = "the channel's start after the configuration reload"
 	wait := t.deps.WaitForReloadFunc
@@ -198,6 +202,14 @@ func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType string) *tools.T
 		return changeSuccess(fields, savedNotWorking("not live-tested: channel status is unavailable", scope, notTested...))
 	}
 	running, failure, known := t.deps.ChannelLiveStatus(id)
+	// Another save between this write and the reload replaced the entry: the
+	// running channel is not proof for the configuration this call saved.
+	if current := channelRevision(t.deps.GetCfg(), id); current != savedRevision {
+		fields["revision"] = current
+		return changeSuccess(fields, savedNotWorking(
+			"the connection was changed by another save while it was being applied; re-read it with list_channels",
+			scope, notTested...))
+	}
 	switch {
 	case whatsappChannel(chType) && running:
 		fields["pairing"] = "QR pairing started; the connection works only after the QR code is scanned"
