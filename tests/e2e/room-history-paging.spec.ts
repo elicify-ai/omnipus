@@ -23,29 +23,41 @@
  *   WebSocket, which cannot be stubbed at the network layer, so there is no
  *   smaller honest route: the room really is seeded past the cap.
  *
- * Seeding is strictly sequential (10,005 entries = the cap + 5 below-window),
- * so seq order matches seed order: the attach window shows seed 10005 down to
- * seed 6, and the one older history page (the default limit,
- * pkg/rooms/history.go HistoryDefaultLimit = 100) carries seeds 1..5.
+ * Seeding happens ONCE per run in test.beforeAll, not per attempt: the seed
+ * is the expensive phase (10,005 sequential posts), and Playwright's CI
+ * retries re-run the whole test — per-test seeding made every retry pay the
+ * seed again inside its own timeout and the attempt cascade red. The room is
+ * created under a FIXED name and reused when its seed is complete (the
+ * newest entry is the last seed or a later live message); a room whose seed
+ * died mid-way is left behind and a fresh uniquely-named room is seeded
+ * instead, so a partial seed can never be mistaken for a complete one.
+ * Reused rooms may carry a few extra tail entries from earlier attempts, so
+ * the position anchor sits well inside the attach window (seed 20, not the
+ * window edge), and the terminal assertion (seed 1 arrives with the one
+ * below-window page, default limit 100) tolerates that drift too.
  *
  * The reader's position is asserted, not assumed, and the older response is
- * HELD until the pre-load baseline is captured: the oldest in-window message
- * (seed 6) and the log's scrollTop are recorded while the response is paused,
- * then the page is released, painted, and the same message must sit at the
- * same viewport offset with the scroll offset moved down by the prepended
- * block (T23's "preserves the visible message and offset"). The prepend is
- * observed through the real history request (cursor, one page, then no
- * further request after the hint clears), and the live tail is proven by a
- * message that arrives while the reader sits at the top.
+ * HELD until the pre-load baseline is captured: the anchor message and the
+ * log's scrollTop are recorded while the response is paused, then the page is
+ * released, painted, and the same message must sit at the same viewport
+ * offset with the scroll offset moved down by the prepended block (T23's
+ * "preserves the visible message and offset"). The prepend is observed
+ * through the real history request (cursor, one page, then no further
+ * request after the hint clears), and the live tail is proven by a message
+ * that arrives while the reader sits at the top.
  *
  * CI only — never run locally. Shard: stubs-1.
  */
 import { expect, test, type Page } from '@playwright/test'
 
 const ENTRY_COUNT = 10_005 // attach cap (10,000) + 5 entries below the window
-// The oldest entry of the attach window: what the reader sees at the top
-// right before the older page loads, and what must stay put across it.
-const WINDOW_OLDEST_TEXT = 'pager-message-6'
+const ROOM_NAME = 'Paging-history-replay'
+// The anchor sits well inside the attach window: reused rooms carry a few
+// extra tail entries from earlier attempts (one live message per attempt),
+// which move the window's oldest entry forward by that many, and the position
+// assertions compare the log's scrollTop against half its scrollHeight —
+// both hold only for an anchor above the middle of the content.
+const ANCHOR_TEXT = 'pager-message-20'
 const OLDEST_TEXT = 'pager-message-1'
 
 async function csrfHeaders(page: Page): Promise<Record<string, string>> {
@@ -54,20 +66,77 @@ async function csrfHeaders(page: Page): Promise<Record<string, string>> {
   return csrf ? { 'X-CSRF-Token': csrf.value } : {}
 }
 
-test('scrolling up through paged history keeps the reader anchored and ends at the first entry', async ({ page }) => {
-  test.setTimeout(420_000) // the 10,005-entry seed dominates; the walk itself is one page
+let workspaceId = ''
+let roomId = ''
+
+test.beforeAll(async ({ browser }) => {
+  // The seed dominates the run (10,005 sequential posts): give the hook its
+  // own budget so one slow-but-succeeding seed is not killed at the default.
+  test.setTimeout(420_000)
+
+  const project = test.info().project.use as { storageState?: string; baseURL?: string }
+  const context = await browser.newContext({
+    storageState: project.storageState,
+    baseURL: project.baseURL,
+  })
+  const page = await context.newPage()
   const headers = await csrfHeaders(page)
+
   const wsList = await page.request.get('/api/v1/workspaces', { headers })
   expect(wsList.ok()).toBeTruthy()
   const def = ((await wsList.json()) as Array<{ id?: string; is_default?: boolean }>).find((w) => w.is_default === true)
-  expect(def?.id, 'no default workspace').toBeTruthy()
+  const id = def?.id
+  expect(id, 'no default workspace').toBeTruthy()
+  workspaceId = id!
 
-  const create = await page.request.post(`/api/v1/workspaces/${def!.id}/rooms`, {
+  // Create-or-reuse: a room from a previous attempt (or a crashed one) is
+  // reused only when its seed is complete, so retries never re-seed and a
+  // partial seed is never mistaken for a working one.
+  const list = await page.request.get(`/api/v1/workspaces/${workspaceId}/rooms`, { headers })
+  expect(list.ok(), `list rooms failed: ${list.status()}`).toBeTruthy()
+  const existing = ((await list.json()) as Array<{ id: string; name?: string }>).find(
+    (r) => r.name === ROOM_NAME,
+  )
+  if (existing) {
+    const probe = await page.request.get(`/api/v1/rooms/${existing.id}/messages?limit=1`, { headers })
+    expect(probe.ok(), `seed-completeness probe failed: ${probe.status()}`).toBeTruthy()
+    const newest = ((await probe.json()) as { entries: Array<{ text?: string }> }).entries[0]?.text ?? ''
+    if (newest === `pager-message-${ENTRY_COUNT}` || newest.startsWith('pager-message-live')) {
+      roomId = existing.id
+      await context.close()
+      return
+    }
+    // A seed that died mid-way: never reuse it — seed a fresh, uniquely
+    // named room instead (the partial room is left in the disposable CI home).
+  }
+
+  const create = await page.request.post(`/api/v1/workspaces/${workspaceId}/rooms`, {
     headers,
-    data: { name: `Paging-${Date.now()}`, kind: 'adhoc', agent_ids: ['mia', 'jim'] },
+    data: {
+      name: existing ? `${ROOM_NAME}-${Date.now()}` : ROOM_NAME,
+      kind: 'adhoc',
+      agent_ids: ['mia', 'jim'],
+    },
   })
   expect(create.ok(), `create room failed: ${create.status()}`).toBeTruthy()
-  const { id: roomId } = (await create.json()) as { id: string }
+  roomId = ((await create.json()) as { id: string }).id
+
+  // Seed past the attach cap, strictly in order so seq order matches seed
+  // order: the window then shows the newest ENTRY_COUNT - 10,000 entries, and
+  // everything below it arrives with the one older history page.
+  for (let i = 1; i <= ENTRY_COUNT; i++) {
+    const sent = await page.request.post(`/api/v1/rooms/${roomId}/messages`, {
+      headers,
+      data: { client_message_id: `seed-${i}`, text: `pager-message-${i}`, mentions: [] },
+    })
+    expect(sent.ok(), `seed ${i} failed: ${sent.status()}`).toBeTruthy()
+  }
+  await context.close()
+})
+
+test('scrolling up through paged history keeps the reader anchored and ends at the first entry', async ({ page }) => {
+  test.setTimeout(240_000) // the walk and its waits; the seed ran in beforeAll
+  const headers = await csrfHeaders(page)
 
   // Observe the real paging requests instead of sleeping: every history page
   // the SPA fetches lands here with its cursor. Seed POSTs to the same path
@@ -78,17 +147,6 @@ test('scrolling up through paged history keeps the reader anchored and ends at t
       historyRequests.push(req.url())
     }
   })
-
-  // Seed past the attach cap, strictly in order so seq order matches seed
-  // order: the window then shows seed 10005 down to seed 6, and the five
-  // entries below it are seeds 1..5.
-  for (let i = 1; i <= ENTRY_COUNT; i++) {
-    const sent = await page.request.post(`/api/v1/rooms/${roomId}/messages`, {
-      headers,
-      data: { client_message_id: `seed-${i}`, text: `pager-message-${i}`, mentions: [] },
-    })
-    expect(sent.ok(), `seed ${i} failed: ${sent.status()}`).toBeTruthy()
-  }
 
   // Hold the REAL older page: fetch it when the SPA asks, but do not hand it
   // to the browser until the pre-load position baseline has been captured.
@@ -109,10 +167,9 @@ test('scrolling up through paged history keeps the reader anchored and ends at t
     await route.fulfill({ response })
   })
 
-  await page.goto(`/#/workspaces/${def!.id}/rooms/${roomId}`)
+  await page.goto(`/#/workspaces/${workspaceId}/rooms/${roomId}`)
   const log = page.getByRole('log', { name: 'Group conversation' })
   await expect(log).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByText('pager-message-10005')).toBeVisible({ timeout: 20_000 })
   // The newest window carries the hint: older history exists above the cap.
   const hint = page.getByText(/Earlier messages aren't shown/)
   await expect(hint).toBeVisible()
@@ -125,7 +182,7 @@ test('scrolling up through paged history keeps the reader anchored and ends at t
     { timeout: 30_000 },
   )
   await olderRequested
-  const anchor = page.getByText(WINDOW_OLDEST_TEXT)
+  const anchor = page.getByText(ANCHOR_TEXT)
   await expect(anchor).toBeVisible({ timeout: 20_000 })
 
   // Pre-load baseline: the visible message's viewport offset and the log's
@@ -155,8 +212,8 @@ test('scrolling up through paged history keeps the reader anchored and ends at t
   const requestsAtTerminal = historyRequests.length
   expect(requestsAtTerminal).toBe(1)
 
-  // Terminal: the five below-window entries are all there is — the hint is
-  // gone and further top scrolling issues no further history request.
+  // Terminal: the below-window entries are all there is — the hint is gone
+  // and further top scrolling issues no further history request.
   await expect(hint).toHaveCount(0, { timeout: 20_000 })
   await anchor.hover() // wheel events scroll whatever is under the pointer
   for (let i = 0; i < 4; i++) {
@@ -173,12 +230,13 @@ test('scrolling up through paged history keeps the reader anchored and ends at t
   await anchor.scrollIntoViewIfNeeded()
   await expect(anchor).toBeVisible()
   const scrollTopAtTail = await log.evaluate((el) => el.scrollTop)
+  const liveText = `pager-message-live-${Date.now()}`
   const live = await page.request.post(`/api/v1/rooms/${roomId}/messages`, {
     headers,
-    data: { client_message_id: `seed-live-${Date.now()}`, text: 'pager-message-live', mentions: [] },
+    data: { client_message_id: liveText, text: liveText, mentions: [] },
   })
   expect(live.ok(), `live message failed: ${live.status()}`).toBeTruthy()
-  await expect(page.getByText('pager-message-live')).toBeAttached({ timeout: 20_000 })
+  await expect(page.getByText(liveText)).toBeAttached({ timeout: 20_000 })
   await expect(anchor).toBeVisible()
   expect(Math.abs((await log.evaluate((el) => el.scrollTop)) - scrollTopAtTail)).toBeLessThanOrEqual(2)
 })
