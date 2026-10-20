@@ -2509,6 +2509,7 @@ type WorkspaceDelegationEdge = {
 };
 type WorkspaceMemberConfig = Partial<{
   main_session_id: string;
+  main_session_error: string;
   heartbeat: WorkspaceMemberHeartbeat;
   hidden_from_sidebar: boolean;
 }>;
@@ -5522,6 +5523,7 @@ export const WorkspaceMemberHeartbeat: z.ZodType<WorkspaceMemberHeartbeat> = z
 export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
   .object({
     main_session_id: z.string().max(255),
+    main_session_error: z.string().min(1),
     heartbeat: WorkspaceMemberHeartbeat,
     hidden_from_sidebar: z.boolean(),
   })
@@ -15458,6 +15460,8 @@ Returns HTTP 201 on success.
     method: "get",
     path: "/workspaces/:id",
     alias: "getWorkspace",
+    description: `Reads the workspace and makes one idempotent main-chat preparation attempt for each currently eligible member. A preparation failure does not undo saved membership or fail the workspace read: that member has main_session_error instead of main_session_id. Repeating this read retries preparation after storage is repaired; unreadable or mismatched saved identities are never replaced.
+`,
     requestFormat: "json",
     parameters: [
       {
