@@ -200,19 +200,6 @@ func newWU6Fixture(t *testing.T) *wu6Fixture {
 	hs := health.NewServer("127.0.0.1", 0)
 	mgr.SetupHTTPServer("127.0.0.1:0", hs)
 	al.SetChannelManager(mgr)
-	// The Deps are wired the way production does (pkg/gateway/gateway.go::
-	// wireSystemTools): the config mutator and its persistence hook are part
-	// of the production wiring, and the connect/configure family refuses to
-	// run without them — a fixture that omits them never reaches the real
-	// oracles (BDD-8.1/8.3/8.7).
-	al.WireSysagentDeps(&systools.Deps{
-		Home:             f.home,
-		ConfigPath:       f.configPath,
-		GetCfg:           al.GetConfig,
-		MutateConfig:     al.MutateConfig,
-		SaveConfigLocked: func(c *config.Config) error { return config.SaveConfig(f.configPath, c) },
-		CredStore:        store,
-	})
 	api := &restAPI{agentLoop: al, homePath: f.home, credStore: store}
 	svc := &services{
 		homePath: f.home, ChannelManager: mgr, HealthServer: hs, bundle: bundle, credStore: store,
@@ -221,6 +208,17 @@ func newWU6Fixture(t *testing.T) *wu6Fixture {
 	api.reloadOutcome = svc.reloadOutcome
 	hs.SetDegradedFunc(svc.reloadDegradedStatus)
 	svc.loadConfigForSwap = func() (*config.Config, error) { return config.LoadConfigWithStore(f.configPath, store) }
+	// Match the production config-write dependencies. Journeys that need a
+	// real reload opt in through newWU7LiveFixture; the secret-listing,
+	// attention and pairing fixtures keep their existing runtime boundary.
+	al.WireSysagentDeps(&systools.Deps{
+		Home:             f.home,
+		ConfigPath:       f.configPath,
+		GetCfg:           al.GetConfig,
+		MutateConfig:     al.MutateConfig,
+		SaveConfigLocked: func(c *config.Config) error { return config.SaveConfig(f.configPath, c) },
+		CredStore:        store,
+	})
 	t.Cleanup(func() { stopAndCleanupServices(svc, 5*time.Second, false) })
 	require.NoError(t, mgr.StartAll(context.Background()), "the shared listener and healthy channels must start")
 
