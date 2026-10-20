@@ -48,7 +48,14 @@ func newWU7LiveFixture(t *testing.T) *wu7LiveFixture {
 				return
 			case <-w.svc.manualReloadChan:
 				runReloadCycle(w.al, w.svc, nil, 0, func(c *config.Config) error {
-					return executeReload(ctx, w.al, c, &provider, w.svc, w.bus, false)
+					if err := executeReload(ctx, w.al, c, &provider, w.svc, w.bus, false); err != nil {
+						return err
+					}
+					// #1340 rebuilds the named provider pools on reload.
+					// Reinstall the fixture's qa1277 script after that rebuild,
+					// before runReloadCycle clears the pending flag, so the
+					// next real turn cannot borrow the HTTP/default client.
+					return wireWU6ScriptedProviderPool(w.al, w.provider)
 				}, load)
 			}
 		}
@@ -75,6 +82,33 @@ func newWU7LiveFixture(t *testing.T) *wu7LiveFixture {
 		// after reload instead of retaining a pre-reload manager pointer.
 	})
 	return f
+}
+
+// TestWU7LiveFixture_ScriptedPairSurvivesReload guards the #1340 fixture
+// repair: a real reload must rebuild the registry, then the next real turn
+// must still consume the session-aware script from its named qa1277 pair.
+// Both existing live-connection oracles are re-driven after that reload;
+// neither can pass by inspecting the injected default client alone.
+func TestWU7LiveFixture_ScriptedPairSurvivesReload(t *testing.T) {
+	for _, tc := range []struct {
+		name, access string
+	}{
+		{name: "working", access: issue1277ConnectAccess},
+		{name: "controlled_401", access: issue1277UnauthorizedAccess},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWU7LiveFixture(t)
+			before := f.al.GetRegistry()
+			require.NoError(t, waitForReload(f.al, f.svc.reloadOutcome), "the real reload must complete")
+			require.NotSame(t, before, f.al.GetRegistry(), "the regression must exercise rebuilt agent/provider pools")
+			attempt := wu7ConnectJourney(t, f, "mia", tc.access)
+			if tc.access == issue1277UnauthorizedAccess {
+				wu7RequireRejectedCredential(t, f, attempt)
+			} else {
+				wu7RequireWorking(t, f, attempt)
+			}
+		})
+	}
 }
 
 // wu7ConnectSnapshot records state immediately before/after the approved
