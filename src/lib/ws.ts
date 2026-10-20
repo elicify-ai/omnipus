@@ -4,6 +4,7 @@
 import { maybeDevToast } from '@/lib/dev-toast'
 import { forceLogout } from '@/lib/authLogout'
 import { logError } from '@/lib/telemetry'
+import { AttachReplayBuffer } from '@/lib/attach-replay'
 
 // ── Generated type imports ────────────────────────────────────────────────────
 // All wire-format frame types are sourced from the generated AsyncAPI types.
@@ -426,6 +427,7 @@ export class WsConnection {
 
   /** Validated frames waiting for the next rAF/microtask flush. */
   private _inboundBatch: ServerFrame[] = []
+  private readonly _attachReplay = new AttachReplayBuffer()
   /** True when a rAF/setTimeout flush is already scheduled for this batch. */
   private _rafPending = false
 
@@ -460,6 +462,7 @@ export class WsConnection {
     this.slowRetryAttempts = 0
     this.inSlowPhase = false
     this._inboundBatch = []
+    this._attachReplay.clear()
     this._rafPending = false
     this._nextWorkerId = 0
     this._workerNextExpected = 0
@@ -475,6 +478,7 @@ export class WsConnection {
     this._stopHeartbeat()
     this._detachWindowListeners()
     this._stopWorker()
+    this._attachReplay.clear()
     // Flush any pending batch before tearing down so callers don't lose frames
     // queued just before disconnect() was called.
     this._flushBatch()
@@ -623,7 +627,11 @@ export class WsConnection {
     // in chatStore.handleFrame.
     if (frame.type === 'pong') return
 
-    this._inboundBatch.push(frame)
+    const ready = this._attachReplay.accept(frame)
+    if (ready.length === 0) return
+    // Avoid spreading a large history into push(): long transcripts can exceed
+    // the engine's argument limit. One batch still means one React update.
+    for (const readyFrame of ready) this._inboundBatch.push(readyFrame)
     this._scheduleFlush()
   }
 
@@ -658,6 +666,7 @@ export class WsConnection {
     if (this.ws?.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(frame))
+        if (frame.type === 'attach_session') this._attachReplay.begin(frame.session_id)
         return true
       } catch (err) {
         // An OPEN socket can still throw on send (broken pipe, send-buffer full,
@@ -785,6 +794,10 @@ export class WsConnection {
       }
     }
 
+    // An incomplete attach must not survive into the next socket generation.
+    // Existing disconnect/reconnect reducers expose reachability and release
+    // the loading state; completed batches and ordinary live frames still flush.
+    this._attachReplay.clear()
     // Flush frames already queued before the drop so callers don't lose them.
     // Chat reducers are idempotent on replay, so flushing on unintentional
     // close is safe. Also clear any in-flight worker entries whose responses
