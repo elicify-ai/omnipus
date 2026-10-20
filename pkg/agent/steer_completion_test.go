@@ -34,7 +34,7 @@ type depthEchoProvider struct{}
 func (p *depthEchoProvider) Chat(_ context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
 	var last string
 	for _, m := range messages {
-		if m.Role == "user" {
+		if m.Role == "user" && !m.Volatile { // FR-007: echo the actual handback/task, not its volatile note.
 			last = m.Content
 		}
 	}

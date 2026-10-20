@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -134,13 +135,36 @@ func TestEmptyEnvelope_FailedMidStreamAttemptUsageIsDebitedOnTheTurn(t *testing.
 	require.NoError(t, err)
 	entries, err := al.GetSessionStore().ReadTranscript(meta.ID)
 	require.NoError(t, err)
-	var tokens int64
+	var calls []session.TranscriptEntry
+	var tokens, prompt, output int
 	for _, e := range entries {
-		if e.Role == "assistant" && e.Tokens > 0 {
-			tokens = int64(e.Tokens)
+		if e.Role == "assistant" {
+			calls = append(calls, e)
+			tokens += e.Tokens
+			prompt += e.PromptTokens
+			output += e.CompletionTokens
 		}
 	}
-	assert.EqualValues(t, 5100, tokens, "the failed attempt's 5000 billed tokens plus the delivered 100")
+	// Contract changes + chief ruling: EACH billed call owns its entry. The
+	// failed, no-text attempt is invisible; final narration carries only its call.
+	require.Len(t, calls, 2, "the failed attempt and delivered retry each need one accounting entry")
+	assert.Equal(t, []string{"", "done"}, []string{calls[0].Content, calls[1].Content},
+		"the failed call adds no visible narration and the delivered answer stays exact")
+	assert.Equal(t, []int{4000, 1000, 5000}, []int{calls[0].PromptTokens, calls[0].CompletionTokens, calls[0].Tokens},
+		"failed call's billed usage must persist independently")
+	assert.Equal(t, []int{40, 60, 100}, []int{calls[1].PromptTokens, calls[1].CompletionTokens, calls[1].Tokens},
+		"delivered call must not repeat the failed call's usage")
+	for i, call := range calls {
+		assert.Zero(t, call.CacheReadTokens, "call %d fixture has no cache read", i+1)
+		assert.Zero(t, call.CacheWriteTokens, "call %d fixture has no cache write", i+1)
+	}
+	assert.Equal(t, []int{4040, 1060, 5100}, []int{prompt, output, tokens},
+		"all entries conserve 4000+40 input, 1000+60 output, and 5000+100 total")
+	stored, err := al.GetSessionStore().GetMeta(meta.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []int{4040, 1060, 5100}, []int{stored.Stats.TokensIn, stored.Stats.TokensOut, stored.Stats.TokensTotal},
+		"session aggregation must include the invisible failed call exactly once")
+	assert.Equal(t, 2, provider.CallCount(), "exactly one failed attempt and one delivered retry")
 }
 
 // R2-S1-10: the retry budget is per blip. A second, separate empty envelope later

@@ -219,7 +219,7 @@ func (p *goalFR022JudgeProvider) Chat(
 ) (*providers.LLMResponse, error) {
 	var user string
 	for _, m := range messages {
-		if m.Role == "user" {
+		if m.Role == "user" && !m.Volatile { // FR-007: judge the actual criteria, not volatile metadata.
 			user = m.Content
 		}
 	}

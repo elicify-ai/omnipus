@@ -32,6 +32,9 @@ type LLMResponse struct {
 	Usage            *UsageInfo        `json:"usage,omitempty"`
 	Reasoning        string            `json:"reasoning"`
 	ReasoningDetails []ReasoningDetail `json:"reasoning_details"`
+	// ThinkingBlocks carries opaque signed provider blocks for model replay,
+	// separate from display reasoning and every public wire projection.
+	ThinkingBlocks []string `json:"-"`
 	// Diagnostics is a content-free summary of what the provider's stream
 	// delivered, for the agent loop's empty-answer warning (provider hotfix
 	// H5). In-process only: never serialised, never shown to a user. nil
@@ -88,12 +91,21 @@ type UsageInfo struct {
 	// CacheWriteTokens holds tokens written into a new cache entry this call.
 	// Populated when the provider reports them (Anthropic only); 0 otherwise.
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// CacheWrite5mTokens is the 5-minute write count when the provider
+	// reported the split. 0 when it did not. When the split is reported,
+	// CacheWriteTokens is the sum of this and CacheWrite1hTokens.
+	CacheWrite5mTokens int `json:"cache_write_5m_tokens,omitempty"`
+	// CacheWrite1hTokens is the 1-hour write count when the provider
+	// reported the split. 0 when it did not.
+	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.
-// Currently only "ephemeral" is supported (used by Anthropic).
+// Type "ephemeral" is the Anthropic mark. TTL is "5m" or "1h" where that
+// host documents a lifetime, and empty when the host has no lifetime mark.
 type CacheControl struct {
-	Type string `json:"type"` // "ephemeral"
+	Type string `json:"type"`          // "ephemeral"
+	TTL  string `json:"ttl,omitempty"` // "5m" or "1h"
 }
 
 // ContentBlock represents a structured segment of a system message.
@@ -106,10 +118,14 @@ type ContentBlock struct {
 }
 
 type Message struct {
+	// Volatile marks the single request-only note after history. Adapters never
+	// serialize this flag and put cache boundaries before it.
+	Volatile         bool           `json:"-"`
 	Role             string         `json:"role"`
 	Content          string         `json:"content"`
 	Media            []string       `json:"media,omitempty"`
 	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ThinkingBlocks   []string       `json:"-"`                      // opaque signed blocks; private model history only
 	SystemParts      []ContentBlock `json:"system_parts,omitempty"` // structured system blocks for cache-aware adapters
 	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`

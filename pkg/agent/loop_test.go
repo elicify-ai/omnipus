@@ -228,9 +228,9 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 		t.Fatalf("system prompt missing sender context %q:\n%s", wantSender, systemPrompt)
 	}
 
-	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
+	lastMessage := requireConversationBeforeVolatileTail(t, provider.lastMessages)[len(provider.lastMessages)-2]
 	if lastMessage.Role != "user" || lastMessage.Content != "hello" {
-		t.Fatalf("last provider message = %+v, want unchanged user message", lastMessage)
+		t.Fatalf("last conversation message before volatile user-role tail = %+v, want unchanged user message", lastMessage)
 	}
 
 	// Channel-session routing: the non-webchat discord message must have caused a
@@ -433,9 +433,9 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 		t.Fatalf("system prompt missing requested skill content:\n%s", systemPrompt)
 	}
 
-	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
+	lastMessage := requireConversationBeforeVolatileTail(t, provider.lastMessages)[len(provider.lastMessages)-2]
 	if lastMessage.Role != "user" || lastMessage.Content != "explain how to list files" {
-		t.Fatalf("last provider message = %+v, want rewritten user message", lastMessage)
+		t.Fatalf("last conversation message before FR-007 tail = %+v, want rewritten user message", lastMessage)
 	}
 }
 

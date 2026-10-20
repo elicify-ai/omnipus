@@ -231,9 +231,12 @@ func (p *windowCheckpoint) rebuildBreadcrumb(ctx context.Context) error {
 		}
 		m.Content += "\n\n---\n\n" + next
 	}
-	if !found {
+	if !found && len(m.SystemParts) > 0 {
 		m.SystemParts = append(m.SystemParts, providers.ContentBlock{Type: "text", Text: next})
 	}
+	// A plain-Content system prompt must stay plain here. Creating structured
+	// parts for only the breadcrumb would hide its original instructions from
+	// adapters that prefer SystemParts over Content.
 	p.messages[0] = m
 	p.breadcrumb = next
 	return nil

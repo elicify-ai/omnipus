@@ -1,17 +1,10 @@
-// Package agent — regression test for bug #416.
+// Package agent — regression test for bug #416 and per-call accounting.
 //
-// When an assistant turn interleaves narration text with multiple tool-call
-// rounds (text → tool → text → tool → text), only the FINAL text segment was
-// persisted to the session transcript.  The first two sentences were dropped.
-//
-// Fix: appendIntermediateAssistantTranscript is now called in the tool-call
-// branch of runTurn — once per iteration that has both Content and ToolCalls —
-// before the tool_call entries for that round, so the transcript faithfully
-// reflects the order the user saw live.
-//
-// This test drives the non-streaming (ProcessScheduled) path because it does
-// not require a websocket.  The streaming path shares the same fix point in
-// loop.go so the invariant holds for both paths.
+// ProcessScheduled completes four provider calls: three narrated segments and
+// one no-text tool round. Prompt-caching's Contract changes, FR-015 and the
+// squad lead's Q1 option-A ruling require four assistant accounting entries,
+// each with its own usage, while visible narration stays exactly three segments.
+// This test exercises the non-streaming path; it makes no streaming claim.
 
 package agent
 
@@ -32,16 +25,16 @@ import (
 
 // TestInterleavedAssistantText_AllSegmentsPersisted reproduces bug #416.
 //
-// Scenario: the LLM emits 2 interleaved (text + tool_call) rounds, then a
-// final plain-text response:
+// Scenario: two narrated tool rounds, one no-text tool round, then a final
+// plain-text response. Every completed call has its own accounting entry:
 //
-//	Round 1: "Got it, saving fact 1." + tool call remember-0
-//	Round 2: "Got it, saving fact 2." + tool call remember-1
-//	Final:   "All three facts saved!"
+//	Round 1: "Got it, saving fact 1." + remember, 100 input / 20 output
+//	Round 2: empty visible text + remember, 50 input / 10 output
+//	Round 3: "Got it, saving fact 2." + remember, 40 input / 5 output
+//	Final:   "All three facts saved!", 30 input / 15 output
 //
-// Before the fix, the transcript contained only "All three facts saved!" as the
-// sole assistant entry.  After the fix it must contain all three text segments
-// in order, each appearing BEFORE the tool_call entries it introduced.
+// The #416 narration/order guarantee remains. No-text accounting is not an
+// extra visible narration, and the final entry must not duplicate turn usage.
 func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 	// Cannot use t.Parallel() — this test calls t.Setenv (OMNIPUS_HOME).
 
@@ -51,26 +44,23 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
+	// RememberTool.Parameters requires content, category and room. Valid
+	// arguments are necessary to exercise successful saves, not validation errors.
 	provider := testutil.NewScenario().
-		// Iteration 1: narration text + tool call. Carries token usage so the
-		// turn accumulates real stats (#411 path).
-		WithTextAndToolCall("Got it, saving fact 1.", "remember", `{"key":"name","value":"Alex"}`).
+		WithTextAndToolCall("Got it, saving fact 1.", "remember", `{"content":"Name: Alex","category":"reference","room":"private"}`).
 		WithUsage(100, 20).
-		// Iteration 2: a NO-TEXT tool round (empty Content) — must NOT produce an
-		// empty-content assistant entry (covers the content=="" guard in
-		// appendIntermediateAssistantTranscript). Also carries usage.
-		WithToolCall("remember", `{"key":"color","value":"blue"}`).
+		// The no-text call still requires its own assistant accounting entry.
+		WithToolCall("remember", `{"content":"Favorite color: blue","category":"reference","room":"private"}`).
 		WithUsage(50, 10).
-		// Iteration 3: narration text + tool call again.
-		WithTextAndToolCall("Got it, saving fact 2.", "remember", `{"key":"pet","value":"cat"}`).
+		WithTextAndToolCall("Got it, saving fact 2.", "remember", `{"content":"Pet: cat","category":"reference","room":"private"}`).
 		WithUsage(40, 5).
-		// Iteration 4: final text only (no tool calls) — ends the turn.
 		WithText("All three facts saved!").
 		WithUsage(30, 15)
 
 	cfg := &config.Config{}
+	cfg.Providers = []*config.ModelConfig{{Provider: "openai", Model: "scripted-model"}}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "workspace")
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "scripted-model"}
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Provider: "openai", Model: "scripted-model"}
 	cfg.Agents.Defaults.MaxTokens = 4096
 	cfg.Agents.Defaults.MaxToolIterations = 10
 
@@ -112,6 +102,7 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 		"scheduled", sessionID,
 	)
 	require.NoError(t, err, "ProcessScheduled must not error")
+	assert.Equal(t, 4, provider.CallCount(), "all four scripted provider calls must complete")
 	assert.Equal(t, "All three facts saved!", reply)
 
 	// -----------------------------------------------------------------------
@@ -133,80 +124,72 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 		}
 	}
 
-	// Before the fix: assistantTexts == ["All three facts saved!"]  (len=1)
-	// After the fix:  assistantTexts == [segment1, segment2, "All three facts saved!"]  (len=3)
-	//
-	// Note the NO-TEXT tool round (iteration 2) contributes NO assistant entry —
-	// the content=="" guard in appendIntermediateAssistantTranscript suppresses
-	// it. So we still expect exactly 3 narrated segments.
-	assert.Len(t, assistantTexts, 3,
-		"all 3 narrated assistant text segments must be persisted; the no-text "+
-			"tool round must NOT add an empty-content entry (bug #416 regression); got: %v",
-		assistantTexts)
+	assert.Equal(t, []string{
+		"Got it, saving fact 1.", "Got it, saving fact 2.", "All three facts saved!",
+	}, assistantTexts, "exactly three visible narrations must persist in order (#416)")
 
-	if len(assistantTexts) == 3 {
-		assert.Equal(t, "Got it, saving fact 1.", assistantTexts[0],
-			"first segment must be the round-1 narration")
-		assert.Equal(t, "Got it, saving fact 2.", assistantTexts[1],
-			"second segment must be the round-3 narration")
-		assert.Equal(t, "All three facts saved!", assistantTexts[2],
-			"third segment must be the final answer")
-	}
-
-	// -----------------------------------------------------------------------
-	// Assert: no empty-content assistant entry was written for the no-text
-	// tool round. Belt-and-suspenders against a regression where an empty
-	// narration leaks an assistant bubble.
-	// -----------------------------------------------------------------------
+	var assistantEntries []session.TranscriptEntry
+	toolCalls := make([]session.ToolCall, 0, 3)
 	for _, e := range entries {
 		if e.Role == "assistant" {
-			assert.NotEmpty(t, e.Content,
-				"no empty-content assistant entry may be written (no-text tool round must be silent)")
-		}
-	}
-
-	// -----------------------------------------------------------------------
-	// Assert: token/cost attribution (#411 — no double-counting).
-	// The two INTERMEDIATE narrated entries must carry Tokens==0 && Cost==0;
-	// the FINAL assistant entry carries the whole turn total (sum of every
-	// round's usage). Total tokens = (100+20)+(50+10)+(40+5)+(30+15) = 270.
-	// -----------------------------------------------------------------------
-	const wantTurnTokens = 270
-	var assistantEntries []session.TranscriptEntry
-	for _, e := range entries {
-		if e.Role == "assistant" && e.Content != "" {
 			assistantEntries = append(assistantEntries, e)
 		}
+		toolCalls = append(toolCalls, e.ToolCalls...)
 	}
-	require.Len(t, assistantEntries, 3, "expected exactly 3 narrated assistant entries")
-
-	// Intermediate entries (all but the last) carry no usage.
-	for i := 0; i < len(assistantEntries)-1; i++ {
-		assert.Equal(t, 0, assistantEntries[i].Tokens,
-			"intermediate assistant entry %d must have 0 tokens (no double-counting, #411)", i)
-		assert.Zero(t, assistantEntries[i].Cost,
-			"intermediate assistant entry %d must have 0 cost (no double-counting, #411)", i)
+	require.Len(t, toolCalls, 3, "the scenario must execute and persist all three remember calls")
+	for i, call := range toolCalls {
+		assert.Equal(t, "remember", call.Tool, "tool call %d", i+1)
+		assert.Equal(t, "success", call.Status, "remember call %d must save, not fail argument validation", i+1)
+		assert.Empty(t, call.Error, "remember call %d must not carry an execution error", i+1)
 	}
 
-	// Final entry carries the full turn total.
-	final := assistantEntries[len(assistantEntries)-1]
-	assert.Equal(t, wantTurnTokens, final.Tokens,
-		"final assistant entry must carry the full turn token total (#411)")
-	assert.Positive(t, final.Cost,
-		"final assistant entry must carry a non-zero turn cost (#411)")
+	// Contract changes + Q1 option A: one accounting entry for EACH completed
+	// call, including the no-text call, never a final-entry whole-turn duplicate.
+	// FR-015: this synthetic model has no input price; every token is unpriced.
+	wants := []struct {
+		content                   string
+		prompt, completion, total int
+	}{
+		{"Got it, saving fact 1.", 100, 20, 120},
+		{"", 50, 10, 60},
+		{"Got it, saving fact 2.", 40, 5, 45},
+		{"All three facts saved!", 30, 15, 45},
+	}
+	require.Len(t, assistantEntries, len(wants),
+		"one assistant accounting entry per completed call, including the no-text call (Q1 option A)")
+	var promptTotal, completionTotal, tokenTotal, unpricedTotal int
+	var costTotal float64
+	for i, want := range wants {
+		entry := assistantEntries[i]
+		assert.Equal(t, want.content, entry.Content, "call %d content", i+1)
+		assert.Equal(t, "openai", entry.ProviderID, "call %d provider_id", i+1)
+		assert.Equal(t, "scripted-model", entry.ModelID, "call %d verbatim model_id", i+1)
+		assert.Equal(t, "scripted-model", entry.Model, "call %d display model", i+1)
+		assert.Equal(t, want.prompt, entry.PromptTokens, "call %d uncached input", i+1)
+		assert.Equal(t, want.completion, entry.CompletionTokens, "call %d output", i+1)
+		assert.Zero(t, entry.CacheReadTokens, "call %d has no cache read in its fixture", i+1)
+		assert.Zero(t, entry.CacheWriteTokens, "call %d has no cache write in its fixture", i+1)
+		assert.Zero(t, entry.CacheWrite5mTokens, "call %d has no 5-minute write", i+1)
+		assert.Zero(t, entry.CacheWrite1hTokens, "call %d has no 1-hour write", i+1)
+		assert.Equal(t, want.total, entry.Tokens, "call %d total must not be the turn total", i+1)
+		assert.Equal(t, "unpriced", entry.BillingClass, "call %d billing_class (FR-015)", i+1)
+		assert.Equal(t, want.total, entry.UnpricedTokens, "call %d must keep every unpriced token", i+1)
+		assert.Zero(t, entry.Cost, "call %d must not invent a fallback dollar cost (FR-015)", i+1)
+		promptTotal += entry.PromptTokens
+		completionTotal += entry.CompletionTokens
+		tokenTotal += entry.Tokens
+		unpricedTotal += entry.UnpricedTokens
+		costTotal += entry.Cost
+	}
+	// Derived only from the four WithUsage inputs: 220 + 50 = 120+60+45+45.
+	assert.Equal(t, 220, promptTotal, "all four calls' uncached input must be conserved")
+	assert.Equal(t, 50, completionTotal, "all four calls' output must be conserved")
+	assert.Equal(t, 270, tokenTotal, "all four calls counted exactly once (#411)")
+	assert.Equal(t, 270, unpricedTotal, "all four calls' tokens stay explicitly unpriced")
+	assert.Zero(t, costTotal, "unpriced synthetic usage must not create dollars")
 
-	// -----------------------------------------------------------------------
-	// Assert: ordering — each text segment must appear BEFORE the tool_call
-	// entries that were triggered in the same round.
-	//
-	// Expected transcript order:
-	//   [user]               — (written by processMessage, not checked here)
-	//   [assistant text 1]   ← intermediate, round 1
-	//   [tool_call round 1]  — remember call for fact 1
-	//   [assistant text 2]   ← intermediate, round 2
-	//   [tool_call round 2]  — remember call for fact 2
-	//   [assistant text 3]   ← final answer
-	// -----------------------------------------------------------------------
+	// #416 ordering still holds: each assistant entry precedes the tool call
+	// it introduced. Q1 option A includes the no-text accounting entry too.
 	type entryKind int
 	const (
 		kindAssistant entryKind = iota
@@ -214,7 +197,7 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 		kindOther
 	)
 	kind := func(e session.TranscriptEntry) entryKind {
-		if e.Role == "assistant" && e.Content != "" {
+		if e.Role == "assistant" {
 			return kindAssistant
 		}
 		if e.Type == session.EntryTypeToolCall || len(e.ToolCalls) > 0 {
@@ -231,17 +214,13 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 		}
 	}
 
-	// Expected pattern (user entry is kindOther, excluded above):
-	//   assistant(text1) → tool(r1) → tool(r2, no-text round) → assistant(text2)
-	//   → tool(r3) → assistant(final)
-	// The no-text round 2 contributes only a tool entry, no assistant entry.
+	// The no-text round has an assistant accounting entry, but no narration.
 	expectedPattern := []entryKind{
 		kindAssistant, kindToolCall,
-		kindToolCall,
+		kindAssistant, kindToolCall,
 		kindAssistant, kindToolCall,
 		kindAssistant,
 	}
 	assert.Equal(t, expectedPattern, sequence,
-		"transcript entries must reflect the interleaved order, with the no-text "+
-			"round emitting only a tool entry (bug #416)")
+		"all four per-call entries must preserve assistant-before-tool order (#416, Q1 option A)")
 }
