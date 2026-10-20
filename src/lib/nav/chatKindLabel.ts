@@ -49,3 +49,20 @@ export function feedKindLabel(session: FeedKindSource): string | null {
   if (title === '') return 'Extra chat'
   return `Extra chat ${EM_DASH} ${title}`
 }
+
+/**
+ * The parent part of a child chat's breadcrumb ("<parent> › Helper", founder
+ * decision 2026-10-20): the DIRECT parent's title, derived exactly as the rest
+ * of the SPA derives it (sessionDisplayTitle — a main reads
+ * "<Agent> - Main Session" from the live roster). Null when nothing honest can
+ * be named (a main with neither a roster name nor an agent id); the caller
+ * then shows the plain kind label with no link.
+ */
+export function feedParentLabel(
+  parent: Pick<Session, 'type' | 'title'>,
+  agentName: string | undefined,
+  agentId: string | null | undefined,
+): string | null {
+  const fallback = parent.type === 'delegate' ? 'Helper' : parent.type === 'task' ? 'Task run' : 'Extra chat'
+  return sessionDisplayTitle(parent, agentName, fallback, agentId)
+}
