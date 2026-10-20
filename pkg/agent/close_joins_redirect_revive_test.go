@@ -135,11 +135,11 @@ func TestClose_JoinsTheTurnARedirectWaiterDispatchesDuringClose(t *testing.T) {
 		t.Fatal("SETUP: registered agent missing")
 	}
 	inst.Provider = provider
-	real, ok := inst.Sessions.(closeJoinStore)
+	backing, ok := inst.Sessions.(closeJoinStore)
 	if !ok {
 		t.Fatalf("SETUP: the agent's session store %T is not a context-window store", inst.Sessions)
 	}
-	gate := &closeJoinReadGate{closeJoinStore: real, entered: make(chan struct{}), release: make(chan struct{})}
+	gate := &closeJoinReadGate{closeJoinStore: backing, entered: make(chan struct{}), release: make(chan struct{})}
 	inst.Sessions = gate
 	var releaseGateOnce sync.Once
 	releaseGate := func() { releaseGateOnce.Do(func() { close(gate.release) }) }
