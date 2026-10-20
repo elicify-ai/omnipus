@@ -63,16 +63,19 @@ func (t *RemoveSecretTool) consumers(ref string) []string {
 	return append([]string{}, secretrequest.ReferenceConsumers(t.deps.GetCfg())[ref]...)
 }
 
-// removalReference reads reference_name (no aliases).
+// removalReference reads reference_name (no aliases) EXACTLY as given:
+// Settings can store distinct keys that differ only by surrounding spaces,
+// and list_secrets shows them verbatim, so trimming could delete a different
+// secret than the one approved (gate r1 M4, security T2-S6).
 func removalReference(args map[string]any) string {
 	ref, _ := args["reference_name"].(string)
-	return strings.TrimSpace(ref)
+	return ref
 }
 
 func (t *RemoveSecretTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
 	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	ref := removalReference(args)
-	if ref == "" {
+	if strings.TrimSpace(ref) == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "reference_name is required", "Read list_secrets for the stored names"))
 	}
 	if t.deps == nil || t.deps.CredStore == nil {
