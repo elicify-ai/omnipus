@@ -11,8 +11,8 @@ A group chat (also called a room) is one conversation between you and two or mor
 | Kind | Who creates it | Members | Can you delete it? |
 |---|---|---|---|
 | **Team room** | Created automatically the first time the workspace has two conversation agents | Every conversation agent of the workspace. It follows the team on its own as agents join or leave | No |
-| **Squad** | You. You give it a name (1 to 80 characters) | Two or more agents you choose | Yes |
-| **Ad-hoc room** | You. No name needed: it is named after its members, for example "Mia, Jim" | Two or more agents you choose | Yes |
+| **Squad** | You. You give it a name (1 to 80 characters; a few characters, such as some emoji and rare CJK characters, count as two) | Two or more agents you choose | Yes |
+| **Ad-hoc room** | You. No name needed: it is named after its members, for example "Mia, Jim"; a long name is shortened with "…" | Two or more agents you choose | Yes |
 
 A conversation agent is an agent you can chat with directly. Workers, system agents and Omnipus never join a group chat. A squad or ad-hoc room has at most 256 agents: creating one and adding members both refuse a larger group, and one membership change names at most 256 agents. The team room is the workspace's whole conversation team, including teams larger than 256. Its metadata, snapshots and message fan-out are accepted without a 256-member output limit; the 256-id limit still applies to each creation or mutation request. The workspace lists its team room first, then squads, then ad-hoc rooms, each oldest first.
 

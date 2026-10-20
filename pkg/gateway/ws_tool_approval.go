@@ -51,6 +51,7 @@ const (
 	approvalRootSessionMaxLen = 255
 	approvalActingNameMaxLen  = 128
 	approvalOriginLabelMaxLen = 200
+	approvalRoomNameMaxLen    = 80
 )
 
 // approvalContext is what every approval carrier derives from the acting
@@ -455,8 +456,14 @@ func (h *WSHandler) pendingApprovalSnapshot(e *approvalEntry) generated.SessionS
 
 // approvalRoomRef projects a group chat's pre-admission card room reference
 // (FR-251, K7); absent on every other approval.
+//
+// A room_ref whose room name does not fit the browser's 80-unit limit is
+// omitted, never sent: the browser would otherwise reject the whole frame or
+// reload snapshot (gate round 3, security O1). Room names are validated in
+// UTF-16 units at creation (pkg/rooms/admin.go::roomName); this is the
+// producer's safety net, the same rule as the S4 fields.
 func approvalRoomRef(e *approvalEntry) *generated.RoomRef {
-	if e == nil || e.RoomRef == nil {
+	if e == nil || e.RoomRef == nil || !fitsWireLength(e.RoomRef.RoomName, approvalRoomNameMaxLen) {
 		return nil
 	}
 	ref := *e.RoomRef

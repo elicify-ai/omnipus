@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -74,7 +75,7 @@ func (s *Service) Create(workspaceID string, req generated.RoomCreateRequest, pr
 func roomName(kind string, name *string, members []string, ws WorkspaceInfo) (string, error) {
 	if name != nil {
 		n := strings.TrimSpace(*name)
-		if n == "" || utf8.RuneCountInString(n) > maxRoomNameRunes || !utf8.ValidString(n) || strings.ContainsRune(n, 0) {
+		if n == "" || !utf8.ValidString(n) || nameUnits(n) > maxRoomNameUnits || strings.ContainsRune(n, 0) {
 			return "", unprocessable(textNameLength)
 		}
 		return n, nil
@@ -89,12 +90,39 @@ func roomName(kind string, name *string, members []string, ws WorkspaceInfo) (st
 	return truncateName(strings.Join(names, ", ")), nil
 }
 
+// nameUnits counts a room name the way every wire carrier's limit is checked
+// in the browser: the generated validators compare JavaScript String.length,
+// UTF-16 code units, so a character outside the Basic Multilingual Plane
+// (U+10000 and up) counts twice. A name within 80 code points but over 80
+// units made the browser reject whole approval frames, reload snapshots and
+// room lists (gate round 3, security O1; founder decision 2026-10-20). Units
+// are never fewer than code points, so this one count also satisfies the
+// contract's maxLength.
+func nameUnits(n string) int {
+	units := 0
+	for _, r := range n {
+		units += utf16.RuneLen(r)
+	}
+	return units
+}
+
+// truncateName shortens a composed name to at most maxRoomNameUnits UTF-16
+// units, keeping whole characters and ending with "…" (one unit).
 func truncateName(n string) string {
-	runes := []rune(n)
-	if len(runes) <= maxRoomNameRunes {
+	if nameUnits(n) <= maxRoomNameUnits {
 		return n
 	}
-	return string(runes[:maxRoomNameRunes-1]) + "…"
+	var b strings.Builder
+	units := 0
+	for _, r := range n {
+		w := utf16.RuneLen(r)
+		if units+w > maxRoomNameUnits-1 {
+			break
+		}
+		b.WriteRune(r)
+		units += w
+	}
+	return b.String() + "…"
 }
 
 // Delete deletes a squad or an ad-hoc room: its pending requests are
