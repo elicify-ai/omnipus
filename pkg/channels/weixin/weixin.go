@@ -2,7 +2,9 @@ package weixin
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -34,7 +36,22 @@ type WeixinChannel struct {
 	pauseUntil        time.Time
 	syncBufPath       string
 	contextTokensPath string
+	// firstPoll carries the outcome of the first getupdates after Start
+	// (nil = accepted, errWeixinCredentialsRejected = rejected, other = not
+	// reached). Buffered 1; later outcomes are dropped.
+	firstPoll chan error
 }
+
+// weixinFirstPollWait is the fixed upper limit Start waits for the first
+// getupdates answer (Train 2 gate r1, BDD-8.3; 3 s by the coordinator's
+// ruling). A rejected token is answered at once; a healthy token is held by
+// the long poll, so no answer inside the limit is NOT a rejection — the poll
+// loop simply carries on. Documented in docs/connectors.md.
+const weixinFirstPollWait = 3 * time.Second
+
+// errWeixinCredentialsRejected marks a first poll Weixin answered with HTTP
+// 401/403 or ret/errcode -14 (the bot session is no longer valid).
+var errWeixinCredentialsRejected = errors.New("the Weixin platform rejected the bot token")
 
 func init() {
 	channels.RegisterFactory(
@@ -83,11 +100,54 @@ func NewWeixinChannel(
 func (c *WeixinChannel) Start(ctx context.Context) error {
 	logger.InfoC("weixin", "Starting Weixin channel")
 	c.ctx, c.cancel = context.WithCancel(ctx)
+	c.firstPoll = make(chan error, 1)
 	c.SetRunning(true)
 	c.restoreContextTokens()
 	go c.pollLoop(c.ctx)
+	if err := c.awaitFirstPoll(); err != nil {
+		return err
+	}
 	logger.InfoC("weixin", "Weixin channel started")
 	return nil
+}
+
+// awaitFirstPoll waits at most weixinFirstPollWait for the first poll outcome.
+// Only an explicit rejection fails Start; an unreachable server or a long poll
+// still held at the limit keeps the poll loop running as before.
+func (c *WeixinChannel) awaitFirstPoll() error {
+	timer := time.NewTimer(weixinFirstPollWait)
+	defer timer.Stop()
+	select {
+	case err := <-c.firstPoll:
+		if errors.Is(err, errWeixinCredentialsRejected) {
+			_ = c.Stop(context.Background())
+			return fmt.Errorf("weixin rejected the bot token: %w", err)
+		}
+		if err != nil {
+			logger.WarnCF("weixin", "Could not reach Weixin to check the bot token; polling will retry",
+				map[string]any{"error": err.Error()})
+		}
+	case <-timer.C:
+	case <-c.ctx.Done():
+	}
+	return nil
+}
+
+// reportFirstPoll records a poll outcome for awaitFirstPoll without ever
+// blocking the poll loop.
+func (c *WeixinChannel) reportFirstPoll(err error) {
+	select {
+	case c.firstPoll <- err:
+	default:
+	}
+}
+
+// weixinTokenRejected reports whether a getupdates transport error is an
+// HTTP 401/403 answer.
+func weixinTokenRejected(err error) bool {
+	var httpErr *weixinHTTPError
+	return errors.As(err, &httpErr) &&
+		(httpErr.status == http.StatusUnauthorized || httpErr.status == http.StatusForbidden)
 }
 
 // restoreContextTokens loads persisted context tokens from disk into memory.
@@ -204,6 +264,11 @@ func (c *WeixinChannel) pollLoop(ctx context.Context) {
 				return
 			}
 
+			if weixinTokenRejected(err) {
+				c.reportFirstPoll(fmt.Errorf("%w: %w", errWeixinCredentialsRejected, err))
+			} else {
+				c.reportFirstPoll(err)
+			}
 			consecutiveFails++
 			logger.WarnCF("weixin", "getUpdates failed", map[string]any{
 				"error":   err.Error(),
@@ -231,6 +296,8 @@ func (c *WeixinChannel) pollLoop(ctx context.Context) {
 		}
 
 		if isSessionExpiredStatus(resp.Ret, resp.Errcode) {
+			c.reportFirstPoll(fmt.Errorf("%w: getupdates ret=%d errcode=%d errmsg=%s",
+				errWeixinCredentialsRejected, resp.Ret, resp.Errcode, resp.Errmsg))
 			remaining := c.pauseSession("getupdates", resp.Ret, resp.Errcode, resp.Errmsg)
 			select {
 			case <-ctx.Done():
@@ -241,6 +308,7 @@ func (c *WeixinChannel) pollLoop(ctx context.Context) {
 		}
 
 		if resp.Errcode != 0 || resp.Ret != 0 {
+			c.reportFirstPoll(fmt.Errorf("getupdates ret=%d errcode=%d errmsg=%s", resp.Ret, resp.Errcode, resp.Errmsg))
 			consecutiveFails++
 			logger.ErrorCF("weixin", "getUpdates API error", map[string]any{
 				"ret":     resp.Ret,
@@ -256,6 +324,7 @@ func (c *WeixinChannel) pollLoop(ctx context.Context) {
 		}
 
 		consecutiveFails = 0
+		c.reportFirstPoll(nil)
 
 		// Update the long-poll timeout from server hint
 		if resp.LongpollingTimeoutMs > 0 {
