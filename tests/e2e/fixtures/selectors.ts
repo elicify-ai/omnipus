@@ -250,24 +250,46 @@ export const selectAgent = async (
   // not found" — reproduced locally and in CI llm-chat run 38115921651, and
   // passing on retry). The check is therefore TWO-SURFACED, same oracle, same
   // strength: (1) the row's aria-current before any unmount, then (2) if the
-  // sidebar closed, REOPEN it the way a user does and read the row's
-  // data-selected instead — the same store-driven "this agent owns the
-  // selected chat" truth, independent of the close timing.
+  // sidebar closed, REOPEN it the way a user does and require the TARGET
+  // workspace's own row (agentRowLocator, which also reopens and re-expands)
+  // to carry data-selected="true" — the same store-driven "this agent owns
+  // the selected chat" truth, independent of the close timing, and —
+  // code-reviewer F1 (PR #1366) — scoped to the workspace whose row was
+  // clicked, never the global selected row: on a failed attach
+  // useSelectSession rolls the app back to the previous workspace, whose
+  // same-named agent is still selected there.
   try {
     await expect(mainButton).toHaveAttribute('aria-current', 'true', { timeout: 5_000 });
   } catch (err) {
-    if (!(err instanceof errors.TimeoutError)) throw err;
+    // An expect() matcher that runs out of time throws a plain matcher error
+    // carrying `matcherResult` — NOT errors.TimeoutError (verified on the
+    // pinned Playwright 1.61.1). The old `instanceof errors.TimeoutError`
+    // check therefore rethrew every lost aria-current poll, and this
+    // documented fallback never ran (CI run 39143775263, job 117725852235:
+    // the chat had switched, the sidebar had closed, the test failed here).
+    // Any other error still propagates; a closed page also fails loudly at
+    // the second surface below.
+    if (!(err instanceof Error && 'matcherResult' in err)) throw err;
     // Fall through to the second surface whether the sidebar closed OR the
     // row was transiently replaced while it stayed open — both lose the
     // aria-current poll without the switch having failed.
-    const nav = page.locator('nav[aria-label="Main navigation"]');
-    if (!(await nav.isVisible())) await openSidebar(page);
-    const stillSelected = selectedAgentRow(page);
+    //
+    // SCOPE (code-reviewer F1, PR #1366): the completion check is the TARGET
+    // workspace's OWN row — re-resolved through the workspace-scoped
+    // agentRowLocator, which also reopens a closed sidebar and re-expands a
+    // folded roster — and that row must carry data-selected="true". NEVER the
+    // global selectedAgentRow: a failed attach leaves a same-named agent
+    // selected in ANOTHER workspace (the supported rollback state), and a
+    // global selected-row name match would bless a switch that never
+    // happened. The omitted-workspace case is scoped by the same
+    // DEFAULT_WORKSPACE_NAME default that scoped the click itself, so the
+    // re-resolved row is always the row that was clicked.
+    const targetRow = await agentRowLocator(page, name, workspace);
     await expect(
-      stillSelected,
+      targetRow,
       `selectAgent: clicked ${String(name)}'s row but neither its aria-current nor the ` +
         'selected row confirmed the switch — the active chat did not move',
-    ).toHaveAttribute('aria-label', name, { timeout: 10_000 });
+    ).toHaveAttribute('data-selected', 'true', { timeout: 10_000 });
   }
   // Leave the sidebar the way a row click normally does: closed (see closeSidebar).
   await closeSidebar(page);
