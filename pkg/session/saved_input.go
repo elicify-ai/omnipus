@@ -127,12 +127,23 @@ func (us *UnifiedStore) SavedChatInput(sessionID, id string) (ArchiveAddress, bo
 	if err != nil {
 		return ArchiveAddress{}, false, err
 	}
-	if entry, ok := idx[id]; ok {
-		return entry.Address, false, nil
-	}
 	archive, err := us.archiveStore(sessionID)
 	if err != nil {
 		return ArchiveAddress{}, false, err
+	}
+	if entry, ok := idx[id]; ok {
+		// The pending entry is a hint, the archive is the authority: a placement
+		// whose index retirement failed (crash or disk error after the model
+		// reference landed) is placed, never offered again. The check reads only
+		// the rows written since the save.
+		placed, placedErr := savedSourceAlreadyPlaced(archive, entry.Address, entry.FromOrdinal)
+		if placedErr != nil || !placed {
+			return entry.Address, false, placedErr
+		}
+		if retireErr := us.retireSavedInputLocked(sessionID, id); retireErr != nil {
+			return ArchiveAddress{}, false, fmt.Errorf("saved input %q: retire placed input: %w", id, retireErr)
+		}
+		return entry.Address, true, nil
 	}
 	var addr ArchiveAddress
 	placed := false
