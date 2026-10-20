@@ -59,8 +59,9 @@ export interface RoomTranscriptHistory { // not-wire-format: React props for the
   loadOlder: () => void
 }
 
-export function RoomTranscript({ roomId, entries, agentName, hasOlder = false, history }: {
+export function RoomTranscript({ roomId, snapshotReceived, entries, agentName, hasOlder = false, history }: {
   roomId: string
+  snapshotReceived: boolean
   entries: RoomEntry[]
   agentName: (agentId: string) => string
   hasOlder?: boolean
@@ -70,10 +71,10 @@ export function RoomTranscript({ roomId, entries, agentName, hasOlder = false, h
   const anchorRef = useRef<ReaderAnchor | null>(null)
   const firstSeq = entries[0]?.seq
 
-  // Open at the newest message: when the room changes (opened or switched
-  // to), land at the bottom as soon as this room's first content is on
-  // screen — immediately for a cached room, after the first snapshot
-  // otherwise. Later entries never re-jump.
+  // Keep the opening jump pending through cached rows until this opening's
+  // attach snapshot has merged its catch-up. Readiness is snapshotReceived,
+  // not the wire frame's reserved complete flag. Later live entries and
+  // reattaches never re-arm an already settled opening.
   const roomRef = useRef<string | undefined>(undefined)
   const jumpPendingRef = useRef(false)
   useLayoutEffect(() => {
@@ -84,10 +85,10 @@ export function RoomTranscript({ roomId, entries, agentName, hasOlder = false, h
       anchorRef.current = null
     }
     const log = logRef.current
-    if (!log || !jumpPendingRef.current || entries.length === 0) return
+    if (!log || !jumpPendingRef.current || !snapshotReceived) return
     jumpPendingRef.current = false
     log.scrollTop = log.scrollHeight
-  }, [roomId, entries])
+  }, [roomId, entries, snapshotReceived])
 
   // Keep the reader's current place when older entries are prepended.
   useLayoutEffect(() => {
@@ -122,8 +123,10 @@ export function RoomTranscript({ roomId, entries, agentName, hasOlder = false, h
     requestOlder()
   }
 
+  // Manual prepend compensation owns this scroller. Disable native scroll
+  // anchoring so the browser cannot add the same offset a second time (W1).
   return (
-    <div ref={logRef} onScroll={onScroll} role="log" aria-label="Group conversation" className="flex flex-1 flex-col gap-[var(--space-3)] overflow-y-auto px-[var(--space-3)] py-[var(--space-3)]">
+    <div ref={logRef} onScroll={onScroll} role="log" aria-label="Group conversation" className="flex flex-1 flex-col gap-[var(--space-3)] overflow-y-auto [overflow-anchor:none] px-[var(--space-3)] py-[var(--space-3)]">
       {hasOlder && (
         <Button
           variant="ghost"

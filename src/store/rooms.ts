@@ -138,12 +138,19 @@ function mergeEntries(current: RoomEntry[], incoming: RoomEntry[]): RoomEntry[] 
  * invariants (contracts/components/schemas/RoomHistoryResponse.yaml; #1332):
  * `next_before_seq` is present if and only if `has_older` is true and equals
  * the first returned entry's seq; an empty page is `entries: []` with
- * `has_older: false` and no cursor. The generated schema checks structure
- * only, so a page that breaks the invariant is a protocol failure — never a
- * successful empty history (it would loop on the same boundary) and never a
+ * `has_older: false` and no cursor. Each entry must also belong to the
+ * requested room, precede its exclusive cursor and be strictly ascending.
+ * The generated schema checks structure only, so a broken invariant is a
+ * protocol failure — never successful empty history (which could loop on
+ * the same boundary) and never a
  * silently invented cursor (loadOlder's error/Retry path surfaces it).
  */
-function pageContradictsContinuation(page: RoomHistoryResponse): boolean {
+function pageContradictsContinuation(page: RoomHistoryResponse, roomId: string, beforeSeq?: number): boolean {
+  if (page.entries.some((entry, index) =>
+    entry.room_id !== roomId ||
+    (beforeSeq !== undefined && entry.seq >= beforeSeq) ||
+    (index > 0 && entry.seq <= page.entries[index - 1]!.seq),
+  )) return true
   if (!page.has_older) return page.next_before_seq !== undefined
   return page.entries.length === 0 || page.next_before_seq !== page.entries[0]?.seq
 }
@@ -238,7 +245,7 @@ export const useRoomStore = create<RoomStore>()((set, get) => ({
       page = await fetchRoomHistory(roomId, beforeSeq === undefined ? {} : { beforeSeq })
       if (!page || !Array.isArray(page.entries)) {
         failed = true
-      } else if (pageContradictsContinuation(page)) {
+      } else if (pageContradictsContinuation(page, roomId, beforeSeq)) {
         // A contradictory page must reach the room's visible error/Retry path
         // with rows, boundary and hasOlder intact — not the success branch.
         throw new Error(
@@ -269,7 +276,7 @@ export const useRoomStore = create<RoomStore>()((set, get) => ({
             // Displayed entries win collisions with the older page.
             entries: mergeEntries(page.entries, current.entries),
             hasOlder: page.has_older,
-            olderBoundary: page.has_older ? (page.next_before_seq ?? page.entries[0]?.seq) : undefined,
+            olderBoundary: page.next_before_seq,
             historyToken: undefined,
             historyStatus: 'idle',
             historyFailed: false,

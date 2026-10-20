@@ -95,11 +95,20 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
   const connection = useConnectionStore((state) => state.connection)
   const send = useRoomSend(roomId)
   const [askAgain, setAskAgain] = useState<{ agentId: string; nonce: number }>()
+  const [attachedRoomId, setAttachedRoomId] = useState<string>()
 
   // K45: attach on mount and after every reconnect (the store resumes after
   // the room's own cursor). Never an agent-session attach.
   useEffect(() => {
-    if (connected && connection) useRoomStore.getState().attachRoom(roomId)
+    if (connected && connection) {
+      useRoomStore.getState().attachRoom(roomId)
+      // Cached rows may still carry the previous opening's ready flag on
+      // the first render. Only this opening's attach can make them ready.
+      setAttachedRoomId(roomId)
+    } else {
+      // Offline navigation cannot reuse an attachment from an earlier visit.
+      setAttachedRoomId(undefined)
+    }
   }, [roomId, connected, connection])
   // #1332 D6: leaving the room invalidates its in-flight older-page request.
   useEffect(() => () => useRoomStore.getState().abandonOlder(roomId), [roomId])
@@ -136,6 +145,7 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
       />
       <RoomTranscript
         roomId={roomId}
+        snapshotReceived={connected && attachedRoomId === roomId && live?.snapshotReceived === true}
         entries={live?.entries ?? []}
         agentName={agentName}
         hasOlder={live?.hasOlder}
