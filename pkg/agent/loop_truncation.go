@@ -187,16 +187,8 @@ func (al *AgentLoop) evaluateTruncatedToolCallError(
 
 	*roundRepairUsed = true
 
-	// D3.9: the refused attempt was billed by the provider even though the
-	// call was refused locally — debit its usage exactly once, through the
-	// SAME function the success arm uses (debitLLMUsage). An earlier cut of
-	// this block re-typed the four accounting calls by hand and silently
-	// omitted SetLastUsage, so a turn whose last provider call was a refused
-	// truncated tool call reported the PREVIOUS call's usage as its last.
-	var tae *common.ToolArgumentsError
-	if errors.As(err, &tae) {
-		al.debitLLMUsage(ts, llmModel, tae.Usage)
-	}
+	// D3.9: the provider boundary already debited the refused attempt, before
+	// fallback/recovery. Scheduling its repair must not debit it again.
 
 	logger.WarnCF("agent", "tool call cut off at the output-token limit — re-prompting the model once",
 		map[string]any{
@@ -269,6 +261,9 @@ func (al *AgentLoop) evaluateTruncatedSuccess(
 
 	responseContent := response.Content
 	accumulated := ts.appendToAccumulator(responseContent)
+	if responseContent != "" {
+		ts.markContinuationCallAccounting()
+	}
 
 	if strings.TrimSpace(accumulated) == "" {
 		// D4a: nothing was ever produced. No retry, no fallback
@@ -391,6 +386,8 @@ func (al *AgentLoop) truncationContinuationEligible(
 // post-context-overflow-trim assembly) all call it, so the shape the model
 // sees can never drift between the three.
 func continuationChainMessages(accumulated string) []providers.Message {
+	// A collapsed answer can span several provider replies. Never attach a
+	// single reply's signed thinking blocks to this synthesized text.
 	return []providers.Message{
 		{Role: "assistant", Content: accumulated},
 		truncationContinueMessage(),
@@ -432,6 +429,7 @@ func sameContinuationChainMessage(a, b providers.Message) bool {
 	return a.Role == b.Role &&
 		a.Content == b.Content &&
 		len(a.ToolCalls) == 0 && len(b.ToolCalls) == 0 &&
+		len(a.ThinkingBlocks) == 0 && len(b.ThinkingBlocks) == 0 &&
 		len(a.Media) == 0 && len(b.Media) == 0
 }
 
@@ -482,6 +480,8 @@ func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationCha
 	if pending == "" {
 		return nil
 	}
+	restoreAccounting := ts.holdFollowingCallAccounting()
+	defer restoreAccounting()
 	ts.appendIntermediateAssistantTranscript(pending)
 	if !ts.opts.NoHistory && ts.agent != nil && ts.agent.Sessions != nil {
 		if err := ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", pending); err != nil {

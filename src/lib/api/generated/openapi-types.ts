@@ -4734,7 +4734,7 @@ export interface components {
             tokens_total: number;
             /**
              * Format: double
-             * @description Total USD cost for this session (based on provider pricing).
+             * @description Total USD cost for this session: the sum of priced portions only. A cost of zero together with unpriced_tokens greater than zero means the session is unpriced, not free. subscription_tokens are excluded from cost; those tokens recorded no dollars.
              * @example 0.0023
              */
             cost: number;
@@ -4762,6 +4762,20 @@ export interface components {
             by_model?: {
                 [key: string]: components["schemas"]["ModelTokens"];
             };
+            /** @description Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions. */
+            by_provider?: {
+                [key: string]: components["schemas"]["ModelTokens"];
+            };
+            /**
+             * @description Unpriced token portions in this session. Counts only the unpriced portion of each call, not the whole call. A session with cost 0 and unpriced_tokens greater than 0 is unpriced, not free.
+             * @example 0
+             */
+            unpriced_tokens?: number;
+            /**
+             * @description Tokens from ChatGPT sign-in calls. Those tokens recorded no dollars and are excluded from cost.
+             * @example 0
+             */
+            subscription_tokens?: number;
         };
         /** @description Full session detail as returned by GET /sessions/{id}. Contains the session metadata plus the complete ordered transcript. */
         SessionDetail: {
@@ -16076,6 +16090,12 @@ export interface components {
              * @example 500
              */
             tokens_cache_write?: number;
+            /**
+             * Format: double
+             * @description Cache-hit ratio for this agent: tokens_cache_read / (tokens_in + tokens_cache_read + tokens_cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. tokens_in is uncached input.
+             * @example 0.8
+             */
+            cache_hit_ratio?: number | null;
             /** @description Per-model breakdown for this agent. Absent when no model data is available. */
             by_model?: {
                 [key: string]: components["schemas"]["ModelTokens"];
@@ -16110,6 +16130,20 @@ export interface components {
             by_model?: {
                 [key: string]: components["schemas"]["ModelTokens"];
             };
+            /** @description Per-provider token breakdown for the period. Same cell shape as by_model. Keys are catalog provider ids. Absent when no provider data is available. */
+            by_provider?: {
+                [key: string]: components["schemas"]["ModelTokens"];
+            };
+            /**
+             * @description Sum of unpriced token portions in the period. Counts only the unpriced portion of each call, not the whole call. A period with no priced cost and unpriced_tokens greater than zero is unpriced, not free.
+             * @example 0
+             */
+            unpriced_tokens?: number;
+            /**
+             * @description Sum of tokens from ChatGPT sign-in calls in the period. Those tokens recorded no dollars and are excluded from any priced cost.
+             * @example 0
+             */
+            subscription_tokens?: number;
             /**
              * @description True when one or more session stores failed to load during aggregation, so the totals may under-count. Clients should surface a "some sessions could not be read" indicator rather than presenting the number as authoritative. Absent (or false) when every store loaded cleanly.
              * @example false
@@ -16143,6 +16177,12 @@ export interface components {
              * @example 25
              */
             cache_write?: number;
+            /**
+             * Format: double
+             * @description Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+             * @example 0.8
+             */
+            cache_hit_ratio?: number | null;
             /**
              * @description Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
              * @example 1000

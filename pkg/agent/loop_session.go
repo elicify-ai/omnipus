@@ -336,6 +336,12 @@ func (al *AgentLoop) forgetSession(sessionID string) {
 		return
 	}
 	suffix := manifestBucketKeySep + sessionID
+	al.promptCacheSessions.Range(func(key, _ any) bool {
+		if bucket, ok := key.(string); ok && (bucket == sessionID || strings.HasSuffix(bucket, suffix)) {
+			al.promptCacheSessions.Delete(key)
+		}
+		return true
+	})
 
 	al.loadedToolsMu.Lock()
 	for key := range al.loadedTools {

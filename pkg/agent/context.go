@@ -1293,14 +1293,6 @@ func (cb *ContextBuilder) loadBootstrapFilesWithDef(agentDefinition AgentContext
 	return sb.String()
 }
 
-// buildDynamicContext returns a short dynamic context string with per-request info.
-// This changes every request (time, session) so it is NOT part of the cached prompt.
-// LLM-side KV cache reuse is achieved by each provider adapter's native mechanism:
-//   - Anthropic: per-block cache_control (ephemeral) on the static SystemParts block
-//   - OpenAI / Codex: prompt_cache_key for prefix-based caching
-//
-// See: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-// See: https://platform.openai.com/docs/guides/prompt-caching
 func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 	senderID = strings.TrimSpace(senderID)
 	senderDisplayName = strings.TrimSpace(senderDisplayName)
@@ -1317,19 +1309,13 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 	}
 }
 
+// buildDynamicContext renders live metadata in its original system-prefix slot.
+// Clock and skill-reminder text are rendered separately by buildVolatileContext.
 func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, channel, chatID, senderID, senderDisplayName string) string {
-	localNow := time.Now()
-	// Finding 10(b): the local time carried no timezone, so the model could not
-	// tell how it related to any timestamp it reads elsewhere in context (e.g.
-	// memory entries, which are persisted and displayed in UTC — see
-	// MemoryStore.GetMemoryContext). Both a local time WITH its zone/offset and
-	// an explicit UTC line are rendered so the two are unambiguously reconcilable.
-	now := localNow.Format("2006-01-02 15:04 MST (-07:00) Monday")
-	utcNow := localNow.UTC().Format("2006-01-02 15:04:05Z")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "## Current Time\n%s\nUTC: %s\n\n## Runtime\n%s", now, utcNow, rt)
+	fmt.Fprintf(&sb, "## Runtime\n%s", rt)
 
 	if channel != "" && chatID != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)
@@ -1365,24 +1351,18 @@ func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, 
 		}
 	}
 
-	// ADR-072 D3: the "consider your skills" reminder lands here, in the
-	// UN-CACHED dynamic context, deliberately outside the cache breakpoint
-	// that the "# Skills" menu (BuildSystemPrompt, the static/cached half)
-	// sits inside. See skill_reminder.go for the byte-budget rationale.
-	fmt.Fprintf(&sb, "\n\n%s", skillReminderNote)
-
 	return sb.String()
 }
 
 // BuildMessages assembles the provider message list for a single agent turn.
 //
 // Assembly order (FR-006/FR-019):
-//  1. Single system message: static cached prompt + dynamic context + skills +
-//     breadcrumb block (FR-007, when non-empty).
+//  1. Single system message: static prompt + live metadata + active skills + breadcrumb.
 //  2. recallSpan messages (transient recalled turns, Design B), when non-nil — old
 //     recalled turns precede the recent window (FR-019 chronology).
 //  3. history messages (the Skip-trimmed sliding window, post-eviction).
 //  4. Current user message.
+//  5. One request-only user-role block for the clock and skill reminder.
 //
 // delegationDepth is the turn's current delegation-chain depth (ts.depth, the
 // value the enforcement gate compares against its cap); it lets the
@@ -1417,8 +1397,8 @@ func (cb *ContextBuilder) BuildMessages(
 
 	// The static part (identity, bootstrap, skills, memory) is cached locally to
 	// avoid repeated file I/O and string building on every call (fixes issue #607).
-	// Dynamic parts (time, session, breadcrumb) are appended per request.
-	// Everything is sent as a single system message for provider compatibility:
+	// Only the clock and skill reminder move behind history. Live sender/session
+	// metadata stays in the system stream for provider compatibility:
 	// - Anthropic adapter extracts messages[0] (Role=="system") and maps its content
 	//   to the top-level "system" parameter in the Messages API request. A single
 	//   contiguous system block makes this extraction straightforward.
@@ -1432,23 +1412,23 @@ func (cb *ContextBuilder) BuildMessages(
 	// below for the delegation block, so both read the same turn's workspace.
 	staticPrompt := cb.BuildSystemPromptWithCacheForWorkspace(workspaceID)
 
-	// Build short dynamic context (time, runtime, session, delegation) — changes per request.
+	// Keep runtime, session, sender and delegation metadata in the system prefix.
 	// workspaceID is threaded so the delegation block reads the same graph the gate enforces.
 	dynamicCtx := cb.buildDynamicContext(delegationDepth, workspaceID, channel, chatID, senderID, senderDisplayName)
 
-	// Compose a single system message: static (cached) + dynamic + breadcrumb.
+	// Compose stable system instructions; volatile context is appended at the tail.
 	// Keeping all system content in one message ensures every provider adapter can
 	// extract it correctly (Anthropic adapter -> top-level system param,
 	// Codex -> instructions field).
 	//
 	// SystemParts carries the same content as structured blocks so that
 	// cache-aware adapters (Anthropic) can set per-block cache_control.
-	// The static block is marked "ephemeral" — its prefix hash is stable
-	// across requests, enabling LLM-side KV cache reuse.
+	// The static block is a cache-aware hint. Each adapter applies only the
+	// markers and lifetimes documented by its own endpoint.
 	stringParts := []string{staticPrompt, dynamicCtx}
 
 	contentBlocks := []providers.ContentBlock{
-		{Type: "text", Text: staticPrompt, CacheControl: &providers.CacheControl{Type: "ephemeral"}},
+		{Type: "text", Text: staticPrompt, CacheControl: &providers.CacheControl{Type: "ephemeral", TTL: "1h"}},
 		{Type: "text", Text: dynamicCtx},
 	}
 
@@ -1550,7 +1530,7 @@ func (cb *ContextBuilder) BuildMessages(
 		messages = append(messages, msg)
 	}
 
-	return messages
+	return appendVolatileNote(messages, buildVolatileContext())
 }
 
 func sanitizeHistoryForProvider(history []providers.Message) []providers.Message {

@@ -608,8 +608,9 @@ type AgentLoop struct {
 	// a fresh set on first load; entries are evicted by forgetSession's
 	// suffix sweep on CloseSession (transcript sessions). Only populated when
 	// Compressed is true.
-	loadedTools   map[string]map[string]bool
-	loadedToolsMu sync.Mutex
+	loadedTools         map[string]map[string]bool
+	loadedToolsMu       sync.Mutex
+	promptCacheSessions sync.Map // manifest bucket → sessionPromptCache
 
 	// pendingSearchPromotions is a side table of loadedTools (ADR-071
 	// §4.3.1a): bucket key → tool name → the turn index (bucketTurnCounter
@@ -654,24 +655,6 @@ const (
 	metadataKeyParentPeerKind = "parent_peer_kind"
 	metadataKeyParentPeerID   = "parent_peer_id"
 )
-
-// debitLLMUsage is the ONE accounting path for a provider call's reported
-// usage: turnState.lastUsage and the turn's own stats — collapsed total +
-// cost, the cache read/write split, and the prompt/completion split.
-//
-// It exists because ADR-087 D3.9 must debit a REFUSED attempt's billed usage
-// (common.ToolArgumentsError.Usage) exactly the way the success arm debits a
-// delivered one, and the first cut of that re-typed the calls by hand and
-// dropped SetLastUsage. Two callers, one body, no drift.
-func (al *AgentLoop) debitLLMUsage(ts *turnState, llmModel string, usage *providers.UsageInfo) {
-	if ts == nil || usage == nil {
-		return
-	}
-	ts.SetLastUsage(usage)
-	ts.AddTurnStats(int64(usage.TotalTokens), estimateLLMCallCost(llmModel, usage))
-	ts.AddTurnCacheStats(usage.CacheReadTokens, usage.CacheWriteTokens)
-	ts.AddTurnIOStats(usage.PromptTokens, usage.CompletionTokens)
-}
 
 // ErrReloadNotConfigured is returned by TriggerReload when no reload function
 // has been registered. This is normal in unit-test environments where the full
@@ -2758,68 +2741,6 @@ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
 		return registry.provider, true
 	}
 	return nil, false
-}
-
-// llmRate holds approximate per-1K-token pricing for a model family.
-type llmRate struct {
-	inputPer1K, outputPer1K float64
-}
-
-// llmRateFallback is used when no prefix in llmRateTable matches. It is
-// deliberately conservative so unknown models over-count rather than silently
-// escape the cost cap.
-var llmRateFallback = llmRate{inputPer1K: 0.003, outputPer1K: 0.015}
-
-// llmRateTable is an ordered prefix lookup — first match wins. Longer/more
-// specific prefixes must appear before shorter ones. Rates are approximations
-// for budgeting only and will not match provider invoices exactly.
-var llmRateTable = []struct {
-	prefix string
-	rate   llmRate
-}{
-	// Anthropic Claude 3.x
-	{"claude-3-5-haiku", llmRate{0.0008, 0.004}},
-	{"claude-3-5-sonnet", llmRate{0.003, 0.015}},
-	{"claude-3-haiku", llmRate{0.00025, 0.00125}},
-	{"claude-3-sonnet", llmRate{0.003, 0.015}},
-	{"claude-3-opus", llmRate{0.015, 0.075}},
-	// Anthropic Claude 4.x
-	{"claude-opus-4", llmRate{0.015, 0.075}},
-	{"claude-sonnet-4", llmRate{0.003, 0.015}},
-	{"claude-haiku-4", llmRate{0.0008, 0.004}},
-	// OpenAI GPT-4 family
-	{"gpt-4o-mini", llmRate{0.00015, 0.0006}},
-	{"gpt-4o", llmRate{0.005, 0.015}},
-	{"gpt-4-turbo", llmRate{0.01, 0.03}},
-	{"gpt-4", llmRate{0.03, 0.06}},
-	{"gpt-3.5-turbo", llmRate{0.0005, 0.0015}},
-	// Google Gemini
-	{"gemini-1.5-flash", llmRate{0.000075, 0.0003}},
-	{"gemini-1.5-pro", llmRate{0.00125, 0.005}},
-	{"gemini-2.0-flash", llmRate{0.0001, 0.0004}},
-	{"gemini-2.5-pro", llmRate{0.00125, 0.01}},
-}
-
-// estimateLLMCallCost returns a conservative cost estimate in USD for a single
-// LLM call given the model name and token usage (SEC-26). Unknown models fall
-// back to llmRateFallback so the cost accumulator never under-counts.
-func estimateLLMCallCost(model string, usage *providers.UsageInfo) float64 {
-	if usage == nil {
-		return 0
-	}
-
-	lowerModel := strings.ToLower(model)
-	rate := llmRateFallback
-	for _, entry := range llmRateTable {
-		if strings.HasPrefix(lowerModel, entry.prefix) {
-			rate = entry.rate
-			break
-		}
-	}
-
-	inputCost := float64(usage.PromptTokens) / 1000.0 * rate.inputPer1K
-	outputCost := float64(usage.CompletionTokens) / 1000.0 * rate.outputPer1K
-	return inputCost + outputCost
 }
 
 // braveKeys returns a []string for use as BraveAPIKeys. Returns nil if the key is empty.

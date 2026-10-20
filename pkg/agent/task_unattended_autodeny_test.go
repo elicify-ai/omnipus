@@ -128,8 +128,12 @@ func TestProcessTaskDirect_UnattendedAskTool_AutoDeniedAtOnce_ZeroApproverCalls(
 	approver := &countingApproveApprover{}
 	al.SetToolApprover(approver)
 
+	// Direct-task callers must provision an owned transcript before dispatch;
+	// per-call accounting deliberately refuses nonexistent session IDs.
+	taskSession, err := al.GetSessionStore().NewSession(session.SessionTypeTask, "system", mia.ID)
+	require.NoError(t, err)
 	ctx := tools.WithAutoDenyAsk(context.Background(), true)
-	reply, err := al.processTaskDirect(ctx, "mia", "please use dangerous_tool", "task-sess-d08-1", "task:d08-1")
+	reply, err := al.processTaskDirect(ctx, "mia", "please use dangerous_tool", "task-sess-d08-1", taskSession.ID)
 	require.NoError(t, err, "auto-deny is a loop-level action, not an agent error")
 	assert.Equal(t, "could not use that tool, proceeding without it", reply)
 

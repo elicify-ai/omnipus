@@ -9,7 +9,8 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
+	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
@@ -65,38 +66,26 @@ func TestIsPrivilegedAgent(t *testing.T) {
 	}
 }
 
-// TestEstimateLLMCallCost verifies that estimateLLMCallCost produces
-// strictly positive costs for known and unknown models.
+// TestEstimateLLMCallCost is replaced by the catalog price. A model with no
+// catalog input price is unpriced. It is not the old $3-per-million fallback
+// (1,000 input tokens would have cost $0.003). Nil usage still costs nothing;
+// TestAccountProviderCall_NilUsageAddsNoCost covers that on production accounting.
 func TestEstimateLLMCallCost(t *testing.T) {
-	cases := []struct {
-		model      string
-		promptToks int
-		outputToks int
-	}{
-		{"claude-3-5-sonnet-20241022", 1000, 200},
-		{"claude-opus-4-5", 500, 100},
-		{"gpt-4o", 800, 300},
-		{"gemini-1.5-flash", 1000, 500},
-		{"unknown-model-xyz", 1000, 200}, // must use conservative default
+	got := promptcache.Price(promptcache.PriceInput{
+		ProviderID: "openai",
+		Usage: protocoltypes.UsageInfo{
+			PromptTokens:     1000,
+			CompletionTokens: 200,
+		},
+	})
+	const oldFallback = 0.003
+	if got.Cost == oldFallback {
+		t.Fatalf("cost = %v, want unpriced rather than the old $3-per-million fallback", got.Cost)
 	}
-	for _, tc := range cases {
-		u := &providers.UsageInfo{
-			PromptTokens:     tc.promptToks,
-			CompletionTokens: tc.outputToks,
-			TotalTokens:      tc.promptToks + tc.outputToks,
-		}
-		cost := estimateLLMCallCost(tc.model, u)
-		if cost <= 0 {
-			t.Errorf("estimateLLMCallCost(%q, %d+%d) = %.6f, want > 0",
-				tc.model, tc.promptToks, tc.outputToks, cost)
-		}
+	if got.BillingClass != promptcache.BillingClassUnpriced {
+		t.Fatalf("billing class = %q, want %q", got.BillingClass, promptcache.BillingClassUnpriced)
 	}
-}
-
-// TestEstimateLLMCallCost_NilUsage verifies nil usage returns 0 without panic.
-func TestEstimateLLMCallCost_NilUsage(t *testing.T) {
-	cost := estimateLLMCallCost("claude-3-5-sonnet", nil)
-	if cost != 0 {
-		t.Errorf("estimateLLMCallCost with nil usage = %.6f, want 0", cost)
+	if got.UnpricedTokens == 0 {
+		t.Fatal("unpriced tokens = 0, want the call's tokens kept")
 	}
 }
