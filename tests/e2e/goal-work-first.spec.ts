@@ -28,7 +28,7 @@ import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected, assistantMessages } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
-import { endTurnDeterministically, trackServerFrames } from './helpers/endTurn'
+import { endTurnDeterministically, pinRootSession, trackServerFrames } from './helpers/endTurn'
 
 const stopButton = (page: import('@playwright/test').Page) =>
   page.locator('[data-testid="stop-btn"]')
@@ -74,7 +74,10 @@ test(
     await waitForConnected(page)
 
     // Fresh session so assistantMessages/goal state start clean.
-    await freshChat(page)
+    // freshChat creates the session over REST, so no session_started frame
+    // ever pins it — pin it from the create response (helpers/endTurn.ts::pinRootSession).
+    const { sessionId } = await freshChat(page)
+    pinRootSession(page, sessionId)
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
 
     // No confirm row exists before the goal is even sent — the sanity
