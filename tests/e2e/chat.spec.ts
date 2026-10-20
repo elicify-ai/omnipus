@@ -3,7 +3,7 @@ import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, assistantMessages, userMessages, selectAgent, tokenCounter, waitForConnected } from './fixtures/selectors';
 import { freshChat, originOf } from './fixtures/session-setup';
-import type { ServerFrame } from '../../src/lib/api/generated/asyncapi-types';
+import type { ClientFrame, ServerFrame } from '../../src/lib/api/generated/asyncapi-types';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -17,7 +17,7 @@ test('attach replay paints history once at the bottom without intermediate rows'
   let completed = false;
   await page.routeWebSocket(/\/api\/v1\/chat\/ws/, socket => {
     socket.onMessage(async raw => {
-      const request = JSON.parse(String(raw)) as { type: string; session_id?: string };
+      const request = JSON.parse(String(raw)) as ClientFrame;
       if (request.type === 'ping') { socket.send(JSON.stringify({ type: 'pong' })); return; }
       if (request.type !== 'attach_session' || request.session_id !== sessionId) return;
       const frames: ServerFrame[] = [{ type: 'session_snapshot', session_id: sessionId, seq: 100, boot_id: 'replay-browser', reason: 'unknown_position' }];
