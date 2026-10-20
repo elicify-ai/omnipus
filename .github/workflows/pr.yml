@@ -2942,6 +2942,16 @@ jobs:
         # sandbox.audit_log must be true at BOOT (it is restart-gated) for T26.
         # sandbox.tool_policies.delegate = "allow" is explicit so no migration run can
         # override it (an existing "allow" policy is never downgraded by the migrator).
+        #
+        # gateway.log_level: live-model (llm-*) shards log at info, so a red shard's
+        # gateway-logs artifact carries llm_request/llm_response timing and each
+        # tool call with its argument preview (release run 39391964355 had only
+        # warnings and could not show first-token timing or the goal_claim
+        # arguments). Every other shard keeps the shipped "warn". Registered
+        # credentials are scrubbed by the logger itself (pkg/logger/logger.go
+        # logMessage) and provider-key shapes again at upload below.
+        env:
+          E2E_GATEWAY_LOG_LEVEL: ${{ startsWith(matrix.group, 'llm-') && 'info' || 'warn' }}
         run: |
           set -euo pipefail
           : "${OMNIPUS_E2E_MODEL:?OMNIPUS_E2E_MODEL is not set — the 'Read central e2e model' step must run first}"
@@ -2953,7 +2963,8 @@ jobs:
             "version": 1,
             "gateway": {
               "port": 6060,
-              "dev_mode_bypass": true
+              "dev_mode_bypass": true,
+              "log_level": "${E2E_GATEWAY_LOG_LEVEL}"
             },
             "sandbox": {
               "audit_log": true,
@@ -3310,10 +3321,15 @@ jobs:
           retention-days: 7
 
       - name: Prepare gateway logs for upload
-        # Bound each log (last 5000 lines / 5 MB) and scrub provider-key
-        # shapes before upload — logs are archived on every outcome, so no
-        # credential material may ride along.
+        # Bound each log and scrub provider-key shapes before upload — logs are
+        # archived on every outcome, so no credential material may ride along.
+        # Bound: last 5000 lines / 5 MB, or 200000 lines / 40 MB on the
+        # live-model shards, whose info-level logs would otherwise keep only the
+        # retry and drop the failed first attempt (see gateway.log_level above).
         if: always()
+        env:
+          LOG_MAX_BYTES: ${{ startsWith(matrix.group, 'llm-') && '41943040' || '5242880' }}
+          LOG_MAX_LINES: ${{ startsWith(matrix.group, 'llm-') && '200000' || '5000' }}
         run: |
           set -euo pipefail
           STAGING=/tmp/gateway-logs-staging
@@ -3321,7 +3337,7 @@ jobs:
           for f in /tmp/omnipus.log /tmp/omnipus-e2e/logs/*; do
             [ -f "$f" ] || continue
             out="$STAGING/$(basename "$f")"
-            tail -c 5242880 "$f" | tail -n 5000 \
+            tail -c "$LOG_MAX_BYTES" "$f" | tail -n "$LOG_MAX_LINES" \
               | sed -E 's/sk-or-[A-Za-z0-9_-]+/[REDACTED]/g; s/sk-[A-Za-z0-9_-]{16,}/[REDACTED]/g' > "$out"
           done
 
