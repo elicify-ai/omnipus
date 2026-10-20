@@ -104,3 +104,86 @@ it('#1340: a saved unpaired fallback is shown as incomplete, can be removed, and
   // It can be removed.
   expect(screen.getAllByTestId('fallback-chip-remove-legacy-model')[0]).toBeEnabled()
 })
+
+// ── CHECK F1–F3 follow-up (#1340): preservation, no guessing, removal ──────
+
+type SentChain = Array<{ model?: string; provider?: string }> | undefined
+
+function lastUpdate(): { id: string; payload: Record<string, unknown> } {
+  const calls = vi.mocked(updateAgent).mock.calls
+  const [id, payload] = calls[calls.length - 1]
+  return { id: id as string, payload: payload as unknown as Record<string, unknown> }
+}
+
+it('#1340 F1: an unrelated edit while a fallback is incomplete omits the chain entirely — the stored chain is never erased', async () => {
+  renderProfile()
+  await screen.findByText(legacyAgent.name)
+
+  const description = (await screen.findAllByTestId('agent-description-input'))[0] as HTMLTextAreaElement
+  fireEvent.change(description, { target: { value: 'Edited description' } })
+
+  await waitFor(
+    () => expect(vi.mocked(updateAgent).mock.calls.length).toBeGreaterThan(0),
+    { timeout: 6000 },
+  )
+  const { id, payload } = lastUpdate()
+  expect(id).toBe(legacyAgent.id)
+  expect(payload.description).toBe('Edited description')
+  // Omitted — not [] (which would clear the saved chain) and not a partial
+  // chain (which would drop the complete pair or resend the unpaired one).
+  expect(payload).not.toHaveProperty('fallback_models')
+  for (const [, sent] of vi.mocked(updateAgent).mock.calls) {
+    expect(sent as unknown as Record<string, unknown>).not.toHaveProperty('fallback_models')
+  }
+})
+
+it('#1340 F2: hydration never invents a provider, even when a connected provider offers the unpaired model', async () => {
+  // Here the connected provider DOES list `legacy-model`, so any guess on
+  // hydration would silently pair it with openrouter.
+  vi.mocked(fetchProviders).mockReset().mockResolvedValue([
+    { ...PROVIDERS[0], models: ['paired-model', 'legacy-model'] },
+  ] as never)
+  // The agent arrives only after the provider catalog has loaded, so a
+  // lookup at hydration time would have the catalog available.
+  vi.mocked(fetchAgent).mockReset().mockImplementation(
+    () => new Promise((resolve) => setTimeout(() => resolve(legacyAgent), 50)),
+  )
+  renderProfile()
+  await screen.findByText(legacyAgent.name)
+
+  // Still shown as incomplete, with the explicit choice still owed.
+  expect((await screen.findAllByTestId('fallback-chip-warning-legacy-model'))[0]).toHaveTextContent(/incomplete/i)
+  expect(screen.getAllByTestId('fallback-provider-option-placeholder-legacy-model').length).toBeGreaterThan(0)
+  expect((screen.getAllByTestId('fallback-provider-select-legacy-model')[0] as HTMLSelectElement).value).toBe('')
+
+  // And a save does not send an invented pair.
+  const description = (await screen.findAllByTestId('agent-description-input'))[0] as HTMLTextAreaElement
+  fireEvent.change(description, { target: { value: 'Edited description' } })
+  await waitFor(
+    () => expect(vi.mocked(updateAgent).mock.calls.length).toBeGreaterThan(0),
+    { timeout: 6000 },
+  )
+  expect(lastUpdate().payload).not.toHaveProperty('fallback_models')
+})
+
+it('#1340 F3: Remove on the incomplete fallback removes it, and the next save sends exactly the remaining complete pair', async () => {
+  renderProfile()
+  await screen.findByText(legacyAgent.name)
+  await screen.findAllByTestId('fallback-chip-warning-legacy-model')
+
+  fireEvent.click(screen.getAllByTestId('fallback-chip-remove-legacy-model')[0])
+
+  await waitFor(() => {
+    expect(screen.queryAllByTestId('fallback-chip-remove-legacy-model')).toHaveLength(0)
+    expect(screen.queryAllByTestId('fallback-incomplete-notice')).toHaveLength(0)
+  })
+  expect(screen.getAllByTestId('fallback-chip-remove-paired-model').length).toBeGreaterThan(0)
+
+  await waitFor(
+    () => expect(vi.mocked(updateAgent).mock.calls.length).toBeGreaterThan(0),
+    { timeout: 6000 },
+  )
+  const { id, payload } = lastUpdate()
+  expect(id).toBe(legacyAgent.id)
+  expect(payload.fallback_models as SentChain).toEqual([{ model: 'paired-model', provider: 'openrouter' }])
+})

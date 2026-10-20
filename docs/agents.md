@@ -71,8 +71,9 @@ Every conversation names its agent — there is no global default agent any more
 
 1. Click **+ New Main** or **+ New Subagent** in its section header. For an external worker, click **+ Add Subagent (External)** and pick the command-line tool from the menu; entries for tools not installed on the host are greyed out.
 2. Fill in **Identity**: name, the agent's look (**Role badge**, **Look**, and **Colour**), and model. The preview starts with Omnipus, General assistant, and Pewter (a grey); leaving these choices untouched saves those defaults when you create the agent. There is no agent-picture upload. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
+   Main and Subagent agents can also add up to two **fallback models** on this step, tried in order when the primary model fails. Each fallback needs both a model and a provider. When a connected provider offers the model you type, that provider is filled in; otherwise choose one in the provider picker. A fallback missing either half has to be completed or removed before **Next** is available, and the hint beside the buttons names what is missing.
 3. Fill in **Personality**: the soul, the agent's persona prompt, is required for every type.
-4. Main and Subagent have a third step, **Tools**, for tool permissions, skills, and fallback models. An external worker has no Tools step — it brings its own.
+4. Main and Subagent have a third step, **Tools**, for tool permissions and skills. An external worker has no Tools step — it brings its own.
 5. Create the agent. Its card appears in its section.
 
 To change an agent, open its card. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
