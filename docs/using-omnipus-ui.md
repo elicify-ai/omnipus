@@ -124,7 +124,7 @@ When an agent needs a key, token or password, its secret card appears above the 
 
 The saved-but-unconfirmed warning is restored after a page reload or in a fresh tab while the server still reports the follow-up as unconfirmed, and clears when delivery is confirmed, you stop the follow-up, or the request reaches another final state; reopen the chat to retry without re-entering or resending the secret.
 
-Secret cards are available independently of the agent profile's **Private secrets** list, which is not yet enabled. See [security](security.md) for the limits of secret storage and use.
+Secret cards are available independently of the agent profile's **Private secrets** list. For a non-worker, non-system agent, open its profile's **Tools** tab to review its private-variable versions, grouped by workspace. The list shows names, versions and use state, never values. **Available in channel conversations** controls whether that variable is added to commands in turns that consumed a channel person's message; it is off by default. To add or replace a value, ask the agent in chat and use its secure card. To remove one, ask Omnipus. See [security](security.md) for the limits of secret storage and use.
 
 ### Where an approval came from
 
