@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -91,6 +92,9 @@ func (al *AgentLoop) contextWindowTurnExit(ts *turnState, iteration int, model s
 	if _, typed := typedExitCode(cause); typed {
 		return al.typedTurnExit(ts, iteration, model, cause)
 	}
+	logger.ErrorCF("agent", "context admission failed",
+		map[string]any{"session_id": ts.transcriptSessionID, "agent_id": ts.agent.ID,
+			"turn_id": ts.turnID, "error": cause.Error()})
 	al.emitTurnErrorFrame(ts, ts.eventMeta("contextCheckpoint", "turn.error"), "context_window", "context_window", TranslateTurnError(cause))
 	return turnResult{status: TurnEndStatusError}, TurnEndStatusError, cause
 }

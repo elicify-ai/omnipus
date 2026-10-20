@@ -55,6 +55,15 @@ func (us *UnifiedStore) loadSavedInputIndexLocked(sessionID string) (savedInputI
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return nil, fmt.Errorf("saved input index %q: parse: %w", sessionID, err)
 	}
+	if idx == nil {
+		return nil, fmt.Errorf("saved input index %q: expected a JSON object, got null", sessionID)
+	}
+	for id, entry := range idx {
+		if id == "" || entry.Address.EntryID != id || entry.Address.PartitionKey == "" ||
+			entry.Address.ByteOffset < 0 || entry.FromOrdinal < 0 {
+			return nil, fmt.Errorf("saved input index %q: invalid entry %q", sessionID, id)
+		}
+	}
 	return idx, nil
 }
 

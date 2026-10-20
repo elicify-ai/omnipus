@@ -194,11 +194,6 @@ func (al *AgentLoop) placePendingSavedWakeInputs(ctx context.Context, ts *turnSt
 	// The content-free pending directory answers "none" without reading the
 	// archive; only pending records' own addresses are read otherwise.
 	inputs, err := al.GetSessionStore().PendingChatInputs(ctx, ts.transcriptSessionID)
-	if errors.Is(err, fs.ErrNotExist) {
-		// SaveChatInput refuses a recipient without metadata, so a session
-		// with no metadata cannot hold a saved wake input: nothing to place.
-		return nil
-	}
 	if err != nil || len(inputs) == 0 {
 		return err
 	}
