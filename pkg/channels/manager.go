@@ -1952,7 +1952,36 @@ func (m *Manager) StartChannel(name string) (bool, error) {
 	if err := channel.Start(context.Background()); err != nil {
 		return false, err
 	}
+	m.completeExplicitStartLocked(name, channel)
 	return true, nil
+}
+
+// completeExplicitStartLocked finishes the manager lifecycle a successful
+// Start owes, exactly as StartAll and Reload's added path do (Train 2 gate r2
+// CR-T2-R2-01 / R2-A01 / T2-SF-09): a channel whose earlier Start failed was
+// left registered with no reply worker and, after a failed reload start, with
+// no committed config hash. Without this, an explicit start reports running
+// while replies have no worker, and the next unchanged reload would build and
+// start a second instance beside this one. It creates only missing workers
+// (never a duplicate), re-registers the channel's HTTP handlers (idempotent)
+// and commits the channel's current config hash. Caller must hold m.mu.
+func (m *Manager) completeExplicitStartLocked(name string, channel Channel) {
+	if _, hasWorker := m.workers[name]; !hasWorker && m.dispatchCtx != nil {
+		w := newChannelWorker(m.channelTypeForRateLimit(name), channel)
+		m.workers[name] = w
+		// Snapshot m.config while holding m.mu — see runWorker's doc comment.
+		go m.runWorker(m.dispatchCtx, name, w, m.config)
+		go m.runMediaWorker(m.dispatchCtx, name, w)
+	}
+	m.registerChannelLocked(name, channel)
+	if m.config != nil {
+		if hash, ok := toChannelHashes(m.config)[name]; ok {
+			if m.channelHashes == nil {
+				m.channelHashes = make(map[string]string)
+			}
+			m.channelHashes[name] = hash
+		}
+	}
 }
 
 func (m *Manager) GetChannel(name string) (Channel, bool) {
