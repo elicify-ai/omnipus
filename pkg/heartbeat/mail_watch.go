@@ -34,6 +34,9 @@ type MailWatchService struct {
 	interval time.Duration
 	mu       sync.Mutex
 	stopChan chan struct{}
+	// done closes when the loop goroutine has exited; Stop waits on it (see
+	// pollerStopJoinBudget).
+	done chan struct{}
 }
 
 // NewMailWatchService creates a watch service cycling watcher every interval.
@@ -60,7 +63,8 @@ func (s *MailWatchService) Start() {
 	}
 
 	s.stopChan = make(chan struct{})
-	go s.runLoop(s.stopChan)
+	s.done = make(chan struct{})
+	go s.runLoop(s.stopChan, s.done)
 
 	logger.InfoCF("heartbeat", "Mail-watch service started (new-mail watcher)", map[string]any{
 		"interval_seconds": s.interval.Seconds(),
@@ -70,12 +74,22 @@ func (s *MailWatchService) Start() {
 // Stop halts the watch loop. Idempotent.
 func (s *MailWatchService) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.stopChan == nil {
+		s.mu.Unlock()
 		return
 	}
 	close(s.stopChan)
 	s.stopChan = nil
+	done := s.done
+	s.done = nil
+	s.mu.Unlock()
+
+	// Wait for a cycle already in flight to finish, so it cannot keep doing
+	// mailbox I/O or writing mailbox state after Stop returns (failed-boot
+	// teardown, shutdown and every config reload call Stop). Never cancelled
+	// mid-cycle; the wait is bounded and only happens when a cycle is
+	// actually running.
+	joinPollerLoop(done, "mail-watch")
 }
 
 // IsRunning reports whether the watch loop is active.
@@ -85,25 +99,23 @@ func (s *MailWatchService) IsRunning() bool {
 	return s.stopChan != nil
 }
 
-func (s *MailWatchService) runLoop(stopChan chan struct{}) {
+func (s *MailWatchService) runLoop(stopChan, done chan struct{}) {
+	defer close(done)
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
 	// Cycle once shortly after start so mail that arrived before boot is
-	// reflected in the badge without waiting a full interval.
-	time.AfterFunc(time.Second, func() {
-		select {
-		case <-stopChan:
-			return
-		default:
-			s.watcher.CycleAll(context.Background())
-		}
-	})
+	// reflected in the badge without waiting a full interval. It runs on
+	// this goroutine, so Stop joins it like every later pass.
+	first := time.NewTimer(time.Second)
+	defer first.Stop()
 
 	for {
 		select {
 		case <-stopChan:
 			return
+		case <-first.C:
+			s.watcher.CycleAll(context.Background())
 		case <-ticker.C:
 			s.watcher.CycleAll(context.Background())
 		}
