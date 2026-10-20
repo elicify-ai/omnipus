@@ -41,7 +41,7 @@ func (al *AgentLoop) runSteeredTurnBody(ctx context.Context, rec *session.Lifecy
 func (al *AgentLoop) newRoomMeterForOptions(opts processOptions) *roomCostMeter {
 	sessionID := opts.TranscriptSessionID
 	if sessionID == "" {
-		_, sessionID, _ = strings.Cut(opts.SessionKey, ":session:")
+		sessionID = sessionIDFromScopeKey(opts.SessionKey)
 	}
 	m := al.newTurnRoomMeter(bus.InboundMessage{SessionID: sessionID})
 	m.scope = opts.SessionKey

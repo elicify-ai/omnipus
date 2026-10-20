@@ -6,7 +6,6 @@ package agent
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -163,6 +162,5 @@ func attendanceSessionID(opts *processOptions) string {
 	if opts.TranscriptSessionID != "" {
 		return opts.TranscriptSessionID
 	}
-	_, sessionID, _ := strings.Cut(opts.SessionKey, ":session:")
-	return sessionID
+	return sessionIDFromScopeKey(opts.SessionKey)
 }

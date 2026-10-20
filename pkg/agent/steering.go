@@ -1557,6 +1557,26 @@ func (al *AgentLoop) continueWithSteeringMessagesFrom(
 	return resp, err
 }
 
+// sessionIDFromScopeKey returns the session a scope key names, only for the
+// canonical session-key grammar "agent:<agent>:session:<nonempty id>" (parsed
+// with routing.ParseAgentSessionKey). Every other key kind names no session,
+// including a chat or peer key that merely contains ":session:<id>", a
+// prefixless key or a malformed one (gate round 4, architect ruling): reading
+// an id out of any ":session:" substring could attribute a turn to a session
+// the key does not name. The one parser for continuationTranscript,
+// attendanceSessionID and newRoomMeterForOptions.
+func sessionIDFromScopeKey(key string) string {
+	parsed := routing.ParseAgentSessionKey(key)
+	if parsed == nil {
+		return ""
+	}
+	id, ok := strings.CutPrefix(parsed.Rest, "session:")
+	if !ok {
+		return ""
+	}
+	return id
+}
+
 // continuationTranscript binds a steering continuation to the concrete session
 // its session-scoped key "agent:<agent>:session:<id>" names, so the
 // continuation's transcript rows (its reply, tool rows and a refused Ask call's
@@ -1566,8 +1586,8 @@ func (al *AgentLoop) continueWithSteeringMessagesFrom(
 // no session, and a session that does not exist has no transcript: both stay
 // unbound, exactly as before.
 func (al *AgentLoop) continuationTranscript(sessionKey string) (string, *session.UnifiedStore) {
-	_, sessionID, ok := strings.Cut(sessionKey, ":session:")
-	if !ok || sessionID == "" {
+	sessionID := sessionIDFromScopeKey(sessionKey)
+	if sessionID == "" {
 		return "", nil
 	}
 	store := al.ResolveSessionStore(sessionID)
