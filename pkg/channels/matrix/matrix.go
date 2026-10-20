@@ -8,10 +8,12 @@ package matrix
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"mime"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -276,6 +278,20 @@ func (c *MatrixChannel) Start(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
 	c.startTime = time.Now()
 
+	// The access token is otherwise first used by the background sync, which
+	// only logs a rejection; check it here so a rejected credential fails
+	// the start instead of being reported as running (BDD-8.3, gate r1). A
+	// transport error is not a rejection: the sync keeps retrying, as before.
+	if _, whoErr := c.client.Whoami(c.ctx); whoErr != nil {
+		if matrixTokenRejected(whoErr) {
+			c.cancel()
+			return fmt.Errorf("matrix homeserver rejected the access token: %w", whoErr)
+		}
+		logger.WarnCF("matrix", "Could not reach the homeserver to check the access token; sync will retry", map[string]any{
+			"error": whoErr.Error(),
+		})
+	}
+
 	// Initialize crypto helper if database and passphrase are configured
 	if c.cryptoDbPath != "" && c.config.CryptoPassphraseRef != "" {
 		if err := c.initCrypto(ctx); err != nil {
@@ -306,6 +322,16 @@ func (c *MatrixChannel) Start(ctx context.Context) error {
 
 	logger.InfoC("matrix", "Matrix channel started")
 	return nil
+}
+
+// matrixTokenRejected reports whether err is the homeserver rejecting the
+// access token (M_UNKNOWN_TOKEN / M_MISSING_TOKEN, or any HTTP 401).
+func matrixTokenRejected(err error) bool {
+	if errors.Is(err, mautrix.MUnknownToken) || errors.Is(err, mautrix.MMissingToken) {
+		return true
+	}
+	var httpErr mautrix.HTTPError
+	return errors.As(err, &httpErr) && httpErr.IsStatus(http.StatusUnauthorized)
 }
 
 func (c *MatrixChannel) Stop(ctx context.Context) error {
