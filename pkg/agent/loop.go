@@ -600,6 +600,11 @@ type AgentLoop struct {
 	// Value: *sessionWorker.
 	// Workers self-remove after workerIdleTimeout; Close() cancels all remaining.
 	sessionWorkers sync.Map
+	// workerSpawnMu guards workerSpawnClosed: Close sets it before draining
+	// the workers and dispatchSessionWorker checks it while spawning, so no
+	// worker can start after Close's drain snapshot (Train 2 gate r1).
+	workerSpawnMu     sync.Mutex
+	workerSpawnClosed bool
 
 	// admission is the soft-cap gate for concurrent session workers.
 	// Phase 1: gates inbound user-message dispatch only, per unique scope.
@@ -1092,7 +1097,9 @@ func (al *AgentLoop) Close() {
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their
-	// own context; a double-cancel is a no-op.
+	// own context; a double-cancel is a no-op. New spawns are refused first,
+	// so no worker can start after the drain snapshot and outlive Close.
+	al.closeSessionWorkerSpawns()
 	al.stopSessionWorkers()
 
 	// Drain the detached request goroutines tracked by activeRequests — the
