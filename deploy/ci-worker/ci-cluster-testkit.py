@@ -54,14 +54,17 @@ def validate_probe_wrapper(parts, root):
     the actual shell for matched/no-match/usage-error statuses, independently
     of the modeled process table below.
     """
-    directory = root / f"parser-bin-{os.getpid()}"
-    directory.mkdir(exist_ok=True)
-    executable = directory / "pgrep"
-    executable.write_text('#!/bin/sh\nprintf "PARSER_ARGC:%s\\n" "$#"\nprintf "PARSER_ARG:%s\\n" "$@"\nexit "$PARSER_EXIT"\n')
-    executable.chmod(0o755)
+    if parts[:2] != ["sh", "-c"] or len(parts) != 3:
+        return False
+    root.mkdir(parents=True, exist_ok=True)
+    # Stub the pgrep command inside the actual shell, leaving the rendered
+    # body unchanged. This avoids creating/executing a new script for every
+    # assertion while still testing the real shell's quoting and status flow.
+    stub = 'pgrep() { printf "PARSER_ARGC:%s\\n" "$#"; printf "PARSER_ARG:%s\\n" "$@"; return "$PARSER_EXIT"; }\n'
+    (root / "rendered-probe.json").write_text(json.dumps(parts) + "\n")
     for status in (0, 1, 2):
-        env = dict(os.environ, PATH=str(directory) + os.pathsep + os.environ["PATH"], PARSER_EXIT=str(status))
-        result = subprocess.run(parts, capture_output=True, text=True, env=env, timeout=3)
+        env = dict(os.environ, PARSER_EXIT=str(status))
+        result = subprocess.run([parts[0], parts[1], stub + parts[2]], capture_output=True, text=True, env=env, timeout=3)
         rows = result.stdout.splitlines()
         if (result.returncode != 0 or "PARSER_ARGC:2" not in rows
                 or "PARSER_ARG:-f" not in rows or f"PROBE_STATUS: {status}" not in rows):
@@ -105,6 +108,19 @@ def fake_fly(args):
         remote, dest = args[3:5]
         append(root / "events.log", f"COPY {machine} {remote}")
         phase = "collection" if "/worker/" in dest else "recovery"
+        source = root / "remote" / Path(remote).name
+        if has(f"partialfail{phase}") or has(f"partialhang{phase}"):
+            # Deliberately write VALID identity/HEAD/verdict bytes before a
+            # failed operation. Content validity cannot replace transfer success.
+            if not source.is_file():
+                print("partial-transfer fixture source absent", file=sys.stderr)
+                return 2
+            Path(dest).write_bytes(source.read_bytes())
+            append(root / "events.log", f"PARTIAL_VALID_BYTES {phase} {machine}")
+            if has(f"partialhang{phase}"):
+                hang(f"{phase}-{machine}", root)
+            print("Error: fixture transfer failed after writing valid-looking bytes", file=sys.stderr)
+            return 1
         if has("hangsftp") or has(f"hang{phase}"):
             hang(f"{phase}-{machine}", root)
         if has("interruptcollection") and phase == "collection":
@@ -241,6 +257,12 @@ def fake_fly(args):
         return 1
     remote.write_text(body + "ALL GATES GREEN\n")
     print("ALL GATES GREEN", flush=True)
+    if has("killtier"):
+        # A completed remote gate is not permission to ignore a failed LOCAL
+        # tier job. Signal only this fake client's owning tier process after
+        # its valid final verdict has reached the capture.
+        append(root / "events.log", f"INTERRUPTED tier {os.getppid()} TERM")
+        os.kill(os.getppid(), signal.SIGTERM)
     if has("verdicthang"):
         hang(f"console-{machine}", root, has("ignoreterm"))
     return 0
@@ -361,18 +383,162 @@ gofmt() {
                 print(f"FAIL real runner {name}: signal was not deferred while child active")
                 failures += 1
             (root / "release").touch()
+            timed_out = False
             try:
                 status = exit_code(proc.wait(timeout=5))
             except subprocess.TimeoutExpired:
+                timed_out = True
+                print(f"FAIL real runner {name}: timed out waiting for signal exit")
                 stop_group(proc)
-                status = 143
+                # Preserve the observed post-cleanup code, never substitute
+                # TERM's expected 143 for a failed wait.
+                status = exit_code(proc.returncode)
             text = output.read_text()
-            correct = (status == expected and f"RUNCI: KILLED by signal {name} " in text
+            correct = (not timed_out and status == expected and f"RUNCI: KILLED by signal {name} " in text
                        and "ALL GATES GREEN" not in text and "GATE FAILURE(S)" not in text)
             print(f"{'PASS' if correct else 'FAIL'} real runner {name}: exit={status}, expected={expected}, trailer={'present' if f'RUNCI: KILLED by signal {name} ' in text else 'absent'}")
             output.with_suffix(".exit").write_text(str(status) + "\n")
+            output.with_suffix(".outcome.json").write_text(json.dumps({
+                "timed_out": timed_out, "observed_exit": status,
+                "expected_exit": expected, "passed": correct,
+            }) + "\n")
             failures += not correct
             stop_group(proc)
+    return 1 if failures else 0
+
+
+def probe_contract_fixture(args):
+    events, directory = args
+    root = Path(directory)
+    root.mkdir(parents=True, exist_ok=True)
+    commands = []
+    for row in Path(events).read_text().splitlines():
+        if row.startswith("PROBE "):
+            command = row.split(" ", 2)[2]
+            if command not in commands:
+                commands.append(command)
+    if not commands:
+        print("FAIL rendered probe: no executed probe found")
+        return 1
+    for command in commands:
+        parts = shlex.split(command)
+        if parts[:2] != ["sh", "-c"] or not validate_probe_wrapper(parts, root):
+            print("FAIL rendered probe shell/argv/status contract")
+            return 1
+    print(f"PASS rendered probe statuses 0/1/2: {len(commands)} actual command(s)")
+    return 0
+
+
+def user_switch(args):
+    root = Path(args[0])
+    guest_args = args[1:]
+    (root / "user-switch.json").write_text(json.dumps(guest_args) + "\n")
+    if guest_args[:3] != ["-u", "ci", "--"]:
+        raise SystemExit("unexpected user-switch argv")
+    os.execvpe(guest_args[3], guest_args[3:], os.environ)
+
+
+def identity_fixture(args):
+    """Run actual prologue and re-exec; remap only guest filesystem prefixes.
+
+    The complete runner is executed, with no control flow extracted or removed.
+    /cache, /home and the lock's /tmp prefix map into a private scratch guest;
+    BASH_ENV supplies guest git/id/flock/find/chown/df/python/gofmt commands.
+    The user-switch stub records argv and execs the real env/bash child.
+    """
+    runner, directory, full = args
+    root = Path(directory)
+    root.mkdir(parents=True, exist_ok=True)
+    cache = root / "cache"
+    home = root / "home"
+    (cache / "omnipus" / ".git").mkdir(parents=True, exist_ok=True)
+    (home / "ci").mkdir(parents=True, exist_ok=True)
+    (root / "tmp").mkdir(exist_ok=True)
+    (root / "bin").mkdir(exist_ok=True)
+    script = root / "runci.sh"
+    text = Path(runner).read_text()
+    # Filesystem redirections are performed by the shell before command
+    # stubs can intercept them. Remap these guest path literals, not behavior.
+    script.write_text(text.replace("/cache", str(cache))
+                      .replace("/tmp/runci.lock", str(root / "tmp" / "runci.lock"))
+                      .replace("/home/", str(home) + "/"))
+    envfile = root / "guest-env.sh"
+    envfile.write_text('''git() {
+  case "$*" in
+    *'--get-all safe.directory'*) printf '*\\n' ;;
+    *'rev-parse --short'*) printf '%s\\n' "${RUNNER_FULL_REF:0:9}" ;;
+    *'rev-parse --verify'*) printf '%s\\n' "$RUNNER_FULL_REF" ;;
+    *'log -1'*) printf 'identity fixture\\n' ;;
+    *) return 0 ;;
+  esac
+}
+id() {
+  if [ "$*" = '-u' ]; then printf '0\\n'
+  elif [ "$*" = '-u ci' ]; then printf '1000\\n'
+  else return 98; fi
+}
+flock() { return 0; }
+find() { return 0; }
+chown() { return 0; }
+df() { printf 'Use%%\\n1%%\\n'; }
+python() { return 0; }
+gofmt() { return 0; }
+if [ -n "${RUNCI_AS_CI:-}" ]; then
+  printf '%s\\n' "$@" > "$RUNNER_ROOT_FIXTURE/child-argv.txt"
+fi
+''')
+    switch = root / "bin" / "runuser"
+    switch.write_text('#!/bin/sh\nexec python3 -I "$CI_TESTKIT" user-switch "$RUNNER_ROOT_FIXTURE" "$@"\n')
+    switch.chmod(0o755)
+    paths = []
+    failures = []
+    for token in ("0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"):
+        env = dict(os.environ, BASH_ENV=str(envfile), RUNNER_ROOT_FIXTURE=str(root),
+                   RUNNER_FULL_REF=full, CI_TESTKIT=str(Path(__file__).resolve()),
+                   PATH=str(root / "bin") + os.pathsep + os.environ["PATH"])
+        env.pop("RUNCI_AS_CI", None)
+        output = root / f"identity-{token}.log"
+        with output.open("wb") as stream:
+            proc = subprocess.Popen(["bash", str(script), full, "gofmt", token],
+                                    stdout=stream, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+            try:
+                status = exit_code(proc.wait(timeout=10))
+            except subprocess.TimeoutExpired:
+                stop_group(proc)
+                failures.append("root runner did not complete")
+                continue
+            # tee is an actual child. Wait for its retained log to finish too.
+            for _ in range(100):
+                content = output.read_text()
+                announcements = [line[8:] for line in content.splitlines() if line.startswith("RUNLOG: ")]
+                if announcements and Path(announcements[0]).is_file() and "ALL GATES GREEN" in Path(announcements[0]).read_text():
+                    break
+                time.sleep(0.02)
+            else:
+                failures.append("retained RUNLOG never completed")
+                stop_group(proc)
+                continue
+            path = Path(announcements[0])
+            retained = path.read_text()
+            wanted = f"ATTEMPT: {token} gate gofmt ref {full}"
+            expected_suffix = f"-at{token}.log"
+            switch_args = json.loads((root / "user-switch.json").read_text())
+            child = (root / "child-argv.txt").read_text().splitlines()
+            correct = (status == 0 and path.name.startswith(f"gofmt@{full}-")
+                       and path.name.endswith(expected_suffix)
+                       and wanted in content.splitlines() and wanted in retained.splitlines()
+                       and child == [full, "gofmt", token]
+                       and switch_args[-4:] == [str(script), full, "gofmt", token])
+            paths.append(str(path))
+            if not correct:
+                failures.append(f"identity/header/re-exec contract failed for {token}")
+            print(f"{'PASS' if correct else 'FAIL'} real runner identity: token={token} exit={status} child={child}")
+            stop_group(proc)
+    if len(paths) != 2 or len(set(paths)) != 2:
+        failures.append("two supplied tokens did not produce distinct retained artifacts")
+    (root / "identity-outcome.json").write_text(json.dumps({"paths": paths, "failures": failures}, indent=2) + "\n")
+    for failure in failures:
+        print("FAIL real runner identity: " + failure)
     return 1 if failures else 0
 
 
@@ -384,4 +550,10 @@ if __name__ == "__main__":
         raise SystemExit(run_fixture(arguments))
     if mode == "signals":
         raise SystemExit(signal_fixture(arguments))
+    if mode == "identity":
+        raise SystemExit(identity_fixture(arguments))
+    if mode == "user-switch":
+        user_switch(arguments)
+    if mode == "probe-contract":
+        raise SystemExit(probe_contract_fixture(arguments))
     raise SystemExit(f"unknown fixture mode: {mode}")

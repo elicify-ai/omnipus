@@ -294,7 +294,14 @@ found in the inspected logs; the exact cause of death was not established. A
 stopped log alone does not prove which process or signal killed the run.
 
 The dispatcher now checks gate liveness rather than imposing a test-duration
-limit. Each gate invocation gets a fresh random attempt token, passed as the
+limit. Its local log directory must not already exist: creation is exclusive,
+and a reused directory is refused before any machine work without reading or
+deleting previous evidence. A failure to create/store a gate token writes an
+explicit local `FAIL:dispatch` record and never launches that gate. Failed
+local tier jobs independently force a nonzero overall result even if every
+remote verdict row is PASS; those local job statuses are not the unreliable
+SSH-wrapper exit codes. Evidence from other tiers is still collected.
+Each gate invocation gets a fresh random attempt token, passed as the
 third argument to `runci.sh` and saved in the local `.attempt` file. The runner
 puts it in its RUNLOG filename and in `ATTEMPT: <token> gate <gate> ref <sha>`;
 the non-root re-exec retains the argument. A process probe matches the resolved
@@ -341,7 +348,18 @@ test cap. Checks include healthy/queued probes, same-commit stale PASS refusal,
 foreign attempts, hung probes/copies, signal recovery, child reaping and
 interrupt-time collect-before-stop. The signal fixture executes the unchanged
 runner's real non-root path with only guest setup commands stubbed; it sends
-real HUP/INT/TERM rather than extracting or duplicating trap statements. The
-guard companion runs the complete suite once, then reason-specific mutations
+real HUP/INT/TERM rather than extracting or duplicating trap statements.
+A signal-exit wait timeout is an unconditional fixture failure, not a
+substitute TERM status; the actual post-cleanup exit and timeout outcome are
+saved separately. A trailer-then-hang TERM mutation must be rejected while
+HUP/INT controls still pass. Separate fixtures execute the real root prologue
+and re-exec, remapping only hardcoded guest filesystem prefixes into scratch
+and stubbing guest setup/user-switch commands. Two tokens must produce
+distinct real RUNLOGs, identity headers and forwarded child arguments.
+Transfer-failure fixtures write correct identity/HEAD/verdict bytes before
+failing or hanging: unsuccessful recovery cannot adopt them, and unsuccessful
+collection cannot authorize a stop. The guard companion protects these
+boundaries with token-forwarding, identity-output and transfer-status mutants.
+The guard companion runs the complete suite once, then reason-specific mutations
 for state parsing, GO override, disabled watchdog, missing attempt qualifier,
 removed real traps and abandoned console reaping. No fixture contacts Fly.

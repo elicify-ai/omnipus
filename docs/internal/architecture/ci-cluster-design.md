@@ -94,7 +94,13 @@ All are documented with burn history in `deploy/ci-worker/CLAUDE.md`:
 1. **Pre-flight, per machine, before any dispatch**: `fly machine status` → start it if
    stopped (recording ownership) → poll `fly ssh console -C true` until the machine is
    actually SSH-reachable (a started machine is not immediately usable) → md5 check.
-2. **Dispatch, concurrently**: one background job per tier; each gate is its own
+2. **Run evidence and dispatch**: the local run directory is exclusively
+   created. An existing path is refused before machine work without modifying
+   or adopting old logs. An entropy/identity-write failure records a local
+   `FAIL:dispatch` outcome without launching the gate. Nonzero local tier exits
+   independently fail the overall invocation while collection still proceeds;
+   unlike remote SSH wrapper statuses, these are reliable orchestration errors.
+   Dispatch is concurrent: one background job per tier; each gate is its own
    `fly ssh console` with output captured to `<logdir>/<tier>-<gate>.log`. Gates within a
    tier run sequentially (the machine's `runci.lock` would queue a second run for up to 90
    minutes); all gates in a tier run even after one fails, mirroring `runci.sh all`.
@@ -130,6 +136,17 @@ All are documented with burn history in `deploy/ci-worker/CLAUDE.md`:
    (`FAIL:stalled`) naming the gate, machine and last output. The real runner's
    HUP/INT/TERM traps print their trailer and exit 129/130/143; handling may be
    deferred while a foreground child runs. SIGKILL has no catchable trailer.
+   The signal fixture rejects every wait timeout regardless of the eventual
+   cleanup status and retains separate timeout/observed-exit receipts. A
+   TERM-only trailer-then-hang mutation verifies that distinction.
+
+   **Producer and partial-transfer coverage.** The root runner prologue and
+   user-switch re-exec are exercised with guest filesystem prefixes remapped
+   into a private scratch guest and setup/user-switch commands stubbed. Both
+   supplied tokens must survive the real filename/header/child-argv producer.
+   For recovery and collection separately, unsuccessful transfers deliberately
+   leave correct identity/HEAD/verdict bytes behind; transfer status must
+   still reject them. The companion mutation checks cover both boundaries.
    `FAIL:no-result-line`, `FAIL:gate` and other existing verdicts remain.
 
 3. **Collect**: verdicts + HEAD shas from the logs; a summary table; one exit code

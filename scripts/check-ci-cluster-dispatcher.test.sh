@@ -21,17 +21,18 @@ new_tree() {
   cp "$REPO/deploy/ci-worker/runci.sh" "$TREE/runci.sh"
   cp "$REPO/deploy/ci-worker/ci-cluster.sh" "$TREE/ci-cluster.sh"
 }
-run_guard() { # output-name cases dispatcher [runner]
+run_guard() { # output-name cases dispatcher [runner] [signal-fixture]
   GIT_DIR="$GIT_DIR_ABS" CI_SELFCHECK_CASES="$2" CI_CLUSTER_UNDER_TEST="$3" \
     CI_RUNCI_UNDER_TEST="${4:-$REPO/deploy/ci-worker/runci.sh}" \
+    CI_SIGNAL_TESTKIT_UNDER_TEST="${5:-$REPO/deploy/ci-worker/ci-cluster-testkit.py}" \
     bash "$GUARD" >"$TMP_DIR/$1.log" 2>&1
   RC=$?
 }
-mutation_check() { # name cases dispatcher reason [runner]
+mutation_check() { # name cases dispatcher reason [runner] [signal-fixture]
   local name="$1" cases="$2" script="$3" reason="$4" runner="${5:-$REPO/deploy/ci-worker/runci.sh}"
   run_guard "$name-control" "$cases" "$TMP_DIR/control/deploy/ci-worker/ci-cluster.sh"
   check "$name-control" 0 "$RC"
-  run_guard "$name" "$cases" "$script" "$runner"
+  run_guard "$name" "$cases" "$script" "$runner" "${6:-$REPO/deploy/ci-worker/ci-cluster-testkit.py}"
   check "$name-red" 1 "$RC"
   if grep -qE "$reason" "$TMP_DIR/$name.log"; then
     printf '  PASS [%s-reason]: %s\n' "$name" "$reason"; PASS=$((PASS + 1))
@@ -105,6 +106,79 @@ assert s.count(old) == 1
 p.write_text(s.replace(old, '    if kill -0 "$CONSOLE_PID" 2>/dev/null; then\n      : # MUTANT: abandon the verdict-present child'))
 PY
 mutation_check no-reap 18 "$TREE/ci-cluster.sh" 'unexpected \^LEAK'
+new_tree reuse-evidence
+python3 -I - "$TREE/ci-cluster.sh" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]);s=p.read_text();old='mkdir "$LOG_DIR" || die'
+assert s.count(old)==1
+p.write_text(s.replace(old,'mkdir -p "$LOG_DIR" || die'))
+PY
+mutation_check reuse-evidence 36 "$TREE/ci-cluster.sh" 'reused run changed previous evidence'
+new_tree drop-tier-status
+python3 -I - "$TREE/ci-cluster.sh" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]);s=p.read_text();old='dispatch_all_and_wait; DISPATCH_RC=$?'
+assert s.count(old)==1
+p.write_text(s.replace(old,'dispatch_all_and_wait; DISPATCH_RC=0'))
+PY
+mutation_check drop-tier-status 44 "$TREE/ci-cluster.sh" 'expected exit 1, got 0|unexpected OVERALL: PASS'
+new_tree timeout-as-term
+cp "$REPO/deploy/ci-worker/ci-cluster-testkit.py" "$TREE/ci-cluster-testkit.py"
+python3 -I - "$TREE/ci-cluster-testkit.py" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]);s=p.read_text()
+assert s.count('timed_out = True')==1
+assert s.count('status = exit_code(proc.returncode)')==1
+s=s.replace('timed_out = True','timed_out = False')
+s=s.replace('status = exit_code(proc.returncode)','status = 143')
+p.write_text(s)
+PY
+mutation_check timeout-as-term 38 "$TREE/ci-cluster.sh" 'TERM trailer-then-hang fixture must fail: expected 1, got 0' "$TREE/runci.sh" "$TREE/ci-cluster-testkit.py"
+new_tree lose-forwarded-token
+python3 -I - "$TREE/runci.sh" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]);lines=p.read_text().splitlines(True)
+matched=[i for i,line in enumerate(lines) if 'exec runuser ' in line]
+assert len(matched)==1
+i=matched[0];assert ' "$ATTEMPT"' in lines[i]
+lines[i]=lines[i].replace(' "$ATTEMPT"','')
+p.write_text(''.join(lines))
+PY
+mutation_check lose-forwarded-token 43 "$TREE/ci-cluster.sh" 'real runner identity fixture failed' "$TREE/runci.sh"
+new_tree lose-identity-output
+python3 -I - "$TREE/runci.sh" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]);lines=p.read_text().splitlines(True)
+matched=[line for line in lines if 'echo "ATTEMPT:' in line]
+assert len(matched)==1
+p.write_text(''.join(line for line in lines if line not in matched))
+PY
+mutation_check lose-identity-output 43 "$TREE/ci-cluster.sh" 'real runner identity fixture failed' "$TREE/runci.sh"
+new_tree accept-failed-transfer
+python3 -I - "$TREE/ci-cluster.sh" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]);s=p.read_text()
+assert s.count('run_bounded() {')==1
+s=s.replace('run_bounded() {','checked_run_bounded() {')
+old='\nmain "$@"\n';assert s.count(old)==1
+wrapper='''
+run_bounded() {
+  local status
+  checked_run_bounded "$@"; status=$?
+  if [ "$4 $5 $6" = "fly ssh sftp" ]; then return 0; fi
+  return "$status"
+}
+main "$@"
+'''
+p.write_text(s.replace(old,wrapper))
+PY
+mutation_check accept-failed-transfer '39 41' "$TREE/ci-cluster.sh" 'expected exit 1, got 0|unexpected verdict recovered|unexpected OVERALL: PASS'
 printf 'Results: %s passed, %s failed; evidence=%s\n' "$PASS" "$FAIL" "$TMP_DIR"
 [ "$FAIL" -eq 0 ] || exit 1
 printf 'All assertions passed.\n'

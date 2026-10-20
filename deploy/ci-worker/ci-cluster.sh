@@ -472,8 +472,22 @@ dispatch_tier() { # tier machine gates
   local tier="$1" id="$2" gates="$3" gate log rc state strikes watched token tier_rc=0
   for gate in $gates; do
     log="$LOG_DIR/$tier-$gate.log"
-    token=$(new_attempt_token) || { warn "[$tier] cannot generate attempt identity for $gate"; return 1; }
-    printf '%s\n' "$token" >"$LOG_DIR/$tier-$gate.attempt" || return 1
+    # The run directory is exclusively created by this invocation. Write the
+    # failure record BEFORE identity generation so an undispatched gate has
+    # an explicit outcome even if entropy or its identity-file write fails.
+    : >"$log" || { warn "[$tier] cannot create gate evidence for $gate"; return 1; }
+    if ! token=$(new_attempt_token); then
+      printf 'CI-CLUSTER: DISPATCH FAILED — gate %s on %s: cannot create attempt identity; runner was NOT launched\n' "$gate" "$id" >>"$log"
+      : >"$log.dispatch-failed" || warn "[$tier] cannot retain not-launched marker for $gate"
+      warn "[$tier] DISPATCH FAILED for $gate: cannot create attempt identity"
+      return 1
+    fi
+    if ! printf '%s\n' "$token" >"$LOG_DIR/$tier-$gate.attempt"; then
+      printf 'CI-CLUSTER: DISPATCH FAILED — gate %s on %s: cannot store attempt identity; runner was NOT launched\n' "$gate" "$id" >>"$log"
+      : >"$log.dispatch-failed" || warn "[$tier] cannot retain not-launched marker for $gate"
+      warn "[$tier] DISPATCH FAILED for $gate: cannot store attempt identity"
+      return 1
+    fi
     info "[$tier] dispatching gate $gate -> machine $id (attempt $token)"
     fly ssh console --app "$APP" --machine "$id" \
       -C "/cache/runci.sh $EXPECTED_FULL $gate $token" >"$log" 2>&1 &
@@ -549,6 +563,7 @@ tier_worker() {
 verdict_of_log() { # $1 log-file
   local log="$1"
   [ -f "$log" ] || { printf 'FAIL:no-log'; return; }
+  if [ -f "$log.dispatch-failed" ]; then printf 'FAIL:dispatch'; return; fi
   if grep -q '^ALL GATES GREEN$' "$log"; then printf 'PASS'; return; fi
   if grep -q 'GATE FAILURE(S)' "$log"; then printf 'FAIL:gate'; return; fi
   if grep -q 'REAL FAILURE' "$log"; then printf 'FAIL:real'; return; fi
@@ -616,6 +631,12 @@ collect_machine_logs() { # tier machine gates
   local tier="$1" id="$2" gates="$3" gate remote dest token rc=0
   for gate in $gates; do
     [ -f "$LOG_DIR/$tier-$gate.log" ] || continue
+    if [ -f "$LOG_DIR/$tier-$gate.log.dispatch-failed" ]; then
+      # No remote process ever launched for this gate: its complete failure
+      # evidence is already local, so an idle owned machine may still stop.
+      info "[$tier] gate $gate was NOT launched; dispatch failure evidence is local"
+      continue
+    fi
     dest="$LOG_DIR/worker/$tier-$gate.log"
     token=$(attempt_of_gate "$tier" "$gate") || token=""
     remote=$(remote_runlog_for_gate "$tier" "$gate" "$id") || remote=""
@@ -807,7 +828,7 @@ write_run_header() { # $@ = tier filters; records what this run dispatched, for 
 }
 
 dispatch_all_and_wait() { # one tier per machine concurrently; gates sequential within a tier
-  local a pid rc
+  local a pid rc dispatch_rc=0
   # Publish the plan to globals BEFORE dispatching: the EXIT trap's collection
   # phase runs after main has returned, where main's TIER_* locals no longer
   # exist, and it must know which machines this run dispatched gates on.
@@ -821,12 +842,14 @@ dispatch_all_and_wait() { # one tier per machine concurrently; gates sequential 
   done
   for a in "${!TIER_PIDS[@]}"; do
     wait "${TIER_PIDS[$a]}"; rc=$?
+    [ "$rc" -eq 0 ] || dispatch_rc=1
     TIER_PIDS[a]=""
     info "tier ${PID_TIERS[$a]} job exited $rc"
   done
   # Completed tiers have reaped their transports; do not retain stale PIDs
   # for EXIT cleanup to signal after a long collection phase.
   TIER_PIDS=()
+  return "$dispatch_rc"
 }
 
 summarize_run() { # verdicts + HEAD-sha assertion from the logs; returns 0 only if all PASSed
@@ -880,7 +903,7 @@ summarize_run() { # verdicts + HEAD-sha assertion from the logs; returns 0 only 
 main() {
   # EXPECTED_FULL/EXPECTED_SHORT are deliberately NOT local: the EXIT trap's
   # collection phase verifies HEAD shas after main has returned and needs them.
-  local REF LOCAL_MD5 overall COLLECT_RC
+  local REF LOCAL_MD5 overall COLLECT_RC DISPATCH_RC
   local -a TIER_NAMES=() TIER_MACHINES=() TIER_GATES=() ALL_NAMES=()
 
   [ $# -ge 1 ] || { usage >&2; exit 2; }
@@ -908,7 +931,11 @@ main() {
 
   # ---- log dir ----
   LOG_DIR="${CI_CLUSTER_LOG_DIR:-${TMPDIR:-/tmp}/omnipus-ci-cluster/run-$(date +%Y%m%d-%H%M%S)}"
-  mkdir -p "$LOG_DIR" || die "cannot create log dir $LOG_DIR"
+  # Exclusive creation prevents old local identities/verdicts from becoming
+  # evidence for this invocation. Refuse reuse without reading or deleting
+  # the previous run, and do so BEFORE claiming or contacting any machines.
+  mkdir -p "$(dirname "$LOG_DIR")" || die "cannot create log parent for $LOG_DIR"
+  mkdir "$LOG_DIR" || die "refusing existing or unwritable log directory $LOG_DIR — choose a fresh directory; previous evidence preserved"
   write_run_header "$@"
   info "logs: $LOG_DIR"
 
@@ -923,9 +950,13 @@ main() {
   done
 
   # ---- dispatch concurrently, COLLECT the evidence, then verdicts, summarize ----
-  dispatch_all_and_wait
+  dispatch_all_and_wait; DISPATCH_RC=$?
   collect_all_and_verify; COLLECT_RC=$?
   summarize_run; overall=$?
+  if [ "$DISPATCH_RC" -ne 0 ]; then
+    overall=1
+    warn "OVERALL: FAIL — a local tier job failed; its exit status is independent of remote gate verdicts"
+  fi
   if [ "$COLLECT_RC" -ne 0 ]; then
     overall=1
     warn "OVERALL: FAIL — at least one machine's evidence is NOT secured local; that machine is LEFT RUNNING (see LEFT RUNNING above for ids and hand-retrieval commands)"

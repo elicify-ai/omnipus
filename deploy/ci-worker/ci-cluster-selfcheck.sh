@@ -7,6 +7,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLUSTER="${CI_CLUSTER_UNDER_TEST:-$HERE/ci-cluster.sh}"
 RUNCI="${CI_RUNCI_UNDER_TEST:-$HERE/runci.sh}"
 TESTKIT="$HERE/ci-cluster-testkit.py"
+SIGNAL_TESTKIT="${CI_SIGNAL_TESTKIT_UNDER_TEST:-$TESTKIT}"
 [ -f "$CLUSTER" ] && [ -f "$RUNCI" ] && [ -f "$TESTKIT" ] || { printf 'selfcheck: missing fixture or script\n' >&2; exit 2; }
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/ci-cluster-selfcheck.XXXXXX")" || exit 2
 trap '[ -n "${CI_KEEP_TMP:-}" ] || rm -rf "$TMP"' EXIT
@@ -15,11 +16,61 @@ SHORT="$(git -C "$HERE/../.." rev-parse --short "$FULL")" || exit 2
 RUNCI_LOCAL="$(dirname "$CLUSTER")/runci.sh"
 if command -v md5sum >/dev/null 2>&1; then MD5="$(md5sum "$RUNCI_LOCAL" | cut -d ' ' -f 1)"; else MD5="$(md5 -q "$RUNCI_LOCAL")"; fi
 export FAKE_MD5="$MD5" FAKE_SHORT="$SHORT"
-export CI_REAL_GIT="$(command -v git)" CI_TESTKIT="$TESTKIT"
+export CI_REAL_GIT="$(command -v git)" CI_TESTKIT="$TESTKIT" CI_REAL_OD="$(command -v od)"
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/fly" <<'FAKE'
 #!/usr/bin/env bash
-exec python3 -I "$CI_TESTKIT" fake "$@"
+# Execute the rendered probe in this shell against a faithful pgrep function.
+# The separate parser case checks all 0/1/2 statuses outside the watchdog's
+# short control-call deadline; do not spawn that validator on every probe.
+id=""; cmd=""; args=("$@")
+while [ "$#" -gt 0 ]; do
+  case "$1" in --machine) id="$2"; shift ;; -C) cmd="$2"; shift ;; esac
+  shift
+done
+case "$cmd" in
+  pgrep*|sh\ -c*pgrep*)
+    printf 'ssh console --machine %s -C %s\n' "$id" "$cmd" >>"$FAKE_DIR/calls.log"
+    printf 'PROBE %s %s\n' "$id" "$cmd" >>"$FAKE_DIR/events.log"
+    if [ "$(<"$FAKE_DIR/state-$id")" != started ]; then printf 'machine is stopped\n' >&2; exit 1; fi
+    hang_probe() {
+      printf 'HANG %s %s\n' "$1" "$$" >>"$FAKE_DIR/events.log"
+      trap 'printf "TERMINATED %s %s 15\n" "$1" "$$" >>"$FAKE_DIR/events.log"; exit 143' TERM
+      while :; do sleep 0.1; done
+    }
+    case "$cmd" in
+      *"$FAKE_SHORT"*) [ ! -f "$FAKE_DIR/slowpgrep-$id" ] || hang_probe "probe-$id" ;;
+      *) [ ! -f "$FAKE_DIR/hangbusy-$id" ] || hang_probe "busy-$id" ;;
+    esac
+    if [ -f "$FAKE_DIR/unreach-$id" ]; then printf 'connection refused\n' >&2; exit 1; fi
+    pgrep() {
+      if [ "$#" -ne 2 ] || [ "$1" != -f ]; then
+        printf 'pgrep: only one pattern can be provided\n' >&2; return 2
+      fi
+      local pattern="$2" line n=0 matched=1
+      if [ -f "$FAKE_DIR/procs-$id" ]; then
+        while IFS= read -r line; do
+          n=$((n + 1))
+          if [[ "$line" =~ $pattern ]]; then printf '%s\n' "$n"; matched=0; fi
+        done <"$FAKE_DIR/procs-$id"
+      fi
+      if [ "$matched" -eq 0 ]; then
+        printf 'PROBE_RESULT %s alive\n' "$id" >>"$FAKE_DIR/events.log"
+      else
+        printf 'PROBE_RESULT %s gone\n' "$id" >>"$FAKE_DIR/events.log"
+      fi
+      return "$matched"
+    }
+    # Input is only the command emitted by the repository dispatcher/mutants,
+    # never arbitrary external data. Parse its argv, then execute only the
+    # expected pgrep or sh -c probe form; no real host pgrep is called.
+    eval "set -- $cmd"
+    if [ "$1" = sh ] && [ "$2" = -c ] && [ "$#" -eq 3 ]; then eval "$3"
+    elif [ "$1" = pgrep ]; then pgrep "${@:2}"
+    else printf 'unsupported probe form\n' >&2; exit 2; fi
+    exit "$?" ;;
+esac
+exec python3 -I "$CI_TESTKIT" fake "${args[@]}"
 FAKE
 cat >"$TMP/bin/git" <<'GIT'
 #!/usr/bin/env bash
@@ -31,7 +82,15 @@ cat >"$TMP/bin/hostname" <<'HOST'
 #!/usr/bin/env bash
 if [ -f "$FAKE_DIR/hostname" ]; then printf '%s\n' "$(<"$FAKE_DIR/hostname")"; else /usr/bin/hostname "$@"; fi
 HOST
-chmod +x "$TMP/bin/fly" "$TMP/bin/git" "$TMP/bin/hostname"
+cat >"$TMP/bin/od" <<'OD'
+#!/usr/bin/env bash
+if [ -f "$FAKE_DIR/fail-entropy" ]; then
+  printf 'fixture entropy read failed\n' >&2
+  exit 1
+fi
+exec "$CI_REAL_OD" "$@"
+OD
+chmod +x "$TMP/bin/fly" "$TMP/bin/git" "$TMP/bin/hostname" "$TMP/bin/od"
 FAIL=0; COUNT=0
 fail() { printf 'selfcheck FAIL: (%s) %s\n' "$CASE" "$*" >&2; FAIL=1; CASE_FAIL=1; }
 expect() { # exact exit and reason; expectation comes from task/review contract
@@ -87,7 +146,7 @@ PY
 }
 TIERS=$'go|mA|gofmt\nxplat|mB|cli-verb-guard'
 GO_ID=080d74db170408; NODE_ID=d8d0d90a1e9648; XPLAT_ID=78113d4f329908
-ALL_CASES='1 2 3 4 5 6a 6b 6c 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35'
+ALL_CASES='1 2 3 4 5 6a 6b 6c 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45'
 SELECTED="${CI_SELFCHECK_CASES-$ALL_CASES}"
 [ -n "$SELECTED" ] || { printf 'selfcheck: empty case selection\n' >&2; exit 2; }
 for CASE in $SELECTED; do
@@ -161,7 +220,7 @@ for CASE in $SELECTED; do
       run_cluster "$TIERS"; expect 1 'FAIL:killed-by-signal'
       absent "$FAKE_DIR/logs/go-gofmt.log" 'CI-CLUSTER: STALLED/DIED'; no_leaks ;;
     11)
-      python3 -I "$TESTKIT" signals "$RUNCI" "$FAKE_DIR/real-runner" "$FULL" >"$FAKE_DIR/signals.log" 2>&1
+      python3 -I "$SIGNAL_TESTKIT" signals "$RUNCI" "$FAKE_DIR/real-runner" "$FULL" >"$FAKE_DIR/signals.log" 2>&1
       RC=$?; [ "$RC" -eq 0 ] || fail "real runner signal fixture failed: $(<"$FAKE_DIR/signals.log")"
       for sig in HUP INT TERM; do contains "$FAKE_DIR/signals.log" "PASS real runner $sig:"; done
       cat "$FAKE_DIR/signals.log" ;;
@@ -247,6 +306,90 @@ for CASE in $SELECTED; do
       else touch_flag tokenprefix; fi
       run_cluster "$TIERS"; expect 1 'watchdog:gone'
       contains "$OUT" 'FAIL:stalled'; absent "$FAKE_DIR/stops.log" '^STOP mA$'; no_leaks ;;
+    36)
+      # Seed a real success, then reuse that exact evidence directory while
+      # entropy fails. No bytes from the previous invocation may be consulted
+      # as the current outcome; no new runner may start on refusal.
+      run_cluster 'go|mA|gofmt'; expect 0 'OVERALL: PASS'
+      cp "$OUT" "$FAKE_DIR/first-success.log"
+      cp -R "$FAKE_DIR/logs" "$FAKE_DIR/old-evidence"
+      before=$(grep -c "/cache/runci[.]sh $FULL gofmt " "$FAKE_DIR/calls.log")
+      touch "$FAKE_DIR/fail-entropy"
+      run_cluster 'go|mA|gofmt'
+      [ "$RC" -eq 2 ] || fail "reused old PASS after failed attempt creation: expected refusal exit 2, got $RC"
+      contains "$OUT" 'refusing existing or unwritable log directory'
+      absent "$OUT" 'OVERALL: PASS|^go +mA +gofmt +PASS'
+      after=$(grep -c "/cache/runci[.]sh $FULL gofmt " "$FAKE_DIR/calls.log")
+      [ "$after" -eq "$before" ] || fail 'refused namespace dispatched a new runner'
+      diff -r "$FAKE_DIR/old-evidence" "$FAKE_DIR/logs" >"$FAKE_DIR/evidence.diff" || fail 'reused run changed previous evidence'
+      no_leaks ;;
+    37)
+      touch "$FAKE_DIR/fail-entropy"
+      run_cluster 'go|mA|gofmt'; expect 1 'FAIL:dispatch'
+      contains "$OUT" 'local tier job failed'
+      contains "$FAKE_DIR/logs/go-gofmt.log" 'DISPATCH FAILED.*attempt identity'
+      absent "$OUT" 'OVERALL: PASS|^go +mA +gofmt +PASS'
+      absent "$FAKE_DIR/calls.log" '/cache/runci[.]sh [^ ]+ gofmt |ssh sftp get'
+      contains "$FAKE_DIR/stops.log" '^STOP mA$'; no_leaks ;;
+    38)
+      # A real TERM handler with the correct trailer but NO exit must not be
+      # accepted because fixture cleanup happens to produce 143.
+      mutant="$FAKE_DIR/term-hang-runner.sh"
+      python3 -I - "$RUNCI" "$mutant" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); text = p.read_text()
+lines = text.splitlines(True)
+matched = [n for n, line in enumerate(lines) if line.startswith("trap ") and "RUNCI: KILLED by signal TERM" in line]
+assert len(matched) == 1
+n = matched[0]
+assert "exit 143" in lines[n]
+lines[n] = lines[n].replace("exit 143", "trap \"\" TERM; while :; do sleep 0.1; done")
+Path(sys.argv[2]).write_text("".join(lines))
+PY
+      python3 -I "$SIGNAL_TESTKIT" signals "$mutant" "$FAKE_DIR/term-hang" "$FULL" >"$FAKE_DIR/term-hang.log" 2>&1
+      RC=$?; [ "$RC" -eq 1 ] || fail "TERM trailer-then-hang fixture must fail: expected 1, got $RC"
+      contains "$FAKE_DIR/term-hang.log" 'FAIL real runner TERM: timed out'
+      contains "$FAKE_DIR/term-hang.log" 'PASS real runner HUP:'
+      contains "$FAKE_DIR/term-hang.log" 'PASS real runner INT:'
+      absent "$FAKE_DIR/term-hang.log" 'PASS real runner TERM:'
+      contains "$FAKE_DIR/term-hang/TERM.outcome.json" '"timed_out": true'
+      contains "$FAKE_DIR/term-hang/TERM.outcome.json" '"passed": false' ;;
+    39|40|41|42)
+      if [ "$CASE" = 39 ] || [ "$CASE" = 40 ]; then
+        touch_flag recoverpass
+        if [ "$CASE" = 39 ]; then touch_flag partialfailrecovery; else touch_flag partialhangrecovery; fi
+        run_cluster 'go|mA|gofmt'; expect 1 'FAIL:stalled'
+        absent "$OUT" 'verdict recovered|OVERALL: PASS'
+        contains "$FAKE_DIR/logs/go-gofmt.recovered.log" '^ALL GATES GREEN$'
+        contains "$FAKE_DIR/logs/go-gofmt.recovered.log" '^ATTEMPT: '
+      else
+        if [ "$CASE" = 41 ]; then touch_flag partialfailcollection; else touch_flag partialhangcollection; fi
+        run_cluster 'go|mA|gofmt'; expect 1 'OVERALL: FAIL'
+        contains "$FAKE_DIR/logs/worker/go-gofmt.log" '^ALL GATES GREEN$'
+        contains "$FAKE_DIR/logs/worker/go-gofmt.log" '^ATTEMPT: '
+        absent "$FAKE_DIR/stops.log" '^STOP mA$'; contains "$OUT" 'LEFT RUNNING'
+      fi
+      contains "$FAKE_DIR/events.log" '^PARTIAL_VALID_BYTES '
+      no_leaks ;;
+    43)
+      python3 -I "$TESTKIT" identity "$RUNCI" "$FAKE_DIR/root-runner" "$FULL" >"$FAKE_DIR/identity.log" 2>&1
+      RC=$?; [ "$RC" -eq 0 ] || fail "real runner identity fixture failed: $(<"$FAKE_DIR/identity.log")"
+      [ "$(grep -c '^PASS real runner identity:' "$FAKE_DIR/identity.log")" -eq 2 ] || fail 'two distinct real producer/re-exec controls did not pass'
+      cat "$FAKE_DIR/identity.log" ;;
+    44)
+      touch_flag killtier
+      run_cluster 'go|mA|gofmt'; expect 1 'local tier job failed'
+      contains "$OUT" '^go +mA +gofmt +PASS'
+      absent "$OUT" 'OVERALL: PASS'
+      contains "$FAKE_DIR/events.log" '^INTERRUPTED tier '
+      assert_copy_before_stop; no_leaks ;;
+    45)
+      touch_flag slow
+      run_cluster 'go|mA|gofmt'; expect 0 'OVERALL: PASS'
+      python3 -I "$TESTKIT" probe-contract "$FAKE_DIR/events.log" "$FAKE_DIR/probe-contract" >"$FAKE_DIR/probe-contract.log" 2>&1
+      RC=$?; [ "$RC" -eq 0 ] || fail "rendered shell/argv status contract failed: $(<"$FAKE_DIR/probe-contract.log")"
+      contains "$FAKE_DIR/probe-contract.log" 'PASS rendered probe statuses 0/1/2' ;;
   esac
   if [ "$CASE_FAIL" -eq 0 ]; then printf 'selfcheck ok:   (%s)\n' "$CASE"; fi
   printf '%s\n' "$CASE_FAIL" >"$FAKE_DIR/case.exit"
