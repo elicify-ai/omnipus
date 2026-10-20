@@ -71,12 +71,14 @@ func (ds *TaskDrainService) Start() {
 	})
 }
 
-// Stop halts the drain loop. Idempotent.
-func (ds *TaskDrainService) Stop() {
+// Stop halts the drain loop. Idempotent. It returns
+// ErrPollerCycleStillRunning (wrapped) when a cycle in flight outlives the
+// bounded wait; nil otherwise.
+func (ds *TaskDrainService) Stop() error {
 	ds.mu.Lock()
 	if ds.stopChan == nil {
 		ds.mu.Unlock()
-		return
+		return nil
 	}
 	close(ds.stopChan)
 	ds.stopChan = nil
@@ -90,7 +92,7 @@ func (ds *TaskDrainService) Stop() {
 	// cancelled: the check passes its context to ExecuteTask, and a cancel
 	// between claiming and dispatching would fail a queued task - Stop also
 	// runs on every config reload. The check itself is local and short.
-	joinPollerLoop(done, "task-drain")
+	return joinPollerLoop(done, "task-drain", "its queued-task check may still claim or start a task")
 }
 
 // IsRunning reports whether the drain loop is active.

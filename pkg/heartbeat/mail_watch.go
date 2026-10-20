@@ -71,12 +71,14 @@ func (s *MailWatchService) Start() {
 	})
 }
 
-// Stop halts the watch loop. Idempotent.
-func (s *MailWatchService) Stop() {
+// Stop halts the watch loop. Idempotent. It returns
+// ErrPollerCycleStillRunning (wrapped) when a cycle in flight outlives the
+// bounded wait; nil otherwise.
+func (s *MailWatchService) Stop() error {
 	s.mu.Lock()
 	if s.stopChan == nil {
 		s.mu.Unlock()
-		return
+		return nil
 	}
 	close(s.stopChan)
 	s.stopChan = nil
@@ -89,7 +91,7 @@ func (s *MailWatchService) Stop() {
 	// teardown, shutdown and every config reload call Stop). Never cancelled
 	// mid-cycle; the wait is bounded and only happens when a cycle is
 	// actually running.
-	joinPollerLoop(done, "mail-watch")
+	return joinPollerLoop(done, "mail-watch", "its mail check may still talk to the mail server and save mailbox state")
 }
 
 // IsRunning reports whether the watch loop is active.

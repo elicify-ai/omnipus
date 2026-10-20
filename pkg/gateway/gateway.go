@@ -1762,6 +1762,32 @@ type catalogLogAdapter struct{}
 // against a wedged transport.
 const catalogRefreshStopTimeout = 10 * time.Second
 
+// stopPollersReporting stops the queued-task and mail pollers. Each Stop
+// waits, bounded, for a cycle already in flight; when that wait runs out the
+// cycle is still running (it is never cancelled mid-cycle), so the operator
+// gets a warning naming the poller, what it may still be doing, and that the
+// reload or stop otherwise went ahead.
+func stopPollersReporting(runningServices *services, isReload bool) {
+	phase := "stopping services"
+	if isReload {
+		phase = "applying the configuration reload"
+	}
+	if runningServices.TaskDrain != nil {
+		if err := runningServices.TaskDrain.Stop(); err != nil {
+			slog.Warn("gateway: the queued-task poller was still in a check after its stop wait; "+phase+
+				" continued without it. The check finishes on its own; if this repeats, look for a slow or locked task store.",
+				"error", err.Error())
+		}
+	}
+	if runningServices.MailWatch != nil {
+		if err := runningServices.MailWatch.Stop(); err != nil {
+			slog.Warn("gateway: the mail poller was still in a mail check after its stop wait; "+phase+
+				" continued without it. The check finishes on its own; if this repeats, check the mailbox connection.",
+				"error", err.Error())
+		}
+	}
+}
+
 func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Duration, isReload bool) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
@@ -1774,12 +1800,7 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if !isReload && runningServices.ChannelManager != nil {
 		runningServices.ChannelManager.StopAll(shutdownCtx)
 	}
-	if runningServices.TaskDrain != nil {
-		runningServices.TaskDrain.Stop()
-	}
-	if runningServices.MailWatch != nil {
-		runningServices.MailWatch.Stop()
-	}
+	stopPollersReporting(runningServices, isReload)
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
