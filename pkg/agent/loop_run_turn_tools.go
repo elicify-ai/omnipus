@@ -2151,6 +2151,7 @@ func (rx *agentLoopRunTurnTools) finishToolIteration() agentLoopRunTurnToolsFlow
 					"threshold": toolRepeatStopThreshold,
 				})
 			rx.finalContent = notice
+			rx.finalIsModelAnswer = false
 			rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
 			return agentLoopRunTurnToolsBreakL1
 		}
@@ -2169,6 +2170,7 @@ func (rx *agentLoopRunTurnTools) finishToolIteration() agentLoopRunTurnToolsFlow
 				"threshold": toolFailureCircuitBreakThreshold,
 			})
 		rx.finalContent = notice
+		rx.finalIsModelAnswer = false
 		rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
 		return agentLoopRunTurnToolsBreakL1
 	}

@@ -1606,6 +1606,19 @@ func (ts *turnState) resolveContinuation() {
 	ts.continueSameMessageID = false
 }
 
+// retireContinuationAccumulator empties the D6 accumulator and settles the
+// chain once the accumulated answer has been saved as a whole answer of its
+// own (keepAnswerBeforeSteering). Without it a later round's answer is
+// prefixed with the already-saved text (finishTextResponse appends to the
+// accumulator for the rest of the turn once hadContinuation is true).
+func (ts *turnState) retireContinuationAccumulator() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationAccum = ""
+	ts.continuationPending = false
+	ts.continueSameMessageID = false
+}
+
 // hadContinuation reports whether this turn has dispatched at least one D6
 // continuation round. Unlike continuationUnresolved, this never clears once
 // set — finalizeStreamer needs it for the rest of the turn's finalization,
