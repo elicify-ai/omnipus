@@ -105,17 +105,12 @@ type AgentLoop struct {
 	// (FR-019): key sessionKey (string), value *RecallSpan. Never persisted;
 	// set by recall_conversation, read/dropped by windowTrim + assembly.
 	recallSpans sync.Map // key: sessionKey (string), value: *RecallSpan
-	// pairingRequests correlates a chat-started channel pairing with the
-	// request and chat that started it (K10, FR-081): channel id -> pairingCorrelation.
-	pairingRequests sync.Map
+	// pairingOwners is each channel's per-attempt chat ownership of its QR
+	// pairing (K10, FR-081; see pairing_ownership.go).
+	pairingOwners pairingOwnership
 	// pairingSeq numbers WhatsApp pairing events in emit order
 	// (WhatsAppPairingPayload.Seq).
 	pairingSeq atomic.Uint64
-	// pairingLastOwners keeps the chat request that owned a channel's last
-	// pairing after it timed out, failed or was stopped, so a Retry from that
-	// same chat can restore ownership (RestorePairingRequest); channel id ->
-	// pairingCorrelation.
-	pairingLastOwners sync.Map
 	// pendingRequests / remindedRequests back the unanswered-request reminder
 	// (request_reminder.go): request id -> receiver session id, and the ids that
 	// already got their one reminder.
@@ -605,6 +600,10 @@ type AgentLoop struct {
 	// worker can start after Close's drain snapshot (Train 2 gate r1).
 	workerSpawnMu     sync.Mutex
 	workerSpawnClosed bool
+	// workerSnapshotHook is a test seam (gate r2 pr-test C1): when set, it
+	// runs right after stopSessionWorkers takes its worker snapshot, so a test
+	// can hold shutdown at that boundary. Always nil in production.
+	workerSnapshotHook func()
 
 	// admission is the soft-cap gate for concurrent session workers.
 	// Phase 1: gates inbound user-message dispatch only, per unique scope.
@@ -1003,6 +1002,9 @@ func (al *AgentLoop) stopSessionWorkers() {
 		workers = append(workers, w)
 		return true
 	})
+	if hook := al.workerSnapshotHook; hook != nil {
+		hook()
+	}
 
 	for _, w := range workers {
 		w.cancel()

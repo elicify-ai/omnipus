@@ -204,7 +204,7 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 	c.reconnectMu.Unlock()
 
 	if err := os.MkdirAll(c.storePath, 0o700); err != nil {
-		return fmt.Errorf("create session store dir: %w", err)
+		return fmt.Errorf("create session store dir: %w: %w", channels.ErrLocalState, err)
 	}
 
 	dbPath := filepath.Join(c.storePath, whatsappDBName)
@@ -212,26 +212,26 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 
 	db, err := sql.Open(sqliteDriver, connStr)
 	if err != nil {
-		return fmt.Errorf("open whatsapp store: %w", err)
+		return fmt.Errorf("open whatsapp store: %w: %w", channels.ErrLocalState, err)
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	if _, err = db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("enable foreign keys: %w", err)
+		return fmt.Errorf("enable foreign keys: %w: %w", channels.ErrLocalState, err)
 	}
 
 	waLogger := waLog.Stdout("WhatsApp", "WARN", true)
 	container := sqlstore.NewWithDB(db, sqliteDriver, waLogger)
 	if err = container.Upgrade(ctx); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("open whatsapp store: %w", err)
+		return fmt.Errorf("open whatsapp store: %w: %w", channels.ErrLocalState, err)
 	}
 
 	deviceStore, err := container.GetFirstDevice(ctx)
 	if err != nil {
 		_ = container.Close()
-		return fmt.Errorf("get device store: %w", err)
+		return fmt.Errorf("get device store: %w: %w", channels.ErrLocalState, err)
 	}
 
 	client := whatsmeow.NewClient(deviceStore, waLogger)

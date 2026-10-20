@@ -22,14 +22,42 @@ type pairingCorrelation struct {
 	sessionID string
 }
 
-// NotePairingRequest records that a chat request started the pairing of
-// channelID, so the pairing's QR and progress frames carry its request and
-// session ids (K10, FR-081) until the pairing links, fails or times out.
+// NotePairingRequest records that an approved chat request (connect_channel)
+// starts the pairing of channelID, so the next pairing attempt's QR and
+// progress frames carry its request and session ids (K10, FR-081) and that
+// chat's Stop ends it. It never takes over another chat's claim still waiting
+// for its attempt (pairing_ownership.go).
 func (al *AgentLoop) NotePairingRequest(channelID, requestID, sessionID string) {
 	if channelID == "" || requestID == "" || sessionID == "" {
 		return
 	}
-	al.pairingRequests.Store(channelID, pairingCorrelation{requestID: requestID, sessionID: sessionID})
+	al.pairingOwners.claimNext(channelID, pairingCorrelation{requestID: requestID, sessionID: sessionID})
+}
+
+// SettlePairingRequest is called once the start a claim was made for has
+// finished: a claim no pairing attempt consumed (the device was already
+// linked, or nothing started) is disarmed so a later, unrelated attempt
+// cannot inherit it.
+func (al *AgentLoop) SettlePairingRequest(channelID, requestID, sessionID string) {
+	al.pairingOwners.settleClaim(channelID, pairingCorrelation{requestID: requestID, sessionID: sessionID})
+}
+
+// ClaimPairingRetry is the atomic ownership admission for a chat Retry
+// (PUT /channels/{id}/enable with pairing_retry): requestID/sessionID must be
+// the channel's recorded last owner and no other chat may hold a claim; then
+// that chat owns the next attempt. The caller has already proved the session
+// belongs to the requesting user. ErrPairingRetryConflict refuses it.
+func (al *AgentLoop) ClaimPairingRetry(channelID, requestID, sessionID string) error {
+	if channelID == "" || requestID == "" || sessionID == "" {
+		return ErrPairingRetryConflict
+	}
+	return al.pairingOwners.claimRetry(channelID, pairingCorrelation{requestID: requestID, sessionID: sessionID})
+}
+
+// ReleasePairingClaim returns a Retry claim whose enable failed: the chat is
+// the last owner again and may retry. Another chat's newer claim is kept.
+func (al *AgentLoop) ReleasePairingClaim(channelID, requestID, sessionID string) {
+	al.pairingOwners.releaseClaim(channelID, pairingCorrelation{requestID: requestID, sessionID: sessionID})
 }
 
 // channelLiveStatus reports whether a configured channel instance is running
@@ -53,28 +81,23 @@ func (al *AgentLoop) channelLiveStatus(id string) (running bool, failure string,
 	return false, "the channel is not running", true
 }
 
-// stopPairingsForSession ends every in-flight pairing that sessionID started
-// from its chat (BDD-8.8: Stop ends pairing with "stopped"). Each ended
-// pairing emits a "stopped" frame carrying its request and session ids, which
-// also clears the correlation. A pairing that is no longer in flight (already
-// linked, or the channel is gone) only drops its correlation.
+// stopPairingsForSession ends every in-flight pairing that sessionID owns
+// (BDD-8.8: Stop ends pairing with "stopped"). Each ended pairing emits a
+// "stopped" frame carrying its request and session ids. A Stop that finds no
+// pairing in flight keeps the chat as the channel's last owner instead of
+// deleting the only ownership record (gate r2 CR-T2-04), so the chat's later
+// Retry is still correlated.
 func (al *AgentLoop) stopPairingsForSession(sessionID string) {
 	if sessionID == "" {
 		return
 	}
-	al.pairingRequests.Range(func(key, value any) bool {
-		channelID, _ := key.(string)
-		corr, ok := value.(pairingCorrelation)
-		if !ok || corr.sessionID != sessionID {
-			return true
-		}
+	for channelID, corr := range al.pairingOwners.ownedBy(sessionID) {
 		if al.stopChannelPairing(channelID) {
 			al.EmitWhatsAppPairing(channelID, channels.PairingStatusStopped, "", "pairing stopped from the chat")
-			return true
+			continue
 		}
-		al.pairingRequests.CompareAndDelete(channelID, corr)
-		return true
-	})
+		al.pairingOwners.endWithoutAttempt(channelID, corr)
+	}
 }
 
 // stopChannelPairing asks the channel to end its in-flight pairing.
@@ -112,30 +135,4 @@ func (al *AgentLoop) ensureChannelStarted(id string) (bool, error) {
 		return false, nil
 	}
 	return mgr.StartChannel(id)
-}
-
-// RestorePairingRequest re-establishes a chat's ownership of a channel's
-// pairing after that chat's Retry restarted it (gate r1 CR-T2-04): only when
-// requestID and sessionID exactly match the request that owned the channel's
-// last pairing, and no pairing is currently owned. The caller is responsible
-// for checking that the subscribing connection belongs to the session's
-// owner. It reports whether ownership was restored.
-func (al *AgentLoop) RestorePairingRequest(channelID, requestID, sessionID string) bool {
-	if channelID == "" || requestID == "" || sessionID == "" {
-		return false
-	}
-	if _, owned := al.pairingRequests.Load(channelID); owned {
-		return false
-	}
-	v, ok := al.pairingLastOwners.Load(channelID)
-	if !ok {
-		return false
-	}
-	last, ok := v.(pairingCorrelation)
-	if !ok || last.requestID != requestID || last.sessionID != sessionID {
-		return false
-	}
-	al.pairingLastOwners.CompareAndDelete(channelID, last)
-	al.NotePairingRequest(channelID, requestID, sessionID)
-	return true
 }

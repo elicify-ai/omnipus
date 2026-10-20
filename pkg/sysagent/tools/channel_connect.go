@@ -6,10 +6,14 @@ package systools
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -139,9 +143,33 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 	}
 	t.selected(ctx, t.Name(), id, refs)
 	if whatsappChannel(chType) && t.deps.NotePairingRequest != nil {
-		t.deps.NotePairingRequest(id, tools.ToolCallID(ctx), tools.ToolTranscriptSessionID(ctx))
+		requestID, sessionID := tools.ToolCallID(ctx), tools.ToolTranscriptSessionID(ctx)
+		t.deps.NotePairingRequest(id, requestID, sessionID)
+		if t.deps.SettlePairingRequest != nil {
+			// The live check below waits for the reload and the start, so a
+			// pairing attempt this connect began has bound the claim by then.
+			defer t.deps.SettlePairingRequest(id, requestID, sessionID)
+		}
 	}
 	return t.liveResult(id, ws, agentID, chType, savedRevision)
+}
+
+// startFailureReason turns an explicit start failure into a value-free cause
+// and its repair, never the platform's raw response.
+func startFailureReason(err error) string {
+	const prefix = "the channel could not be started after saving: "
+	var netErr net.Error
+	switch {
+	case errors.Is(err, channels.ErrLocalState):
+		return prefix + "its local data (session store) could not be opened. " +
+			"Check that the Omnipus data directory is readable and writable; the server log names the cause. " +
+			"Then connect again. Re-entering credentials will not fix this"
+	case errors.As(err, &netErr), errors.Is(err, context.DeadlineExceeded):
+		return prefix + "the platform could not be reached. Check the network connection, then connect again"
+	default:
+		return prefix + "the platform rejected the credentials or the start failed. " +
+			"Check the stored credentials; the server log names the cause. Then connect again"
+	}
 }
 
 // validateBinding refuses a target that is not a valid main agent of the
@@ -205,7 +233,13 @@ func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision s
 	// example after Stop ended its pairing): this approved connect starts it.
 	if t.deps.EnsureChannelStarted != nil {
 		if _, err := t.deps.EnsureChannelStarted(id); err != nil {
-			return changeSuccess(fields, savedNotWorking("the channel could not be started after saving", scope, notTested...))
+			// The full cause goes to the operator log (registered credential
+			// values are filtered there); the model gets a value-free cause
+			// and the matching repair (gate r2 T2-SF-10).
+			logger.ErrorCF("sysagent", "Approved channel start failed", map[string]any{
+				"channel_id": id, "operation": "start_channel", "error": err.Error(),
+			})
+			return changeSuccess(fields, savedNotWorking(startFailureReason(err), scope, notTested...))
 		}
 	}
 	if t.deps.ChannelLiveStatus == nil {

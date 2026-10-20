@@ -165,13 +165,13 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			a.setChannelEnabled(w, channelID, true)
+			a.enableChannel(w, r, channelID)
 		case "disable":
 			if r.Method != http.MethodPut {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			a.setChannelEnabled(w, channelID, false)
+			_ = a.setChannelEnabled(w, channelID, false)
 		case "configure":
 			if r.Method != http.MethodPut {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1057,11 +1057,11 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) {
+func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) bool {
 	baseType, _ := config.ParseInstanceKey(channelID)
 	if !validChannelIDs[baseType] {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
-		return
+		return false
 	}
 	if enabled {
 		// Stage 1 of the channel-Test redesign: enabling a channel with an
@@ -1074,11 +1074,11 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		if err != nil {
 			slog.Error("rest: read config for channel enable validation", "channel", channelID, "error", err)
 			jsonServerFailure(w, http.StatusInternalServerError, "could not read config", err)
-			return
+			return false
 		}
 		if msg := validateChannelConfigComplete(baseType, stored, nil, nil); msg != "" {
 			jsonErr(w, http.StatusBadRequest, msg)
-			return
+			return false
 		}
 	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
@@ -1101,7 +1101,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 	}); err != nil {
 		slog.Error("rest: set channel enabled", "channel", channelID, "enabled", enabled, "error", err)
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
-		return
+		return false
 	}
 	// #358: persisting channels.<id>.enabled via safeUpdateConfigJSON only swaps the
 	// in-memory config pointer (refreshConfigAndRewireServices → SwapConfig); it does
@@ -1122,7 +1122,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 				"channel", channelID, "enabled", enabled, "error", err)
 			jsonErr(w, http.StatusInternalServerError,
 				fmt.Sprintf("channel %s saved but failed to %s. Details are in the server log.", channelID, verb))
-			return
+			return false
 		} else if !confirmed {
 			verb := "start"
 			if !enabled {
@@ -1134,6 +1134,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		}
 	}
 	jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: enabled})
+	return true
 }
 
 // redactChannelConfig returns a copy of cfg with sensitive fields replaced by a

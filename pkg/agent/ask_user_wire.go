@@ -40,6 +40,7 @@ func (al *AgentLoop) cancelPendingAskForScope(sessionID string) error {
 	if r := al.getAskUserRegistry(); r != nil {
 		r.CancelOnSessionStop(sessionID)
 	}
-	al.stopPairingsForSession(sessionID)
+	// The session's pairing is ended by StopSession after this cancel has been
+	// initiated, never here before it (gate r2 CR-T2-R2-02).
 	return al.stopSecretRequests(sessionID)
 }

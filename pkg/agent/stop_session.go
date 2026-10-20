@@ -101,10 +101,12 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	}
 	ctx = al.withSecretStopIntent(ctx, intentCause)
 	// BDD-8.8: Stop in the chat that started a pairing ends that pairing even
-	// when the chat has no live turn to cancel (its turn already completed or
-	// stopped, so RequestCancel and its pairing sweep are never reached).
-	// Idempotent with the live-cancel sweep (gate r1 CR-T2-03).
-	al.stopPairingsForSession(req.SessionID)
+	// when the chat has no live turn to cancel (gate r1 CR-T2-03). The pairing
+	// teardown can block on the platform client (up to pairingStopTimeout), so
+	// it runs only after this Stop has stamped its durable fence and asked the
+	// turn to stop (gate r2 CR-T2-R2-02): deferred, so every return path —
+	// including a Stop whose target could not be read — still ends the pairing.
+	defer al.stopPairingsForSession(req.SessionID)
 	// N6: once this Stop has ended the session's episode, release any retained
 	// external-CLI driver (its option/env snapshot). No-op while the run is still
 	// winding down (releaseExternalRunIfIdle checks the running flag; the steered

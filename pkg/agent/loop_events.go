@@ -130,21 +130,12 @@ func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.Pairi
 		Message:   message,
 		Seq:       al.pairingSeq.Add(1),
 	}
-	if v, ok := al.pairingRequests.Load(channelID); ok {
-		if corr, ok := v.(pairingCorrelation); ok {
-			payload.RequestID, payload.SessionID = corr.requestID, corr.sessionID
-		}
-		switch status {
-		case channels.PairingStatusLinked:
-			al.pairingRequests.Delete(channelID) // the chat-started pairing linked
-		case channels.PairingStatusError, channels.PairingStatusTimeout, channels.PairingStatusStopped:
-			// The pairing ended; remember its owner so a Retry from that chat
-			// can restore it (RestorePairingRequest, gate r1 CR-T2-04).
-			if corr, ok := v.(pairingCorrelation); ok {
-				al.pairingLastOwners.Store(channelID, corr)
-			}
-			al.pairingRequests.Delete(channelID)
-		}
+	// The attempt's owner, if any, is decided atomically with the ownership
+	// transition this event causes (pairing_ownership.go): a new attempt is
+	// unowned unless a chat claimed it, and an ended attempt's owner becomes
+	// the only chat that may Retry it.
+	if corr := al.pairingOwners.observe(channelID, status); corr != nil {
+		payload.RequestID, payload.SessionID = corr.requestID, corr.sessionID
 	}
 	al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, payload)
 	// #358, FR-081/K10: audit-log device-pairing lifecycle transitions so linking a

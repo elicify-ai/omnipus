@@ -178,6 +178,10 @@ type Deps struct {
 	// NotePairingRequest correlates a chat-started QR pairing with its
 	// request and chat (K10, FR-081). WireSysagentDeps fills it.
 	NotePairingRequest func(channelID, requestID, sessionID string)
+	// SettlePairingRequest disarms that claim once connect_channel's start
+	// finished without beginning a pairing attempt, so a later unrelated
+	// attempt cannot inherit it (gate r2 T2-R2-S1). WireSysagentDeps fills it.
+	SettlePairingRequest func(channelID, requestID, sessionID string)
 	// EnsureChannelStarted starts a registered channel that is not running,
 	// for connect_channel only: a channel stopped in place (its pairing was
 	// stopped from the chat) keeps an unchanged config, so a reload alone
