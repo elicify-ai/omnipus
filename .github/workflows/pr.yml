@@ -22,6 +22,11 @@ on:
         description: Run paid llm-* E2E shards (false runs only non-LLM shards)
         type: boolean
         default: true
+      only_shard:
+        description: Diagnostic branch only — one exact E2E shard name; empty preserves normal coverage
+        type: string
+        required: false
+        default: ''
 
 # Paid llm-* shards are opt-in on PRs: add the run-e2e label BEFORE the next
 # push to the PR branch (or reopen the PR). Label changes alone do not trigger CI.
@@ -2737,15 +2742,25 @@ jobs:
             ${{ github.event_name == 'push' ||
                 (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-e2e')) ||
                 (github.event_name == 'workflow_dispatch' && inputs.llm_e2e) }}
+          EVENT_NAME: ${{ github.event_name }}
+          ONLY_SHARD: ${{ github.event_name == 'workflow_dispatch' && inputs.only_shard || '' }}
         run: |
           set -euo pipefail
           scripts/e2e-shards.sh check
           all_matrix=$(scripts/e2e-shards.sh matrix)
           matrix=$(jq -c --argjson run_llm "$RUN_LLM_E2E" \
             '.include |= map(select($run_llm or (.group | startswith("llm-") | not)))' <<< "$all_matrix")
-          # Derive exclusions from the actual selected matrix, not a second list.
+          # Diagnostic branch only. Non-manual events retain their original matrix.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$ONLY_SHARD" ]; then
+            if ! jq -e --arg shard "$ONLY_SHARD" 'any(.include[]; .group == $shard)' <<< "$matrix" >/dev/null; then
+              echo "::error::only_shard is unknown or excluded by llm_e2e: $ONLY_SHARD" >&2
+              exit 1
+            fi
+            matrix=$(jq -c --arg shard "$ONLY_SHARD" '.include |= map(select(.group == $shard))' <<< "$matrix")
+          fi
+          # Derive paid exclusions from the actual selected matrix, not a second list.
           llm_skipped=$(jq -c --argjson selected "$matrix" \
-            '[.include[].group] - [$selected.include[].group]' <<< "$all_matrix")
+            '[.include[].group | select(startswith("llm-"))] - [$selected.include[].group]' <<< "$all_matrix")
           printf 'matrix=%s\nllm_skipped=%s\n' "$matrix" "$llm_skipped" >> "$GITHUB_OUTPUT"
 
   playwright:
@@ -3311,8 +3326,16 @@ jobs:
           fi
           exit $rc
 
+      - name: Capture replan runtime evidence after the shard
+        if: always() && matrix.group == 'llm-conformance-replan'
+        run: |
+          python3 -I scripts/capture-replan-diagnostics.py \
+            --home "$OMNIPUS_HOME" \
+            --output test-results/replan-shard-final.zip \
+            --metadata '{"phase":"shard-final-after-cleanup"}'
+
       - name: Upload Playwright artifacts
-        if: failure()
+        if: failure() || matrix.group == 'llm-conformance-replan'
         uses: actions/upload-artifact@v7
         with:
           name: playwright-artifacts-${{ matrix.group }}
@@ -3428,9 +3451,14 @@ jobs:
           E2E_MATRIX: ${{ needs.e2e-plan.outputs.matrix }}
           LLM_SKIPPED: ${{ needs.e2e-plan.outputs.llm_skipped }}
           EVENT_NAME: ${{ github.event_name }}
+          ONLY_SHARD: ${{ github.event_name == 'workflow_dispatch' && inputs.only_shard || '' }}
         run: |
           set -euo pipefail
           printf '## E2E shard coverage\n\n' >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$ONLY_SHARD" ]; then
+            printf 'Diagnostic single-shard selection: %s. All other E2E shards are NOT RUN; this is not full validation.\n\n' \
+              "$ONLY_SHARD" >> "$GITHUB_STEP_SUMMARY"
+          fi
           if [ "$E2E_PLAN_RESULT" != "success" ]; then
             # Existing path/dependency gates still apply; no plan means no counts.
             printf 'E2E shard plan: %s; execution: %s. No shard coverage claimed.\n' \
@@ -3446,7 +3474,9 @@ jobs:
             printf '| Selected shards aggregate job result | %s |\n\n' "$E2E_RESULT"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$skipped_count" -gt 0 ]; then
-            if [ "$EVENT_NAME" = "pull_request" ]; then
+            if [ -n "$ONLY_SHARD" ]; then
+              message='Other LLM shards not run: this is an explicitly narrowed diagnostic dispatch, not full validation.'
+            elif [ "$EVENT_NAME" = "pull_request" ]; then
               message='LLM e2e not run on this PR (label run-e2e or workflow_dispatch to run; nightly full run covers them)'
             else
               message='LLM e2e not run on this manual run (llm_e2e=false; dispatch with llm_e2e=true to run)'

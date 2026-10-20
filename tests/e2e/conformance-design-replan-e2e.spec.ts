@@ -21,6 +21,9 @@
 // another test wrote, in this file or in any sibling — which is precisely what
 // makes splitting the suite across shards sound.
 
+import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { expect, type Page } from '@playwright/test'
 import type { components } from '../../src/lib/api/generated/openapi-types'
 import { test } from './fixtures/plan-cleanup'
@@ -39,6 +42,35 @@ import {
   startFreshChatWithJim,
 } from './fixtures/conformance-helpers'
 import { blockedMarker } from './fixtures/stub-external-cli'
+
+// Diagnostic branch only: preserve every attempt, including a successful retry.
+// afterEach runs before plan-cleanup's fixture teardown, so this snapshot precedes Stop.
+// No production writer, task state, assertion, retry or timeout is changed.
+test.use({ trace: 'on' })
+test.afterEach(async ({ createdPlanIds }, testInfo) => {
+  const home = process.env.OMNIPUS_HOME
+  if (!home) throw new Error('replan diagnostic capture requires explicit OMNIPUS_HOME; never use the live data directory')
+  const archive = testInfo.outputPath('replan-diagnostics.zip')
+  const args = [
+    '-I', resolve('scripts/capture-replan-diagnostics.py'),
+    '--home', home, '--output', archive,
+    '--metadata', JSON.stringify({
+      title: testInfo.title, retry: testInfo.retry, status: testInfo.status,
+      phase: 'before-cleanup', commit: process.env.GITHUB_SHA ?? '',
+    }),
+    ...createdPlanIds.flatMap((id) => ['--plan-id', id]),
+  ]
+  let captureFailure: unknown
+  try {
+    execFileSync('python3', args, { encoding: 'utf8' })
+  } catch (error) {
+    captureFailure = error
+  }
+  if (existsSync(archive)) {
+    await testInfo.attach('replan-runtime-diagnostics', { path: archive, contentType: 'application/zip' })
+  }
+  if (captureFailure) throw captureFailure
+})
 
 // ── Conformance_t3_PlanningReplanningE2E ─────────────────────────────────────
 //
