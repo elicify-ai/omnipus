@@ -245,6 +245,12 @@ func (r *Registry) RetryResumes() error {
 		if r.opts.Stopped != nil {
 			stopped, err := r.opts.Stopped(rec.Card.SessionId)
 			if err != nil {
+				// Whether the session was stopped is unknown, so delivery is
+				// unconfirmed: a fresh client must warn, never show an
+				// ordinary "Saved" (gate r2 T2-SF-02). A stopped veto is
+				// never weakened — this branch never delivers.
+				r.setUnconfirmedLocked(rec.Card.RequestId, !rec.ResumeStopped)
+				logStorageFault("continuation_session_check", rec.Card.RequestId, rec.Card.SessionId, err, repairSessionStorage)
 				failures = append(failures, err)
 				continue
 			}
