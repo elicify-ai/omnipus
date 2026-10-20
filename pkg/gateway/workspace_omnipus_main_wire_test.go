@@ -15,8 +15,8 @@ import (
 // ordinary member_configs main_session_id; the retired admin_main_session_id
 // is never filled any more.
 func TestWorkspaceWire_OmnipusMainIsAnOrdinaryMemberMain(t *testing.T) {
-	resolver := func(ws storedWorkspace, agentID string) string {
-		return "main-session-" + ws.ID + "+" + agentID
+	resolver := func(ws storedWorkspace, agentID string) (string, error) {
+		return "main-session-" + ws.ID + "+" + agentID, nil
 	}
 	base := storedWorkspace{ID: "ws1", Name: "W", Status: "active", IsDefault: true,
 		CoreTeam: []string{"mia", "omnipus"}, CreatedAt: "2026-10-10T00:00:00Z", UpdatedAt: "2026-10-10T00:00:00Z"}

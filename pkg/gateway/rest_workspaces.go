@@ -398,7 +398,7 @@ func workspaceToWireFrom(
 	w storedWorkspace,
 	taskCount int,
 	graph *workspace.State,
-	mains func(storedWorkspace, string) string,
+	mains func(storedWorkspace, string) (string, error),
 ) gen.Workspace {
 	createdAt, err := time.Parse(time.RFC3339, w.CreatedAt)
 	if err != nil {
@@ -470,26 +470,30 @@ func workspaceToWireFrom(
 				entry.HiddenFromSidebar = &h
 			}
 			if mains != nil {
-				if id := mains(w, agentID); id != "" {
+				if id, mainErr := mains(w, agentID); id != "" {
 					entry.MainSessionId = &id
+				} else if mainErr != nil {
+					reason := mainSessionErrorMessage(mainErr)
+					entry.MainSessionError = &reason
 				}
 			}
 			wireMC[agentID] = entry
 		}
-		// C-MAIN: a member who owns a resolved main is listed even without
-		// stored settings. main_session_id is a computed, read-only projection
-		// that names an identity that actually exists; a member whose main does
-		// not resolve gets no entry and no address (never a guessed one).
+		// Eligible members get an address OR a safe preparation error even
+		// without stored settings. Neither field is persisted, and an error
+		// never makes an unresolved main address usable.
 		if mains != nil {
 			for _, agentID := range w.CoreTeam {
 				if _, listed := wireMC[agentID]; listed {
 					continue
 				}
-				id := mains(w, agentID)
-				if id == "" {
-					continue
+				id, mainErr := mains(w, agentID)
+				if id != "" {
+					wireMC[agentID] = gen.WorkspaceMemberConfig{MainSessionId: &id}
+				} else if mainErr != nil {
+					reason := mainSessionErrorMessage(mainErr)
+					wireMC[agentID] = gen.WorkspaceMemberConfig{MainSessionError: &reason}
 				}
-				wireMC[agentID] = gen.WorkspaceMemberConfig{MainSessionId: &id}
 			}
 		}
 		wire.MemberConfigs = &wireMC
@@ -1032,6 +1036,14 @@ func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id 
 	if err != nil {
 		writeWorkspaceReadError(w, err)
 		return
+	}
+	// Retry reaches this detail read even when the failed member has no main
+	// address. Make one eligible-pair preparation attempt, never in the shared
+	// serializer or list projection; damaged identities remain untouched.
+	if len(state.Workspace.CoreTeam) > 0 {
+		if mainsErr := a.ensureMainsForTeam(state.Workspace); mainsErr != nil {
+			logsafeError("rest: workspace detail: some team mains could not be prepared", "workspace_id", id, "error", mainsErr)
+		}
 	}
 	// FR-1.9: owner is attribution only — no access gate.
 	jsonOK(w, workspaceToWireFrom(a.homePath, state.Workspace, countTasksForWorkspace(a.homePath, id), &state, a.mainSessionAddress))
