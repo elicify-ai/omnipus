@@ -540,6 +540,13 @@ func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, strin
 		jsonErr(pap.cra.w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
 		return "", "", true
 	}
+	// Issue #1340 (founder rule 2026-10-18): same pair rule as the update path.
+	if pap.fallbackModels != nil {
+		if msg := unpairedFallbackError(*pap.fallbackModels); msg != "" {
+			jsonErr(pap.cra.w, http.StatusBadRequest, msg)
+			return "", "", true
+		}
+	}
 	// model_params.top_p (T2): removed from the wire entirely — see
 	// agentModelParamsInput's doc comment. No explicit rejection is needed
 	// here: gen.AgentCreateRequestMain/Subagent no longer have a top_p
