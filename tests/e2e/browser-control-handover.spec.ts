@@ -43,7 +43,6 @@ import { test } from './fixtures/console-errors';
 import {
   chatInput,
   waitForConnected,
-  selectAgent,
   assistantMessages,
   watchLiveButton,
   browserLivePanel,
@@ -55,7 +54,7 @@ import {
   installWebrtcDebug,
   logWebrtcDebug,
 } from './fixtures/webrtc-debug';
-import { endTurnDeterministically, trackServerFrames } from './helpers/endTurn';
+import { endTurnDeterministically, pinRootSession, trackServerFrames } from './helpers/endTurn';
 
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]');
 
@@ -74,7 +73,11 @@ async function waitForViewportInput(page: Page): Promise<void> {
 
 /** Click empty space inside the rendered video, never its object-contain letterbox. */
 async function takeControlFromRenderedVideo(page: Page, testInfo: TestInfo): Promise<void> {
-  const frame = browserLiveFrame(page);
+  // Keep the gesture itself scoped to an input-ready frame: decoded dimensions
+  // alone can still describe the old picture during a viewport handoff.
+  const frame = page
+    .locator('[data-input-mode="dedicated"][data-input-state="ready"]:not([data-input-blocked-by])')
+    .getByTestId('browser-live-frame');
   const video = browserLiveVideo(page);
   // A <video> element is not a picture: videoWidth/videoHeight stay 0 until a
   // frame actually decodes (ICE/DTLS can finish after the frame container is
@@ -91,6 +94,12 @@ async function takeControlFromRenderedVideo(page: Page, testInfo: TestInfo): Pro
       timeout: 45_000,
     })
     .toBeGreaterThan(0);
+  // The resize banner may not have appeared yet when the frame first mounts.
+  // Check it after decoding, then positively require every input gate to open.
+  await waitForViewportInput(page);
+  await expect(frame, 'the live picture decoded, but the panel never admitted input').toBeVisible({
+    timeout: 45_000,
+  });
   const box = await frame.boundingBox();
   if (!box) throw new Error('the live frame has no bounding box');
   const media = await video.evaluate((el) => {
@@ -104,10 +113,12 @@ async function takeControlFromRenderedVideo(page: Page, testInfo: TestInfo): Pro
     await logWebrtcDebug(page, testInfo, 'browser-control-handover:0x0-dimensions');
     throw new Error('the live video has no decoded frame dimensions');
   }
-  const scale = Math.min(box.width / media.width, box.height / media.height);
-  const left = box.x + (box.width - media.width * scale) / 2;
-  const top = box.y + (box.height - media.height * scale) / 2;
-  await page.mouse.click(left + media.width * scale * 0.5, top + media.height * scale * 0.9);
+  // The centre stays inside both object-contain letterboxing and the encoder's
+  // padding even if capture dimensions change between measurement and click.
+  await frame.click({
+    position: { x: box.width / 2, y: box.height / 2 },
+    timeout: 45_000,
+  });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -138,8 +149,12 @@ test(
     // (pkg/coreagent/core.go); Mia's "guide" persona routes browser work
     // away rather than executing it (media.spec.ts, browser-live-video.spec.ts
     // rely on the same choice).
-    await freshChat(page);
-    await selectAgent(page, /Jim/i);
+    // Select Jim when creating the session. Switching agents afterwards opens
+    // Jim's existing main chat, leaking the previous attempt into every retry.
+    const { sessionId } = await freshChat(page, /Jim/i);
+    // REST-created chats do not emit session_started; bind the Stop helper to
+    // this session if the agent is still working after the handover notice.
+    pinRootSession(page, sessionId);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     await test.step('drive the agent to open a live browser tab', async () => {
@@ -167,7 +182,6 @@ test(
     await test.step('take the wheel by clicking into the live frame', async () => {
       const frame = browserLiveFrame(page);
       await expect(frame).toBeVisible({ timeout: 90_000 });
-      await waitForViewportInput(page);
       // Click empty space away from any link the agent's own navigation
       // might have landed on, but inside the rendered video rather than an
       // object-contain letterbox where production deliberately rejects input.
