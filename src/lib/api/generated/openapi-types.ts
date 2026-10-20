@@ -27068,6 +27068,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     updateSecretOptions: {
@@ -27099,6 +27100,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     getAgentDependencies: {

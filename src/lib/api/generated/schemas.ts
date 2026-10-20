@@ -13111,6 +13111,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
@@ -13152,6 +13157,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],

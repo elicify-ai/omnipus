@@ -12972,6 +12972,8 @@ paths:
                   $ref: '#/components/schemas/SecretNameEntry'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
   /secrets/{reference}/options:
     patch:
       operationId: updateSecretOptions
@@ -13011,6 +13013,8 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '422':
           $ref: '#/components/responses/422UnprocessableEntity'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
   /agents/{id}/dependencies:
     get:
       operationId: getAgentDependencies
