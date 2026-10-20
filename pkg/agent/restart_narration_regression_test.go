@@ -106,6 +106,15 @@ func TestRestartNarration_ParentInputMatchesAdmission(t *testing.T) {
 	}
 }
 
+// GetSessionStore explicitly permits nil after shared-store initialization
+// fails. Reading the first saved input must surface that failure, not panic.
+func TestHelperReportNarration_MissingStoreReturnsError(t *testing.T) {
+	al := &AgentLoop{}
+	_, found, err := al.savedHelperInput("parent", "helper:1:final")
+	require.EqualError(t, err, "helper input: session store is not configured")
+	require.False(t, found)
+}
+
 // Supplemental boundary: retained reports must not multiply the shipped
 // 32-KiB per-report budget into a multi-megabyte model input. Omitted report
 // bodies remain in the inbox and the input explicitly says where to read them.

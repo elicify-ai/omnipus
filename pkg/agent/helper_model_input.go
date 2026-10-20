@@ -50,6 +50,9 @@ func (al *AgentLoop) restartNoticeInput(ctx context.Context, rec *session.Lifecy
 // event id would conflict with SaveChatInput's immutable-content guarantee.
 func (al *AgentLoop) savedHelperInput(recipient, outcomeID string) (string, bool, error) {
 	store := al.GetSessionStore()
+	if store == nil {
+		return "", false, errors.New("helper input: session store is not configured")
+	}
 	addr, _, err := store.SavedChatInput(recipient, "saved-input-"+outcomeID)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", false, nil // WakeSession reports the unavailable recipient
