@@ -246,8 +246,8 @@ func TestWU7ConnectChannel_BadToken_NeverWorking(t *testing.T) {
 		for _, field := range card.Fields {
 			values[field.Key] = badValue
 		}
-		raw, err := json.Marshal(gen.SecretSubmitRequest{Values: &values})
-		require.NoError(t, err)
+		raw, marshalErr := json.Marshal(gen.SecretSubmitRequest{Values: &values})
+		require.NoError(t, marshalErr)
 		resp := w.do(http.MethodPost, "/api/v1/secret-requests/"+card.RequestId+"/submit", string(raw))
 		require.Equal(t, http.StatusOK, resp.Code, "K5 submit: %s", resp.Body.String())
 		var state gen.SecretRequestState
