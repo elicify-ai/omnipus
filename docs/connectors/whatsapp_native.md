@@ -9,12 +9,14 @@ Omnipus connects to WhatsApp directly using the [whatsmeow](https://github.com/t
 **Native mode ships in the default build — no build tag needed.** A standard build (and every official release binary) includes the whatsmeow stack:
 
 ```bash
-go build ./cmd/...        # native WhatsApp included
+make build                # canonical build; native WhatsApp included
 ```
+
+Build through the make targets — they inject the required `goolm,stdjson` build tags (a bare `go build ./cmd/...` fails with a "build constraints exclude all Go files" error).
 
 `modernc.org/sqlite` is pure Go and does not require CGo, so `CGO_ENABLED=0` builds are supported. The whatsmeow + SQLite stack adds roughly 58 MB to the binary.
 
-> **Lite variant.** If you need the smaller binary and don't use native WhatsApp, build with `-tags lite` (`make build-lite`). The lite build omits whatsmeow; with it, `NewWhatsAppNativeChannel` returns an error and the channel will fail to start. The planned UI gating for the lite variant is tracked in [#299](https://github.com/elicify-ai/omnipus/issues/299).
+> **Unsupported architectures.** There is no separate lite build — native WhatsApp ships in every build on every supported platform (Linux, macOS, Windows). On a few unsupported targets — `mipsle`, `netbsd`, and `freebsd/arm` — `modernc.org/sqlite`, the SQLite driver behind the session store, cannot build, so those binaries get a stub instead and the WhatsApp channel fails to start. There, the WhatsApp **Configure** panel on the Connectors screen shows a note that linked-device pairing is unavailable on this server build instead of a QR code.
 
 ## Configuration
 
