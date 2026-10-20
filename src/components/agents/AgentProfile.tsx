@@ -664,7 +664,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const storedOwnToolIterationLimit = agent?.max_tool_iterations_override ?? null
   const ownToolIterationLimit = maxToolIterationsEdit !== undefined ? maxToolIterationsEdit : storedOwnToolIterationLimit
   const limitRefusal = useToolIterationLimitRefusal(agentId, agent?.name)
-  const globalToolIterationLimit = useGlobalToolIterationLimit()
+  // Only while the sheet is open: AppShell mounts this editor on every page,
+  // and /api/v1/performance is an admin-only read (503 under dev-mode bypass).
+  const globalToolIterationLimit = useGlobalToolIterationLimit({ enabled: isOpen })
   const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = executor?.cli
     ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_path, executor.cli_args, ownToolIterationLimit ?? undefined)
     : undefined

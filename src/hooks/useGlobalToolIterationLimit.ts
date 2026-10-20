@@ -18,8 +18,13 @@ const detachedClient = new QueryClient()
  * dev-mode bypass) or when no QueryClientProvider is mounted. Callers must
  * then render the limit without a number — the SPA never prints a literal
  * default (spec FR-004).
+ *
+ * `enabled: false` keeps the hook from reading at all. A caller that is
+ * mounted while not shown (the shell-hosted AgentProfile, closed on every
+ * page) passes its visibility here, so a page load never reads this
+ * admin-only route just because the closed editor exists.
  */
-export function useGlobalToolIterationLimit(): number | undefined {
+export function useGlobalToolIterationLimit({ enabled = true }: { enabled?: boolean } = {}): number | undefined {
   const contextClient = useContext(QueryClientContext)
   const { data } = useQuery(
     {
@@ -27,7 +32,7 @@ export function useGlobalToolIterationLimit(): number | undefined {
       // Deferred access: a test double of '@/lib/api' without this export
       // fails the query (handled) instead of throwing during render.
       queryFn: () => fetchPerformanceSettings(),
-      enabled: contextClient !== undefined,
+      enabled: enabled && contextClient !== undefined,
     },
     contextClient ?? detachedClient,
   )
