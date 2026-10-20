@@ -256,62 +256,59 @@ func TestRunTurn_TransientFailureThatRecovers_ResetsTheBreaker(t *testing.T) {
 		"no call may be refused")
 }
 
-// queuedInstructionProvider asks for the refused call every round and, while
-// answering round 7, has a person queue an instruction for the running turn.
-type queuedInstructionProvider struct {
-	mu       sync.Mutex
-	calls    int
-	al       *AgentLoop
-	requests [][]providers.Message
+// steerWhileRunningTool stands in for a person typing while the round runs:
+// its execution queues an instruction for the running turn, then fails, so
+// the round itself makes no progress.
+type steerWhileRunningTool struct {
+	tools.BaseTool
+	al *AgentLoop
 }
 
 const queuedInstruction = "stop retrying that tool and summarise what you have"
 
-func (p *queuedInstructionProvider) Chat(
-	_ context.Context, msgs []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
-) (*providers.LLMResponse, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.calls++
-	p.requests = append(p.requests, append([]providers.Message(nil), msgs...))
-	if p.calls == 7 {
-		if err := p.al.Steer(providers.Message{Role: "user", Content: queuedInstruction}); err != nil {
-			return nil, err
-		}
+func (s *steerWhileRunningTool) Name() string { return "steer_while_running" }
+func (s *steerWhileRunningTool) Description() string {
+	return "test stub: queues an instruction, then fails"
+}
+func (s *steerWhileRunningTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (s *steerWhileRunningTool) Scope() tools.ToolScope { return tools.ScopeGeneral }
+func (s *steerWhileRunningTool) Execute(context.Context, map[string]any) *tools.ToolResult {
+	if err := s.al.Steer(providers.Message{Role: "user", Content: queuedInstruction}); err != nil {
+		return tools.ErrorResult("steer failed: " + err.Error())
 	}
-	if p.calls <= 7 {
-		fc := providers.FunctionCall{Name: "always_failing_tool", Arguments: "{}"}
-		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
-			ID: fmt.Sprintf("q-%02d", p.calls), Type: "function", Function: &fc,
-		}}}, nil
-	}
-	return &providers.LLMResponse{Content: "summary as asked"}, nil
+	return tools.ErrorResult("still not available")
 }
 
-func (p *queuedInstructionProvider) GetDefaultModel() string { return "scripted-model" }
-
-// TestRunTurn_QueuedInstructionAtTheBreakerStop_IsDeliveredNotLost (T3): a
-// person's instruction arrives in the round that would end the turn. The
-// instruction wins: the turn continues, the model receives it exactly once,
-// and the turn ends on the model's answer.
+// TestRunTurn_QueuedInstructionAtTheBreakerStop_IsDeliveredNotLost (T3): in the
+// round that asks again for the refused call - the round that would end the
+// turn - a person's instruction arrives after the refusal. The instruction
+// wins: the turn continues, the model receives it exactly once, and the turn
+// ends on the model's answer.
 func TestRunTurn_QueuedInstructionAtTheBreakerStop_IsDeliveredNotLost(t *testing.T) {
-	provider := &queuedInstructionProvider{}
+	provider := testutil.NewScenario()
+	scriptRounds(provider, "brk", "always_failing_tool", "{}", 6) // 5 failures, round 6 refused
+	provider.WithToolCalls([]providers.ToolCall{
+		oneCall("again-refused", "always_failing_tool", "{}"),
+		oneCall("person-types", "steer_while_running", "{}"),
+	})
+	provider.WithText("summary as asked")
+
 	al := newRepeatStopLoop(t, provider)
-	provider.al = al
 	stub := &alwaysFailingStubTool{}
 	al.RegisterTool(stub)
-	allowToolsForAllAgents(t, al, "always_failing_tool")
+	al.RegisterTool(&steerWhileRunningTool{al: al})
+	allowToolsForAllAgents(t, al, "always_failing_tool", "steer_while_running")
 
 	finalContent, err := al.processDirectPrimaryForTest(context.Background(),
 		"run always_failing_tool until it works", "test-session-breaker-queued")
 	require.NoError(t, err)
 
 	assert.Equal(t, "summary as asked", finalContent, "the queued instruction must supersede the stop")
-	provider.mu.Lock()
-	defer provider.mu.Unlock()
-	require.Equal(t, 8, provider.calls, "the turn continued for exactly one more round")
+	require.Equal(t, 8, provider.CallCount(), "the turn continued for exactly one more round")
 	delivered := 0
-	for _, m := range provider.requests[7] {
+	for _, m := range provider.AllRequests()[7] {
 		if m.Role == "user" && strings.Contains(m.Content, queuedInstruction) {
 			delivered++
 		}
