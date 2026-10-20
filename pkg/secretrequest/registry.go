@@ -311,7 +311,8 @@ func (r *Registry) Submit(id, owner string, input gen.SecretSubmitRequest) (Reco
 		logStorageFault("state_publication", id, rec.Card.SessionId, persistErr, repairSessionStorage)
 	}
 	r.notifyLocked(rec, "submitted")
-	resumeErr := r.resumeLocked(rec)
+	resumeErr := r.ensureDeliveryLocked(rec)
+	rec = r.entries[id]
 	if resumeErr != nil {
 		logStorageFault("continuation_dispatch", id, rec.Card.SessionId, resumeErr, "reopen this chat to retry the saved continuation")
 	}

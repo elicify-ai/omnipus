@@ -148,6 +148,7 @@ export interface SessionStateSecretRequest {
   session_id: string;
   root_session_id?: string;
   state: "pending" | "submitted" | "cancelled" | "stopped" | "interrupted" | "refused";
+  continuation_unconfirmed?: boolean;
   acting_agent_id: string;
   acting_agent_name: string;
   origin_label?: string;

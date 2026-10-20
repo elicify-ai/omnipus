@@ -184,6 +184,8 @@ func (r *Registry) Stop(sessionID string) error {
 			// once published. A failed publication stays pending and the
 			// next Stop retries it (never a skip on the cached flag).
 			rec.ResumeStopped = true
+			// A deliberate Stop is not a failed delivery (M13).
+			rec.Card.ContinuationUnconfirmed = nil
 			r.entries[rec.Card.RequestId] = rec
 			delete(r.inFlight, rec.Card.RequestId)
 			if err := r.persistLocked(rec.Card.SessionId); err != nil {
@@ -250,11 +252,47 @@ func (r *Registry) RetryResumes() error {
 				continue
 			}
 		}
-		if err := r.resumeLocked(rec); err != nil {
+		if err := r.ensureDeliveryLocked(rec); err != nil {
 			failures = append(failures, err)
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// ensureDeliveryLocked runs the one ensure-delivery primitive (resumeLocked)
+// and records its outcome on the card as continuation_unconfirmed (Train 2
+// gate r1 M13; architect ruling arch-m13-ruling.md): set while a submitted,
+// not-stopped request has no confirmed delivery, cleared once the dispatcher
+// accepted it or its transcript entry exists. The flag is value-free.
+func (r *Registry) ensureDeliveryLocked(rec Record) error {
+	err := r.resumeLocked(rec)
+	r.setUnconfirmedLocked(rec.Card.RequestId, err != nil && rec.Card.State == "submitted" && !rec.ResumeStopped)
+	return err
+}
+
+// setUnconfirmedLocked sets or clears the card's continuation_unconfirmed
+// flag (present only when true) and republishes the session's state when it
+// changed, so a fresh tab and a restart read the same fact. A publication
+// failure is logged value-free; the in-memory flag still serves snapshots.
+func (r *Registry) setUnconfirmedLocked(id string, unconfirmed bool) {
+	rec, ok := r.entries[id]
+	if !ok {
+		return
+	}
+	current := rec.Card.ContinuationUnconfirmed != nil && *rec.Card.ContinuationUnconfirmed
+	if current == unconfirmed {
+		return
+	}
+	if unconfirmed {
+		flag := true
+		rec.Card.ContinuationUnconfirmed = &flag
+	} else {
+		rec.Card.ContinuationUnconfirmed = nil
+	}
+	r.entries[id] = rec
+	if err := r.persistLocked(rec.Card.SessionId); err != nil {
+		logStorageFault("continuation_flag", id, rec.Card.SessionId, err, repairSessionStorage)
+	}
 }
 
 func ResumeEntryID(id string) string { return "secret-resume-" + id }
@@ -274,6 +312,8 @@ func (r *Registry) DeferResume(id, sessionID, reasonCode string) bool {
 	if r.opts.Audit != nil {
 		r.opts.Audit(cloneRecord(rec), "resume_deferred")
 	}
+	// Acceptance was revoked downstream: not delivered (M13).
+	r.setUnconfirmedLocked(id, !rec.ResumeStopped)
 	return true
 }
 
@@ -307,5 +347,10 @@ func (r *Registry) ClaimResume(id, sessionID string) (Record, bool, error) {
 		ID: ResumeEntryID(id), Role: "user", AgentID: rec.Card.ActingAgentId, Content: ResumeMessage(rec),
 	})
 	delete(r.inFlight, id)
+	if err == nil {
+		// The resume entry is in the transcript: delivery confirmed (M13).
+		r.setUnconfirmedLocked(id, false)
+		rec = r.entries[id]
+	}
 	return cloneRecord(rec), claimed, err
 }
