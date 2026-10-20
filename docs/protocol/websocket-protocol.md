@@ -259,7 +259,7 @@ Signals that a streaming response has completed. The partial buffer is finalized
 
 ### `error`
 
-Signals an unrecoverable error during a turn. Renders inline as an error message.
+Reports an error without closing the connection. It can concern a turn, one user message, or one question-card action; message- and card-scoped notifications must not be treated as the end of a running turn.
 
 ```json
 {
@@ -274,8 +274,13 @@ Signals an unrecoverable error during a turn. Renders inline as an error message
 | message | string | yes | Human-readable error description |
 | session_id | string | no | The session the error relates to. |
 | client_message_id | string | no | Present when the error is about one message you sent. |
+| ask_user_card_id | string | no | Exact question-card ID from the submitted answer or cancellation. Non-empty; requires `session_id`. |
 
 An error that carries both `session_id` and `client_message_id` (and no `first_message_error`) is about that one message: it was refused, the error ends no turn, and the chat's running turn continues. A `message_status` frame with `state: "failed"` for the same message follows it.
+
+An error with `ask_user_card_id` concerns only the exact `(session_id, ask_user_card_id)` pair and is sent only to the connection that submitted that card action. It omits `client_message_id` and `first_message_error`. Handle this notification before generic turn-error cleanup: it ends no turn and is not an acknowledgement of acceptance. Authoritative card updates determine whether the card remains pending and can be retried, or was already consumed; a delayed error must not reopen a terminal card or change a promoted successor. An unusable envelope, such as a blank card or session ID, receives an ordinary generic error without card correlation and changes no question state.
+
+Generated validators enforce both declared sibling requirements: `ask_user_card_id` requires `session_id`, and `first_message_error` requires `client_message_id`.
 
 **Producer**: Gateway and agent loop error handlers in `pkg/gateway/`, `pkg/agent/`
 **Consumer**: Chat message component — renders inline error with retry button
@@ -415,7 +420,7 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | S→C | `session_mode_updated` | Acknowledge a per-chat mode change with the resolved Auto-approve setting |
 | S→C | `token` | LLM response token chunk |
 | S→C | `done` | Turn complete, with usage stats |
-| S→C | `error` | Unrecoverable error (does not terminate the connection) |
+| S→C | `error` | Error notification; message/card scopes do not end a turn, and the connection stays open |
 | S→C | `message_status` | Delivery state of one message you sent with a `client_message_id`: `received`, `working`, `failed`, `discarded`, or `held` (an `@` request waiting because the recipient is stopped; it is not a failure) |
 | S→C | `tool_call_start` | Tool invocation began |
 | S→C | `tool_call_result` | Tool invocation completed |

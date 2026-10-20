@@ -95,6 +95,9 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	if al == nil || strings.TrimSpace(req.SessionID) == "" {
 		return res, fmt.Errorf("Stop requires a session")
 	}
+	// Capture the question head before any durable Stop work. A delayed
+	// callback/re-drive may cancel only that identity, never its successor.
+	ctx = al.bindPendingAskStop(ctx, req.SessionID, req.Continue != nil)
 	// N6: once this Stop has ended the session's episode, release any retained
 	// external-CLI driver (its option/env snapshot). No-op while the run is still
 	// winding down (releaseExternalRunIfIdle checks the running flag; the steered
@@ -131,6 +134,9 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	res.Selected = make(map[string]session.StopSelection)
 	swept := make(map[string]bool) // sessions whose stop already ran the shell hook
 	stopTurn := func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
+		// The canceller supplies the accepted execution/control context; the
+		// Stop owner supplies its immutable question-card intent.
+		effectCtx = context.WithValue(effectCtx, pendingAskStopContextKey{}, ctx.Value(pendingAskStopContextKey{}))
 		// D5: this Stop supersedes the session's older pending steers.
 		if selected, carried := stopSelectionFromContext(effectCtx); carried {
 			if err := al.supersedePendingSteers(id, selected.Effect.ControlID); err != nil {
@@ -173,10 +179,11 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	if stopper == nil {
 		stopper = al.steerCanceller()
 	}
-	if _, err := lifecycle.Load(req.SessionID); err != nil {
-		if !errors.Is(err, session.ErrLifecycleNotFound) || req.Continue != nil {
+	rootRecord, readErr := lifecycle.Load(req.SessionID)
+	if readErr != nil {
+		if !errors.Is(readErr, session.ErrLifecycleNotFound) || req.Continue != nil {
 			// An accepted control continues only on its own record.
-			return res, fmt.Errorf("read Stop target: %w", err)
+			return res, fmt.Errorf("read Stop target: %w", readErr)
 		}
 		// An ordinary chat may have no lifecycle record of its own while its
 		// helpers do (their durable edge names it). Stop its own turn, and
@@ -241,6 +248,13 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		// of sessions that have no turn left to stop (already stopped by an
 		// earlier plain Stop, or idle), which the cascade does not reach.
 		al.killTreeBackgroundShells(req.SessionID, hooksFor, swept, &res)
+	}
+	if !rootReached && req.Continue == nil {
+		// A previous Stop may already have landed while its question-state
+		// save failed. A fresh Stop must still retry that captured card, but
+		// not bypass a newer execution or replay an old control's card intent.
+		res.RootErr = errors.Join(res.RootErr,
+			al.retryStoppedPendingAsk(ctx, req.SessionID, rootRecord.Generation, &res.Report))
 	}
 	// A queued-only stop still did work: its durable stop landed without an
 	// active turn. A repeated stop has no Reached entries and is a no-op.

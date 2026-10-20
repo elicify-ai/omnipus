@@ -5,12 +5,14 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -431,9 +433,14 @@ func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll 
 	if err != nil {
 		slog.Warn("ws: handleCancel: RequestCancel error",
 			"session_id", sessionID, "error", err)
+		message := "cancel failed: the Stop request could not be completed. Details are in the server log."
+		if errors.Is(err, askuser.ErrStopTargetChanged) {
+			message = "The question changed before Stop reached it. No replacement card was cancelled. Press Stop again if you want to cancel it."
+		}
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:    string(generated.WsFrameTypeError),
-			Message: "cancel failed: the Stop request could not be completed. Details are in the server log.",
+			Type:      string(generated.WsFrameTypeError),
+			SessionId: &sessionID,
+			Message:   message,
 		})
 		return
 	}

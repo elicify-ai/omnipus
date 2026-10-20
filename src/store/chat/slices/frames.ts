@@ -41,6 +41,7 @@ import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
 import { appendErrorNotice, handleJudgeConclusionErrorFrame } from './error-notice-frames'
+import { handleAskUserCardErrorFrame } from './ask-user-error-frames'
 
 
 
@@ -960,7 +961,7 @@ function applyMessageStatusCase(
 export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, syncForeground, armRateLimitClear, maybeDrainNext, runtime }: FrameContext): FrameSlice {
   return {
     handleFrame: (frame) => {
-      if (handleRoomFrame(frame)) return // group-chat frames never touch session routing (room-frames.ts)
+      if (handleAskUserCardErrorFrame(frame, get, withBucket) || handleRoomFrame(frame)) return // card errors and group-chat frames bypass generic session/turn routing
       // Resolve which session this frame belongs to.
       // session_started is special: it carries the new id for the pending message.
       // ask_user_question nests its session id on card.session_id (required

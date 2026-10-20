@@ -181,8 +181,12 @@ func (f *fakeParkedCardRegistry) PendingForSession(sessionID string) (*askuser.P
 	}
 	return nil, false
 }
-func (f *fakeParkedCardRegistry) CancelOnSessionStop(string) bool   { return false }
+func (f *fakeParkedCardRegistry) CancelOnSessionStop(string) (bool, error) { return false, nil }
+func (f *fakeParkedCardRegistry) CancelOnSessionStopForCard(string, string) (bool, error) {
+	return false, nil
+}
 func (f *fakeParkedCardRegistry) CancelByUser(string, string) error { return nil }
+func (f *fakeParkedCardRegistry) ForgetDeletedSession(string)       {}
 
 // TestKeeper_ParkedCardSuppression proves FR-016: a pending AskUserQuestion
 // set on the goal session suppresses BOTH idle settlement AND the D6c nudge

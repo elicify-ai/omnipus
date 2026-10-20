@@ -35,13 +35,16 @@
 //     auto-default answers marked so they are never mistaken for a human
 //     choice.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, X } from '@phosphor-icons/react'
-import type { AskUserQuestionCard as AskUserCard } from '@/lib/api/generated/asyncapi-types'
+import type { AskUserAnswerFrame, AskUserQuestionCard as AskUserCard } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore } from '@/store/chat'
+import { useConnectionStore } from '@/store/connection'
+import { askUserCardKey, subscribeAskUserAnswerRejection, subscribeAskUserPendingReconciliation } from '@/store/askUserAnswerFeedback'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/error-state'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 /** Grace window before the client auto-submits a fully-answered card. */
@@ -78,6 +81,37 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
   const [now, setNow] = useState(() => Date.now())
   const lastInteraction = useRef(Date.now())
   const submitted = useRef(false)
+  const awaitingReconnectSnapshot = useRef(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const rejectSubmission = useCallback((message: string) => {
+    submitted.current = false
+    awaitingReconnectSnapshot.current = false
+    setSubmitting(false)
+    setSubmitError(message)
+    lastInteraction.current = Date.now()
+  }, [])
+  useEffect(() => {
+    if (card.status !== 'pending') return
+    const identity = { session_id: card.session_id, card_id: card.card_id }
+    const unsubscribeRejection = subscribeAskUserAnswerRejection(identity, rejectSubmission)
+    const unsubscribeConnection = useConnectionStore.subscribe((state, previous) => {
+      if (submitted.current && (!state.isConnected || state.connection !== previous.connection)) {
+        awaitingReconnectSnapshot.current = true
+      }
+    })
+    const unsubscribeReconciliation = subscribeAskUserPendingReconciliation(identity, () => {
+      // Connectivity alone cannot tell whether the server consumed the action.
+      // Only the exact pending card, after authoritative reconciliation, can.
+      if (!awaitingReconnectSnapshot.current || !submitted.current || !useConnectionStore.getState().isConnected) return
+      rejectSubmission('This question card is still waiting after reconnecting. Review your answers, then choose Answer or Cancel to retry.')
+    })
+    return () => {
+      unsubscribeRejection()
+      unsubscribeConnection()
+      unsubscribeReconciliation()
+    }
+  }, [card.session_id, card.card_id, card.status, rejectSubmission])
   const optionsRef = useRef<HTMLDivElement | null>(null)
   // Set when a confirm moved to another question, so focus follows to its
   // first option (keyboard users keep their place).
@@ -207,10 +241,18 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
     })
   }
 
-  function submit(fromDrafts: Record<string, AnswerDraft> = drafts) {
+  function sendAnswer(answer: Omit<AskUserAnswerFrame, 'type'>) {
     if (submitted.current) return
     submitted.current = true
-    sendAskUserAnswer({
+    awaitingReconnectSnapshot.current = false
+    setSubmitting(true)
+    setSubmitError(null)
+    const error = sendAskUserAnswer(answer)
+    if (error) rejectSubmission(error)
+  }
+
+  function submit(fromDrafts: Record<string, AnswerDraft> = drafts) {
+    sendAnswer({
       card_id: card.card_id,
       session_id: card.session_id,
       answers: buildAnswers(fromDrafts),
@@ -218,9 +260,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
   }
 
   function cancel() {
-    if (submitted.current) return
-    submitted.current = true
-    sendAskUserAnswer({ card_id: card.card_id, session_id: card.session_id, cancel: true })
+    sendAnswer({ card_id: card.card_id, session_id: card.session_id, cancel: true })
   }
 
   // 1s tick drives the countdown line; only armed while one is visible.
@@ -246,7 +286,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
   const graceTick = useRef<() => void>(() => {})
   useEffect(() => {
     graceTick.current = () => {
-      if (!submitted.current && allAnswered && Date.now() - lastInteraction.current >= ASK_GRACE_MS) {
+      if (!submitted.current && !submitError && allAnswered && Date.now() - lastInteraction.current >= ASK_GRACE_MS) {
         submit()
       }
     }
@@ -307,6 +347,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
       data-testid="ask-user-question-card"
       role="group"
       aria-label={`Questions from ${card.agent_id}`}
+      aria-busy={submitting}
       className="my-[var(--space-2)] border-y border-[var(--color-border)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
     >
       {/* Header: label + tabs */}
@@ -322,6 +363,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
             see CalendarToolbar.tsx's precedent cited there. */}
         <SegmentedControl
           aria-label="Questions"
+          disabled={submitting}
           value={String(active)}
           onValueChange={(v) => {
             touch()
@@ -376,6 +418,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                 type="button"
                 variant="ghost"
                 aria-pressed={selected}
+                disabled={submitting}
                 onClick={() => selectOption(q, o.label)}
                 onKeyDown={(event) => optionKeyDown(event, q, activeIndex, o.label)}
                 data-ask-nav
@@ -429,6 +472,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
               type="text"
               tabIndex={0}
               value={draftFor(q.header).freeText}
+              disabled={submitting}
               onChange={(e) => typeFreeText(q, e.target.value)}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter') return
@@ -452,7 +496,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
               type="button"
               variant="outline"
               size="sm"
-              disabled={!isAnswered(q)}
+              disabled={submitting || !isAnswered(q)}
               onClick={() => confirmQuestion(activeIndex, drafts)}
               data-testid="ask-user-next"
               className="h-auto rounded-lg px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)]"
@@ -476,13 +520,15 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
         )}
       </div>
 
+      {submitError && <ErrorState message={submitError} className="items-start py-[var(--space-2)]" />}
+
       {/* Footer: Answer + Cancel + counter */}
       <div className="flex items-center gap-[var(--space-2-5)] mt-[var(--space-2-5)]">
         <Button
           type="button"
           variant="default"
           size="sm"
-          disabled={!allAnswered}
+          disabled={submitting || !allAnswered}
           onClick={() => submit()}
           data-testid="ask-user-submit"
           className="h-auto rounded-lg px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)]"
@@ -494,6 +540,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
           variant="ghost"
           size="sm"
           onClick={cancel}
+          disabled={submitting}
           data-testid="ask-user-cancel"
           className="h-auto rounded-none px-[var(--space-1)] text-[length:var(--type-caption-size)] hover:bg-transparent"
         >
@@ -525,7 +572,7 @@ export function AskUserQuestionThreadTail() {
   if (!pendingAsk || pendingAsk.status !== 'pending') return null
   return (
     <div className="w-full max-w-3xl mx-auto px-[var(--space-3)]" data-testid="ask-user-thread-tail">
-      <AskUserQuestionCard card={pendingAsk} />
+      <AskUserQuestionCard key={askUserCardKey(pendingAsk)} card={pendingAsk} />
       <p
         className="text-center font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-1)]"
         data-testid="ask-user-composer-note"

@@ -220,6 +220,12 @@ type UnifiedStore struct {
 	homePath     string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
 	backend      *archiveBackend
 
+	// The optional deletion observer is memory-only best-effort cleanup,
+	// called after successful DeleteSession and after releasing its shard.
+	// It never changes the durable deletion result.
+	sessionDeletedMu       sync.RWMutex
+	sessionDeletedObserver func(sessionID string)
+
 	// archiveMu guards archives: the one ArchiveDayStore per session directory,
 	// shared by the transcript writers and the model-window backend so every
 	// append to a session's archive serializes on the same store lock (effects

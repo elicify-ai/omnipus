@@ -45,14 +45,19 @@ import (
 // (E1/S-32) and clearGoal (a `/goal clear` must not leave an orphaned card
 // behind, E7/S-41). A no-op when no registry is wired or nothing is parked
 // for this session.
-func (al *AgentLoop) cancelOrphanedClarifyCard(reg tools.AskUserQuestionRegistry, sessionID string) {
+func (al *AgentLoop) cancelOrphanedClarifyCard(reg tools.AskUserQuestionRegistry, sessionID string) error {
 	if reg == nil || sessionID == "" {
-		return
+		return nil
 	}
-	if reg.CancelOnSessionStop(sessionID) {
+	cancelled, err := reg.CancelOnSessionStop(sessionID)
+	if err != nil {
+		return fmt.Errorf("cancel parked goal question: %w", err)
+	}
+	if cancelled {
 		logger.InfoCF("agent", "goal: cancelled a parked clarify card without dispatching a resume",
 			map[string]any{"session_id": sessionID})
 	}
+	return nil
 }
 
 // goalClearNoteMet / goalClearNoteUser are the two `clearGoal` note literals
@@ -175,7 +180,11 @@ func (al *AgentLoop) endActiveGoal(sessionID string, store *session.UnifiedStore
 	// AskUserQuestion card parked on this session — cancel it WITHOUT
 	// dispatching a resume turn (the re-homed cancelOrphanedClarifyCard).
 	// Runs whether or not a goal was actually active, exactly as before.
-	al.cancelOrphanedClarifyCard(al.getAskUserRegistry(), sessionID)
+	if err := al.cancelOrphanedClarifyCard(al.getAskUserRegistry(), sessionID); err != nil {
+		logger.WarnCF("agent", "goal: pending question cancellation failed; goal clear not completed",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return "Could not cancel the pending question card. Check session storage and retry.", nil, false
+	}
 
 	if !hadGoal {
 		return "No active goal to clear.", nil, true

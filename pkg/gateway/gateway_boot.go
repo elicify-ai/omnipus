@@ -1284,6 +1284,11 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// agent_created_broadcast.go's doc comment.
 	agentCreatedFn := func(f gen.AgentCreatedFrame) { stg.wsHandler.broadcastAgentCreated(f) }
 	stg.api.agentCreatedBroadcast.Store(&agentCreatedFn)
+	// #1329: the setup-offer line is a saved transcript entry, not a turn
+	// frame. The same hub that journals every other chat frame delivers it
+	// live and on incremental re-attach. wsHandler exists by here
+	// (wireInteractiveServices); a nil hubs is the poster's logged miss.
+	stg.api.sessionHubs = stg.wsHandler.hubs
 	// ADR-067 FR-037 (T067-11): a catalog refresh invalidates the
 	// entitlement cache — the intersection behind every cached answer was
 	// computed against a document that is no longer the served one.
