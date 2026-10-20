@@ -45,7 +45,11 @@ The port is read at startup; a running gateway does not move its listener.
 
 ### Stopping the gateway takes a moment
 
-When you stop the gateway normally — Ctrl-C, or SIGTERM from a service manager — it stops taking new work, then waits for work it had already started to finish writing before it closes its stores: running turns, background task runs, and helper-agent turns, including one that a redirect started while the gateway was shutting down. Each kind of work gets a bounded wait of up to 30 seconds. When a wait runs out, shutdown continues anyway and the log shows a warning such as `Close: steered-turn drain budget exceeded; proceeding with teardown`; that work may be left unfinished.
+When you stop the gateway normally — Ctrl-C, or SIGTERM from a service manager — Omnipus stops its chat channels and cancels the agent loop. It tries to let tracked work finish writing before tearing down the stores it uses, including background task runs and helper-agent turns. This cleanup also covers a helper turn already being resumed by a redirect as shutdown begins.
+
+Shutdown has several wait budgets, not one 30-second limit. The gateway waits up to 65 seconds for active requests, limited by the time remaining on its 70-second shutdown context. Agent cleanup has separate waits of up to 30 seconds for recaps, task dispatches and helper-agent turns, and up to five seconds for each session worker. These are individual wait budgets, not a guaranteed total stop time. If the gateway's shutdown context expires, it can continue shutdown without waiting for agent cleanup to finish.
+
+When a wait runs out, cleanup continues and the log shows a warning such as `Close: steered-turn drain budget exceeded; proceeding with teardown`. Some work or its final writes may be left unfinished.
 
 ## A connection shows a credential error (degraded)
 

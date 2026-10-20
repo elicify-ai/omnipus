@@ -171,6 +171,10 @@ Every change is recorded in the audit log as a `security_setting_change` event. 
 
 If an agent's own limit changes between the dialog opening and your confirmation, nothing is saved. The dialog shows **"The list of affected agents changed — review and confirm again."** with the new list, and you confirm again.
 
+### A save that reloads the configuration can pause
+
+When a save makes the gateway reload its configuration, the reload first waits for a background queued-task check or mail check that is already in progress, so it is not cut off halfway. Each of the two checks gets up to 10 seconds, one after the other. Do not repeat the save while the first one is still pending. If a check is still running when its wait runs out, the reload goes ahead without it and the log shows a warning that names the poller (for example, "the mail poller was still in a mail check after its stop wait"). That check finishes on its own; if the warning repeats, check the mailbox connection or, for the queued-task poller, the task store.
+
 ### When a save is not applied yet
 
 Rarely, a save is written but not yet in force. A warning then starts with **"Saved, but not applied yet"**. It names only the settings that save changed (for this card, "the tool-iteration limit"). The agents that save lowered are named at the moment of the save — in a status toast and inline under the field — but that naming does not survive a page reload: reload, and the list under the field is gone, even though the "Saved, but not applied yet" warning itself keeps showing. The audit log is the lasting record of which agents were lowered and when. It comes in two forms:
