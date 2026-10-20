@@ -111,9 +111,13 @@ func (s *ArchiveDayStore) scanAllLocked(fn func(ArchiveAddress, ArchiveRecord) b
 	if _, statErr := os.Stat(cur); statErr == nil {
 		_, err = s.scanPartitionLocked(cur, mark, fn, strict)
 		return err
-	} else if strict || !errors.Is(statErr, fs.ErrNotExist) {
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		return fmt.Errorf("archive: scan: stat current: %w", statErr)
 	}
+	// Rollover publishes the day mark before appendLineLocked creates the new
+	// current file. Its absence alone is not lost data; a known record's ReadAt
+	// still refuses a missing addressed partition, and strict decoding above
+	// still refuses corrupt records in every existing partition.
 	return nil
 }
 
