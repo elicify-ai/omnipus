@@ -8,6 +8,7 @@ package common
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -158,32 +159,42 @@ func TestDecodeToolCallArguments_NonObjectRefused(t *testing.T) {
 	}
 }
 
-// TestToolArgumentsErrorIsDiagnostic requires the error to carry the two
-// things an operator needs to tell truncation apart from malformation: which
-// tool was being called, and the actual fragment that arrived.
-//
-// Without the fragment the message is indistinguishable from an ordinary
-// schema complaint, which is precisely the confusion the fix exists to end.
+// TestToolArgumentsErrorIsDiagnostic pins the founder's 2026-10-20 M24
+// ruling (security W1): diagnostics name the tool, payload size, parsing
+// stop offset and cutoff versus malformed state, NEVER payload text. The
+// sentinel and JSON cause remain reachable; ADR-087 truncation evidence is
+// unchanged. An unfinished object stops at len(payload); '!' is the first
+// invalid byte in the malformed case. Double encoding changes neither the
+// inner size nor its parse offset. The non-ASCII value distinguishes bytes
+// from character counts.
 func TestToolArgumentsErrorIsDiagnostic(t *testing.T) {
-	_, err := DecodeToolCallArguments(json.RawMessage(`{"query`), "web_search")
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-
-	// Assert on Body, not Error(). Body is the canonical message and the
-	// string the classifier actually reads; Error() wraps it in the
-	// provider-error envelope and re-quotes it, which escapes the fragment a
-	// second time and makes a substring match on it meaningless.
-	var pe *ProviderError
-	if !errors.As(err, &pe) {
-		t.Fatalf("error is not a *ProviderError: %v", err)
-	}
-
-	if !strings.Contains(pe.Body, "web_search") {
-		t.Errorf("error does not name the tool: %s", pe.Body)
-	}
-	if !strings.Contains(pe.Body, `{\"query`) {
-		t.Errorf("error does not quote the offending fragment: %s", pe.Body)
+	const secret = "M24-DIAGNOSTIC-PRIVATE-SENTINEL-雪"
+	prefix := `{"token":"` + secret + `"`
+	for _, tc := range []struct {
+		name, payload string
+		stop          int64
+		truncated     bool
+	}{
+		{name: "cut_off_object", payload: prefix, stop: int64(len(prefix)), truncated: true},
+		{name: "malformed_object", payload: prefix + ` !}`, stop: int64(len(prefix) + 2)},
+	} {
+		for _, encoded := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/encoded=%t", tc.name, encoded), func(t *testing.T) {
+				raw := json.RawMessage(tc.payload)
+				if encoded {
+					var marshalErr error
+					raw, marshalErr = json.Marshal(tc.payload)
+					if marshalErr != nil {
+						t.Fatal(marshalErr)
+					}
+				}
+				args, err := DecodeToolCallArguments(raw, "web_search")
+				if args != nil {
+					t.Fatalf("undecodable arguments must not become dispatchable: %v", args)
+				}
+				assertValueFreeArgumentDiagnostic(t, err, "web_search", "M24-DIAGNOSTIC", len(tc.payload), tc.stop, tc.truncated)
+			})
+		}
 	}
 }
 
@@ -254,26 +265,87 @@ func TestToolArgumentsErrorAvoidsClassifierTraps(t *testing.T) {
 	}
 }
 
-// TestToolArgumentsErrorCapsQuotedFragment checks the quoted fragment is
-// bounded. The fragment is the diagnostic, but a runaway or hostile payload
-// must not flood a log line, and the message must say how much it cut so the
-// reader knows it is looking at a prefix.
+// TestToolArgumentsErrorCapsQuotedFragment keeps its historical regression
+// name but follows the founder's 2026-10-20 M24 ruling: a payload is now
+// omitted entirely, not merely prefix-capped. Large cutoff AND malformed
+// calls still report their exact byte count and parser stop offset, preserve
+// the cause/truncation evidence, and stay within the existing message budget.
 func TestToolArgumentsErrorCapsQuotedFragment(t *testing.T) {
-	// Unterminated string literal: long, and genuinely undecodable.
-	oversized := `{"content":"` + strings.Repeat("A", 4096)
+	const secret = "M24-OVERSIZED-PRIVATE-SENTINEL"
+	for _, size := range []int{4096, 16384} {
+		prefix := `{"content":"` + secret + strings.Repeat("A", size)
+		for _, truncated := range []bool{true, false} {
+			t.Run(fmt.Sprintf("bytes=%d/cutoff=%t", size, truncated), func(t *testing.T) {
+				payload := prefix
+				stop := int64(len(payload))
+				if !truncated {
+					payload += `" !}`
+					// One-based position of the first invalid byte, after
+					// the closing string quote and separating space.
+					stop = int64(len(prefix) + 3)
+				}
+				args, err := DecodeToolCallArguments(json.RawMessage(payload), "write_file")
+				if args != nil {
+					t.Fatalf("undecodable arguments must not become dispatchable: %v", args)
+				}
+				assertValueFreeArgumentDiagnostic(t, err, "write_file", secret, len(payload), stop, truncated)
+				if len(err.Error()) > maxUndecodableArgumentsQuoted*2 {
+					t.Errorf("value-free diagnostic is %d bytes, exceeds the existing %d-byte message budget",
+						len(err.Error()), maxUndecodableArgumentsQuoted*2)
+				}
+			})
+		}
+	}
+}
 
-	_, err := DecodeToolCallArguments(json.RawMessage(oversized), "write_file")
+func assertValueFreeArgumentDiagnostic(t *testing.T, err error, tool, sentinel string, size int, stop int64, truncated bool) {
+	t.Helper()
 	if err == nil {
-		t.Fatal("expected an error")
+		t.Fatal("malformed tool arguments must be refused")
 	}
-	msg := err.Error()
-
-	if len(msg) > maxUndecodableArgumentsQuoted*2 {
-		t.Errorf("error message is %d bytes, want it bounded near the %d-byte quote cap",
-			len(msg), maxUndecodableArgumentsQuoted)
+	if !errors.Is(err, ErrToolArgumentsUndecodable) {
+		t.Errorf("the refusal must retain ErrToolArgumentsUndecodable: %v", err)
 	}
-	if !strings.Contains(msg, "bytes total") {
-		t.Errorf("truncated quote must report the true payload length: %s", msg)
+	var pe *ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("the refusal must remain a ProviderError: %T", err)
+	}
+	if pe.Status != 0 {
+		t.Errorf("provider status = %d, want 0; this is a decode error, not an HTTP failure", pe.Status)
+	}
+	var arguments *ToolArgumentsError
+	if !errors.As(err, &arguments) {
+		t.Fatalf("the refusal must remain a ToolArgumentsError: %T", err)
+	}
+	if arguments.ToolName != tool || arguments.Truncated != truncated {
+		t.Errorf("tool/truncation evidence = %q/%t, want %q/%t", arguments.ToolName, arguments.Truncated, tool, truncated)
+	}
+	var cause *json.SyntaxError
+	if !errors.As(err, &cause) {
+		t.Fatalf("the JSON syntax cause must remain reachable: %T", err)
+	}
+	if cause.Offset != stop {
+		t.Errorf("JSON cause offset = %d, want %d from the constructed input", cause.Offset, stop)
+	}
+	shape := "not valid JSON"
+	if truncated {
+		shape = "cut off before the end"
+	}
+	for surface, message := range map[string]string{"error": err.Error(), "provider body": pe.Body} {
+		for _, want := range []string{fmt.Sprintf("tool %q", tool), fmt.Sprintf("%d bytes", size), fmt.Sprintf("parsing stopped at byte %d", stop), shape} {
+			if !strings.Contains(message, want) {
+				t.Errorf("%s lacks value-free diagnostic %q: %s", surface, want, message)
+			}
+		}
+		if strings.Contains(message, sentinel) {
+			t.Errorf("%s leaked the planted payload sentinel (M24 forbids payload quoting)", surface)
+		}
+		if strings.Contains(message, cause.Error()) {
+			t.Errorf("%s echoed the JSON cause text instead of keeping it only in the error chain", surface)
+		}
+		if !truncated && strings.Contains(message, "cut off") {
+			t.Errorf("%s labels malformed input as a cutoff: %s", surface, message)
+		}
 	}
 }
 
