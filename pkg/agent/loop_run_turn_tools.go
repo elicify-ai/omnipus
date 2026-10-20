@@ -1304,6 +1304,12 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 				Reason: errMsg,
 			},
 		)
+		// Asked again, in a later round, for a call already refused this
+		// turn: end the turn after this round (finishToolIteration) rather
+		// than pay a provider round per repeat until the iteration cap.
+		if ex.rx.rr.rq.ri.rf.rt.ts.recordBrokenSignatureRefusal(ex.toolCBSig, ex.rx.rr.rq.ri.rf.rt.iteration) {
+			ex.rx.rr.rq.ri.rf.rt.ts.requestToolFailureStop(toolFailureStopNotice(ex.toolName))
+		}
 		return agentLoopRunTurnToolsExecuteContinue
 	}
 
@@ -2146,6 +2152,22 @@ func (rx *agentLoopRunTurnTools) finishToolIteration() agentLoopRunTurnToolsFlow
 			rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
 			return agentLoopRunTurnToolsBreakL1
 		}
+	}
+	// The model asked again for a call the identical-failure breaker had
+	// already refused (tool_failure_circuit_breaker.go). Same exit as the
+	// identical-success stop above; a queued user message is new input and
+	// lets the turn continue.
+	if notice := rx.rr.rq.ri.rf.rt.ts.takeToolFailureStop(); notice != "" && len(rx.rr.rq.ri.pendingMessages) == 0 {
+		logger.WarnCF("agent", "Turn stopped: the model asked again for a tool call the circuit breaker had already refused",
+			map[string]any{
+				"agent_id":  rx.rr.rq.ri.rf.rt.ts.agent.ID,
+				"turn_id":   rx.rr.rq.ri.rf.rt.ts.turnID,
+				"iteration": rx.rr.rq.ri.rf.rt.iteration,
+				"threshold": toolFailureCircuitBreakThreshold,
+			})
+		rx.finalContent = notice
+		rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+		return agentLoopRunTurnToolsBreakL1
 	}
 	return agentLoopRunTurnToolsNext
 }

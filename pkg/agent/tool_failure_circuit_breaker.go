@@ -224,6 +224,62 @@ func (ts *turnState) takeToolRepeatStop() string {
 	return notice
 }
 
+// recordBrokenSignatureRefusal notes that the breaker refused sig in round
+// and reports whether it had already refused sig in an EARLIER round of this
+// turn: the model was shown the refusal and asked for the same call again
+// anyway. Only signatures the identical-failure breaker marked broken count;
+// an oscillation refusal is per-call and never ends the turn. Refusals of
+// several identical calls batched into one round count as one round, so a
+// model still gets one round to react to the refusal it was shown.
+func (ts *turnState) recordBrokenSignatureRefusal(sig string, round int) (again bool) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if _, broken := ts.toolCircuitBroken[sig]; !broken {
+		return false
+	}
+	first, seen := ts.toolBreakerRefusedRound[sig]
+	if !seen {
+		if ts.toolBreakerRefusedRound == nil {
+			ts.toolBreakerRefusedRound = make(map[string]int)
+		}
+		ts.toolBreakerRefusedRound[sig] = round
+		return false
+	}
+	return round > first
+}
+
+// requestToolFailureStop records the final message the turn ends with at the
+// end of the current round. The first request in a round wins.
+func (ts *turnState) requestToolFailureStop(notice string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.toolFailureStopNotice == "" {
+		ts.toolFailureStopNotice = notice
+	}
+}
+
+// takeToolFailureStop returns and clears a pending stop notice ("" when none).
+func (ts *turnState) takeToolFailureStop() string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	notice := ts.toolFailureStopNotice
+	ts.toolFailureStopNotice = ""
+	return notice
+}
+
+// toolFailureStopNotice is the visible final content of a turn ended because
+// the model asked again for a call the identical-failure breaker had already
+// refused (release run 39391964355: an evidence-less goal_claim asked for
+// until the turn ran 109 iterations).
+func toolFailureStopNotice(toolName string) string {
+	return fmt.Sprintf(
+		"I stopped this turn: my call to `%s` failed %d times in a row with the same arguments and the "+
+			"same result, further identical attempts were blocked, and I asked for it again anyway. "+
+			"Tell me how you would like to proceed, or ask me to try a different approach.",
+		toolName, toolFailureCircuitBreakThreshold-1,
+	)
+}
+
 // toolRepeatWarnNotice is appended to a successful tool result once its
 // identical-success run reaches toolRepeatWarnThreshold.
 func toolRepeatWarnNotice(toolName string, run int) string {
