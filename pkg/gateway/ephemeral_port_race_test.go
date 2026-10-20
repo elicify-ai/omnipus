@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,47 +32,78 @@ import (
 var wu15BootPortDrawnForTest func(port int)
 
 // drawFreeTCPPort returns a port that was free when its listener was closed.
-// A draw that cannot even listen IS occupied (the squatter case
-// pkg/agent/testutil's bootUntilReady guards) — it redraws, bounded.
+// Only EADDRINUSE retries; resource/permission/close/type errors remain loud.
 func drawFreeTCPPort(t *testing.T, attempts int) int {
 	t.Helper()
-	for i := 0; i < attempts; i++ {
+	port, err := drawFixturePort("TCP", attempts, func() (int, error) {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
-			continue
+			return 0, err
 		}
-		addr, ok := ln.Addr().(*net.TCPAddr)
-		if !ok {
-			_ = ln.Close()
-			continue
-		}
-		port := addr.Port
-		require.NoError(t, ln.Close())
-		return port
-	}
-	t.Fatalf("drawFreeTCPPort: %d consecutive port draws failed", attempts)
-	return 0
+		return closeFixturePort("TCP", ln.Addr(), ln)
+	})
+	require.NoError(t, err, "drawFreeTCPPort failed")
+	return port
 }
 
-// drawFreeUDPPort is drawFreeTCPPort for the UDP media fixtures.
+// drawFreeUDPPort applies the same bounded, diagnostic-preserving rule to UDP.
 func drawFreeUDPPort(t *testing.T, attempts int) int {
 	t.Helper()
-	for i := 0; i < attempts; i++ {
+	port, err := drawFixturePort("UDP", attempts, func() (int, error) {
 		pc, err := net.ListenPacket("udp", ":0")
 		if err != nil {
-			continue
+			return 0, err
 		}
-		addr, ok := pc.LocalAddr().(*net.UDPAddr)
-		if !ok {
-			_ = pc.Close()
-			continue
-		}
-		port := addr.Port
-		require.NoError(t, pc.Close())
-		return port
+		return closeFixturePort("UDP", pc.LocalAddr(), pc)
+	})
+	require.NoError(t, err, "drawFreeUDPPort failed")
+	return port
+}
+
+// drawFixturePort keeps the OS cause, including when the retry budget expires.
+// The injected draw is only the socket edge: tests can induce EMFILE without
+// exhausting descriptors on this shared machine.
+func drawFixturePort(network string, attempts int, draw func() (int, error)) (int, error) {
+	if attempts < 1 {
+		return 0, fmt.Errorf("%s fixture port draw requires at least one attempt", network)
 	}
-	t.Fatalf("drawFreeUDPPort: %d consecutive port draws failed", attempts)
-	return 0
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		port, err := draw()
+		if err == nil {
+			return port, nil
+		}
+		lastErr = fmt.Errorf("%s fixture port draw %d/%d failed: %w", network, attempt, attempts, err)
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			return 0, lastErr
+		}
+	}
+	return 0, lastErr
+}
+
+func closeFixturePort(network string, addr net.Addr, socket io.Closer) (int, error) {
+	var port int
+	var typeErr error
+	switch a := addr.(type) {
+	case *net.TCPAddr:
+		if network == "TCP" {
+			port = a.Port
+		} else {
+			typeErr = fmt.Errorf("%s fixture received unexpected address type %T", network, addr)
+		}
+	case *net.UDPAddr:
+		if network == "UDP" {
+			port = a.Port
+		} else {
+			typeErr = fmt.Errorf("%s fixture received unexpected address type %T", network, addr)
+		}
+	default:
+		typeErr = fmt.Errorf("%s fixture received unexpected address type %T", network, addr)
+	}
+	if err := errors.Join(typeErr, socket.Close()); err != nil {
+		return 0, err
+	}
+	return port, nil
 }
 
 // TestWU15RoomsBoot_BindRaceLostOnFirstPort_BootsOnAFreshPort FORCES the bind
