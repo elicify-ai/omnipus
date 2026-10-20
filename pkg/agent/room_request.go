@@ -769,13 +769,22 @@ func (al *AgentLoop) SetRoomCallPricer(p RoomCallPricer) {
 
 // roomCallCost is the cost of one model call as the room allocation reads it,
 // and whether its price is known: the installed pricer, or else the call's own
-// catalog price (pkg/agent/prompt_cache_accounting.go::accountProviderCall),
-// known unless the catalog classes the call unpriced.
+// catalog price (pkg/agent/prompt_cache_accounting.go::accountProviderCall).
 func (al *AgentLoop) roomCallCost(model string, usage *providers.UsageInfo, price promptcache.PriceResult) (float64, bool) {
 	if p := al.roomPricer.Load(); p != nil && usage != nil {
 		return (*p)(model, *usage), true
 	}
-	return price.Cost, price.BillingClass != promptcache.BillingClassUnpriced
+	return price.Cost, roomPriceKnown(price)
+}
+
+// roomPriceKnown reports whether a call's catalog price is known as a whole,
+// as the room allocation needs it (§6.14: a turn with an unknown price adds
+// nothing and marks "plus unpriced turns"). A fully unpriced call is not, and
+// neither is a MIXED call: the caching accounting keeps it "priced" while it
+// carries unpriced tokens, and its dollars cover only the priced portions
+// (gate round 3, architect R3-N1). A subscription call is a known zero.
+func roomPriceKnown(price promptcache.PriceResult) bool {
+	return price.BillingClass != promptcache.BillingClassUnpriced && price.UnpricedTokens == 0
 }
 
 // roomCostMeter accumulates the cost and consumed inputs of one ordinary turn
@@ -805,7 +814,7 @@ func (m *roomCostMeter) addCall(turnID, model string, usage *providers.UsageInfo
 	if m == nil {
 		return
 	}
-	cost, priced := price.Cost, price.BillingClass != promptcache.BillingClassUnpriced
+	cost, priced := price.Cost, roomPriceKnown(price)
 	if m.al != nil {
 		cost, priced = m.al.roomCallCost(model, usage, price)
 	}

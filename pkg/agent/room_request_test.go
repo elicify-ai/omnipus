@@ -323,4 +323,29 @@ func TestRoomCallPricer_FeedsOnlyTheRoomAllocation(t *testing.T) {
 	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); cost != 0 || !unpriced {
 		t.Fatalf("a catalog-unpriced call must mark unpriced and add nothing: %v unpriced=%v", cost, unpriced)
 	}
+
+	// Gate round 3, architect R3-N1: a MIXED call stays "priced" in the
+	// caching accounting (it carries unpriced tokens; the cohere fixture
+	// prices no one-hour cache write), but its price is not known as a whole,
+	// so for the room it adds nothing and marks "plus unpriced turns"
+	// (§6.14). Usage is the caching producer fixture's "mixed one-hour
+	// unpriced" case.
+	mixed := &providers.UsageInfo{PromptTokens: 100, CompletionTokens: 10, CacheReadTokens: 800,
+		CacheWriteTokens: 100, CacheWrite5mTokens: 40, CacheWrite1hTokens: 60, TotalTokens: 1010}
+	ts.opts.roomCost = &roomCostMeter{al: al, inputs: 1, rooms: map[string]int{}}
+	_, mixedPrice := ts.accountProviderCall("cohere", "cache-model", mixed)
+	if mixedPrice.BillingClass != "priced" || mixedPrice.UnpricedTokens != 60 {
+		t.Fatalf("instrument: the fixture must be a mixed call (priced, 60 unpriced tokens), got %+v", mixedPrice)
+	}
+	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); cost != 0 || !unpriced {
+		t.Fatalf("a mixed call must mark the room unpriced and add nothing: %v unpriced=%v", cost, unpriced)
+	}
+
+	// Control: a subscription call is a known zero (no per-call dollar
+	// debit), not an unknown price: it adds 0 and does not set the mark.
+	ts.opts.roomCost = &roomCostMeter{al: al, inputs: 1, rooms: map[string]int{}}
+	ts.accountProviderCall("openai-chatgpt", "cache-model", usage)
+	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); cost != 0 || unpriced {
+		t.Fatalf("a subscription call is a known zero: %v unpriced=%v", cost, unpriced)
+	}
 }
