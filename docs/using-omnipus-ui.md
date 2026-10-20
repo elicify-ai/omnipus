@@ -122,7 +122,7 @@ When an agent needs a key, token or password, its secret card appears above the 
 | A resolved request | Shows **Saved**, **Cancelled**, **Stopped**, **Request unavailable**, or **Refused**, as reported by the server. A restart-interrupted request is unavailable, not saved. |
 | Reconnecting or reloading | Restores the request metadata and latest result supplied by the server, never typed values from the server. Reloading starts a pending card with empty fields; reconnecting never automatically resends them. |
 
-In the open tab, the saved-but-unconfirmed warning survives reconnecting, later **Saved** updates, and moving away from the chat and back. A state check that finds the stored secret does not prove the agent continued. Only a confirmed successful submit or a different final request outcome clears that warning. A full page reload restores the server's request metadata, not this tab's warning.
+The saved-but-unconfirmed warning is restored after a page reload or in a fresh tab while the server still reports the follow-up as unconfirmed, and clears when delivery is confirmed, you stop the follow-up, or the request reaches another final state; reopen the chat to retry without re-entering or resending the secret.
 
 Secret cards are available independently of the agent profile's **Private secrets** list, which is not yet enabled. See [security](security.md) for the limits of secret storage and use.
 

@@ -2,11 +2,12 @@
 // Oracle: the SF-01 dispatch and chief's explicit clearing/racing-WS ruling.
 // Real component, store, frame handling and API client; doubles only at fetch/socket.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { SecretRequestFrame, SecretRequestResolvedFrame } from '@/lib/api/generated/asyncapi-types'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { SecretRequestFrame, SecretRequestResolvedFrame, SessionSnapshotFrame, SessionStateFrame, SessionStateSecretRequest } from '@/lib/api/generated/asyncapi-types'
 import type { ErrorResponse, SecretRequestState } from '@/lib/api/generated/openapi-types'
 import { getSecretRequest } from '@/lib/api/secrets'
 import { queryClient } from '@/lib/queryClient'
+import { parseFrameSafe } from '@/lib/ws'
 import { useChatStore } from '@/store/chat'
 import { useSecretRequestStore } from '@/store/secretRequests'
 import { useSessionStore } from '@/store/session'
@@ -105,7 +106,8 @@ describe('SF-01 saved but continuation unconfirmed', () => {
     const readback = await getSecretRequest(frame.request_id)
     act(() => useSecretRequestStore.getState().applyState(readback))
     expectWarning()
-    act(() => useSecretRequestStore.getState().reconcileSession(frame.session_id, [{ ...frame, ...saved }]))
+    // M13: a still-unconfirmed authoritative snapshot now says so explicitly.
+    act(() => useSecretRequestStore.getState().reconcileSession(frame.session_id, [{ ...frame, ...saved, continuation_unconfirmed: true }]))
     expectWarning()
     act(() => useChatStore.getState().handleFrame(frame))
     expectWarning()
@@ -175,5 +177,81 @@ describe('SF-01 saved but continuation unconfirmed', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.queryByTestId('secret-request-result')).not.toBeInTheDocument()
     expectNoEchoOrReplay()
+  })
+})
+
+// M13 / T2-SF-02: the authoritative continuation flag is on K4's two
+// session-state carriers, not on K3's one-shot resolved frame or K5 GET.
+// Oracle: architect M13 ruling, Decision / SPA paragraph (2026-10-20).
+const snapshotEntry: SessionStateSecretRequest = {
+  ...saved,
+  session_id: frame.session_id,
+  acting_agent_id: frame.acting_agent_id,
+  acting_agent_name: frame.acting_agent_name,
+  purpose: frame.purpose,
+  recipient: frame.recipient,
+  fields: frame.fields,
+}
+const carriers = ['session_snapshot', 'session_state'] as const
+
+function deliverProjection(carrier: typeof carriers[number], request: SessionStateSecretRequest) {
+  const message: SessionSnapshotFrame | SessionStateFrame = carrier === 'session_snapshot'
+    ? { type: carrier, session_id: frame.session_id, seq: 1, reason: 'unknown_position', secret_requests: [request] }
+    : { type: carrier, session_id: frame.session_id, user_id: 'l1-red-user', pending_approvals: [], emitted_at: saved.updated_at, secret_requests: [request] }
+  // Exercise the real generated validator as well as the dispatcher: a
+  // schema that dropped the new field would fail this exact-shape assertion.
+  const parsed = parseFrameSafe(JSON.stringify(message))
+  expect(parsed).toEqual(message)
+  if (!parsed || (parsed.type !== 'session_snapshot' && parsed.type !== 'session_state')) {
+    throw new Error('M13 projection must validate as a server session-state frame')
+  }
+  act(() => useChatStore.getState().handleFrame(parsed))
+}
+
+function expectPlainSaved() {
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(screen.getByTestId('secret-request-result').textContent).toBe('Saved · stored as reporting_key.v1')
+  expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
+  expect(queryLabelledControl('Reporting API key')).not.toBeInTheDocument()
+}
+
+describe('M13 reload-safe continuation projection', () => {
+  it.each(carriers)('restores the warning from %s after reload without any surviving tab-local state', async carrier => {
+    await showUnconfirmed()
+    cleanup()
+    act(() => useSecretRequestStore.getState().reset())
+    expect(useSecretRequestStore.getState().byId).toEqual({})
+
+    deliverProjection(carrier, { ...snapshotEntry, continuation_unconfirmed: true })
+    render(<SecretRequestThreadTail />)
+    expectWarning()
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument()
+    expectNoEchoOrReplay()
+  })
+
+  describe.each(carriers)('%s authoritative confirmation', carrier => {
+    it.each([undefined, false])('clears the warning when the flag is %s and renders plain Saved', async flag => {
+      await showUnconfirmed()
+      deliverProjection(carrier, { ...snapshotEntry, continuation_unconfirmed: flag })
+      expectPlainSaved()
+      expectNoEchoOrReplay()
+    })
+  })
+
+  it('updates the mounted card as live session_state toggles the flag, without a submit or reload', () => {
+    deliverProjection('session_state', snapshotEntry)
+    render(<SecretRequestThreadTail />)
+    expectPlainSaved()
+
+    deliverProjection('session_state', { ...snapshotEntry, continuation_unconfirmed: true })
+    expectWarning()
+    deliverProjection('session_state', snapshotEntry)
+    expectPlainSaved()
+    // A later downstream revocation can make delivery unconfirmed again.
+    deliverProjection('session_state', { ...snapshotEntry, continuation_unconfirmed: true })
+    expectWarning()
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument()
+    expect(requests).toEqual([])
+    expect(socketSends).toEqual([])
   })
 })

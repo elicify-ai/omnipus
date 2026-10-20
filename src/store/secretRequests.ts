@@ -31,7 +31,7 @@ export interface SecretRequestEntry { // not-wire-format: the generated server r
   localPhase?: SecretLocalPhase
   /** Safe, value-free reason for a rejected submit. */
   localMessage?: string
-  /** Committed 503: stored values, but no confirmed continuation in this tab. */
+  /** Committed 503 or server snapshot: saved, but continuation is unconfirmed. */
   continuationUnconfirmed?: boolean
   /** A pending request a newer snapshot no longer lists: read its state. */
   checkRequired?: boolean
@@ -130,9 +130,14 @@ export const useSecretRequestStore = create<SecretRequestStore>((set) => ({
           ...existing,
           request,
           checkRequired: false,
-          continuationUnconfirmed: isTerminalSecretState(request.state) && request.state !== 'submitted'
-            ? undefined
-            : existing?.continuationUnconfirmed,
+          // M13 / K4: snapshots carry the authoritative delivery fact. An
+          // absent flag on a submitted entry means confirmed (or stopped),
+          // unlike a K3 resolved frame or K5 GET, which only confirm storage.
+          continuationUnconfirmed: request.state === 'submitted'
+            ? request.continuation_unconfirmed === true || undefined
+            : isTerminalSecretState(request.state)
+              ? undefined
+              : existing?.continuationUnconfirmed,
           // The server's terminal state ends any local phase of this tab.
           ...(isTerminalSecretState(request.state) ? { localPhase: undefined, localMessage: undefined } : {}),
         }
