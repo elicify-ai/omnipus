@@ -53,8 +53,9 @@ func TestPrice_CatalogArithmetic(t *testing.T) {
 	}
 }
 
-// TestPrice_MissingInputIsUnpriced is TDD row 5. 1,000 tokens at the old
-// $3-per-million fallback would be $0.003. That fallback is not the result.
+// TestPrice_MissingInputIsUnpriced is TDD row 5 and FR-015. Missing input
+// pricing records exactly zero dollars, explicitly unpriced, while retaining
+// all 2,200 tokens: 1,000 prompt + 200 output + 1,000 cache read.
 func TestPrice_MissingInputIsUnpriced(t *testing.T) {
 	got := Price(PriceInput{
 		ProviderID: "openai",
@@ -64,15 +65,15 @@ func TestPrice_MissingInputIsUnpriced(t *testing.T) {
 			CacheReadTokens:  1000,
 		},
 	})
-	const oldFallback = 0.003 // $3 per million input on 1,000 tokens
-	if got.Cost == oldFallback || got.Cost == oldFallback*2 {
-		t.Fatalf("cost = %v, used the old $3-per-million fallback; want unpriced", got.Cost)
+	if got.Cost != 0 {
+		t.Fatalf("cost = %v, want exactly 0 dollars for an unpriced call", got.Cost)
 	}
 	if got.BillingClass != BillingClassUnpriced {
 		t.Fatalf("billing class = %q, want %q", got.BillingClass, BillingClassUnpriced)
 	}
-	if got.UnpricedTokens == 0 {
-		t.Fatal("unpriced tokens = 0, want the call's tokens kept")
+	const wantUnpricedTokens = 2200 // 1,000 prompt + 200 output + 1,000 cache read
+	if got.UnpricedTokens != wantUnpricedTokens {
+		t.Fatalf("unpriced tokens = %d, want %d (all prompt, output, and cache-read tokens)", got.UnpricedTokens, wantUnpricedTokens)
 	}
 }
 
