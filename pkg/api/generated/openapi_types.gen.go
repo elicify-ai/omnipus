@@ -16150,6 +16150,18 @@ type ChannelCreateResponse struct {
 	Type string `json:"type"`
 }
 
+// ChannelEnableRequest Optional body of PUT /api/v1/channels/{id}/enable. An absent body or {} is an ordinary enable and grants no chat ownership of a pairing. pairing_retry is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the gateway proves the caller owns session_id and that the request/session pair is the channel's recorded pairing owner, then claims the next pairing attempt for that chat before enabling. A WebSocket subscription never grants this ownership.
+type ChannelEnableRequest struct {
+	// PairingRetry The original connect call and chat of the pairing being retried (not newly minted identifiers). Compared verbatim. A mismatch, a stale owner or a competing attempt is refused with 409 pairing_retry_conflict and nothing is enabled.
+	PairingRetry *struct {
+		// RequestId The connect_channel tool-call ID that started the pairing.
+		RequestId string `json:"request_id"`
+
+		// SessionId The chat session that started the pairing.
+		SessionId string `json:"session_id"`
+	} `json:"pairing_retry,omitempty"`
+}
+
 // ChannelEnabledResponse Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
 type ChannelEnabledResponse struct {
 	// Enabled Whether the channel is now enabled.
@@ -29969,6 +29981,9 @@ type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
 
 // ConfigureChannelJSONRequestBody defines body for ConfigureChannel for application/json ContentType.
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
+
+// EnableChannelJSONRequestBody defines body for EnableChannel for application/json ContentType.
+type EnableChannelJSONRequestBody = ChannelEnableRequest
 
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
 type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest

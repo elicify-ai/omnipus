@@ -6330,7 +6330,7 @@ components:
     WhatsAppPairingSubscribeFrame:
       title: WhatsAppPairingSubscribeFrame
       description: 'Client → server. Registers or clears this connection''s interest in a channel''s whatsapp_pairing frames
-        so the QR is delivered only to the operator viewing that channel''s pairing UI (#283).
+        so the QR is delivered only to the operator viewing that channel''s pairing UI (#283). Subscribing (including the automatic re-subscribe on reconnect) only observes pairing frames: it never restores chat ownership of a pairing and never restarts pairing. A chat Retry claims ownership through PUT /api/v1/channels/{id}/enable with pairing_retry.
 
         '
       type: object
@@ -6345,15 +6345,17 @@ components:
           minLength: 1
           maxLength: 128
           description: >
-            Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with
-            the chat request that started it (QR pairing in chat, WU-7).
+            Spec omnipus-system-agent K10 (FR-081). Correlation hint naming the
+            chat request that started the pairing (QR pairing in chat, WU-7).
+            It is not authority: subscribing never restores ownership.
         session_id:
           type: string
           minLength: 1
           maxLength: 255
           description: >
-            Spec K10. The chat session the pairing belongs to, when it was
-            started from a chat.
+            Spec K10. Correlation hint naming the chat session the pairing
+            belongs to, when it was started from a chat. It is not authority:
+            subscribing never restores ownership.
         type:
           type: string
           const: whatsapp_pairing_subscribe

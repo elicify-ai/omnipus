@@ -4659,6 +4659,14 @@ export const ChannelCreateResponse = z.object({
   type: z.string(),
   enabled: z.boolean(),
 });
+export const ChannelEnableRequest = z
+  .object({
+    pairing_retry: z.object({
+      request_id: z.string().min(1).max(128).regex(/\S/),
+      session_id: z.string().min(1).max(255).regex(/\S/),
+    }),
+  })
+  .partial();
 export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
   z.object({
     id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
@@ -9096,9 +9104,15 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/channels/:id/enable",
     alias: "enableChannel",
-    description: `Sets the channel&#x27;s enabled flag to true in config.`,
+    description: `Sets the channel&#x27;s enabled flag to true in config. An absent body or {} is an ordinary enable that grants no chat ownership. A pairing_retry body is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the caller must own the session and the request/session pair must be the channel&#x27;s recorded pairing owner; the next pairing attempt is claimed for that chat before the channel is enabled. A refused Retry enables nothing and changes no ownership; a disable that already succeeded is not rolled back, so the channel stays disabled.
+`,
     requestFormat: "json",
     parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ChannelEnableRequest.optional(),
+      },
       {
         name: "id",
         type: "Path",
@@ -9108,13 +9122,39 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: ChannelEnabledResponse,
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `code pairing_retry_conflict: this chat can no longer retry this pairing (missing, stale or mismatched ownership, or a competing attempt). Nothing was enabled and no ownership changed.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],

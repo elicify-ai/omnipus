@@ -1704,13 +1704,13 @@ type WhatsAppPairingFrame struct {
 	Type      string  `json:"type"`
 }
 
-// WhatsAppPairingSubscribeFrame — Client → server. Registers or clears this connection's interest in a channel's whatsapp_pairing frames so the QR is delivered only to the operator viewing that channel's pairing UI (#283).
+// WhatsAppPairingSubscribeFrame — Client → server. Registers or clears this connection's interest in a channel's whatsapp_pairing frames so the QR is delivered only to the operator viewing that channel's pairing UI (#283). Subscribing (including the automatic re-subscribe on reconnect) only observes pairing frames: it never restores chat ownership of a pairing and never restarts pairing. A chat Retry claims ownership through PUT /api/v1/channels/{id}/enable with pairing_retry.
 type WhatsAppPairingSubscribeFrame struct {
 	Active    bool   `json:"active"`
 	ChannelId string `json:"channel_id"`
-	// Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with the chat request that started it (QR pairing in chat, WU-7).
+	// Spec omnipus-system-agent K10 (FR-081). Correlation hint naming the chat request that started the pairing (QR pairing in chat, WU-7). It is not authority: subscribing never restores ownership.
 	RequestId *string `json:"request_id,omitempty"`
-	// Spec K10. The chat session the pairing belongs to, when it was started from a chat.
+	// Spec K10. Correlation hint naming the chat session the pairing belongs to, when it was started from a chat. It is not authority: subscribing never restores ownership.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
 }

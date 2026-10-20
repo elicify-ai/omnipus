@@ -1155,7 +1155,7 @@ export interface paths {
         get?: never;
         /**
          * Enable a channel
-         * @description Sets the channel's enabled flag to true in config.
+         * @description Sets the channel's enabled flag to true in config. An absent body or {} is an ordinary enable that grants no chat ownership. A pairing_retry body is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the caller must own the session and the request/session pair must be the channel's recorded pairing owner; the next pairing attempt is claimed for that chat before the channel is enabled. A refused Retry enables nothing and changes no ownership; a disable that already succeeded is not rolled back, so the channel stays disabled.
          */
         put: operations["enableChannel"];
         post?: never;
@@ -12545,6 +12545,25 @@ export interface components {
             cli_version?: string;
         };
         /**
+         * ChannelEnableRequest
+         * @description Optional body of PUT /api/v1/channels/{id}/enable. An absent body or {} is an ordinary enable and grants no chat ownership of a pairing. pairing_retry is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the gateway proves the caller owns session_id and that the request/session pair is the channel's recorded pairing owner, then claims the next pairing attempt for that chat before enabling. A WebSocket subscription never grants this ownership.
+         */
+        ChannelEnableRequest: {
+            /** @description The original connect call and chat of the pairing being retried (not newly minted identifiers). Compared verbatim. A mismatch, a stale owner or a competing attempt is refused with 409 pairing_retry_conflict and nothing is enabled. */
+            pairing_retry?: {
+                /**
+                 * @description The connect_channel tool-call ID that started the pairing.
+                 * @example original-connect-call-id
+                 */
+                request_id: string;
+                /**
+                 * @description The chat session that started the pairing.
+                 * @example requesting-chat-id
+                 */
+                session_id: string;
+            };
+        };
+        /**
          * ChannelEnabledResponse
          * @description Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
          */
@@ -20938,9 +20957,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ChannelEnableRequest"];
+            };
+        };
         responses: {
-            /** @description Channel enable state updated. */
+            /** @description Channel enable state updated. For a Retry this confirms ownership admission and enable acceptance only, not QR readiness, linking or message delivery. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -20949,7 +20972,9 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -20959,6 +20984,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description code pairing_retry_conflict: this chat can no longer retry this pairing (missing, stale or mismatched ownership, or a competing attempt). Nothing was enabled and no ownership changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     disableChannel: {
@@ -27637,6 +27673,7 @@ export type SessionScopeUpdateResponse = components["schemas"]["SessionScopeUpda
 export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResponse"];
 export type AgentToolsResponse = components["schemas"]["AgentToolsResponse"];
 export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
+export type ChannelEnableRequest = components["schemas"]["ChannelEnableRequest"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];

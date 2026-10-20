@@ -1779,6 +1779,8 @@ components:
       $ref: ./components/schemas/AgentToolsResponse.yaml
     RunnerTestResponse:
       $ref: ./components/schemas/RunnerTestResponse.yaml
+    ChannelEnableRequest:
+      $ref: ./components/schemas/ChannelEnableRequest.yaml
     ChannelEnabledResponse:
       $ref: ./components/schemas/ChannelEnabledResponse.yaml
     ChannelTestResponse:
@@ -4948,7 +4950,16 @@ paths:
     put:
       operationId: enableChannel
       summary: Enable a channel
-      description: Sets the channel's enabled flag to true in config.
+      description: >
+        Sets the channel's enabled flag to true in config. An absent body or {}
+        is an ordinary enable that grants no chat ownership. A pairing_retry
+        body is an explicit chat Retry of a WhatsApp QR pairing (spec
+        omnipus-system-agent FR-081 / K10, BDD-8.8): the caller must own the
+        session and the request/session pair must be the channel's recorded
+        pairing owner; the next pairing attempt is claimed for that chat before
+        the channel is enabled. A refused Retry enables nothing and changes no
+        ownership; a disable that already succeeded is not rolled back, so the
+        channel stays disabled.
       tags:
       - Channels
       parameters:
@@ -4959,21 +4970,47 @@ paths:
         schema:
           type: string
         example: telegram
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelEnableRequest'
       responses:
         '200':
-          description: Channel enable state updated.
+          description: >
+            Channel enable state updated. For a Retry this confirms ownership
+            admission and enable acceptance only, not QR readiness, linking or
+            message delivery.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ChannelEnabledResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
         '404':
           description: Channel ID not found.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            code pairing_retry_conflict: this chat can no longer retry this
+            pairing (missing, stale or mismatched ownership, or a competing
+            attempt). Nothing was enabled and no ownership changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
   /channels/{id}/disable:
     put:
       operationId: disableChannel
