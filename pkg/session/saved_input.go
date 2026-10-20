@@ -45,7 +45,7 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 		}
 		existing, indexed = entry.Address, true
 		conflict = rec.ID != id || rec.ViewMembership != ViewMembershipChat || rec.ModelMessage == nil || rec.Content != body
-	} else if err = archive.scanSavedInputIntegrity(func(addr ArchiveAddress, rec ArchiveRecord) bool {
+	} else if err = archive.scanSavedInputIntegrity(idx, func(addr ArchiveAddress, rec ArchiveRecord) bool {
 		// Wake path only (once per outcome): a retried save of an input that
 		// was already placed and left the pending directory must not append a
 		// second copy. The scan also learns whether it was consumed — placed
@@ -147,7 +147,7 @@ func (us *UnifiedStore) SavedChatInput(sessionID, id string) (ArchiveAddress, bo
 	}
 	var addr ArchiveAddress
 	placed := false
-	err = archive.scanSavedInputIntegrity(func(a ArchiveAddress, rec ArchiveRecord) bool {
+	err = archive.scanSavedInputIntegrity(idx, func(a ArchiveAddress, rec ArchiveRecord) bool {
 		if rec.ID == id && rec.ViewMembership == ViewMembershipChat && rec.ModelMessage != nil {
 			addr = a
 		}
