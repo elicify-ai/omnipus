@@ -216,11 +216,11 @@ func (h *issue1296Harness) peerSend(t *testing.T, content string) *tools.ToolRes
 		// on a settled receiver. Awaiting only the reply let the trailing
 		// reminder turn land between those snapshots (Cross-Platform arm64,
 		// PR #1365 run 39135504176: an extra policy-receiver-turn-3 entry).
+		// awaitTurn also drains each turn's published reply. Exactly two awaits:
+		// merge 35859e0ed combined this branch's 3c0b72ff3 and release's
+		// 01246adac — both of which already added the reminder await — into
+		// three, and the third waited for a turn that never comes.
 		h.awaitTurn(t, h.recvID)
-		h.awaitTurn(t, h.recvID)
-		// This plain-text fixture never calls answer_request, so an admitted
-		// request owes exactly one reminder turn. Drain its published reply
-		// before a later refusal compares the receiver's transcript snapshots.
 		h.awaitTurn(t, h.recvID)
 	}
 	return result
