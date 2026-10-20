@@ -11,8 +11,11 @@
 // mount, never an automatic walk to the beginning. The "Earlier messages
 // aren't shown" hint stays until the old end is reached. Loading shows a
 // status; a failure shows an inline error with Retry for the same boundary.
-// A prepended page keeps the reader's place: the scroll offset grows by the
-// height the page added above the visible messages.
+// A prepended page keeps the reader's CURRENT place: the pending request is
+// anchored on the entry that was first visible when it started, and the
+// reader's scroll position at response time grows by the height added above
+// that entry — scrolling done while the page was in flight and live messages
+// appended below in the meantime never move the reader.
 
 import { useLayoutEffect, useRef } from 'react'
 import type { RoomEntry } from '@/lib/api/generated/asyncapi-types'
@@ -21,6 +24,29 @@ import { ErrorState } from '@/components/ui/error-state'
 
 /** How close to the top (px) counts as "reached the top" for loading older messages. */
 const TOP_THRESHOLD_PX = 24
+
+/** The reader's place during a pending older-page request: the first visible entry. */
+interface ReaderAnchor { // not-wire-format: in-memory scroll anchor
+  entryId: string
+  /** The entry's offset within the log's content when the request started. */
+  offsetTop: number
+  firstSeq: number | undefined
+}
+
+/** The element's offset within the log's content — scroll-position independent. */
+function contentOffsetOf(log: HTMLElement, el: Element): number {
+  return el.getBoundingClientRect().top - log.getBoundingClientRect().top + log.scrollTop
+}
+
+/** Anchor on the log's first displayed entry (at the top, the first visible one). */
+function captureAnchor(log: HTMLElement, firstSeq: number | undefined): ReaderAnchor {
+  const first = log.querySelector('[data-room-entry-id]')
+  return {
+    entryId: first?.getAttribute('data-room-entry-id') ?? '',
+    offsetTop: first ? contentOffsetOf(log, first) : 0,
+    firstSeq,
+  }
+}
 
 export interface RoomTranscriptHistory { // not-wire-format: React props for the older-history controls
   status: 'idle' | 'loading' | 'error'
@@ -35,25 +61,32 @@ export function RoomTranscript({ entries, agentName, hasOlder = false, history }
   history?: RoomTranscriptHistory
 }) {
   const logRef = useRef<HTMLDivElement>(null)
-  const anchorRef = useRef<{ scrollHeight: number; scrollTop: number; firstSeq: number | undefined } | null>(null)
+  const anchorRef = useRef<ReaderAnchor | null>(null)
   const firstSeq = entries[0]?.seq
 
-  // Keep the reader's place when older entries are prepended.
+  // Keep the reader's current place when older entries are prepended.
   useLayoutEffect(() => {
     const log = logRef.current
     const anchor = anchorRef.current
     if (!log || !anchor || firstSeq === anchor.firstSeq) return
     anchorRef.current = null
-    // Only move when the prepended page actually added height above the reader.
-    const added = log.scrollHeight - anchor.scrollHeight
-    if (added > 0) log.scrollTop = anchor.scrollTop + added
+    const anchored = anchor.entryId
+      ? log.querySelector(`[data-room-entry-id="${CSS.escape(anchor.entryId)}"]`)
+      : null
+    // The anchor entry is gone (the window was replaced) — never guess a position.
+    if (!anchored) return
+    // Only the height added ABOVE the anchored entry counts: total scroll
+    // height would also count live messages appended below the reader while
+    // the request was in flight, and would push them out of place.
+    const added = contentOffsetOf(log, anchored) - anchor.offsetTop
+    if (added > 0) log.scrollTop += added
   }, [firstSeq])
 
   const onScroll = () => {
     const log = logRef.current
     if (!log || !history || !hasOlder || history.status === 'loading') return
     if (log.scrollTop > TOP_THRESHOLD_PX) return
-    anchorRef.current = { scrollHeight: log.scrollHeight, scrollTop: log.scrollTop, firstSeq }
+    anchorRef.current = captureAnchor(log, firstSeq)
     history.loadOlder()
   }
 
@@ -73,7 +106,7 @@ export function RoomTranscript({ entries, agentName, hasOlder = false, history }
         <ErrorState
           message="Could not load earlier messages."
           onRetry={() => {
-            anchorRef.current = { scrollHeight: logRef.current?.scrollHeight ?? 0, scrollTop: logRef.current?.scrollTop ?? 0, firstSeq }
+            if (logRef.current) anchorRef.current = captureAnchor(logRef.current, firstSeq)
             history.loadOlder()
           }}
           className="py-[var(--space-1)]"
@@ -85,7 +118,7 @@ export function RoomTranscript({ entries, agentName, hasOlder = false, history }
         </p>
       )}
       {entries.map((entry) => (
-        <article key={entry.id} className="flex flex-col gap-[var(--space-1)]">
+        <article key={entry.id} data-room-entry-id={entry.id} className="flex flex-col gap-[var(--space-1)]">
           <div className="flex items-baseline gap-[var(--space-2)]">
             <span className="text-[length:var(--type-caption-size)] font-semibold text-[var(--color-secondary)]">
               {entry.author.kind === 'user' ? 'You' : agentName(entry.author.agent_id ?? '')}

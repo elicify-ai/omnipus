@@ -16,10 +16,12 @@
 // pages backward through GET getRoomHistory from the earliest displayed
 // entry. A page is merged by seq with the CURRENT list (displayed entries win
 // collisions) and never moves the reconnect cursor, members, mutes, pause,
-// generation, cost or the first-snapshot send gate. One older-page request is
-// in flight per room; a new attach (any room), a truncating snapshot or
-// leaving the room invalidates it, and its late success or failure changes
-// nothing.
+// generation, cost or the first-snapshot send gate. A page that contradicts
+// the response contract's continuation invariant (has_older ⇔ next_before_seq
+// = first entry seq; empty ⇒ terminal) is a visible error with Retry, never
+// success. One older-page request is in flight per room; a new attach (any
+// room), a truncating snapshot or leaving the room invalidates it, and its
+// late success or failure changes nothing.
 
 import { create } from 'zustand'
 import type {
@@ -131,6 +133,21 @@ function mergeEntries(current: RoomEntry[], incoming: RoomEntry[]): RoomEntry[] 
   return [...bySeq.values()].sort((a, b) => a.seq - b.seq)
 }
 
+/**
+ * RoomHistoryResponse's conditional continuation rules are producer/consumer
+ * invariants (contracts/components/schemas/RoomHistoryResponse.yaml; #1332):
+ * `next_before_seq` is present if and only if `has_older` is true and equals
+ * the first returned entry's seq; an empty page is `entries: []` with
+ * `has_older: false` and no cursor. The generated schema checks structure
+ * only, so a page that breaks the invariant is a protocol failure — never a
+ * successful empty history (it would loop on the same boundary) and never a
+ * silently invented cursor (loadOlder's error/Retry path surfaces it).
+ */
+function pageContradictsContinuation(page: RoomHistoryResponse): boolean {
+  if (!page.has_older) return page.next_before_seq !== undefined
+  return page.entries.length === 0 || page.next_before_seq !== page.entries[0]?.seq
+}
+
 function trackEntryDeliveries(deliveries: Record<string, TrackedDelivery>, entries: RoomEntry[]): void {
   for (const entry of entries) for (const delivery of entry.deliveries) track(deliveries, delivery, entry.seq, false)
 }
@@ -219,7 +236,17 @@ export const useRoomStore = create<RoomStore>()((set, get) => ({
     let failed = false
     try {
       page = await fetchRoomHistory(roomId, beforeSeq === undefined ? {} : { beforeSeq })
-      if (!page || !Array.isArray(page.entries)) failed = true
+      if (!page || !Array.isArray(page.entries)) {
+        failed = true
+      } else if (pageContradictsContinuation(page)) {
+        // A contradictory page must reach the room's visible error/Retry path
+        // with rows, boundary and hasOlder intact — not the success branch.
+        throw new Error(
+          `contradictory older-history page for room ${roomId}: ` +
+            `has_older=${String(page.has_older)} entries=${page.entries.length} ` +
+            `next_before_seq=${String(page.next_before_seq)}`,
+        )
+      }
     } catch (error) {
       failed = true
       console.warn('[rooms] could not load earlier group-chat messages', { roomId, beforeSeq, error })
