@@ -99,9 +99,19 @@ func ResolveRecipient(cfg *config.Config, in Input) ([]credentials.CardRecipient
 		if !ok || !channelCredentialField(in.Field) {
 			return nil, nil, gen.SecretRecipientDisplay{}, errors.New("choose an existing channel instance and a credential field")
 		}
-		// The fingerprint contains every non-credential setting. Changing an
-		// account, host or endpoint while the card is open invalidates consent.
+		// The ONE canonical channel recipient descriptor, used by card
+		// creation and by every reference validator. Founder ruling
+		// 2026-10-20 (Train 2 gate r1 M5, option A): a channel card's
+		// consent scope is the platform account, its settings and the
+		// credential field. Binding (WorkspaceID, Identity) and Enabled are
+		// routing, governed by the person's approval of the connect_channel
+		// step, so they are excluded here. Every other non-credential
+		// setting is included: changing an account, host or endpoint while
+		// the card is open invalidates consent.
 		projection := channel
+		projection.WorkspaceID = ""
+		projection.Identity = nil
+		projection.Enabled = false
 		rv := reflect.ValueOf(&projection).Elem()
 		for i := 0; i < rv.NumField(); i++ {
 			if strings.HasSuffix(rv.Type().Field(i).Name, "Ref") {

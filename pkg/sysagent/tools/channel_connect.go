@@ -103,12 +103,15 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 			}
 			saved = before
 			in.apply(&saved)
-			if err := configure.validateChannelReferences(id, before, saved, in); err != nil {
-				return err
-			}
 			saved.WorkspaceID = ws
 			saved.Identity = &config.ChannelIdentity{Kind: "agent", ID: agentID}
 			saved.Enabled = true
+			// References are validated against the FINAL saved entry, under
+			// the canonical consent scope (founder ruling 2026-10-20, M5):
+			// binding and enabled are routing and do not affect it.
+			if err := configure.validateChannelReferences(id, before, saved, in); err != nil {
+				return err
+			}
 			if cfg.Channels == nil {
 				cfg.Channels = make(map[string]config.ChannelInstanceConfig)
 			}
