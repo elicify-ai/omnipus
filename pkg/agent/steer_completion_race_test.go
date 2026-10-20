@@ -213,12 +213,13 @@ func TestComplete_StopThatCausedThisCompletionLandsStopped(t *testing.T) {
 
 	// D6: exactly one deduplicated stopped-child notice reaches the direct
 	// parent — carrying cause/actor, the RESUME/redirect/decide actions and
-	// the owner-first advice for a human stop — with exactly one wake, and
+	// the owner-first advice for a human stop — with no wake (PW-D13), and
 	// no legacy terminal/fatal completion beside it. The helper also errors
 	// on any legacy terminal/fatal message this child produced (D2 CRIT-001:
 	// a Stop-fenced completion publishes no final).
 	noticeID, _ := assertU1StoppedChildNotice(t, al, parentID, rec, string(session.StopCauseStop), "dan")
-	if got := wakeCount(noticeID); got != 1 {
-		t.Errorf("working-parent wakes for the stopped-child notice = %d, want exactly 1 (D6)", got)
+	// PW-D13 (founder 2026-10-15): a completion caused by Stop never wakes.
+	if got := wakeCount(noticeID); got != 0 {
+		t.Errorf("working-parent wakes for intentional Stop = %d, want 0 (PW-D13)", got)
 	}
 }

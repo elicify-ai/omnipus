@@ -304,7 +304,6 @@ func (a *restAPI) runProviderDelete(
 		// slots are cleared, never re-pointed.
 		if agents, ok := m["agents"].(map[string]any); ok {
 			if defaults, ok := agents["defaults"].(map[string]any); ok {
-				pruneSlugList(defaults, "model_fallbacks", resolvesToProvider)
 				pruneSlugList(defaults, "image_model_fallbacks", resolvesToProvider)
 				clearSlugValue(defaults, "image_model", resolvesToProvider)
 				clearSlugValue(defaults, "recap_model", resolvesToProvider)

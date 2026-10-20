@@ -200,10 +200,12 @@ func TestIssue1053_GenuineFailedParentCascadeStopsDescendants(t *testing.T) {
 	}
 
 	// (4) The leaf's DIRECT parent (mid) holds exactly one D6 stopped-child
-	// notice for the leaf, woken once — the grandparent gets none.
+	// notice for the leaf, without a wake (PW-D13) — the grandparent gets none.
 	noticeID, _ := assertU1StoppedChildNotice(t, al, mid.SessionID, leaf, string(session.StopCauseCascade), "")
-	if got := wakes(noticeID); got != 1 {
-		t.Errorf("mid wakes for the leaf's stopped-child notice = %d, want exactly 1 (D6)", got)
+	// PW-D13 (founder 2026-10-15): the leaf's cascade Stop is not a wake reason.
+	// The genuine fatal failure still reaches the root separately below.
+	if got := wakes(noticeID); got != 0 {
+		t.Errorf("failed mid wakes for its leaf's stopped notice = %d, want 0 (PW-D13)", got)
 	}
 	assertU1NoStoppedNoticeFor(t, al, root, leaf.SessionID)
 

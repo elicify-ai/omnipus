@@ -77,7 +77,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -1014,9 +1013,13 @@ func (te *TaskExecutor) taskOperatorFixReason(agentID string, turnErr error, cau
 			}
 		}
 	}
-	var fe *providers.FailoverError
-	if errors.As(turnErr, &fe) && strings.TrimSpace(fe.Provider) != "" {
-		provider = fe.Provider
+	if pe := errorToProviderError(turnErr); pe != nil {
+		if strings.TrimSpace(pe.Provider) != "" {
+			provider = pe.Provider
+		}
+		if strings.TrimSpace(pe.Model) != "" {
+			model = pe.Model
+		}
 	}
 	return taskOperatorFixText(cause, strings.TrimSpace(agentName), strings.TrimSpace(provider), strings.TrimSpace(model))
 }
@@ -1063,6 +1066,10 @@ func taskOperatorFixText(cause operatorFixCause, agentName, provider, model stri
 			"Check that the disk has space and the folder is writable" + rerun
 	case operatorFixQuotaBilling:
 		return lead + agent + "'s provider account is out of credit. Top up the account or assign the agent a provider with credit" + rerun
+	case operatorFixBadModel:
+		return lead + operatorModelPair(provider, model) + " is not offered. Pick an offered model/provider pair in the agent's settings" + rerun
+	case operatorFixModelRouteUnavailable:
+		return lead + "the connection for " + operatorModelPair(provider, model) + " could not be set up. Check the provider's API key and endpoint settings" + rerun
 	case operatorFixModelRetired:
 		subject := "the agent's model"
 		if model != "" {

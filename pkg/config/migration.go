@@ -12,7 +12,31 @@ import (
 	"log/slog"
 	"reflect"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
+
+// warnRemovedModelFallbacks reports a stale agents.defaults.model_fallbacks
+// key. The global default fallback list was removed (issue #1340, founder
+// ruling 2026-10-19): an agent's fallback chain is exactly its own configured
+// provider/model pairs. The key no longer decodes into Config, so without this
+// WARN it would vanish silently on the next save. A probe failure is ignored:
+// the full decode has already succeeded and this check must never break a load.
+func warnRemovedModelFallbacks(data []byte) {
+	var probe struct {
+		Agents struct {
+			Defaults struct {
+				ModelFallbacks json.RawMessage `json:"model_fallbacks"`
+			} `json:"defaults"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil || len(probe.Agents.Defaults.ModelFallbacks) == 0 {
+		return
+	}
+	logger.WarnCF("config",
+		"removed setting, ignored: agents.defaults.model_fallbacks — set fallbacks per agent as provider/model pairs",
+		map[string]any{"value": string(probe.Agents.Defaults.ModelFallbacks)})
+}
 
 // loadConfig loads a version-CurrentVersion config (current schema).
 func loadConfig(data []byte) (*Config, error) {
@@ -77,6 +101,7 @@ func loadConfig(data []byte) (*Config, error) {
 	// SaveConfig to write "model_list" back out permanently duplicated
 	// alongside the renamed "providers" key on every load+save round-trip.
 	detectUnknownConfigFields(compatData, cfg)
+	warnRemovedModelFallbacks(compatData)
 
 	return cfg, nil
 }

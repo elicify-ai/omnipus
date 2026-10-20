@@ -131,6 +131,11 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 	if cr.rr.rq.ri.rf.err == nil {
 		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 	}
+	// Permanent route/model faults are not attachment failures. Refuse before
+	// synthesis, strip-retry, or PDF fallback can overwrite the original error.
+	if permanentModelFailure(cr.rr.rq.ri.rf.err) {
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
 	// ADR-087 D3/D9 (main call site): a tool call cut off at the
 	// output-token limit gets one bounded repair before falling
 	// through to ClassifyError/the media-downgrade/PDF paths below.
@@ -345,6 +350,9 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) classifyFailure() agentLoo
 		activeProviderName = cr.rr.rq.ri.rf.rt.activeCandidates[0].Provider
 	}
 	failErr := providers.ClassifyError(cr.rr.rq.ri.rf.err, activeProviderName, cr.rr.rq.ri.rf.rt.llmModel)
+	if permanentModelFailure(cr.rr.rq.ri.rf.err) {
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
 
 	cr.isTimeoutError = false
 	cr.isContextError = false
@@ -670,6 +678,7 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 		if outcomeRelabelApplies(llm.Code, rr.rq.ri.rf.rt.ts.outcomeRelabel) {
 			llm.Code = rr.rq.ri.rf.rt.ts.outcomeRelabel
 			llm.Message = UserMessageForCode(rr.rq.ri.rf.rt.ts.outcomeRelabel)
+			llm.ProviderMessage = false
 		}
 
 		rr.rq.ri.rf.rt.al.emitEvent(
@@ -679,6 +688,7 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 				Stage: "llm", ChatID: rr.rq.ri.rf.rt.ts.opts.ChatID,
 				Code:          string(llm.Code),
 				Message:       llm.Message,
+				Detail:        llm.Detail,
 				ProviderError: pe,
 				SessionID:     string(rr.rq.ri.rf.rt.ts.routingSessionID),
 			},

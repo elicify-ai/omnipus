@@ -160,6 +160,8 @@ const (
 	// transcript note is persisted once per session per (unavailable,
 	// answered) pair (derived from the transcript, per-turn scoped).
 	EventKindProviderFallback
+	// EventKindHelperEvent follows a durable immutable helper-event chat row.
+	EventKindHelperEvent
 
 	eventKindCount
 )
@@ -205,6 +207,7 @@ var eventKindNames = [...]string{
 	"subagent_state",
 	"provider_retry",
 	"provider_fallback",
+	"helper_event",
 }
 
 // String returns the stable string form of an EventKind.

@@ -972,11 +972,15 @@ type AgentDefaults struct {
 	// the zero value (FR-040) — onboarding's explicit pick and the
 	// default-model PUT are its only writers; no boot/reload path may back-fill
 	// it (FR-020).
-	DefaultModel        DefaultModel `json:"default_model"`
-	ModelFallbacks      []string     `json:"model_fallbacks,omitempty"`
-	ImageModel          string       `json:"image_model,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks []string     `json:"image_model_fallbacks,omitempty"`
-	MaxTokens           int          `json:"max_tokens"                      env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOKENS"`
+	DefaultModel DefaultModel `json:"default_model"`
+	// model_fallbacks (a global default fallback list inherited by every
+	// agent without its own) was removed (issue #1340, founder ruling
+	// 2026-10-19): an agent's chain is exactly its own configured pairs. A
+	// stale key in config.json is ignored with one load-time WARN
+	// (migration.go::warnRemovedModelFallbacks).
+	ImageModel          string   `json:"image_model,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModelFallbacks []string `json:"image_model_fallbacks,omitempty"`
+	MaxTokens           int      `json:"max_tokens"                      env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOKENS"`
 	// context_window was deleted by ADR-066 D2 (FR-004, T066-09). The global
 	// default lives in ContextSettings.DefaultContextWindow (the `context`
 	// key, D9) and every agent's window is resolved by the D2 ladder

@@ -1290,7 +1290,7 @@ describe('ChannelConfigPanel — client-side save validation', () => {
 })
 
 // Workers (type:'Subagent') are delegation-only labour agents and can't be a
-// channel routing default (the backend 400s). The routing "Default agent" picker
+// channel's main agent (the backend 400s). The routing "Main agent" picker
 // must therefore omit them.
 describe('ChannelConfigPanel — routing picker excludes workers', () => {
   afterEach(() => {

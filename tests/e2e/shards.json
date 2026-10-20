@@ -9,7 +9,8 @@
         "tests/e2e/chat.spec.ts",
         "tests/e2e/provider-retry.spec.ts",
         "tests/e2e/truncation-notice-live.spec.ts",
-        "tests/e2e/terminal-outcome.spec.ts"
+        "tests/e2e/terminal-outcome.spec.ts",
+        "tests/e2e/parent-wake-stream.spec.ts"
       ]
     },
     {

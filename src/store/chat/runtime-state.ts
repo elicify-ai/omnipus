@@ -175,6 +175,8 @@ export const SESSION_SCOPED_FRAME_TYPES = new Set([
   // Goal outcome line (founder decision 2026-09-14): GoalOutcomeFrame carries
   // a required, min(1) `session_id` — session-scoped like goal_status.
   'goal_outcome',
+  // Parent-wake visibility: an event belongs only to its addressed transcript.
+  'helper_event',
   // Q33: live and replayed context diagnostics require their owning session.
   'context_window_notice',
   // ADR-091 D7/I-4 (FR-E-002): subagent_message/subagent_state always carry

@@ -398,6 +398,7 @@ func TestAgentLoop_ImageRejection_FriendlyMessage(t *testing.T) {
 
 	defaultAgent := al.registry.primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "default agent must exist")
+	defaultAgent.StoreProviderPool(map[string]providers.LLMProvider{"anthropic": provider})
 
 	response, loopErr := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
 		SessionKey:      "img-rej-test",

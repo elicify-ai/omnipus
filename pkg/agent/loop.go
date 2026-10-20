@@ -2068,6 +2068,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	}
 
 	defer rz.rc.turnCancel()
+	// SFH-02: a turn that exits with a dequeued batch still uninjected (a rate
+	// limit, an error, a cancel) gives back those saved inputs' claims. Their
+	// saved records stay pending, so the next legitimate fence places them.
+	defer func() {
+		if ri := rz.rc.rx.rr.rq.ri; len(ri.pendingSteeringReceipts) > 0 {
+			al.releaseSavedWakeClaims(ts.transcriptSessionID, ri.pendingSteeringReceipts)
+		}
+	}()
 
 	rz.rc.registerTurnContext()
 
