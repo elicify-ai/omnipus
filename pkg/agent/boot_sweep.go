@@ -290,7 +290,11 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	if !pendingStop && interruptedErr == nil {
 		// Resume admission (or its visible refusal) precedes the one restart
 		// wake. The immutable restart row is still sourced from the ledger.
-		r.resumeRestartHelper(ctx, rec, notice)
+		if r.resumeRestartHelper(ctx, rec, notice) {
+			ctx = context.WithValue(ctx, restartContinuationKey{}, restartContinuation{
+				sessionID: rec.SessionID, generation: rec.Generation, stopSeq: rec.StopNote.Seq,
+			})
+		}
 	}
 	r.repairRetainedRows(id, true, notice)
 	stopNoticeRecovered := r.recoverStoppedChildNotice(ctx, rec, notice)
@@ -581,6 +585,14 @@ func (r *SteerBootRecovery) deliverIfUnconsumed(ctx context.Context, rec *sessio
 
 func (r *SteerBootRecovery) deliver(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, message generated.SessionMessage, notice func(string, string)) {
 	envelope, _ := decodeBootMessage(message)
+	handled, _, receiptErr := r.bootWakeHandled(steerParentSessionID(rec), envelope.MessageID)
+	if receiptErr != nil {
+		notice("deliver:"+envelope.MessageID, fmt.Sprintf("session %s wake %s receipt could not be checked: %v", rec.SessionID, envelope.MessageID, receiptErr))
+		return
+	}
+	if handled {
+		return
+	}
 	if r.Deliverer == nil {
 		notice("deliver:"+envelope.MessageID, fmt.Sprintf("session %s wake %s not delivered: upward deliverer is not configured", rec.SessionID, envelope.MessageID))
 		return
@@ -591,18 +603,11 @@ func (r *SteerBootRecovery) deliver(ctx context.Context, rec *session.LifecycleR
 		notice("deliver:"+envelope.MessageID, fmt.Sprintf("session %s wake %s not delivered: %v", rec.SessionID, envelope.MessageID, err))
 		return
 	}
-	// [ADR-091 fix lane RX-OUTCOME, HIGH] Boot recovery IS the last-resort
-	// re-nudge every other Deliver call site relies on ("the boot re-nudge
-	// covers it"). A wake-eligible entry that comes back stored_not_woken
-	// HERE therefore has nothing left behind it: the parent will not be
-	// woken by this boot either, and the next restart will find the same
-	// unacknowledged entry and fail the same way. That makes it an
-	// undeliverable entry in FR-B-004's sense, so it takes BOTH the ERROR
-	// line every call site now emits AND the operator notice this sweep
-	// already reports its other failures through — a silent no-op was the
-	// one thing it must not be.
+	// A genuine boot retry failure still gets both an error and an operator
+	// notice. A consumed result or intentional hold is not such a failure:
+	// storage, model consumption and wake publication are distinct facts.
 	reportUndeliveredWake("steer: boot recovery", event, steerParentSessionID(rec), rec.Generation, delivery)
-	if delivery.Outcome == steer.DeliveryStoredNotWoken {
+	if delivery.Outcome == steer.DeliveryStoredNotWoken && !delivery.ExpectedNoWake() {
 		if class, cerr := session.ClassifySessionMessage(message); cerr != nil || class.WakeEligible {
 			notice("deliver:"+envelope.MessageID, fmt.Sprintf(
 				"session %s wake %s was stored but its steering session was NOT woken — it will not learn of this outcome until it is nudged by hand",

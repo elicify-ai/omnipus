@@ -248,7 +248,15 @@ func (al *AgentLoop) wakeParentForStoppedNotice(ctx context.Context, rec *sessio
 	if tr.Cause == session.StopCauseRestart && rec.StopNote != nil && rec.StopNote.Seq == tr.StopSeq {
 		source.restartBootSeq = rec.StopNote.BootSeq
 	}
-	_, err := al.WakeSession(context.WithValue(ctx, wakeSourceKey{}, source), parentID, reason, id, event.Text)
+	body := event.Text
+	if tr.Cause == session.StopCauseRestart {
+		var err error
+		body, err = al.restartNoticeInput(ctx, rec, parentID, id, tr)
+		if err != nil {
+			return err
+		}
+	}
+	_, err := al.WakeSession(context.WithValue(ctx, wakeSourceKey{}, source), parentID, reason, id, body)
 	if err != nil {
 		return fmt.Errorf("steer: stopped notice: wake parent %s: %w", parentID, err)
 	}

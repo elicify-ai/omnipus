@@ -192,6 +192,19 @@ func (r *SteerBootRecovery) deliverPendingFinal(ctx context.Context, item sessio
 		r.recordFinalDeliveryFacts(item, session.FinalDeliveryProgress{AckObserved: true}, notice)
 		return
 	}
+	handled, consumed, receiptErr := r.bootWakeHandled(commit.ParentSessionID, replayID)
+	if receiptErr != nil {
+		notice("final-delivery:"+replayID, fmt.Sprintf("session %s committed final %s receipt could not be checked: %v — the commit stays pending", item.SessionID, replayID, receiptErr))
+		return
+	}
+	if handled {
+		if consumed && sighting.appended {
+			r.recordFinalDeliveryFacts(item, session.FinalDeliveryProgress{InboxAppended: true, AckObserved: true}, notice)
+		}
+		// A model placement can outlive its compacted inbox entry. It stops
+		// replay, but does not invent missing outbox append/ACK receipts.
+		return
+	}
 	if !sighting.appended {
 		event := steer.UpwardEvent{
 			ChildSessionID: item.SessionID,

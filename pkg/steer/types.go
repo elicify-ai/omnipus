@@ -238,6 +238,20 @@ const (
 type Delivery struct {
 	MessageID string
 	Outcome   DeliveryOutcome
+	// Disposition preserves why no wake was needed. This is internal delivery
+	// control flow, not a gateway/SPA wire format or proof of consumption.
+	Disposition string
+}
+
+// ExpectedNoWake distinguishes a deliberate hold or completed receipt from an
+// unexplained failed wake. Unknown/empty reasons must remain visible failures.
+func (d Delivery) ExpectedNoWake() bool {
+	switch d.Disposition {
+	case "not_eligible", "already_consumed", "suppressed_by_stop", "held_for_question", "already_pending":
+		return true
+	default:
+		return false
+	}
 }
 
 // WakeInput is the inbox entry that woke a session (I-3) — nil for a first

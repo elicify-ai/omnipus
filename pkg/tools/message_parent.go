@@ -824,7 +824,7 @@ func (mt *messageParentToolExecute) markFinalHandback() string {
 // (and for why this only ever logs). Silent for every other outcome and for
 // the kinds whose contract IS stored-not-woken.
 func (mt *messageParentToolExecute) reportUndeliveredWake() {
-	if mt.delivery.Outcome != steer.DeliveryStoredNotWoken {
+	if mt.delivery.Outcome != steer.DeliveryStoredNotWoken || mt.delivery.ExpectedNoWake() {
 		return
 	}
 	if class, err := session.ClassifySessionMessage(mt.sm); err == nil && !class.WakeEligible {

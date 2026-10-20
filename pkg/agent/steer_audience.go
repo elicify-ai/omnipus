@@ -555,7 +555,11 @@ func (d *SteerUpwardDeliverer) publishUpward(
 			}
 		}
 		if shortCircuit {
-			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+			disposition := "not_eligible"
+			if wakeEligible {
+				disposition = "already_consumed"
+			}
+			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken, Disposition: disposition}, nil
 		}
 	}
 
@@ -584,7 +588,7 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	}
 
 	if !wakeEligible {
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken, Disposition: "not_eligible"}, nil
 	}
 	return d.wakeOwnerOrStore(ctx, al, lifecycle, ownerKey, childRec, event, msg, res)
 }
@@ -750,7 +754,7 @@ func (d *SteerUpwardDeliverer) wakeOwnerOrStore(
 	if reason == "" {
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
-	body, err := al.combinedEndingInput(childRec, msg)
+	body, err := al.upwardModelInput(childRec, msg, ownerKey, res.MessageID)
 	if err != nil {
 		return steer.Delivery{}, err
 	}
