@@ -27,7 +27,7 @@ A kernel that is too old for a right Omnipus asks for is different: Omnipus star
 
 The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port.
 
-Before that error appears, the gateway stops the background services the failed start had already launched — scheduled jobs, the task and mail pollers, task triggers and the plan engine — so they do not keep running, or writing to the data directory, after it exits. A short pause between the bind retries and the error is that cleanup, not a hang; let it finish. The same cleanup runs when any other startup step fails. The recovery steps below are unchanged. Check what holds the port:
+Before returning the final bind error, the gateway runs cleanup for services created during that startup attempt. It requests shutdown of scheduled jobs, the task and mail pollers, task triggers and the plan engine, where present. Cleanup can delay the final error while active work is stopping; the delay is not guaranteed to be short. Some stop requests do not wait for every in-flight operation to finish. The same cleanup runs for errors returned by other steps in this service-startup sequence, skipping services that were not created. Check what holds the port:
 
 ```bash
 lsof -i :5000 | grep LISTEN
@@ -42,6 +42,10 @@ Stop that process, or set another port in `~/.omnipus/config.json` and start aga
 ```
 
 The port is read at startup; a running gateway does not move its listener.
+
+### Stopping the gateway takes a moment
+
+When you stop the gateway normally — Ctrl-C, or SIGTERM from a service manager — it stops taking new work, then waits for work it had already started to finish writing before it closes its stores: running turns, background task runs, and helper-agent turns, including one that a redirect started while the gateway was shutting down. Each kind of work gets a bounded wait of up to 30 seconds. When a wait runs out, shutdown continues anyway and the log shows a warning such as `Close: steered-turn drain budget exceeded; proceeding with teardown`; that work may be left unfinished.
 
 ## A connection shows a credential error (degraded)
 
