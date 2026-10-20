@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
@@ -285,11 +286,17 @@ turnLoop:
 			})
 		er.cn.rc.rx.rr.rq.ri.pendingMessages = append(er.cn.rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
 		er.cn.rc.rx.rr.rq.ri.pendingSteeringReceipts = append(er.cn.rc.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
-		er.cn.rc.rx.finalContent = ""
 		// I2: guard against bypassing the hard iteration ceiling via goto.
 		// If the ceiling is exceeded, fall through to finalization rather than
-		// re-entering turnLoop, which would be invalid at this point anyway.
+		// re-entering turnLoop, which would be invalid at this point anyway;
+		// the completed answer then stays the turn's final content.
 		if er.cn.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() < 2*er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations {
+			// Keep the completed answer before continuing for the steering:
+			// clearing it unrecorded lost it from history and transcript.
+			if er.cn.keepAnswerBeforeSteering(er.cn.rc.rx.finalContent) {
+				return er.cn.ret0
+			}
+			er.cn.rc.rx.finalContent = ""
 			goto turnLoop
 		}
 	}
@@ -562,6 +569,11 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 			})
 		cn.rc.rx.rr.rq.ri.pendingMessages = append(cn.rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
 		cn.rc.rx.rr.rq.ri.pendingSteeringReceipts = append(cn.rc.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
+		// The response just completed is a real answer: keep it before the
+		// turn continues for the steering (UAT-A, bundle #1370 at 1380a6d66).
+		if cn.keepAnswerBeforeSteering(cn.rc.rx.rr.rq.ri.rf.response.Content) {
+			return agentLoopRunTurnConductorRunIterationsReturn
+		}
 		return agentLoopRunTurnConductorRunIterationsContinue
 	}
 	// ADR-087 D4/D6/D9: the one success-arm truncation handler,
@@ -732,4 +744,49 @@ func (cn *agentLoopRunTurnConductorRunIterations) dispatchToolCalls() agentLoopR
 		return agentLoopRunTurnConductorRunIterationsBreakL1
 	}
 	return agentLoopRunTurnConductorRunIterationsNext
+}
+
+// keepAnswerBeforeSteering records a direct (tool-free) answer the model
+// completed before steering continued the same turn, exactly as a tool-call
+// round records its narration (agentLoopRunTurnResponse.recordToolCalls):
+// into the model window and this turn's working messages, so the next call
+// builds on the answer instead of redrafting it, and as its own chat
+// transcript entry carrying the round's live message id and usage, so a
+// reload still shows it. Without this the continuation dropped the answer
+// (UAT-A on bundle #1370 at 1380a6d66: a follow-up sent into a running reply
+// left only the second reply after a reload, and the model redrafted the
+// first). Reports true when recording failed and the turn has been ended.
+func (cn *agentLoopRunTurnConductorRunIterations) keepAnswerBeforeSteering(content string) bool {
+	ri := cn.rc.rx.rr.rq.ri
+	ts := ri.rf.rt.ts
+	err := func() error {
+		if content != "" {
+			msg := providers.Message{Role: "assistant", Content: content}
+			if resp := ri.rf.response; resp != nil && resp.Content == content {
+				msg.ReasoningContent = resp.ReasoningContent
+				msg.ThinkingBlocks = append([]string(nil), resp.ThinkingBlocks...)
+			}
+			if _, err := ts.appendWindowMessage(msg, windowProducerAssistant); err != nil {
+				return err
+			}
+			ri.messages = append(ri.messages, msg)
+		}
+		ts.appendIntermediateAssistantTranscript(content)
+		if err := ts.callAccountingError(); err != nil {
+			return err
+		}
+		if content != "" {
+			ts.markLastStreamerTranscriptPersisted()
+		}
+		return nil
+	}()
+	if err == nil {
+		return false
+	}
+	rt := ri.rf.rt
+	var status TurnEndStatus
+	cn.rc.ret0, status, cn.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
+	ri.turnStatus = status
+	cn.ret0 = agentLoopRunTurnConductorReturn
+	return true
 }
