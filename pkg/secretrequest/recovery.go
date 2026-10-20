@@ -179,13 +179,19 @@ func (r *Registry) Stop(sessionID string) error {
 			if _, err := r.finishLocked(rec, "stopped"); err != nil {
 				failures = append(failures, err)
 			}
-		} else if rec.Card.State == "submitted" && !rec.ResumeStopped {
+		} else if rec.Card.State == "submitted" && (!rec.ResumeStopped || r.vetoPending[rec.Card.RequestId]) {
+			// The veto takes effect in memory at once; it counts as done only
+			// once published. A failed publication stays pending and the
+			// next Stop retries it (never a skip on the cached flag).
 			rec.ResumeStopped = true
 			r.entries[rec.Card.RequestId] = rec
 			delete(r.inFlight, rec.Card.RequestId)
 			if err := r.persistLocked(rec.Card.SessionId); err != nil {
+				r.vetoPending[rec.Card.RequestId] = true
 				failures = append(failures, err)
+				continue
 			}
+			delete(r.vetoPending, rec.Card.RequestId)
 			if r.opts.Audit != nil {
 				rec.ReasonCode = "session_stopped"
 				r.opts.Audit(cloneRecord(rec), "resume_stopped")

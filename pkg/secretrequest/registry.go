@@ -67,11 +67,16 @@ type Registry struct {
 	// cleanup failed (request id -> session id). It is retried on later state
 	// operations; a restart retries it through the full-inventory orphan sweep.
 	receiptRetry map[string]string
+	// vetoPending holds submitted requests whose explicit-Stop veto is set in
+	// memory but whose publication failed (request id -> true). The next Stop
+	// retries the publication instead of treating the cached flag as durable
+	// (gate r1 SFH T2-SF-08).
+	vetoPending map[string]bool
 }
 
 func NewRegistry(opts Options) *Registry {
 	return &Registry{opts: opts, entries: make(map[string]Record), inFlight: make(map[string]bool),
-		receiptRetry: make(map[string]string)}
+		receiptRetry: make(map[string]string), vetoPending: make(map[string]bool)}
 }
 
 func (r *Registry) SetSink(sink func(Record)) {
