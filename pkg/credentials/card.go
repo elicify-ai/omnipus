@@ -89,7 +89,12 @@ func (s *Store) CommitCard(requestID, sessionID string, values []CardValue, at t
 		if item.BaseName == "" || len(item.Value) < 4 || len(item.Value) > 16384 || !utf8.ValidString(item.Value) || strings.ContainsRune(item.Value, 0) {
 			return CardReceipt{}, errors.New("invalid secret value")
 		}
-		version := 1
+		if sf.CardHighWater == nil {
+			sf.CardHighWater = make(map[string]int)
+		}
+		// Never reuse a name: start above the highest version ever issued
+		// for this family, not only above the versions still stored.
+		version := sf.CardHighWater[item.BaseName] + 1
 		for name := range sf.Credentials {
 			if strings.HasPrefix(name, item.BaseName+".v") {
 				var existing int
@@ -98,6 +103,7 @@ func (s *Store) CommitCard(requestID, sessionID string, values []CardValue, at t
 				}
 			}
 		}
+		sf.CardHighWater[item.BaseName] = version
 		ref := fmt.Sprintf("%s.v%d", item.BaseName, version)
 		entry, sealErr := encrypt(s.key, ref, []byte(item.Value))
 		if sealErr != nil {

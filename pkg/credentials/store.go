@@ -158,6 +158,11 @@ type storeFile struct {
 	Credentials  map[string]encEntry    `json:"credentials"`
 	CardSecrets  map[string]CardSecret  `json:"card_secrets,omitempty"`
 	CardReceipts map[string]CardReceipt `json:"card_receipts,omitempty"`
+	// CardHighWater records, per reference family (CardValue.BaseName), the
+	// highest version ever issued. Deleting a version never lowers it, so a
+	// deleted reference name is never issued again: a consumer still naming
+	// it stays unresolved until a new approved selection (gate r1 M1).
+	CardHighWater map[string]int `json:"card_high_water,omitempty"`
 	// PrivateSelected maps one agent-private variable (privateKey) to the
 	// reference of its selected version. Only the selected version is
 	// injected into that pair's children (FR-076, FR-086).
