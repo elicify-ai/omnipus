@@ -178,6 +178,12 @@ type Deps struct {
 	// NotePairingRequest correlates a chat-started QR pairing with its
 	// request and chat (K10, FR-081). WireSysagentDeps fills it.
 	NotePairingRequest func(channelID, requestID, sessionID string)
+	// EnsureChannelStarted starts a registered channel that is not running,
+	// for connect_channel only: a channel stopped in place (its pairing was
+	// stopped from the chat) keeps an unchanged config, so a reload alone
+	// never starts it again (gate r1 architect F04). It reports whether it
+	// started the channel. WireSysagentDeps fills it.
+	EnsureChannelStarted func(id string) (bool, error)
 	// WaitForPendingReloadFunc BLOCKS until any reload already queued by a
 	// prior publish hook (UpsertAgentFastFunc / ReloadFunc) has actually
 	// landed in memory, OR returns an error after reloadWaitTimeout elapses.

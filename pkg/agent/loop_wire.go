@@ -2145,6 +2145,9 @@ func (al *AgentLoop) WireSysagentDeps(deps *systools.Deps) {
 	if depsCopy.NotePairingRequest == nil {
 		depsCopy.NotePairingRequest = al.NotePairingRequest
 	}
+	if depsCopy.EnsureChannelStarted == nil {
+		depsCopy.EnsureChannelStarted = al.ensureChannelStarted
+	}
 	al.sysagentDeps = &depsCopy
 	al.wireSysagentDepsLocked(al.registry, &depsCopy)
 }

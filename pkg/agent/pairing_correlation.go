@@ -99,3 +99,17 @@ func (al *AgentLoop) stopChannelPairing(channelID string) bool {
 	}
 	return stopped
 }
+
+// ensureChannelStarted starts a registered channel that is not running, for
+// an approved connect_channel (gate r1 architect F04). A channel the manager
+// does not hold is left to the reload's own start and failure reporting.
+func (al *AgentLoop) ensureChannelStarted(id string) (bool, error) {
+	mgr := al.GetChannelManager()
+	if mgr == nil {
+		return false, nil
+	}
+	if _, registered := mgr.GetChannel(id); !registered {
+		return false, nil
+	}
+	return mgr.StartChannel(id)
+}

@@ -198,6 +198,13 @@ func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision s
 	if err := wait(); err != nil {
 		return changeSuccess(fields, savedNotWorking("the reload after saving did not complete", scope, notTested...))
 	}
+	// An unchanged config does not restart a channel stopped in place (for
+	// example after Stop ended its pairing): this approved connect starts it.
+	if t.deps.EnsureChannelStarted != nil {
+		if _, err := t.deps.EnsureChannelStarted(id); err != nil {
+			return changeSuccess(fields, savedNotWorking("the channel could not be started after saving", scope, notTested...))
+		}
+	}
 	if t.deps.ChannelLiveStatus == nil {
 		return changeSuccess(fields, savedNotWorking("not live-tested: channel status is unavailable", scope, notTested...))
 	}

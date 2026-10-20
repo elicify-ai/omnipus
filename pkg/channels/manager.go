@@ -1929,6 +1929,28 @@ func (m *Manager) evictStale(now time.Time) {
 	})
 }
 
+// StartChannel starts a registered channel that is not running, for an
+// explicit, approved start request (connect_channel after its pairing was
+// stopped in place: the config is unchanged, so a reload never calls Start).
+// It reports whether it started the channel; a running channel is left
+// alone, and a name with no registered channel is refused. The channel is
+// started with the same background lifetime StartAll and Reload use.
+func (m *Manager) StartChannel(name string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	channel, ok := m.channels[name]
+	if !ok || channel == nil {
+		return false, fmt.Errorf("channel %q is not registered", name)
+	}
+	if channel.IsRunning() {
+		return false, nil
+	}
+	if err := channel.Start(context.Background()); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (m *Manager) GetChannel(name string) (Channel, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
