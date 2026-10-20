@@ -49,7 +49,7 @@ func (p *sinceCursorStreamingProvider) ChatStream(_ context.Context, messages []
 	p.streamed++
 	lastInput := ""
 	for _, message := range messages {
-		if message.Role == "user" {
+		if message.Role == "user" && !message.Volatile {
 			lastInput = message.Content
 		}
 	}
