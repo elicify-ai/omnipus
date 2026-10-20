@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -26,7 +27,8 @@ const train3R3MixedCatalog = `{
 
 type train3R3UsageProvider struct {
 	*wu15ScriptProvider
-	usage providers.UsageInfo
+	usage      providers.UsageInfo
+	requestIDs []string
 }
 
 func (p *train3R3UsageProvider) Chat(ctx context.Context, msgs []providers.Message, defs []providers.ToolDefinition, model string, opts map[string]any) (*providers.LLMResponse, error) {
@@ -34,7 +36,21 @@ func (p *train3R3UsageProvider) Chat(ctx context.Context, msgs []providers.Messa
 	if err != nil {
 		return nil, err
 	}
-	usage := p.usage
+	// A plain reply leaves room requests unanswered and legitimately schedules
+	// another reminder turn. Answer both through the real tool path instead:
+	// one usage-bearing tool-call response, then one zero-usage final response.
+	// §6.14 allocates the whole turn, not a scheduler-dependent call count.
+	usage := providers.UsageInfo{}
+	if len(p.inputs()) == 1 {
+		response = &providers.LLMResponse{FinishReason: "tool_calls"}
+		for _, requestID := range p.requestIDs {
+			response.ToolCalls = append(response.ToolCalls, providers.ToolCall{
+				ID: "cost-answer-" + requestID, Type: "function", Name: "answer_request",
+				Arguments: map[string]any{"request_id": requestID, "text": "cost boundary complete"},
+			})
+		}
+		usage = p.usage
+	}
 	response.Usage = &usage
 	return response, nil
 }
@@ -81,15 +97,23 @@ func TestTrain3Fix3_MixedCallRoomCostKeepsRatioDedupAndUnpricedBoundary(t *testi
 			h.stopMain("mia")
 			h.post(roomA.Id, "cost-a", "@Mia COST_ROOM_A")
 			h.post(roomB.Id, "cost-b", "@Mia COST_ROOM_B")
+			// Join actual admission completion, not a timing delay or a cost
+			// value. Both captures must be held before the web revival starts.
+			h.api.rooms.Load().svc.WaitIdleForTest()
 			a := wu15Delivery(t, wu15FindEntry(t, h.snapshot(roomA.Id), "cost-a"), "mia")
 			b := wu15Delivery(t, wu15FindEntry(t, h.snapshot(roomB.Id), "cost-b"), "mia")
 			for _, request := range []gen.RoomDeliveryState{a, b} {
+				require.Equal(t, "held", request.State, "room admission settled while the main was stopped")
 				capture, found, captureErr := h.al.RequestLedger().Get(h.main("mia"), request.RequestId)
 				require.NoError(t, captureErr)
 				require.True(t, found)
+				require.True(t, capture.Held, "both room inputs are durably held before web revival")
 				require.False(t, capture.Delivered, "ratio inputs were not consumed by an earlier turn")
 			}
-			p := &train3R3UsageProvider{wu15ScriptProvider: &wu15ScriptProvider{answer: "cost boundary complete"}, usage: tc.usage}
+			p := &train3R3UsageProvider{
+				wu15ScriptProvider: &wu15ScriptProvider{answer: "cost boundary complete"},
+				usage:              tc.usage, requestIDs: []string{a.RequestId, b.RequestId},
+			}
 			inst, ok := h.al.GetRegistry().GetAgent("mia")
 			require.True(t, ok)
 			inst.Provider = p
@@ -106,9 +130,16 @@ func TestTrain3Fix3_MixedCallRoomCostKeepsRatioDedupAndUnpricedBoundary(t *testi
 			require.NotNil(t, done.Stats)
 			require.NotNil(t, done.Stats.Cost)
 			require.Equal(t, tc.turnMicroUSD, int64(math.Round(*done.Stats.Cost*1e6)), "turn accounting retains all known portions")
-			require.Len(t, p.inputs(), 1, "all three inputs entered one actual provider call")
+			calls := p.inputs()
+			require.Len(t, calls, 2, "one usage-bearing answer call and one zero-usage final call; no unanswered-request reminder")
 			for _, text := range []string{"COST_ROOM_A", "COST_ROOM_B", "COST_WEB_C"} {
-				wu15AssertProviderSaw(t, p.wu15ScriptProvider, text)
+				seenInFirstCall := false
+				for _, message := range calls[0] {
+					if message.Role != "system" && strings.Contains(message.Content, text) {
+						seenInFirstCall = true
+					}
+				}
+				require.True(t, seenInFirstCall, "all three logical inputs entered the usage-bearing call: missing %s", text)
 			}
 			entries, err := h.al.GetSessionStore().ReadTranscript(h.main("mia"))
 			require.NoError(t, err)
@@ -118,9 +149,11 @@ func TestTrain3Fix3_MixedCallRoomCostKeepsRatioDedupAndUnpricedBoundary(t *testi
 					callCounts = append(callCounts, entry.UnpricedTokens)
 				}
 			}
-			require.Equal(t, []int{tc.unpricedTokens}, callCounts, "one call's exact unpriced count is retained")
-			for _, room := range []gen.Room{roomA, roomB} {
+			require.Equal(t, []int{tc.unpricedTokens, 0}, callCounts, "the answer call's exact unpriced count and the zero-usage final call are retained")
+			for index, room := range []gen.Room{roomA, roomB} {
 				snap := h.snapshot(room.Id)
+				delivery := wu15Delivery(t, wu15FindEntry(t, snap, []string{"cost-a", "cost-b"}[index]), "mia")
+				require.Equal(t, "answered", delivery.State, "both requests are actually answered, so no reminder turn remains owed")
 				require.Equal(t, tc.roomMicroUSD, snap.AllocatedCostMicroUsd, "BDD-17.30: each room's exact one-third allocation, or B1 zero")
 				require.Equal(t, tc.unpricedTokens > 0, snap.AllocatedCostUnpriced, "a mixed call must not look fully priced")
 			}
@@ -139,7 +172,7 @@ func TestTrain3Fix3_MixedCallRoomCostKeepsRatioDedupAndUnpricedBoundary(t *testi
 			// Retry the SAME logical inputs: no new turn and no new debit.
 			h.post(roomA.Id, "cost-a", "@Mia COST_ROOM_A")
 			h.post(roomB.Id, "cost-b", "@Mia COST_ROOM_B")
-			require.Len(t, p.inputs(), 1, "completed input retry does not call the provider again")
+			require.Len(t, p.inputs(), 2, "completed input retry does not call the provider again")
 			for _, room := range []gen.Room{roomA, roomB} {
 				require.Equal(t, tc.roomMicroUSD, h.snapshot(room.Id).AllocatedCostMicroUsd, "retry never doubles allocation")
 			}
