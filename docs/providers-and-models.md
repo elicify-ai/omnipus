@@ -39,14 +39,14 @@ For a custom endpoint, choose either the `openai-compatible` or `anthropic` prot
 
 ## Picking a model when two providers offer it
 
-The model pickers — next to the chat message box, on an agent's profile, in the new-agent wizard, and on the **Default model** card — list every model offered by your connected and signed-in providers, grouped under the provider that serves it.
+The model pickers — next to the chat message box, on an agent's profile, and on the **Default model** card — list every model offered by your connected and signed-in providers, grouped under the provider that serves it.
 
 The same model name can appear under more than one provider, for example when a local proxy serves models that a subscription provider also offers. When that happens, the check mark appears only under the provider whose row you actually picked — by mouse or by keyboard — and picking the same model under a different provider moves the check mark to that provider's row.
 
 Two limits to know:
 
 - A value restored from a saved setting or conversation rather than picked in this session carries no provider record (for example a recap model saved earlier, or the model a conversation was last answered with). When exactly one provider offers that model, its row is marked; when several providers offer it, no row is marked, because the UI cannot know which one served it.
-- In the chat composer the provider choice is currently display-only: the message is sent with the model name only, and the server decides which provider serves it. The agent profile, the new-agent wizard, the **Default model** card, and fallback entries do save the chosen provider.
+- In the chat composer the provider choice is currently display-only: the message is sent with the model name only, and the server decides which provider serves it. The agent profile, the **Default model** card, and fallback entries do save the chosen provider. There is no create form in the app: new agents are created by asking Omnipus or through the REST API (see [agents](agents.md)).
 
 ## Models known to support tools
 
