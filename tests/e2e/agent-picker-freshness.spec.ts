@@ -54,6 +54,7 @@
 import { expect } from "@playwright/test";
 import { test } from "./fixtures/console-errors";
 import {
+  assistantMessages,
   selectAgent,
   agentRowGroup,
   DEFAULT_WORKSPACE_NAME,
@@ -227,5 +228,29 @@ test.describe("selectAgent when the row click closes the sidebar (static harness
     await expect(selectAgent(page, "Jim", "Other Workspace")).rejects.toThrow(
       /neither its aria-current nor the selected row confirmed the switch/,
     );
+  });
+});
+
+// Harness-only regression for selectors.ts::assistantMessages (static DOM, no
+// gateway). Since the parent-wake landing a helper's hand-back renders in the
+// parent chat as a system row that carries data-message-id
+// (SystemMessageRows.tsx::VirtualSystemMessageRow, data-message-role="system").
+// Before ea78b8704 the selector counted it as an assistant reply:
+// subagent.spec.ts (d) saw 2 replies where the parent gave 1 (release run
+// 39427198408). This pins ea78b8704's exclusion. System rows
+// - helper hand-backs, goal outcomes, the clear-context divider - are never
+// assistant replies.
+test.describe("assistantMessages counts assistant replies only (static harness)", () => {
+  test("a system row with data-message-id is not an assistant reply", async ({ page }) => {
+    await page.setContent(`
+      <div data-message-role="user" data-message-id="u1" class="flex-row-reverse">delegate this</div>
+      <div data-testid="assistant-message" data-message-role="assistant" data-message-id="a1" data-status="complete">summary</div>
+      <div data-message-role="system" data-message-id="helper-event-finished-s1-s2:1:final">A delegated session handed back (final): done</div>
+      <div data-message-role="system" data-message-id="clear-1">Context cleared</div>
+      <div data-message-id="a2">a reply rendered without a role attribute</div>
+      <div data-message-id="a3" data-status="running">still streaming</div>`);
+    await expect(assistantMessages(page)).toHaveCount(2);
+    expect(await assistantMessages(page).evaluateAll((els) => els.map((el) => el.getAttribute("data-message-id"))))
+      .toEqual(["a1", "a2"]);
   });
 });
