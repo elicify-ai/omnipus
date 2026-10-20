@@ -282,4 +282,66 @@ occasionally the write lands mid-`RemoveAll` and fails an otherwise green test w
 
 **Trap 9 — the WU-23 Landlock receipt tests cannot run on Fly (excluded explicitly, never silently).** Fly's Firecracker VMs run a kernel without usable Landlock (`Landlock not available. Using application-level enforcement. backend=fallback kernel_version=6.12.105-fly` in the worker log), so every WU-23 kernel-receipt test — the eight `TestWU23*…Landlock` tests in `pkg/sandbox/wu23_landlock_linux_test.go`, `wu23_agenthome_creation_linux_test.go`, `wu23_r1_runtime_inventory_linux_test.go` and `pkg/tools/wu23_god_spawns_linux_test.go` — failed here with `BLOCKED: real Landlock unavailable — D8 requires a non-skip Linux receipt`. That made the `go-test` and `go-race` gates permanently red: an instrument that cannot go green proves nothing and hides every OTHER real failure. Since 2026-10-18, `runci.sh`'s `run_gotest`/`run_gorace` pass `-skip '^TestWU23.*Landlock'` to **all four** of their `go test` invocations — the contended run AND the flake filter's isolated re-runs (without it there, a re-run of any package holding a receipt test fails on the BLOCKED fatal and stamps the package `REAL FAILURE (failed twice)`, silently undoing the exclusion). The skip is never silent: each gate prints `NOT RUN ON FLY: WU-23 Landlock receipt tests (no Landlock in Fly VMs; GitHub Linux CI is the authority, amendment §2.2 D8)` in its output, and `-skip` omits the matched tests from the go test output entirely (no `--- SKIP` line is printed — verified on go 1.27; without `-v` the log shows only the package's `ok` line). No `--- PASS` line therefore ever exists for them and no verdict in `runci.sh` can count them as a pass (the only pass-counting anywhere is `records-no-sqlite`'s floor, a different gate whose tests do not match the pattern) — the NOT RUN ON FLY line is the log's only marker that these tests were left out. The LEFT-anchored pattern (WU-23 prefix + "Landlock" anywhere in the name — a right anchor `…Landlock$` would be WRONG: it misses the six `TestWU23_Landlock*` names, which do not end in "Landlock") matches exactly those eight receipt tests, verified against the full repo test inventory — the OTHER 14 Landlock-named tests (`TestLandlock_*`, `TestLandlockRightsForABI_*`, `TestAccessToLandlockRights_*`, `TestSandboxBackend_LandlockFallbackChain`, …) do not start with `TestWU23`, do not match, and do not affect this gate. Coverage honesty: four of them are kernel-dependent subprocess tests that SELF-SKIP on Fly's fallback backend (`TestLandlock_ApplySubprocess`, `TestLandlock_BindAllowedSubprocess`, `TestLandlock_BindBlockedSubprocess`, `TestLandlock_WorkspaceReroot_StaysInsideBootGrant` — `pkg/sandbox/backend_linux_subprocess_test.go` and `pkg/sandbox/workspace_reroot_subprocess_test.go` skip with `Landlock backend not available (backend=…)` whenever the backend is not Landlock), so a Fly green covers less Landlock subprocess confinement than those names suggest; they do run on any kernel where Landlock exists.
 
-**Trap 10 — a dead remote session must end in a verdict, never a silent hang (the 3-hour stall).** On 2026-10-18 the session behind a dispatched lint gate was torn down remotely mid-write (every remote process died at 13:59:26Z, 3m20s into the gate; the RUNLOG froze mid-line at 113507 bytes with no RESULT; dmesg had zero OOM traces, flyd logged no event — the killer was session-level and the guest keeps no trace of it). The local `fly ssh console` sat on a half-open flow forever, and the then-synchronous `ci-cluster.sh::dispatch_tier` waited on it ~3 hours with no verdict — an instrument that cannot return proves nothing. Since 2026-10-19: every gate's console runs under a **liveness watchdog** — the tier re-checks verdict-in-log every second and probes the remote gate process (`pgrep -f "/cache/[r]unci.sh <ref> <gate>"`, ref- and gate-specific: a co-tenant's runci must never make a dead gate look alive) once per `CI_CLUSTER_WATCH_INTERVAL` (default 30s); after `CI_CLUSTER_DEAD_STRIKES` (default 3) consecutive not-alive probes the console is killed and either the verdict is **recovered from the remote RUNLOG** (the transport died but the run finished) or the tier ends with an explicit non-zero **STALLED/DIED** verdict naming the gate, the machine and the last log line — then evidence is collected and machines are stopped exactly as on any failure. Liveness, not a timer: a healthy `go-race` (~25 min) probes alive on every cycle and is never killed. `runci.sh` adds HUP/INT/TERM traps that write a `RUNCI: KILLED by signal …` trailer and exit 129/130/143 (a SIGKILL cannot be trapped — the watchdog is the guarantee for that shape); a trailer yields `FAIL:killed-by-signal`, never a STALLED stamp over it. Verdicts: `FAIL:stalled`, `FAIL:killed-by-signal`, `FAIL:no-result-line` (legacy shape, same recovery logic). Related, easy to rediscover the hard way: `fly ssh console -C` splits its command into argv **without a shell** — pipes, redirects and globs in a bare `-C` command never execute (the dispatcher's owner-marker write has always wrapped in `sh -c`; its run-log fallback `ls` was silently dead until 2026-10-19 for exactly this reason). The selfcheck (`ci-cluster-selfcheck.sh`) proves the watchdog end to end against the fake `fly`: cases 7 (half-open hang → STALLED/DIED, exit 1, within the window), 8 (transport-only drop → verdict RECOVERED, PASS), 9 (healthy slow gate survives — liveness, not an idle timer), 10 (signal death keeps its trailer); run it after any dispatcher change. GitHub's Linux runners DO provide Landlock and `pr.yml` never invokes `runci.sh`, so GitHub CI remains the receipt authority (amendment D8: the Fly cluster is not accepted as kernel evidence — `coordination/designs/L1-AMENDMENTS-20261013.md` §2.2 D8, outside this repo). Failure mode to keep honest: a NEW or renamed receipt test whose name does not mention `Landlock` at all is NOT matched by the pattern, fails here with the BLOCKED message, and turns the gate red — that is the intended visible failure; fix the pattern or the name consciously, never by broadening it blindly.
+GitHub Linux CI remains the kernel-receipt authority (binding amendment §2.2
+D8: Fly is not accepted as kernel evidence). A new receipt test not mentioning
+`Landlock` does not match the Fly-only exclusion and stays visibly red; update
+that boundary consciously rather than broadening it blindly.
+
+**Trap 10 — a dead remote gate needs an explicit verdict, not a silent wait.** The
+2026-10-18 lint RUNLOG ended mid-line at 113507 bytes with no final verdict,
+while the local console remained waiting. No machine restart or OOM trace was
+found in the inspected logs; the exact cause of death was not established. A
+stopped log alone does not prove which process or signal killed the run.
+
+The dispatcher now checks gate liveness rather than imposing a test-duration
+limit. Each gate invocation gets a fresh random attempt token, passed as the
+third argument to `runci.sh` and saved in the local `.attempt` file. The runner
+puts it in its RUNLOG filename and in `ATTEMPT: <token> gate <gate> ref <sha>`;
+the non-root re-exec retains the argument. A process probe matches the resolved
+full commit, gate and **exact token**, as one quoted `pgrep -f` pattern. Linux
+procps accepts only one pattern operand. Its explicit `PROBE_STATUS` marker,
+not the SSH wrapper's exit code or an empty stderr, distinguishes matched,
+no-match and failed probes. The fixture checks the actual rendered shell
+fragment and argv, including exit statuses 0/1/2.
+
+`CI_CLUSTER_WATCH_INTERVAL` (30s) and `CI_CLUSTER_DEAD_STRIKES` (3) control the
+probe cadence and consecutive not-alive threshold. A healthy or lock-queued
+gate remains alive regardless of elapsed time. Probe calls themselves have a
+`CI_CLUSTER_PROBE_TIMEOUT` (20s); recovery and evidence copies have a
+`CI_CLUSTER_RECOVER_TIMEOUT` (60s). Expiry is explicit and non-successful;
+partial output/copies are not accepted. Owned local consoles and control
+children are terminated and reaped, with bounded TERM-to-KILL escalation,
+including verdict-then-hang and interrupt paths. Ownership/idleness checks at
+teardown are bounded too; an unreadable answer refuses a machine stop.
+
+Recovery uses **only this attempt's announced RUNLOG path**. There is no
+newest-by-gate fallback. The path must bind the exact gate, commit and token;
+a completed transfer must also contain that exact identity and matching HEAD.
+An old same-commit PASS, missing announcement, foreign path, invalid identity,
+or timed-out transfer never supplies a verdict. Validated recovered partial
+logs are retained, including a signal trailer that reached only the RUNLOG.
+Outcomes are `PASS`, `FAIL:gate`, `FAIL:stalled` (explicit STALLED/DIED with
+machine, gate and last output), or `FAIL:killed-by-signal`. Existing incomplete,
+unknown-gate and commit-mismatch failures remain. `runci.sh` writes HUP/INT/TERM
+trailers with statuses 129/130/143; signals sent only to its shell can be
+handled after the foreground child finishes. SIGKILL cannot produce a trailer.
+
+Collection and identity verification precede any stop. Failed/empty/foreign
+copies leave the machine running with a hand-retrieval warning. So do foreign
+owners, active work and unreadable ownership/idleness; already-running machines
+are never owned by this dispatcher. This is not a guarantee that every VM
+always stops.
+
+`ci-cluster-selfcheck.sh` runs the real dispatcher against the hermetic process
+fixture in `ci-cluster-testkit.py` (Python 3, test-only). Default execution runs
+every named case. Focused mutation receipts may set `CI_SELFCHECK_CASES`; the
+selection is printed and counted, and unknown/empty selections fail. The fake
+console hangs until terminated, rather than self-finishing inside its outer
+test cap. Checks include healthy/queued probes, same-commit stale PASS refusal,
+foreign attempts, hung probes/copies, signal recovery, child reaping and
+interrupt-time collect-before-stop. The signal fixture executes the unchanged
+runner's real non-root path with only guest setup commands stubbed; it sends
+real HUP/INT/TERM rather than extracting or duplicating trap statements. The
+guard companion runs the complete suite once, then reason-specific mutations
+for state parsing, GO override, disabled watchdog, missing attempt qualifier,
+removed real traps and abandoned console reaping. No fixture contacts Fly.

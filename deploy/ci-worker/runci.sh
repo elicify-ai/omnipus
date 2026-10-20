@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Omnipus CI worker entrypoint for a single gate run.
-# Usage: runci.sh <git-ref> <gate>
+# Usage: runci.sh <git-ref> <gate> [attempt-token]
 #   gate ∈ { all | all-no-e2e | go-build | go-vet | lint | go-test | go-race | records-no-sqlite | contracts | spa | gofmt | quick | embed-build | e2e }
 #   all-no-e2e = `all` minus go-race/e2e, with setup (npm ci + verify-contracts) done once and
 #   the remaining checks fanned out over three parallel groups — see run_all_no_e2e.
@@ -11,10 +11,10 @@
 #   concurrent LLM shards their own rate-limit windows; unset ⇒ they fall back to the primary
 #   key (the run still works, just at single-key parallelism). See run_e2e below.
 set -uo pipefail
-# Trailer when the run is killed by a signal (2026-10-18, lint@d52b70bdc: the
-# console session's server side tore the run down mid-write — every process
-# died at 13:59:26Z, no guest OOM in dmesg, no flyd event — and the log simply
-# stopped, so the dispatcher could not tell "killed" from "still going").
+# Trailer for catchable signal deaths. In the 2026-10-18 lint incident the
+# log stopped mid-write with no final verdict. The exact killer was not
+# established; these traps provide a cause when a catchable signal reaches
+# this shell, while the dispatcher also detects deaths with no trailer.
 # These traps write an explicit KILLED line (through the RUNLOG tee once it is
 # up, otherwise to the console capture) and then exit, preserving death-by-
 # signal semantics: HUP=129, INT=130, TERM=143. No RESULT line is written —
@@ -32,6 +32,14 @@ trap 'echo "RUNCI: KILLED by signal TERM — no verdict written; gate state at d
 
 REF="${1:-HEAD}"
 GATE="${2:-all}"
+# Optional per-attempt identity (third argument), passed by ci-cluster.sh and
+# bound to everything the dispatcher later matches on: the RUNLOG filename, the
+# `ATTEMPT:` line below, and the remote process argv its liveness probe greps.
+# Empty for manual runs — every token-dependent behavior simply switches off.
+ATTEMPT="${3:-}"
+case "$ATTEMPT" in
+  *[!A-Za-z0-9_-]*) printf 'invalid attempt token: use letters, digits, underscore or hyphen\n' >&2; exit 64 ;;
+esac
 REPO_DIR=/cache/omnipus   # on the persistent volume → clone survives stop/start
 
 # --- per-run log on the persistent volume ---------------------------------
@@ -56,7 +64,7 @@ if [ -z "${RUNCI_AS_CI:-}" ]; then
 RUNLOG_DIR=/cache/logs
 mkdir -p "$RUNLOG_DIR" || { echo "cannot create $RUNLOG_DIR — no persistent run log possible"; exit 2; }
 safe_ref="$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '-')"
-RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ).log"
+RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ)${ATTEMPT:+-at${ATTEMPT}}.log"
 # Prune BEFORE the tee opens the new file: keep the newest 2 existing logs for
 # THIS gate (today's file becomes the 3rd). `@` separates gate from ref — gate
 # names contain `-` (go-test), so a `-` there would make `go-*` also match
@@ -64,6 +72,7 @@ RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ).log"
 ( cd "$RUNLOG_DIR" && ls -t "${GATE}@"*.log 2>/dev/null | tail -n +3 | xargs -r rm -f -- ) || true
 exec > >(tee -a "$RUNLOG") 2>&1
 echo "RUNLOG: $RUNLOG"
+[ -n "$ATTEMPT" ] && echo "ATTEMPT: $ATTEMPT gate $GATE ref $REF"
 fi
 
 # --- whole-run mutex ------------------------------------------------------
@@ -287,7 +296,7 @@ if [ -z "${RUNCI_AS_CI:-}" ]; then
       if [ "$(id -u)" = 0 ]; then
         ci_prepare || { echo "cannot prepare the non-root test user '$CI_USER'"; exit 2; }
         echo "re-exec as non-root user '$CI_USER' (uid $(id -u "$CI_USER"))"
-        exec runuser -u "$CI_USER" -- env RUNCI_AS_CI=1 HOME="/home/$CI_USER" "PATH=$PATH" bash "$0" "$REF" "$GATE"
+        exec runuser -u "$CI_USER" -- env RUNCI_AS_CI=1 HOME="/home/$CI_USER" "PATH=$PATH" bash "$0" "$REF" "$GATE" "$ATTEMPT"
       fi
       ;;
   esac

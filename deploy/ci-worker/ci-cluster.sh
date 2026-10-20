@@ -90,6 +90,13 @@ PROBE_INTERVAL=5
 # the seconds between a console connecting and runci.sh first appearing.
 WATCH_INTERVAL="${CI_CLUSTER_WATCH_INTERVAL:-30}"  # seconds between liveness probes
 DEAD_STRIKES="${CI_CLUSTER_DEAD_STRIKES:-3}"       # consecutive not-alive probes → STALLED/DIED
+# Control-plane bounds (gate-review F3/SF-2): the watchdog's OWN remote calls
+# must never be able to hang — that was the original failure shape. Probes and
+# recovery lookups/transfers get a finite completion bound; a timed-out probe
+# counts as an 'unreachable' strike, a timed-out recovery refuses recovery.
+# These bounds NEVER apply to a real test gate or its lock wait.
+PROBE_TIMEOUT="${CI_CLUSTER_PROBE_TIMEOUT:-20}"    # seconds per liveness probe
+RECOVER_TIMEOUT="${CI_CLUSTER_RECOVER_TIMEOUT:-60}" # seconds per recovery lookup/copy
 
 # CI_CLUSTER_TIERS overrides the whole map. One tier per line:
 #   <name>|<machine-id>|<gate> <gate> ...
@@ -140,6 +147,8 @@ Env:
   CI_CLUSTER_START_TIMEOUT  seconds to wait for a started machine to become reachable
   CI_CLUSTER_WATCH_INTERVAL seconds between gate-liveness probes (default 30)
   CI_CLUSTER_DEAD_STRIKES   consecutive not-alive probes before STALLED/DIED (default 3)
+  CI_CLUSTER_PROBE_TIMEOUT  bound per liveness probe; expiry = an unreachable strike (default 20)
+  CI_CLUSTER_RECOVER_TIMEOUT bound per recovery/evidence transfer (default 60)
   CI_CLUSTER_LOG_DIR        where per-gate logs go (default a fresh dir under /tmp)
 
 Tiers with an empty machine id are skipped. Exit 0 = all gates green; 1 = failure;
@@ -148,6 +157,59 @@ EOF
 }
 
 # --- small helpers -------------------------------------------------------------------------
+
+# Each gate invocation gets a fresh token, recorded locally before dispatch.
+# Commit+gate alone cannot distinguish a new dead attempt from an older PASS.
+new_attempt_token() {
+  local token
+  token=$(LC_ALL=C od -An -N16 -tx1 /dev/urandom | tr -d '[:space:]') || return 1
+  [ "${#token}" -eq 32 ] || return 1
+  case "$token" in *[!0-9a-f]*) return 1 ;; esac
+  printf '%s' "$token"
+}
+
+# Only direct children owned by this shell are tracked. The tier EXIT trap
+# and parent cleanup reap them before the owning shell exits (SF-2/SF-5).
+CONTROL_PID=""
+CONSOLE_PID=""
+terminate_and_reap() { # $1 exact child PID; no process-group or name matching
+  local p="${1:-}" i=0 grace="${2:-20}"
+  [ -n "$p" ] || return 0
+  kill -TERM "$p" 2>/dev/null || true
+  while kill -0 "$p" 2>/dev/null && [ "$i" -lt "$grace" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if kill -0 "$p" 2>/dev/null; then kill -KILL "$p" 2>/dev/null || true; fi
+  wait "$p" 2>/dev/null || true
+}
+
+cleanup_transports() {
+  terminate_and_reap "${CONTROL_PID:-}"; CONTROL_PID=""
+  terminate_and_reap "${CONSOLE_PID:-}"; CONSOLE_PID=""
+}
+
+# Bound control-plane operations, NOT gates/lock waits. Run in the current
+# shell so cancellation can see CONTROL_PID. A timeout keeps stderr and
+# returns 124; partial stdout/copies never become a successful operation.
+run_bounded() { # seconds stdout-file stderr-file command...
+  local limit="$1" out="$2" err="$3" ticks=0 status
+  shift 3
+  "$@" >"$out" 2>"$err" &
+  CONTROL_PID=$!
+  while kill -0 "$CONTROL_PID" 2>/dev/null && [ "$ticks" -lt "$((limit * 10))" ]; do
+    sleep 0.1
+    ticks=$((ticks + 1))
+  done
+  if kill -0 "$CONTROL_PID" 2>/dev/null; then
+    printf 'CONTROL TIMEOUT after %ss: %s\n' "$limit" "$1" >>"$err"
+    terminate_and_reap "$CONTROL_PID"; CONTROL_PID=""
+    return 124
+  fi
+  wait "$CONTROL_PID"; status=$?
+  CONTROL_PID=""
+  return "$status"
+}
 
 # md5 of the LOCAL runci.sh. macOS has no md5sum, so fall back to `md5 -q`.
 local_md5() {
@@ -250,18 +312,28 @@ write_owner_marker() { # $1 machine-id
     || warn "could not write the owner marker on machine $1 (it will still be stopped at exit unless a foreign marker or a running gate is found)"
 }
 
-# True when the machine carries a readable owner marker that is NOT ours. An
-# unreadable machine (unreachable) or a missing marker is not foreign.
-marker_is_foreign() { # $1 machine-id
-  local got
-  got=$(fly ssh console --app "$APP" --machine "$1" -C 'cat /tmp/ci-owner' 2>/dev/null | tr -d '\r' | sed -n '/^ci-cluster:/p' | head -1)
-  [ -n "$got" ] && [ "$got" != "$OWNER_TOKEN" ]
+# Refuse a stop on a foreign, missing or unreadable ownership marker.
+# Unknown ownership is not permission to terminate another session's machine.
+marker_is_foreign() { # machine; unreadable ownership also prevents stopping
+  local got out="$LOG_DIR/owner-$1.out" err="$LOG_DIR/owner-$1.err"
+  if ! run_bounded "$PROBE_TIMEOUT" "$out" "$err" \
+    fly ssh console --app "$APP" --machine "$1" -C 'cat /tmp/ci-owner'; then
+    warn "machine $1 ownership unreadable — refusing to stop it"
+    return 0
+  fi
+  got=$(tr -d '\r' <"$out" | sed -n '/^ci-cluster:/p' | head -1)
+  [ -z "$got" ] || [ "$got" != "$OWNER_TOKEN" ]
 }
 
-# True when a runci.sh gate is currently executing on the machine: something
-# (another dispatcher, a manual run) is using it, so stopping would kill that run.
-machine_is_busy() { # $1 machine-id
-  fly ssh console --app "$APP" --machine "$1" -C "pgrep -f '/cache/[r]unci.sh'" >/dev/null 2>&1
+# A successful no-match is announced explicitly, not inferred from flyctl's
+# unreliable exit code. Unreachable/unknown idleness is conservatively busy.
+machine_is_busy() { # machine
+  local out="$LOG_DIR/busy-$1.out" err="$LOG_DIR/busy-$1.err"
+  if ! run_bounded "$PROBE_TIMEOUT" "$out" "$err" fly ssh console --app "$APP" --machine "$1" \
+    -C "sh -c 'pgrep -f \"/cache/[r]unci[.]sh\"; status=\$?; printf \"PROBE_STATUS: %s\\n\" \"\$status\"'"; then
+    return 0
+  fi
+  ! grep -qx 'PROBE_STATUS: 1' "$out"
 }
 
 # Start the machine only if it is STOPPED, and record ownership of exactly those.
@@ -297,34 +369,33 @@ preflight_machine() { # $1 tier $2 machine-id $3 expected-md5
 
 # --- dispatch ------------------------------------------------------------------------------
 
-# Remote liveness of THIS run's gate (tier+gate identify it) on a machine.
-# Prints exactly one of: alive | gone | unreachable.
-#   alive        a process matching THIS gate's runci.sh argv exists — the gate,
-#                or a lock-queued twin of it (conservative: waiting is safe)
-#   gone         the console reached the machine and pgrep found NOTHING — the
-#                gate process is dead while our capture has no verdict
-#   unreachable  the console itself failed (machine stopped / agent wedged);
-#                discriminated from 'gone' by flyctl writing an error to stderr
-#                where a clean pgrep no-match writes nothing
-# The pattern is REF- and gate-specific so a CO-TENANT's runci.sh (another
-# session's run on this shared machine) can never make our dead gate look
-# alive; the [r]unci bracket keeps pgrep from matching the probe's own line.
-remote_gate_state() { # $1 machine-id $2 tier $3 gate
-  local id="$1" out rc errf="$LOG_DIR/probe-$2-$3.err"
-  out=$(fly ssh console --app "$APP" --machine "$id" -C "pgrep -f /cache/[r]unci.sh $REF $3" 2>"$errf" | tr -d '\r')
-  rc=$?
-  if [ "$rc" -eq 0 ]; then
-    if [ -n "$out" ]; then printf 'alive'; else printf 'gone'; fi
-    return 0
+# The full expression is ONE quoted remote argument, including the canonical
+# SHA, gate and exact attempt token. procps rejects multiple pattern operands.
+# Do not use stderr emptiness as the oracle: fly prints connection diagnostics
+# there even on a clean pgrep no-match. Remote exit 0/1/other is announced
+# explicitly; transport failure/timeout or pgrep usage error is unreachable.
+remote_gate_state() { # machine tier gate; sets REMOTE_GATE_STATE
+  local id="$1" tier="$2" gate="$3" token out err status
+  token=$(attempt_of_gate "$tier" "$gate") || { REMOTE_GATE_STATE=unreachable; return; }
+  out="$LOG_DIR/probe-$tier-$gate.out"; err="$LOG_DIR/probe-$tier-$gate.err"
+  if run_bounded "$PROBE_TIMEOUT" "$out" "$err" fly ssh console --app "$APP" --machine "$id" \
+    -C "sh -c 'pgrep -f \"/cache/[r]unci[.]sh $EXPECTED_FULL $gate $token( |$)\"; status=\$?; printf \"PROBE_STATUS: %s\\n\" \"\$status\"'"; then
+    status=$(tr -d '\r' <"$out" | sed -n 's/^PROBE_STATUS: //p')
+    case "$status" in
+      0) REMOTE_GATE_STATE=alive ;;
+      1) REMOTE_GATE_STATE=gone ;;
+      *) REMOTE_GATE_STATE=unreachable ;;
+    esac
+  else
+    REMOTE_GATE_STATE=unreachable
   fi
-  if [ -s "$errf" ]; then printf 'unreachable'; else printf 'gone'; fi
 }
 
 # End a gate that has no verdict in its console capture. Three entry shapes:
 #   reason="watchdog:gone"        console still open, remote runci.sh gone for
 #                                 $DEAD_STRIKES probes — the 2026-10-18 half-open
-#                                 hang (lint@d52b70bdc: remote died 13:59:26Z
-#                                 mid-write, local console blocked for ~3h)
+#                                 hang (lint@d52b70bdc: log stopped mid-write,
+#                                 local console remained blocked for ~3h)
 #   reason="watchdog:unreachable" machine stopped/unreachable under the run
 #   reason="exited:$rc"           the console exited by itself and the capture
 #                                 has no RESULT (session dropped at the very end)
@@ -335,50 +406,49 @@ remote_gate_state() { # $1 machine-id $2 tier $3 gate
 # the gate counts as completed; otherwise the log gets an explicit
 # CI-CLUSTER: STALLED/DIED marker naming the gate, the machine and the last
 # log line, and the tier fails. Never silent; never a hang.
-handle_incomplete_gate() { # $1 tier $2 machine-id $3 gate $4 log $5 reason
-  local tier="$1" id="$2" gate="$3" log="$4" reason="$5" remote rec last
-  grep -qE '^(ALL GATES GREEN|GATE FAILURE\(S\))' "$log" 2>/dev/null && return 0
-  # Recovery: fetch the remote RUNLOG and look for the verdict there.
-  remote=$(remote_runlog_for_gate "$tier" "$gate" "$id")
-  if [ -n "$remote" ]; then
+# A fetched log is usable only after transfer success AND exact identity:
+# attempt token, gate, resolved ref, and the checked-out HEAD.
+log_matches_attempt() { # file token gate
+  local sha
+  grep -Fqx "ATTEMPT: $2 gate $3 ref $EXPECTED_FULL" "$1" || return 1
+  sha=$(head_sha_of_log "$1")
+  head_matches "$sha" "$EXPECTED_FULL"
+}
+
+gate_has_result() {
+  grep -qE '^(ALL GATES GREEN$|GATE FAILURE\(S\))' "$1" 2>/dev/null
+}
+
+handle_incomplete_gate() { # tier machine gate console-log reason
+  local tier="$1" id="$2" gate="$3" log="$4" reason="$5" remote rec last token
+  gate_has_result "$log" && return 0
+  token=$(attempt_of_gate "$tier" "$gate") || token=""
+  remote=$(remote_runlog_for_gate "$tier" "$gate" "$id") || remote=""
+  if [ -n "$remote" ] && [ -n "$token" ]; then
     rec="$LOG_DIR/$tier-$gate.recovered.log"
-    if fly ssh sftp get "$remote" "$rec" --app "$APP" --machine "$id" >/dev/null 2>&1 \
-       && [ -s "$rec" ] \
-       && grep -qE '^(ALL GATES GREEN|GATE FAILURE\(S\))' "$rec" 2>/dev/null; then
-      # The recovered RUNLOG becomes the gate's verdict — but the original
-      # console capture stays part of the record: it carries the `RUNLOG:`
-      # line the collection phase reads, plus whatever output reached us
-      # before the transport died. The capture by definition has no verdict.
-      mv "$log" "$log.console-capture"
-      {
-        echo "CI-CLUSTER: console transport dropped before the verdict reached us; verdict RECOVERED from the remote run log $remote"
-        cat "$rec"
-        echo ""
-        echo "CI-CLUSTER: the original console capture (no verdict reached us over the transport) is preserved in $log.console-capture"
-      } >"$log"
-      rm -f "$rec"
-      info "[$tier] gate $gate on machine $id: console dropped ($reason) but the remote run COMPLETED — verdict recovered from $remote"
-      return 0
+    if run_bounded "$RECOVER_TIMEOUT" "$rec.transfer.out" "$rec.transfer.err" \
+      fly ssh sftp get "$remote" "$rec" --app "$APP" --machine "$id" \
+      && [ -s "$rec" ] && log_matches_attempt "$rec" "$token" "$gate"; then
+      # Preserve validated partial logs too: a remote-only KILLED trailer is
+      # evidence even though no completed verdict exists (SF-6).
+      printf '\nCI-CLUSTER: attempt-validated remote log %s\n' "$remote" >>"$log"
+      cat "$rec" >>"$log"
+      if gate_has_result "$rec"; then
+        info "[$tier] gate $gate: verdict recovered from $remote (attempt $token)"
+        return 0
+      fi
+    else
+      warn "[$tier] gate $gate: recovery refused (transfer or attempt/gate/ref/HEAD validation failed); evidence retained at $rec"
     fi
-    rm -f "$rec"
   fi
-  # No verdict anywhere: say STALLED/DIED, loudly, with the tail for triage —
-  # UNLESS the log already carries runci.sh's KILLED-by-signal trailer, which
-  # already states truthfully why there is no verdict (the run died on a
-  # signal); stamping STALLED/DIED over it would claim something the log
-  # contradicts. Either way the tier fails.
   last=$(tail -n 1 "$log" 2>/dev/null | cut -c 1-200)
-  if grep -q 'RUNCI: KILLED by signal' "$log" 2>/dev/null; then
-    printf '[%s] ERROR: gate %s on machine %s was KILLED by a signal (trailer in the log) — no verdict exists; treating the tier as failed (%s)\n' \
-      "$tier" "$gate" "$id" "$reason" >&2
+  if grep -q '^RUNCI: KILLED by signal' "$log" 2>/dev/null; then
+    warn "[$tier] gate $gate on machine $id was KILLED by a signal — no completed verdict ($reason)"
     return 1
   fi
-  {
-    echo ""
-    echo "CI-CLUSTER: STALLED/DIED — gate $gate on machine $id: $reason; no RESULT in the console capture and no recoverable verdict in the remote run log (${remote:-none found}). Last log line: ${last:-<empty>}"
-  } >>"$log"
-  printf '[%s] ERROR: STALLED/DIED — gate %s on machine %s: %s; no RESULT in the capture and none recoverable from the run log. Last line: %s\n' \
-    "$tier" "$gate" "$id" "$reason" "${last:-<empty>}" >&2
+  printf '\nCI-CLUSTER: STALLED/DIED — gate %s on machine %s: %s; no completed verdict for this attempt. Last log line: %s\n' \
+    "$gate" "$id" "$reason" "${last:-<empty>}" >>"$log"
+  warn "[$tier] STALLED/DIED — gate $gate on machine $id: $reason; last log line: ${last:-<empty>}"
   return 1
 }
 
@@ -390,83 +460,77 @@ handle_incomplete_gate() { # $1 tier $2 machine-id $3 gate $4 log $5 reason
 # the verdict comes from each log, never from the SSH wrapper's exit code.
 #
 # Each gate's console runs in the BACKGROUND of this subshell under a liveness
-# watchdog (2026-10-19 — was a bare synchronous call that hung for ~3h with no
-# verdict when the remote session died without closing the SSH flow: the
-# remote runci.sh was gone at 13:59:26Z, the local console blocked on a
-# half-open socket forever). While the console runs, the subshell probes
+# watchdog (the old synchronous call waited for ~3h with no verdict when
+# the remote log stopped). The exact remote killer was not established.
+# While the console runs, the subshell probes
 # remote_gate_state every WATCH_INTERVAL: 'alive' resets the strike count, so
 # a healthy gate of ANY duration (go-race ~25 min) is never touched; after
 # DEAD_STRIKES consecutive 'gone'/'unreachable' probes the console is killed
 # and handle_incomplete_gate either recovers the verdict from the remote RUNLOG
 # or ends the tier with the explicit STALLED/DIED failure.
-dispatch_tier() { # $1 tier $2 machine-id $3 gates(space-separated)
-  local tier="$1" id="$2" gates="$3" gate log rc con state strikes watched tier_rc=0
+dispatch_tier() { # tier machine gates
+  local tier="$1" id="$2" gates="$3" gate log rc state strikes watched token tier_rc=0
   for gate in $gates; do
     log="$LOG_DIR/$tier-$gate.log"
-    printf '[%s] dispatching gate %-18s -> machine %s\n' "$tier" "$gate" "$id"
-    fly ssh console --app "$APP" --machine "$id" -C "/cache/runci.sh $REF $gate" >"$log" 2>&1 &
-    con=$!
-    strikes=0
-    watched=0
-    # Two clocks on purpose (the first cut slept the full WATCH_INTERVAL per
-    # gate because a console that is still STARTING is genuinely alive at the
-    # first check):
-    #   * the wait hops in 1s steps, so a fast gate (fake fly, small gate) costs
-    #     ~1s here, never a full interval;
-    #   * the remote liveness probe and the verdict re-check run only once per
-    #     WATCH_INTERVAL — probe cadence is what DEAD_STRIKES multiplies, and a
-    #     healthy go-race (~25 min) probes 'alive' on every cycle and is never
-    #     killed.
-    while kill -0 "$con" 2>/dev/null; do
-      grep -qE '^(ALL GATES GREEN|GATE FAILURE\(S\))' "$log" 2>/dev/null && break
+    token=$(new_attempt_token) || { warn "[$tier] cannot generate attempt identity for $gate"; return 1; }
+    printf '%s\n' "$token" >"$LOG_DIR/$tier-$gate.attempt" || return 1
+    info "[$tier] dispatching gate $gate -> machine $id (attempt $token)"
+    fly ssh console --app "$APP" --machine "$id" \
+      -C "/cache/runci.sh $EXPECTED_FULL $gate $token" >"$log" 2>&1 &
+    CONSOLE_PID=$!
+    strikes=0; watched=0
+    while kill -0 "$CONSOLE_PID" 2>/dev/null; do
+      gate_has_result "$log" && break
       sleep 1
-      kill -0 "$con" 2>/dev/null || break            # finished during the hop
+      kill -0 "$CONSOLE_PID" 2>/dev/null || break
       watched=$((watched + 1))
       [ "$watched" -lt "$WATCH_INTERVAL" ] && continue
       watched=0
-      grep -qE '^(ALL GATES GREEN|GATE FAILURE\(S\))' "$log" 2>/dev/null && break
-      state=$(remote_gate_state "$id" "$tier" "$gate")
-      if [ "$state" = "alive" ]; then
-        strikes=0
-        continue
-      fi
+      gate_has_result "$log" && break
+      remote_gate_state "$id" "$tier" "$gate"
+      state="$REMOTE_GATE_STATE"
+      if [ "$state" = alive ]; then strikes=0; continue; fi
       strikes=$((strikes + 1))
       info "[$tier] gate $gate: remote gate state '$state' ($strikes/$DEAD_STRIKES strikes)"
-      if [ "$strikes" -ge "$DEAD_STRIKES" ]; then
-        kill "$con" 2>/dev/null
-        wait "$con" 2>/dev/null
-        con=""    # reaped by the watchdog — the plain path below must not wait again
-        if handle_incomplete_gate "$tier" "$id" "$gate" "$log" "watchdog:$state (no verdict, remote not alive for $DEAD_STRIKES probes)"; then
-          break   # verdict recovered — continue with the next gate
-        fi
-        tier_rc=1
-        break 2   # the machine is in no state to run the remaining gates — stop here
+      if [ -s "$LOG_DIR/probe-$tier-$gate.err" ]; then
+        warn "[$tier] gate $gate probe diagnostic: $(tail -n 1 "$LOG_DIR/probe-$tier-$gate.err" | cut -c 1-200)"
       fi
+      [ "$strikes" -ge "$DEAD_STRIKES" ] && break
     done
-    # The console may outlive its own verdict (printed ALL GATES GREEN, then the
-    # session hung) — the verdict is in hand, so do not wait on the corpse. rc is
-    # only captured where it is used: the no-verdict error message below.
+    # Own every background console through exit. Even verdict-then-hang and
+    # TERM-ignoring transports are killed/reaped without changing the verdict.
     rc=0
-    if [ -n "$con" ] && ! grep -qE '^(ALL GATES GREEN|GATE FAILURE\(S\))' "$log" 2>/dev/null; then
-      wait "$con" 2>/dev/null
-      rc=$?
+    if kill -0 "$CONSOLE_PID" 2>/dev/null; then
+      terminate_and_reap "$CONSOLE_PID"
+    else
+      wait "$CONSOLE_PID"; rc=$?
     fi
-    printf '[%s] gate %s finished on machine %s (log: %s)\n' "$tier" "$gate" "$id" "$log"
-    # A gate with no RESULT line did not complete: the machine was stopped under
-    # it, or the SSH session dropped. Recover the verdict from the remote RUNLOG
-    # if the run actually finished, else fail the tier with STALLED/DIED — never
-    # "exited 0", and the next gates would only fail on the same dead machine.
-    if ! grep -qE '^(ALL GATES GREEN|GATE FAILURE\(S\))' "$log" 2>/dev/null \
-       && ! grep -q 'unknown gate' "$log" 2>/dev/null; then
-      if handle_incomplete_gate "$tier" "$id" "$gate" "$log" "console exited $rc with no verdict (session dropped or machine stopped)"; then
-        continue
+    CONSOLE_PID=""
+    info "[$tier] gate $gate finished on machine $id (log: $log)"
+    if ! gate_has_result "$log" && ! grep -q 'unknown gate' "$log"; then
+      if [ "$strikes" -ge "$DEAD_STRIKES" ]; then
+        state="watchdog:$state (remote not alive for $DEAD_STRIKES probes)"
+      else
+        state="console exited $rc with no verdict"
       fi
-      tier_rc=1
-      break
+      if ! handle_incomplete_gate "$tier" "$id" "$gate" "$log" "$state"; then
+        tier_rc=1
+        break
+      fi
     fi
   done
-  printf '[%s] tier complete: %s\n' "$tier" "$gates"
+  info "[$tier] tier complete: $gates"
   return "$tier_rc"
+}
+
+# Install cleanup in the tier process, not just in its parent: when the tier
+# exits, no active console/probe may become orphaned (SF-5, interrupt F5).
+tier_worker() {
+  trap cleanup_transports EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  dispatch_tier "$@"
 }
 
 # --- verdict collection --------------------------------------------------------------------
@@ -522,51 +586,48 @@ head_matches() { # $1 reported-short-sha $2 expected-full-sha
 # VERIFIED: non-zero size AND the run's `HEAD:` line — a zero-byte or
 # HEAD-less file looks like evidence and is not.
 
-# Remote run-log path for a gate this run dispatched. Prefers the machine-
-# readable `RUNLOG: <path>` line runci.sh prints as its FIRST output — it is
-# present in the local console capture even when the SSH stream later drops
-# mid-run. Falls back to the newest matching file on the machine (guarded by
-# the HEAD-sha verification in collect_machine_logs, which rejects another
-# run's file). Prints nothing when neither yields a path.
-# The fallback runs under `sh -c`: `fly ssh console -C` splits its command
-# into argv WITHOUT a shell, so pipes, redirects and globs in a bare command
-# never execute — this fallback was dead code on the real cluster until
-# 2026-10-19 (found while wiring the STALLED/DIED recovery, which needs it).
-remote_runlog_for_gate() { # $1 tier $2 gate $3 machine-id
-  local tier="$1" gate="$2" id="$3" path
-  path=$(sed -n 's/^RUNLOG: \(\/cache\/logs\/.*\)$/\1/p' "$LOG_DIR/$tier-$gate.log" 2>/dev/null | head -1)
-  if [ -z "$path" ]; then
-    path=$(fly ssh console --app "$APP" --machine "$id" \
-             -C "sh -c 'ls -1t /cache/logs/${gate}@* 2>/dev/null | head -1'" 2>/dev/null \
-           | tr -d '\r' | sed -n '/^\/cache\/logs\//p' | head -1)
-  fi
-  printf '%s' "$path"
+attempt_of_gate() { # tier gate
+  local token
+  [ -s "$LOG_DIR/$1-$2.attempt" ] || return 1
+  token=$(<"$LOG_DIR/$1-$2.attempt")
+  [ "${#token}" -eq 32 ] || return 1
+  case "$token" in *[!0-9a-f]*) return 1 ;; esac
+  printf '%s' "$token"
 }
 
-# Copy one machine's dispatched-gate run logs off the machine and VERIFY each
-# one (non-zero size, HEAD sha = this run's ref). Gates with no local console
-# log were never dispatched — nothing to collect, not a failure. Returns
-# non-zero if any dispatched gate's evidence is not verified local.
-collect_machine_logs() { # $1 tier $2 machine-id $3 gates(space-separated)
-  local tier="$1" id="$2" gates="$3" gate remote dest sha rc=0
+# No newest-by-gate lookup: without this attempt's announced RUNLOG, recovery
+# is refused. Even an announced path must exactly name this gate/ref/token.
+remote_runlog_for_gate() { # tier gate machine (machine retained for callers)
+  local token path name
+  token=$(attempt_of_gate "$1" "$2") || return 1
+  path=$(tr -d '\r' <"$LOG_DIR/$1-$2.log" | sed -n 's/^RUNLOG: //p' | head -1)
+  name=${path#/cache/logs/}
+  [ "$name" = "${name##*/}" ] || return 1
+  case "$path" in
+    "/cache/logs/$2@$EXPECTED_FULL-"*"-at$token.log") printf '%s' "$path" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Every dispatched log is copied AND identity-verified before allowing a
+# stop. Failed/timed-out/partial/foreign evidence deliberately leaves the
+# machine running; diagnostics and the copy stay available for manual triage.
+collect_machine_logs() { # tier machine gates
+  local tier="$1" id="$2" gates="$3" gate remote dest token rc=0
   for gate in $gates; do
     [ -f "$LOG_DIR/$tier-$gate.log" ] || continue
     dest="$LOG_DIR/worker/$tier-$gate.log"
-    remote=$(remote_runlog_for_gate "$tier" "$gate" "$id")
-    if [ -z "$remote" ] \
-       || ! fly ssh sftp get "$remote" "$dest" --app "$APP" --machine "$id" >/dev/null 2>&1 \
-       || [ ! -s "$dest" ]; then
-      warn "[$tier] evidence NOT collected: gate $gate log on machine $id could not be copied non-empty (${remote:-no run log found on the machine})"
+    token=$(attempt_of_gate "$tier" "$gate") || token=""
+    remote=$(remote_runlog_for_gate "$tier" "$gate" "$id") || remote=""
+    if [ -z "$remote" ] || [ -z "$token" ] \
+      || ! run_bounded "$RECOVER_TIMEOUT" "$dest.transfer.out" "$dest.transfer.err" \
+        fly ssh sftp get "$remote" "$dest" --app "$APP" --machine "$id" \
+      || [ ! -s "$dest" ] || ! log_matches_attempt "$dest" "$token" "$gate"; then
+      warn "[$tier] evidence NOT verified: gate $gate on $id (announcement/transfer/attempt/gate/ref/HEAD); LEFT RUNNING until secured"
       rc=1
       continue
     fi
-    sha=$(head_sha_of_log "$dest")
-    if [ -z "$sha" ] || ! head_matches "$sha" "$EXPECTED_FULL"; then
-      warn "[$tier] evidence NOT verified: gate $gate log copied from machine $id has HEAD '${sha:-none}', expected ${EXPECTED_SHORT} — possibly another run's file, not this one"
-      rc=1
-      continue
-    fi
-    info "[$tier] collected + verified $dest (from machine $id: $remote)"
+    info "[$tier] collected + verified $dest (attempt $token, machine $id: $remote)"
   done
   return "$rc"
 }
@@ -635,7 +696,7 @@ stop_started_machines() {
       warn "machine $id is running a gate (a runci.sh is active on it) - NOT stopping it; stop it by hand when idle: fly machine stop $id --app $APP"
       continue
     fi
-    if ! fly machine stop "$id" --app "$APP"; then
+    if ! run_bounded "$PROBE_TIMEOUT" "$LOG_DIR/stop-$id.out" "$LOG_DIR/stop-$id.err" fly machine stop "$id" --app "$APP"; then
       warn "could not stop machine $id — STOP IT MANUALLY, it is billing:"
       echo "  fly machine stop $id --app $APP" >&2
     fi
@@ -643,24 +704,18 @@ stop_started_machines() {
 }
 
 cleanup() {
-  local rc=$?
-  trap - EXIT INT TERM
-  # Best-effort: kill the tier subshells and their direct fly children. The real
-  # backstop is the machine stop below — halting the VM cuts every SSH session
-  # and with it the remote runci.sh run. (macOS has no setsid; pkill -P exists.)
-  if [ "${#TIER_PIDS[@]}" -gt 0 ]; then
-    local pid
-    kill "${TIER_PIDS[@]}" 2>/dev/null || true
-    for pid in "${TIER_PIDS[@]}"; do
-      pkill -TERM -P "$pid" 2>/dev/null || true
-    done
-  fi
-  # Collect-then-stop, not stop-never: if the run never reached the collection
-  # phase (interrupt, or a death after dispatch began), collect best-effort
-  # NOW, then stop whatever verified. Do not weaken or remove this trap.
+  local rc=$? pid
+  trap - EXIT INT TERM HUP
+  cleanup_transports
+  # Let tier traps reap the exact transports they own, then reap the tiers.
+  # No pkill-by-pattern or process-group signals on a shared machine.
+  for pid in ${TIER_PIDS[@]+"${TIER_PIDS[@]}"}; do
+    # Two owned transports may each need their two-second escalation grace.
+    terminate_and_reap "$pid" 60
+  done
   if [ "$COLLECTION_DONE" -ne 1 ]; then
-    info "exit before the collection phase — collecting evidence best-effort before any stop"
-    collect_all_and_verify || true
+    info "exit before collection — collecting evidence before any stop"
+    collect_all_and_verify || rc=1
   fi
   stop_started_machines
   exit "$rc"
@@ -760,18 +815,22 @@ dispatch_all_and_wait() { # one tier per machine concurrently; gates sequential 
   PLAN_MACHINES=("${TIER_MACHINES[@]}")
   PLAN_GATES=("${TIER_GATES[@]}")
   for a in "${!TIER_NAMES[@]}"; do
-    dispatch_tier "${TIER_NAMES[$a]}" "${TIER_MACHINES[$a]}" "${TIER_GATES[$a]}" &
+    tier_worker "${TIER_NAMES[$a]}" "${TIER_MACHINES[$a]}" "${TIER_GATES[$a]}" &
     pid=$!
     TIER_PIDS+=("$pid"); PID_TIERS+=("${TIER_NAMES[$a]}")
   done
   for a in "${!TIER_PIDS[@]}"; do
     wait "${TIER_PIDS[$a]}"; rc=$?
+    TIER_PIDS[a]=""
     info "tier ${PID_TIERS[$a]} job exited $rc"
   done
+  # Completed tiers have reaped their transports; do not retain stale PIDs
+  # for EXIT cleanup to signal after a long collection phase.
+  TIER_PIDS=()
 }
 
 summarize_run() { # verdicts + HEAD-sha assertion from the logs; returns 0 only if all PASSed
-  local overall=0 a gate log verdict sha p left=""
+  local overall=0 a gate log verdict sha token p left=""
   printf '\n=== ci-cluster summary — app %s, ref %s @ %s ===\n' "$APP" "$REF" "$EXPECTED_SHORT"
   printf '%-8s %-14s %-20s %s\n' TIER MACHINE GATE VERDICT
   for a in "${!TIER_NAMES[@]}"; do
@@ -782,12 +841,17 @@ summarize_run() { # verdicts + HEAD-sha assertion from the logs; returns 0 only 
         sha=$(head_sha_of_log "$log")
         if ! head_matches "$sha" "$EXPECTED_FULL"; then
           verdict="FAIL:head-mismatch(${sha:-no HEAD line})"
+        else
+          token=$(attempt_of_gate "${TIER_NAMES[$a]}" "$gate") || token=""
+          if [ -z "$token" ] || ! log_matches_attempt "$log" "$token" "$gate"; then
+            verdict="FAIL:attempt-mismatch"
+          fi
         fi
       fi
       printf '%-8s %-14s %-20s %s\n' "${TIER_NAMES[$a]}" "${TIER_MACHINES[$a]}" "$gate" "$verdict"
       [ "$verdict" = "PASS" ] || overall=1
       if [ "$verdict" = "FAIL:stalled" ]; then
-        warn "gate ${TIER_NAMES[$a]}/$gate STALLED/DIED: the remote gate process disappeared without a verdict (see the CI-CLUSTER: STALLED/DIED line in the log for the last output and the machine) — root causes seen so far: console session torn down remotely (2026-10-18 lint@d52b70bdc), machine stopped under the run"
+        warn "gate ${TIER_NAMES[$a]}/$gate STALLED/DIED: the remote gate process disappeared without a verdict (see the CI-CLUSTER: STALLED/DIED line in the log for the last output and the machine) — no completed verdict was established for this attempt"
       fi
       if grep -q 'another runci.sh is already running' "$log" 2>/dev/null; then
         warn "tier ${TIER_NAMES[$a]} gate $gate QUEUED behind another run on that machine — verdict may reflect contention"
@@ -824,6 +888,10 @@ main() {
     -h|--help) usage; exit 0 ;;
   esac
   REF="$1"; shift
+  local bound
+  for bound in "$WATCH_INTERVAL" "$DEAD_STRIKES" "$PROBE_TIMEOUT" "$RECOVER_TIMEOUT"; do
+    case "$bound" in ''|*[!0-9]*|0) die "watchdog intervals/strikes/timeouts must be positive integers" ;; esac
+  done
 
   command -v fly >/dev/null 2>&1 || die "fly not on PATH — install flyctl first"
   [ -f "$RUNCI_LOCAL" ] || die "$RUNCI_LOCAL not found — run from a checkout of the omnipus repo"

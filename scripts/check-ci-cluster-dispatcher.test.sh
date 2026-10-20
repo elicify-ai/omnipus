@@ -1,110 +1,110 @@
 #!/usr/bin/env bash
-# check-ci-cluster-dispatcher.test.sh
-#
-# Proof-of-failure companion for check-ci-cluster-dispatcher.sh. A guard that
-# cannot fail is no guard (docs/internal/false-green-patterns.md): this proves
-# the wrapper goes RED on a dispatcher with the 2026-10-11 bug (the machine
-# state read through a flag flyctl does not have), GREEN on the real one, and
-# exits 2 when the selfcheck it wraps is missing.
-
+# Proof-of-failure companion: full real suite once, focused behavioral mutants.
+# Every mutant has a same-layout positive control and a reason-specific red;
+# targeting a mutation case is explicit, counted, and never affects default CI
+# discovery of the complete selfcheck.
 set -uo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 GUARD="$SCRIPT_DIR/check-ci-cluster-dispatcher.sh"
-TMP_DIR="$(mktemp -d /tmp/ci-cluster-dispatcher-test.XXXXXX)"
-trap 'rm -rf "$TMP_DIR"' EXIT
-
-PASS=0
-FAIL=0
-check() { # label expected actual
-  if [ "$3" -eq "$2" ]; then
-    echo "  PASS [$1]: exit $3 (expected $2)"; PASS=$((PASS + 1))
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ci-cluster-dispatcher-test.XXXXXX")" || exit 2
+trap '[ -n "${CI_KEEP_TMP:-}" ] || rm -rf "$TMP_DIR"' EXIT
+GIT_DIR_ABS="$(git -C "$REPO" rev-parse --absolute-git-dir)"
+PASS=0; FAIL=0
+check() {
+  if [ "$3" -eq "$2" ]; then printf '  PASS [%s]: exit %s\n' "$1" "$3"; PASS=$((PASS + 1))
+  else printf '  FAIL [%s]: expected %s, got %s\n' "$1" "$2" "$3"; FAIL=$((FAIL + 1)); fi
+}
+new_tree() {
+  TREE="$TMP_DIR/$1/deploy/ci-worker"
+  mkdir -p "$TREE"
+  cp "$REPO/deploy/ci-worker/runci.sh" "$TREE/runci.sh"
+  cp "$REPO/deploy/ci-worker/ci-cluster.sh" "$TREE/ci-cluster.sh"
+}
+run_guard() { # output-name cases dispatcher [runner]
+  GIT_DIR="$GIT_DIR_ABS" CI_SELFCHECK_CASES="$2" CI_CLUSTER_UNDER_TEST="$3" \
+    CI_RUNCI_UNDER_TEST="${4:-$REPO/deploy/ci-worker/runci.sh}" \
+    bash "$GUARD" >"$TMP_DIR/$1.log" 2>&1
+  RC=$?
+}
+mutation_check() { # name cases dispatcher reason [runner]
+  local name="$1" cases="$2" script="$3" reason="$4" runner="${5:-$REPO/deploy/ci-worker/runci.sh}"
+  run_guard "$name-control" "$cases" "$TMP_DIR/control/deploy/ci-worker/ci-cluster.sh"
+  check "$name-control" 0 "$RC"
+  run_guard "$name" "$cases" "$script" "$runner"
+  check "$name-red" 1 "$RC"
+  if grep -qE "$reason" "$TMP_DIR/$name.log"; then
+    printf '  PASS [%s-reason]: %s\n' "$name" "$reason"; PASS=$((PASS + 1))
   else
-    echo "  FAIL [$1]: exit $3 (expected $2)"; FAIL=$((FAIL + 1))
+    printf '  FAIL [%s-reason]: expected %s\n' "$name" "$reason"; FAIL=$((FAIL + 1))
+    printf '%s\n' "$(<"$TMP_DIR/$name.log")"
   fi
 }
-
-echo "=== check-ci-cluster-dispatcher self-test ==="
-
-echo "Test 1: the real dispatcher passes"
-bash "$GUARD" >"$TMP_DIR/real.out" 2>&1; rc=$?
-[ "$rc" -eq 0 ] || sed 's/^/    | /' "$TMP_DIR/real.out"
-check "real-dispatcher" 0 "$rc"
-
-echo "Test 2: a dispatcher that reads the machine state with --json is caught, for the intended reason"
-# The mutant must live in a tree shaped like the repo (deploy/ci-worker/ci-cluster.sh next to
-# runci.sh, two levels under a root git can resolve refs in), or ci-cluster.sh dies with exit 2
-# on a missing runci.sh BEFORE it reaches the mutated line and the test proves nothing.
-MUT_DIR="$TMP_DIR/mutant/deploy/ci-worker"
-mkdir -p "$MUT_DIR" "$TMP_DIR/control/deploy/ci-worker"
-cp "$REPO/deploy/ci-worker/runci.sh" "$MUT_DIR/runci.sh"
-cp "$REPO/deploy/ci-worker/runci.sh" "$TMP_DIR/control/deploy/ci-worker/runci.sh"
-cp "$REPO/deploy/ci-worker/ci-cluster.sh" "$TMP_DIR/control/deploy/ci-worker/ci-cluster.sh"
-# shellcheck disable=SC2016 # the pattern is a literal sed regex, not a shell expansion
-sed 's|fly machine status "\$1" --app "\$APP" 2>/dev/null|fly machine status "$1" --app "$APP" --json 2>/dev/null|' \
-  "$REPO/deploy/ci-worker/ci-cluster.sh" > "$MUT_DIR/ci-cluster.sh"
-GIT_DIR_ABS="$(git -C "$REPO" rev-parse --absolute-git-dir)"
-if cmp -s "$REPO/deploy/ci-worker/ci-cluster.sh" "$MUT_DIR/ci-cluster.sh"; then
-  echo "  FAIL [mutant-built]: the mutation did not change ci-cluster.sh, so this test proves nothing"
-  FAIL=$((FAIL + 1))
-else
-  # Control: an UNMUTATED copy in the same layout must pass, or the layout (not the mutation) is what fails.
-  GIT_DIR="$GIT_DIR_ABS" CI_CLUSTER_UNDER_TEST="$TMP_DIR/control/deploy/ci-worker/ci-cluster.sh" \
-    bash "$GUARD" >"$TMP_DIR/control.out" 2>&1; rc=$?
-  [ "$rc" -eq 0 ] || sed 's/^/    | /' "$TMP_DIR/control.out"
-  check "unmutated-copy-in-mutant-layout" 0 "$rc"
-  GIT_DIR="$GIT_DIR_ABS" CI_CLUSTER_UNDER_TEST="$MUT_DIR/ci-cluster.sh" \
-    bash "$GUARD" >"$TMP_DIR/mutant.out" 2>&1; rc=$?
-  check "mutant-dispatcher" 1 "$rc"
-  # The reason, not just the exit code: the dispatcher reached the mutated state read, got no
-  # state back (the fake flyctl rejects --json), and refused the machine.
-  if grep -q 'selfcheck FAIL: (1) expected exit 0, got 2: .*cannot read the state of machine' "$TMP_DIR/mutant.out" \
-    && ! grep -q -e 'missing' -e 'cannot resolve ref' -e 'md5' "$TMP_DIR/mutant.out"; then
-    echo "  PASS [mutant-reason]: failed on the unreadable machine state, as intended"; PASS=$((PASS + 1))
-  else
-    echo "  FAIL [mutant-reason]: the mutant failed for some other reason:"; sed 's/^/    | /' "$TMP_DIR/mutant.out"
-    FAIL=$((FAIL + 1))
-  fi
-fi
-
-echo "Test 3: a tree without the selfcheck exits 2 (never a silent green)"
+printf '=== check-ci-cluster-dispatcher proof of failure ===\n'
+# No case filter on this call: every case must execute in the normal gate.
+env -u CI_SELFCHECK_CASES bash "$GUARD" >"$TMP_DIR/full.log" 2>&1; rc=$?
+check full-real-selfcheck 0 "$rc"
+if [ "$rc" -ne 0 ]; then printf '%s\n' "$(<"$TMP_DIR/full.log")"; fi
+new_tree control
+new_tree state-json
+python3 -I - "$TREE/ci-cluster.sh" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); s = p.read_text()
+old = 'fly machine status "$1" --app "$APP" 2>/dev/null'
+assert s.count(old) == 1
+p.write_text(s.replace(old, 'fly machine status "$1" --app "$APP" --json 2>/dev/null'))
+PY
+mutation_check state-json 1 "$TREE/ci-cluster.sh" 'cannot read the state of machine'
 mkdir -p "$TMP_DIR/empty"
-REPO_ROOT="$TMP_DIR/empty" bash "$GUARD" >/dev/null 2>&1; check "missing-selfcheck" 2 $?
-
-echo "Test 4: a dispatcher that ignores the GO override is caught by selfcheck case 6c"
-# The 2026-10-19 steer: case 6c's matcher was hardened to match the machine id
-# only in addressing positions (`machine status|start|stop <id>`, `--machine
-# <id>`) because on the Fly worker `hostname -s` IS the machine id and rides
-# inside OWNER_TOKEN. This test proves the hardened matcher still bites: a
-# mutant whose default tier map IGNORES the CI_CLUSTER_GO_MACHINE override
-# really dispatches the go tier onto the default machine, and 6c must go red
-# — including under the selfcheck's hostile-hostname simulation.
-MUT4_DIR="$TMP_DIR/mutant4/deploy/ci-worker"
-mkdir -p "$MUT4_DIR"
-cp "$REPO/deploy/ci-worker/runci.sh" "$MUT4_DIR/runci.sh"
-GIT_DIR_ABS="$(git -C "$REPO" rev-parse --absolute-git-dir)"
-# shellcheck disable=SC2016 # literal sed replacement, no regex metachars
-sed 's/[$][{]CI_CLUSTER_GO_MACHINE-080d74db170408[}]/080d74db170408/' \
-  "$REPO/deploy/ci-worker/ci-cluster.sh" > "$MUT4_DIR/ci-cluster.sh"
-if cmp -s "$REPO/deploy/ci-worker/ci-cluster.sh" "$MUT4_DIR/ci-cluster.sh"; then
-  echo "  FAIL [mutant4-built]: the mutation did not change ci-cluster.sh, so this test proves nothing"
-  FAIL=$((FAIL + 1))
-else
-  GIT_DIR="$GIT_DIR_ABS" CI_CLUSTER_UNDER_TEST="$MUT4_DIR/ci-cluster.sh" \
-    bash "$GUARD" >"$TMP_DIR/mutant4.out" 2>&1; rc=$?
-  check "mutant4-dispatcher" 1 "$rc"
-  if grep -q '(6c) the go tier.s default machine was touched despite an override' "$TMP_DIR/mutant4.out" \
-    && ! grep -q -e 'missing' -e 'cannot resolve ref' -e 'md5' "$TMP_DIR/mutant4.out"; then
-    echo "  PASS [mutant4-reason]: caught by 6c's addressing-position matcher, as intended"; PASS=$((PASS + 1))
-  else
-    echo "  FAIL [mutant4-reason]: the mutant failed for some other reason:"; sed 's/^/    | /' "$TMP_DIR/mutant4.out" | tail -20
-    FAIL=$((FAIL + 1))
-  fi
-fi
-
-echo ""
-echo "Results: ${PASS} passed, ${FAIL} failed"
+REPO_ROOT="$TMP_DIR/empty" bash "$GUARD" >"$TMP_DIR/missing.log" 2>&1; check missing-selfcheck 2 "$?"
+new_tree go-override
+python3 -I - "$TREE/ci-cluster.sh" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); s = p.read_text(); old = '${CI_CLUSTER_GO_MACHINE-080d74db170408}'
+assert s.count(old) == 1
+p.write_text(s.replace(old, '080d74db170408'))
+PY
+mutation_check go-override 6c "$TREE/ci-cluster.sh" 'default machine was touched despite an override'
+new_tree no-watchdog
+python3 -I - "$TREE/ci-cluster.sh" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); s = p.read_text(); old = 'main "$@"'
+assert s.count('\n' + old + '\n') == 1
+p.write_text(s.replace('\n' + old + '\n', '\nremote_gate_state() { REMOTE_GATE_STATE=alive; }\n' + old + '\n'))
+PY
+mutation_check no-watchdog 7 "$TREE/ci-cluster.sh" 'expected exit 1, got 143|expected diagnostic: watchdog:gone'
+new_tree no-token
+python3 -I - "$TREE/ci-cluster.sh" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); s = p.read_text(); old = ' $gate $token( |$)'
+assert s.count(old) == 1
+p.write_text(s.replace(old, ' $gate( |$)'))
+PY
+mutation_check no-token 16 "$TREE/ci-cluster.sh" 'expected exit 1, got 143|expected diagnostic: watchdog:gone'
+new_tree no-traps
+python3 -I - "$TREE/runci.sh" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); lines = p.read_text().splitlines(True)
+removed = [line for line in lines if line.startswith('trap ') and 'RUNCI: KILLED by signal' in line]
+assert len(removed) == 3
+p.write_text(''.join(line for line in lines if line not in removed))
+PY
+mutation_check no-traps 11 "$TREE/ci-cluster.sh" 'real runner signal fixture failed|FAIL real runner' "$TREE/runci.sh"
+new_tree no-reap
+python3 -I - "$TREE/ci-cluster.sh" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); s = p.read_text()
+old = '    if kill -0 "$CONSOLE_PID" 2>/dev/null; then\n      terminate_and_reap "$CONSOLE_PID"'
+assert s.count(old) == 1
+p.write_text(s.replace(old, '    if kill -0 "$CONSOLE_PID" 2>/dev/null; then\n      : # MUTANT: abandon the verdict-present child'))
+PY
+mutation_check no-reap 18 "$TREE/ci-cluster.sh" 'unexpected \^LEAK'
+printf 'Results: %s passed, %s failed; evidence=%s\n' "$PASS" "$FAIL" "$TMP_DIR"
 [ "$FAIL" -eq 0 ] || exit 1
-echo "All assertions passed."
-exit 0
+printf 'All assertions passed.\n'
