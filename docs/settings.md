@@ -145,7 +145,7 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 
 **Max tool calls per turn**, on the Performance tab, caps how many tool steps any agent may take in one turn. A turn is one message, one task run, or one heartbeat run. When an agent reaches the limit without a final answer, the turn stops and the agent replies that it hit its limit of tool steps for one turn. You can then ask it to continue.
 
-A turn can also stop before the limit when the agent repeats itself without progress: after the same tool call with the same arguments succeeds eight times in a row, or when it asks again for a call that already failed five times in a row with the same arguments and was then blocked. The agent's last reply names the tool and says why it stopped; a task run in that state counts as a try that did not finish, so the task retries or ends Failed instead of staying in progress.
+A turn can also stop before the limit when the agent repeats itself without progress: after the same tool call with the same arguments succeeds eight times in a row, or when, in a round where nothing else succeeded, it asks again for a call that already failed five times with the same arguments and was then blocked. The agent's last reply names the tool and says why it stopped; a task run in that state counts as a try that did not finish, so the task retries or ends Failed instead of staying in progress.
 
 - The limit applies to every agent, including the built-in roster and [external workers](agents.md#workers-and-delegation).
 - It accepts a whole number from **1 to 1000**. The shipped value is **200**.

@@ -271,13 +271,36 @@ func (ts *turnState) takeToolFailureStop() string {
 // the model asked again for a call the identical-failure breaker had already
 // refused (release run 39391964355: an evidence-less goal_claim asked for
 // until the turn ran 109 iterations).
+//
+// It states only what the breaker measured: this exact call (same tool, same
+// arguments) failed toolFailureCircuitBreakThreshold-1 times without a success
+// of that call in between. It does not compare error results.
 func toolFailureStopNotice(toolName string) string {
 	return fmt.Sprintf(
-		"I stopped this turn: my call to `%s` failed %d times in a row with the same arguments and the "+
-			"same result, further identical attempts were blocked, and I asked for it again anyway. "+
+		"I stopped this turn: my call to `%s` with the same arguments failed %d times this turn, "+
+			"further identical calls were blocked, and I asked for it again anyway. "+
 			"Tell me how you would like to proceed, or ask me to try a different approach.",
 		toolName, toolFailureCircuitBreakThreshold-1,
 	)
+}
+
+// noteRoundProgress records that a dispatched call succeeded in the current
+// tool round. A round with any success made progress the model can use, so a
+// pending breaker stop for that round is dropped (finishToolIteration).
+func (ts *turnState) noteRoundProgress() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.toolRoundProgressed = true
+}
+
+// takeRoundProgress returns and clears whether the current round made
+// progress. Called once at the end of every tool round.
+func (ts *turnState) takeRoundProgress() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	progressed := ts.toolRoundProgressed
+	ts.toolRoundProgressed = false
+	return progressed
 }
 
 // toolRepeatWarnNotice is appended to a successful tool result once its

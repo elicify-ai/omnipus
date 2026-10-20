@@ -688,6 +688,10 @@ type turnState struct {
 	// toolRepeatStopNotice does. Guarded by mu; per-turn, never persisted.
 	toolBreakerRefusedRound map[string]int
 	toolFailureStopNotice   string
+	// toolRoundProgressed is set when a dispatched call succeeds in the
+	// current tool round and cleared at the end of every round; a round
+	// that made progress never ends the turn on the breaker stop.
+	toolRoundProgressed bool
 	// delegatePolls tracks, per polled child session, what each delegate
 	// polling action last returned and how many times new information was
 	// seen (delegate_poll_guard.go). Guarded by mu; per-turn, never persisted.
