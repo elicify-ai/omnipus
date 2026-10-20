@@ -49,10 +49,19 @@ test.describe('WU-11 — retired surfaces are removed without forwarding', () =>
 
   test('BDD-12.8 the signed-in shell offers no Agents link and no manual create action', async ({ page }) => {
     await page.goto('/#/')
-    // The shell settles on the default workspace chat; the fixed nav must not
-    // carry the retired Agents entry (Sidebar.tsx::ASSET_ITEMS) and no
+    // A fresh visit is not pinned: the sidebar starts closed and the header
+    // shows the hamburger (Show sidebar) — the same precondition every other
+    // shell spec handles (tests/e2e/sidebar.spec.ts). Open it so the nav is
+    // actually on screen; without this the CI viewport has no nav at all and
+    // the no-Agents-link assertion would pass vacuously.
+    const showSidebar = page.getByRole('button', { name: 'Show sidebar' })
+    await expect(showSidebar).toBeVisible({ timeout: 15_000 })
+    await showSidebar.click()
+    // The shell settles on the default workspace chat; the opened nav must
+    // not carry the retired Agents entry (Sidebar.tsx::ASSET_ITEMS) and no
     // create-agent control may exist anywhere on it.
-    await expect(page.locator('nav')).toBeVisible({ timeout: 15_000 })
+    const nav = page.locator('nav[aria-label="Main navigation"]')
+    await expect(nav).toBeVisible({ timeout: 15_000 })
     await expect(page.getByRole('link', { name: 'Agents' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'New agent' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'New Main' })).toHaveCount(0)
