@@ -35,8 +35,11 @@
 package integration
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -75,13 +78,24 @@ func readUntil(t *testing.T, conn *websocket.Conn, timeout time.Duration, stop f
 		_ = conn.SetReadDeadline(deadline)
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			t.Fatalf("reading frames: %v (got %d so far)", err, len(frames))
+			// SCRATCH INSTRUMENTATION (release-red sincecursor): dump all
+			// goroutine stacks so a single red shows where the pipeline is
+			// stuck. Reverted before landing.
+			buf := make([]byte, 4<<20)
+			n := runtime.Stack(buf, true)
+			fmt.Fprintf(os.Stderr, "SCTRACE DUMP BEGIN goroutines=%d\n%s\nSCTRACE DUMP END\n", bytes.Count(buf[:n], []byte("\n\n")), buf[:n])
+			var types []string
+			for _, fr := range frames {
+				types = append(types, fmt.Sprintf("%v/%v", fr["type"], fr["seq"]))
+			}
+			t.Fatalf("reading frames: %v (got %d so far: %v)", err, len(frames), types)
 		}
 		var f map[string]any
 		if json.Unmarshal(msg, &f) != nil {
 			continue
 		}
 		frames = append(frames, f)
+		fmt.Fprintf(os.Stderr, "SCTRACE %s read type=%v seq=%v\n", time.Now().Format("15:04:05.000"), f["type"], f["seq"])
 		if stop(f) {
 			return frames
 		}
