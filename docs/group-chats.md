@@ -71,7 +71,7 @@ The same one-reminder rule applies when a background update started the turn. St
 ### Approvals and questions
 
 - **Approving the request itself.** If an agent's `send_message` permission is Allow, the request reaches that agent without approval. If it is Deny, the request is refused. If it is Ask, the request needs your approval unless a standing grant already covers `send_message` for that agent; then no new card is raised. When a card is raised, it belongs to that agent and is labelled "for group <name>", and the group shows the member as awaiting your approval.
-- **Approvals during the work.** Approvals and questions the agent raises while working on a group request belong to its main chat, not to the group. While one is open, the group shows the member as waiting for you.
+- **Approvals during the work.** Approvals and questions the agent raises while working on a group request belong to its main chat, not to the group. While one is open, the group shows the member as waiting for you. While a member is awaiting your approval or waiting for you, the group's header shows an **Open <Agent>'s main chat** link that takes you to the card (shown when Omnipus can find that main chat).
 - **Where they appear.** The approval card appears inside the agent's main chat, labelled "for group <name>" when a group request raised it. While it waits, that main chat needs your attention in the sidebar.
 - **Not supported yet.** Secret requests from group work are not handled in this version.
 
@@ -111,7 +111,7 @@ The group shows one state per member: its most recent request. The labels in thi
 | answered | The answer is in the group |
 | refused | The agent's permission refused the request |
 | failed: turn failed, or failed: no answer (`failed`) | The turn failed (`turn failed`), or ended with no answer after the reminder (`no answer`) |
-| interrupted | The turn was stopped, or Omnipus restarted while it ran. Interrupted work is never re-run |
+| interrupted | The turn was stopped, or Omnipus restarted while it ran. Interrupted work is never re-run. The member shows **Ask again**, which puts "@<Agent> " in the composer so you can write and send a new message to that agent; it does not resume the interrupted work |
 | unavailable (`unavailable`) | Not delivered. The reason is shown, for example "rate limit", "not a member" or "storage" |
 | cancelled, or cancelled — removed (`cancelled`) | Cancelled by `/pause` or deleting the group (`cancelled`). Removing the member shows `cancelled — removed` |
 | unknown | After a restart, Omnipus could not prove what happened |
