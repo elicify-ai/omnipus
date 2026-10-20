@@ -125,6 +125,10 @@ Click or tap a card or List row and the task detail panel slides in. The separat
 
 ## Limits and things to watch
 
+A settings reload is not a gateway restart. A task that is already running keeps its run and conversation through the reload; crash recovery does not mark that live run interrupted. If the gateway process actually restarts during a task, the interrupted run ends Failed and does not resume automatically. Retry starts a fresh run.
+
+An agent's `set_todos` scratchpad is a separate checklist card, not another execution of the task it is working on. If the agent uses the task's title for its scratchpad, two cards can have the same title: the assigned task and its working checklist. Creating the checklist does not start another task run.
+
 A confirmed wrong model (`bad_model`), or a named connection that cannot be set up (`model_route_unavailable`), ends a task **Failed** without consuming an attempt or restarting unchanged. The result names the failing provider/model and the settings to fix. Correct the model/provider pair or the provider's credentials and endpoint settings, then run the task again. These configuration failures are not temporary provider outages.
 
 - **A task with no agent cannot run.** The engine skips unassigned tasks; assign one before starting.
