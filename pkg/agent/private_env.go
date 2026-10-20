@@ -50,8 +50,15 @@ func (al *AgentLoop) privateEnvForTurn(ctx context.Context) ([]tools.PrivateVari
 	}
 	values, err := store.PrivateEnvironment(ancestry.WorkspaceID, agentID, tools.ToolTurnOrigin(ctx).ChannelTriggered())
 	vars := make([]tools.PrivateVariable, 0, len(values))
+	plain := make([]string, 0, len(values))
 	for _, v := range values {
 		vars = append(vars, tools.PrivateVariable{Name: v.Name, Value: v.Value})
+		plain = append(plain, v.Value)
+	}
+	// Mask every value BEFORE any child can see it, independently of the
+	// card's continuation having registered it (gate r1 M3, T2-S1).
+	if len(plain) > 0 {
+		al.GetConfig().EnsureSensitiveValues(plain)
 	}
 	if err == nil {
 		return vars, ""

@@ -31,8 +31,8 @@ func TestK49Options_NullAndWrongTypeRefusedWithoutWrite(t *testing.T) {
 		`{"available_in_channel_turns":"false"}`,
 		`{"available_in_channel_turns":0}`,
 	} {
-		rec := f.do(http.MethodPatch, url, body)
-		require.Equal(t, http.StatusBadRequest, rec.Code, "%s must be refused as malformed; got %d %s", body, rec.Code, rec.Body.String())
+		refused := f.do(http.MethodPatch, url, body)
+		require.Equal(t, http.StatusBadRequest, refused.Code, "%s must be refused as malformed; got %d %s", body, refused.Code, refused.Body.String())
 		entry := f.entryFor(refs)
 		require.NotNil(t, entry.AvailableInChannelTurns)
 		require.True(t, *entry.AvailableInChannelTurns, "%s must not change the stored flag", body)

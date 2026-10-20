@@ -207,18 +207,13 @@ func TestWSRedirect_StreamingTextTurnOverTheRealHTTPProvider(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	var req struct {
-		Messages []struct {
-			Role    string `json:"role"`
-			Content any    `json:"content"`
-		} `json:"messages"`
+		Messages []providers.Message `json:"messages"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(model.Bodies()[1]), &req))
-	lastUser := ""
-	for _, m := range req.Messages {
-		if m.Role == "user" {
-			lastUser, _ = m.Content.(string)
-		}
-	}
-	require.Equal(t, instruction, lastUser, "the continued turn's last user message is the exact instruction")
+	conversation, tailErr := gatewayConversationBeforeVolatileTail(req.Messages)
+	require.NoError(t, tailErr, "FR-007: the real HTTP request ends in one proper volatile user tail")
+	last := conversation[len(conversation)-1]
+	require.Equal(t, "user", last.Role, "the redirect instruction immediately precedes the volatile tail")
+	require.Equal(t, instruction, last.Content, "the continued turn's last conversation message is the exact instruction")
 	require.Len(t, model.Bodies(), 2, "stopped stream + exactly one continued turn")
 }

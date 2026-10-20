@@ -26,6 +26,14 @@ func (t *MCPAddTool) RefuseArgumentNames(names []string) *tools.ToolResult {
 	return nil
 }
 
+// RefuseArgumentNames gives connect_channel the same names-only plaintext
+// refusal as configure_channel, sharing its credential-field inventory, so a
+// plaintext credential argument is refused before native history, approval,
+// events and the registry's argument log (gate r1 M2, security T2-S3).
+func (*ChannelConnectTool) RefuseArgumentNames(names []string) *tools.ToolResult {
+	return (&ChannelConfigureTool{}).RefuseArgumentNames(names)
+}
+
 func (t *ChannelConfigureTool) RefuseArgumentNames(names []string) *tools.ToolResult {
 	for _, name := range names {
 		switch name {

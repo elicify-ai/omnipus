@@ -248,6 +248,7 @@ func (p *Provider) clone() Provider {
 	out.Models = make([]Model, len(p.Models))
 	for i := range p.Models {
 		out.Models[i] = p.Models[i]
+		out.Models[i].Cost = p.Models[i].Cost.Clone()
 		out.Models[i].InputModalities = append([]Modality(nil), p.Models[i].InputModalities...)
 		out.Models[i].InferenceProfiles = append([]string(nil), p.Models[i].InferenceProfiles...)
 	}

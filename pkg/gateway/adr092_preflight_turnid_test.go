@@ -64,7 +64,11 @@ type adr092TurnIDProvider struct {
 func (p *adr092TurnIDProvider) Chat(
 	_ context.Context, msgs []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
 ) (*providers.LLMResponse, error) {
-	if n := len(msgs); n > 0 && msgs[n-1].Role == "tool" {
+	conversation, err := gatewayConversationBeforeVolatileTail(msgs)
+	if err != nil {
+		return nil, err
+	}
+	if conversation[len(conversation)-1].Role == "tool" {
 		return &providers.LLMResponse{Content: "done"}, nil
 	}
 	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{

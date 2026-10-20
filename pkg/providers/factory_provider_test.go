@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
-	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
+	officialanthropic "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
@@ -167,12 +167,12 @@ func TestCreateProviderFromConfig_ProtocolDispatch(t *testing.T) {
 					t.Errorf("base URL = %q, want %q", got.APIBase(), tt.wantURL)
 				}
 			case anthropicKind:
-				got, ok := p.(*anthropicmessages.Provider)
+				got, ok := p.(*officialanthropic.Provider)
 				if !ok {
-					t.Fatalf("provider = %T, want *anthropicmessages.Provider", p)
+					t.Fatalf("provider = %T, want the official *anthropic.Provider", p)
 				}
-				if got.APIBase() != tt.wantURL {
-					t.Errorf("base URL = %q, want %q", got.APIBase(), tt.wantURL)
+				if got.BaseURL() != tt.wantURL {
+					t.Errorf("base URL = %q, want the catalog row %q", got.BaseURL(), tt.wantURL)
 				}
 			}
 		})
@@ -229,12 +229,12 @@ func TestCreateProviderFromConfig_ProtocolChoice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("secondary protocol: %v", err)
 	}
-	got, ok := secondary.(*anthropicmessages.Provider)
+	got, ok := secondary.(*officialanthropic.Provider)
 	if !ok {
-		t.Fatalf("protocol: anthropic gave %T, want *anthropicmessages.Provider", secondary)
+		t.Fatalf("protocol: anthropic gave %T, want the official *anthropic.Provider", secondary)
 	}
-	if want := "https://api.z.ai/api/anthropic/v1"; got.APIBase() != want {
-		t.Errorf("base URL = %q, want the row's anthropic endpoint %q", got.APIBase(), want)
+	if want := "https://api.z.ai/api/anthropic/v1"; got.BaseURL() != want {
+		t.Errorf("base URL = %q, want the row's anthropic endpoint %q", got.BaseURL(), want)
 	}
 }
 

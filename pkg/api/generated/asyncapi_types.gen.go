@@ -1360,10 +1360,12 @@ type SessionStatePendingApproval struct {
 
 // SessionStateSecretRequest — One entry of the `secret_requests` list on SessionStateFrame and SessionSnapshotFrame (spec omnipus-system-agent K4; FR-074, FR-079): a pending request, or a recent terminal one (value-free; at most the last 32 terminal entries per session, §6.2), so a reloaded card restores its true state. Absence of an entry is never success. Same card fields as SecretRequestFrame plus `state`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.SessionStateSecretRequest) — keep both copies in sync by hand.
 type SessionStateSecretRequest struct {
-	ActingAgentId   string               `json:"acting_agent_id"`
-	ActingAgentName string               `json:"acting_agent_name"`
-	Fields          []SecretRequestField `json:"fields"`
-	OriginLabel     *string              `json:"origin_label,omitempty"`
+	ActingAgentId   string `json:"acting_agent_id"`
+	ActingAgentName string `json:"acting_agent_name"`
+	// True only when state is `submitted` and the value-free continuation (the reference-only resume message) is not confirmed delivered: the latest ensure-delivery attempt failed or was revoked downstream. Absent once delivery is confirmed, the person stops the continuation, or the request reaches any non-submitted terminal state. Never carries or implies a secret value, cause, stage or reference name. (Train 2 M13, T2-SF-02; K4, FR-079.)
+	ContinuationUnconfirmed *bool                `json:"continuation_unconfirmed,omitempty"`
+	Fields                  []SecretRequestField `json:"fields"`
+	OriginLabel             *string              `json:"origin_label,omitempty"`
 	// Present only for the agent_private kind.
 	Owner *struct {
 		AgentId     string `json:"agent_id"`

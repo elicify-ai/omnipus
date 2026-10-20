@@ -221,8 +221,14 @@ When connecting to multiple MCP servers, exposing hundreds of tools simultaneous
 and increase API costs. The **Discovery** feature solves this by keeping MCP tools *hidden* by default.
 
 Instead of loading all tools, the LLM is provided with a lightweight search tool (using BM25 keyword matching or Regex).
-When the LLM needs a specific capability, it searches the hidden library. Matching tools are then temporarily "unlocked"
-and injected into the context for a configured number of turns (`ttl`).
+When the LLM needs a specific capability, it searches the hidden library. A tool loaded for a session stays advertised
+for that session beyond the discovery promotion lifetime (`ttl`). The TTL remains discovery bookkeeping, not a timer
+that removes a session's loaded definition. Another session does not inherit the load.
+
+Current permissions, server/tool assignments and registration still apply. Denying a loaded tool, removing its assignment
+or disconnecting its server removes access. An unrelated configuration reload preserves a still-valid session load.
+Goal-setting requests may temporarily narrow the offered list; ordinary requests resume the session's loaded list.
+Retention does not advertise every allowed tool on the first request.
 
 ### Global Config
 
@@ -237,7 +243,7 @@ and injected into the context for a configured number of turns (`ttl`).
 | Config               | Type | Default | Description                                                                                                                       |
 |----------------------|------|---------|-----------------------------------------------------------------------------------------------------------------------------------|
 | `enabled`            | bool | false   | Global default: if `true`, all MCP tools are hidden and loaded on-demand via search; if `false`, all tools are loaded into context. Individual servers can override this with the per-server `deferred` field. |
-| `ttl`                | int  | 5       | Number of conversational turns a discovered tool remains unlocked                                                                 |
+| `ttl`                | int  | 5       | Discovery promotion lifetime in tool rounds — one round is one pass of tool execution inside an agent's turn, so a turn with several tool steps burns several. A tool a session has loaded stays advertised for that session beyond this lifetime. |
 | `max_search_results` | int  | 5       | Maximum number of tools returned per search query                                                                                 |
 | `use_bm25`           | bool | true    | Let `ToolSearch` match natural-language and keyword queries. **Warning**: consumes more resources than regex search |
 | `use_regex`          | bool | false   | Let `ToolSearch` match regular-expression queries |

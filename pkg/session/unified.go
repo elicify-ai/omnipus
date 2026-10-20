@@ -181,6 +181,7 @@ func (m *UnifiedMeta) Clone() *UnifiedMeta {
 	c.AgentIDs = slices.Clone(m.AgentIDs)
 	c.CompactionSummaries = maps.Clone(m.CompactionSummaries)
 	c.Stats.ByModel = maps.Clone(m.Stats.ByModel)
+	c.Stats.ByProvider = maps.Clone(m.Stats.ByProvider)
 	return &c
 }
 

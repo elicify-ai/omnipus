@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
+	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 	"github.com/elicify-ai/omnipus/pkg/providers/azure"
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 )
@@ -40,12 +40,15 @@ func TestCWSlideR1_AllAdapterRequestsPreserveRetainedGroups(t *testing.T) {
 			require.Less(t, requestTokens(messages, nil), agentContextBudget(h.agent), "instrument: total alone must not cause this slide")
 			out := h.check(t, ts, messages)
 			r, p := cwR1Adapter(t, family)
-			cwR1Send(t, cwR1Flow(h, ts, out, p))
+			rr := cwR1Flow(h, ts, out, p)
+			cwR1Send(t, rr)
+			requireConversationBeforeVolatileTail(t, rr.rq.ri.rf.callMessages)
 			requests := r.requests(t)
 			require.Len(t, requests, 1, "the actual adapter reached the recording HTTP endpoint")
 			wire := cwR1DecodeWire(t, family, requests[0])
-			require.Contains(t, wire.instructions, instructions, "Responses and other adapters cannot replace original pinned instructions")
-			require.Equal(t, []string{ts.userMessage}, wire.users, "one original user anchor precedes retained history")
+			tail := rr.rq.ri.rf.callMessages[len(rr.rq.ri.rf.callMessages)-1]
+			require.Equal(t, []string{ts.userMessage, tail.Content}, wire.users,
+				"one unchanged user anchor precedes retained history; FR-007 adds only the volatile user tail")
 			wantIDs := []string{"wire-old-b", "wire-new-a", "wire-new-b"}
 			var gotIDs []string
 			for _, call := range wire.calls {
@@ -61,6 +64,7 @@ func TestCWSlideR1_AllAdapterRequestsPreserveRetainedGroups(t *testing.T) {
 			}, wire.results, "all matching result roles/correlations/text/order survive, not silently repaired away")
 			require.Greater(t, cwR1Skip(t, h), 0, "final body is bound to an actual persisted slide")
 			require.Len(t, h.archive(t), 8, "adapter preparation cannot append a duplicate user anchor")
+			require.Contains(t, wire.instructions, instructions, "Responses and other adapters cannot replace original pinned instructions")
 		})
 	}
 }
@@ -122,7 +126,9 @@ func cwR1Adapter(t *testing.T, family string) (*cwR1Recorder, providers.LLMProvi
 	case "openai":
 		p, err = providers.NewHTTPProviderWithTimeouts("r1-inert-fixture-key", r.server.URL, "", "max_tokens", 10, 0, nil)
 	case "anthropic":
-		p = anthropicmessages.NewProvider("r1-inert-fixture-key", r.server.URL)
+		// FR-004 / User Story 2: exercise the surviving official connector at
+		// the same HTTP boundary, retaining every call/result parity assertion.
+		p = anthropicprovider.NewProviderWithBaseURL("r1-inert-fixture-key", r.server.URL)
 	case "bedrock":
 		p, err = bedrock.NewProvider("r1-inert-fixture-key", bedrock.WithBaseEndpoint(r.server.URL))
 	case "responses":

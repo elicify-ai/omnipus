@@ -76,6 +76,7 @@ export const SessionStateSecretRequest = z
     session_id: z.string().min(1).max(255),
     root_session_id: z.string().min(1).max(255).optional(),
     state: z.enum(["pending", "submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    continuation_unconfirmed: z.boolean().optional(),
     acting_agent_id: z.string().min(1).max(128),
     acting_agent_name: z.string().min(1).max(128),
     origin_label: z.string().min(1).max(200).optional(),
