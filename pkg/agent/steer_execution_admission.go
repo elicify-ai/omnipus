@@ -6,6 +6,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -43,6 +44,13 @@ func (al *AgentLoop) checkNewAdmission(rec *session.LifecycleRecord) error {
 // inside the SAME lifecycle mutation that changes its queue/run state. A
 // promotion validates its original durable owner; it never re-stamps it.
 func commitSteeredExecutionState(lifecycle *session.LifecycleStore, claim executionClaim, state session.LifecycleState, pendingMessage string) (*session.LifecycleRecord, error) {
+	return commitSteeredExecutionStateWithSaved(lifecycle, claim, state, pendingMessage, "")
+}
+
+// commitSteeredExecutionStateWithSaved is commitSteeredExecutionState that
+// also records a queued saved-input identity (PendingSavedInputs) in the same
+// durable mutation.
+func commitSteeredExecutionStateWithSaved(lifecycle *session.LifecycleStore, claim executionClaim, state session.LifecycleState, pendingMessage, savedInputID string) (*session.LifecycleRecord, error) {
 	if lifecycle == nil || claim.RunID == "" || claim.BootSeq == 0 {
 		return nil, errCompleteNoExecutionIdentity
 	}
@@ -64,6 +72,9 @@ func commitSteeredExecutionState(lifecycle *session.LifecycleStore, claim execut
 		rec.State = state
 		if pendingMessage != "" {
 			rec.PendingUserMessages = append(rec.PendingUserMessages, pendingMessage)
+		}
+		if savedInputID != "" && !slices.Contains(rec.PendingSavedInputs, savedInputID) {
+			rec.PendingSavedInputs = append(rec.PendingSavedInputs, savedInputID)
 		}
 		// A running admission is real activity. Queued waiting stays inside
 		// the live CreatedAt window; stamping it here would let a later

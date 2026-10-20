@@ -1036,8 +1036,11 @@ export function ChannelConfigPanel({
 
                     {/* Agent selector (US-2 / FR-002) — disabled until workspace chosen */}
                     <div className="space-y-[var(--space-2)]">
+                      {/* "Main agent" (omnipus-system-agent FR-121, FR-140): the
+                          bound agent that answers this channel. Not a default
+                          — there is no default agent to fall back to. */}
                       <Label>
-                        Default agent
+                        Main agent
                       </Label>
                       {agentsError ? (
                         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
@@ -1075,7 +1078,7 @@ export function ChannelConfigPanel({
                           <SmartSelect
                             value={selectedAgentId}
                             disabled={!isBoundFlow}
-                            ariaLabel="Default agent"
+                            ariaLabel="Main agent"
                             onValueChange={(v) => {
                               setSelectedAgentId(v)
                               // Persist only when BOTH picks are named (MAJ-001):
@@ -1101,6 +1104,9 @@ export function ChannelConfigPanel({
                           Select an agent from this workspace to enable routing.
                         </p>
                       )}
+                      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
+                        The agent that answers messages on this channel.
+                      </p>
                     </div>
 
                   </div>

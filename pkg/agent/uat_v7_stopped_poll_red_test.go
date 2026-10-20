@@ -11,15 +11,15 @@ import (
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// Oracle: dispatch V7 (including no-poll control), validator/report-v.md::V7,
-// and sub-agent control-plane D5/D6. Reading B's actual stopped notice in A's
-// woken turn consumes it; queued B transport cannot create another parent turn.
-// Conversely an unpolled B must still cause exactly one real parent turn.
+// PW-D13 (founder 2026-10-15): neither helper Stop starts a parent turn.
+// Keep V7's real registered-tool polling and no-poll control: an explicit later
+// instruction may read both durable notices, but an unpolled Stop stays quiet.
 func TestQAV7StoppedNotices_PollConsumesAndSuppressesSecondWake(t *testing.T) {
 	for _, action := range []string{"status", "inbox", ""} {
 		name := action
@@ -30,60 +30,45 @@ func TestQAV7StoppedNotices_PollConsumesAndSuppressesSecondWake(t *testing.T) {
 			f := newQA3StoppedFixture(t, action)
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			qa3AssertStoppedNoticeLedger(t, f) // Exactly one notice per stopped transition before any read.
-			response, err := f.al.processSystemMessage(ctx, f.wakes[0])
-			if err != nil || response != qa3StoppedParentAnswer {
-				t.Fatalf("SETUP: first real stop-notice parent turn = (%q, %v)", response, err)
+			qa3AssertStoppedNoticeLedger(t, f) // Exactly one notice per transition before any read.
+			if len(f.wakes) != 0 {
+				t.Errorf("V7 PW-D13: two intentional Stops published %d wakes, want 0", len(f.wakes))
 			}
-			beforeB := f.parent.Requests()
-			wantFirstCalls := 1
+			if calls := len(f.parent.Requests()); calls != 0 {
+				t.Fatalf("V7 PW-D13: Stops caused %d parent model calls before an instruction, want 0", calls)
+			}
+			wantPending, wantConsumed, wantCalls := 1, 0, 0
 			if action != "" {
-				wantFirstCalls = 2 // Model poll request + model receives actual registered-tool results.
-			}
-			if len(beforeB) != wantFirstCalls || !strings.Contains(qaUATLastUser(beforeB[0]), "stopped_child:") {
-				t.Fatalf("SETUP: first wake provider requests=%d, want %d with A's real stopped notice", len(beforeB), wantFirstCalls)
-			}
-			if action != "" {
-				qa3AssertParentPolledBothStops(t, f, beforeB[1], action)
-			}
-			pendingB := qa3PendingStoppedMessages(t, f, f.children[1].SessionID)
-			wantPendingB, wantConsumedB, wantAdditionalCalls := 0, 1, 0
-			if action == "" {
-				wantPendingB, wantConsumedB, wantAdditionalCalls = 1, 0, 1
-			}
-			if len(pendingB) != wantPendingB {
-				t.Errorf("V7: after A's turn delegate %q left B's stopped notice pending=%d, want %d; a polled stop must be consumed like a final", action, len(pendingB), wantPendingB)
-			}
-			if got := qa3ConsumedMarkerCount(t, f, f.noticeID[1]); got != wantConsumedB {
-				t.Errorf("V7: after A's turn B's durable consumed markers=%d, want %d (delegate %q)", got, wantConsumedB, action)
-			}
-			response, err = f.al.processSystemMessage(ctx, f.wakes[1])
-			if err != nil {
-				t.Fatalf("V7: B's retained REAL wake failed instead of consuming/deduplicating: %v", err)
+				// PW-D13 permits an explicit later instruction, not a Stop wake.
+				key := "agent:" + testDefaultAgentID + ":session:" + f.parentID
+				response, _, err := f.al.processMessage(ctx, bus.InboundMessage{
+					Channel: "webchat", ChatID: f.parentID, SessionKey: key, SessionID: f.parentID,
+					Content: "Please check both stopped helpers.", UserInitiated: true,
+					Metadata: map[string]string{"agent_id": testDefaultAgentID},
+				})
+				if err != nil || response != qa3StoppedParentAnswer {
+					t.Fatalf("explicit parent polling turn = (%q, %v)", response, err)
+				}
+				requests := f.parent.Requests()
+				wantCalls = 2 // One poll request, then the real registered-tool results.
+				if len(requests) != wantCalls {
+					t.Fatalf("explicit polling provider requests=%d, want %d", len(requests), wantCalls)
+				}
+				qa3AssertParentPolledBothStops(t, f, requests[1], action)
+				wantPending, wantConsumed = 0, 1
 			}
 			afterB := f.parent.Requests()
-			if got := len(afterB) - len(beforeB); got != wantAdditionalCalls {
-				t.Errorf("V7: B's stopped notice caused %d extra parent model calls after delegate %q, want %d; poll OR wake, never both", got, action, wantAdditionalCalls)
-			}
-			if action == "" {
-				if response != qa3StoppedParentAnswer || len(afterB) != 2 || !strings.Contains(qaUATLastUser(afterB[1]), "stopped_child:") {
-					t.Errorf("V7 CONTROL: unpolled B must reach exactly one real parent turn: reply=%q requests=%d", response, len(afterB))
-				}
-			} else if response != "" {
-				t.Errorf("V7: already-polled B wake returned %q, want empty deduplicated success", response)
+			if len(afterB) != wantCalls {
+				t.Errorf("V7: parent calls=%d, want only %d explicit-poll calls (PW-D13)", len(afterB), wantCalls)
 			}
 			for i, child := range f.children {
-				if msgs := qa3PendingStoppedMessages(t, f, child.SessionID); len(msgs) != 0 {
-					t.Errorf("V7: consumed helper %d notice remains pending: %+v", i, msgs)
+				if msgs := qa3PendingStoppedMessages(t, f, child.SessionID); len(msgs) != wantPending {
+					t.Errorf("V7: helper %d pending notices=%d, want %d (poll=%q)", i, len(msgs), wantPending, action)
 				}
-				if got := qa3ConsumedMarkerCount(t, f, f.noticeID[i]); got != 1 {
-					t.Errorf("V7: helper %d notice has %d durable consumed markers, want exactly 1", i, got)
+				if got := qa3ConsumedMarkerCount(t, f, f.noticeID[i]); got != wantConsumed {
+					t.Errorf("V7: helper %d consumed markers=%d, want %d (poll=%q)", i, got, wantConsumed, action)
 				}
-				// Replayed transport, duplicate Stop and live/boot publisher retry
-				// all traverse the real paths; none can duplicate the notice/work.
-				if reply, err := f.al.processSystemMessage(ctx, f.wakes[i]); err != nil || reply != "" {
-					t.Errorf("V7: replay of helper %d wake = (%q, %v), want empty success", i, reply, err)
-				}
+				// Duplicate Stop and real publisher retry cannot start a turn.
 				stopCtx := tools.WithTranscriptSessionID(ctx, f.parentID)
 				stopCtx = tools.WithAgentID(stopCtx, testDefaultAgentID)
 				res := delegateToolFor(t, f.al).Execute(stopCtx, map[string]any{"action": "stop_all", "session_id": child.SessionID})
@@ -136,18 +121,13 @@ func qa3AssertParentPolledBothStops(t *testing.T, f *qa3StoppedFixture, request 
 		if err := json.Unmarshal([]byte(results[0]), &inbox); err != nil {
 			t.Fatalf("SETUP: generated delegate inbox reply decode failed: %q: %v", results[0], err)
 		}
-		wantMessages := 0 // A was already consumed by its own first wake.
-		if i == 1 {
-			wantMessages = 1
+		// PW-D13 (founder 2026-10-15): no earlier Stop wake consumed either notice.
+		if len(inbox.Messages) != 1 {
+			t.Fatalf("helper %d inbox messages=%d, want exactly 1 before the explicit poll", i, len(inbox.Messages))
 		}
-		if len(inbox.Messages) != wantMessages {
-			t.Fatalf("SETUP: helper %d inbox messages=%d, want %d", i, len(inbox.Messages), wantMessages)
-		}
-		if i == 1 {
-			notice, err := inbox.Messages[0].AsSessionMessageError()
-			if err != nil || notice.MessageId != f.noticeID[i] || notice.SessionId != child.SessionID || !strings.HasPrefix(notice.Text, "stopped_child:") {
-				t.Fatalf("SETUP: parent did not receive B's actual stopped notice through its registered inbox tool: %+v error=%v", notice, err)
-			}
+		notice, err := inbox.Messages[0].AsSessionMessageError()
+		if err != nil || notice.MessageId != f.noticeID[i] || notice.SessionId != child.SessionID || !strings.HasPrefix(notice.Text, "stopped_child:") {
+			t.Fatalf("parent did not receive helper %d's actual notice through the registered inbox tool: %+v error=%v", i, notice, err)
 		}
 	}
 }

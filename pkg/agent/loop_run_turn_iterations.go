@@ -619,16 +619,17 @@ func (cn *agentLoopRunTurnConductorRunIterations) surfaceEmptyRetryOutcome() age
 		if outcomeRelabelApplies(llm.Code, cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel) {
 			llm.Code = cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel
 			llm.Message = UserMessageForCode(cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel)
+			llm.ProviderMessage = false
 		}
 
 		cn.rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindError,
 			cn.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.error"),
-			ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, ProviderError: pe, ChatID: cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.ChatID, SessionID: string(cn.rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID)},
+			ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, Detail: llm.Detail, ProviderError: pe, ChatID: cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.ChatID, SessionID: string(cn.rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID)},
 		)
-		// FR-002: persist this provider error to the transcript (write
-		// choke point).
-		cn.rc.rx.rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+		// Already translated provider failures use the same trusted write
+		// seam as the main call, preserving the live sentence on replay.
+		cn.rc.rx.rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "provider", llm)
 		// ADR-087 D6.8: no further provider call follows this error
 		// either — runTurn's deferred preserveTruncatedAccumulator
 		// keeps a D6 continuation left unresolved by a prior round.

@@ -1351,18 +1351,20 @@ describe('OnboardingWizard — finish', () => {
     })
   })
 
-  it('Meet your Assistant shows Mia with the default-star badge and her role', async () => {
+  it('Meet your Assistant shows Mia with her role and never calls her a default agent', async () => {
 
     await goToCompleteReady()
     fireEvent.click(screen.getByRole('button', { name: /finish/i }))
     await waitFor(() => screen.getByText(/Mia — Assistant/i))
 
-    // Default-agent star badge is present.
-    expect(screen.getByLabelText(/default agent/i)).toBeInTheDocument()
+    // omnipus-system-agent FR-120/FR-122: there is no default agent, so the
+    // screen names none — neither as a label nor in its copy.
+    expect(screen.queryByLabelText(/default agent/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/default agent/i)).not.toBeInTheDocument()
     // Role line.
     expect(screen.getByText(/memory-rich, cross-workspace recall/i)).toBeInTheDocument()
-    // Intro line referencing My Workspace + default agent.
-    expect(screen.getByText(/bound to my workspace/i)).toBeInTheDocument()
+    // Intro line: Mia's team membership and where Start chatting goes.
+    expect(screen.getByText(/Mia is on the team of My Workspace, where Start chatting takes you\./)).toBeInTheDocument()
   })
 
   it('surfaces an inline error and stays on step 4 with Retry setup when finish fails', async () => {

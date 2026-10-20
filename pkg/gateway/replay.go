@@ -574,6 +574,12 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	// entry stamped goal_outcome but carrying no outcome is malformed: it
 	// is logged and falls through to the ordinary rendering below so its
 	// text is not lost.
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == "helper_event" && entry.HelperEvent != nil {
+		if err := emitFrame(agent.HelperEventFrameFor(sr.sessionID, entry.ID, *entry.HelperEvent)); err != nil {
+			return streamReplayStateReturn, err
+		}
+		return streamReplayStateContinue, nil
+	}
 	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeGoalOutcome {
 		if entry.GoalOutcome != nil {
 			if err2 := emitFrame(goalOutcomeFrame(sr.sessionID, entry.ID, *entry.GoalOutcome)); err2 != nil {

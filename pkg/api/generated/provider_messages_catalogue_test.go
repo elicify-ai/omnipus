@@ -5,9 +5,10 @@
 // Oracles from the SPEC ONLY (§6 + §7.1 item 5):
 //   - Bijection (C-3/C-4): the codes carrying a provider_message variant
 //     are exactly the spec §6 templated set — provider_auth_failed,
-//     rate_limited, quota_billing, model_retired — both directions.
-//   - Closed-slot token check (OBS-002): every template's slots come from
-//     the closed set {provider}, {answered_model}, {unavailable_model}.
+//     rate_limited, quota_billing, model_retired plus #1340's bad_model,
+//     provider_request_rejected and model_route_unavailable — both directions.
+//   - Closed-slot token check: every template's slots come from the explicit
+//     contract vocabulary, including {model} for the failing attempt.
 //
 // CHARACTERIZATION PIN, green-today-by-design: Wave 1 (contracts) landed
 // this contract data; these assertions guard it against drift. Expected
@@ -22,10 +23,10 @@ import (
 
 // pmTemplatedCodes is the spec §6 templated set — the codes whose
 // x-user-messages catalogue entry carries a provider_message variant.
-var pmTemplatedCodes = []string{"provider_auth_failed", "rate_limited", "quota_billing", "model_retired"}
+var pmTemplatedCodes = []string{"provider_auth_failed", "rate_limited", "quota_billing", "model_retired", "bad_model", "provider_request_rejected", "model_route_unavailable"}
 
 // pmClosedSlots is OBS-002's closed slot vocabulary.
-var pmClosedSlots = map[string]bool{"provider": true, "answered_model": true, "unavailable_model": true}
+var pmClosedSlots = map[string]bool{"provider": true, "model": true, "attempt": true, "max": true, "countdown": true, "answered_model": true, "unavailable_model": true}
 
 // pmSlotRe extracts {slot} tokens from a template string.
 var pmSlotRe = regexp.MustCompile(`\{([a-z_]+)\}`)

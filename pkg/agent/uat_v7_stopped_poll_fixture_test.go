@@ -43,7 +43,7 @@ func (p *qa3StoppedHelperProvider) Chat(ctx context.Context, _ []providers.Messa
 }
 func (*qa3StoppedHelperProvider) GetDefaultModel() string { return "qa3-v7-helper" }
 
-// On the first REAL notice-woken turn the model polls both helpers; the
+// On the first explicit user-requested turn the model polls both helpers; the
 // following request captures their real tool results. An unexpected extra
 // wake gets a terminal answer, so the dispatch-count assertion exposes it.
 type qa3StoppedParentProvider struct {
@@ -173,14 +173,10 @@ func newQA3StoppedFixture(t *testing.T, action string) *qa3StoppedFixture {
 			}
 			byID[id] = wake
 		default:
-			if len(byID) != 2 {
-				t.Fatalf("SETUP: initial stop wake identities=%v, want exactly two", byID)
-			}
-			for _, id := range f.noticeID {
-				wake, ok := byID[id]
-				if !ok || wake.Channel != "system" || wake.AsyncTranscriptSessionID != parentID || !strings.Contains(wake.Content, "stopped_child:") {
-					t.Fatalf("SETUP: real stop wake for %s lost parent identity: %+v", id, wake)
-				}
+			// PW-D13 (founder 2026-10-15): Stop must publish zero wakes.
+			// Return every actual transport item to the test's zero-count oracle;
+			// do not require forbidden wakes as a setup precondition.
+			for _, wake := range byID {
 				f.wakes = append(f.wakes, wake)
 			}
 			return f

@@ -19,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -72,6 +73,14 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 
 	// Register the agent that will own the scheduled session.
 	mia := registerAgent(t, al, home, "mia", provider)
+	// The agent's pinned pair is (openai, scripted-model). Named-pair routing
+	// (#1340) serves a turn only from that pair's configured connection and
+	// never borrows the agent's default client, so the scripted provider is
+	// installed as exactly that connection.
+	mia.storeProviderPoolBuild(providerPoolBuild{
+		pool:   map[string]providers.LLMProvider{"openai": provider},
+		routes: map[providers.FallbackCandidate]providers.LLMProvider{{Provider: "openai", Model: "scripted-model"}: provider},
+	})
 	// No-default-policy model (CLAUDE.md hard constraint 6): "remember" is a
 	// real builtin tool with zero policy coverage on this bare test config, so
 	// it now fails closed to "deny" unless granted explicitly — this test's

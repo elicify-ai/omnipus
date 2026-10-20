@@ -1173,3 +1173,71 @@ describe('CreateAgentModal — providers-query four-state plumbing (bug fix)', (
     )
   })
 })
+
+// #1341 CR9-1 — founder rule "provider and model always come in pairs, never
+// alone". The create endpoint refuses (400) a fallback missing either half, so
+// the wizard must never let one reach the create request: an unpaired
+// fallback blocks step 1 (and names what is missing) until it is completed or
+// removed, and only complete {model, provider} pairs are ever sent.
+describe('CreateAgentModal — fallback pairs on create (#1341 CR9-1)', () => {
+  it('blocks step 1 while a fallback has no provider, and the create request carries only complete pairs', async () => {
+    vi.mocked(fetchProviders).mockReset().mockResolvedValue([
+      connectedProvider({ models: ['backup-model'] }),
+    ])
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+    // The provider catalog has loaded before anything is typed.
+    await waitFor(() => expect(screen.getByTestId('wizard-model')).toHaveAttribute('data-catalog-status', 'ready'))
+
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Research Bot' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'claude-sonnet-4-6' } })
+    await waitFor(() => expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled())
+
+    // A fallback whose model no connected provider offers stays unpaired:
+    // nothing is guessed for it and the step cannot be left.
+    fireEvent.click(screen.getByTestId('wizard-add-fallback'))
+    fireEvent.change(screen.getByTestId('wizard-fallback-model-0'), { target: { value: 'unknown-model' } })
+    expect(screen.getByTestId('wizard-next-1')).toBeDisabled()
+    expect(screen.getByTestId('wizard-advance-hint')).toHaveTextContent(/fallback provider/i)
+
+    // An empty (just added) row is incomplete too.
+    fireEvent.change(screen.getByTestId('wizard-fallback-model-0'), { target: { value: '' } })
+    expect(screen.getByTestId('wizard-next-1')).toBeDisabled()
+    expect(screen.getByTestId('wizard-advance-hint')).toHaveTextContent(/fallback model/i)
+
+    // A model a connected provider offers is paired with that provider.
+    fireEvent.change(screen.getByTestId('wizard-fallback-model-0'), { target: { value: 'backup-model' } })
+    await waitFor(() => expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+    fireEvent.change(screen.getByTestId('wizard-soul'), { target: { value: 'You are a focused research assistant.' } })
+    await waitFor(() => expect(screen.getByTestId('wizard-next-2')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('wizard-next-2'))
+    fireEvent.click(await screen.findByTestId('wizard-create'))
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1))
+    const req = onCreate.mock.calls[0][0] as { fallback_models?: Array<{ model?: string; provider?: string }> }
+    expect(req.fallback_models).toEqual([{ model: 'backup-model', provider: 'openrouter' }])
+  })
+
+  it('removing the unpaired fallback unblocks step 1 and the create request omits fallbacks entirely', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Research Bot' } })
+    fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'claude-sonnet-4-6' } })
+    fireEvent.click(screen.getByTestId('wizard-add-fallback'))
+    fireEvent.change(screen.getByTestId('wizard-fallback-model-0'), { target: { value: 'unknown-model' } })
+    expect(screen.getByTestId('wizard-next-1')).toBeDisabled()
+
+    fireEvent.click(screen.getByTestId('wizard-fallback-remove-0'))
+    await waitFor(() => expect(screen.getByTestId('wizard-next-1')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('wizard-next-1'))
+    fireEvent.change(screen.getByTestId('wizard-soul'), { target: { value: 'You are a focused research assistant.' } })
+    await waitFor(() => expect(screen.getByTestId('wizard-next-2')).not.toBeDisabled())
+    fireEvent.click(screen.getByTestId('wizard-next-2'))
+    fireEvent.click(await screen.findByTestId('wizard-create'))
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1))
+    expect(onCreate.mock.calls[0][0]).not.toHaveProperty('fallback_models')
+  })
+})

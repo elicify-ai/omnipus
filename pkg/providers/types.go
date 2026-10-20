@@ -95,6 +95,7 @@ const (
 	FailoverBilling         FailoverReason = "billing"
 	FailoverTimeout         FailoverReason = "timeout"
 	FailoverFormat          FailoverReason = "format"
+	FailoverBadModel        FailoverReason = "bad_model"
 	FailoverContextOverflow FailoverReason = "context_overflow"
 	FailoverOverloaded      FailoverReason = "overloaded"
 	FailoverUnknown         FailoverReason = "unknown"
@@ -119,9 +120,10 @@ func (e *FailoverError) Unwrap() error {
 }
 
 // IsRetriable returns true if this error should trigger fallback to next candidate.
-// Non-retriable: Format errors (bad request structure, image dimension/size).
+// Non-retriable: request format, context overflow, and a model unavailable on
+// the selected provider. A wrong model is a configuration fault, not an outage.
 func (e *FailoverError) IsRetriable() bool {
-	return e.Reason != FailoverFormat && e.Reason != FailoverContextOverflow
+	return e.Reason != FailoverFormat && e.Reason != FailoverContextOverflow && e.Reason != FailoverBadModel
 }
 
 // ModelConfig holds primary model and fallback list.

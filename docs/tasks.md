@@ -125,6 +125,8 @@ Click or tap a card or List row and the task detail panel slides in. The separat
 
 ## Limits and things to watch
 
+A confirmed wrong model (`bad_model`), or a named connection that cannot be set up (`model_route_unavailable`), ends a task **Failed** without consuming an attempt or restarting unchanged. The result names the failing provider/model and the settings to fix. Correct the model/provider pair or the provider's credentials and endpoint settings, then run the task again. These configuration failures are not temporary provider outages.
+
 - **A task with no agent cannot run.** The engine skips unassigned tasks; assign one before starting.
 - **The assigned agent must be on the workspace team** — its core members plus anyone reachable through delegation. See [workspaces](workspaces.md).
 - **You cannot drag into Blocked or out of Done.** Blocked belongs to the dependency engine; Done is final.

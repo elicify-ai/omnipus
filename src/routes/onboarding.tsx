@@ -9,7 +9,6 @@ import {
   CheckCircle,
   XCircle,
   User,
-  Star,
   ChatCircle,
   Key,
   Eye,
@@ -1740,17 +1739,11 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.18, duration: 0.38 }}
       >
-        <div className="flex items-center justify-center gap-[var(--space-2)] mb-[var(--space-2)]">
+        <div className="flex items-center justify-center mb-[var(--space-2)]">
           <h1 className="font-headline text-3xl sm:text-4xl font-bold leading-tight"
             style={{ color: 'var(--color-secondary)' }}>
             Mia — Assistant
           </h1>
-          <Star
-            size={22}
-            weight="fill"
-            style={{ color: 'var(--color-accent)' }}
-            aria-label="Default agent"
-          />
         </div>
         <p className="font-headline text-[length:var(--type-body-compact-size)] font-bold tracking-wide"
           style={{ color: 'var(--color-accent)' }}>
@@ -1787,8 +1780,8 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
         className="w-full"
       >
         <p className="text-[length:var(--type-body-compact-size)] leading-relaxed mb-[var(--space-4)]" style={{ color: 'var(--color-muted)' }}>
-          Mia is your default agent. She&apos;s bound to My Workspace and knows you
-          across all your workspaces. Start chatting to begin.
+          Mia is on the team of My Workspace, where Start chatting takes you. She
+          knows you across all your workspaces.
         </p>
         <Button
           className="w-full h-11 gap-[var(--space-2)] font-headline font-bold text-base"
