@@ -930,11 +930,13 @@ func TestCompletion_WokenDeliveryStaysQuiet(t *testing.T) {
 	}
 }
 
-// TestCompletion_ProgressStoredNotWoken_LoggedAtError (FR-012): progress is
-// wake-eligible now, so a progress entry stored without a wake is a STALL and
-// must be logged at ERROR. The non-wake-eligible kinds this test's predecessor
-// covered (progress/checkpoint) no longer exist among the accepted report
-// kinds.
+// TestCompletion_ProgressStoredNotWoken_LoggedAtError: PW-D4 (founder
+// 2026-10-15) returned progress to stored-not-woken by design (§9.8,
+// FR-011/FR-012), so a progress entry stored without a wake is the INTENDED
+// outcome, not a stall, and must stay silent — the ERROR the legacy oracle
+// demanded is reserved for a wake-eligible entry that failed to reach its
+// recipient. Retain the legacy test name so its changed oracle stays
+// traceable.
 func TestCompletion_ProgressStoredNotWoken_LoggedAtError(t *testing.T) {
 	readLog := captureLogFile(t, logger.ERROR)
 	al, cleanup := newSteerAL(t)
@@ -960,8 +962,11 @@ func TestCompletion_ProgressStoredNotWoken_LoggedAtError(t *testing.T) {
 		Message:        progress,
 	}, parentID, rec.Generation, steer.Delivery{MessageID: rec.SessionID + ":progress", Outcome: steer.DeliveryStoredNotWoken})
 
-	if captured := readLog(); !strings.Contains(captured, `"level":"error"`) {
-		t.Fatalf("a wake-eligible progress entry stored without a wake produced no ERROR line — under FR-012 that is a stall; captured log:\n%s", captured)
+	// PW-D4: a stored-not-woken progress entry is the contract (§9.8), so it
+	// must not trip the undelivered-wake ERROR — the same silence rule the
+	// sibling wake-eligible completion above asserts from the other side.
+	if captured := readLog(); strings.Contains(captured, `"level":"error"`) {
+		t.Fatalf("a stored-not-woken progress entry logged at ERROR — under PW-D4 that is the intended outcome, not a stall; captured log:\n%s", captured)
 	}
 }
 

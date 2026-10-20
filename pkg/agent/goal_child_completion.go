@@ -10,9 +10,9 @@
 // recovery). MAJ-003 (sub-agent control plane) retires the FD1=A pair-end:
 // NO terminal session write ends the session-owned goal — only natural
 // met/round-exhaustion adjudication and an explicit clear (/goal clear,
-// authorized clear_goal) do. The judge-unavailable arm of the
-// deferred adjudication is re-driven a bounded number of times inside the
-// already-off-critical-path goroutine, then the child is failed visibly.
+// authorized clear_goal) do. A transient judge-unavailable outcome is re-driven
+// a bounded number of times inside the already-off-critical-path goroutine,
+// then the child is failed visibly. Operator-only refusals conclude at once.
 //
 // This file deliberately does NOT add a wall-clock reaper (FD2=A): completion
 // is event-driven, and the boot sweep repairs crash residuals.
@@ -51,7 +51,7 @@ const goalJudgeRedriveAttempts = 3
 var goalJudgeRedriveBackoff = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second} //nolint:gochecknoglobals
 
 // redriveGoalAdjudication is decision (c)'s bounded re-drive: it wraps the
-// single shared adjudication body (runGoalAdjudication) so a judge-unavailable
+// single shared adjudication body (runGoalAdjudicationOutcome) so a judge-unavailable
 // round no longer strands the pair. Each attempt is bounded by
 // goalJudgeRoundTimeout exactly as the pre-fix dispatch was; between attempts
 // the wrapper waits through judgeSleepFn, treating a failed wait as "retry
@@ -70,9 +70,9 @@ var goalJudgeRedriveBackoff = []time.Duration{5 * time.Second, 15 * time.Second,
 // A registry concurrency back-off (#984) is NOT re-driven: runGoalAdjudication
 // resolves JudgeCriteriaResult.ConcurrencyBackoff to (false, false) — a
 // final, silent stop for THIS wrapper, with no retry (the in-flight
-// adjudication resolves the goal) and no child failure. Only a genuine
-// judge outage (unavailable=true, reason != the concurrency sentinel) is
-// retried and, on exhaustion, fails the child visibly.
+// adjudication resolves the goal) and no child failure. An unavailable outcome
+// that needs an operator ends immediately with its safe corrective action;
+// other unavailable outcomes keep the bounded retry and visible conclusion.
 func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork) {
 	if al == nil || work == nil || work.sessionID == "" {
 		return
@@ -83,6 +83,7 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 			map[string]any{"session_id": work.sessionID})
 		return
 	}
+	var lastOutcome goalAdjudicationOutcome
 	for attempt := 1; attempt <= goalJudgeRedriveAttempts; attempt++ {
 		if attempt > 1 {
 			al.waitGoalRedriveBackoff(attempt - 1)
@@ -115,22 +116,29 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 		// reported as ErrJudgeTimeLimit, never as a provider timeout.
 		ctx, cancel := context.WithTimeoutCause(withGoalAnswer(withGoalProducer(context.Background(), work.producer), work.answer),
 			goalJudgeRoundTimeout, ErrJudgeTimeLimit)
-		met, unavailable := al.runGoalAdjudication(ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
+		lastOutcome = al.runGoalAdjudicationOutcome(ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
 			al.idleSteerDeliverer(work.sessionID, rec.GoalID, goalClaimDeferredSourceKind))
 		cancel()
-		if met || !unavailable {
+		if lastOutcome.met || !lastOutcome.unavailable {
 			return
+		}
+		if lastOutcome.needsOperator {
+			break // another unchanged check cannot fix the Judge's settings
 		}
 		logger.WarnCF("agent", "goal: judge unavailable on a re-drive attempt — retrying while attempts remain",
 			map[string]any{"session_id": work.sessionID, "goal_id": rec.GoalID,
 				"attempt": attempt, "max_attempts": goalJudgeRedriveAttempts})
 	}
 	reason := fmt.Sprintf("judge unavailable after %d attempts: the completion claim could not be adjudicated", goalJudgeRedriveAttempts)
+	nextStep := "The goal stays active: claim completion again once the Judge is available."
+	if lastOutcome.needsOperator {
+		reason = lastOutcome.reason // already safe, provider/model-specific guidance
+		nextStep = "The goal stays active: correct the Judge's settings, then claim completion again."
+	}
 	// Issue #1306 (founder): the Judge must conclude. The conclusion names the
 	// verdict AND carries the worker's claim, so the parent (or the chat user)
 	// gets the actual work result with "not verified" — never a bare failure.
-	conclusion := notVerifiedConclusion(reason,
-		"The goal stays active: claim completion again once the Judge is available.", work.upwardAnswer())
+	conclusion := notVerifiedConclusion(reason, nextStep, work.upwardAnswer())
 	// SFH F1: the audience is decided from the lifecycle record; a read
 	// failure is retried and then reported loudly — it never silently picks
 	// the interactive (no-parent) audience.
@@ -145,7 +153,7 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 	}
 	logger.ErrorCF("agent", "goal: "+reason+" — failing the goal-bearing child visibly",
 		map[string]any{"session_id": work.sessionID})
-	al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), work.producer), work.sessionID, "", errors.New(conclusion))
+	al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), work.producer), work.sessionID, "", &curatedTurnError{text: conclusion})
 }
 
 // goalConclusionAudienceAttempts bounds the lifecycle re-reads before an
@@ -491,95 +499,81 @@ func (al *AgentLoop) deliverGoalParkUpward(sessionID string, blocked bool, text 
 	reportUndeliveredWake("goal: park delivery", event, steerParentSessionID(rec), rec.Generation, delivery)
 }
 
-// ackMetVerdictEntry acknowledges the session-goal met verdict's inbox entry
-// after the hand-back produces the parent wake (founder Q1=A, #984 follow-up).
-// The met verdict is delivered with its wake suppressed
-// (deliverGoalVerdictUpward's SuppressWake); the completion handback that
-// follows it is the one parent wake for the whole "met". An entry delivered
-// without a wake is consumed by nothing — leaving it unacked would make boot recovery
-// (boot_sweep.go::unacknowledged) re-deliver AND re-wake it on every later
-// restart, which is exactly the re-entry Q1=A removes.
-//
-// Best-effort by design: the tail (completeSteeredTurnAfterGoal) runs FIRST
-// so a crash before the hand-back wake leaves both entries unacked for boot
-// recovery to re-deliver. Once the hand-back has woken, acknowledging the
-// wake-suppressed verdict is crash-safe because the deterministic hand-back
-// is itself durable and remains unacknowledged until the parent's normal
-// consumption marker retires it; a crash before consumption therefore makes
-// boot recovery re-deliver that hand-back as the one durable wake carrier.
-// This ack runs AFTER the tail returns, so it never races the tail's Deliver.
-// No parent edge → nothing to ack (a task-owned goal has no steered edge and
-// its verdict wake is load-bearing).
-func (al *AgentLoop) ackMetVerdictEntry(sessionID, goalID string, round int) {
-	inbox := al.GetMessageInboxStore()
-	if inbox == nil {
-		return
-	}
-	lifecycle := al.GetSessionLifecycleStore()
-	if lifecycle == nil {
-		return
+// ackMetVerdictEntry acknowledges only after the combined final-id input is
+// saved as chat membership (PW-D16), or the final was already consumed by a
+// poll. Publication is not durability; placement is a later, safe-fence step.
+// The suppressed verdict never owns a second wake id (PW-D17).
+func (al *AgentLoop) ackMetVerdictEntry(sessionID, goalID string, round int) error {
+	inbox, lifecycle, store := al.GetMessageInboxStore(), al.GetSessionLifecycleStore(), al.GetSessionStore()
+	if inbox == nil || lifecycle == nil || store == nil {
+		return errors.New("goal: met verdict acknowledgement dependencies are not wired")
 	}
 	rec, err := lifecycle.Load(sessionID)
-	if err != nil {
-		logger.WarnCF("agent", "goal: met verdict ack skipped — could not load the child's lifecycle record",
-			map[string]any{"session_id": sessionID, "goal_id": goalID, "error": err.Error()})
-		return
-	}
-	if rec == nil || rec.SteeredBy == nil {
-		return
-	}
-	ownerKey := deliverOwnerKey(rec)
-	if ownerKey == "" {
-		return
-	}
-	id := goalVerdictUpwardMessageID(goalID, round)
-	if aerr := inbox.Ack(ownerKey, []string{id}); aerr != nil {
-		logger.WarnCF("agent", "goal: met verdict ack failed — boot recovery may re-wake this verdict once",
-			map[string]any{"session_id": sessionID, "goal_id": goalID, "message_id": id, "error": aerr.Error()})
-	}
-}
-
-// wakeMetVerdictEntry re-delivers the already-durable, unacknowledged met
-// verdict without wake suppression when no deterministic final hand-back
-// woke the parent. Deliver's duplicate handling deliberately re-runs the wake
-// for an unacknowledged wake-eligible entry, so this creates no second inbox
-// row. Publishing or queueing is not consumption: every outcome leaves the
-// verdict unacknowledged until processSteeredSystemWake or
-// consumeDequeuedSteering writes the parent's normal consumed marker. That
-// preserves boot recovery's ability to re-deliver after a crash between wake
-// publication and actual consumption. A missing or stopped parent produces
-// DeliveryStoredNotWoken and returns an error under the same durable posture.
-func (al *AgentLoop) wakeMetVerdictEntry(sessionID, goalID string, round int) error {
-	inbox := al.GetMessageInboxStore()
-	lifecycle := al.GetSessionLifecycleStore()
-	deliverer := al.getUpwardDeliverer()
-	if inbox == nil || lifecycle == nil || deliverer == nil {
-		return errors.New("goal: met verdict fallback wake dependencies are not wired")
-	}
-	rec, err := lifecycle.Load(sessionID)
-	if err != nil {
-		return fmt.Errorf("load child lifecycle: %w", err)
-	}
-	if rec == nil || rec.SteeredBy == nil {
-		return errors.New("goal: met verdict fallback wake has no steering edge")
-	}
-	wantID := goalVerdictUpwardMessageID(goalID, round)
-	message, found, err := findUnackedInboxMessage(inbox, deliverOwnerKey(rec), sessionID, wantID)
 	if err != nil {
 		return err
 	}
-	if !found {
-		return fmt.Errorf("goal: met verdict %q is not present and unacknowledged", wantID)
+	if rec.SteeredBy == nil {
+		return nil
 	}
-	event := steer.UpwardEvent{ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: message}
-	delivery, err := deliverer.Deliver(context.Background(), event)
+	ownerKey := deliverOwnerKey(rec)
+	finalID := fmt.Sprintf("%s:%d:final", sessionID, rec.Generation)
+	addr, _, err := store.SavedChatInput(ownerKey, "saved-input-"+finalID)
 	if err != nil {
-		return fmt.Errorf("wake stored met verdict: %w", err)
+		return err
 	}
-	reportUndeliveredWake("goal: met verdict fallback wake", event, steerParentSessionID(rec), rec.Generation, delivery)
-	if !deliveryWokeRecipient(delivery.Outcome) {
-		return fmt.Errorf("wake stored met verdict: delivery outcome %q did not wake the parent", delivery.Outcome)
+	if addr.EntryID == "" {
+		consumed, readErr := al.wakeInputConsumed(ownerKey, finalID)
+		if readErr != nil {
+			return readErr
+		}
+		if !consumed {
+			return fmt.Errorf("goal: verdict remains unread: combined input %q has not been saved", finalID)
+		}
 	}
+	return inbox.Ack(ownerKey, []string{goalVerdictUpwardMessageID(goalID, round)})
+}
+
+// wakeMetVerdictEntry retries only a saved final-id input. With no combined
+// input it deliberately suppresses the standalone verdict; a stopped parent
+// remains a refusal. The committed-final pass owns recovery, never a second
+// turn under a verdict-round id.
+func (al *AgentLoop) wakeMetVerdictEntry(sessionID, goalID string, round int) error {
+	inbox, lifecycle, store := al.GetMessageInboxStore(), al.GetSessionLifecycleStore(), al.GetSessionStore()
+	if inbox == nil || lifecycle == nil || store == nil {
+		return errors.New("goal: met verdict retry dependencies are not wired")
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	if rec.SteeredBy == nil {
+		return errors.New("goal: met verdict retry has no steering edge")
+	}
+	parentID := deliverOwnerKey(rec)
+	_, parent, err := al.wakeRecipient(parentID)
+	if err != nil {
+		return err
+	}
+	if blocked, blockErr := al.wakeBlocked(parent); blockErr != nil || blocked {
+		return errors.Join(blockErr, errors.New("goal: met ending is held by Stop"))
+	}
+	_, found, err := findUnackedInboxMessage(inbox, parentID, sessionID, goalVerdictUpwardMessageID(goalID, round))
+	if err != nil || !found {
+		return err
+	}
+	finalID := fmt.Sprintf("%s:%d:final", sessionID, rec.Generation)
+	entries, err := store.ReadTranscript(parentID)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.ID == "saved-input-"+finalID {
+			_, err := al.WakeSession(withUpwardWakeSource(context.Background(), sessionID, "handback", nil), parentID, "finished", finalID, entry.Content)
+			return err
+		}
+	}
+	// A verdict without the final's saved payload is deliberately suppressed,
+	// not an alternate wake identity. Boot's committed-final pass retries it.
 	return nil
 }
 

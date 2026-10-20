@@ -77,6 +77,7 @@ export type WsFrameType =
   | "browser_input_control_ack"
   | "browser_handover_notice"
   | "goal_outcome"
+  | "helper_event"
   | "library_changed"
   | "session_snapshot"
   | "catch_up_complete"
@@ -369,7 +370,7 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
@@ -382,7 +383,7 @@ export interface LLMError {
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
   message: string;
   retryable: boolean;
   provider_message?: boolean;
@@ -1219,6 +1220,23 @@ export interface BrowserHandoverNoticeFrame {
   text: string;
 }
 
+export interface HelperEventFrameEvent {
+  helper_session_id: string;
+  helper_title?: string;
+  kind: "verdict_unmet" | "not_verified" | "stopped" | "restarted" | "resume_refused" | "timed_out" | "finished" | "question" | "blocker" | "failed";
+  text: string;
+  goal_id?: string;
+  created_at: string;
+}
+
+export interface HelperEventFrame {
+  type: "helper_event";
+  session_id: string;
+  message_id: string;
+  helper_event: HelperEventFrameEvent;
+  seq?: number;
+}
+
 export interface GoalOutcomeFrameOutcome {
   goal_id: string;
   goal_text: string;
@@ -1439,6 +1457,7 @@ export type WsFrame =
   | PlanStatusFrame
   | JudgeVerdictFrame
   | BrowserHandoverNoticeFrame
+  | HelperEventFrame
   | GoalOutcomeFrame
   | KnowledgeIndexProgressFrame
   | BrowserInputOfferFrame
@@ -1540,6 +1559,7 @@ export type ServerFrame =
   | PlanStatusFrame
   | JudgeVerdictFrame
   | BrowserHandoverNoticeFrame
+  | HelperEventFrame
   | GoalOutcomeFrame
   | KnowledgeIndexProgressFrame
   | BrowserInputAnswerFrame

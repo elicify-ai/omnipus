@@ -259,7 +259,6 @@ func TestProviderDependents_EnumeratesEveryModelField(t *testing.T) {
 	covered := map[string]string{
 		// AgentDefaults
 		"DefaultModel":        "providerBacksDefault (backs_default; DELETE requires new_default)",
-		"ModelFallbacks":      "settings row agents.defaults.model_fallbacks, role fallback",
 		"ImageModel":          "settings row agents.defaults.image_model, role image",
 		"ImageModelFallbacks": "settings row agents.defaults.image_model_fallbacks, role image",
 		"RecapModel":          "settings row agents.defaults.recap_model, role recap",

@@ -1,0 +1,28 @@
+title: HelperEventFrame
+description: >
+  Server to client. One durable helper-event row addressed to its destination
+  transcript. Emitted live only after save, and replayed from the stamped
+  helper_event subtype. Keep the generating copy in asyncapi.yaml in sync.
+type: object
+additionalProperties: false
+required:
+  - type
+  - session_id
+  - message_id
+  - helper_event
+properties:
+  type:
+    type: string
+    const: helper_event
+  session_id:
+    type: string
+    minLength: 1
+  message_id:
+    type: string
+    minLength: 1
+  helper_event:
+    $ref: ./HelperEvent.yaml
+  seq:
+    type: integer
+    format: int64
+    minimum: 1

@@ -266,6 +266,7 @@ properties:
       - browser_handover_notice
       - expiry_notice
       - goal_outcome
+      - helper_event
       - subagent_start
       - subagent_state
       - subagent_message
@@ -303,6 +304,8 @@ properties:
     example: "browser_handover_notice"
   goal_outcome:
     $ref: './GoalOutcome.yaml'
+  helper_event:
+    $ref: './HelperEvent.yaml'
   # subagent_start/state/message/end below are present only on the
   # matching `system_subtype` entry (ADR-091 D7/I-4) — steer_frames.go's
   # persisted sub-agent lifecycle frames. Plain $ref, no sibling

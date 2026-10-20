@@ -36,7 +36,6 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // stoppedChildNoticeID is D6's dedup key, spelled
@@ -66,13 +65,10 @@ func stoppedChildNoticeText(tr session.StoppedTransition) string {
 // landed stop transition in the child's control-ledger history whose
 // original parent is a real session. It is the single publisher both stop
 // producers call after their landing is durable, and the boot retry replays
-// through. Idempotent per transition on the durable NOTE: an already-stored
-// notice id is never re-appended (one durable line per transition). D8.4's
-// "one wake per notice" is amended for the RING (founder decision,
-// 2026-10-04): a stored note the parent has not taken yet re-rings its
-// parent on every delivery pass — startup and any later retry pass — until
-// the durable ack lands; a taken note rings nobody, and no ring repeats the
-// parent's work.
+// through. Idempotent per transition: stored rows are repaired without a
+// second append. PW-D13 keeps intentional Stops quiet on every delivery and
+// replay; only restart and historical timeout call WakeSession, whose saved
+// input, consumption markers and pending publication coalesce their wakes.
 //
 // pending reports whether at least one transition had UNFINISHED work — a
 // fresh append or a failed one — so the boot caller can tell "nothing
@@ -117,14 +113,10 @@ func (al *AgentLoop) deliverLandedStopNotices(ctx context.Context, rec *session.
 // deliverLandedStopNotice delivers ONE landed transition's notice to its
 // ORIGINAL direct parent. A root stop (empty parent in the history) is
 // history the publisher keeps, never a parent it invents. work reports
-// unfinished or freshly finished APPEND work for this transition: a fresh
-// append (followed by its one wake when the parent is working) or a failed
-// append. An already-stored notice is finished append work — the line is
-// never re-appended — but while the parent has not taken it (no durable ack
-// covers its id), that stored note still re-rings the parent on this
-// delivery pass when the parent is working; a taken note rings nobody
-// (founder decision, 2026-10-04, amending D8.4's one-wake rule for the
-// ring). A failed ack-state read or failed ring is returned visibly.
+// unfinished or freshly finished work. The row is always repaired before the
+// acknowledgement check. An intentional Stop cannot wake or join; a restart
+// or timeout uses its own landed-transition id through WakeSession. Failures
+// are returned and the landed ledger remains the repair source.
 func (al *AgentLoop) deliverLandedStopNotice(ctx context.Context, rec *session.LifecycleRecord, tr session.StoppedTransition) (work bool, err error) {
 	parentID := strings.TrimSpace(tr.ParentSessionID)
 	if parentID == "" {
@@ -140,10 +132,6 @@ func (al *AgentLoop) deliverLandedStopNotice(ctx context.Context, rec *session.L
 	if inbox == nil {
 		return false, errors.New("steer: stopped notice: inbox store is not wired")
 	}
-	wake, err := al.parentWorkingForStoppedNotice(parentID)
-	if err != nil {
-		return false, err
-	}
 	id := stoppedChildNoticeID(parentID, tr.SessionID, tr.Generation, tr.StopSeq)
 	msg, err := stoppedChildNoticeMessage(rec, parentID, id, tr)
 	if err != nil {
@@ -157,12 +145,28 @@ func (al *AgentLoop) deliverLandedStopNotice(ctx context.Context, rec *session.L
 		// is not gated by this.
 		return true, fmt.Errorf("steer: stopped notice: append %s: %w", id, err)
 	}
+	// The landed ledger is the lasting repair source. Required rows are
+	// repaired even when the inbox notice was acknowledged or compacted.
+	helperEvent := stoppedHelperEvent(rec, tr)
+	if err := al.saveHelperEvent(parentID, id, helperEvent); err != nil {
+		al.publishHelperEventRepairPending(parentID, id, helperEvent)
+		return true, errors.Join(err, al.retainPendingHelperEvent(rec.SessionID, parentID, id, helperEvent))
+	}
+	if tr.Cause == session.StopCauseRestart {
+		if err := al.saveHelperEvent(rec.SessionID, id, helperEvent); err != nil {
+			al.publishHelperEventRepairPending(rec.SessionID, id, helperEvent)
+			return true, errors.Join(err, al.retainPendingHelperEvent(rec.SessionID, rec.SessionID, id, helperEvent))
+		}
+	}
+	if tr.Cause != session.StopCauseRestart && tr.Cause != session.StopCauseTimeout {
+		// PW-D13: an intentional Stop never calls the wake entry, including
+		// when a live parent could otherwise accept an in-turn join.
+		return !res.Deduped, nil
+	}
 	if res != nil && res.Deduped {
-		// The durable note already exists (one line per transition — it is
-		// never re-appended). D8.4's one-wake rule as amended (founder
-		// decision, 2026-10-04): a stored note the parent has NOT taken yet
-		// re-rings on this delivery pass — fall through to the wake below —
-		// and a taken note rings nobody: the parent already did the work.
+		// A retry may repair rows, but an acknowledged transition starts no
+		// turn. An unread restart/timeout still passes through the one shared
+		// wake entry; an intentional Stop already returned above.
 		taken, ackErr := stopNoticeTaken(inbox, parentID, id)
 		if ackErr != nil {
 			return false, ackErr
@@ -170,9 +174,6 @@ func (al *AgentLoop) deliverLandedStopNotice(ctx context.Context, rec *session.L
 		if taken {
 			return false, nil
 		}
-	}
-	if !wake {
-		return true, nil
 	}
 	return true, al.wakeParentForStoppedNotice(ctx, rec, parentID, id, tr)
 }
@@ -232,46 +233,22 @@ func noticeSender(rec *session.LifecycleRecord) string {
 	return "runtime"
 }
 
-// parentWorkingForStoppedNotice is D6's routing table. A chat root has no
-// lifecycle record and is the working parent. stopped, waiting, done and
-// failed retain the notice with no wake.
-func (al *AgentLoop) parentWorkingForStoppedNotice(parentID string) (bool, error) {
-	lifecycle := al.GetSessionLifecycleStore()
-	if lifecycle == nil {
-		return false, errors.New("steer: stopped notice: lifecycle store is not wired")
-	}
-	parent, err := lifecycle.Load(parentID)
-	if errors.Is(err, session.ErrLifecycleNotFound) {
-		return true, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("steer: stopped notice: load parent %s: %w", parentID, err)
-	}
-	switch parent.State {
-	case session.LifecycleRunning, session.LifecycleQueued:
-		return true, nil
-	default:
-		return false, nil
-	}
-}
-
 func (al *AgentLoop) wakeParentForStoppedNotice(ctx context.Context, rec *session.LifecycleRecord, parentID, id string, tr session.StoppedTransition) error {
-	if al.asyncNotifier == nil {
-		return errors.New("steer: stopped notice: async notifier is not wired")
+	var reason string
+	switch tr.Cause {
+	case session.StopCauseRestart:
+		reason = "restart"
+	case session.StopCauseTimeout:
+		reason = "timed_out"
+	default:
+		return nil
 	}
-	target := rec.SteeredBy.ReportingTarget
-	if target.Channel == "" || target.ChatID == "" {
-		return fmt.Errorf("steer: stopped notice: parent %s has no wake destination", parentID)
+	event := stoppedHelperEvent(rec, tr)
+	source := wakeSource{childID: rec.SessionID, event: &event, publishKind: "error"}
+	if tr.Cause == session.StopCauseRestart && rec.StopNote != nil && rec.StopNote.Seq == tr.StopSeq {
+		source.restartBootSeq = rec.StopNote.BootSeq
 	}
-	err := al.asyncNotifier.WakeParentAlways(ctx, "error", tools.MessageParentWakeEvent{
-		Channel:             target.Channel,
-		ChatID:              target.ChatID,
-		AgentID:             rec.AgentID,
-		TranscriptSessionID: parentID,
-		Content:             stoppedChildNoticeText(tr),
-		MessageID:           id,
-		Generation:          tr.Generation,
-	})
+	_, err := al.WakeSession(context.WithValue(ctx, wakeSourceKey{}, source), parentID, reason, id, event.Text)
 	if err != nil {
 		return fmt.Errorf("steer: stopped notice: wake parent %s: %w", parentID, err)
 	}
@@ -289,7 +266,7 @@ func (al *AgentLoop) wakeParentForStoppedNotice(ctx context.Context, rec *sessio
 // caller's own boot consequence runs. Correction C5: a replay outcome is NOT
 // current-run recovery — a replay failure stays visibly pending and retried
 // below, and it never suppresses the caller's current-run stop nor
-// authorizes a run (boot never dispatches, D8.5).
+// authorizes a run. Native restart resume is the separate admission step.
 func (r *SteerBootRecovery) recoverStoppedChildNotice(ctx context.Context, rec *session.LifecycleRecord, notice func(string, string)) bool {
 	if r == nil || rec == nil || rec.SteeredBy == nil || rec.State == session.LifecycleNeedsInput {
 		return false

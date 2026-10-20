@@ -577,3 +577,23 @@ func captureDefaultSlog(t *testing.T, level slog.Level) *raceFreeLogBuffer {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	return buf
 }
+
+// provisionTestWorkspace writes a real workspace record whose core team holds
+// agentIDs, at the current omnipusHome(). Restart resume (PW-SEC-01) only
+// continues saved work in a workspace that exists and still holds the agent,
+// so a fixture that relies on resume must name a real workspace rather than an
+// arbitrary id.
+func provisionTestWorkspace(t *testing.T, workspaceID string, agentIDs ...string) {
+	t.Helper()
+	dir := filepath.Join(omnipusHome(), "workspaces")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("provisionTestWorkspace: mkdir: %v", err)
+	}
+	data, err := json.Marshal(testHarnessWorkspaceRecord{ID: workspaceID, CoreTeam: agentIDs})
+	if err != nil {
+		t.Fatalf("provisionTestWorkspace: marshal: %v", err)
+	}
+	if err := fileutil.WriteFileAtomic(filepath.Join(dir, workspaceID+".json"), data, 0o644); err != nil {
+		t.Fatalf("provisionTestWorkspace: write: %v", err)
+	}
+}

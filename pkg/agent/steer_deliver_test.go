@@ -221,6 +221,13 @@ func TestDeliver_HandbackOnePerChild_Identity(t *testing.T) {
 	al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
+	// §9.4 recipient table, last row: "Hidden, removed, missing metadata ...
+	// -> No wake, no substitute" (PW-D12 / FR-019). A parent that has ever
+	// delegated has a live chat session by definition, so the fixture seeds
+	// the parent's real unified session metadata; without it the delivery is
+	// correctly refused as missing-metadata, which is the gone-parent case
+	// the RED pack already pins.
+	seedUnifiedSession(t, al, parentID)
 
 	delivery, err := deliverer.Deliver(context.Background(), handbackEvent(childID, "caller-supplied-id"))
 	if err != nil {
@@ -252,7 +259,6 @@ func TestDeliver_HandbackOnePerChild_Identity(t *testing.T) {
 	if hb.MessageId != wantID {
 		t.Fatalf("stored MessageId = %q, want the deterministic id %q (not the caller-supplied one)", hb.MessageId, wantID)
 	}
-	_ = al // silence unused if go vet flags it in a future edit
 }
 
 // TestDeliver_RepeatWake_SameDeterministicID_OneEntry covers the crash-repair
@@ -263,12 +269,25 @@ func TestDeliver_RepeatWake_SameDeterministicID_OneEntry(t *testing.T) {
 	al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
-	_ = al
+	// §9.4 recipient table, last row (PW-D12 / FR-019): seed the parent's
+	// real unified session metadata — a delegating parent has one by
+	// definition, and without it the wake is correctly refused as
+	// missing-metadata instead of reaching the dedupe assertions below.
+	seedUnifiedSession(t, al, parentID)
 
 	ctx := context.Background()
 	if _, err := deliverer.Deliver(ctx, handbackEvent(childID, "first-attempt")); err != nil {
 		t.Fatalf("first Deliver: %v", err)
 	}
+	// PW-D5 ("one outcome starts at most one parent turn") is enforced
+	// process-locally (pkg/agent/wake_session.go::AgentLoop.WakeSession holds
+	// an in-flight publication marker per recipient+outcome id, released when
+	// the wake's receiver exits). The repair delivery this test models is a
+	// restart's boot re-delivery, and a real restart destroys that marker
+	// with the process — release it the same way, or the coalescing below
+	// correctly absorbs the second wake and the crash-repair contract this
+	// test owns is never exercised.
+	al.releaseWakePublication(parentID, "child-1:1:final")
 	second, err := deliverer.Deliver(ctx, handbackEvent(childID, "second-attempt-different-caller-id"))
 	if err != nil {
 		t.Fatalf("second Deliver (repair): %v", err)
@@ -313,6 +332,10 @@ func TestDeliver_LiveParentUsesRawSessionKeyAndRetainsMessageIdentity(t *testing
 	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
+	// §9.4 recipient table, last row (PW-D12 / FR-019): a live parent still
+	// needs its own unified session metadata for the wake path's recipient
+	// check; the live-turn join this test asserts sits behind it.
+	seedUnifiedSession(t, al, parentID)
 	al.activeTurnStates.Store(parentID, &turnState{sessionKey: parentID})
 
 	delivery, err := deliverer.Deliver(context.Background(), handbackEvent(childID, "ignored"))
@@ -416,7 +439,10 @@ func TestDeliver_EmptyAnswer_FailedWithError(t *testing.T) {
 	al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
-	_ = al
+	// §9.4 recipient table, last row (PW-D12 / FR-019): seed the parent's
+	// real unified session metadata — a fatal failure is wake-eligible only
+	// for a resolvable recipient, and a delegating parent has one.
+	seedUnifiedSession(t, al, parentID)
 
 	var sm generated.SessionMessage
 	if err := sm.FromSessionMessageError(generated.SessionMessageError{
@@ -458,11 +484,16 @@ func TestDeliver_EmptyAnswer_FailedWithError(t *testing.T) {
 
 // TestDeliver_ProgressStoredNotWoken covers US-2/AS-10 (TDD plan test 15):
 // progress is stored but never wakes the parent.
+// PW-D4 (founder 2026-10-15): progress is stored and shown and never wakes.
+// Retain the legacy test name so its changed oracle stays traceable.
 func TestDeliver_ProgressWakesIdleParent(t *testing.T) {
 	al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
-	_ = al
+	// §9.4 recipient table, last row (PW-D12 / FR-019): seed the parent's
+	// real unified session metadata so the not-waking outcome below is the
+	// PW-D4 classification, not a missing-metadata refusal.
+	seedUnifiedSession(t, al, parentID)
 
 	var sm generated.SessionMessage
 	if err := sm.FromSessionMessageProgress(generated.SessionMessageProgress{
@@ -478,10 +509,10 @@ func TestDeliver_ProgressWakesIdleParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
-	// FR-012: every accepted report kind — progress included — wakes an idle
-	// non-stopped parent, so the outcome is DeliveryWoke, not stored_not_woken.
-	if delivery.Outcome != steer.DeliveryWoke {
-		t.Fatalf("Delivery.Outcome = %q, want woke (FR-012: progress wakes an idle non-stopped parent)", delivery.Outcome)
+	// PW-D4 / §9.8 / FR-011: progress is stored and shown and NEVER wakes;
+	// FR-012 keeps only the inbox rate and unacked caps for it.
+	if delivery.Outcome != steer.DeliveryStoredNotWoken {
+		t.Errorf("Delivery.Outcome = %q, want stored_not_woken (PW-D4: progress never wakes)", delivery.Outcome)
 	}
 	msgs, _, _, derr := inbox.Drain(parentID, childID, "", 10)
 	if derr != nil || len(msgs) != 1 {

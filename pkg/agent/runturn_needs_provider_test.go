@@ -28,6 +28,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // TestAgentTurn_NeedsProvider_TypedRefusal — T33. An agent bound to a provider
@@ -121,6 +122,9 @@ func TestAgentTurn_NeedsProvider_TypedRefusal(t *testing.T) {
 
 	agentA, ok := al.GetRegistry().GetAgent("agent-a")
 	require.True(t, ok, "agent A must still be registered")
+	// A's named client is the scenario boundary, never the real API endpoint
+	// represented by the identity-only config row below.
+	agentA.StoreProviderPool(map[string]providers.LLMProvider{"openai": provider})
 	agentB, ok := al.GetRegistry().GetAgent("agent-b")
 	require.True(t, ok, "agent B must still be registered — the unknown provider is non-fatal")
 
