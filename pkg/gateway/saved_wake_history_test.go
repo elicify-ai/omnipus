@@ -25,9 +25,10 @@ func TestSavedWakeInput_HistoryAndReplayKeepOnlyVisibleRows(t *testing.T) {
 			store := api.agentLoop.GetSessionStore()
 			now := time.Now().UTC()
 			body := "A delegated session handed back (final): B1-HELPER-4412"
-			if kind == "verdict" {
+			switch kind {
+			case "verdict":
 				body = "Goal verdict: met. Conditions: all met. Reason: the file exists."
-			} else if kind == "restart" {
+			case "restart":
 				body = "Interrupted by a restart."
 			}
 			appendEntry := func(entry session.TranscriptEntry) {
@@ -111,13 +112,13 @@ func TestSavedWakeInput_HistoryAndReplayKeepOnlyVisibleRows(t *testing.T) {
 			require.NotNil(t, person.Id)
 			require.Equal(t, "person", *person.Id)
 			if kind == "verdict" {
-				verdict, ok := frames[1].(generated.GoalOutcomeFrame)
-				require.True(t, ok, "the proper goal outcome row must remain")
+				verdict, verdictFrameOK := frames[1].(generated.GoalOutcomeFrame)
+				require.True(t, verdictFrameOK, "the proper goal outcome row must remain")
 				require.Equal(t, "wake-row", verdict.MessageId)
 				require.Equal(t, "goal-1", verdict.Outcome.GoalId)
 			} else {
-				event, ok := frames[1].(generated.HelperEventFrame)
-				require.True(t, ok, "the proper helper row must remain")
+				event, helperFrameOK := frames[1].(generated.HelperEventFrame)
+				require.True(t, helperFrameOK, "the proper helper row must remain")
 				require.Equal(t, "wake-row", event.MessageId)
 				require.Equal(t, body, event.HelperEvent.Text)
 			}

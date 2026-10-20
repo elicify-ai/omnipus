@@ -62,7 +62,7 @@ func TestSavedWakeInput_ChatViewHidesInputAndKeepsModelDelivery(t *testing.T) {
 				}
 				for _, entry := range visible {
 					entry.AgentID, entry.Timestamp = "mia", time.Now().UTC()
-					_, err := s.AppendTranscriptAddressed(sid, entry)
+					_, err = s.AppendTranscriptAddressed(sid, entry)
 					require.NoError(t, err)
 				}
 				view, err := s.ReadTranscriptView(sid)
