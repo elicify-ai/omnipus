@@ -117,6 +117,7 @@ func (al *AgentLoop) assembleMessages(
 	base := ts.agent.ContextBuilder.BuildMessages(ts.depth, nil, userMsg, media,
 		ts.opts.WorkspaceID, ts.channel, ts.chatID, ts.opts.SenderID,
 		ts.opts.SenderDisplayName, withExpiryNote(breadcrumb, expiryNote), nil, skillNames...)
+	base = withoutVolatileNotes(base)
 	out := make([]providers.Message, 0, len(base)+len(history)+len(keptSpan))
 	out = append(out, base[0])
 	// Keep the original leading user/anchor ahead of injected archived context.

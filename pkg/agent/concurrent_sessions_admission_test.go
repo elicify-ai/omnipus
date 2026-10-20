@@ -52,7 +52,7 @@ func (p *gatedProvider) Chat(
 ) (*providers.LLMResponse, error) {
 	last := ""
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "user" {
+		if msgs[i].Role == "user" && !msgs[i].Volatile { // FR-007: gate on task text, not the request-only tail.
 			last = msgs[i].Content
 			break
 		}

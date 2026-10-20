@@ -4,7 +4,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/session"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -326,7 +329,14 @@ type streamOwnershipReleaser interface {
 // real outcome; runTurn's deferred call (the other exits) discards the error —
 // those turns already end failed/aborted, and the WARN below stays as
 // operator detail there.
+// CallAccountingStreamer receives the exact per-call producer records. It is
+// optional for channels; non-persisting streamers use the turn's own store.
+type CallAccountingStreamer interface {
+	SetCallAccounting(entries []session.TranscriptEntry)
+}
+
 func (ts *turnState) finalizeStreamer(ctx context.Context) error {
+	accountingErr := ts.callAccountingError()
 	// B4: if the turn has been abandoned, suppress the final "done" frame so
 	// a stuck goroutine cannot send a spurious done signal to the frontend.
 	if ts.abandoned.Load() {
@@ -362,6 +372,18 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 	ts.lastStreamer = nil
 	ts.mu.Unlock()
 	if s != nil {
+		if setter, ok := s.(CallAccountingStreamer); ok {
+			pending, seen := ts.takeCallAccounting()
+			if seen {
+				setter.SetCallAccounting(pending)
+			}
+		} else {
+			accountingErr = errors.Join(accountingErr, ts.flushPendingCallAccounting())
+		}
+	} else {
+		accountingErr = errors.Join(accountingErr, ts.flushPendingCallAccounting())
+	}
+	if s != nil {
 		if setter, ok := s.(streamerStatsSetter); ok {
 			setter.SetTurnStats(tokens, cost, duration)
 		}
@@ -369,7 +391,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 			iosetter.SetTurnIOStats(promptTokens, completionTokens, cacheRead, cacheWrite)
 		}
 		if fsetter, ok := s.(streamerFailedSetter); ok {
-			fsetter.SetTurnFailed(failed)
+			fsetter.SetTurnFailed(failed || accountingErr != nil)
 		}
 		// ADR-087 D6.1 (§9 fixed E→C interface): a continued answer's
 		// per-call streamer buffer holds only the LAST round's text — hand
@@ -414,8 +436,8 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 			// caller — the turn loop decides the outcome from it. The WARN
 			// stays as operator detail.
 			logger.WarnCF("agent", "Turn-end streaming finalize error", map[string]any{"error": err.Error()})
-			return err
+			return errors.Join(accountingErr, err)
 		}
 	}
-	return nil
+	return accountingErr
 }

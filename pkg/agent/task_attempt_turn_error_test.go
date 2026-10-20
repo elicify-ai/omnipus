@@ -59,7 +59,7 @@ const cleanWorkerEvidence = "ran ./greeting.sh | wc -l -> 1, exit 0"
 // finish: a goal_claim(met) call, then — once the tool result is back — the
 // turn's closing text.
 func cleanClaimTurn(msgs []providers.Message) *providers.LLMResponse {
-	if n := len(msgs); n > 0 && msgs[n-1].Role == "tool" {
+	if lastConversationMessageForFixture(msgs).Role == "tool" {
 		return &providers.LLMResponse{Content: "greeting.sh now prints exactly one line."}
 	}
 	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{

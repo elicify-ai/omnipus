@@ -216,4 +216,8 @@ type Model struct {
 	// this base model. Empty means on-demand (regional, unprefixed) access
 	// only.
 	InferenceProfiles []string
+	// Cost is the catalog price in USD per 1 million tokens. Nil when the
+	// published row has no cost object. A present object whose Input is
+	// nil is an unpriced model, not a zero price.
+	Cost *ModelCost
 }

@@ -4388,6 +4388,40 @@
       }
     },
     {
+      "id": "src/components/screens/UsageScreen.tsx#tab:provider",
+      "kind": "tab",
+      "source": "src/components/screens/UsageScreen.tsx",
+      "symbol": "tab:provider",
+      "lane": 7,
+      "verification": [
+        {
+          "checkId": "surface:src-components-screens-usagescreen-tsx-tab-provider:unit",
+          "file": "src/components/screens/UsageScreen.cachehit.test.tsx",
+          "test": "TestUsageScreen_HitPercentAndProviderTab > adds the provider breakdown on the existing tabs control",
+          "status": "executed",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-screens-usagescreen-tsx-tab-provider:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/screens/UsageScreen.tsx#tab:provider surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-screens-usagescreen-tsx-tab-provider:interaction",
+          "kind": "interaction",
+          "file": "src/components/screens/UsageScreen.cachehit.test.tsx",
+          "test": "TestUsageScreen_HitPercentAndProviderTab > keeps the selected tab focused when the period changes",
+          "status": "executed"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/screens/UsageScreen.tsx#tab:provider"
+      }
+    },
+    {
       "id": "src/components/screens/UsageScreen.tsx#tab:session",
       "kind": "tab",
       "source": "src/components/screens/UsageScreen.tsx",
@@ -6843,6 +6877,10 @@
     },
     {
       "source": "src/components/chat/FeedKindLabel.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ParentCrumbLink.tsx",
       "lane": 3
     },
     {

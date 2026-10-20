@@ -141,12 +141,16 @@ type SessionStats = {
   tokens_cache_read?: number | undefined;
   tokens_cache_write?: number | undefined;
   by_model?: {} | undefined;
+  by_provider?: {} | undefined;
+  unpriced_tokens?: number | undefined;
+  subscription_tokens?: number | undefined;
 };
 type ModelTokens = {
   in?: number | undefined;
   out?: number | undefined;
   cache_read?: number | undefined;
   cache_write?: number | undefined;
+  cache_hit_ratio?: (number | null) | undefined;
   total: number;
 };
 type SessionDetail = {
@@ -2660,6 +2664,7 @@ type AgentTokenEntry = {
   tokens_total: number;
   tokens_cache_read?: number | undefined;
   tokens_cache_write?: number | undefined;
+  cache_hit_ratio?: (number | null) | undefined;
   by_model?: {} | undefined;
 };
 type TokenUsageSummary = {
@@ -2669,6 +2674,9 @@ type TokenUsageSummary = {
   tokens_cache_read?: number | undefined;
   tokens_cache_write?: number | undefined;
   by_model?: {} | undefined;
+  by_provider?: {} | undefined;
+  unpriced_tokens?: number | undefined;
+  subscription_tokens?: number | undefined;
   partial?: boolean | undefined;
   partial_error_count?: number | undefined;
 };
@@ -3408,6 +3416,7 @@ export const ModelTokens: z.ZodType<ModelTokens> = z
     out: z.number().int().gte(0).optional(),
     cache_read: z.number().int().gte(0).optional(),
     cache_write: z.number().int().gte(0).optional(),
+    cache_hit_ratio: z.number().gte(0).lte(1).nullish(),
     total: z.number().int().gte(0),
   })
   .passthrough();
@@ -3422,6 +3431,9 @@ export const SessionStats: z.ZodType<SessionStats> = z
     tokens_cache_read: z.number().int().gte(0).optional(),
     tokens_cache_write: z.number().int().gte(0).optional(),
     by_model: z.record(ModelTokens).optional(),
+    by_provider: z.record(ModelTokens).optional(),
+    unpriced_tokens: z.number().int().gte(0).optional(),
+    subscription_tokens: z.number().int().gte(0).optional(),
   })
   .passthrough();
 export const Session: z.ZodType<Session> = z.object({
@@ -6720,6 +6732,7 @@ export const AgentTokenEntry: z.ZodType<AgentTokenEntry> = z
     tokens_total: z.number().int(),
     tokens_cache_read: z.number().int().gte(0).optional(),
     tokens_cache_write: z.number().int().gte(0).optional(),
+    cache_hit_ratio: z.number().gte(0).lte(1).nullish(),
     by_model: z.record(ModelTokens).optional(),
   })
   .passthrough();
@@ -6731,6 +6744,9 @@ export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
     tokens_cache_read: z.number().int().gte(0).optional(),
     tokens_cache_write: z.number().int().gte(0).optional(),
     by_model: z.record(ModelTokens).optional(),
+    by_provider: z.record(ModelTokens).optional(),
+    unpriced_tokens: z.number().int().gte(0).optional(),
+    subscription_tokens: z.number().int().gte(0).optional(),
     partial: z.boolean().optional(),
     partial_error_count: z.number().int().gte(0).optional(),
   })

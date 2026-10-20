@@ -46,10 +46,11 @@ func orphanACCompletedControls(t *testing.T) {
 			rr.rq.prepareCallMessages()
 			require.NoError(t, ts.contextWindowError(), "positive instrument control takes the real validation path")
 			callMessages := rr.rq.ri.rf.callMessages
-			require.Len(t, callMessages, len(raw)+1, "N4 ruling: the complete raw view survives until the normalization/send boundary")
-			require.Equal(t, "system", callMessages[0].Role)
-			require.Equal(t, raw, callMessages[1:], "pre-send validation/repair cannot erase or reorder the raw complete group, unbound records or control")
-			pinnedInput := callMessages[0].Content
+			conversation := requireConversationBeforeVolatileTail(t, callMessages)
+			require.Len(t, conversation, len(raw)+1, "N4 ruling: complete raw view survives before FR-007's single tail")
+			require.Equal(t, "system", conversation[0].Role)
+			require.Equal(t, raw, conversation[1:], "pre-send validation/repair cannot erase or reorder the raw complete group, unbound records or control")
+			pinnedInput := conversation[0].Content
 			// Architect N4 ruling: derive the exact wire instructions from the
 			// immutable pinned INPUT plus literal fixture records, not received
 			// output or a production normalizer. Preserve each input occurrence.
@@ -67,11 +68,13 @@ func orphanACCompletedControls(t *testing.T) {
 			require.Len(t, bodies, 1, "recorder can see a real request; zero-request negative oracle is not a dead instrument")
 			t.Logf("N4 captured full HTTP body (marker occurrences=%d): %s", n, bodies[0])
 			received := cwR1Messages(t, bodies[0])
-			require.NotEmpty(t, received)
-			require.Len(t, received, 5, "N4 ruling: one composed system message followed by the four unchanged non-system messages")
-			require.Equal(t, "system", received[0].Role)
-			require.Equal(t, raw[:4], received[1:], "final serialized body retains the entire complete group and both results, with every field and order intact")
-			require.Equal(t, wantSystemContent, received[0].Content, "serialized instructions retain the pinned input, every unbound marker occurrence and unrelated control in exact order, without loss or duplicate collapse")
+			wireConversation := requireConversationBeforeVolatileTail(t, received)
+			require.Equal(t, callMessages[len(callMessages)-1].Content, received[len(received)-1].Content,
+				"the single volatile tail survives the real HTTP adapter unchanged")
+			require.Len(t, wireConversation, 5, "N4 ruling: one composed system message and four unchanged conversation messages precede the tail")
+			require.Equal(t, "system", wireConversation[0].Role)
+			require.Equal(t, raw[:4], wireConversation[1:], "final serialized body retains the entire complete group and both results, with every field and order intact")
+			require.Equal(t, wantSystemContent, wireConversation[0].Content, "serialized instructions retain the pinned input, every unbound marker occurrence and unrelated control in exact order, without loss or duplicate collapse")
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})
 	}

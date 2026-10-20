@@ -38,6 +38,7 @@ type Provider struct {
 	client             *anthropic.Client
 	tokenSource        func() (string, error)
 	baseURL            string
+	providerID         string        // catalog identity, preserved when api_base points at a proxy
 	streamStallTimeout time.Duration // streaming silence limit; 0 = common.DefaultStreamStallTimeout
 
 	// streamHTTPClient is the streaming request's HTTP client: the default
@@ -78,10 +79,16 @@ func NewProvider(token string) *Provider {
 	return NewProviderWithBaseURL(token, "")
 }
 
-func NewProviderWithBaseURL(token, apiBase string) *Provider {
+func NewProviderWithBaseURL(token, apiBase string, timeoutSeconds ...int) *Provider {
 	baseURL := normalizeBaseURL(apiBase)
+	timeout := common.DefaultRequestTimeout
+	if len(timeoutSeconds) > 0 && timeoutSeconds[0] > 0 {
+		timeout = time.Duration(timeoutSeconds[0]) * time.Second
+	}
 	client := anthropic.NewClient(
-		option.WithAuthToken(token),
+		option.WithAuthToken(""),
+		option.WithAPIKey(token),
+		option.WithRequestTimeout(timeout),
 		option.WithBaseURL(baseURL),
 		// D13: the chain owns every retry decision (§7.4's in-chain
 		// rate-limit loop reads the provider's own retry-after fact). An
@@ -94,9 +101,21 @@ func NewProviderWithBaseURL(token, apiBase string) *Provider {
 	return &Provider{
 		client:           &client,
 		baseURL:          baseURL,
-		streamHTTPClient: newStreamHTTPClient(common.DefaultRequestTimeout),
+		streamHTTPClient: newStreamHTTPClient(timeout),
 	}
 }
+
+// NewProviderWithTimeout preserves the factory's canonical Messages endpoint
+// while the SDK uses its root (it adds v1/messages itself).
+func NewProviderWithTimeout(token, apiBase string, timeoutSeconds int) *Provider {
+	p := NewProviderWithBaseURL(token, apiBase, timeoutSeconds)
+	p.baseURL = strings.TrimRight(p.baseURL, "/") + "/v1"
+	return p
+}
+
+// WithProviderID pins documented dialect selection to the configured catalog
+// row, even when an operator routes it through a private base URL.
+func (p *Provider) WithProviderID(id string) *Provider { p.providerID = id; return p }
 
 // WithStreamStallTimeout sets the streaming silence limit on this provider
 // (founder decision 2026-09-14): a ChatStream call receiving no events of any
@@ -150,6 +169,7 @@ func (p *Provider) Chat(
 		}
 		opts = append(opts,
 			option.WithAuthToken(tok),
+			option.WithAPIKey(""),
 			option.WithHeader("anthropic-beta", anthropicBetaHeader),
 		)
 	}
@@ -158,14 +178,17 @@ func (p *Provider) Chat(
 	if err != nil {
 		return nil, err
 	}
+	p.markCache(&params, messages, model)
 
 	// OAuth/setup-tokens require streaming; API keys use non-streaming.
 	if p.tokenSource != nil {
 		return p.chatStreaming(ctx, params, opts)
 	}
 
+	boundary := sdkErrorBoundary{baseURL: p.baseURL}
+	opts = append(opts, option.WithMiddleware(boundary.middleware))
 	resp, err := p.client.Messages.New(ctx, params, opts...)
-	if err != nil {
+	if err = boundary.wrap(err); err != nil {
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
@@ -197,6 +220,7 @@ func (p *Provider) ChatStream(
 		}
 		opts = append(opts,
 			option.WithAuthToken(tok),
+			option.WithAPIKey(""),
 			option.WithHeader("anthropic-beta", anthropicBetaHeader),
 		)
 	}
@@ -205,6 +229,7 @@ func (p *Provider) ChatStream(
 	if err != nil {
 		return nil, err
 	}
+	p.markCache(&params, messages, model)
 
 	return p.streamWithCallbacks(ctx, params, opts, onChunk, onProgress)
 }
@@ -237,7 +262,7 @@ func (p *Provider) streamWithCallbacks(
 	opts []option.RequestOption,
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
-) (*LLMResponse, error) {
+) (response *LLMResponse, err error) {
 	stall := p.effectiveStreamStallTimeout()
 
 	// stallArmer hands the monitor's arm fn to the body-wrapping middleware
@@ -246,16 +271,17 @@ func (p *Provider) streamWithCallbacks(
 	// immediately after the stream is created and every subsequent Read
 	// re-arms the clock. Reads that race the fill simply skip one arm.
 	var armer stallBodyArmer
-	streamOpts := opts
+	boundary := sdkErrorBoundary{baseURL: p.baseURL}
+	streamOpts := append(append([]option.RequestOption{}, opts...), option.WithRequestTimeout(0), option.WithMiddleware(boundary.middleware))
 	if p.streamHTTPClient != nil {
 		streamOpts = append(append([]option.RequestOption{}, streamOpts...), option.WithHTTPClient(p.streamHTTPClient))
 	}
 	if stall > 0 {
 		streamOpts = append(append([]option.RequestOption{}, streamOpts...),
 			option.WithMiddleware(func(req *http.Request, next func(*http.Request) (*http.Response, error)) (*http.Response, error) {
-				resp, err := next(req)
-				if err != nil || resp == nil || resp.Body == nil {
-					return resp, err
+				resp, nextErr := next(req)
+				if nextErr != nil || resp == nil || resp.Body == nil {
+					return resp, nextErr
 				}
 				// Method value, bound to &armer: reads made before the monitor
 				// exists find armer.arm nil and skip; every later read re-arms.
@@ -275,6 +301,8 @@ func (p *Provider) streamWithCallbacks(
 	}
 
 	var msg anthropic.Message
+	var openingUsage *anthropic.Usage
+	defer func() { err = failedStreamUsage(err, &msg, openingUsage) }()
 	var lastTextLen int
 	var lastReasoningLen int
 	lastArgsLen := map[int]int{}
@@ -289,6 +317,10 @@ func (p *Provider) streamWithCallbacks(
 		}
 		if err := msg.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("claude streaming accumulate: %w", err)
+		}
+		if event.Type == "message_start" {
+			u := msg.Usage
+			openingUsage = &u
 		}
 		if onChunk == nil && onProgress == nil {
 			continue
@@ -381,7 +413,10 @@ func (p *Provider) streamWithCallbacks(
 		if watch.Fired() {
 			return nil, common.NewStallError(stall)
 		}
-		return nil, fmt.Errorf("claude API call: %w", err)
+		return nil, boundary.wrap(fmt.Errorf("claude API call: %w", err))
+	}
+	if err := boundary.wrap(nil); err != nil {
+		return nil, err
 	}
 	// A stream that ends without message_stop was cut off (the connection was
 	// closed under it): what accumulated is not an answer and a tool call that
@@ -394,6 +429,7 @@ func (p *Provider) streamWithCallbacks(
 		return nil, &common.StreamProviderError{Code: "incomplete_stream", Message: "the stream ended before message_stop"}
 	}
 
+	restoreOpeningUsage(&msg, openingUsage)
 	return parseResponse(&msg)
 }
 
@@ -462,9 +498,6 @@ func buildParams(
 			if len(msg.SystemParts) > 0 {
 				for _, part := range msg.SystemParts {
 					block := anthropic.TextBlockParam{Text: part.Text}
-					if part.CacheControl != nil && part.CacheControl.Type == "ephemeral" {
-						block.CacheControl = anthropic.NewCacheControlEphemeralParam()
-					}
 					system = append(system, block)
 				}
 			} else {
@@ -472,55 +505,41 @@ func buildParams(
 			}
 		case "user":
 			if msg.ToolCallID != "" {
-				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropicToolResult(msg)),
-				)
+				anthropicMessages = appendToolResult(anthropicMessages, anthropicToolResult(msg))
 			} else {
 				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content)),
+					anthropic.NewUserMessage(anthropicUserContent(msg)...),
 				)
 			}
 		case "assistant":
-			if len(msg.ToolCalls) > 0 {
-				var blocks []anthropic.ContentBlockParamUnion
+			if len(msg.ToolCalls) > 0 || len(msg.ThinkingBlocks) > 0 {
+				blocks, replayErr := replayThinkingBlocks(msg.ThinkingBlocks)
+				if replayErr != nil {
+					return anthropic.MessageNewParams{}, replayErr
+				}
 				if msg.Content != "" {
 					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 				}
 				for _, tc := range msg.ToolCalls {
-					// Skip tool calls with empty names to avoid API errors
-					if tc.Name == "" {
-						continue
+					name := tc.Name
+					if name == "" && tc.Function != nil {
+						name = tc.Function.Name
 					}
-					// OUTBOUND rebuild: this re-serialises OUR OWN history back
-					// into an Anthropic request, so unlike the inbound decode in
-					// parseResponse a failure here is an internal invariant
-					// violation, not a truncated upstream reply. It stays
-					// non-fatal — refusing to rebuild would make one bad history
-					// entry permanently unsendable, which is the wedge described
-					// in common.ErrToolArgumentsUndecodable — but it no longer
-					// happens in silence. Before, the error was discarded
-					// outright and an empty arguments block was sent as if the
-					// model had called the tool with no parameters.
+					if name == "" {
+						return anthropic.MessageNewParams{}, fmt.Errorf("stored tool call has no function name")
+					}
 					args := tc.Arguments
 					if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
-						decoded, err := common.DecodeToolCallArguments(
-							json.RawMessage(tc.Function.Arguments), tc.Name,
-						)
-						if err != nil {
-							logger.ErrorCF(
-								"anthropic",
-								"stored tool call arguments will not decode when rebuilding the request; "+
-									"sending an empty arguments block",
-								map[string]any{"tool": tc.Name, "id": tc.ID, "error": err.Error()},
-							)
-						} else {
-							args = decoded
+						decoded, decodeErr := common.DecodeToolCallArguments(json.RawMessage(tc.Function.Arguments), name)
+						if decodeErr != nil {
+							return anthropic.MessageNewParams{}, decodeErr
 						}
+						args = decoded
 					}
 					if args == nil {
 						args = map[string]any{}
 					}
-					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, tc.Name))
+					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, name))
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {
@@ -529,23 +548,17 @@ func buildParams(
 				)
 			}
 		case "tool":
-			anthropicMessages = append(anthropicMessages,
-				anthropic.NewUserMessage(anthropicToolResult(msg)),
-			)
+			anthropicMessages = appendToolResult(anthropicMessages, anthropicToolResult(msg))
 		}
 	}
 
 	maxTokens := int64(4096)
-	if mt, ok := options["max_tokens"].(int); ok {
+	if mt, ok := common.AsInt(options["max_tokens"]); ok {
 		maxTokens = int64(mt)
 	}
 
-	// Normalize model ID: Anthropic API uses hyphens (claude-sonnet-4-6),
-	// but config may use dots (claude-sonnet-4.6).
-	apiModel := strings.ReplaceAll(model, ".", "-")
-
 	params := anthropic.MessageNewParams{
-		Model:     apiModel,
+		Model:     model,
 		Messages:  anthropicMessages,
 		MaxTokens: maxTokens,
 	}
@@ -705,6 +718,15 @@ func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
 		if desc := t.Function.Description; desc != "" {
 			tool.Description = anthropic.String(desc)
 		}
+		tool.InputSchema.ExtraFields = make(map[string]any)
+		for key, value := range t.Function.Parameters {
+			if key != "type" && key != "properties" && key != "required" {
+				tool.InputSchema.ExtraFields[key] = value
+			}
+		}
+		if req, ok := t.Function.Parameters["required"].([]string); ok {
+			tool.InputSchema.Required = append([]string(nil), req...)
+		}
 		if req, ok := t.Function.Parameters["required"].([]any); ok {
 			required := make([]string, 0, len(req))
 			for _, r := range req {
@@ -723,31 +745,28 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	var content strings.Builder
 	var reasoning strings.Builder
 	var toolCalls []ToolCall
+	var thinkingBlocks []string
 
-	// PromptTokens = plain (uncached) input; cache tokens are tracked separately.
-	// TotalTokens = plain input + cache_creation + cache_read + output.
-	// Computed up front (resp.Usage/resp.StopReason are top-level fields, not
-	// dependent on the content-block loop below) so a tool-call decode
-	// failure can attach this same evidence to the refusal (ADR-087 D3.9 /
-	// D5 / D7) instead of returning bare.
-	cacheWrite := int(resp.Usage.CacheCreationInputTokens)
-	cacheRead := int(resp.Usage.CacheReadInputTokens)
-	promptTokens := int(resp.Usage.InputTokens)
-	completionTokens := int(resp.Usage.OutputTokens)
-	total := promptTokens + cacheWrite + cacheRead + completionTokens
-	usage := &UsageInfo{
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		CacheWriteTokens: cacheWrite,
-		CacheReadTokens:  cacheRead,
-		TotalTokens:      total,
+	var usage *UsageInfo
+	if hasMessageUsage(resp) {
+		var usageErr error
+		usage, usageErr = messageUsage(resp)
+		if usageErr != nil {
+			return nil, usageErr
+		}
 	}
 
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "thinking":
-			tb := block.AsThinking()
-			reasoning.WriteString(tb.Thinking)
+			reasoning.WriteString(block.Thinking)
+			fallthrough
+		case "redacted_thinking":
+			replay, replayErr := signedThinkingBlock(block)
+			if replayErr != nil {
+				return nil, replayErr
+			}
+			thinkingBlocks = append(thinkingBlocks, replay)
 		case "text":
 			tb := block.AsText()
 			content.WriteString(tb.Text)
@@ -796,11 +815,12 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	}
 
 	return &LLMResponse{
-		Content:      content.String(),
-		Reasoning:    reasoning.String(),
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
-		Usage:        usage,
+		Content:        content.String(),
+		Reasoning:      reasoning.String(),
+		ThinkingBlocks: thinkingBlocks,
+		ToolCalls:      toolCalls,
+		FinishReason:   finishReason,
+		Usage:          usage,
 	}, nil
 }
 

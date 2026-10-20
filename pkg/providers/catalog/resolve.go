@@ -125,3 +125,12 @@ func (h Handle) Locality() Locality {
 	}
 	return h.p.Locality
 }
+
+// Cost returns a copy of this exact catalog pair's price, or nil on a miss.
+// A nil price is unpriced; there is no model-family or default dollar rate.
+func (h Handle) Cost() *ModelCost {
+	if h.m == nil {
+		return nil
+	}
+	return h.m.Cost.Clone()
+}

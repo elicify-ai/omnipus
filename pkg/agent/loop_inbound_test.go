@@ -500,8 +500,9 @@ func TestProcessSystemMessage_AsyncResult_NoOriginSession_RunsWithoutHistory(t *
 	requests := provider.recorded()
 	require.NotEmpty(t, requests, "the notify turn must reach the provider")
 	first := requests[0]
+	conversation := requireConversationBeforeVolatileTail(t, first)
 	var nonSystem []providers.Message
-	for _, m := range first {
+	for _, m := range conversation {
 		if m.Role != "system" {
 			nonSystem = append(nonSystem, m)
 		}
@@ -533,6 +534,9 @@ func TestProcessSystemMessage_AsyncResult_NoOriginSession_RunsWithoutHistory(t *
 	require.NoError(t, err)
 	requests = provider.recorded()
 	require.GreaterOrEqual(t, len(requests), 2, "the second notify turn must also reach the provider")
+	secondConversation := requireConversationBeforeVolatileTail(t, requests[len(requests)-1])
+	require.Equal(t, "user", secondConversation[len(secondConversation)-1].Role)
+	require.Contains(t, secondConversation[len(secondConversation)-1].Content, "a second unrelated notify")
 	for _, m := range requests[len(requests)-1] {
 		assert.NotContains(t, m.Content, firstContent,
 			"a no-origin turn must never inherit another no-origin turn's history")

@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"reflect"
+	"slices"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -79,7 +80,7 @@ func sameArchiveIdentity(a, b providers.Message) bool {
 	if a.Role == "tool" {
 		return a.ToolCallID != ""
 	}
-	if a.Content != b.Content || a.ReasoningContent != b.ReasoningContent || len(a.ToolCalls) != len(b.ToolCalls) {
+	if a.Content != b.Content || a.ReasoningContent != b.ReasoningContent || !slices.Equal(a.ThinkingBlocks, b.ThinkingBlocks) || len(a.ToolCalls) != len(b.ToolCalls) {
 		return false
 	}
 	for i := range a.ToolCalls {

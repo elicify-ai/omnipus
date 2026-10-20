@@ -15,7 +15,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
@@ -349,12 +348,6 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) classifyFailure() agentLoo
 	activeProviderName := ""
 	if len(cr.rr.rq.ri.rf.rt.activeCandidates) > 0 {
 		activeProviderName = cr.rr.rq.ri.rf.rt.activeCandidates[0].Provider
-	}
-	// A provider that failed after the 200 (common.StreamProviderError) still
-	// billed the attempt: debit its usage like a delivered response (R2-S1-06).
-	var streamErr *common.StreamProviderError
-	if errors.As(cr.rr.rq.ri.rf.err, &streamErr) {
-		cr.rr.rq.ri.rf.rt.al.debitLLMUsage(cr.rr.rq.ri.rf.rt.ts, cr.rr.rq.ri.rf.rt.llmModel, streamErr.Usage)
 	}
 	failErr := providers.ClassifyError(cr.rr.rq.ri.rf.err, activeProviderName, cr.rr.rq.ri.rf.rt.llmModel)
 	if permanentModelFailure(cr.rr.rq.ri.rf.err) {
@@ -923,6 +916,7 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 		Role:             "assistant",
 		Content:          rr.rq.ri.rf.response.Content,
 		ReasoningContent: rr.rq.ri.rf.response.ReasoningContent,
+		ThinkingBlocks:   append([]string(nil), rr.rq.ri.rf.response.ThinkingBlocks...),
 	}
 	for _, tc := range rr.normalizedToolCalls {
 		argumentsJSON, marshalErr := json.Marshal(tc.Arguments)
@@ -984,9 +978,12 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 	// We write BEFORE the tool_call entries so the transcript order mirrors
 	// the live stream: [text segment N] → [tool_call round N] → …
 	//
-	// Tokens/cost are 0 here — the turn total is attributed to the final
-	// assistant entry only (wsStreamer.Finalize or appendAssistantTranscript).
+	// This entry owns this call's usage, including a no-text accounting entry.
+	// The final reply must not count that usage a second time.
 	rr.rq.ri.rf.rt.ts.appendIntermediateAssistantTranscript(rr.rq.ri.rf.response.Content)
+	if err := rr.rq.ri.rf.rt.ts.callAccountingError(); err != nil {
+		return err
+	}
 	if rr.rq.ri.rf.response.Content != "" {
 		// The narration is now in the transcript. If this round's streamer
 		// ends up being finalized (the turn exits via max_tool_iterations

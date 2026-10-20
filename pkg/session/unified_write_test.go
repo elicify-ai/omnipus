@@ -17,43 +17,45 @@ import (
 
 // --- moved from unified.go tests 2026-09-15 ---
 
-// TestAppendTranscript_CacheTokens_AccumulatesInStats verifies that an assistant
-// TranscriptEntry with CacheReadTokens and CacheWriteTokens populated correctly
-// updates SessionStats.TokensCacheRead and TokensCacheWrite.
-//
-// BDD:
-//
-//	Given a fresh session,
-//	When an assistant entry with Tokens=200, CacheReadTokens=50, CacheWriteTokens=20
-//	  is appended,
-//	Then Stats.TokensCacheRead==50 and Stats.TokensCacheWrite==20.
+// TestAppendTranscript_CacheTokens_AccumulatesInStats checks conserving usage
+// splits, not the obsolete all-Tokens-as-output oracle. Prompt-caching FR-002/011
+// and the cache-only scenario require known zero input/output to stay zero.
 func TestAppendTranscript_CacheTokens_AccumulatesInStats(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-
-	entry := TranscriptEntry{
-		ID:               "cache-entry-001",
-		Role:             "assistant",
-		Content:          "Cached response",
-		Tokens:           200,
-		CacheReadTokens:  50,
-		CacheWriteTokens: 20,
-		Timestamp:        time.Now().UTC(),
+	for _, tc := range []struct {
+		name                               string
+		prompt, output, read, write, total int
+	}{
+		// The original 200-token fixture, now explicitly normalized:
+		// 100 uncached + 30 output + 50 read + 20 write = 200.
+		{"mixed", 100, 30, 50, 20, 200},
+		// Literal cache-only and all-read cases from the spec.
+		{"cache only", 0, 0, 800, 200, 1000},
+		{"all read", 0, 0, 1000, 0, 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
+			require.NoError(t, err)
+			entry := TranscriptEntry{
+				ID: "cache-entry-001", Role: "assistant", Content: "Cached response",
+				ProviderID: "cache-provider", Model: "cache-model", ModelID: "cache-model",
+				PromptTokens: tc.prompt, CompletionTokens: tc.output, Tokens: tc.total,
+				CacheReadTokens: tc.read, CacheWriteTokens: tc.write,
+				Timestamp: time.Now().UTC(),
+			}
+			require.NoError(t, store.AppendTranscript(meta.ID, entry))
+			got, err := store.GetMeta(meta.ID)
+			require.NoError(t, err)
+			assert.Equal(t, tc.prompt, got.Stats.TokensIn, "uncached input stays separate")
+			assert.Equal(t, tc.output, got.Stats.TokensOut, "output is not the call's full Tokens total")
+			assert.Equal(t, tc.read, got.Stats.TokensCacheRead, "cache reads are counted once")
+			assert.Equal(t, tc.write, got.Stats.TokensCacheWrite, "cache writes are counted once")
+			assert.Equal(t, tc.total, got.Stats.TokensTotal, "all four components conserve the call total")
+			wantCell := ModelTokens{In: tc.prompt, Out: tc.output, CacheRead: tc.read, CacheWrite: tc.write, Total: tc.total}
+			assert.Equal(t, map[string]ModelTokens{"cache-model": wantCell}, got.Stats.ByModel)
+			assert.Equal(t, map[string]ModelTokens{"cache-provider": wantCell}, got.Stats.ByProvider)
+		})
 	}
-
-	require.NoError(t, store.AppendTranscript(meta.ID, entry))
-
-	got, err := store.GetMeta(meta.ID)
-	require.NoError(t, err)
-
-	assert.Equal(t, 50, got.Stats.TokensCacheRead,
-		"TokensCacheRead must equal the entry's CacheReadTokens")
-	assert.Equal(t, 20, got.Stats.TokensCacheWrite,
-		"TokensCacheWrite must equal the entry's CacheWriteTokens")
-	assert.Equal(t, 200, got.Stats.TokensOut,
-		"TokensOut must equal the full turn total (Tokens field)")
 }
 
 // TestAppendTranscript_ByModel_AccumulatesPerModel verifies that two assistant

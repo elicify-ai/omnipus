@@ -1,0 +1,5 @@
+{
+  "prompt_tokens": 250,
+  "completion_tokens": 10,
+  "private_prompt_text": "SECRET-PROMPT-DO-NOT-LOG"
+}

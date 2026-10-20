@@ -151,7 +151,7 @@ func (h *issue1296Harness) stop(t *testing.T) {
 	h.cancel = nil
 }
 
-func (h *issue1296Harness) awaitTurn(t *testing.T, sessionID string) agent.TurnEndPayload {
+func (h *issue1296Harness) awaitTurn(t *testing.T, sessionID string) {
 	t.Helper()
 	deadline := time.NewTimer(busDeliveryTimeout)
 	defer deadline.Stop()
@@ -166,13 +166,32 @@ func (h *issue1296Harness) awaitTurn(t *testing.T, sessionID string) agent.TurnE
 			require.True(t, typed)
 			if end.SessionID == sessionID {
 				require.Equal(t, agent.TurnEndStatusCompleted, end.Status, "real policy-probe turn must complete")
-				return end
+				// TurnEnd precedes runTurn's final cleanup. The worker publishes
+				// its reply only after processMessage and its transcript writes return.
+				h.awaitPublishedReply(t, sessionID, end.ChatID, deadline.C)
+				return
 			}
 		case runErr := <-h.runDone:
 			t.Fatalf("issue1296 fixture: loop exited before the next decision: %v", runErr)
 		case <-deadline.C:
 			t.Fatal("issue1296 fixture: no completed real turn; not RED evidence about permissions")
 		}
+	}
+}
+
+func (h *issue1296Harness) awaitPublishedReply(t *testing.T, sessionID, chatID string, deadline <-chan time.Time) {
+	t.Helper()
+	select {
+	case reply, ok := <-h.bus.OutboundChan():
+		require.True(t, ok, "policy-probe reply stream must stay connected")
+		require.Equal(t, "webchat", reply.Channel)
+		require.Equal(t, sessionID, reply.SessionID, "published reply must belong to the completed turn")
+		require.Equal(t, chatID, reply.ChatID, "published reply must belong to the completed turn")
+		require.Equal(t, "policy-probe acknowledgement", reply.Content)
+	case runErr := <-h.runDone:
+		t.Fatalf("issue1296 fixture: loop exited before publishing the completed turn: %v", runErr)
+	case <-deadline:
+		t.Fatal("issue1296 fixture: completed turn did not publish its reply")
 	}
 }
 
@@ -197,13 +216,12 @@ func (h *issue1296Harness) peerSend(t *testing.T, content string) *tools.ToolRes
 		// on a settled receiver. Awaiting only the reply let the trailing
 		// reminder turn land between those snapshots (Cross-Platform arm64,
 		// PR #1365 run 39135504176: an extra policy-receiver-turn-3 entry).
+		// awaitTurn also drains each turn's published reply. Exactly two awaits:
+		// merge 35859e0ed combined this branch's 3c0b72ff3 and release's
+		// 01246adac — both of which already added the reminder await — into
+		// three, and the third waited for a turn that never comes.
 		h.awaitTurn(t, h.recvID)
-		reminder := h.awaitTurn(t, h.recvID)
-		// Assertion only, no extra wait: the second receiver turn must be the
-		// request-reminder owner wake (request_reminder.go); any other chat
-		// means an unauthorized receiver turn.
-		require.Equal(t, "request-reminder:"+h.recvID, reminder.ChatID,
-			"second receiver turn ran on an unexpected chat; expected the request-reminder owner wake")
+		h.awaitTurn(t, h.recvID)
 	}
 	return result
 }

@@ -99,13 +99,16 @@ func TestSingleSystemMessage(t *testing.T) {
 				t.Errorf("last message should be user, got %s", msgs[len(msgs)-1].Role)
 			}
 
-			// System message must contain identity (static) and time (dynamic)
+			// FR-007: identity stays in front; clock/reminder follow history
+			// and the current user message in one trailing user text block.
 			sys := msgs[0].Content
 			if !strings.Contains(sys, "omnipus") {
 				t.Error("system message missing identity")
 			}
-			if !strings.Contains(sys, "Current Time") {
-				t.Error("system message missing dynamic time context")
+			conversation := requireConversationBeforeVolatileTail(t, msgs)
+			current := conversation[len(conversation)-1]
+			if current.Role != "user" || current.Content != tt.message {
+				t.Errorf("current user before volatile tail = %+v, want unchanged %q", current, tt.message)
 			}
 
 			// The legacy summariser is decommissioned: BuildMessages must

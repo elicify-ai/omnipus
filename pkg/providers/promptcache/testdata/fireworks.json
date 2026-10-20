@@ -1,0 +1,10 @@
+{
+  "prompt_tokens": 1000,
+  "completion_tokens": 10,
+  "prompt_tokens_details": {
+    "cached_tokens": 900
+  },
+  "perf_metrics": {
+    "cached_tokens": 7
+  }
+}
