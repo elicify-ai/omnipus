@@ -4057,7 +4057,7 @@ export const AgentCreateRequest =
     AgentCreateRequestSubagent3p,
   ]) satisfies z.ZodType<AgentCreateRequest>;
 export const FallbackModelPair: z.ZodType<FallbackModelPair> = z.object({
-  model: z.string().max(256),
+  model: z.string().min(1).max(256),
   provider: z.string().min(1).max(64),
 });
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({

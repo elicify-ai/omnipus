@@ -9128,7 +9128,7 @@ export interface components {
             color?: components["schemas"]["AgentColor"];
             /**
              * @description Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
-             *     Wire format is always the object form `[{model, provider}]`, and every entry must name both: an entry without a provider is refused 400, naming the entry (issue #1340).
+             *     Wire format is always the object form `[{model, provider}]`, and every entry must name both: an entry missing its provider or its model is refused 400, naming the entry (issue #1340).
              * @example [
              *       {
              *         "model": "claude-sonnet-4.6",
@@ -9189,7 +9189,7 @@ export interface components {
              */
             provider?: string;
         };
-        /** @description One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry without a provider, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected. */
+        /** @description One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry missing its provider or its model, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected. */
         FallbackModelPair: {
             /**
              * @description Model id exactly as the provider names it (a `/` inside it is data).
