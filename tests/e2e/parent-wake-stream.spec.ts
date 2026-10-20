@@ -92,9 +92,10 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
     await expect(pageB.getByText(PARENT_WAKE_PARTIAL, { exact: false })).toBeVisible({ timeout: 30_000 });
     expect(provider.failures(), 'scripted provider stayed on the delegate / helper / wake sequence').toEqual([]);
 
-    const otherMessages = await gw.apiFetch('GET', `/api/v1/sessions/${other.id}/messages`);
-    expect(otherMessages.ok, otherMessages.raw).toBe(true);
-    expect(JSON.stringify(otherMessages.body)).not.toContain(PARENT_WAKE_PARTIAL);
+    // Browser login replaced gw's cookie session; use the browser's current cookies.
+    const otherMessages = await page.request.get(`${gw.baseURL}/api/v1/sessions/${other.id}/messages`);
+    expect(otherMessages.ok(), await otherMessages.text()).toBe(true);
+    expect(JSON.stringify(await otherMessages.json())).not.toContain(PARENT_WAKE_PARTIAL);
 
     provider.releaseWake();
     await page.reload();
