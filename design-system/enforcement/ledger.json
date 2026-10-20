@@ -5205,6 +5205,11 @@
   ],
   "reviewedBoundaries": [
     {
+      "path": "tests/e2e/sidebar-selection-helper.spec.ts",
+      "kind": "test",
+      "reason": "Exact browser-test fixture boundary: raw HTML implements only the external sidebar accessibility and immediate-unmount contract so the real Playwright selection helper can be tested without mocking Locator or expect. It is never loaded by the application and does not introduce a product control or style. Both selection assertions and the wrong-agent rejection remain active."
+    },
+    {
       "path": "src/components/chat/AgentStatusIndicator.monogram.wave1.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."

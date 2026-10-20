@@ -92,6 +92,7 @@
       "specs": [
         "tests/e2e/security-tools.spec.ts",
         "tests/e2e/sidebar.spec.ts",
+        "tests/e2e/sidebar-selection-helper.spec.ts",
         "tests/e2e/skills.spec.ts",
         "tests/e2e/uat-audit-and-settings.spec.ts",
         "tests/e2e/side-panel-expand-multitab.spec.ts",

@@ -241,34 +241,19 @@ export const selectAgent = async (
   // fails here, named, in seconds — the unbounded default burned whole test
   // timeouts on CI (llm-agents, run 38112714098).
   await mainButton.click({ timeout: 15_000 });
-  // Assert the switch took effect: the row's main button carries aria-current
-  // exactly while this agent owns the selected chat (WorkspaceAgentList
-  // .tsx:355). RACE: clicking the row also CLOSES an unpinned sidebar
-  // (useSelectSession calls onClose before navigate — Sidebar.tsx wires
-  // onOverlayClose to close()), so the row unmounts after its exit animation
-  // and the aria-current poll can legitimately lose to the unmount ("element(s)
-  // not found" — reproduced locally and in CI llm-chat run 38115921651, and
-  // passing on retry). The check is therefore TWO-SURFACED, same oracle, same
-  // strength: (1) the row's aria-current before any unmount, then (2) if the
-  // sidebar closed, REOPEN it the way a user does and read the row's
-  // data-selected instead — the same store-driven "this agent owns the
-  // selected chat" truth, independent of the close timing.
-  try {
-    await expect(mainButton).toHaveAttribute('aria-current', 'true', { timeout: 5_000 });
-  } catch (err) {
-    if (!(err instanceof errors.TimeoutError)) throw err;
-    // Fall through to the second surface whether the sidebar closed OR the
-    // row was transiently replaced while it stayed open — both lose the
-    // aria-current poll without the switch having failed.
-    const nav = page.locator('nav[aria-label="Main navigation"]');
-    if (!(await nav.isVisible())) await openSidebar(page);
-    const stillSelected = selectedAgentRow(page);
-    await expect(
-      stillSelected,
-      `selectAgent: clicked ${String(name)}'s row but neither its aria-current nor the ` +
-        'selected row confirmed the switch — the active chat did not move',
-    ).toHaveAttribute('aria-label', name, { timeout: 10_000 });
-  }
+  // Row selection closes an unpinned sidebar and unmounts the very button we
+  // need to verify. Settle that close, then reopen through the real UI before
+  // checking BOTH selection surfaces. Playwright assertion errors are not
+  // errors.TimeoutError, so catching that class never recovered the lost row.
+  await closeSidebar(page);
+  await agentRowGroup(page, name, workspace);
+  const stillSelected = selectedAgentRow(page);
+  await expect(
+    stillSelected,
+    `selectAgent: clicked ${String(name)}'s row but neither its aria-current nor the ` +
+      'selected row confirmed the switch — the active chat did not move',
+  ).toHaveAttribute('aria-label', name, { timeout: 10_000 });
+  await expect(mainButton).toHaveAttribute('aria-current', 'true', { timeout: 5_000 });
   // Leave the sidebar the way a row click normally does: closed (see closeSidebar).
   await closeSidebar(page);
 };
