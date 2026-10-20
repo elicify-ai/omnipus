@@ -430,7 +430,22 @@ jobs:
     # missing-browser false-RED trap documented in deploy/ci-worker/CLAUDE.md.
     runs-on: ubuntu-latest
     needs: [changes, fast-tier, setup]
-    if: success() && needs.changes.outputs.code == 'true'
+    # NOT a bare `success()`: fast-tier deliberately tolerates its path-skipped
+    # needs (typecheck, lint-spa, design-system-locks when spa==false; lint
+    # when go==false — see the fast-tier job's comment), but a bare success()
+    # here also sees those skipped jobs upstream of fast-tier and skips THIS
+    # job. That silently dropped the real-Chrome tests from every PR touching
+    # only Go or only SPA/tests (PR #1365 runs 39135504058 and 39139789198:
+    # Detect, Install and Fast tier all green, this job skipped). Same shape
+    # as fast-tier: `!cancelled()` drops the implicit success() gate and the
+    # explicit per-need checks below are the only gate, so a real failure or
+    # cancellation of any need still blocks this job.
+    if: >-
+      !cancelled() &&
+      needs.changes.outputs.code == 'true' &&
+      needs.changes.result == 'success' &&
+      needs.fast-tier.result == 'success' &&
+      needs.setup.result == 'success'
     env:
       CGO_ENABLED: "0"
       # Opts past skipIfNoBrowser's CI branch. Set ONLY here.

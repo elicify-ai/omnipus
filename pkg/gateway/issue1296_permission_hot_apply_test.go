@@ -208,6 +208,15 @@ func (h *issue1296Harness) peerSend(t *testing.T, content string) *tools.ToolRes
 	result := tool.Execute(ctx, map[string]any{"workspace_id": issue1296Workspace, "agent_id": "policy-receiver", "content": content})
 	require.NotNil(t, result)
 	if !result.IsError {
+		// An admitted request runs TWO receiver turns: the reply, then — because
+		// the scripted model answers in plain text, never via answer_request —
+		// exactly one request reminder (pkg/agent/request_reminder.go::
+		// remindUnansweredRequests, once per request, published at turn end).
+		// Await both, so the next decision's before/after snapshots are taken
+		// on a settled receiver. Awaiting only the reply let the trailing
+		// reminder turn land between those snapshots (Cross-Platform arm64,
+		// PR #1365 run 39135504176: an extra policy-receiver-turn-3 entry).
+		h.awaitTurn(t, h.recvID)
 		h.awaitTurn(t, h.recvID)
 		// This plain-text fixture never calls answer_request, so an admitted
 		// request owes exactly one reminder turn. Drain its published reply
