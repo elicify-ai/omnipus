@@ -32,7 +32,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"time"
-	"unicode/utf8"
+	"unicode/utf16"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
@@ -117,12 +117,26 @@ func (h *WSHandler) approvalSessionContext(sessionID string) approvalContext {
 	return fallback(sid, "parent chain longer than the hop bound", nil)
 }
 
-// withinChars reports whether s fits a contract maxLength. JSON Schema and
-// the generated validators count characters, not UTF-8 bytes: a valid
-// 80-character non-ASCII room name makes a "for group" label of well over 200
-// bytes that the contract still accepts (gate round 1, architect F3 / SF-06).
-func withinChars(s string, limit int) bool {
-	return utf8.RuneCountInString(s) <= limit
+// fitsWireLength reports whether s fits a contract maxLength as BOTH ends of
+// the wire count it. Never UTF-8 bytes: a valid 80-character non-ASCII room
+// name makes a "for group" label of well over 200 bytes that the contract
+// accepts (gate round 1, architect F3 / SF-06). And not code points either:
+// the browser's generated validator (zod z.string().max) counts JavaScript
+// String.length, UTF-16 code units, so a character outside the Basic
+// Multilingual Plane counts twice there. A value that fits in code points but
+// not in UTF-16 units made the browser reject the whole approval frame and the
+// whole reload snapshot (gate round 2, security S4 / SF-07 / architect N1;
+// founder decision 2026-10-20). UTF-16 units are never fewer than code points,
+// so this one count satisfies both the contract and the browser.
+func fitsWireLength(s string, limit int) bool {
+	units := 0
+	for _, r := range s {
+		units += utf16.RuneLen(r)
+		if units > limit {
+			return false
+		}
+	}
+	return true
 }
 
 // rootSessionField returns the wire root_session_id: omitted (nil) when the
@@ -155,7 +169,7 @@ func (h *WSHandler) approvalActingAgentName(agentID string) *string {
 		return nil
 	}
 	name, ok := reg.GetAgentName(agentID)
-	if !ok || name == "" || !withinChars(name, approvalActingNameMaxLen) {
+	if !ok || name == "" || !fitsWireLength(name, approvalActingNameMaxLen) {
 		return nil
 	}
 	return &name
@@ -454,7 +468,7 @@ func approvalRoomRef(e *approvalEntry) *generated.RoomRef {
 // <Agent>" for a turn that consumed a peer request. Absent for a plain web
 // turn, or when longer than the schema allows.
 func approvalOriginLabel(e *approvalEntry) *string {
-	if e == nil || e.OriginLabel == "" || !withinChars(e.OriginLabel, approvalOriginLabelMaxLen) {
+	if e == nil || e.OriginLabel == "" || !fitsWireLength(e.OriginLabel, approvalOriginLabelMaxLen) {
 		return nil
 	}
 	l := e.OriginLabel
