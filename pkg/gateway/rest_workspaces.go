@@ -1032,7 +1032,15 @@ func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id 
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
-	state, err := workspace.ReadState(a.homePath, id)
+	if a.beforeWorkspaceDetailPreparation != nil {
+		a.beforeWorkspaceDetailPreparation()
+	}
+	// Preparation writes sessions, so its eligibility read and writes must be
+	// ordered with workspace deletion. Keep the existing workspace -> session
+	// lock order, and never prepare from a snapshot read before this lock.
+	unlock := sync.OnceFunc(workspace.LockID(id))
+	defer unlock()
+	state, err := workspace.ReadStateLocked(a.homePath, id)
 	if err != nil {
 		writeWorkspaceReadError(w, err)
 		return
@@ -1045,6 +1053,9 @@ func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id 
 			logsafeError("rest: workspace detail: some team mains could not be prepared", "workspace_id", id, "error", mainsErr)
 		}
 	}
+	// The shared serializer reads workspace-owned stores itself. Release the
+	// non-reentrant lifecycle lock before response work can acquire it again.
+	unlock()
 	// FR-1.9: owner is attribution only — no access gate.
 	jsonOK(w, workspaceToWireFrom(a.homePath, state.Workspace, countTasksForWorkspace(a.homePath, id), &state, a.mainSessionAddress))
 }
