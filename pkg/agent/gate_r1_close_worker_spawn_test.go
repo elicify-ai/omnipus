@@ -16,7 +16,7 @@ import (
 // Close returned. Close's contract is that nothing writes after it returns,
 // so a dispatch that arrives once Close has begun must not spawn a worker.
 func TestAgentLoopClose_RefusesNewSessionWorkers(t *testing.T) {
-	al, _, _, _, closeLoop := newTestAgentLoop(t)
+	al, _, _, _, closeLoop := newTestAgentLoop(t) //nolint:dogsled // only al and its Close are used
 	closeLoop()
 
 	const scope = "gate-r1-scope-after-close"

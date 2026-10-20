@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	ta "github.com/mymmrac/telego/telegoapi"
 	"io"
 	"net/http"
 	"net/url"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	ta "github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
 

@@ -122,13 +122,13 @@ func TestGoogleChatTokenExchange_SendsRawSignedJWT(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var assertion string
+	assertions := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if parseErr := r.ParseForm(); parseErr != nil {
+			http.Error(w, parseErr.Error(), http.StatusBadRequest)
 			return
 		}
-		assertion = r.PostForm.Get("assertion")
+		assertions <- r.PostForm.Get("assertion")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"access_token":"ya29.gate","expires_in":3600,"token_type":"Bearer"}`))
 	}))
@@ -142,9 +142,10 @@ func TestGoogleChatTokenExchange_SendsRawSignedJWT(t *testing.T) {
 		saKey:   key,
 		saEmail: "bot@gate.iam.gserviceaccount.com",
 	}
-	if _, err := ch.getAccessToken(context.Background()); err != nil {
-		t.Fatalf("getAccessToken: %v", err)
+	if _, tokenErr := ch.getAccessToken(context.Background()); tokenErr != nil {
+		t.Fatalf("getAccessToken: %v", tokenErr)
 	}
+	assertion := <-assertions
 	if parts := strings.Split(assertion, "."); len(parts) != 3 {
 		t.Fatalf("assertion must be a 3-part signed JWT, got %d part(s)", len(parts))
 	}
