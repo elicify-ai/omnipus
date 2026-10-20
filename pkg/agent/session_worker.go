@@ -980,6 +980,13 @@ func (w *sessionWorker) abandonQueuedSteering(ctx context.Context, target *conti
 	// window would restore it minus the pointer writeSteeringConsumedMarker's
 	// consume-ack bookkeeping depends on.
 	abandonedScope, abandonedItems, _, _ = al.dequeueSteeringItemsForScopeWithFallback(target.SessionKey)
+	// SFH-02: an abandoned saved helper input gives back its in-process claim;
+	// its saved record stays pending for the next legitimate fence.
+	for _, item := range abandonedItems {
+		if item.wake != nil {
+			al.releaseWakePublication(item.wake.transcriptSessionID, item.wake.messageID)
+		}
+	}
 
 	// Load-bearing (see doc comment above): the next message for this
 	// session must go to the inbox as a fresh turn, not be steered into a

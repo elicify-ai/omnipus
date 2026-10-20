@@ -387,6 +387,15 @@ func (b *archiveBackend) AppendModelMessage(ctx context.Context, key string, in 
 // placement takes its own ordinal. A second placement of the same source returns
 // ErrAlreadyConsumed. The caller applies the existing consumption/Stop fence.
 func (b *archiveBackend) PlaceSavedInput(ctx context.Context, key string, source ArchiveAddress) (ModelSlot, WindowView, error) {
+	return b.placeSavedInput(ctx, key, source, -1)
+}
+
+// placeSavedInput is PlaceSavedInput with an optional bounded once-only check:
+// fromOrdinal >= 0 is the model-slot count when the source was saved, so an
+// earlier placement can only sit in rows [fromOrdinal, count). A negative
+// value keeps the lifetime scan for a source the saved-input directory does
+// not track.
+func (b *archiveBackend) placeSavedInput(ctx context.Context, key string, source ArchiveAddress, fromOrdinal int) (ModelSlot, WindowView, error) {
 	if err := ctx.Err(); err != nil {
 		return ModelSlot{}, WindowView{}, err
 	}
@@ -400,21 +409,15 @@ func (b *archiveBackend) PlaceSavedInput(ctx context.Context, key string, source
 	if err != nil {
 		return ModelSlot{}, WindowView{}, err
 	}
-	n, err := store.OrdinalCount()
+	// Consumption survives window eviction and process restart. Read the
+	// archive's body-free references rather than treating the active window
+	// as the lifetime consumed set (PW-D16). No second index/store is needed.
+	alreadyPlaced, err := savedSourceAlreadyPlaced(store, source, fromOrdinal)
 	if err != nil {
 		return ModelSlot{}, WindowView{}, err
 	}
-	// The already-placed set is derived from the published window rows — no
-	// separate counter or queue. A placement is always inside the window that
-	// consumed it; an evicted source was consumed long before.
-	rows, err := store.readOrdinalRows(clampSkip(meta.Skip, n), n)
-	if err != nil {
-		return ModelSlot{}, WindowView{}, err
-	}
-	for _, row := range rows {
-		if row.Source != nil && *row.Source == source {
-			return ModelSlot{}, WindowView{}, ErrAlreadyConsumed
-		}
+	if alreadyPlaced {
+		return ModelSlot{}, WindowView{}, ErrAlreadyConsumed
 	}
 	src, err := store.ReadAt(source)
 	if err != nil {
@@ -1177,4 +1180,38 @@ func sortRows(rows []archiveProjectionRow) {
 		}
 		return rows[i].ToolCallID < rows[j].ToolCallID
 	})
+}
+
+// savedSourceAlreadyPlaced reports whether a model_ref for source exists. With
+// fromOrdinal >= 0 only the ordinal rows written since the save are read.
+func savedSourceAlreadyPlaced(store *ArchiveDayStore, source ArchiveAddress, fromOrdinal int) (bool, error) {
+	if fromOrdinal >= 0 {
+		count, err := store.OrdinalCount()
+		if err != nil {
+			return false, err
+		}
+		if fromOrdinal > count {
+			fromOrdinal = count
+		}
+		rows, err := store.readOrdinalRows(fromOrdinal, count)
+		if err != nil {
+			return false, err
+		}
+		for _, row := range rows {
+			if row.Source != nil && *row.Source == source {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	alreadyPlaced := false
+	err := store.ScanAll(func(_ ArchiveAddress, rec ArchiveRecord) bool {
+		if rec.ModelRef != nil && rec.ModelRef.EntryID == source.EntryID &&
+			rec.ModelRef.PartitionKey == source.PartitionKey && rec.ModelRef.ByteOffset == source.ByteOffset {
+			alreadyPlaced = true
+			return false
+		}
+		return true
+	})
+	return alreadyPlaced, err
 }

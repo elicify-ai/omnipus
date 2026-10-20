@@ -390,6 +390,14 @@ type LifecycleRecord struct {
 	// wire SessionLifecycleRecord (this is not session status).
 	PendingUserMessages []string `json:"pending_user_messages,omitempty"`
 
+	// PendingSavedInputs lists queued wakes whose input is already a saved
+	// chat record (PW-D16). Their body is NOT copied into PendingUserMessages:
+	// the promoted turn places each saved record once at its consumption
+	// fence, so it never also arrives as a fresh user message.
+	//
+	// not-wire-format: internal steered-session bookkeeping.
+	PendingSavedInputs []string `json:"pending_saved_inputs,omitempty"`
+
 	NeedsInput *NeedsInput `json:"needs_input,omitempty"`
 
 	// FailedReason is set only when State==LifecycleFailed. Left open
@@ -533,7 +541,7 @@ func (s *LifecycleStore) tail(sessionID string) (rec *LifecycleRecord, found boo
 			// deliberately non-fatal — see the doc comment above.
 			continue
 		}
-		if probe.Kind == JournalKindFinalDeliveryUpdate {
+		if probe.Kind == JournalKindFinalDeliveryUpdate || probe.Kind == JournalKindHelperEventRepair {
 			continue
 		}
 		var r LifecycleRecord
@@ -1340,6 +1348,14 @@ func (s *LifecycleStore) pruneTerminalOne(id string, cutoff time.Time) bool {
 	}
 	if !rec.Terminal() || rec.UpdatedAt.After(cutoff) {
 		return false
+	}
+	pendingRepairs, repairErr := s.helperEventRepairsLocked(id)
+	if repairErr != nil {
+		slog.Warn("session: lifecycle: prune_terminal: repair source unreadable, preserving journal", "session_id", id, "error", repairErr)
+		return false
+	}
+	if len(pendingRepairs) != 0 {
+		return false // PW-D18: retain payloads until every destination has its row.
 	}
 
 	if pruneTerminalRaceHook != nil {

@@ -151,9 +151,11 @@ func verifyRecordedRuntimeClassification(rec *session.LifecycleRecord, agentID s
 // worker, both runtimes, and the caller-appropriate recovery — never a bare
 // mismatch report.
 func steeredWorkerRuntimeRefusal(agentID string, recordIs3P, liveIs3P bool, recovery string) error {
-	return fmt.Errorf(
-		"%w: worker %q was launched as a %s worker, but its agent now resolves to a %s worker; %s",
-		errSteeredWorkerRuntimeChanged, agentID, runtimeLabel(recordIs3P), runtimeLabel(liveIs3P), recovery)
+	// This refusal is authored from runtime identity facts, not a provider
+	// response. Preserve its safe action while retaining the errors.Is marker.
+	text := fmt.Sprintf("worker %q was launched as a %s worker, but its agent now resolves to a %s worker; %s",
+		agentID, runtimeLabel(recordIs3P), runtimeLabel(liveIs3P), recovery)
+	return fmt.Errorf("%w: %w", errSteeredWorkerRuntimeChanged, &curatedTurnError{text: text})
 }
 
 // runtimeLabel is the plain-language name of a worker runtime for F4's refusal.

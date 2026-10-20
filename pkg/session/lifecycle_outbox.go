@@ -200,6 +200,7 @@ type finalDeliveryState struct {
 type lifecycleJournalLine struct {
 	record   *LifecycleRecord
 	envelope *finalDeliveryUpdateEnvelope
+	repair   *helperEventRepairEnvelope
 }
 
 // decodeJournalLine decodes one JSONL line, discriminating record lines
@@ -216,6 +217,13 @@ func decodeJournalLine(line []byte) *lifecycleJournalLine {
 	}
 	if err := json.Unmarshal(line, &probe); err != nil {
 		return nil
+	}
+	if probe.Kind == JournalKindHelperEventRepair {
+		var env helperEventRepairEnvelope
+		if err := json.Unmarshal(line, &env); err != nil {
+			return nil
+		}
+		return &lifecycleJournalLine{repair: &env}
 	}
 	if probe.Kind == JournalKindFinalDeliveryUpdate {
 		var env finalDeliveryUpdateEnvelope

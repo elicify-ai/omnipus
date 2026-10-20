@@ -60,6 +60,8 @@ func (h *WSHandler) hubSyncTap(evt agent.Event) {
 		h.hubGoalStatusChanged(evt)
 	case agent.EventKindGoalOutcome:
 		h.hubGoalOutcome(evt)
+	case agent.EventKindHelperEvent:
+		h.hubHelperEvent(evt)
 	case agent.EventKindJudgeVerdict:
 		h.hubJudgeVerdict(evt)
 	case agent.EventKindLoopStatusChanged:

@@ -125,8 +125,10 @@ func TestDeadlineErrorWithoutHandback_FailsWithRealCauseNotTimeoutStop(t *testin
 	if got.StopNote != nil {
 		t.Fatalf("child after a provider deadline error carries stop note %+v, want none (no lifetime-limit stop, #1306)", got.StopNote)
 	}
-	if !strings.Contains(got.FailedReason, context.DeadlineExceeded.Error()) || strings.Contains(got.FailedReason, "lifetime") {
-		t.Fatalf("failed reason = %q, want the real deadline cause and no lifetime-limit wording", got.FailedReason)
+	// SFH F2: preserve the real timeout classification, never raw wrapped
+	// provider text in durable handbacks. This is not a lifetime-limit Stop.
+	if want := "failed: " + UserMessageForCode(CodeTurnTimedOut); got.FailedReason != want || strings.Contains(got.FailedReason, "lifetime") {
+		t.Fatalf("failed reason = %q, want exact translated timeout %q and no lifetime-limit wording", got.FailedReason, want)
 	}
 }
 

@@ -279,10 +279,9 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
 
   function addFallback() {
     if (fallbacks.length >= MAX_FALLBACKS) return
-    setFallbacks([
-      ...fallbacks,
-      { model: '', provider: modelToProvider('') },
-    ])
+    // A new row starts empty: both halves are chosen by the person (#1341
+    // CR9-1 — a fallback is a provider+model pair, never one alone).
+    setFallbacks([...fallbacks, { model: '', provider: '' }])
   }
 
   function updateFallback(idx: number, patch: Partial<FallbackModel>) {
@@ -317,8 +316,8 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
         </Button>
       </div>
       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-        Each fallback is a {`{model, provider}`} pair. Server rejects more
-        than {MAX_FALLBACKS} with 400.
+        Each fallback needs both a model and a provider. Complete or remove
+        an incomplete fallback before you continue.
       </p>
       {fallbacks.length === 0 && (
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No fallbacks configured.</p>
@@ -346,18 +345,20 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
               className="font-mono text-[length:var(--type-utility-xs-size)] h-7 flex-1"
               data-testid={`wizard-fallback-model-${idx}`}
             />
+            {/* No "auto"/empty choice (#1341 CR9-1): the server refuses a
+                fallback without a provider, so an unpaired row shows a
+                placeholder it can only leave by choosing a provider. */}
             <Select
-              value={entry.provider || '__auto__'}
-              onValueChange={(v) => updateFallback(idx, { provider: v === '__auto__' ? '' : v })}
+              value={entry.provider ?? ''}
+              onValueChange={(v) => { if (v) updateFallback(idx, { provider: v }) }}
             >
               <SelectTrigger
                 className="h-7 px-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
                 data-testid={`wizard-fallback-provider-${idx}`}
               >
-                <SelectValue />
+                <SelectValue placeholder="Choose provider" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__auto__">auto</SelectItem>
                 {providers.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {providerNameById.get(p.id) ?? p.id}

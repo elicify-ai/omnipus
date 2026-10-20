@@ -4987,8 +4987,9 @@ export interface components {
              * @example browser_handover_notice
              * @enum {string}
              */
-            system_subtype?: "browser_handover_notice" | "expiry_notice" | "goal_outcome" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
+            system_subtype?: "browser_handover_notice" | "expiry_notice" | "goal_outcome" | "helper_event" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
             goal_outcome?: components["schemas"]["GoalOutcome"];
+            helper_event?: components["schemas"]["HelperEvent"];
             subagent_start?: components["schemas"]["SubagentStartFrame"];
             subagent_state?: components["schemas"]["SubagentStateFrame"];
             subagent_message?: components["schemas"]["SubagentMessageFrame"];
@@ -9142,7 +9143,7 @@ export interface components {
             color?: components["schemas"]["AgentColor"];
             /**
              * @description Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
-             *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
+             *     Wire format is always the object form `[{model, provider}]`, and every entry must name both: an entry missing its provider or its model is refused 400, naming the entry (issue #1340).
              * @example [
              *       {
              *         "model": "claude-sonnet-4.6",
@@ -9150,7 +9151,7 @@ export interface components {
              *       }
              *     ]
              */
-            fallback_models?: components["schemas"]["FallbackModel"][];
+            fallback_models?: components["schemas"]["FallbackModelPair"][];
             /** @description LLM sampling parameters applied to this agent's requests. Rejected 400 on subagent_3p agents (CLI may not support these flags). */
             model_params?: {
                 /**
@@ -9202,6 +9203,19 @@ export interface components {
              * @example anthropic
              */
             provider?: string;
+        };
+        /** @description One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry missing its provider or its model, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected. */
+        FallbackModelPair: {
+            /**
+             * @description Model id exactly as the provider names it (a `/` inside it is data).
+             * @example claude-sonnet-4.6
+             */
+            model: string;
+            /**
+             * @description Routing key (e.g. "openrouter", "anthropic", "openai"). The fallback uses this provider's connection — independent of the primary's provider.
+             * @example anthropic
+             */
+            provider: string;
         };
         ExternalCliTool: components["schemas"]["ExternalCli"];
         /**
@@ -15992,7 +16006,7 @@ export interface components {
         };
         /**
          * GoalOutcome
-         * @description How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+         * @description How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written once per goal ending on the helper transcript and, when a parent exists, once on the parent transcript, with different message ids but the same goal id, ending, rounds and Judge reason. Written by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
          */
         GoalOutcome: {
             /**
@@ -17212,6 +17226,21 @@ export interface components {
              * @example 123456789
              */
             route_chat_id?: string;
+        };
+        /**
+         * HelperEvent
+         * @description An immutable helper event shown in the addressed chat independently of the model's reply. Source-event identity plus destination transcript determines the message id. Live, replay and cold load carry the same filtered payload.
+         */
+        HelperEvent: {
+            helper_session_id: string;
+            helper_title?: string;
+            /** @enum {string} */
+            kind: "verdict_unmet" | "not_verified" | "stopped" | "restarted" | "resume_refused" | "timed_out" | "finished" | "question" | "blocker" | "failed";
+            /** @description Sensitive-data-filtered sentence saved before live publication. */
+            text: string;
+            goal_id?: string;
+            /** Format: date-time */
+            created_at: string;
         };
         /**
          * PlanRestartResponse
@@ -27465,6 +27494,7 @@ export type AgentCreateRequestSubagent = components["schemas"]["AgentCreateReque
 export type AgentCreateRequestSubagent3p = components["schemas"]["AgentCreateRequestSubagent3p"];
 export type AgentUpdateRequest = components["schemas"]["AgentUpdateRequest"];
 export type FallbackModel = components["schemas"]["FallbackModel"];
+export type FallbackModelPair = components["schemas"]["FallbackModelPair"];
 export type ExternalCliTool = components["schemas"]["ExternalCliTool"];
 export type ExecutorConfig = components["schemas"]["ExecutorConfig"];
 export type ExecutorDefaults = components["schemas"]["ExecutorDefaults"];
@@ -27705,6 +27735,7 @@ export type SessionMessageRespond = components["schemas"]["SessionMessageRespond
 export type RevisionEntry = components["schemas"]["RevisionEntry"];
 export type SessionLifecycleRecord = components["schemas"]["SessionLifecycleRecord"];
 export type Goal = components["schemas"]["Goal"];
+export type HelperEvent = components["schemas"]["HelperEvent"];
 export type PlanRestartResponse = components["schemas"]["PlanRestartResponse"];
 export type DelegateActionRequest = components["schemas"]["DelegateActionRequest"];
 export type DelegateRunAction = components["schemas"]["DelegateRunAction"];
