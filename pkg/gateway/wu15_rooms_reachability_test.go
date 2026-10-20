@@ -36,7 +36,7 @@ func TestWU15Rooms_RealHTTPAndWSMemberTurnAnswersAndMirrorsOnce(t *testing.T) {
 	wu15AssertProviderSaw(t, p, "draft the exact launch plan")
 	snap := h.waitState(room.Id, request.RequestId, "answered")
 	require.Empty(t, other.inputs(), "FR-215: a room has no owner to wake")
-	wu15RequireMirrors(t, h.messages("mia"), room, request.RequestId, p.answer)
+	wu15AwaitAnswerMirror(t, h, room, request.RequestId, p.answer)
 	done := wu15ReadTurnDone(t, mainConn)
 	require.Equal(t, h.main("mia"), done.SessionId, "R2: receiver's main is the real actor")
 	require.NotNil(t, done.TurnId, "real turn, not handcrafted transcript insertion")
@@ -45,7 +45,7 @@ func TestWU15Rooms_RealHTTPAndWSMemberTurnAnswersAndMirrorsOnce(t *testing.T) {
 	retried := h.snapshot(room.Id)
 	require.Equal(t, snap.Entries, retried.Entries, "FR-216: completed Retry is idempotent")
 	require.Equal(t, calls, len(p.inputs()), "FR-216: Retry never starts a second model turn")
-	wu15RequireMirrors(t, h.messages("mia"), room, request.RequestId, p.answer)
+	wu15AwaitAnswerMirror(t, h, room, request.RequestId, p.answer)
 	// Every actor session is an ordinary main. The room itself is not a session.
 	for _, id := range []string{"mia", "jim"} {
 		meta, err := h.al.GetSessionStore().GetMeta(h.main(id))
@@ -108,7 +108,7 @@ func TestWU15Rooms_MainLiveHistoryAndReplayShareRoomReferences(t *testing.T) {
 	h.provider("mia", p)
 	h.startLoop()
 	h.waitState(room.Id, request.RequestId, "answered")
-	wu15RequireMirrors(t, h.messages("mia"), room, request.RequestId, p.answer)
+	wu15AwaitAnswerMirror(t, h, room, request.RequestId, p.answer)
 	wu15ReadFrame(t, mainConn, "done")
 	replayConn := h.connect()
 	require.NoError(t, replayConn.WriteJSON(gen.AttachSessionFrame{Type: "attach_session", SessionId: h.main("mia")}))

@@ -25,16 +25,15 @@ import (
 // transcript row, and the tool.policy.ask.denied audit row naming the ACTING
 // session — never the cron-flavoured headless/scheduled text.
 //
-// "touch notes/x" is the deliberate stimulus for both: a RELATIVE-path write
-// is not on the no-sandbox read-only allowlist, carries no absolute path for
-// the D7 filesystem pre-flight (its classifier is absolute-path-only) and no
-// network need for D8 — the exact gap the no-sandbox gate exists for. Under
-// the operator ask rule the same command matches a genuine {action: ask} rule;
-// needsRuleAsk is Ask-mode-only, so Auto's loop-level rule pin never pre-settles
-// it and the bash tool's own rule branch is what asks (and, in a task, what is
-// denied). The l11263 harness never runs a real sandbox apply, so no kernel
-// turn-policy base is registered on ANY platform and the no-sandbox gate is
-// active in this fixture everywhere — the test is not OS-conditional.
+// The no-sandbox probe uses "touch notes/x": a relative-path write outside
+// the read-only allowlist, with no absolute path for D7 and no network need
+// for D8. The RULE probe instead uses "echo rule-ask-control": read-only and
+// safe to execute without the operator rule, so deleting the rule branch
+// cannot pass by falling through to an indistinguishable no-sandbox refusal
+// (round-3 CHECK F4). Auto's loop-level rule pin never pre-settles the ask;
+// the shell tool's own rule branch must supply the canonical task refusal.
+// The l11263 harness never runs a real sandbox apply, so the no-sandbox gate
+// remains active; the rule probe deliberately clears it.
 
 // requireCanonicalTaskPlanBashRefusal asserts the full canonical task/plan
 // refusal for one refused bash call: the structured model-visible denial, the
@@ -92,11 +91,11 @@ func TestTrain3Fix1_AutoShellNoSandboxEscalationInATaskIsTheTaskPlanRefusal(t *t
 // escalates through requestRuleApproval under Auto, and inside a task that
 // ask is auto-denied with the same canonical task/plan refusal.
 func TestTrain3Fix1_AutoShellRuleAskEscalationInATaskIsTheTaskPlanRefusal(t *testing.T) {
-	call := l11263Call("ruleask-shell", "bash", map[string]any{"command": "touch notes/x"})
+	call := l11263Call("ruleask-shell", "bash", map[string]any{"command": "echo rule-ask-control"})
 	worker := l11263Script(call, l11263Claim())
 	h := newL11263Harness(t, true, config.ToolPolicyAsk, map[string]*l11263Provider{l11263Agent: worker},
 		func(cfg *config.Config) {
-			cfg.Sandbox.CommandRules = []shellrule.Rule{{Binary: "touch", Action: shellrule.ActionAsk}}
+			cfg.Sandbox.CommandRules = []shellrule.Rule{{Binary: "echo", Action: shellrule.ActionAsk}}
 		})
 	created := h.createTask(t, "")
 	h.startBoard(t, created)
