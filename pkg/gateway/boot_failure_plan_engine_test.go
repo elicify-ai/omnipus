@@ -51,7 +51,9 @@ func TestSetupAndStartServices_BootFailureAfterPlanEngineStopsIt(t *testing.T) {
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err, "SETUP: occupy a port")
 	t.Cleanup(func() { _ = occupied.Close() })
-	port := occupied.Addr().(*net.TCPAddr).Port
+	tcpAddr, ok := occupied.Addr().(*net.TCPAddr)
+	require.True(t, ok, "SETUP: listener address %T is not a TCP address", occupied.Addr())
+	port := tcpAddr.Port
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: port},
