@@ -29,12 +29,14 @@
 import { useId } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ListChecks } from '@phosphor-icons/react'
-import { fetchAgents } from '@/lib/api'
+import { fetchAgents, fetchSessions } from '@/lib/api'
+import type { Session } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
-import { feedKindLabel } from '@/lib/nav/chatKindLabel'
+import { feedKindLabel, feedParentLabel } from '@/lib/nav/chatKindLabel'
 import { isMainSession } from '@/lib/nav/sessionCoreSeam'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { ParentCrumbLink } from './ParentCrumbLink'
 
 // A header that cannot be named is left empty on purpose (nothing honest to
 // show); this leaves a trace, once per session, so the empty line is debuggable.
@@ -58,6 +60,17 @@ export function FeedKindLabel() {
   const { data: agents = [], isPending: agentsPending, isError: agentsError } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
   const descriptor = activeWorkspaceId != null ? sessionByWorkspace[activeWorkspaceId] : undefined
+  const activeIsChild = descriptor != null && descriptor.id === activeSessionId
+    && (descriptor.type === 'delegate' || descriptor.type === 'task')
+  // Child chats only (helper / task run): the shared flat session list (same
+  // key and fetch as the search modal) names the direct parent. Nothing is
+  // fetched for any other session kind.
+  const { data: allSessions } = useQuery({
+    queryKey: ['sessions', 'flat'],
+    queryFn: () => fetchSessions(undefined, undefined, { flat: true }),
+    enabled: activeIsChild,
+  })
+
   if (descriptor != null && activeSessionId != null && descriptor.id === activeSessionId) {
     const main = isMainSession(descriptor)
     // A main's title is derived from the LIVE roster — never from the
@@ -91,6 +104,23 @@ export function FeedKindLabel() {
     const rosterNameResolved = descriptor.agentId != null
       && agents.some((agent) => agent.id === descriptor.agentId && agent.name.trim() !== '')
     const namesUnavailable = main && agentsError && !rosterNameResolved
+    // Founder decision 2026-10-20 ("Breadcrumb"): a child chat reads
+    // "<parent title> › Helper" and the parent part opens the parent. The
+    // direct parent only. Any gap — no parent_session_id, a parent that is
+    // gone or not loaded, a main parent whose roster name is still loading —
+    // keeps the plain kind label with no link; a name is never fabricated.
+    let parentCrumb: { parent: Session, label: string } | null = null
+    if (activeIsChild) {
+      const parentId = allSessions?.find((s) => s.id === descriptor.id)?.parent_session_id
+      const parent = parentId ? allSessions?.find((s) => s.id === parentId) : undefined
+      if (parent != null && !(parent.type === 'main' && agentsPending)) {
+        const parentAgentName = parent.agent_id != null
+          ? agents.find((agent) => agent.id === parent.agent_id)?.name
+          : undefined
+        const parentLabel = feedParentLabel(parent, parentAgentName, parent.agent_id)
+        if (parentLabel != null) parentCrumb = { parent, label: parentLabel }
+      }
+    }
     return (
       <div
         role="status"
@@ -100,7 +130,8 @@ export function FeedKindLabel() {
         className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]"
       >
         <span id={labelId} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
-          {namesUnavailable ? `${label} — agent names unavailable` : label}
+          {parentCrumb != null ? <><ParentCrumbLink parent={parentCrumb.parent} label={parentCrumb.label} />{` › ${label}`}</> : null}
+          {parentCrumb == null ? (namesUnavailable ? `${label} — agent names unavailable` : label) : null}
         </span>
       </div>
     )

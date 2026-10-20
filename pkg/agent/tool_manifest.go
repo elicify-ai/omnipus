@@ -191,7 +191,7 @@ func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
 // compressed code-path.
 func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []tools.Tool) ([]providers.ToolDefinition, error) {
 	bucket := ts.manifestBucket()
-	loaded := al.sessionLoadedTools(bucket)
+	loaded := al.pruneLoadedTools(bucket, policyFiltered)
 
 	// Track which infra tools are already present in policyFiltered so we don't
 	// double-add them. Build the sent list in one pass.
@@ -228,7 +228,9 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 	if err != nil {
 		return nil, err
 	}
-	return tools.ToolsToProviderDefs(sent), nil
+	defs := tools.ToolsToProviderDefs(sent)
+	al.retainAdvertisedTools(ts, defs)
+	return defs, nil
 }
 
 // appendGoalDoorsAfterEscape keeps ADR-088 D3's first-move doors callable
@@ -301,18 +303,11 @@ func (al *AgentLoop) buildToolManifestNote(ts *turnState, policyFiltered []tools
 	return tools.BuildCompressedManifest(policyFiltered, loaded)
 }
 
-// injectManifestNote inserts note as a "system" role message at index 1 of
-// msgs (immediately after the system prompt at index 0, before conversation
-// history). Returns msgs unchanged when note == "" or len(msgs) == 0.
-// This is a pure helper extracted from the runTurn injection site to allow
-// unit-testing the position and role invariants without driving a full turn.
+// injectManifestNote appends request-only user text. The send seam combines it
+// with the clock, scratchpad and goal note after all completed history groups.
 func injectManifestNote(msgs []providers.Message, note string) []providers.Message {
 	if note == "" || len(msgs) == 0 {
 		return msgs
 	}
-	out := make([]providers.Message, 0, len(msgs)+1)
-	out = append(out, msgs[0])
-	out = append(out, providers.Message{Role: "system", Content: note})
-	out = append(out, msgs[1:]...)
-	return out
+	return appendVolatileNote(msgs, note)
 }

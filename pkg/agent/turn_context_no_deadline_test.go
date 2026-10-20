@@ -8,6 +8,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // deadlineRecordingProvider records, for every provider call, whether the
@@ -71,7 +72,11 @@ func TestTurnContext_NoDeadlineOnNativeRootTaskOrScheduledTurns(t *testing.T) {
 			}
 		}},
 		{"native task turn", func(t *testing.T, al *AgentLoop) {
-			if _, err := al.processTaskDirect(context.Background(), testDefaultAgentID, "do the task", "no-deadline-task", "task:no-deadline"); err != nil {
+			meta, err := al.GetSessionStore().NewSession(session.SessionTypeTask, "system", testDefaultAgentID)
+			if err != nil {
+				t.Fatalf("NewSession: %v", err)
+			}
+			if _, err := al.processTaskDirect(context.Background(), testDefaultAgentID, "do the task", "no-deadline-task", meta.ID); err != nil {
 				t.Fatalf("processTaskDirect: %v", err)
 			}
 		}},

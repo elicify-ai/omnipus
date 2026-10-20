@@ -197,33 +197,26 @@ type stopNoteEntry = struct { // not-wire-format: alias of the codegen-inlined S
 	Seq     int64                    `json:"seq"`
 }
 
-// modelEntry aliases the oapi-codegen-inlined Session.Stats.by_model element so
-// it can be referenced by name (Go cannot name the anonymous inline struct).
-type modelEntry = struct { // not-wire-format: alias of the codegen-inlined Session.Stats.by_model element; canonical wire schema is contracts/components/schemas/ModelTokens.yaml, not a new type
-	CacheRead  *int `json:"cache_read,omitempty"`
-	CacheWrite *int `json:"cache_write,omitempty"`
-	In         *int `json:"in,omitempty"`
-	Out        *int `json:"out,omitempty"`
-	Total      int  `json:"total"`
-}
-
 // unifiedMetaToGenSession converts a session.UnifiedMeta to the generated gen.Session wire type.
 // The two types have matching JSON field names; this explicit conversion satisfies the Go type checker.
 func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
-	// Build the optional per-model breakdown for the inline Stats struct.
-	var byModel *map[string]modelEntry
+	stats := gen.SessionStats{
+		Cost: m.Stats.Cost, MessageCount: m.Stats.MessageCount,
+		TokensCacheRead: intPtrIfPositive(m.Stats.TokensCacheRead), TokensCacheWrite: intPtrIfPositive(m.Stats.TokensCacheWrite),
+		TokensIn: m.Stats.TokensIn, TokensOut: m.Stats.TokensOut, TokensTotal: m.Stats.TokensTotal, ToolCalls: m.Stats.ToolCalls,
+		UnpricedTokens: intPtrIfPositive(m.Stats.UnpricedTokens), SubscriptionTokens: intPtrIfPositive(m.Stats.SubscriptionTokens),
+	}
 	if len(m.Stats.ByModel) > 0 {
-		mm := make(map[string]modelEntry, len(m.Stats.ByModel))
-		for model, mt := range m.Stats.ByModel {
-			mm[model] = modelEntry{
-				In:         intPtrIfPositive(mt.In),
-				Out:        intPtrIfPositive(mt.Out),
-				CacheRead:  intPtrIfPositive(mt.CacheRead),
-				CacheWrite: intPtrIfPositive(mt.CacheWrite),
-				Total:      mt.Total,
-			}
+		initOptionalMap(&stats.ByModel)
+		for id, cell := range m.Stats.ByModel {
+			(*stats.ByModel)[id] = toByModelCell(cell)
 		}
-		byModel = &mm
+	}
+	if len(m.Stats.ByProvider) > 0 {
+		initOptionalMap(&stats.ByProvider)
+		for id, cell := range m.Stats.ByProvider {
+			(*stats.ByProvider)[id] = toByModelCell(cell)
+		}
 	}
 
 	s := gen.Session{
@@ -244,33 +237,7 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 			}
 			return m.Partitions
 		}(),
-		Stats: struct {
-			ByModel *map[string]struct {
-				CacheRead  *int `json:"cache_read,omitempty"`
-				CacheWrite *int `json:"cache_write,omitempty"`
-				In         *int `json:"in,omitempty"`
-				Out        *int `json:"out,omitempty"`
-				Total      int  `json:"total"`
-			} `json:"by_model,omitempty"`
-			Cost             float64 `json:"cost"`
-			MessageCount     int     `json:"message_count"`
-			TokensCacheRead  *int    `json:"tokens_cache_read,omitempty"`
-			TokensCacheWrite *int    `json:"tokens_cache_write,omitempty"`
-			TokensIn         int     `json:"tokens_in"`
-			TokensOut        int     `json:"tokens_out"`
-			TokensTotal      int     `json:"tokens_total"`
-			ToolCalls        int     `json:"tool_calls"`
-		}{
-			ByModel:          byModel,
-			Cost:             m.Stats.Cost,
-			MessageCount:     m.Stats.MessageCount,
-			TokensCacheRead:  intPtrIfPositive(m.Stats.TokensCacheRead),
-			TokensCacheWrite: intPtrIfPositive(m.Stats.TokensCacheWrite),
-			TokensIn:         m.Stats.TokensIn,
-			TokensOut:        m.Stats.TokensOut,
-			TokensTotal:      m.Stats.TokensTotal,
-			ToolCalls:        m.Stats.ToolCalls,
-		},
+		Stats: stats,
 	}
 	if m.Model != "" {
 		s.Model = &m.Model

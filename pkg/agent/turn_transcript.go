@@ -146,9 +146,9 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine .
 // entries so the transcript faithfully reflects the interleaved order the user
 // saw live.
 //
-// Tokens and cost are always 0 for intermediate entries to avoid double-counting:
-// the turn total is attributed to the final assistant entry written by either
-// wsStreamer.Finalize (streaming path) or appendAssistantTranscript (non-streaming).
+// Each provider call owns its own accounting. A no-text tool call still writes
+// an empty-content accounting entry; replay does not create a visible bubble.
+// Native final and intermediate entries never repeat the whole turn total.
 //
 // Bug #416 fix: without this, only the last text segment reached the transcript.
 //
@@ -163,7 +163,7 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		ts.warnAbandonedTranscriptWrite("appendIntermediateAssistantTranscript")
 		return
 	}
-	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || (content == "" && !ts.pendingCallAccounting()) {
 		return
 	}
 	agentID := ts.resolveActiveAgentID()
@@ -207,10 +207,10 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		// nothing assigns that field today, so ts.parentSpawnCallID is
 		// always "" here too. Flagged for the team, not fixed here.
 		ParentSpawnCallID: ts.parentSpawnCallID,
-		// Tokens and Cost are intentionally 0 — the turn total is attributed to
-		// the final assistant entry only. See appendAssistantTranscript.
+		// The completed call's immutable accounting is applied by
+		// persistAssistantAccounting immediately before this entry is saved.
 	}
-	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
+	if err := ts.persistAssistantAccounting(entry); err != nil {
 		transcriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "could not record intermediate assistant message to transcript",
 			map[string]any{"session_id": ts.transcriptSessionID, "error": err.Error()})
@@ -294,9 +294,9 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 	if len(producedModel) > 0 && producedModel[0] != "" {
 		model = producedModel[0]
 	}
-	// Populate token/cost from accumulated turn stats so scheduled and
-	// non-websocket turns record real usage, mirroring the wsStreamer.Finalize
-	// path (#411). GetTurnStats is safe to call here — the turn is finishing.
+	// Non-provider/external callers retain their existing turn-stat fallback.
+	// Native calls replace these with their own captured call facts in
+	// persistAssistantAccounting, so earlier rounds are never counted again.
 	turnTokens, turnCost := ts.GetTurnStats()
 	turnCacheRead, turnCacheWrite := ts.GetTurnCacheStats()
 	turnPromptTokens, turnCompletionTokens := ts.GetTurnIOStats()
@@ -339,7 +339,7 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 		Truncated:        truncated,
 		TruncationReason: truncationReason,
 	}
-	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
+	if err := ts.persistAssistantAccounting(entry); err != nil {
 		transcriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "could not record assistant message to transcript",
 			map[string]any{"session_id": ts.transcriptSessionID, "error": err.Error()})

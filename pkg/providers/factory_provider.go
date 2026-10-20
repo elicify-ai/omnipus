@@ -13,9 +13,10 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
+	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/providers/openai_compat"
 )
 
 // resolvedRow is everything the dispatch below needs, already decided: which
@@ -214,6 +215,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.RequestTimeout,
 			int(cfg.EffectiveStreamStallTimeout().Seconds()),
 			cfg.ExtraBody,
+			openai_compat.WithProviderID(cfg.Provider),
 		)
 		if err != nil {
 			return nil, "", err
@@ -224,11 +226,11 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if err := requireKey(cfg, row); err != nil {
 			return nil, "", err
 		}
-		return anthropicmessages.NewProviderWithTimeout(
+		return anthropicprovider.NewProviderWithTimeout(
 			cfg.APIKey(),
 			row.api,
 			cfg.RequestTimeout,
-		), modelID, nil
+		).WithProviderID(cfg.Provider).WithStreamStallTimeout(cfg.EffectiveStreamStallTimeout()), modelID, nil
 
 	case catalog.ProtocolBedrock:
 		if err := requireKey(cfg, row); err != nil {

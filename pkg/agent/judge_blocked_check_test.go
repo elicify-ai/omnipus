@@ -55,7 +55,7 @@ func (r *recordingJudgeProvider) Chat(
 	r.mu.Lock()
 	r.calls++
 	for _, m := range msgs {
-		if m.Role == "user" {
+		if m.Role == "user" && !m.Volatile { // FR-007: capture the evidence prompt, not its request-only note.
 			r.lastMsg = m.Content
 		}
 	}

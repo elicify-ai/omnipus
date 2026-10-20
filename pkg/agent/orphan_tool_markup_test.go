@@ -164,8 +164,7 @@ func TestOrphanToolMarkup_NeverReachesTheUser(t *testing.T) {
 			// must not quote the residue back (that invites a repeat).
 			requests := provider.AllRequests()
 			require.Len(t, requests, 2)
-			second := requests[1]
-			require.NotEmpty(t, second)
+			second := requireConversationBeforeVolatileTail(t, requests[1])
 			repair := second[len(second)-1]
 			assert.Equal(t, "user", repair.Role, "the repair note is a user-role turn")
 			assert.Contains(t, repair.Content, "did not arrive as a tool call",
@@ -395,8 +394,8 @@ func TestOrphanToolMarkup_TruncatedCallGetsSizeAdvice(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, provider.calls)
 
-	second := provider.requests[1]
-	require.NotEmpty(t, second)
+	second := requireConversationBeforeVolatileTail(t, provider.requests[1])
+	require.Equal(t, "user", second[len(second)-1].Role, "size advice immediately precedes the volatile tail")
 	repair := second[len(second)-1].Content
 	assert.Contains(t, repair, "cut off at the output-token limit",
 		"a truncated call must be told WHY it failed, not just that it failed")

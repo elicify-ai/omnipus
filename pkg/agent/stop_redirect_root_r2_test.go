@@ -229,8 +229,9 @@ func TestStopRedirectRoot_G3_ChannelControlBoundaryStopsRootChatAndContinuesOnce
 	if got := stopRedirectUserCopies(requests[1], r2Instruction); got != 1 {
 		t.Errorf("continued turn's model input carries the instruction %d times, want exactly 1", got)
 	}
-	if last := requests[1][len(requests[1])-1]; last.Role != "user" || last.Content != r2Instruction {
-		t.Errorf("continued turn's latest input = %s %q, want the exact instruction", last.Role, last.Content)
+	conversation := requireConversationBeforeVolatileTail(t, requests[1])
+	if last := conversation[len(conversation)-1]; last.Role != "user" || last.Content != r2Instruction {
+		t.Errorf("continued turn's latest conversation input before FR-007 tail = %s %q, want the exact instruction", last.Role, last.Content)
 	}
 	provider.open(1)
 	out := r2AwaitOutbound(t, al, "the continued turn's reply", func(o bus.OutboundMessage) bool { return o.Content == "summary reply" })

@@ -431,21 +431,8 @@ func (cn *agentLoopRunTurnConductorRunIterations) prepareIteration() agentLoopRu
 		return agentLoopRunTurnConductorRunIterationsReturn
 	}
 
-	// Record the provider-reported usage on the turn. debitLLMUsage also
-	// records ts.lastUsage — the write that used to sit ~90 lines above
-	// this block, guarded by its own
-	// turnStateFromContext(turnCtx) lookup that resolves to this very same
-	// ts (withTurnState(turnCtx, ts) is how turnCtx was built). Two copies
-	// of one accounting step is how the ADR-087 D3.9 refused-attempt debit
-	// came to omit SetLastUsage; there is now exactly one.
-	//
-	// ADR-087 D8: the old lastUsage site also called the now-deleted
-	// SetLastFinishReason("for SubTurn truncation detection") — that
-	// consumer was never built (GetLastFinishReason had zero callers); see
-	// §5.1 of the ADR for the recorded gap.
-	if cn.rc.rx.rr.rq.ri.rf.response != nil {
-		cn.rc.rx.rr.rq.ri.rf.rt.al.debitLLMUsage(cn.rc.rx.rr.rq.ri.rf.rt.ts, cn.rc.rx.rr.rq.ri.rf.rt.llmModel, cn.rc.rx.rr.rq.ri.rf.response.Usage)
-	}
+	// Successful usage was captured once at the provider boundary.
+
 	return agentLoopRunTurnConductorRunIterationsNext
 }
 
