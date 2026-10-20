@@ -1073,9 +1073,9 @@ func TestManifestSessionID_BothEmpty(t *testing.T) {
 
 // ─── injectManifestNote unit tests ─────────────────────────────────────────
 
-// TestInjectManifestNote_InsertsAtIndex1 proves the note lands at index 1,
-// with role "system", inserted exactly once, when msgs has ≥2 elements.
-func TestInjectManifestNote_InsertsAtIndex1(t *testing.T) {
+// TestInjectManifestNote_AppendsUserTail locks FR-007: the note follows the
+// unchanged conversation exactly once, as user-role text rather than system.
+func TestInjectManifestNote_AppendsUserTail(t *testing.T) {
 	msgs := []providers.Message{
 		{Role: "system", Content: "system prompt"},
 		{Role: "user", Content: "hello"},
@@ -1084,11 +1084,9 @@ func TestInjectManifestNote_InsertsAtIndex1(t *testing.T) {
 	result := injectManifestNote(msgs, "## More tools\n  - create_agent")
 
 	require.Len(t, result, 4, "injectManifestNote must add exactly 1 message")
-	assert.Equal(t, "system", result[0].Role, "index 0 must remain the system prompt")
-	assert.Equal(t, "system", result[1].Role, "index 1 must be the injected note (role=system)")
-	assert.Contains(t, result[1].Content, "More tools", "index 1 must contain the note content")
-	assert.Equal(t, "user", result[2].Role, "index 2 must be the original user message")
-	assert.Equal(t, "assistant", result[3].Role, "index 3 must be the original assistant message")
+	assert.Equal(t, msgs, result[:3], "system, user and assistant history remain unchanged and in order")
+	assert.Equal(t, providers.Message{Role: "user", Content: "## More tools\n  - create_agent", Volatile: true}, result[3],
+		"FR-007: the exact manifest note follows history as a user-role text block")
 }
 
 // TestInjectManifestNote_EmptyNoteNoOp proves no injection when note is "".
@@ -1115,7 +1113,9 @@ func TestInjectManifestNote_SingleMsg(t *testing.T) {
 	}
 	result := injectManifestNote(msgs, "## More tools")
 	require.Len(t, result, 2)
-	assert.Equal(t, "system", result[1].Role)
+	assert.Equal(t, msgs[0], result[0], "the original system prompt is unchanged")
+	assert.Equal(t, providers.Message{Role: "user", Content: "## More tools", Volatile: true}, result[1],
+		"FR-007: even without history, a manifest note is user-role text, not a system message")
 }
 
 // TestInjectManifestNote_NotInjectedTwice proves calling injectManifestNote

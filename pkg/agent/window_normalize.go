@@ -14,7 +14,12 @@ func normalizeWindowMessages(ts *turnState, messages []providers.Message) []prov
 	var system providers.Message
 	var text []string
 	var body []providers.Message
+	var volatile []string
 	for _, m := range messages {
+		if m.Volatile {
+			volatile = append(volatile, m.Content)
+			continue
+		}
 		if m.Role != "system" {
 			body = append(body, m)
 			continue
@@ -45,5 +50,6 @@ func normalizeWindowMessages(ts *turnState, messages []providers.Message) []prov
 		out = append(out, m)
 		start = i + 1
 	}
-	return append(out, normalizeMessagesForProvider(body[start:])...)
+	out = append(out, normalizeMessagesForProvider(body[start:])...)
+	return appendVolatileNote(out, strings.Join(volatile, "\n\n"))
 }

@@ -1,5 +1,76 @@
 # ADR-071 — Tool manifest tier redesign: `ToolSearch`, a search-only third tier, `switch_agent`, and a cached catalog boundary
 
+## Amended 2026-10-15 — prompt-caching founder decisions D4 and D5
+
+**Status:** Accepted amendment. **Date:** 2026-10-15. **Authority:** founder decisions D4 (prefix stability) and D5 (tool list) of the prompt-caching feature, in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/designs/prompt-caching-interview-decisions-20261015.md`, as specified in [the prompt-caching spec](../specs/prompt-caching-spec.md) (Approved, founder 2026-10-15), section "ADR-071 amendment". This amends the design. It does not claim the code already behaves this way. It does not reopen the 2026-10-07 amendment: this ADR's own D4 (`switch_agent`) stays deleted, not renamed. Prompt-caching D4 and D5 are different decisions from this ADR's own D4 and D5. Both pairs are named in full below. Older sentences stay as the record of what was decided on their date; a one-line pointer marks each one that would now mislead.
+
+### Context
+
+The spec's amendment table cites four places in this file. The section numbers match. One description of what they decided does not.
+
+| Spec citation | What this file actually has |
+|---|---|
+| §6 D5 | Matches `## 6. D5 — Move the static catalog inside a prompt-cache boundary`. The split itself is **§6.1**, not a separate heading. |
+| "That work was deferred to #654" | Does **not** match. **§6.6** is titled "Ship D5 now, or defer it into #654?" and its decision is to **ship**, last, behind a live cache-read gate. #654 is only the destination if that gate fails (`ΔC < 0.8 × B`). The header also lists #654 as out of scope for the broad prompt-caching audit, and §6.4 leaves the tool-array churn question to #654. None of those is "the split was already deferred." |
+| §1.1.1 | Matches `### 1.1.1 The two promotion mechanisms`. The MCP-expires claim is the table's "Decays?" and "Removed when" cells. |
+| §6.4 | Matches `### 6.4 The finding that matters more than D5 itself`. Deterministic order is one paragraph in that section (`ToolRegistry.GetAll` iterates `sortedToolNames()`), not the heading. |
+| §6.6 | Matches. The gate is the manual Anthropic measurement in §6.6 (`ΔC ≥ 0.8 × B` on `CacheReadTokens`), owned by the operator, not a CI job. |
+
+**§6.1** splits the manifest into `BuildStaticToolCatalog` (Tier 2 preview lines inside the cached system prefix, immediately after `staticPrompt`, with `CacheControl{Type: "ephemeral"}`) and `BuildLoadedToolsDelta` (one per-turn line naming tools already loaded). That line stays outside the cache, as the index-1 system message `pkg/agent/tool_manifest.go::injectManifestNote` already inserts before conversation history. That is the spec's "already loaded" line in front of history.
+
+**§1.1.1** records that a loaded static tool stays for the session, and that an MCP tool leaves the callable set when `TTL` reaches 0. **§6.4** records that an MCP expiry therefore changes the tool array and invalidates the cached prefix, and that order is deterministic for a stable set. **§3.3** requires a mirror test that an MCP tool does decay.
+
+Prompt-caching founder **D5** keeps loaded tools for the whole session, keeps order deterministic, measures tool and skill sizes, and leaves "send every allowed tool from the start" undecided. Prompt-caching founder **D4** moves the tool-summary (manifest) note behind the conversation. The spec's closing line names D5 as the authority for not leaving the old TTL behaviour in force; D4 is the authority for where the note sits.
+
+### Decision
+
+1. **§6 D5's catalog split is superseded for this feature and is not implemented.** The static tool catalog does not move inside the cached prefix. The per-turn "already loaded" line does not stay in front of history. Prompt-caching founder **D4** moves the tool-summary note behind the conversation. §6.2's instruction to insert the catalog at index 1 is not an implementation task.
+
+2. **§1.1.1, for the bytes of the provider tool list.** Loaded tools, including MCP tools that would have expired, stay in the provider tool list until the session ends. They are not shared with other sessions (§4.6's per-agent, per-session bucket stays in force). A Deny, a removed assignment, or a disconnect still removes them, even though the prefix then changes. Expiry may still apply to discovery bookkeeping that does not change the bytes of the tool list. The §1.1.1 table is left as written; it no longer governs those bytes.
+
+3. **§6.4's deterministic tool order is unchanged.** It is restated as a requirement this feature locks with a test. The cited mechanism stays `ToolRegistry.GetAll` iterating `sortedToolNames()`. The set that must stay in that order is the session's provider tool list, including loaded MCP tools, not a list that shrinks when a TTL hits 0.
+
+4. **§6.6's live cache-read gate is not this feature's gate.** The `ΔC ≥ 0.8 × B` measurement does not accept or reject the prompt-caching feature, and failing it does not drop this feature into #654. This feature's live gate is the five D22 runs in the prompt-caching spec: OpenRouter, the Z.AI/GLM coding plan, the MiniMax coding plan, the Moonshot coding plan, and OpenAI through the ChatGPT subscription. Each run sends the same conversation twice. The second call must report cached tokens greater than zero.
+
+5. **Non-decision, recorded.** Sending every allowed tool from the first turn is not decided. The feature records a labelled token count or token estimate of the tool list and of the skill text per agent, names the estimator, and stops there. A byte count does not satisfy that record (prompt-caching spec, "ADR-071 amendment", and FR-009). This amendment does not choose the estimator.
+
+### Consequences
+
+#### Positive
+
+- Under this amendment, a loaded MCP tool does not leave the provider tool list because its TTL reached 0, so that expiry is not a later cache invalidation. §6.4's rule still holds when the list actually changes: any change to the tool array invalidates the cached prefix.
+- The tool-summary note is specified to sit behind the conversation, which is the prefix-stability decision the founder accepted (prompt-caching D4).
+- Tool order stays the rule §6.4 already recorded, now locked by a test rather than only by a finding.
+
+#### Negative
+
+- A loaded MCP tool occupies provider-tool-list bytes until the session ends, including after the TTL §1.1.1 would have used to drop it. The list is bounded by the session, not by five turns.
+- A Deny, a removed assignment, or a disconnect still changes the prefix on purpose. Keeping a revoked tool in the list so the cache survives is rejected.
+- §7's consequence that the remaining manifest "moves inside a cache boundary" and is "paid once per cache window" does not happen. The split that would have done that is not implemented. The note moves behind the conversation instead.
+
+#### Neutral
+
+- Discovery bookkeeping may still expire. Only the bytes sent as the provider tool list are sticky for the session.
+- Session isolation (§4.6, and the 2026-10-07 amendment) is unchanged. Sticky does not mean shared, and it does not restore `switch_agent`.
+- A goal-setting turn may still replace the tool list for that one turn (prompt-caching spec FR-010). The next ordinary turn uses the session's tool list again. "Until the session ends" is not a ban on that narrowing. Recorded so decision 2 is not read as repealing FR-010; FR-010 is outside the spec's amendment table and is not a new decision here.
+- Prompt-caching founder D5 also says to check the skill list the same way (stability, and any per-turn skill reminder). The part this amendment records is the labelled size of the skill text, in decision 5. Freezing the advertised skill list is FR-009 of the prompt-caching spec, not a change to this ADR's tier rules.
+
+### Alternatives considered
+
+| Alternative | Why rejected |
+|---|---|
+| Implement §6.1 as written: catalog inside the cached prefix, "already loaded" line in front of history | Prompt-caching D4 moves the tool-summary note behind the conversation. The spec states the split is not implemented. |
+| Leave §6.6's "ship behind the cache-read gate" in force and stay silent | The spec requires an amendment so a reader does not implement the old TTL behaviour. §6.6 did not defer the split; silence would leave the ship decision standing. |
+| Keep dropping loaded MCP tools from the provider list when TTL reaches 0, as §1.1.1 describes | Prompt-caching D5, and the spec's amendment table, keep those tools until the session ends. |
+| Decide now to send every allowed tool from the first turn | Founder D5 measures and decides later. The spec forbids starting that behaviour in this feature. |
+| Rewrite §1.1.1, §6, and §7 in place | This file's own §10 convention, and this amendment's instruction, leave historical text standing. Pointers mark the contradictions. |
+
+### Affected components
+
+Design only. No code changes in this amendment. When the prompt-caching feature implements it, the touched behaviour is the provider tool list built from the session loaded set (§1.1.1's `GetAll` / `ToProviderDefs` path) and the position of the tool-summary note (`pkg/agent/tool_manifest.go::injectManifestNote`, which today inserts at index 1, before history). Deterministic order stays `sortedToolNames()`. The §6.6 gate and `BuildStaticToolCatalog` / `BuildLoadedToolsDelta` are not work of this feature.
+
+---
+
 ## Amended 2026-10-07 — session-core founder decisions
 
 **Dated correction of D4/5.1 switch_agent and compatibility mappings.** The switch_agent/handover tool and in-session routing change are deleted, not renamed into another tool. /switch-agent is session navigation; @ is direct MAIN messaging. Preserve per-agent/session loaded-tool isolation and canonical two-layer policy; remove scoped upgrade-only old tool-key aliases.
@@ -190,6 +261,8 @@ one respect this ADR keeps reasoning about — **whether the promotion ever goes
 | **Decays?** | **NO.** No TTL, no cap, no eviction | **Yes.** `TickTTL` decrements once per turn |
 | Removed when | `forgetSession` on **session close** only (`pkg/agent/session_end.go`) | `TTL` reaches 0 |
 
+> **2026-10-15:** The MCP "Decays?" and "Removed when `TTL` reaches 0" cells no longer govern the provider tool list. A loaded tool, including an MCP tool that would have expired, stays until the session ends. See **Amended 2026-10-15** at the top.
+
 The two are wired together at one call site and that is what made the conflation easy to miss:
 `execLoad`/`execSearchAndLoad` (`pkg/tools/tools_tool.go`) call `PromoteTools` **and** `markLoaded`
 on every load, and the file's own comment at the call site says why — *"PromoteTools is a no-op for
@@ -249,6 +322,8 @@ reach `BuildCompressedManifest`'s input at all, and a *promoted* MCP tool is exc
 fixed recurring tax, not a scaling one. D5 addresses the tax; nothing here needs to address
 unbounded growth, because there isn't any.
 
+> **2026-10-15:** "D5 addresses the tax" by moving the catalog inside the cached prefix is not implemented. The tool-summary note moves behind the conversation. See **Amended 2026-10-15** at the top.
+
 **F4 — `library_list`/`library_read` are path-scoped facades over the same machinery as
 `list_directory`/`read_file`.** Added to fix a discoverability bug (the agent could not find
 chat-uploaded files because it did not know about the workspace's `.library/` folder). Documenting
@@ -269,6 +344,8 @@ frequency reasons only, not because it is redundant.
 Five decisions: **D1** rename `load_tool`; **D2** widen its ambiguous-search behavior; **D3**
 introduce a third, search-only visibility tier; **D4** merge `hand_off` + `return_to_default` into
 `switch_agent`; **D5** move the static part of the catalog inside a prompt-cache boundary.
+
+> **2026-10-15:** This ADR's D5 (catalog inside a prompt-cache boundary) is superseded for the prompt-caching feature and is not implemented. This ADR's D4 (`switch_agent`) is a different decision and was already amended on 2026-10-07. See **Amended 2026-10-15** at the top.
 
 ---
 
@@ -727,6 +804,8 @@ was assumed to already exist.
 this gap precisely — no test anywhere would currently catch the difference between the two models,
 in either direction. Pair it with the mirror assertion for an MCP tool, which **does** decay, so the
 test file itself documents the split.
+
+> **2026-10-15:** The mirror assertion that an MCP tool leaves the provider tool list on TTL expiry is superseded. A loaded MCP tool stays in that list until the session ends. See **Amended 2026-10-15** at the top.
 
 ### 3.4 D2 requires no response-shape change — but §3.2.2 removes one branch
 
@@ -1273,6 +1352,8 @@ intended:
 `BuildCompressedManifest` gains one filter line (skip `ManifestSearchOnly`). Nothing else in the
 turn-build path changes: `buildCompressedToolDefs` already sends a lazy tool only when it is in the
 session's loaded set, which is correct for both Tier 2 and Tier 3.
+
+> **2026-10-15:** `BuildStaticToolCatalog` / `BuildLoadedToolsDelta` below (the catalog-inside-the-prefix split) are not implemented. See **Amended 2026-10-15** at the top.
 
 **Where the filter lives once D5 lands — stated, not left to the W3→W2 sequencing note.** §6.1
 splits `BuildCompressedManifest`'s manifest-block role into `BuildStaticToolCatalog(lazyTools []Tool)`
@@ -2017,6 +2098,8 @@ agent write. Concretely:
 
 ## 6. D5 — Move the static catalog inside a prompt-cache boundary
 
+> **2026-10-15:** §6.1's split (static catalog inside the cached prefix; per-turn "already loaded" line in front of history) is superseded for the prompt-caching feature and is not implemented. §6.4's deterministic tool order is unchanged. §6.6's live cache-read gate is not that feature's gate. See **Amended 2026-10-15** at the top.
+
 ### 6.1 Decision
 
 Split `BuildCompressedManifest` into two functions along the **stable / per-turn** seam:
@@ -2078,6 +2161,8 @@ in a session rather than recurring throughout it. This directly strengthens §6.
 D5, and §3.3 cites it as one of the four reasons for rejecting a decay mechanism: adding eviction
 would restore precisely the second invalidation this correction removes.
 
+> **2026-10-15:** "True only for MCP tools" no longer governs the provider tool list. A loaded MCP tool does not leave that list when TTL reaches 0, so that expiry is not a tool-list change. See **Amended 2026-10-15** at the top.
+
 This means the 2026-06 design doc's stated rationale for keeping the manifest outside the cached
 block — "so it can be rebuilt fresh every turn without invalidating the cache when the loaded-tools
 set changes" — **was already defeated**: on exactly those turns the whole prefix is cold regardless
@@ -2091,6 +2176,8 @@ One thing that is *not* a problem, checked: tool ordering is deterministic.
 `ToolRegistry.GetAll` iterates `sortedToolNames()`, not the map, so the array is stable across
 requests for a stable tool set. Had it been map-ordered, nothing in this system would ever have
 cached anything and D5 would be moot.
+
+> **2026-10-15:** Deterministic tool order above is unchanged, and the 2026-10-15 amendment restates it as a requirement a test locks. See **Amended 2026-10-15** at the top.
 
 ### 6.5 Anthropic-only, and it is measurable with what already exists
 
@@ -2122,6 +2209,8 @@ A fragile mechanism for a benefit the document itself questions is a fair thing 
 
 **Decision: D5 ships, sequenced last, with §6.5's acceptance test as a hard merge gate that is
 empowered to reject it.**
+
+> **2026-10-15:** This live cache-read gate is not the prompt-caching feature's gate. That feature's live gate is the five D22 runs. The catalog split this gate was meant to accept or veto is not implemented. See **Amended 2026-10-15** at the top.
 
 The reasoning, in the order that actually decides it:
 
@@ -2208,6 +2297,9 @@ resolution for a decision whose own ADR is ambivalent about its size.
   tool exposure goes from "~101 lines every turn, uncached" to "22 lines, paid once per cache
   window." (r1–r3 quoted "71 → 8"; those are tool counts, not line counts. §4.3's size note derives
   both figures from `BuildCompressedManifest`'s actual output.)
+
+> **2026-10-15:** "Moves inside a cache boundary" / "paid once per cache window" describes this ADR's D5, which is not implemented. See **Amended 2026-10-15** at the top.
+
 - `bash` no longer has a permanent visibility advantage over the narrower tools it competes with,
   removing the gradient identified in F1.
 - The memory trio is uniformly Tier 1, closing an invisible failure mode: under ADR-028 the sliding
@@ -2453,6 +2545,8 @@ parallel execution. The real dependency graph:
 - **W2 = D5 (cache boundary).** Touches `pkg/agent/context.go` (block ordering) and adds two
   builder functions to `pkg/tools/manifest.go`. Its only real coupling to W3 is that both edit
   `manifest.go`.
+
+> **2026-10-15:** Do not build W2. `BuildStaticToolCatalog` / `BuildLoadedToolsDelta` are not implemented. See **Amended 2026-10-15** at the top.
 - **W3 = D3 (visibility mechanism).** Adds `ManifestVisibility` + `ToolManifestVisibility` +
   `previewedLazyToolNames` to `pkg/tools/manifest.go`, one filter line in
   `BuildCompressedManifest`, the drift test, and the Tier 1 list rewrite.
@@ -2467,6 +2561,8 @@ parallel execution. The real dependency graph:
     call site and in `forgetSession`, and `tools.RecordToolSearchNoFollowUp()`. Note this now sits
     in `pkg/agent`, not `pkg/tools` — a scope shift from r3's plan.
   - **§3.3's permanence regression test** (static tool survives >TTL turns; MCP tool does not).
+
+> **2026-10-15:** "MCP tool does not" survive is superseded for the provider tool list. A loaded MCP tool stays until the session ends. See **Amended 2026-10-15** at the top.
 
   **r5 adds two more items to W3, and moves one boundary between W3 and W4:**
   - **§3.2.2's match-list policy filter** in `pkg/tools/tools_tool.go::execSearchAndLoad` — the
@@ -2582,6 +2678,8 @@ shipped should not have to re-litigate it.
   `BuildStaticToolCatalog`/`BuildLoadedToolsDelta`, W3 adds the visibility classifier and one line
   inside the builder — but they will conflict textually. Either land W3 first (it is the smaller
   edit to the existing builder) or agree the split up front so W2 writes against the post-W3 shape.
+
+> **2026-10-15:** W2 does not add `BuildStaticToolCatalog` / `BuildLoadedToolsDelta`. That split is not implemented. See **Amended 2026-10-15** at the top.
 - **W-D1 = D1 (the rename) IS its own workstream — upgraded in r3.** r1 and r2 both called it "not a
   workstream… a mechanical pass over W3's and W4's files." §2.1 shows why that was wrong: D1 touches
   a **contract file** (5-step regeneration, `make verify-contracts` gate), a **user-visible SPA
@@ -2638,8 +2736,12 @@ shipped should not have to re-litigate it.
   placement of W2 in the parallel group — it may still be *developed* in parallel, but it merges
   last.
 
+> **2026-10-15:** W2's gate, and the drop into #654 if it fails, are not the prompt-caching feature's gate. The split is not implemented. See **Amended 2026-10-15** at the top.
+
 **Suggested shape:** **W-D1** alone (its own reviewed unit, §2.1's table as DoD, including the
 contract regeneration) → then W1 (+W5, same commit) ∥ W3 → then W4 → then W2 (gated by §6.6).
+
+> **2026-10-15:** The "then W2 (gated by §6.6)" step above is not work of the prompt-caching feature. See **Amended 2026-10-15** at the top.
 
 Every workstream needs the full gate battery from CLAUDE.md before it merges, and CI is the
 authority for the Go suite — do not run it locally (`pkg/gateway` under `goolm` will OOM this pod).
@@ -2815,6 +2917,8 @@ review files are retained unmodified as historical records; neither is supersede
 | **OBS-002** — `canLoad` short-circuit → full-scan | **§3.2** — stated as an explicit implementation consequence, with the side-effect-free/bounded-at-5 risk assessment |
 | **OBS-003** — who owns the `ManifestVisibility` filter after D5 | **§4.4** — `BuildStaticToolCatalog` applies it itself; does not expect a pre-filtered slice. Same for `PreviewAllLazy` |
 | *Unasked Q4 / Dataset gap* — §6.6 has no tolerance | **§6.6** — `ΔCacheReadTokens ≥ 0.8 × B`, one-sided, no upper bound, with the reasoning for both |
+
+> **2026-10-15:** The OBS-003 row and the §6.6 tolerance row above record the r3 resolution of the catalog split and its gate. Both are superseded for the prompt-caching feature. See **Amended 2026-10-15** at the top. The rows themselves are unchanged.
 
 ### Found by r3's own grep — beyond the r3 review
 

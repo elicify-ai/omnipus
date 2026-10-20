@@ -65,7 +65,7 @@ func (p *perCriterionJudgeProvider) Chat(
 ) (*providers.LLMResponse, error) {
 	var user string
 	for _, m := range messages {
-		if m.Role == "user" {
+		if m.Role == "user" && !m.Volatile { // FR-007: inspect the criteria prompt before the request-only tail.
 			user = m.Content
 		}
 	}

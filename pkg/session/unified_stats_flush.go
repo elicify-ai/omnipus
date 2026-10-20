@@ -73,6 +73,7 @@ func (us *UnifiedStore) u6MarkStatsDirtyLocked(sessionID string, meta *UnifiedMe
 	if cached, ok := us.metaCache[sessionID]; ok {
 		cached.Stats = meta.Stats
 		cached.Stats.ByModel = maps.Clone(meta.Stats.ByModel)
+		cached.Stats.ByProvider = maps.Clone(meta.Stats.ByProvider)
 		if meta.UpdatedAt.After(cached.UpdatedAt) {
 			cached.UpdatedAt = meta.UpdatedAt
 		}

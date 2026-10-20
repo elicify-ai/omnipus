@@ -29,6 +29,9 @@ type ToolEntry struct {
 	Tool   Tool
 	IsCore bool
 	TTL    int
+	// retained keeps an advertised schema executable after discovery TTL expiry.
+	// Session membership and live authorization remain agent-loop gates.
+	retained bool
 }
 
 type ToolRegistry struct {
@@ -352,6 +355,19 @@ func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 	)
 }
 
+// RetainLoadedTools keeps definitions that a real session advertised available
+// beyond the discovery TTL. This is NOT an authorization grant: the loop still
+// checks that session's loaded set, policy, assignment and current registration.
+func (r *ToolRegistry) RetainLoadedTools(names []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, name := range names {
+		if entry := r.tools[name]; entry != nil {
+			entry.retained = true
+		}
+	}
+}
+
 // TickTTL decreases TTL only for non-core tools
 func (r *ToolRegistry) TickTTL() {
 	r.mu.Lock()
@@ -430,10 +446,22 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 		return nil, false
 	}
 	// Hidden tools with expired TTL are not callable.
-	if !entry.IsCore && entry.TTL <= 0 {
+	if !entry.IsCore && !entry.retained && entry.TTL <= 0 {
 		return nil, false
 	}
 	return entry.Tool, true
+}
+
+// IsCoreTool reports whether a registered tool is part of the always-visible
+// registry surface. It grants no policy or offered-request authority.
+func (r *ToolRegistry) IsCoreTool(name string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry := r.tools[name]
+	return entry != nil && entry.IsCore
 }
 
 // GetIncludingHidden returns the registered tool for name regardless of whether
@@ -702,7 +730,7 @@ func (r *ToolRegistry) GetDefinitions() []map[string]any {
 	for _, name := range sorted {
 		entry := r.tools[name]
 
-		if !entry.IsCore && entry.TTL <= 0 {
+		if !entry.IsCore && !entry.retained && entry.TTL <= 0 {
 			continue
 		}
 
@@ -722,7 +750,7 @@ func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
 	for _, name := range sorted {
 		entry := r.tools[name]
 
-		if !entry.IsCore && entry.TTL <= 0 {
+		if !entry.IsCore && !entry.retained && entry.TTL <= 0 {
 			continue
 		}
 
@@ -852,9 +880,10 @@ func (r *ToolRegistry) List() []string {
 // IMPORTANT: keep this in sync with the ToolEntry struct definition above.
 func cloneEntry(e *ToolEntry) *ToolEntry {
 	return &ToolEntry{
-		Tool:   e.Tool,
-		IsCore: e.IsCore,
-		TTL:    e.TTL,
+		Tool:     e.Tool,
+		IsCore:   e.IsCore,
+		TTL:      e.TTL,
+		retained: e.retained,
 	}
 }
 
@@ -986,7 +1015,7 @@ func (r *ToolRegistry) GetAll() []Tool {
 		entry := r.tools[name]
 
 		// Include core tools and non-core tools with active TTL
-		if entry.IsCore || entry.TTL > 0 {
+		if entry.IsCore || entry.retained || entry.TTL > 0 {
 			tools = append(tools, entry.Tool)
 		}
 	}

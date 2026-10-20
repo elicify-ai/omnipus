@@ -640,20 +640,13 @@ func buildGoalRubricInjectionNote(holds, isWebchat bool) string {
 	return note
 }
 
-// injectGoalRubricNote inserts note as a "system" role message at index 1 of
-// msgs — mirrors injectWebRenderingNote/injectWorkspaceInstructions exactly;
-// its position relative to the other ephemeral system notes is not
-// behaviorally significant. Returns msgs unchanged when note == "" or
-// len(msgs) == 0.
+// injectGoalRubricNote appends request-only user text for the volatile tail.
+// The note's wording is unchanged; only its request placement changes.
 func injectGoalRubricNote(msgs []providers.Message, note string) []providers.Message {
 	if note == "" || len(msgs) == 0 {
 		return msgs
 	}
-	out := make([]providers.Message, 0, len(msgs)+1)
-	out = append(out, msgs[0])
-	out = append(out, providers.Message{Role: "system", Content: note})
-	out = append(out, msgs[1:]...)
-	return out
+	return appendVolatileNote(msgs, note)
 }
 
 // buildGoalCompileMessages assembles the compile call's fresh context: a

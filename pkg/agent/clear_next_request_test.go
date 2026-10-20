@@ -71,14 +71,14 @@ func clearMessageText(m providers.Message) string {
 	return b.String()
 }
 
-// requireNothingFromBeforeTheClear asserts a request is exactly the system
-// prompt plus the new user message: no earlier user, assistant or tool message,
-// no archive breadcrumb or summary, no recalled span.
+// requireNothingFromBeforeTheClear asserts the conversation is exactly the
+// system prompt plus the new user message, before FR-007's single volatile tail:
+// no earlier user, assistant or tool message, breadcrumb, summary or recall span.
 func requireNothingFromBeforeTheClear(t *testing.T, req []providers.Message, newUser string, forbidden ...string) {
 	t.Helper()
-	require.GreaterOrEqual(t, len(req), 2)
-	require.Equal(t, "system", req[0].Role, "the system prompt and instructions lead the request")
-	rest := req[1:]
+	conversation := requireConversationBeforeVolatileTail(t, req)
+	require.Equal(t, "system", conversation[0].Role, "the system prompt and instructions lead the request")
+	rest := conversation[1:]
 	require.Len(t, rest, 1, "only the new user message follows the system prompt; got %d messages", len(rest))
 	require.Equal(t, "user", rest[0].Role)
 	require.Contains(t, rest[0].Content, newUser)

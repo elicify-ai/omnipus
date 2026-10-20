@@ -37,6 +37,19 @@ properties:
       Cache-write tokens (written into a new cache entry) for this model.
       Additive to total alongside in and out — see cache_read's description.
     example: 25
+  cache_hit_ratio:
+    type: number
+    format: double
+    minimum: 0
+    maximum: 1
+    nullable: true
+    x-omitempty: false
+    description: >
+      Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write)
+      when that denominator is greater than zero. Null when the denominator is 0,
+      which is not the same as a ratio of zero. A number from 0 to 1 inclusive.
+      in is uncached input.
+    example: 0.8
   total:
     type: integer
     minimum: 0

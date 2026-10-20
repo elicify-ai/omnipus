@@ -4,7 +4,7 @@ A skill is a written playbook an agent picks up when a task calls for it. This p
 
 ## What it is
 
-A skill is a folder that holds a single file, `SKILL.md`: a short description, and instructions written in Markdown. Installing a skill changes nothing on its own. Granting it to an agent adds one line to that agent's context — the skill's name and description. The full instructions are read only when the agent decides the task matches, and they apply to that task only.
+A skill is a folder that holds a single file, `SKILL.md`: a short description, and instructions written in Markdown. Installing a skill changes nothing on its own. When Omnipus first builds a session's advertised skill menu, it lists the skills granted to that agent by name and description. Later turns reuse that captured menu; granting another skill does not automatically refresh the menu of an active session. The full instructions are read only when the agent decides the task matches, and they apply to that task only.
 
 This is what separates a skill from its neighbors. [Tools](tools.md) are the actions an agent can take. [Memory](memory.md) is what an agent remembers between conversations. A skill is how you teach a repeatable procedure once, so any agent can follow it the same way every time.
 
@@ -99,7 +99,7 @@ A skill installed from a GitHub link takes its folder name from the link. That n
 - Registry installs are checked against a published checksum; file installs cannot be. The setting lives in Settings, under Security: **Block unverified** refuses installs with no checksum to check, **Warn unverified** allows them with a warning (the default), and **Allow all** turns checking off.
 - Editing a shipped skill never changes the original. Your edit becomes a copy in your skills folder that overrides it, and every save keeps a snapshot of the prior version under `.versions` inside the skill's folder, so a bad edit is recoverable.
 - A mounted folder's skills come with the mount, available to every agent in that workspace. They cannot replace a skill you granted under the same name — your grant wins.
-- Every skill available to an agent adds one line to its context on every message. A mounted repository carrying a large skill collection adds all of them, with no limit. If the per-message menu grows, trim the repository's skills folder or unmount it.
+- Each skill in a session's advertised menu adds its name and description to later requests. Omnipus captures that menu when it first builds a request for the session and reuses it. Changes to grants, descriptions or mounted skill collections do not automatically refresh an active session's captured menu; a new session builds a fresh one. A large collection therefore enlarges the instruction prefix when the menu is captured. Trimming or unmounting it does not refresh a menu already captured. The advertised menu is not an access grant: current permissions still govern loading a skill and running its tools.
 
 ## Related pages
 

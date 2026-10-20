@@ -80,7 +80,7 @@ func (w *claimingWorker) Chat(
 ) (*providers.LLMResponse, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if n := len(msgs); n > 0 && msgs[n-1].Role == "tool" {
+	if lastConversationMessageForFixture(msgs).Role == "tool" {
 		cur := w.turnAt(w.started - 1)
 		content := cur.content
 		if content == "" {

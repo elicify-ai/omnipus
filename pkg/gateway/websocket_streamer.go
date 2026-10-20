@@ -435,6 +435,17 @@ func (s *wsStreamer) SetTurnIOStats(promptTokens, completionTokens, cacheReadTok
 	s.statsCacheWrite = cacheWriteTokens
 }
 
+// SetCallAccounting carries producer-owned per-call facts independently of
+// the turn-total stats that the done frame still displays.
+func (s *wsStreamer) SetCallAccounting(entries []session.TranscriptEntry) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.callAccounting = append([]session.TranscriptEntry(nil), entries...)
+	s.callAccountingSet = true
+}
+
+var _ agent.CallAccountingStreamer = (*wsStreamer)(nil)
+
 // SetTurnFailed is called by the agent loop's finalizeStreamer when the turn
 // ended via the engine's error/limit fallback rather than a real model response.
 // Conditions that set the flag: (1) LLM returned empty after retries and the
@@ -661,6 +672,8 @@ type wsStreamerFinalize struct {
 	completionTokensF          int
 	cacheReadF                 int
 	cacheWriteF                int
+	callAccounting             []session.TranscriptEntry
+	callAccountingSet          bool
 	durF                       float64
 	transcriptAlreadyPersisted bool
 	producedModel              string
@@ -844,6 +857,8 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	wsf.completionTokensF = wsf.s.statsCompletionTokens
 	wsf.cacheReadF = wsf.s.statsCacheRead
 	wsf.cacheWriteF = wsf.s.statsCacheWrite
+	wsf.callAccounting = append([]session.TranscriptEntry(nil), wsf.s.callAccounting...)
+	wsf.callAccountingSet = wsf.s.callAccountingSet
 	wsf.durF = float64(wsf.s.statsDuration.Milliseconds())
 	wsf.transcriptAlreadyPersisted = wsf.s.transcriptPersisted
 	wsf.producedModel = wsf.s.producedModel
@@ -969,7 +984,7 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 		// stamping directly — either silently no-op'd (no entry to find) or,
 		// worse, walked back and mis-stamped an EARLIER same-turn narration
 		// entry as truncated. See truncationReason's own field doc comment.
-		if content != "" || wsf.truncationReason != "" {
+		if content != "" || wsf.truncationReason != "" || len(wsf.callAccounting) > 0 {
 			// #823 BE-DESIGN.md §6.3: persist the final streamed answer under
 			// the SAME id its live token/done frames carried (message_id),
 			// exactly as appendIntermediateAssistantTranscript already does for
@@ -1039,6 +1054,17 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			// MarkLastEntryTruncated call after Finalize returns. See
 			// truncationReason's own field doc comment for why the post-hoc
 			// call was the bug.
+			if wsf.callAccountingSet {
+				session.SetEntryCallAccounting(&entry, session.TranscriptEntry{})
+				if len(wsf.callAccounting) > 0 {
+					for _, older := range wsf.callAccounting[:len(wsf.callAccounting)-1] {
+						if err := wsf.s.agentStore.AppendTranscriptStrict(wsf.s.sessionID, older); err != nil {
+							return err
+						}
+					}
+					session.SetEntryCallAccounting(&entry, wsf.callAccounting[len(wsf.callAccounting)-1])
+				}
+			}
 			if wsf.truncationReason != "" {
 				entry.Truncated = true
 				entry.TruncationReason = wsf.truncationReason
