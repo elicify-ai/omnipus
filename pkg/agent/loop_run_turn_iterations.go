@@ -277,6 +277,9 @@ turnLoop:
 	// rather than count as elapsed time against the horizon.
 	er.cn.rc.rx.rr.rq.ri.rf.rt.al.tickSearchPromotionHorizon(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.manifestBucket())
 
+	if hook := naturalExitSteeringPollTestHook; hook != nil {
+		hook()
+	}
 	if steerMsgs, steerCorrelationIDs := er.cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
 		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
 			map[string]any{
@@ -745,6 +748,12 @@ func (cn *agentLoopRunTurnConductorRunIterations) dispatchToolCalls() agentLoopR
 	}
 	return agentLoopRunTurnConductorRunIterationsNext
 }
+
+// naturalExitSteeringPollTestHook is a test-only seam fired at the turn's
+// natural exit, just before the steering queue is polled there - so a test
+// can queue a follow-up that reaches this poll and not the earlier
+// direct-response one. nil in production.
+var naturalExitSteeringPollTestHook func()
 
 // keepAnswerBeforeSteering records a direct (tool-free) answer the model
 // completed before steering continued the same turn, exactly as a tool-call
