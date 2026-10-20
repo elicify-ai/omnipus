@@ -244,8 +244,8 @@ func (nai *newAgentInstance) prepareWorkspace() {
 	}
 
 	nai.model = resolveAgentModel(nai.agentCfg, nai.defaults)
-	nai.fallbacks = resolveAgentFallbacks(nai.agentCfg, nai.defaults)
-	nai.fallbackModels = resolveAgentFallbackModels(nai.agentCfg, nai.defaults)
+	nai.fallbacks = resolveAgentFallbacks(nai.agentCfg)
+	nai.fallbackModels = resolveAgentFallbackModels(nai.agentCfg)
 
 	nai.restrict = nai.defaults.RestrictToWorkspace
 	nai.readRestrict = nai.restrict && !nai.defaults.AllowReadOutsideWorkspace
@@ -1246,39 +1246,33 @@ func warnUnpairedFallbacks(agentID string, fallbacks []config.FallbackModel) {
 	}
 }
 
-// resolveAgentFallbacks resolves the fallback models for an agent.
-func resolveAgentFallbacks(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) []string {
-	if agentCfg != nil && agentCfg.Model != nil && agentCfg.Model.Fallbacks != nil {
+// resolveAgentFallbacks returns the agent's own legacy fallback strings. There
+// is no global default fallback list to inherit (agents.defaults.model_fallbacks
+// was removed, issue #1340, founder ruling 2026-10-19).
+func resolveAgentFallbacks(agentCfg *config.AgentConfig) []string {
+	if agentCfg != nil && agentCfg.Model != nil {
 		return agentCfg.Model.Fallbacks
 	}
-	return defaults.ModelFallbacks
+	return nil
 }
 
-// resolveAgentFallbackModels resolves the provider-aware fallback chain for
-// an agent. It prefers the modern AgentConfig.FallbackModels (FR-005) when
-// populated and falls back to deriving one from the legacy sources in order:
-//  1. agentCfg.Model.Fallbacks (the legacy []string on the agent's model block)
-//  2. defaults.ModelFallbacks (the agent-defaults model_fallbacks list)
-//
-// Each returned entry is a config.FallbackModel with Provider populated by
-// config.NormalizeFallbacks (which has already run at config-load time for
-// the AgentConfig path). The defaults path is normalized here so the
-// downstream resolveModelCandidatesFromList can treat every entry uniformly.
-func resolveAgentFallbackModels(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) []config.FallbackModel {
-	if agentCfg != nil && len(agentCfg.FallbackModels) > 0 {
-		// Already normalized at config load — Provider is populated for every
-		// entry that matched a configured provider or passthrough.
-		return agentCfg.FallbackModels
-	}
-	var legacy []string
-	switch {
-	case agentCfg != nil && agentCfg.Model != nil && len(agentCfg.Model.Fallbacks) > 0:
-		legacy = agentCfg.Model.Fallbacks
-	case len(defaults.ModelFallbacks) > 0:
-		legacy = defaults.ModelFallbacks
-	default:
+// resolveAgentFallbackModels returns the agent's OWN fallback chain: the
+// modern AgentConfig.FallbackModels (FR-005) when populated, else the agent's
+// legacy agentCfg.Model.Fallbacks strings as model-only entries (unpaired, so
+// reported and never routed). Nothing is inherited from a global default —
+// agents.defaults.model_fallbacks was removed (issue #1340, founder ruling
+// 2026-10-19).
+func resolveAgentFallbackModels(agentCfg *config.AgentConfig) []config.FallbackModel {
+	if agentCfg == nil {
 		return nil
 	}
+	if len(agentCfg.FallbackModels) > 0 {
+		return agentCfg.FallbackModels
+	}
+	if agentCfg.Model == nil || len(agentCfg.Model.Fallbacks) == 0 {
+		return nil
+	}
+	legacy := agentCfg.Model.Fallbacks
 	out := make([]config.FallbackModel, len(legacy))
 	for i, s := range legacy {
 		out[i] = config.FallbackModel{Model: s}
