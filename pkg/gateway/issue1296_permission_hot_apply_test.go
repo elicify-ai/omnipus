@@ -218,10 +218,6 @@ func (h *issue1296Harness) peerSend(t *testing.T, content string) *tools.ToolRes
 		// PR #1365 run 39135504176: an extra policy-receiver-turn-3 entry).
 		h.awaitTurn(t, h.recvID)
 		h.awaitTurn(t, h.recvID)
-		// This plain-text fixture never calls answer_request, so an admitted
-		// request owes exactly one reminder turn. Drain its published reply
-		// before a later refusal compares the receiver's transcript snapshots.
-		h.awaitTurn(t, h.recvID)
 	}
 	return result
 }
