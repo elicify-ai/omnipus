@@ -113,3 +113,29 @@ func (al *AgentLoop) ensureChannelStarted(id string) (bool, error) {
 	}
 	return mgr.StartChannel(id)
 }
+
+// RestorePairingRequest re-establishes a chat's ownership of a channel's
+// pairing after that chat's Retry restarted it (gate r1 CR-T2-04): only when
+// requestID and sessionID exactly match the request that owned the channel's
+// last pairing, and no pairing is currently owned. The caller is responsible
+// for checking that the subscribing connection belongs to the session's
+// owner. It reports whether ownership was restored.
+func (al *AgentLoop) RestorePairingRequest(channelID, requestID, sessionID string) bool {
+	if channelID == "" || requestID == "" || sessionID == "" {
+		return false
+	}
+	if _, owned := al.pairingRequests.Load(channelID); owned {
+		return false
+	}
+	v, ok := al.pairingLastOwners.Load(channelID)
+	if !ok {
+		return false
+	}
+	last, ok := v.(pairingCorrelation)
+	if !ok || last.requestID != requestID || last.sessionID != sessionID {
+		return false
+	}
+	al.pairingLastOwners.CompareAndDelete(channelID, last)
+	al.NotePairingRequest(channelID, requestID, sessionID)
+	return true
+}

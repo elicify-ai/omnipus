@@ -453,6 +453,29 @@ func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, activ
 	}
 }
 
+// restoreChatPairingOwnership restores a chat's ownership of a pairing its
+// Retry restarted (gate r1 CR-T2-04). The ids come from the client, so they
+// are trusted only together: the session must belong to this connection's
+// user, and the agent loop restores only the exact request that owned the
+// channel's last pairing. A Settings-started subscription carries no ids and
+// restores nothing.
+func (h *WSHandler) restoreChatPairingOwnership(wc *wsConn, f generated.WhatsAppPairingSubscribeFrame) {
+	if h.agentLoop == nil || f.RequestId == nil || f.SessionId == nil || *f.RequestId == "" || *f.SessionId == "" {
+		return
+	}
+	store := h.resolveSessionStore(*f.SessionId)
+	if store == nil {
+		return
+	}
+	meta, err := store.GetMeta(*f.SessionId)
+	if err != nil || meta == nil || meta.Owner != wc.userID {
+		return
+	}
+	if h.agentLoop.RestorePairingRequest(f.ChannelId, *f.RequestId, *f.SessionId) {
+		slog.Info("ws: restored chat ownership of a retried pairing", "channel_id", f.ChannelId, "session_id", *f.SessionId)
+	}
+}
+
 // wantsPairing reports whether this connection has subscribed to channelID's
 // whatsapp_pairing frames (#283, Option B). Safe on a nil map.
 func (c *wsConn) wantsPairing(channelID string) bool {
@@ -1421,6 +1444,9 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 				Message: "whatsapp_pairing_subscribe requires channel_id",
 			})
 			return wsHandlerReadLoopContinue
+		}
+		if f.Active {
+			wh.h.restoreChatPairingOwnership(wh.wc, f)
 		}
 		wh.h.subscribePairingInterest(wh.wc, f.ChannelId, f.Active)
 	case string(generated.WsFrameTypeMailPanelObserver):

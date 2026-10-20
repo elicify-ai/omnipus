@@ -134,9 +134,15 @@ func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.Pairi
 			payload.RequestID, payload.SessionID = corr.requestID, corr.sessionID
 		}
 		switch status {
-		case channels.PairingStatusLinked, channels.PairingStatusError, channels.PairingStatusTimeout,
-			channels.PairingStatusStopped:
-			al.pairingRequests.Delete(channelID) // the chat-started pairing ended
+		case channels.PairingStatusLinked:
+			al.pairingRequests.Delete(channelID) // the chat-started pairing linked
+		case channels.PairingStatusError, channels.PairingStatusTimeout, channels.PairingStatusStopped:
+			// The pairing ended; remember its owner so a Retry from that chat
+			// can restore it (RestorePairingRequest, gate r1 CR-T2-04).
+			if corr, ok := v.(pairingCorrelation); ok {
+				al.pairingLastOwners.Store(channelID, corr)
+			}
+			al.pairingRequests.Delete(channelID)
 		}
 	}
 	al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, payload)
