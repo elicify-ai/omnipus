@@ -10,8 +10,11 @@ export const ROOMS_ENABLED = false
 /** Destination-bound secret cards. Enabled with the WU-4 request/submit server. */
 export const SECRET_CARDS_ENABLED = true
 
-/** An agent's private secrets panel (GET /secrets). Hidden until WU-5. */
-export const AGENT_PRIVATE_SECRETS_ENABLED = false
+/** An agent's private secrets panel (GET /secrets). WU-5 landed in Train 2, so
+ * it is on again (founder 2026-10-14: a switch hides its UI only until the work
+ * unit it belongs to lands). Worker and system agents stay excluded at the
+ * mount site. */
+export const AGENT_PRIVATE_SECRETS_ENABLED = true
 
 /**
  * Inline tool approvals (#1263 unit 3: the card in the chat plus the "waiting in
