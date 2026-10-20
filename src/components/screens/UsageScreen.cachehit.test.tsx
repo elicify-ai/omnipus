@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { UsageScreen } from './UsageScreen'
@@ -114,12 +114,30 @@ describe('TestUsageScreen_HitPercentAndProviderTab', () => {
 
   it('keeps the selected tab focused when the period changes', async () => {
     const user = userEvent.setup()
+    let resolveDay!: (summary: TokenUsageSummary) => void
+    const dayResponse = new Promise<TokenUsageSummary>((resolve) => { resolveDay = resolve })
+    vi.mocked(fetchTokenStats).mockImplementation((period) => (
+      period === 'day' ? dayResponse : Promise.resolve(hitSummary)
+    ))
     renderUsage()
     await waitFor(() => expect(screen.getByTestId('usage-hero-row')).toBeInTheDocument())
-    const providerTab = screen.getByRole('tab', { name: /provider/i })
-    await user.click(providerTab)
+    await user.click(screen.getByRole('tab', { name: /provider/i }))
+    expect(screen.getByRole('tab', { name: /provider/i })).toHaveAttribute('aria-selected', 'true')
+
     await user.click(screen.getByTestId('period-day'))
-    expect(providerTab).toHaveAttribute('aria-selected', 'true')
+    await waitFor(() => expect(fetchTokenStats).toHaveBeenLastCalledWith('day'))
+    expect(screen.getByTestId('usage-skeleton')).toBeInTheDocument()
+    resolveDay(hitSummary)
+    await waitFor(() => expect(screen.queryByTestId('usage-skeleton')).not.toBeInTheDocument())
+
+    // The period fetch remounts the tabs. Inspect the live selection, not a detached tab.
+    expect(screen.getByTestId('period-day')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('tab', { name: /provider/i })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: /agent/i })).toHaveAttribute('aria-selected', 'false')
+    const providerPanel = screen.getByRole('tabpanel', { name: /provider/i })
+    expect(providerPanel).toBeVisible()
+    expect(within(providerPanel).getByText('anthropic')).toBeInTheDocument()
+    expect(within(providerPanel).getByText('80%')).toBeInTheDocument()
   })
 
   it('keeps the loading state', () => {
