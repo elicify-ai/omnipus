@@ -56,6 +56,10 @@ type ModelPayload struct {
 	// never promoted to ordinary chat content by the archive reader.
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 
+	// Opaque signed blocks stay in the private model archive, never in chat
+	// projections. JSON strings preserve their bytes without re-marshalling.
+	ThinkingBlocks []string `json:"thinking_blocks,omitempty"`
+
 	// SystemParts preserves Message.SystemParts / ContentBlock order and each
 	// block's CacheControl value. Only messages already belonging to stored
 	// model history use this codec — fresh pinned prompts and request-only
@@ -81,6 +85,7 @@ type ModelContentBlock struct {
 // "ephemeral" is produced by the Anthropic adapter).
 type ModelCacheControl struct {
 	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 // ModelToolCall mirrors providers.ToolCall EXACTLY, including the three
@@ -156,6 +161,7 @@ func EncodeModelPayload(msg providers.Message) (ModelPayload, error) {
 		Role:             msg.Role,
 		Content:          msg.Content,
 		ReasoningContent: msg.ReasoningContent,
+		ThinkingBlocks:   append([]string(nil), msg.ThinkingBlocks...),
 		ToolCallID:       msg.ToolCallID,
 	}
 	if msg.Media != nil {
@@ -183,7 +189,7 @@ func EncodeModelPayload(msg providers.Message) (ModelPayload, error) {
 func encodeContentBlock(p providers.ContentBlock) ModelContentBlock {
 	block := ModelContentBlock{Type: p.Type, Text: p.Text}
 	if p.CacheControl != nil {
-		block.CacheControl = &ModelCacheControl{Type: p.CacheControl.Type}
+		block.CacheControl = &ModelCacheControl{Type: p.CacheControl.Type, TTL: p.CacheControl.TTL}
 	}
 	return block
 }
@@ -225,6 +231,7 @@ func DecodeModelPayload(p ModelPayload) (providers.Message, error) {
 		Role:             p.Role,
 		Content:          p.Content,
 		ReasoningContent: p.ReasoningContent,
+		ThinkingBlocks:   append([]string(nil), p.ThinkingBlocks...),
 		ToolCallID:       p.ToolCallID,
 	}
 	if p.Media != nil {
@@ -235,7 +242,7 @@ func DecodeModelPayload(p ModelPayload) (providers.Message, error) {
 		for i, b := range p.SystemParts {
 			block := providers.ContentBlock{Type: b.Type, Text: b.Text}
 			if b.CacheControl != nil {
-				block.CacheControl = &providers.CacheControl{Type: b.CacheControl.Type}
+				block.CacheControl = &providers.CacheControl{Type: b.CacheControl.Type, TTL: b.CacheControl.TTL}
 			}
 			out.SystemParts[i] = block
 		}

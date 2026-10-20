@@ -632,7 +632,7 @@ func TestBreadcrumb_ZeroLLMCallsViaStubCounter(t *testing.T) {
 //	[0] system (pinned core + breadcrumb)
 //	[1..N] recall span messages (old recalled turns)
 //	[N+1..M] sliding window messages (recent live turns)
-//	[last] current user message
+//	[penultimate] current user message · [last] volatile user tail (prompt-caching FR-007)
 //
 // Traces to: spec §7 T31, FR-019, spec line 296.
 func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
@@ -758,9 +758,11 @@ func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
 			spanUserIdx, currentIdx)
 	}
 
-	// Current must be the last message.
-	if currentIdx != len(assembled)-1 {
-		t.Errorf("T31-real: current user message must be last (idx=%d), got assembled len=%d",
-			currentIdx, len(assembled))
+	// FR-007: current is last in the conversation, immediately before the
+	// separate volatile tail. Span/window order above is unchanged.
+	conversation := requireConversationBeforeVolatileTail(t, assembled)
+	if currentIdx != len(conversation)-1 {
+		t.Errorf("T31-real: current user message must precede the volatile tail (idx=%d), got conversation len=%d",
+			currentIdx, len(conversation))
 	}
 }

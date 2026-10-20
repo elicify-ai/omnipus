@@ -484,7 +484,7 @@ func TestNewUnifiedStore_LoadMetaCache_CorruptSessionExcludedAndCounted(t *testi
 
 // TestClone_GuardsEveryReferenceField is the MB-3 regression guard: Clone()
 // is a hand-maintained enumeration of UnifiedMeta's current reference fields
-// (Partitions, AgentIDs, CompactionSummaries, Stats.ByModel) with nothing
+// (Partitions, AgentIDs, CompactionSummaries, Stats.ByModel, Stats.ByProvider) with nothing
 // forcing a FUTURE slice/map/pointer field added to
 // UnifiedMeta/SessionMeta/SessionStats to also be cloned there — a silent
 // aliasing bug otherwise.
@@ -518,6 +518,9 @@ func TestClone_GuardsEveryReferenceField(t *testing.T) {
 			Stats: SessionStats{
 				ByModel: map[string]ModelTokens{
 					"model-a": {Total: 10},
+				},
+				ByProvider: map[string]ModelTokens{
+					"provider-a": {In: 2, Out: 3, CacheRead: 4, CacheWrite: 1, Total: 10},
 				},
 			},
 		},
@@ -564,6 +567,7 @@ func TestClone_GuardsEveryReferenceField(t *testing.T) {
 		"AgentIDs":            true,
 		"CompactionSummaries": true,
 		"Stats.ByModel":       true,
+		"Stats.ByProvider":    true,
 	}
 	for _, rf := range refFields {
 		if !known[rf.path] {
@@ -616,4 +620,15 @@ func TestClone_GuardsEveryReferenceField(t *testing.T) {
 	clone.Stats.ByModel["model-a"] = cloneEntry
 	assert.Equal(t, 10, original.Stats.ByModel["model-a"].Total,
 		"mutating clone.Stats.ByModel must not affect original.Stats.ByModel")
+
+	wantProvider := ModelTokens{In: 2, Out: 3, CacheRead: 4, CacheWrite: 1, Total: 10}
+	require.Equal(t, map[string]ModelTokens{"provider-a": wantProvider}, clone.Stats.ByProvider,
+		"Clone must preserve the complete per-provider breakdown before mutation")
+	clone.Stats.ByProvider["provider-a"] = ModelTokens{Total: 999}
+	clone.Stats.ByProvider["provider-new"] = ModelTokens{Total: 123}
+	assert.Equal(t, map[string]ModelTokens{"provider-a": wantProvider}, original.Stats.ByProvider,
+		"mutating or adding clone provider cells must not alias the original map")
+	delete(clone.Stats.ByProvider, "provider-a")
+	assert.Equal(t, map[string]ModelTokens{"provider-a": wantProvider}, original.Stats.ByProvider,
+		"deleting a cloned provider must not delete the original provider")
 }

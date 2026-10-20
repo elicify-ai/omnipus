@@ -568,8 +568,9 @@ func cwRangeDataOnly(t *testing.T) {
 				{Role: "tool", ToolCallID: "current-recall", Content: res.ForLLM},
 			}
 			cb := NewContextBuilder(t.TempDir())
-			req := cb.BuildMessages(0, live, "CURRENT follow-up", nil, "", "", "", "", "", "", nil)
-			require.Len(t, req, 5, "historical JSONL must stay inside the one current result")
+			messages := cb.BuildMessages(0, live, "CURRENT follow-up", nil, "", "", "", "", "", "", nil)
+			req := requireConversationBeforeVolatileTail(t, messages)
+			require.Len(t, req, 5, "before the single volatile tail, historical JSONL stays inside the one current result")
 			require.True(t, reflect.DeepEqual(req[1:4], live), "the live trio must pass through untouched: %+v", req)
 			require.Equal(t, "user", req[4].Role)
 			require.Equal(t, "CURRENT follow-up", req[4].Content)

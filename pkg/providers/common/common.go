@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -402,51 +403,32 @@ func parseDataAudioURL(mediaURL string) (format, data string, ok bool) {
 
 // --- Response parsing ---
 
-// OpenAINonStreamUsage is the intermediate struct for OpenAI-compatible usage
-// objects (both the non-streaming response's top-level "usage" field and a
-// streaming response's final SSE usage chunk share this shape). It captures
-// prompt_tokens_details.cached_tokens to separate uncached prompt tokens from
-// cached ones before populating UsageInfo. Exported so other providers in this
-// package family (e.g. openai_compat's SSE parser) can decode into it directly
-// instead of duplicating the struct and its conversion logic.
+// OpenAINonStreamUsage carries one chat/SSE usage object to the shared
+// normalizer. Raw bytes are private to decoding and never enter logs or stats.
 type OpenAINonStreamUsage struct {
-	PromptTokens        int `json:"prompt_tokens"`
-	CompletionTokens    int `json:"completion_tokens"`
-	TotalTokens         int `json:"total_tokens"`
-	PromptTokensDetails *struct {
-		CachedTokens int `json:"cached_tokens"`
-	} `json:"prompt_tokens_details,omitempty"`
+	raw json.RawMessage
 }
 
-// ToUsageInfo converts a non-streaming usage chunk to UsageInfo.
-// PromptTokens in the result is uncached input only. CacheReadTokens holds the
-// cached portion. CacheWriteTokens stays 0 (OpenAI does not report cache writes).
-func (u *OpenAINonStreamUsage) ToUsageInfo() *UsageInfo {
-	if u == nil {
-		return nil
+func (u *OpenAINonStreamUsage) UnmarshalJSON(data []byte) error {
+	u.raw = append(u.raw[:0], data...)
+	return nil
+}
+
+// ToUsageInfo normalizes a chat or streaming usage chunk for its catalog host.
+func (u *OpenAINonStreamUsage) ToUsageInfo(providerID ...string) (*UsageInfo, error) {
+	var raw []byte
+	if u != nil {
+		raw = u.raw
 	}
-	cachedTokens := 0
-	if u.PromptTokensDetails != nil {
-		cachedTokens = u.PromptTokensDetails.CachedTokens
+	id := ""
+	if len(providerID) > 0 {
+		id = providerID[0]
 	}
-	promptUncached := u.PromptTokens - cachedTokens
-	if promptUncached < 0 {
-		promptUncached = 0
-	}
-	total := u.TotalTokens
-	if total == 0 {
-		total = promptUncached + cachedTokens + u.CompletionTokens
-	}
-	return &UsageInfo{
-		PromptTokens:     promptUncached,
-		CompletionTokens: u.CompletionTokens,
-		CacheReadTokens:  cachedTokens,
-		TotalTokens:      total,
-	}
+	return promptcache.ParseUsage(id, raw)
 }
 
 // ParseResponse parses a JSON chat completion response body into an LLMResponse.
-func ParseResponse(body io.Reader) (*LLMResponse, error) {
+func ParseResponse(body io.Reader, providerID ...string) (*LLMResponse, error) {
 	var apiResponse struct {
 		Choices []struct {
 			Message struct {
@@ -480,6 +462,10 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 	if len(apiResponse.Choices) == 0 {
 		return nil, fmt.Errorf("API returned 0 choices")
 	}
+	usage, err := apiResponse.Usage.ToUsageInfo(providerID...)
+	if err != nil {
+		return nil, err
+	}
 
 	choice := apiResponse.Choices[0]
 	toolCalls := make([]ToolCall, 0, len(choice.Message.ToolCalls))
@@ -503,7 +489,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 				// classifier (and cost accounting) sees real evidence
 				// instead of having to guess from the fragment alone
 				// (ADR-087 D3.9 / D5).
-				return nil, AttachToolArgumentsEvidence(err, choice.FinishReason, apiResponse.Usage.ToUsageInfo())
+				return nil, AttachToolArgumentsEvidence(err, choice.FinishReason, usage)
 			}
 			arguments = decodedArgs
 		}
@@ -533,7 +519,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 		ReasoningDetails: choice.Message.ReasoningDetails,
 		ToolCalls:        toolCalls,
 		FinishReason:     normalizeFinishReason(choice.FinishReason),
-		Usage:            apiResponse.Usage.ToUsageInfo(),
+		Usage:            usage,
 	}, nil
 }
 
@@ -1011,7 +997,7 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 
 // ReadAndParseResponse peeks at the response body to detect HTML errors,
 // then parses the JSON response into an LLMResponse.
-func ReadAndParseResponse(resp *http.Response, apiBase string) (*LLMResponse, error) {
+func ReadAndParseResponse(resp *http.Response, apiBase string, providerID ...string) (*LLMResponse, error) {
 	contentType := resp.Header.Get("Content-Type")
 	reader := bufio.NewReader(resp.Body)
 	prefix, err := reader.Peek(256)
@@ -1021,7 +1007,7 @@ func ReadAndParseResponse(resp *http.Response, apiBase string) (*LLMResponse, er
 	if LooksLikeHTML(prefix, contentType) {
 		return nil, WrapHTMLResponseError(resp.StatusCode, prefix, contentType, apiBase)
 	}
-	out, err := ParseResponse(reader)
+	out, err := ParseResponse(reader, providerID...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
 	}

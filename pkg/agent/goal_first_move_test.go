@@ -29,6 +29,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -415,23 +417,21 @@ func TestGoalRubricInjection_OncePerGoalTurn(t *testing.T) {
 		}
 	})
 
-	t.Run("inject_at_index_1_noop_on_empty_note", func(t *testing.T) {
+	t.Run("append_user_tail_noop_on_empty_note", func(t *testing.T) {
 		msgs := []providers.Message{
 			{Role: "system", Content: "sys"},
 			{Role: "user", Content: "hi"},
 		}
 		out := injectGoalRubricNote(msgs, "")
-		if len(out) != 2 {
-			t.Fatalf("an empty note must be a no-op, got %d messages", len(out))
-		}
+		require.Equal(t, msgs, out, "an empty note must be a no-op")
 		out = injectGoalRubricNote(msgs, "rubric text")
-		if len(out) != 3 || out[1].Role != "system" || out[1].Content != "rubric text" || out[2].Content != "hi" {
-			t.Fatalf("the note must insert as a system message at index 1, got %+v", out)
-		}
-		// The ORIGINAL slice must be untouched (a fresh slice is returned).
-		if len(msgs) != 2 {
-			t.Fatal("injectGoalRubricNote must not mutate its input slice")
-		}
+		require.Len(t, out, 3, "FR-007: one note follows the unchanged conversation")
+		require.Equal(t, msgs, out[:2], "the rubric must not displace system or user history")
+		require.Equal(t, providers.Message{Role: "user", Content: "rubric text", Volatile: true}, out[2],
+			"FR-007: rubric is request-only user text after history, not a system message")
+		require.Equal(t, []providers.Message{
+			{Role: "system", Content: "sys"}, {Role: "user", Content: "hi"},
+		}, msgs, "injectGoalRubricNote must not mutate its input slice")
 	})
 
 	t.Run("registered_in_midturn_budget", func(t *testing.T) {

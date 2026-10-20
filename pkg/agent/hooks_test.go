@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -192,6 +194,7 @@ func TestAgentLoop_Hooks_ObserverAndLLMInterceptor(t *testing.T) {
 }
 
 type toolHookProvider struct {
+	t     *testing.T
 	mu    sync.Mutex
 	calls int
 }
@@ -219,7 +222,10 @@ func (p *toolHookProvider) Chat(
 		}, nil
 	}
 
-	last := messages[len(messages)-1]
+	conversation := requireConversationBeforeVolatileTail(p.t, messages)
+	last := conversation[len(conversation)-1]
+	require.Equal(p.t, "tool", last.Role, "the rewritten/denied tool result must immediately precede the tail")
+	require.Equal(p.t, "call-1", last.ToolCallID, "the hook result stays paired with its original call")
 	return &providers.LLMResponse{
 		Content: last.Content,
 	}, nil
@@ -279,7 +285,7 @@ func (h *toolRewriteHook) AfterTool(
 }
 
 func TestAgentLoop_Hooks_ToolInterceptorCanRewrite(t *testing.T) {
-	provider := &toolHookProvider{}
+	provider := &toolHookProvider{t: t}
 	al, agent, cleanup := newHookTestLoop(t, provider)
 	defer cleanup()
 
@@ -317,7 +323,7 @@ func (h *denyApprovalHook) ApproveTool(ctx context.Context, req *ToolApprovalReq
 }
 
 func TestAgentLoop_Hooks_ToolApproverCanDeny(t *testing.T) {
-	provider := &toolHookProvider{}
+	provider := &toolHookProvider{t: t}
 	al, agent, cleanup := newHookTestLoop(t, provider)
 	defer cleanup()
 

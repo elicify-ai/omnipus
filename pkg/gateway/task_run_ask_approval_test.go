@@ -81,11 +81,16 @@ func (w *askTaskWorker) Chat(
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.calls++
-	if n := len(msgs); n > 0 && msgs[n-1].Role == "tool" {
-		w.toolResults = append(w.toolResults, msgs[n-1].Content)
+	conversation, err := gatewayConversationBeforeVolatileTail(msgs)
+	if err != nil {
+		return nil, err
+	}
+	last := conversation[len(conversation)-1]
+	if last.Role == "tool" {
+		w.toolResults = append(w.toolResults, last.Content)
 		if len(w.toolResults) == 1 {
 			evidence := "the report tool ran"
-			if strings.Contains(msgs[n-1].Content, "permission_denied") {
+			if strings.Contains(last.Content, "permission_denied") {
 				evidence = "the report tool was refused"
 			}
 			return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{

@@ -39,7 +39,11 @@ properties:
     type: number
     format: double
     minimum: 0
-    description: Total USD cost for this session (based on provider pricing).
+    description: >
+      Total USD cost for this session: the sum of priced portions only.
+      A cost of zero together with unpriced_tokens greater than zero means the
+      session is unpriced, not free. subscription_tokens are excluded from cost;
+      those tokens recorded no dollars.
     example: 0.0023
   tool_calls:
     type: integer
@@ -74,3 +78,26 @@ properties:
       are excluded (they run on a separate engine).
     additionalProperties:
       $ref: './ModelTokens.yaml'
+  by_provider:
+    type: object
+    description: >
+      Per-provider token breakdown. Same cell shape as by_model. Keys are
+      catalog provider ids. Summed from the stored per-call provider id,
+      including after reload. Absent for legacy sessions.
+    additionalProperties:
+      $ref: './ModelTokens.yaml'
+  unpriced_tokens:
+    type: integer
+    minimum: 0
+    description: >
+      Unpriced token portions in this session. Counts only the unpriced portion
+      of each call, not the whole call. A session with cost 0 and
+      unpriced_tokens greater than 0 is unpriced, not free.
+    example: 0
+  subscription_tokens:
+    type: integer
+    minimum: 0
+    description: >
+      Tokens from ChatGPT sign-in calls. Those tokens recorded no dollars and
+      are excluded from cost.
+    example: 0
