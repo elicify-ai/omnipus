@@ -3157,7 +3157,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               <WelcomeState hasAgent={!!activeAgentId} />
             </div>
           ) : (
-            <VirtualizedMessageList messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} />
+            /* key = active session: each chat gets a fresh scroll engine, so switching
+                chats lands at the bottom instead of keeping the previous chat's offset. */
+            <VirtualizedMessageList key={activeSessionId ?? '__none'} messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} />
           )}
 
           <ChatConnectionNotice />
