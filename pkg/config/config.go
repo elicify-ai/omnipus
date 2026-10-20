@@ -977,7 +977,7 @@ type AgentDefaults struct {
 	// agent without its own) was removed (issue #1340, founder ruling
 	// 2026-10-19): an agent's chain is exactly its own configured pairs. A
 	// stale key in config.json is ignored with one load-time WARN
-	// (migration.go::warnRetiredModelFallbacks).
+	// (migration.go::warnRemovedModelFallbacks).
 	ImageModel          string   `json:"image_model,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks []string `json:"image_model_fallbacks,omitempty"`
 	MaxTokens           int      `json:"max_tokens"                      env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOKENS"`

@@ -893,7 +893,7 @@ func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 	// migrated model_fallbacks list is dropped — loudly, never silently.
 	if len(c.Agents.Defaults.ModelFallbacks) > 0 {
 		logger.WarnCF("migrate",
-			"retired setting, ignored: agents.defaults.model_fallbacks is not migrated — set fallbacks per agent as provider/model pairs",
+			"removed setting, ignored: agents.defaults.model_fallbacks is not migrated — set fallbacks per agent as provider/model pairs",
 			map[string]any{"dropped": c.Agents.Defaults.ModelFallbacks})
 	}
 
