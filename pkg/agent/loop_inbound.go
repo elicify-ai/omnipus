@@ -1032,19 +1032,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		rec = running
 	}
 
-	if claimed, claimErr := al.claimAdmittedSecretWake(secretID, sessionID, ts); claimErr != nil || !claimed {
+	if proceed, consumeErr := al.consumeAdmittedWake(ctx, ts, store, sessionID, messageID, secretID, marker, rec.AgentID, saved); consumeErr != nil || !proceed {
 		abort()
-		return "", claimErr
-	}
-	// A secret-only wake has no inbox row. Its successful request-id claim is
-	// the sole consumption boundary: redundant writes after it could strand an
-	// already-claimed request before the body. Ordinary wakes (and saved wake
-	// inputs) still owe their one marker and acknowledgement.
-	if secretID == "" {
-		if consumeErr := al.consumeSteeredWake(ctx, ts, store, sessionID, messageID, marker, rec.AgentID, saved); consumeErr != nil {
-			abort()
-			return "", consumeErr
-		}
+		return "", consumeErr
 	}
 	defer release()
 
@@ -1064,6 +1054,29 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	rootExecution.recordTurnOutcome(err)
 	return result.finalContent, err
+}
+
+// consumeAdmittedWake is processSteeredSystemWake's consumption step, run
+// only once admission is certain. A secret-only wake has no inbox row: its
+// successful request-id claim is the sole consumption boundary, and redundant
+// writes after it could strand an already-claimed request before the body.
+// Ordinary wakes (and saved wake inputs) still owe their one marker and
+// acknowledgement. proceed=false with a nil error means a secret wake whose
+// claim was already taken: stop without running the turn.
+func (al *AgentLoop) consumeAdmittedWake(ctx context.Context, ts *turnState, store *session.UnifiedStore,
+	sessionID, messageID, secretID, marker, agentID string, saved bool,
+) (proceed bool, err error) {
+	claimed, err := al.claimAdmittedSecretWake(secretID, sessionID, ts)
+	if err != nil || !claimed {
+		return false, err
+	}
+	if secretID != "" {
+		return true, nil
+	}
+	if err := al.consumeSteeredWake(ctx, ts, store, sessionID, messageID, marker, agentID, saved); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // consumeSteeredWake writes the wake's one durable consumption marker and its
