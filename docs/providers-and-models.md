@@ -83,9 +83,9 @@ An agent whose model was saved without a provider is resolved differently when t
 
 When an agent's model was saved without a provider, its context window now comes from the provider the model actually runs on. Before, it came from a 128,000-token fallback. For example, `z-ai/glm-5.3` on OpenRouter now gets its catalog window of 1,048,576 tokens. An agent that runs an external command-line tool manages its own context, so it has no Omnipus context window.
 
-You set fallbacks per agent. Open the agent's **Identity** settings and use **Fallback models**. Their order matters. A fallback should use a tool-capable model and a provider with valid credentials; otherwise it cannot rescue the request.
+You set fallbacks per agent. Open the agent's profile and use **Fallback models** on the **Basics** tab. Their order matters. A fallback should use a tool-capable model and a provider with valid credentials; otherwise it cannot rescue the request.
 
-Every fallback is a provider and a model together. Saving a fallback without a provider is refused, and the error names the entry. Omnipus never guesses a provider for a fallback. A fallback saved without a provider before this change is not used: the agent runs on its main model and its complete fallbacks, and the server log names the incomplete entry each time the agent loads. Pick a provider for that fallback in the agent's settings to use it again.
+Every fallback is a provider and a model together. Saving a fallback without a provider is refused, and the error names the entry. Omnipus never guesses a provider for a fallback. A fallback saved without a provider before this change is not used: the agent runs on its main model and its complete fallbacks, and the server log names the incomplete entry each time the agent loads. In the agent's profile that fallback is marked **Incomplete — choose a provider or remove it**: pick its provider, or remove it. Until every fallback has a provider, other changes to the profile still save, but changes to the fallback list do not. The fallback picker only offers models listed by a connected provider, so a new fallback always has both.
 
 The catalog changes over time. Use the provider and model lists in **Settings → Providers** as the live list. Treat the examples on this page as a starting point, not a complete inventory.
 

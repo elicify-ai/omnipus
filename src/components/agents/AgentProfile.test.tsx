@@ -1157,9 +1157,9 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     // Connected providers are populated as options.
     expect(screen.getAllByTestId('fallback-provider-option-openrouter-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByTestId('fallback-provider-option-anthropic-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
-    // An "empty" option exists so the user can clear the provider
-    // (which surfaces the persistent warning — I11).
-    expect(screen.getAllByTestId('fallback-provider-option-empty-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
+    // #1340 (founder: provider and model always come in pairs): there is
+    // NO empty option — a fallback's provider cannot be cleared.
+    expect(screen.queryAllByTestId('fallback-provider-option-empty-z-ai/glm-5-turbo')).toHaveLength(0)
   })
 
   it('changing the provider combobox persists the provider ID (not display name) on save (I9)', async () => {
@@ -1256,7 +1256,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
   // W6-C2 / I11: persistent indicator when the chip's provider field
   // is empty. The model is not in any connected provider, so the
   // fallback would silently fail at runtime.
-  it('shows the persistent warning indicator + aria-label when provider is missing (I11)', async () => {
+  it('shows the persistent incomplete warning when provider is missing (I11, #1340 wording)', async () => {
     // Hydrate with an entry whose provider was empty on the wire (e.g.
     // a free-text model that was never connected). After hydration the
     // chip's `provider` field stays empty because `modelToProvider`
@@ -1268,22 +1268,19 @@ describe('AgentProfile — provider-aware fallback editor', () => {
         { model: 'some-unconnected-slug', provider: '' },
       ],
     })
-    // The unconnected chip has the persistent warning indicator.
+    // The provider-less chip has the persistent warning, now as visible
+    // text naming the way out (#1340: a fallback is always a pair).
     const warning = screen.getAllByTestId('fallback-chip-warning-some-unconnected-slug')[0]
     expect(warning).toBeInTheDocument()
-    expect(warning.getAttribute('aria-label')).toBe(
-      'Provider not connected — fallback will not be used at runtime',
-    )
-    expect(warning.getAttribute('title')).toBe(
-      'Provider not connected — fallback will not be used at runtime',
-    )
+    expect(warning).toHaveTextContent('Incomplete — choose a provider or remove it')
     // The connected chip does NOT show the indicator (regression guard).
     expect(screen.queryByTestId('fallback-chip-warning-z-ai/glm-5-turbo')).toBeNull()
   })
 
-  it('clearing the provider combobox flips the chip into the warning state (I11)', async () => {
-    // Sanity: an explicit user action — picking "—" on the provider
-    // select — must trigger the warning indicator on that chip.
+  it('a fallback provider cannot be cleared: an empty pick keeps the pair and shows no warning (#1340)', async () => {
+    // #1340 (founder: provider and model always come in pairs): the "—"
+    // choice is gone, and an empty value is ignored, so a complete pair
+    // can never be turned into a model alone.
     await openFallbackEditor({
       ...mockCoreAgent,
       fallback_models: [
@@ -1294,9 +1291,8 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     fireEvent.change(screen.getAllByTestId('fallback-provider-select-z-ai/glm-5-turbo')[0], {
       target: { value: '' },
     })
-    await waitFor(() => {
-      expect(screen.getAllByTestId('fallback-chip-warning-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
-    })
+    expect(screen.queryByTestId('fallback-chip-warning-z-ai/glm-5-turbo')).toBeNull()
+    expect((screen.getAllByTestId('fallback-provider-select-z-ai/glm-5-turbo')[0] as HTMLSelectElement).value).toBe('openrouter')
   })
 })
 
