@@ -33,9 +33,8 @@ const TOP_THRESHOLD_PX = 24
 /** The reader's place during a pending older-page request: the first visible entry. */
 interface ReaderAnchor { // not-wire-format: in-memory scroll anchor
   entryId: string
-  /** The entry's offset within the log's content when the request started. */
+  /** The entry's content offset at the last committed request layout. */
   offsetTop: number
-  firstSeq: number | undefined
 }
 
 /** The element's offset within the log's content — scroll-position independent. */
@@ -44,12 +43,11 @@ function contentOffsetOf(log: HTMLElement, el: Element): number {
 }
 
 /** Anchor on the log's first displayed entry (at the top, the first visible one). */
-function captureAnchor(log: HTMLElement, firstSeq: number | undefined): ReaderAnchor {
+function captureAnchor(log: HTMLElement): ReaderAnchor {
   const first = log.querySelector('[data-room-entry-id]')
   return {
     entryId: first?.getAttribute('data-room-entry-id') ?? '',
     offsetTop: first ? contentOffsetOf(log, first) : 0,
-    firstSeq,
   }
 }
 
@@ -69,7 +67,6 @@ export function RoomTranscript({ roomId, snapshotReceived, entries, agentName, h
 }) {
   const logRef = useRef<HTMLDivElement>(null)
   const anchorRef = useRef<ReaderAnchor | null>(null)
-  const firstSeq = entries[0]?.seq
 
   // Keep the opening jump pending through cached rows until this opening's
   // attach snapshot has merged its catch-up. Readiness is snapshotReceived,
@@ -90,30 +87,39 @@ export function RoomTranscript({ roomId, snapshotReceived, entries, agentName, h
     log.scrollTop = log.scrollHeight
   }, [roomId, entries, snapshotReceived])
 
-  // Keep the reader's current place when older entries are prepended.
+  // Keep the reader's place through EVERY committed request layout. The
+  // loading row appears before the page arrives; the hint/loading/error rows
+  // can then shrink or disappear without changing the first message seq.
+  // A request-start measurement alone would restore the pre-loader position
+  // rather than the position the reader has immediately before completion.
   useLayoutEffect(() => {
     const log = logRef.current
     const anchor = anchorRef.current
-    if (!log || !anchor || firstSeq === anchor.firstSeq) return
-    anchorRef.current = null
+    if (!log || !anchor) return
     const anchored = anchor.entryId
       ? log.querySelector(`[data-room-entry-id="${CSS.escape(anchor.entryId)}"]`)
       : null
     // The anchor entry is gone (the window was replaced) — never guess a position.
-    if (!anchored) return
-    // Only the height added ABOVE the anchored entry counts: total scroll
-    // height would also count live messages appended below the reader while
-    // the request was in flight, and would push them out of place.
-    const added = contentOffsetOf(log, anchored) - anchor.offsetTop
-    if (added > 0) log.scrollTop += added
-  }, [firstSeq])
+    if (!anchored) {
+      anchorRef.current = null
+      return
+    }
+    const offsetTop = contentOffsetOf(log, anchored)
+    const delta = offsetTop - anchor.offsetTop
+    // Refresh the baseline after each layout, and release it once the
+    // request settles. Tail growth never enters this entry-offset delta.
+    anchorRef.current = history?.status === 'loading' ? { ...anchor, offsetTop } : null
+    // Negative deltas matter too: removing the history controls can shrink
+    // the content above the reader, even for an empty terminal page.
+    if (delta !== 0) log.scrollTop += delta
+  })
 
   // One user action — reaching the top, or the hint when no scrollbar exists
   // to reach it with — asks for one older page.
   const requestOlder = () => {
     const log = logRef.current
     if (!log || !history || history.status === 'loading') return
-    anchorRef.current = captureAnchor(log, firstSeq)
+    anchorRef.current = captureAnchor(log)
     history.loadOlder()
   }
 
