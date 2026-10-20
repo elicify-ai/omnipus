@@ -15,6 +15,7 @@ import {
 } from '@/lib/api/generated/schemas'
 import type {
   ChannelEntry,
+  ChannelEnableRequest,
   ChannelEnabledResponse,
   OperationResult,
   ChannelRouting,
@@ -37,11 +38,13 @@ export function fetchChannels(): Promise<ChannelEntry[]> {
   return request<ChannelEntry[]>('/channels', undefined, z.array(ChannelEntrySchema) as ZodType<ChannelEntry[]>)
 }
 
-export function enableChannel(id: string): Promise<ChannelEnabledResponse> {
+export function enableChannel(id: string, body?: ChannelEnableRequest): Promise<ChannelEnabledResponse> {
   // Backend returns ChannelEnabledResponse {id, enabled} — not a full ChannelEntry.
+  // Only an explicit pairing_retry body claims chat ownership; ordinary enables
+  // remain bodyless and grant no pairing ownership.
   return request<ChannelEnabledResponse>(
     `/channels/${encodeURIComponent(id)}/enable`,
-    { method: 'PUT' },
+    { method: 'PUT', ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
     ChannelEnabledResponseSchema as ZodType<ChannelEnabledResponse>,
   )
 }

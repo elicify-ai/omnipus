@@ -6,8 +6,9 @@
 // The gateway keeps ONE subscription per connection and channel (a set, not a
 // counter: pkg/gateway/websocket.go::setPairingInterest). So the browser
 // counts the mounted viewers per channel: every viewer (re)sends the
-// subscribe while connected — with the chat request's ids when it has them —
-// and only the LAST viewer to close sends `active: false` and drops the QR
+// subscribe while connected — with the chat request's ids as observation-only
+// correlation hints, never an ownership claim — and only the LAST viewer to
+// close sends `active: false` and drops the QR
 // secret from the store (#283).
 
 import { useEffect, useRef } from 'react'
@@ -46,8 +47,9 @@ export function useWhatsAppPairingInterest(channelId: string, requestId?: string
     }
   }, [channelId])
 
-  // Subscribe while connected; per-connection interest is lost across a
-  // reconnect, so it is re-sent — with the same request identity (BDD-8.8).
+  // Reconnect only restores observation interest, with the same correlation
+  // hints (BDD-8.8). It never claims ownership or enables/restarts the channel;
+  // only an explicit Retry's REST enable request may claim the next attempt.
   useEffect(() => {
     if (!isConnected) return
     useConnectionStore.getState().connection?.send({

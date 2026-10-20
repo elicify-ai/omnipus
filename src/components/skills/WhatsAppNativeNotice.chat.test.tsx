@@ -13,10 +13,9 @@
  *              handling.
  *   K10      — WhatsAppPairingFrame/SubscribeFrame gain optional request_id
  *              and session_id (status now includes "stopped").
- *   Train 2 M8 — the gateway restores a chat's pairing ownership at the
- *              id-carrying subscribe, so Retry sends that subscribe BEFORE the
- *              enable call; a failed enable shows its error and drops the
- *              subscription (Retry ordering rows below).
+ *   Train 2 round 2 — arch-retry-contract.md::Decision moves the explicit
+ *              Retry ownership claim to REST enable. Subscriptions only
+ *              observe; a refused enable leaves the channel disabled.
  * Approved plan (frontend dev): WhatsAppNativeNotice gains optional
  * requestId/sessionId props sent on the subscribe frame; the store keeps
  * request_id and session_id from frames; subscription lifetime is
@@ -33,7 +32,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react'
-import { enableChannel } from '@/lib/api'
+import { disableChannel, enableChannel } from '@/lib/api'
 import type { WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
 
 const { sendSpy, connectionState } = vi.hoisted(() => {
@@ -188,13 +187,10 @@ describe('Row 6 — two mount sites: ref-counted subscription per channel', () =
   })
 })
 
-// Train 2 M8 rows: the gateway restores a chat's pairing ownership at the
-// id-carrying subscribe, so the subscribe must reach it BEFORE the restarted
-// channel emits its first waiting/QR frames — i.e. before the enable REST call,
-// in the stopped gap after disable. A failed enable must surface its visible
-// error AND drop the subscription, leaving nothing that claims a pairing.
-describe('Retry ordering — the id-carrying subscribe precedes the enable call (Train 2 M8)', () => {
-  it('a Retry click sends the id-carrying subscribe BEFORE the enable REST call', async () => {
+// Chief-authorized replacements: arch-retry-contract.md::Decision makes
+// REST enable the explicit ownership claim; subscriptions only observe.
+describe('Retry ordering — explicit REST claim, observation-only subscription (Train 2 round 2)', () => {
+  it('a Retry click disables then sends the exact claim on REST enable without a subscribe toggle', async () => {
     mountNotice({ channelId: CHANNEL, requestId: REQ_A, sessionId: SESSION })
     apply(pairingFrame('timeout', REQ_A, { message: 'saved but not working: pairing timed out' }))
 
@@ -205,16 +201,16 @@ describe('Retry ordering — the id-carrying subscribe precedes the enable call 
 
     await waitFor(() => expect(enableChannel).toHaveBeenCalledTimes(1))
 
-    const subIndex = subscribeCalls().findIndex(
-      (frame) => frame.active === true && frame.request_id === REQ_A && frame.session_id === SESSION,
-    )
-    expect(subIndex, 'the id-carrying subscribe must be sent on Retry').toBeGreaterThanOrEqual(0)
-    expect(sendSpy.mock.invocationCallOrder[subIndex]).toBeLessThan(
+    expect(enableChannel).toHaveBeenCalledExactlyOnceWith(CHANNEL, {
+      pairing_retry: { request_id: REQ_A, session_id: SESSION },
+    })
+    expect(vi.mocked(disableChannel).mock.invocationCallOrder.at(-1)).toBeLessThan(
       vi.mocked(enableChannel).mock.invocationCallOrder[0],
     )
+    expect(sendSpy.mock.calls).toEqual([])
   })
 
-  it('a failed enable shows its visible error and drops the subscription (nothing left claiming the pairing)', async () => {
+  it('a failed enable shows the exact disabled-state alert without toggling observation interest', async () => {
     mountNotice({ channelId: CHANNEL, requestId: REQ_A, sessionId: SESSION })
     apply(pairingFrame('timeout', REQ_A, { message: 'saved but not working: pairing timed out' }))
     vi.mocked(enableChannel).mockRejectedValueOnce(new Error('reload failed'))
@@ -222,16 +218,12 @@ describe('Retry ordering — the id-carrying subscribe precedes the enable call 
     sendSpy.mockClear()
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
 
-    // Visible error, not an endless spinner (enable leg: channel left disabled).
-    expect(
-      await screen.findByText(/the channel was disabled but could not restart/),
-    ).toBeInTheDocument()
-
-    // The id-carrying subscribe already went out before the failed enable, so
-    // the error path must end the subscription: the LAST subscribe frame is
-    // the active:false drop, leaving no claim on a pairing that never started.
-    const subscribes = subscribeCalls()
-    expect(subscribes.length, 'the failure path must still manage the subscription').toBeGreaterThan(0)
-    expect(subscribes[subscribes.length - 1]).toMatchObject({ channel_id: CHANNEL, active: false })
+    // A refusal does not roll back the confirmed disable. Keep observing;
+    // ownership is never granted by a subscription (architect ruling).
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'The channel was disabled before the enable request, but its current state could not be confirmed. Could not restart pairing. Open the WhatsApp connector and try again.Retry',
+    )
+    expect(screen.queryByText('Generating your QR code…')).not.toBeInTheDocument()
+    expect(sendSpy.mock.calls).toEqual([])
   })
 })
