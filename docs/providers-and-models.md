@@ -87,6 +87,8 @@ You set fallbacks per agent. Open the agent's profile and use **Fallback models*
 
 Every fallback is a provider and a model together. Saving a fallback without a provider is refused, and the error names the entry. Omnipus never guesses a provider for a fallback. A fallback saved without a provider before this change is not used: the agent runs on its main model and its complete fallbacks, and the server log names the incomplete entry each time the agent loads. In the agent's profile that fallback is marked **Incomplete — choose a provider or remove it**: pick its provider, or remove it. Until every fallback has a provider, other changes to the profile still save, but changes to the fallback list do not. The fallback picker only offers models listed by a connected provider, so a new fallback always has both.
 
+**Upgrading: the global fallback list is gone.** Older versions let `config.json` set one fallback list for every agent, `agents.defaults.model_fallbacks`. That setting is removed. If your `config.json` still has it, Omnipus starts normally, ignores the list, and logs this warning once at load: `removed setting, ignored: agents.defaults.model_fallbacks — set fallbacks per agent as provider/model pairs`. An agent no longer inherits any fallbacks, and Omnipus never guesses a provider for one. If you relied on that list, open each affected agent's profile and add its fallbacks under **Fallback models** on the **Basics** tab, each as a provider and a model. Until you do, an agent without fallbacks of its own runs on its main model only.
+
 The catalog changes over time. Use the provider and model lists in **Settings → Providers** as the live list. Treat the examples on this page as a starting point, not a complete inventory.
 
 ## Related pages
