@@ -143,8 +143,9 @@ func TestStopRedirectRoot_StopsCurrentTurnThenRunsExactlyOneTurnWithInstruction(
 	if got := stopRedirectUserCopies(requests[2], stopRedirectRootHumanTask); got != 1 {
 		t.Errorf("new turn's model input carries the chat's earlier message %d times, want it once as history", got)
 	}
-	if last := requests[2][len(requests[2])-1]; last.Role != "user" || last.Content != stopRedirectRootInstruction {
-		t.Errorf("new turn's latest input = %s %q, want the user's exact instruction %q", last.Role, last.Content, stopRedirectRootInstruction)
+	conversation := requireConversationBeforeVolatileTail(t, requests[2])
+	if last := conversation[len(conversation)-1]; last.Role != "user" || last.Content != stopRedirectRootInstruction {
+		t.Errorf("new turn's latest conversation input before FR-007 tail = %s %q, want the user's exact instruction %q", last.Role, last.Content, stopRedirectRootInstruction)
 	}
 	provider.open(2)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -186,8 +187,9 @@ func TestStopRedirectRoot_IdleChatRunsExactlyOneTurnWithInstruction(t *testing.T
 	if got := stopRedirectUserCopies(requests[2], stopRedirectRootInstruction); got != 1 {
 		t.Errorf("new turn's model input carries the instruction %d times, want exactly 1", got)
 	}
-	if last := requests[2][len(requests[2])-1]; last.Role != "user" || last.Content != stopRedirectRootInstruction {
-		t.Errorf("new turn's latest input = %s %q, want the user's exact instruction %q", last.Role, last.Content, stopRedirectRootInstruction)
+	conversation := requireConversationBeforeVolatileTail(t, requests[2])
+	if last := conversation[len(conversation)-1]; last.Role != "user" || last.Content != stopRedirectRootInstruction {
+		t.Errorf("new turn's latest conversation input before FR-007 tail = %s %q, want the user's exact instruction %q", last.Role, last.Content, stopRedirectRootInstruction)
 	}
 	provider.open(2)
 	stopRedirectAwaitIdle(t, al, rec.SessionID)

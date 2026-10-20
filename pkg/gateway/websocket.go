@@ -1701,6 +1701,8 @@ type wsStreamer struct {
 	statsCompletionTokens int
 	statsCacheRead        int
 	statsCacheWrite       int
+	callAccounting        []session.TranscriptEntry
+	callAccountingSet     bool
 	statsTokens           int64
 	statsCostUSD          float64
 	statsDuration         time.Duration

@@ -204,6 +204,15 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 	toolName string,
 	filterTimePolicyMap map[string]string,
 ) string {
+	// Only hidden registrations need this extra session-membership check.
+	// Core tools still pass the exact offered-request and live-policy gates.
+	if cfg := al.GetConfig(); cfg != nil && cfg.Tools.Manifest.Compressed &&
+		tools.ToolManifestTier(toolName) == tools.ManifestLazy &&
+		(ts.agent == nil || !ts.agent.Tools.IsCoreTool(toolName)) &&
+		!al.sessionLoadedTools(ts.manifestBucket())[toolName] &&
+		toolName != "set_goal" && toolName != "AskUserQuestion" {
+		return "deny"
+	}
 	filterTimePolicy, wasInFilterMap := filterTimePolicyMap[toolName]
 	if !wasInFilterMap {
 		// Tool was not included at filter time — treat as deny regardless of live policy.

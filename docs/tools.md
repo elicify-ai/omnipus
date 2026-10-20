@@ -123,6 +123,19 @@ To connect one:
 
 Server tools carry the server's name, so you can tell where a tool came from. In both policy editors they sit in their own group under the server's name. One Allow, Ask or Deny control covers every tool from that server. The stricter-wins rule applies to them like any other tool.
 
+### Loaded tools stay with the conversation
+
+When an agent loads a tool on demand, its definition stays advertised for that
+session even after the discovery lifetime expires. Another session of the same
+agent does not inherit that load. This keeps the request's tool list stable; it
+does not send every allowed tool from the first turn.
+
+Retention is not permission. A current Deny, removed server/tool assignment,
+unregistered tool or disconnected server still removes access, including to a
+tool loaded earlier. An unrelated configuration reload does not expire a valid
+session load. A request that must offer only goal-setting tools can deliberately
+narrow the list; the next ordinary request uses the session's loaded list again.
+
 Under Auto-approve, a server tool set to Ask runs without a card only when its server labels it read-only or explicitly not destructive. A tool with no label asks. Most servers send no labels today, so most server tools still ask. Each server tool set to Ask shows its own **Auto: runs** or **Auto: asks** marker.
 
 ## Limits and things to watch

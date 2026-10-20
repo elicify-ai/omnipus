@@ -3,12 +3,16 @@ package agent
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -273,29 +277,50 @@ func TestGateRoomRequest_CancelledRequestIsDiscardedAndNotRun(t *testing.T) {
 }
 
 // §6.14 / BDD-17.30 pricing seam: the room allocation reads the installed
-// RoomCallPricer; the turn's own cost keeps the built-in estimate.
+// RoomCallPricer; the turn's own cost keeps the catalog price. Since the
+// prompt-caching landing the one accounting path for a provider call is
+// accountProviderCall (pkg/agent/prompt_cache_accounting.go); the room step
+// rides it. Expected costs come from backendCallCatalog's rates (input 3,
+// output 15 USD per million tokens): 1000 + 1000 tokens = 0.003 + 0.015.
 func TestRoomCallPricer_FeedsOnlyTheRoomAllocation(t *testing.T) {
+	cat, err := catalog.NewCatalog([]byte(backendCallCatalog))
+	require.NoError(t, err, "load the priced catalog fixture")
+	previous := providers.ProviderCatalog()
+	providers.SetCatalog(cat)
+	t.Cleanup(func() { providers.SetCatalog(previous) })
+
 	al, ts := newTestAgentLoopForRateLimit(t)
-	ts.opts.roomCost = &roomCostMeter{inputs: 1, rooms: map[string]int{}}
+	ts.opts.roomCost = &roomCostMeter{al: al, inputs: 1, rooms: map[string]int{}}
 	usage := &providers.UsageInfo{PromptTokens: 1000, CompletionTokens: 1000, TotalTokens: 2000}
-	estimate := estimateLLMCallCost("fixture-model", usage)
+	const catalogCost = 0.003 + 0.015
+
 	al.SetRoomCallPricer(func(string, providers.UsageInfo) float64 { return 0.03 })
-	al.debitLLMUsage(ts, "fixture-model", usage)
+	ts.accountProviderCall("anthropic", "cache-model", usage)
 	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); cost != 0.03 || unpriced {
-		t.Fatalf("room meter cost = %v, want the pricer's 0.03", cost)
+		t.Fatalf("room meter cost = %v unpriced=%v, want the pricer's 0.03, priced", cost, unpriced)
 	}
-	if _, turnCost := ts.GetTurnStats(); turnCost != estimate || estimate == 0.03 {
-		t.Fatalf("turn cost = %v, want the unchanged estimate %v", turnCost, estimate)
+	if _, turnCost := ts.GetTurnStats(); math.Abs(turnCost-catalogCost) > 1e-12 {
+		t.Fatalf("turn cost = %v, want the unchanged catalog price %v (never the pricer's 0.03)", turnCost, catalogCost)
 	}
+
 	al.SetRoomCallPricer(nil)
-	al.debitLLMUsage(ts, "gpt-4o", usage)
-	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); cost != 0.03+estimateLLMCallCost("gpt-4o", usage) || unpriced {
-		t.Fatalf("without the pricer a known model adds its estimate: %v unpriced=%v", cost, unpriced)
+	ts.accountProviderCall("anthropic", "cache-model", usage)
+	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); math.Abs(cost-(0.03+catalogCost)) > 1e-12 || unpriced {
+		t.Fatalf("without the pricer a priced call adds its catalog price: %v unpriced=%v", cost, unpriced)
 	}
-	// A model with no known price marks the turn unpriced and adds nothing
-	// (§6.14 "plus unpriced turns").
-	al.debitLLMUsage(ts, "fixture-model", usage)
-	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); cost != 0.03+estimateLLMCallCost("gpt-4o", usage) || !unpriced {
+
+	// A model the catalog does not know has no price: the turn is marked
+	// unpriced and nothing is added (§6.14 "plus unpriced turns").
+	ts.accountProviderCall("anthropic", "no-such-model", usage)
+	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); math.Abs(cost-(0.03+catalogCost)) > 1e-12 || !unpriced {
 		t.Fatalf("an unknown-priced call must mark unpriced and add nothing: %v unpriced=%v", cost, unpriced)
+	}
+
+	// A model the catalog lists without a price is unpriced too (fresh meter,
+	// so this case is observed on its own).
+	ts.opts.roomCost = &roomCostMeter{al: al, inputs: 1, rooms: map[string]int{}}
+	ts.accountProviderCall("unpriced-fixture", "cache-model", usage)
+	if _, cost, unpriced, _, _ := ts.opts.roomCost.snapshot(); cost != 0 || !unpriced {
+		t.Fatalf("a catalog-unpriced call must mark unpriced and add nothing: %v unpriced=%v", cost, unpriced)
 	}
 }

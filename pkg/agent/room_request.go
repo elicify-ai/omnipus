@@ -42,6 +42,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -752,8 +753,9 @@ func (al *AgentLoop) steerRoomRequest(msg bus.InboundMessage) bool {
 // (§6.14, BDD-17.30): when installed, the cost the room allocation reads for
 // each model call comes from it instead of the built-in estimate, and the
 // call counts as priced. It changes nothing else: the turn's own stats, the
-// done frame and the transcript keep estimateLLMCallCost. Nil (production)
-// uses the built-in estimate, priced only for a model in the rate table.
+// done frame and the transcript keep the catalog price. Nil (production)
+// uses the catalog price of the call, priced unless the catalog classes it
+// unpriced (§6.14 "unknown price").
 type RoomCallPricer func(model string, usage providers.UsageInfo) float64
 
 // SetRoomCallPricer installs (or, with nil, removes) the room pricing seam.
@@ -766,12 +768,14 @@ func (al *AgentLoop) SetRoomCallPricer(p RoomCallPricer) {
 }
 
 // roomCallCost is the cost of one model call as the room allocation reads it,
-// and whether its price is known (the pricer, or a rate-table match).
-func (al *AgentLoop) roomCallCost(model string, usage *providers.UsageInfo, estimate float64) (float64, bool) {
+// and whether its price is known: the installed pricer, or else the call's own
+// catalog price (pkg/agent/prompt_cache_accounting.go::accountProviderCall),
+// known unless the catalog classes the call unpriced.
+func (al *AgentLoop) roomCallCost(model string, usage *providers.UsageInfo, price promptcache.PriceResult) (float64, bool) {
 	if p := al.roomPricer.Load(); p != nil && usage != nil {
 		return (*p)(model, *usage), true
 	}
-	return estimate, llmModelPriced(model)
+	return price.Cost, price.BillingClass != promptcache.BillingClassUnpriced
 }
 
 // roomCostMeter accumulates the cost and consumed inputs of one ordinary turn
@@ -791,6 +795,21 @@ type roomCostMeter struct {
 	// room message (request id -> room id); settlement is independent of cost.
 	joined   map[string]string
 	finished bool
+}
+
+// addCall debits one accounted provider call to the room allocation (§6.14):
+// the loop's installed room pricer when there is one, else the call's own
+// catalog price. Called from the one accounting path
+// (prompt_cache_accounting.go::accountProviderCall); nil-safe like the rest.
+func (m *roomCostMeter) addCall(turnID, model string, usage *providers.UsageInfo, price promptcache.PriceResult) {
+	if m == nil {
+		return
+	}
+	cost, priced := price.Cost, price.BillingClass != promptcache.BillingClassUnpriced
+	if m.al != nil {
+		cost, priced = m.al.roomCallCost(model, usage, price)
+	}
+	m.addCost(turnID, cost, priced)
 }
 
 func (m *roomCostMeter) addCost(turnID string, cost float64, priced bool) {
@@ -860,16 +879,4 @@ func (m *roomCostMeter) snapshot() (turnID string, cost float64, unpriced bool, 
 		out[k] = v
 	}
 	return m.turnID, m.cost, m.unpriced, m.inputs, out
-}
-
-// llmModelPriced reports whether a model has a known price: a match in the
-// rate table. The fallback rate is a guess, not a price (§6.14 "unknown price").
-func llmModelPriced(model string) bool {
-	lower := strings.ToLower(model)
-	for _, entry := range llmRateTable {
-		if strings.HasPrefix(lower, entry.prefix) {
-			return true
-		}
-	}
-	return false
 }

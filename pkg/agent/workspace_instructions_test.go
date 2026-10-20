@@ -72,11 +72,10 @@ func TestInjectWorkspaceInstructions_SingleMsg(t *testing.T) {
 	assert.Contains(t, result[1].Content, "Workspace Instructions")
 }
 
-// TestInjectWorkspaceInstructions_OrderRelativeToManifestNote proves the
-// call-order contract: calling injectWorkspaceInstructions (inserts at [1])
-// BEFORE injectManifestNote (also inserts at [1]) yields the final ordering:
+// TestInjectWorkspaceInstructions_OrderRelativeToManifestNote locks FR-007:
+// workspace instructions stay before history; the manifest moves after it.
 //
-//	[0] system prompt · [1] manifest note · [2] workspace instructions · [3+] history
+//	[0] system prompt · [1] workspace instructions · [2] history · [3] manifest tail
 func TestInjectWorkspaceInstructions_OrderRelativeToManifestNote(t *testing.T) {
 	msgs := []providers.Message{
 		{Role: "system", Content: "system prompt"},
@@ -90,10 +89,12 @@ func TestInjectWorkspaceInstructions_OrderRelativeToManifestNote(t *testing.T) {
 	out = injectManifestNote(out, manifestNote)
 
 	require.Len(t, out, 4, "both injections must each add 1 message; want 4 total")
-	assert.Equal(t, "system prompt", out[0].Content, "[0] must be the system prompt")
-	assert.Contains(t, out[1].Content, "More tools", "[1] must be the manifest note")
-	assert.Contains(t, out[2].Content, "Workspace Instructions", "[2] must be the workspace instructions")
-	assert.Equal(t, "user", out[3].Role, "[3] must be the original user message")
+	assert.Equal(t, msgs[0], out[0], "[0] must be the unchanged system prompt")
+	assert.Equal(t, providers.Message{Role: "system", Content: wsNote}, out[1],
+		"FR-007: workspace instructions stay before the conversation")
+	assert.Equal(t, msgs[1], out[2], "[2] must be the unchanged original user message")
+	assert.Equal(t, providers.Message{Role: "user", Content: manifestNote, Volatile: true}, out[3],
+		"FR-007: the manifest is a user-role tail after the conversation")
 }
 
 // TestInjectWorkspaceInstructions_NoManifestNote proves that when the manifest

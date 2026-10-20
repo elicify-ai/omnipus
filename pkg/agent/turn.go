@@ -382,8 +382,9 @@ type turnState struct {
 
 	// Accumulated turn-level stats across all LLM iterations in this turn.
 	// Used to populate the "done" WS frame for the session UI (issue #12).
-	turnTokens  int64
-	turnCostUSD float64
+	turnTokens     int64
+	turnCostUSD    float64
+	callAccounting turnCallAccounting
 	// Cache token split accumulated across all LLM iterations in this turn.
 	// Populated from UsageInfo.CacheReadTokens / CacheWriteTokens so the
 	// transcript entry can carry the full breakdown for SessionStats.ByModel.

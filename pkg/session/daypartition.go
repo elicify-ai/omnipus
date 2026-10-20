@@ -267,6 +267,9 @@ type ModelTokens struct {
 	CacheRead  int `json:"cache_read"`
 	CacheWrite int `json:"cache_write"`
 	Total      int `json:"total"`
+	// CacheHitRatio is cache_read / (in + cache_read + cache_write) when that
+	// denominator is greater than zero, and nil when it is zero. Not filled yet.
+	CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
 }
 
 // SessionStats aggregates usage across all partitions.
@@ -298,6 +301,15 @@ type SessionStats struct {
 	// ByModel maps model name → per-model token breakdown.
 	// nil on old sessions; the reader must treat nil as empty.
 	ByModel map[string]ModelTokens `json:"by_model,omitempty"`
+	// ByProvider maps a catalog provider id to the same cell shape as ByModel.
+	// Nil until per-call provider ids are summed. The reader must treat nil as empty.
+	ByProvider map[string]ModelTokens `json:"by_provider,omitempty"`
+	// UnpricedTokens counts only the unpriced portion of calls, not the whole call.
+	// A cost of 0 with UnpricedTokens > 0 is unpriced, not free.
+	UnpricedTokens int `json:"unpriced_tokens,omitempty"`
+	// SubscriptionTokens counts ChatGPT sign-in tokens. Those tokens recorded no
+	// dollars and are excluded from Cost.
+	SubscriptionTokens int `json:"subscription_tokens,omitempty"`
 }
 
 // TranscriptEntry represents one line in a partition JSONL file.
@@ -351,6 +363,8 @@ type TranscriptEntry struct {
 	// omits the model span entirely for those (FR-014) — there is no
 	// "(model not recorded)" placeholder string rendered.
 	Model string `json:"model,omitempty"`
+	// ModelID is the verbatim model id used for this accounting call.
+	ModelID string `json:"model_id,omitempty"`
 	// ErrorCode is the translated LLMError.code (per ADR-051 Rev 3).
 	// Populated by appendErrorTranscript and consumed by the replay path so
 	// the SPA can render the same code/message regardless of the live wire.
@@ -385,6 +399,18 @@ type TranscriptEntry struct {
 
 	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// ProviderID is the catalog provider id for this call. Empty on entries
+	// written before prompt-caching accounting.
+	ProviderID string `json:"provider_id,omitempty"`
+	// BillingClass is "priced", "unpriced", or "subscription".
+	BillingClass string `json:"billing_class,omitempty"`
+	// UnpricedTokens is the unpriced portion of this call, not the whole call.
+	// A mixed call stays BillingClass "priced" and still stores that portion.
+	UnpricedTokens int `json:"unpriced_tokens,omitempty"`
+	// CacheWrite5mTokens and CacheWrite1hTokens are the split write counts when
+	// the provider reported them. CacheWriteTokens stays the sum of the two.
+	CacheWrite5mTokens int `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
 
 	// For compaction entries.
 	MessagesCompacted int `json:"messages_compacted,omitempty"`

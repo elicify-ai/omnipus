@@ -929,19 +929,34 @@ func TestProviderChat_PromptCacheKeySentToOpenAI(t *testing.T) {
 }
 
 func TestProviderChat_PromptCacheKeyOmittedForNonOpenAI(t *testing.T) {
-	tests := []struct {
+	// Rewritten to the provider-table allow-list. Mistral receives the key.
+	// Scaleway, OVHcloud, Groq, DeepSeek and Gemini do not.
+	want := []struct {
 		name    string
 		apiBase string
 	}{
 		{"mistral", "https://api.mistral.ai/v1"},
-		{"gemini", "https://generativelanguage.googleapis.com/v1beta"},
-		{"deepseek", "https://api.deepseek.com/v1"},
+	}
+	omit := []struct {
+		name    string
+		apiBase string
+	}{
+		{"scaleway", "https://api.scaleway.ai/v1"},
+		{"ovhcloud", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"},
 		{"groq", "https://api.groq.com/openai/v1"},
-		{"minimax", "https://api.minimaxi.com/v1"},
+		{"deepseek", "https://api.deepseek.com/v1"},
+		{"gemini", "https://generativelanguage.googleapis.com/v1beta"},
 		{"ollama_local", "http://localhost:11434/v1"},
 	}
-
-	for _, tt := range tests {
+	for _, tt := range want {
+		t.Run(tt.name, func(t *testing.T) {
+			body := chatWithCacheKey(t, tt.apiBase)
+			if body["prompt_cache_key"] != "agent-main" {
+				t.Fatalf("prompt_cache_key = %v, want the key sent to %s", body["prompt_cache_key"], tt.name)
+			}
+		})
+	}
+	for _, tt := range omit {
 		t.Run(tt.name, func(t *testing.T) {
 			body := chatWithCacheKey(t, tt.apiBase)
 			if _, exists := body["prompt_cache_key"]; exists {
@@ -960,7 +975,7 @@ func TestSupportsPromptCacheKey(t *testing.T) {
 		{"https://api.openai.com/v1/", true},
 		{"https://myresource.openai.azure.com/openai/deployments/gpt-4", true},
 		{"https://eastus.openai.azure.com/v1", true},
-		{"https://api.mistral.ai/v1", false},
+		{"https://api.mistral.ai/v1", true},
 		{"https://generativelanguage.googleapis.com/v1beta", false},
 		{"https://api.deepseek.com/v1", false},
 		{"https://api.groq.com/openai/v1", false},

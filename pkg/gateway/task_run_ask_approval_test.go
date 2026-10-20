@@ -109,8 +109,15 @@ func (w *taskRefusalWorker) Chat(
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.calls++
-	if n := len(msgs); n > 0 && msgs[n-1].Role == "tool" {
-		w.toolResults = append(w.toolResults, msgs[n-1].Content)
+	// Merge of release 200d2aac8 (prompt caching appends a volatile tail, so
+	// the scripted worker reads the conversation before it) with Train 3's
+	// three-step scenario (refused probe, read_file control, claim).
+	conversation, err := gatewayConversationBeforeVolatileTail(msgs)
+	if err != nil {
+		return nil, err
+	}
+	if last := conversation[len(conversation)-1]; last.Role == "tool" {
+		w.toolResults = append(w.toolResults, last.Content)
 		switch len(w.toolResults) {
 		case 1:
 			return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
@@ -118,7 +125,7 @@ func (w *taskRefusalWorker) Chat(
 				Arguments: map[string]any{"path": taskControlFileName},
 			}}}, nil
 		case 2:
-			w.controlText = msgs[n-1].Content
+			w.controlText = last.Content
 			evidence := "the probe was refused and the control file read: " + w.controlText
 			return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
 				ID: "call-claim", Type: "function", Name: tools.GoalClaimToolName,

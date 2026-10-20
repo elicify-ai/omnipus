@@ -15,8 +15,8 @@
 //	        NEITHER is role "tool". When merging, Content is joined with "\n"
 //	        and Media, ReasoningContent, SystemParts are preserved.
 //
-//	Rule C: An assistant message carrying ToolCalls passes through verbatim —
-//	        never merged, never dropped.
+//	Rule C: An assistant message carrying ToolCalls or signed ThinkingBlocks
+//	        passes through verbatim — never merged, never dropped.
 //
 //	Rule D: A role="tool" message is a TRUE ORPHAN when its ToolCallID is not
 //	        declared by any preceding assistant's ToolCalls[].ID in the same
@@ -76,13 +76,13 @@ func normalizeMessagesForProvider(msgs []providers.Message) []providers.Message 
 		switch m.Role {
 		case "assistant":
 			// Rule A: drop an empty/no-op assistant (blank Content, no ToolCalls).
-			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 {
+			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 && len(m.ThinkingBlocks) == 0 {
 				droppedEmptyAssistant++
 				continue
 			}
 			// Rule C: assistant carrying ToolCalls passes through verbatim.
 			// Accumulate its declared IDs for Rule D before appending.
-			if len(m.ToolCalls) > 0 {
+			if len(m.ToolCalls) > 0 || len(m.ThinkingBlocks) > 0 {
 				for _, tc := range m.ToolCalls {
 					if tc.ID != "" {
 						declaredToolIDs[tc.ID] = true
@@ -155,7 +155,7 @@ func appendOrMergePlainText(out []providers.Message, m providers.Message) []prov
 
 	// Only merge when roles match, the predecessor is also a plain-text message
 	// (no ToolCalls), and neither is a role="tool" message.
-	if last.Role != m.Role || last.Role == "tool" || len(last.ToolCalls) > 0 {
+	if last.Role != m.Role || last.Role == "tool" || len(last.ToolCalls) > 0 || len(last.ThinkingBlocks) > 0 || len(m.ThinkingBlocks) > 0 {
 		return append(out, m)
 	}
 
@@ -189,16 +189,17 @@ func needsNormalization(msgs []providers.Message) bool {
 	declaredToolIDs := map[string]bool{}
 	var lastKeptRole string
 	var lastKeptHasToolCalls bool
+	var lastKeptHasThinking bool
 
 	for _, m := range msgs {
 		switch m.Role {
 		case "assistant":
 			// Rule A: empty assistant.
-			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 {
+			if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 && len(m.ThinkingBlocks) == 0 {
 				return true
 			}
 			// Rule B: consecutive plain-text assistants.
-			if len(m.ToolCalls) == 0 && lastKeptRole == "assistant" && !lastKeptHasToolCalls {
+			if len(m.ToolCalls) == 0 && len(m.ThinkingBlocks) == 0 && lastKeptRole == "assistant" && !lastKeptHasToolCalls && !lastKeptHasThinking {
 				return true
 			}
 			// Accumulate declared IDs.
@@ -209,6 +210,7 @@ func needsNormalization(msgs []providers.Message) bool {
 			}
 			lastKeptRole = "assistant"
 			lastKeptHasToolCalls = len(m.ToolCalls) > 0
+			lastKeptHasThinking = len(m.ThinkingBlocks) > 0
 
 		case "tool":
 			// Rule D: true orphan.
@@ -224,6 +226,7 @@ func needsNormalization(msgs []providers.Message) bool {
 			}
 			lastKeptRole = "tool"
 			lastKeptHasToolCalls = false
+			lastKeptHasThinking = false
 
 		default:
 			// Rule B: consecutive same-role plain-text (user, system, etc.).
@@ -232,6 +235,7 @@ func needsNormalization(msgs []providers.Message) bool {
 			}
 			lastKeptRole = m.Role
 			lastKeptHasToolCalls = false
+			lastKeptHasThinking = false
 		}
 	}
 	return false

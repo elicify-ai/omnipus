@@ -636,23 +636,7 @@ func FixtureSession_Populated() Session {
 		Partitions: partitions,
 		Model:      &model,
 		Type:       sessionType,
-		Stats: struct {
-			ByModel *map[string]struct {
-				CacheRead  *int `json:"cache_read,omitempty"`
-				CacheWrite *int `json:"cache_write,omitempty"`
-				In         *int `json:"in,omitempty"`
-				Out        *int `json:"out,omitempty"`
-				Total      int  `json:"total"`
-			} `json:"by_model,omitempty"`
-			Cost             float64 `json:"cost"`
-			MessageCount     int     `json:"message_count"`
-			TokensCacheRead  *int    `json:"tokens_cache_read,omitempty"`
-			TokensCacheWrite *int    `json:"tokens_cache_write,omitempty"`
-			TokensIn         int     `json:"tokens_in"`
-			TokensOut        int     `json:"tokens_out"`
-			TokensTotal      int     `json:"tokens_total"`
-			ToolCalls        int     `json:"tool_calls"`
-		}{
+		Stats: SessionStats{
 			Cost:         0.0412,
 			MessageCount: 10,
 			TokensIn:     1200,
@@ -683,23 +667,7 @@ func FixtureSession_Edge() Session {
 		Channel:    "telegram",
 		Partitions: []string{},
 		Type:       sessionType,
-		Stats: struct {
-			ByModel *map[string]struct {
-				CacheRead  *int `json:"cache_read,omitempty"`
-				CacheWrite *int `json:"cache_write,omitempty"`
-				In         *int `json:"in,omitempty"`
-				Out        *int `json:"out,omitempty"`
-				Total      int  `json:"total"`
-			} `json:"by_model,omitempty"`
-			Cost             float64 `json:"cost"`
-			MessageCount     int     `json:"message_count"`
-			TokensCacheRead  *int    `json:"tokens_cache_read,omitempty"`
-			TokensCacheWrite *int    `json:"tokens_cache_write,omitempty"`
-			TokensIn         int     `json:"tokens_in"`
-			TokensOut        int     `json:"tokens_out"`
-			TokensTotal      int     `json:"tokens_total"`
-			ToolCalls        int     `json:"tool_calls"`
-		}{},
+		Stats:      SessionStats{},
 	}
 }
 
