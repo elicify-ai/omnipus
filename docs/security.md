@@ -493,6 +493,8 @@ An authorized `environment_setup` run can create and read new files directly ins
 
 When an agent needs a provider key, an MCP server environment secret, or a channel credential, it can open a **secure secret card** in the web app. Type the value into that card, not into the chat. The card names the acting agent, explains why the secret is needed, and shows its destination. An Omnipus helper's card appears in Omnipus's main chat; other helpers must ask their parent.
 
+Each value must contain 4–16,384 bytes of UTF-8 text and no NUL character, and the complete submission is limited to 65,536 bytes. A card holds at most eight fields; the server chooses them, including Slack's required bot-token and app-token pair. Only one secret request may be pending in a chat session, and at most 64 may be pending across the installation; finish or cancel an existing request before asking for another when a limit is reached.
+
 While a secure card is waiting, the sidebar marks a main chat as needing attention: the chat where the card was raised when that is a main chat, otherwise the main chat above the helper that raised it, otherwise the asking agent's main chat in that workspace. Known limit: when that agent has no main chat in the workspace, no sidebar entry is marked; the card still shows in its own chat. When the server cannot read the waiting cards, the entry shows attention as unknown, not "nothing pending". Once the card is no longer waiting, it no longer counts toward the cue.
 
 | Action or state | What happens |
@@ -530,11 +532,11 @@ These are shared installation settings. The agent first reads the current entry 
 
 ### Adding a new MCP server that needs a secret
 
-For a new server, the destination must exist before it can be shown on a card:
+For a new stdio MCP server that needs an environment-variable secret, the non-secret server description must exist before it can be shown on a card. This environment-secret flow does not support HTTP or SSE servers:
 
 | Step | What you should expect |
 |---|---|
-| 1. Save the non-secret server description | Approve its transport, executable and arguments, or URL. The server entry is saved and a connection is attempted. A server that needs a secret may not connect yet: the entry remains saved, but credential setup is unfinished. |
+| 1. Save the non-secret server description | Approve the stdio server's executable and arguments. The server entry is saved and a connection is attempted. A server that needs a secret may not connect yet: the entry remains saved, but credential setup is unfinished. |
 | 2. Submit the secure card | The agent requests the environment-variable secret for that saved server. Submit saves a version and returns only its reference name to the continuation. |
 | 3. Approve reference attachment | The agent re-reads the server's revision, confirms the attachment and calls `add_mcp_server` with the reference map. This attaches references to the unchanged server; it is not a general update command. |
 | 4. Read the connection result | Omnipus attempts live reconciliation and reports the connection status. A saved reference is not proof that the server connected or that its tools work. If live reconciliation fails, the result is **saved but not working** with the failure reason, even when the server is still connected with its previous configuration. Tools still require their normal assignments and policies. |
@@ -560,7 +562,7 @@ The card shows the owner as "Mia in Sales" and the variable name. Omnipus can re
 
 ### Listing and removing secrets in chat
 
-Agents see stored secrets by **reference name**, never by value. `list_secrets` shows each entry's reference name, kind, version, destination, the integrations that use it, and whether it is in use; an ordinary agent sees only its own private variables in the current workspace, while Omnipus sees every stored reference. An entry saved in Settings that no integration uses yet is not listed there, but can still be removed by name.
+Agents see stored secrets by **reference name**, never by value. `list_secrets` shows each entry's reference name, kind, version, destination, the integrations that use it, and whether it is in use; an ordinary agent sees only its own private variables in the current workspace, while Omnipus sees every stored reference. Entries saved through Settings (or by boot configuration) are listed too, with the kind **unbound** and the destination **Stored in Settings; no recipient recorded**: no recipient was recorded for them, which says nothing about whether they are used. Their consumer list shows which integrations use them; one with no consumers is shown as stored, not in use. Omnipus sees their names, never their values, and can remove them by name.
 
 Only Omnipus can remove a secret, with `remove_secret`, and you approve it first. The approval card lists every integration that uses the reference before anything is deleted. Removing a reference that is still in use is allowed: after removal the configuration is reloaded, the integrations that used it stop using it and show as degraded, and the next start keeps running with them degraded until you give them a new secret. The result reports three separate facts — whether the value was durably deleted, what changed for running connections, and whether the configuration still starts. Removing an older version that a replacement superseded leaves the current version working. Each removal is recorded in the audit log as `secret.removed`, without the value.
 
