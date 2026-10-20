@@ -162,6 +162,25 @@ export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { chan
     try {
       await disableChannel(channelId)
       disableSucceeded = true
+
+      // Re-register pairing interest (toggle false → true) BEFORE the enable
+      // call, in the gap where the channel is stopped and cannot emit: the
+      // gateway restores a chat's pairing ownership at the id-carrying
+      // subscribe (Train 2 M8), so a subscribe that arrives after enable misses
+      // the restarted channel's first waiting/QR frames (~one rotation).
+      useConnectionStore.getState().connection?.send({
+        type: 'whatsapp_pairing_subscribe',
+        channel_id: channelId,
+        active: false,
+      })
+      useConnectionStore.getState().connection?.send({
+        type: 'whatsapp_pairing_subscribe',
+        channel_id: channelId,
+        active: true,
+        ...(requestId ? { request_id: requestId } : {}),
+        ...(sessionId ? { session_id: sessionId } : {}),
+      })
+
       await enableChannel(channelId)
     } catch (err) {
       // Restart failed (gateway unreachable, reload error) — surface the error
@@ -176,6 +195,16 @@ export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { chan
         step: disableSucceeded ? 'enable' : 'disable',
         message: err instanceof Error ? err.message : String(err),
       })
+      // Only the enable leg can fail after the id-carrying subscribe went out
+      // (disable failure returns before any subscribe is sent). Drop it so no
+      // subscription survives that claims a pairing the restart never produced.
+      if (disableSucceeded) {
+        useConnectionStore.getState().connection?.send({
+          type: 'whatsapp_pairing_subscribe',
+          channel_id: channelId,
+          active: false,
+        })
+      }
       useWhatsAppPairingStore.getState().apply({
         type: 'whatsapp_pairing',
         channel_id: channelId,
@@ -189,22 +218,6 @@ export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { chan
       return
     }
     retryInFlightRef.current = false
-
-    // Re-register pairing interest for this connection (toggle false → true);
-    // the freshly-started channel emits its first QR over whatsapp_pairing and
-    // the store picks it up under this instance id.
-    useConnectionStore.getState().connection?.send({
-      type: 'whatsapp_pairing_subscribe',
-      channel_id: channelId,
-      active: false,
-    })
-    useConnectionStore.getState().connection?.send({
-      type: 'whatsapp_pairing_subscribe',
-      channel_id: channelId,
-      active: true,
-      ...(requestId ? { request_id: requestId } : {}),
-      ...(sessionId ? { session_id: sessionId } : {}),
-    })
 
     // Bounded timeout: if no `code` frame arrives within RETRY_TIMEOUT_MS, revert
     // to the original state with the Retry affordance (no endless spinner).
