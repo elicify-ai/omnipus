@@ -1665,6 +1665,7 @@ function newPeerConnection() {
 // shutdown retires both the active attempt and any pending pass.
 let captureInFlight = false;
 let captureRerunRequested = false;
+let initialCaptureCommand = null;
 
 function validatedCaptureCommand(command) {
   let next = captureCommandFrom(command || desiredCaptureCommand || readConfig());
@@ -1685,22 +1686,39 @@ function validatedCaptureCommand(command) {
   return next;
 }
 
-async function runCaptureAndOffer(command) {
+async function runCaptureAndOffer(command, initial = false) {
   const next = validatedCaptureCommand(command);
+  // Socket-open capture and the gateway's binding replay can describe the
+  // same initial work. Keep that acquisition/offer alive instead of canceling
+  // it just to acquire the same tab again. This window ends when startup
+  // drains or a different command supersedes it; later explicit recovery,
+  // including overlapping same-generation recovery, still requests a rerun.
+  if (captureInFlight && initialCaptureCommand &&
+      next.capture_generation === initialCaptureCommand.capture_generation &&
+      next.target_id === initialCaptureCommand.target_id &&
+      next.expected_width === initialCaptureCommand.expected_width &&
+      next.expected_height === initialCaptureCommand.expected_height &&
+      next.capture_scale === initialCaptureCommand.capture_scale) {
+    record('runCaptureAndOffer: equivalent initial replay, retaining startup');
+    return;
+  }
   desiredCaptureCommand = next;
   if (captureInFlight) {
+    initialCaptureCommand = null;
     captureGeneration += 1;
     captureRerunRequested = true;
     record('runCaptureAndOffer: already in flight, coalescing into a rerun');
     return;
   }
   captureInFlight = true;
+  initialCaptureCommand = initial ? next : null;
   try {
     do {
       captureRerunRequested = false;
       await runCaptureAndOfferOnce(desiredCaptureCommand);
     } while (captureRerunRequested && !shuttingDown);
   } finally {
+    initialCaptureCommand = null;
     captureInFlight = false;
     captureRerunRequested = false;
   }
@@ -2076,9 +2094,10 @@ function connectOnce(cfg) {
     // browser_capture_hello is client -> server only (no ack frame) — a
     // rejected token surfaces as the gateway closing the connection, not a
     // nack. Proceed straight to capture + offer; the reconnect watchdog
-    // handles the rejection case via the resulting WS close.
+    // handles the rejection case via the resulting WS close. Mark only this
+    // automatic startup as eligible to share an equivalent binding replay.
     try {
-      await runCaptureAndOffer();
+      await runCaptureAndOffer(undefined, true);
     } catch (e) {
       window.__omnipusState.lastError = String(e);
       setStatus('error');

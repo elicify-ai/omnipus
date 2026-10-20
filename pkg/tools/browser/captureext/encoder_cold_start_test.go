@@ -1,0 +1,262 @@
+package captureext
+
+import (
+	"os/exec"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// The failure dispatch requires equivalent startup synchronization to retain the
+// first acquisition, without disabling later same-generation recovery. Exercise
+// the complete script with configuration present before its real entry point.
+func TestEncoderColdStartReplayOwnership(t *testing.T) {
+	for _, stage := range []string{"lookup", "stream-id", "media", "offer"} {
+		for _, mode := range []string{"baseline", "replay", "repeated-replay", "changed-target", "changed-geometry", "enriched", "stale", "conflicting-target", "conflicting-geometry", "conflicting-scale", "shutdown"} {
+			t.Run(stage+"/"+mode, func(t *testing.T) {
+				runEncoderColdStartJS(t, stage, mode)
+			})
+		}
+	}
+	for _, mode := range []string{"recovery-before-answer", "recovery-connected", "recovery-overlap", "media-rejection"} {
+		t.Run(mode, func(t *testing.T) {
+			runEncoderColdStartJS(t, "media", mode)
+		})
+	}
+}
+
+func runEncoderColdStartJS(t *testing.T, stage, mode string) {
+	t.Helper()
+	cmd := exec.Command("node", "-e", "const stage="+strconv.Quote(stage)+",mode="+strconv.Quote(mode)+";"+encoderColdStartJS)
+	cmd.Stdin = strings.NewReader(embeddedEncoderJS(t))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("cold-start encoder behavior: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "COLD_START_CASE_COMPLETE "+stage+"/"+mode) {
+		t.Fatalf("cold-start case did not complete: %s", out)
+	}
+}
+
+const encoderColdStartJS = `
+'use strict';
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const source = require('node:fs').readFileSync(0, 'utf8');
+// Unfinished async work must not inherit Node's default successful exit.
+process.exitCode = 1;
+const first = {capture_generation:1,target_id:'fixture',expected_width:633,expected_height:741,capture_scale:1};
+const replacement = {capture_generation:2,target_id:'replacement',expected_width:888,expected_height:456,capture_scale:1};
+const deferred = () => {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => {resolve=yes;reject=no});
+  return {promise,resolve,reject};
+};
+const entered = deferred(), release = deferred();
+const counts = {}, frames = [], streams = [], peers = [], selections = [], constraints = [], replaced = [], warnings = [];
+const timers = new Map();
+let socket, sandbox, run, opening, recoveryBarrier;
+async function barrier(name) {
+  counts[name] = (counts[name] || 0) + 1;
+  if (name === 'media' && recoveryBarrier) {
+    const held=recoveryBarrier;recoveryBarrier=null;
+    held.entered.resolve();await held.release.promise;
+  }
+  if (name === stage && counts[name] === 1) {
+    entered.resolve();
+    await release.promise;
+  }
+}
+function later(fn, delay, ...args) {
+  const timer = setTimeout(() => {timers.delete(timer);fn(...args)}, delay);
+  timers.set(timer, 'timeout');
+  return timer;
+}
+function every(fn, delay, ...args) {
+  const timer = setInterval(fn, delay, ...args);
+  timers.set(timer, 'interval');
+  return timer;
+}
+function cancel(timer) {
+  timers.delete(timer);
+  clearTimeout(timer);
+  clearInterval(timer);
+}
+class Socket {
+  static OPEN = 1;
+  constructor() {this.readyState=0;this.listeners={};this.closes=0;socket=this}
+  addEventListener(name, fn) {(this.listeners[name] ||= []).push(fn)}
+  open() {this.readyState=1;return Promise.all((this.listeners.open || []).map(fn=>fn({})))}
+  send(raw) {
+    assert.equal(this.readyState, 1, 'only an open socket can send');
+    const frame=JSON.parse(raw);
+    delete frame.token;
+    frames.push(frame);
+  }
+  close() {
+    this.closes++;
+    this.readyState=3;
+    for (const fn of this.listeners.close || []) fn({});
+  }
+}
+class Peer {
+  constructor() {
+    this.connectionState='new';this.iceConnectionState='new';this.signalingState='stable';
+    this.iceGatheringState='complete';this.senders=[];this.closes=0;peers.push(this);
+  }
+  addTrack(track) {
+    const sender={track,getParameters:()=>({encodings:[{}]}),setParameters:async()=>{},getStats:async()=>new Map(),
+      replaceTrack:async next=>{replaced.push(next.kind);sender.track=next}};
+    this.senders.push(sender);
+  }
+  getSenders() {return this.senders}
+  getTransceivers() {return []}
+  async createOffer() {
+    await barrier('offer');
+    return {type:'offer',sdp:'v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 VP8/90000\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n'};
+  }
+  async setLocalDescription(offer) {this.localDescription=offer;this.signalingState='have-local-offer'}
+  async setRemoteDescription(answer) {
+    this.remoteDescription=answer;this.signalingState='stable';
+    this.connectionState='connected';this.iceConnectionState='connected';
+    this.oniceconnectionstatechange();this.onconnectionstatechange();
+  }
+  close() {this.closes++;this.connectionState='closed';this.iceConnectionState='closed'}
+}
+function streamFor(request) {
+  const tracks=['video','audio'].map(kind=>({kind,readyState:'live',muted:false,stops:0,label:'synthetic-'+kind,
+    stop() {this.stops++;this.readyState='ended'},
+    getSettings:()=>kind==='video'?{width:request.video.mandatory.maxWidth,height:request.video.mandatory.maxHeight}:{}}));
+  const stream={tracks,getTracks:()=>tracks,getVideoTracks:()=>[tracks[0]],getAudioTracks:()=>[tracks[1]]};
+  streams.push(stream);
+  return stream;
+}
+const offers = () => frames.filter(frame=>frame.type==='browser_capture_offer');
+const stopped = () => streams.flatMap(stream=>stream.tracks).reduce((n,track)=>n+track.stops,0);
+async function control(frame) {
+  sandbox.incoming=JSON.stringify({type:'browser_capture_control',...frame});
+  await run('handleWsMessage(incoming)');
+}
+async function replay(frame=first) {await control({action:'recapture',...frame})}
+async function main() {
+  const initial={...first};
+  if (mode==='enriched') {delete initial.expected_width;delete initial.expected_height}
+  sandbox={
+    window:{__omnipusCapture:{token:'synthetic-not-recorded',ingestUrl:'ws://fixture',stunServer:'',...initial}},
+    console:{log(){},warn(...args){warnings.push(args.map(String).join(' '))}},
+    setTimeout:later,clearTimeout:cancel,setInterval:every,clearInterval:cancel,
+    WebSocket:Socket,RTCPeerConnection:Peer,RTCRtpSender:{getCapabilities:()=>({codecs:[]})},
+    chrome:{
+      runtime:{getManifest:()=>({version:'test'})},
+      debugger:{getTargets:async()=>{await barrier('lookup');return [
+        {id:'fixture',type:'page',tabId:7},{id:'replacement',type:'page',tabId:99}]}},
+      tabs:{get:async()=>({width:633,height:741}),update:async()=>({})},
+      tabCapture:{getMediaStreamId:async selection=>{
+        selections.push(selection.targetTabId);await barrier('stream-id');return 'source-'+selection.targetTabId}},
+    },
+    navigator:{mediaDevices:{getUserMedia:async request=>{
+      constraints.push(request);const stream=streamFor(request);await barrier('media');return stream}}},
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(source,sandbox);
+  run=code=>vm.runInContext(code,sandbox);
+  assert.ok(socket instanceof Socket, 'real entry point creates the socket');
+  opening=socket.open();
+  assert.equal(await Promise.race([entered.promise.then(()=>true),opening.then(()=>false)]),true,'startup must reach the controlled barrier');
+  assert.equal(frames.filter(frame=>frame.type==='browser_capture_hello').length,1,'one hello precedes capture');
+  assert.equal(offers().length,0,'no offer may escape the held stage');
+  let expected=first;
+  if (mode==='changed-target') {expected=replacement;await replay(expected)}
+  else if (mode==='changed-geometry') {expected={...replacement,target_id:'fixture'};await replay(expected)}
+  else if (mode==='stale') {
+    // Advance from generation one to two, then reject a delayed generation one.
+    expected=replacement;await replay(expected);
+    await assert.rejects(()=>replay(first),{name:'Error',message:'stale capture generation'});
+  } else if (mode.startsWith('conflicting-')) {
+    const invalid={...first};
+    if (mode==='conflicting-target') invalid.target_id='replacement';
+    if (mode==='conflicting-geometry') invalid.expected_width=888;
+    if (mode==='conflicting-scale') invalid.capture_scale=2;
+    await assert.rejects(()=>replay(invalid),{name:'Error',message:'capture generation reused for a different source or geometry'});
+  } else if (mode!=='baseline') {
+    await replay();
+    if (mode==='repeated-replay') await replay();
+  }
+  if (mode==='shutdown') await control({action:'shutdown'});
+  if (mode==='media-rejection') release.reject(new Error('cold media denied'));
+  else release.resolve();
+  await opening;
+  await run('senderParamsChain');
+  assert.equal(run('captureInFlight'),false,'startup operation drains');
+  assert.equal(run('captureRerunRequested'),false,'no abandoned queued command');
+  if (mode==='shutdown') {
+    assert.deepEqual(offers(),[],'shutdown cannot publish an offer');
+    assert.equal(constraints.length,stage==='lookup'||stage==='stream-id'?0:1,'shutdown never starts a queued capture');
+    assert.equal(stopped(),streams.length*2,'shutdown releases every acquired audio/video track');
+    assert.equal(run('window.__omnipusState.status'),'shutdown','late completion cannot resurrect startup');
+  } else if (mode==='media-rejection') {
+    assert.equal(run('window.__omnipusState.lastError'),'Error: cold media denied','a matching replay cannot hide a current acquisition failure');
+    assert.equal(socket.closes,1,'current acquisition failure closes the failed socket');
+    assert.deepEqual(offers(),[],'failed acquisition cannot publish an offer');
+    assert.equal(constraints.length,1,'failure must not be silently retried as a retired attempt');
+  } else {
+    assert.equal(offers().length,1,'only one current initial offer');
+    const offer=offers()[0];
+    assert.deepEqual([offer.capture_generation,offer.target_id],[expected.capture_generation,expected.target_id],'offer identifies the requested source');
+    const changed=['changed-target','changed-geometry','stale','enriched'].includes(mode);
+    const expectedAcquisitions=changed&&(stage==='media'||stage==='offer')?2:1;
+    assert.equal(counts.lookup,changed?2:1,'equivalent initial replay must not restart target lookup');
+    assert.equal(constraints.length,expectedAcquisitions,'equivalent initial replay must retain the first media acquisition');
+    assert.equal(stopped(),(expectedAcquisitions-1)*2,'only superseded media may be stopped');
+    assert.deepEqual(streams.at(-1).tracks.map(track=>track.readyState),['live','live'],'current audio/video remain live');
+    if (mode==='changed-target'||mode==='stale') {
+      assert.equal(selections.at(-1),99,'replacement resolves the exact new tab');
+    } else assert.equal(selections.at(-1),7,'unchanged source stays on the assigned tab');
+    // Grid dimensions are rounded down to multiples of twelve by the capture
+    // contract; these fixture sizes remain below the physical pixel budget.
+    const dims=constraints.at(-1).video.mandatory;
+    assert.deepEqual([dims.maxWidth,dims.maxHeight],[Math.floor(expected.expected_width/12)*12,Math.floor(expected.expected_height/12)*12],'capture uses the requested immutable geometry');
+    if (mode.startsWith('recovery-')) {
+      const connected=mode!=='recovery-before-answer';
+      if (connected) {
+        sandbox.incoming=JSON.stringify({type:'browser_capture_answer',sdp:'v=0\r\n',capture_generation:offer.capture_generation,target_id:offer.target_id,offer_id:offer.offer_id});
+        await run('handleWsMessage(incoming)');await run('senderParamsChain');
+        assert.equal(peers[0].connectionState,'connected','recovery begins on a connected peer');
+      }
+      if (mode==='recovery-overlap') {
+        const held={entered:deferred(),release:deferred()};recoveryBarrier=held;
+        const recovery=replay();
+        try {
+          assert.equal(await Promise.race([held.entered.promise.then(()=>true),recovery.then(()=>false)]),true,'later recovery must reach media acquisition');
+          await replay();
+        } finally {held.release.resolve()}
+        await recovery;await run('senderParamsChain');
+        assert.equal(constraints.length,3,'a later recovery command must still supersede overlapping recovery work');
+        assert.equal(stopped(),4,'superseded recovery releases the old and retired replacement audio/video');
+        assert.deepEqual(streams.at(-1).tracks.map(track=>track.readyState),['live','live'],'latest recovery stream survives');
+      } else {
+        await replay();await run('senderParamsChain');
+        assert.equal(constraints.length,2,'later same-generation recovery must acquire new media');
+        assert.equal(stopped(),2,'later recovery releases old audio and video');
+        assert.equal(offers().length,connected?1:2,'connected recovery retains negotiation; unanswered recovery re-offers');
+        assert.equal(peers.length,connected?1:2,'only connected recovery retains its peer');
+        assert.equal(peers[0].closes,connected?0:1,'connected recovery cannot close its peer');
+        assert.deepEqual(replaced,connected?['video','audio']:[],'connected recovery replaces both sender tracks');
+      }
+    }
+    assert.equal(socket.closes,0,'successful capture does not reconnect');
+    assert.equal(run('window.__omnipusState.lastError'),null,'success has no hidden capture failure');
+  }
+  assert.deepEqual(warnings,[],'browser edge must support the exercised encoder path');
+  console.log('COLD_START_CASE_COMPLETE '+stage+'/'+mode);
+}
+main().then(()=>{process.exitCode=0}).catch(error=>{console.error(error);process.exitCode=1}).finally(async()=>{
+  release.resolve();
+  try {
+    if (run) await control({action:'shutdown'});
+    if (opening) await opening;
+  } finally {
+    for (const timer of timers.keys()) cancel(timer);
+  }
+});
+`
