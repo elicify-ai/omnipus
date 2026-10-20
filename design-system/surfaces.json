@@ -6880,6 +6880,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/ParentCrumbLink.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/GoalCommandMarker.tsx",
       "lane": 3
     },
