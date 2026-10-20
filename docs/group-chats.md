@@ -135,7 +135,7 @@ Each group has an allocated cost: what its members' turns spent on it. The room 
 
 - **How it is shared.** For each member turn, the group receives the turn's cost multiplied by the number of requests from this group that the turn newly consumed, divided by the number of all inputs it newly consumed. This counts inputs, not their length or token size. One group input and one direct input give the group half of that turn's cost.
 - **Each turn counts once per group.** Each share is rounded to the nearest millionth of a dollar. Exact halves round up: half of a millionth becomes one millionth, and one and a half millionths become two. The header shows the total rounded to cents. The counted shares are kept on disk turn by turn, so a share survives a restart even if the group's summary could not be saved at the time.
-- **Missing prices.** A turn on a model with no known price adds no money and marks the total incomplete; the header labels this "plus unpriced turns". The same mark is set if a turn's share could not be recorded.
+- **Missing prices.** Prices come from each model call's provider catalog entry (see [model-call cache accounting](operations/observability.md#model-call-cache-accounting)). If any call in a turn lacks a complete known price — the call is unpriced, or part of its tokens has no price in the catalog — the whole turn adds no money and marks the total incomplete; the header labels this "plus unpriced turns". A ChatGPT sign-in call costs no API dollars and does not set the mark, and a call that reports no token usage adds nothing. The same mark is set if a turn's share could not be recorded.
 
 ## Room commands
 
