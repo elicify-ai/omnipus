@@ -99,6 +99,9 @@ func TestContinue_AdmittedFollowUpKeepsSessionIdentityAndTranscript(t *testing.T
 	require.Empty(t, unrelated, "a continuation must not write to another chat")
 }
 
+// Empty-session and missing-session suffixes still execute successfully without
+// a transcript binding; they are not execution refusals. This is intentional
+// unchanged behaviour in this release-scoped transplant.
 func TestContinue_UnboundKeysDoNotGuessSessionIdentity(t *testing.T) {
 	cfg := newContinueScopeFixConfig(t)
 	msgBus := bus.NewMessageBus()
