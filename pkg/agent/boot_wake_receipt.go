@@ -29,12 +29,13 @@ func (r *SteerBootRecovery) bootWakeHandled(parentID, outcomeID string) (handled
 	if appended && acked {
 		return true, true, nil
 	}
-	al, runtimeErr := r.noticeLoop()
-	if runtimeErr != nil {
+	deliverer, hasRuntime := r.Deliverer.(*SteerUpwardDeliverer)
+	if !hasRuntime || deliverer == nil || deliverer.agentLoop == nil {
 		// A non-runtime deliverer cannot supply saved-input receipts. Leave
 		// delivery to it rather than infer consumption from their absence.
 		return false, false, nil
 	}
+	al := deliverer.agentLoop
 	addr, placed, err := r.Sessions.SavedChatInput(parentID, "saved-input-"+outcomeID)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, false, nil // real delivery surfaces the unavailable parent
@@ -53,11 +54,11 @@ func (r *SteerBootRecovery) bootWakeHandled(parentID, outcomeID string) (handled
 		// Placement is durable positive evidence after inbox compaction too.
 		// Do not append an unknown-id ACK for a message compaction removed.
 		if appended {
-			if err := r.Inbox.Ack(parentID, []string{outcomeID}); err != nil {
+			if err = r.Inbox.Ack(parentID, []string{outcomeID}); err != nil {
 				return false, false, err
 			}
 		}
-		if err := r.Sessions.RetireSavedInput(parentID, "saved-input-"+outcomeID); err != nil {
+		if err = r.Sessions.RetireSavedInput(parentID, "saved-input-"+outcomeID); err != nil {
 			return false, false, err
 		}
 		return true, true, nil
