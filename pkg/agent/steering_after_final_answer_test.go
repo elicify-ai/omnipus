@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 const (
@@ -102,4 +103,43 @@ func TestRunTurn_SteeringAfterACompletedAnswer_KeepsThatAnswer(t *testing.T) {
 	}
 	assert.Equal(t, []string{steeredFirstAnswer, steeredSecondAnswer}, saved,
 		"both completed answers must be saved, in order, so a reload shows both")
+}
+
+// TestRunTurn_SteeringAfterACompletedAnswer_BothAnswersInTheSavedTranscript:
+// the same scenario through a real chat session's transcript - what a reload
+// or reopen renders. Both completed answers must be saved as chat entries, in
+// order, around the follow-up.
+func TestRunTurn_SteeringAfterACompletedAnswer_BothAnswersInTheSavedTranscript(t *testing.T) {
+	provider := &answerThenSteerProvider{}
+	al := newRepeatStopLoop(t, provider)
+	provider.al = al
+	inst, ok := al.GetRegistry().GetAgent("mia")
+	require.True(t, ok)
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "SETUP: shared session store")
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", inst.ID)
+	require.NoError(t, err)
+
+	_, err = al.runAgentLoop(context.Background(), inst, processOptions{
+		SessionKey:          "steer-after-final-transcript",
+		Channel:             "webchat",
+		ChatID:              meta.ID,
+		UserMessage:         "draft the full plan; I may add something while you write",
+		DefaultResponse:     defaultResponse,
+		TranscriptSessionID: meta.ID,
+		TranscriptStore:     store,
+	})
+	require.NoError(t, err)
+
+	entries, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var assistants []string
+	for _, e := range entries {
+		if e.Role == "assistant" && e.Content != "" {
+			assistants = append(assistants, e.Content)
+		}
+	}
+	assert.Equal(t, []string{steeredFirstAnswer, steeredSecondAnswer}, assistants,
+		"after a reload the saved chat must show both completed answers, in order")
 }
