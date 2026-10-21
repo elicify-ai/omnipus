@@ -9,14 +9,19 @@ const { debug } = createRequire(import.meta.url)('playwright-core/lib/utilsBundl
 debug.enable([process.env.DEBUG, 'pw:browser'].filter(Boolean).join(','))
 const inheritedTmpdir = tmpdir()
 console.info('[sidebar-probe] inherited tmpdir', inheritedTmpdir, 'uid', process.getuid?.(), 'mode', (statSync(inheritedTmpdir).mode & 0o7777).toString(8), 'owner', statSync(inheritedTmpdir).uid)
-process.env.TMPDIR = '/tmp'
-console.info('[sidebar-probe] control tmpdir', tmpdir(), 'mode', (statSync(tmpdir()).mode & 0o7777).toString(8), 'owner', statSync(tmpdir()).uid)
 test.describe.configure({ retries: 0 })
 test.beforeEach(async ({ page, browser }) => {
   console.info('[sidebar-probe] context ready', process.platform, browser.version(), page.url())
   page.on('crash', () => console.error('[sidebar-probe] PAGE CRASH'))
   page.on('pageerror', error => console.error('[sidebar-probe] pageerror', error.message))
   page.on('console', message => console.info('[sidebar-probe] console', message.type(), message.text()))
+})
+
+test('diagnostic control: a minimal document without sidebar code remains usable', async ({ page }) => {
+  console.info('[sidebar-probe] minimal page before setContent; no sidebar code')
+  await page.setContent('<!doctype html><html><body><button>Linux control</button></body></html>')
+  console.info('[sidebar-probe] minimal setContent resolved')
+  await expect(page.getByRole('button', { name: 'Linux control', exact: true })).toBeVisible()
 })
 
 /**
