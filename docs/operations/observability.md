@@ -2,7 +2,7 @@
 
 Every action an Omnipus agent takes is visible. There are two complementary surfaces.
 
-The **session transcript** is the persistent, on-disk JSONL of everything that happened in a conversation. It survives restarts, replays at any time, and drives the SPA's chat history.
+The **session transcript** is the persistent, on-disk record of a conversation. The server builds chat history from a filtered view of it. Private continuation inputs remain in the archive for model delivery and recovery; they are not displayed as messages from you.
 
 The **event stream** is the live runtime feed of typed events emitted as the agent loop runs. It powers the SPA in real time, drives subprocess hooks, and feeds the audit log.
 
@@ -24,6 +24,7 @@ Each session has a folder at `$OMNIPUS_HOME/sessions/<session-id>/` (`~/.omnipus
 | `provider_fallback` | The note that a fallback model answered, with the models involved, written once per session and model pair |
 | `judge_verdict` | The Judge agent's verdict on a task's completion claim |
 | `context_window_notice` | A context-window diagnostic shown only in Verbose chat; never part of the model's history |
+| `saved_input` | A private, deferred continuation input. Retained for model delivery and recovery, but excluded from REST chat history and WebSocket snapshot replay. |
 | `model_ref`, `tool_call_effect` | Internal records that point at, or correct, an earlier entry. They are written into the same files and are not shown in chat |
 
 ### What's on every entry (`pkg/session/daypartition.go::TranscriptEntry`)
@@ -65,7 +66,9 @@ When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying
 
 ### Replay
 
-The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, call `UnifiedStore.ReadTranscript(sessionID)` (`pkg/session/unified_write.go::ReadTranscript`) — it reads the day files in order and returns the entries in order.
+For the chat-history view in code or tests, call `UnifiedStore.ReadTranscriptView(sessionID)` and use its `Entries`. REST history and WebSocket snapshot replay use this view. It begins at the last `/clear` marker, applies input-disposition labels, and excludes private continuation inputs.
+
+`UnifiedStore.ReadTranscript(sessionID)` returns the complete merged transcript for internal readers, including those saved inputs. It is not interchangeable with the displayed chat-history view. Both readers use the session's day files in order; the archive remains the single on-disk record.
 
 ## Live event stream
 

@@ -91,7 +91,7 @@ If the agent reaches its tool-call limit before a final answer, chat keeps the n
 
 ## A helper finished but the open parent chat is blank
 
-After upgrading, reload the page once to refresh an older open chat. On the current version, a helper's outcome and the parent's new reply appear without a reload, and the Judge's outcome row also appears in the parent chat. If they appear only in the helper's chat, that is the old behaviour. Do not restart the gateway as a workaround. If the problem persists on the updated page, report the parent and helper session ids and whether a reload shows the missing reply.
+A helper's outcome and the parent's new reply appear in the open parent chat without a reload. A Judge ending also appears in the parent chat. Saved event lines and the parent's replies remain after reload; the internal continuation input is not displayed as a message from you. If an expected row or reply is missing, report the parent and helper session IDs and whether reloading shows it. Do not restart the gateway as a workaround.
 
 ## A task is refused before work starts
 

@@ -155,7 +155,7 @@ Every agent may make at most a set number of tool calls in one turn. The global 
 |---|---|
 | Using the global limit (200) | The agent has no own value and follows the global limit. |
 | Lowered for this agent: 50 (global limit 200) | The agent's own value, 50, applies. |
-| Own value 500 is above the global limit (200) and has no effect | See "An old higher value" below. |
+| Own value 500 is above the global limit (200) and has no effect | See "A stored limit above the global limit" below. |
 
 4. To go back to the global limit, click **Use global limit** next to the field. That clears the agent's own value.
 
@@ -165,7 +165,7 @@ A value above the global limit is not saved. On the profile, the field shows the
 
 The same rules apply everywhere an agent is created or changed, including when you ask an agent in a chat to do it, as you would with Omnipus. The `create_agent` and `update_agent` tools refuse a value above the global limit or outside 1 to 1000, and sending an empty value (`null`) to `update_agent` clears the agent's own value.
 
-**An old higher value.** Earlier releases let an agent's own limit be higher than the global one. Upgrading keeps that stored value untouched, but it no longer applies: the agent runs at the global limit, and its profile says the value has no effect. The gateway log lists every such agent in one warning at start-up. Type a lower value or click **Use global limit** to clear the warning. Lowering the global limit in Settings is the only thing that ever rewrites an agent's own value, and it asks you first.
+**A stored limit above the global limit.** A stored per-agent value above the global limit has no effect: the agent runs at the global limit, and its profile explains why. The gateway log lists every such agent in one warning at start-up. Type a lower value or click **Use global limit** to clear the warning. Lowering the global limit in Settings is the only thing that ever rewrites an agent's own value, and it asks you first.
 
 A change applies from the agent's next turn; a turn already running keeps the limit it started with.
 
