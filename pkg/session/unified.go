@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -220,6 +221,9 @@ type UnifiedStore struct {
 	baseDir      string // {workspace}/sessions/
 	homePath     string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
 	backend      *archiveBackend
+	// Invoked only after retention releases every store lock. The receipt
+	// outbox, never a volatile callback result, remains delivery authority.
+	retentionNoticeDispatch atomic.Pointer[func() error]
 
 	// archiveMu guards archives: the one ArchiveDayStore per session directory,
 	// shared by the transcript writers and the model-window backend so every
@@ -453,6 +457,9 @@ func newUnifiedStore(baseDir, homePath string) (*UnifiedStore, error) {
 
 	backend.provider = us.archiveStore
 	us.loadMetaCacheLocked()
+	if err := us.recoverAllSavedInputLifecycles(context.Background()); err != nil {
+		return nil, fmt.Errorf("unified_store: replay committed saved-input lifecycle: %w", err)
+	}
 	// ADR-057 U6 W24 (FR-063): every store gets a running periodic flusher
 	// from construction — a fresh install with no operator override still
 	// converges stats.json every DefaultSessionStatsFlushInterval (5s, see

@@ -94,6 +94,10 @@ flowchart LR
 
 When the window fills, older turns or complete steps can leave the live view while their admitted source text stays available for recall. Aborted-turn rollback and session retention still apply.
 
+**Retention is actual history deletion, not context relief.** When an aged conversation partition expires, its old model positions do not make those deleted bytes required live context again. Retained conversation content and genuinely new helper reports can continue normally.
+
+Undelivered helper reports expire under the same retention setting; a parked question or stopped parent does not preserve them beyond it. The parent chat gets a saved **expired undelivered** notice identifying the report, chat and time and explaining that the original report will not arrive. Omnipus records that authorized loss explicitly and retries interrupted cleanup and notice delivery. An unexplained missing source remains an integrity error. The notice is new operational context, not a restored copy of the deleted result, and it respects Stop and question holds. Ask the helper to run the work again if you need a new result. See [agents](agents.md#workers-and-delegation) for delivery behavior and [settings](settings.md#limits-and-things-to-watch) for retention.
+
 ## After interrupted tool work
 
 If the gateway is killed before a tool-call group finishes, Omnipus checks for unfinished calls when the conversation is next used. It records restart cancellation rather than resuming that abandoned group. The original assistant calls, any partial tool results, and the cancellation records remain in the conversation archive, subject to normal retention. Only that canceled group and its recovery records are left out of the model's view; other messages, including steering instructions, remain. Reloading the conversation or shortening its context does not bring the canceled group back.

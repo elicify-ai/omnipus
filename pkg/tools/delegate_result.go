@@ -57,7 +57,13 @@ func (t *DelegateTool) executeResult(ctx context.Context, args map[string]any) *
 	if !found {
 		return NewToolResult(fmt.Sprintf("%s, no final result was handed back by this session", state))
 	}
+	if err := t.checkFinalDispositions(rec, []generated.SessionMessage{*msg}); err != nil {
+		return delegateDispositionResult(state, err)
+	}
 	_, note := t.recordFinalsRead(ctx, rec, []generated.SessionMessage{*msg})
+	if err := t.checkFinalDispositions(rec, []generated.SessionMessage{*msg}); err != nil {
+		return delegateDispositionResult(state, err)
+	}
 	text := "(the final hand-back carried no result text)"
 	if handback, decodeErr := msg.AsSessionMessageHandback(); decodeErr == nil && strings.TrimSpace(handback.ResultSoFar) != "" {
 		text = handback.ResultSoFar

@@ -131,6 +131,9 @@ func encodeArchiveLine(rec ArchiveRecord) ([]byte, error) {
 // returned for them).
 func (s *ArchiveDayStore) appendLineLocked(id string, line []byte) (ArchiveAddress, error) {
 	s.observeWriteStep("append.prepared")
+	if err := s.resumeInputDeletionsLocked(); err != nil {
+		return ArchiveAddress{}, err
+	}
 	key, path, err := s.partitionForAppendLocked(s.now().UTC().Format(transcriptDayLayout))
 	if err != nil {
 		return ArchiveAddress{}, err

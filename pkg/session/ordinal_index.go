@@ -334,6 +334,12 @@ func (s *ArchiveDayStore) readOrdinalRowLocked(o int) (ordinalRow, error) {
 func (s *ArchiveDayStore) readOrdinalRows(from, to int) ([]ordinalRow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.readOrdinalRowsRepairedLocked(from, to)
+}
+
+// readOrdinalRowsRepairedLocked shares the canonical derived-offset recovery
+// with callers that already hold the archive mutex.
+func (s *ArchiveDayStore) readOrdinalRowsRepairedLocked(from, to int) ([]ordinalRow, error) {
 	rows, err := s.readOrdinalRowsLocked(from, to)
 	if errors.Is(err, errOrdinalTable) {
 		// The offsets table is derived data that was not fsynced: rebuild it from

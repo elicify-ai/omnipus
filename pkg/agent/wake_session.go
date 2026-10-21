@@ -62,6 +62,13 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 	if err != nil {
 		return result, err
 	}
+	if _, dispositionErr := al.GetSessionStore().SavedInputConsumed(recipientSessionID, "saved-input-"+outcomeID); dispositionErr != nil {
+		if expired, finishErr := al.finishExpiredSavedWake(ctx, recipientSessionID, outcomeID, dispositionErr); expired {
+			result.Disposition = "expired_undelivered"
+			return result, finishErr
+		}
+		return result, dispositionErr
+	}
 	body = al.filterWakeText(body)
 	if err = al.saveWakeEvent(ctx, recipientSessionID, reason, outcomeID, body); err != nil {
 		var pending *helperEventRowPendingError
@@ -73,6 +80,15 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 		rowErr = err
 	}
 	if _, err = al.GetSessionStore().SaveChatInput(recipientSessionID, "saved-input-"+outcomeID, rec.AgentID, body); err != nil {
+		if expired, finishErr := al.finishExpiredSavedWake(ctx, recipientSessionID, outcomeID, err); expired {
+			result.Disposition = "expired_undelivered"
+			return result, finishErr
+		}
+		if errors.Is(err, session.ErrAlreadyConsumed) {
+			result.Disposition = "already_consumed"
+			al.releaseWakePublication(recipientSessionID, outcomeID)
+			return result, al.ackConsumedSteeringWake(steeringWake{messageID: outcomeID, transcriptSessionID: recipientSessionID})
+		}
 		return result, fmt.Errorf("wake session: save input: %w", err)
 	}
 	if source, ok := ctx.Value(wakeSourceKey{}).(wakeSource); ok {
@@ -83,6 +99,10 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 	result.Disposition = "saved_not_placed"
 	consumed, err := al.wakeInputConsumed(recipientSessionID, outcomeID)
 	if err != nil {
+		if expired, finishErr := al.finishExpiredSavedWake(ctx, recipientSessionID, outcomeID, err); expired {
+			result.Disposition = "expired_undelivered"
+			return result, finishErr
+		}
 		return result, err
 	}
 	if consumed {
@@ -233,6 +253,10 @@ func (al *AgentLoop) wakeBlocked(rec *session.LifecycleRecord) (bool, error) {
 
 func (al *AgentLoop) wakeInputConsumed(sessionID, outcomeID string) (bool, error) {
 	store := al.GetSessionStore()
+	consumed, dispositionErr := store.SavedInputConsumed(sessionID, "saved-input-"+outcomeID)
+	if dispositionErr != nil || consumed {
+		return consumed, dispositionErr
+	}
 	_, placed, err := store.SavedChatInput(sessionID, "saved-input-"+outcomeID)
 	if err != nil || placed {
 		return placed, err

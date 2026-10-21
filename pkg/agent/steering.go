@@ -1228,11 +1228,33 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 			}
 		}
 		if item.wake != nil {
+			done, dispositionErr := al.finishKnownSavedWake(context.Background(), *item.wake)
+			if dispositionErr != nil {
+				if done {
+					al.steering.prependItemsScope(scope, items[i+1:])
+				} else {
+					al.steering.prependItemsScope(scope, items[i:])
+					logger.ErrorCF("agent", "saved helper disposition unreadable; wake restored to the queue",
+						map[string]any{"scope": scope, "session_id": item.wake.transcriptSessionID, "outcome_id": item.wake.messageID, "error": dispositionErr.Error()})
+					al.publishSavedWakeReadPending(item.wake.transcriptSessionID, item.wake.messageID)
+				}
+				return msgs, correlationIDs, consumedItems, dispositionErr
+			}
+			if done {
+				continue
+			}
 			// A saved helper input is only dequeued here. Placement and its
 			// consumed marker wait for the model fence, after all tool results.
 			if store := al.GetSessionStore(); store != nil {
 				addr, _, savedErr := store.SavedChatInput(item.wake.transcriptSessionID, "saved-input-"+item.wake.messageID)
 				if savedErr != nil {
+					if expired, finishErr := al.finishExpiredSavedWake(context.Background(), item.wake.transcriptSessionID, item.wake.messageID, savedErr); expired {
+						if finishErr != nil {
+							al.steering.prependItemsScope(scope, items[i+1:])
+							return msgs, correlationIDs, consumedItems, finishErr
+						}
+						continue
+					}
 					al.steering.prependItemsScope(scope, items[i:])
 					// The live tool-boundary polls drop this error, so it is made
 					// visible here; the item stays queued and retryable.
@@ -1344,12 +1366,23 @@ func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) (claimed boo
 // wake writes, so that wake finds it consumed and starts no second parent
 // turn with the same result (D5, exactly once).
 func (al *AgentLoop) recordPolledFinalConsumed(parentID, agentID, messageID string) (alreadyReceived bool, err error) {
+	store := al.GetSessionStore()
+	if store == nil {
+		return false, fmt.Errorf("record final %q as received: session store unavailable", messageID)
+	}
+	already, err := store.RecordSavedInputPollConsumed(parentID, "saved-input-"+messageID)
+	if err != nil {
+		if expired, finishErr := al.finishExpiredSavedWake(context.Background(), parentID, messageID, err); expired {
+			return false, errors.Join(err, finishErr)
+		}
+		return false, err
+	}
 	wake := steeringWake{messageID: messageID, transcriptSessionID: parentID, agentID: agentID}
 	claimed, err := al.writeSteeringConsumedMarker(wake)
 	if err != nil {
 		return false, fmt.Errorf("record final %q as received: %w", messageID, err)
 	}
-	return !claimed, al.ackConsumedSteeringWake(wake)
+	return already || !claimed, al.ackConsumedSteeringWake(wake)
 }
 
 // ackConsumedSteeringWake acknowledges the wake's durable inbox entry in its

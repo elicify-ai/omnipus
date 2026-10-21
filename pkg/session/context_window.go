@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
 )
@@ -55,19 +57,64 @@ func (us *UnifiedStore) PlaceSavedInput(ctx context.Context, key string, source 
 	sessionID := owningSessionID(key)
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
+	if err := ctx.Err(); err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	if err := us.recoverSavedInputLifecycleLocked(sessionID); err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	state, err := loadSavedInputLifecycle(filepath.Join(us.baseDir, sessionID), sessionID)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	if expired, ok := state.ExpiredReports[source.EntryID]; ok {
+		if expired.Source != source {
+			return ModelSlot{}, WindowView{}, fmt.Errorf("saved input source conflicts with its exact expiry receipt")
+		}
+		return ModelSlot{}, WindowView{}, state.expiry(source.EntryID)
+	}
+	if poll, ok := state.PollConsumed[source.EntryID]; ok {
+		if poll.Source != nil && *poll.Source != source {
+			return ModelSlot{}, WindowView{}, fmt.Errorf("saved input source conflicts with its poll receipt")
+		}
+		return ModelSlot{}, WindowView{}, ErrAlreadyConsumed
+	}
+	for receiptID, notice := range state.Notices {
+		if notice.Source == nil || *notice.Source != source {
+			continue
+		}
+		if notice.ModelAdmitted {
+			return ModelSlot{}, WindowView{}, ErrAlreadyConsumed
+		}
+		if state.retiredNoticeSource(source) {
+			e, _ := state.ExpiredReportsByReceipt(receiptID)
+			slot, view, err := us.backend.placeRetentionNoticeModelOnly(ctx, key, e)
+			if err == nil || errors.Is(err, ErrAlreadyConsumed) {
+				err = errors.Join(err, us.acknowledgeRetentionNoticeLocked(sessionID, source))
+			}
+			return slot, view, err
+		}
+	}
 	fromOrdinal, indexed, err := us.savedInputFromOrdinalLocked(sessionID, source)
 	if err != nil {
 		return ModelSlot{}, WindowView{}, err
 	}
-	if !indexed {
-		return us.backend.PlaceSavedInput(ctx, key, source)
+	var slot ModelSlot
+	var view WindowView
+	if indexed {
+		slot, view, err = us.backend.placeSavedInput(ctx, key, source, fromOrdinal)
+	} else {
+		slot, view, err = us.backend.PlaceSavedInput(ctx, key, source)
 	}
-	slot, view, err := us.backend.placeSavedInput(ctx, key, source, fromOrdinal)
 	if err == nil || errors.Is(err, ErrAlreadyConsumed) {
-		// Placed now or earlier: it leaves the pending directory either way.
-		if retireErr := us.retireSavedInputByAddressLocked(sessionID, source); retireErr != nil {
-			return slot, view, errors.Join(err, retireErr)
+		// Placed now or earlier: retire the pending hint, then acknowledge only
+		// the notice whose positive ordinal admission was actually published.
+		if indexed {
+			if retireErr := us.retireSavedInputByAddressLocked(sessionID, source); retireErr != nil {
+				return slot, view, errors.Join(err, retireErr)
+			}
 		}
+		err = errors.Join(err, us.acknowledgeRetentionNoticeLocked(sessionID, source))
 	}
 	return slot, view, err
 }

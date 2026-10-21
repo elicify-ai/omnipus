@@ -117,6 +117,19 @@ func executeSweepTick(store *session.UnifiedStore, getCfg func() *config.Config)
 			"event", "retention_sweep_skipped",
 			"reason", "disabled",
 		)
+		// Disabled means no NEW age decisions. Complete already-committed
+		// losses and their durable notice outbox through the same dispatcher.
+		if store != nil {
+			replayErr := func() error {
+				retentionSweepMu.Lock()
+				defer retentionSweepMu.Unlock()
+				_, err := store.RetentionSweep(0)
+				return err
+			}()
+			if replayErr != nil {
+				slog.Error("retention_sweep: committed expiry replay remains pending", "error", replayErr)
+			}
+		}
 		return
 	}
 

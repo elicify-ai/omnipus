@@ -1,9 +1,6 @@
 package session
 
-import (
-	"fmt"
-	"os"
-)
+import "fmt"
 
 // scanSavedInputIntegrity must see every identity/consumption record before it
 // can certify that a report is absent or unconsumed. Recall's tolerant scanners
@@ -44,27 +41,57 @@ func (s *ArchiveDayStore) checkMissingCurrentPublicationLocked(pending savedInpu
 	if err != nil {
 		return fmt.Errorf("saved input integrity: current partition %q: read publication index: %w", mark, err)
 	}
-	if n == 0 {
-		return nil
-	}
-	rows, err := os.Open(s.ordinalRowsPath())
+	meta, err := loadArchiveBackendMeta(s.dir())
 	if err != nil {
-		return fmt.Errorf("saved input integrity: current partition %q: open publication rows: %w", mark, err)
+		return fmt.Errorf("saved input integrity: read retained window: %w", err)
 	}
-	defer rows.Close()
-	var offset int64
-	for ordinal := 0; ordinal < n; ordinal++ {
-		row, size, readErr := readRowAt(rows, offset)
-		if readErr != nil {
-			return fmt.Errorf("saved input integrity: current partition %q: read publication row %d: %w", mark, ordinal, readErr)
+	state, err := loadSavedInputLifecycle(s.dir(), s.sessionID)
+	if err != nil {
+		return err
+	}
+	if len(state.Deletions) > 0 {
+		meta, _, err = s.projectRetentionWindowLocked(meta, state)
+		if err != nil {
+			return err
 		}
-		if row.Ordinal != ordinal {
-			return fmt.Errorf("saved input integrity: current partition %q: expected publication row %d, found %d", mark, ordinal, row.Ordinal)
+	}
+	if meta.Skip < 0 || meta.Skip > n || meta.Count < 0 || meta.Count > n || meta.ClearFloor < 0 || meta.ClearFloor > meta.Skip {
+		return fmt.Errorf("saved input integrity: invalid retained window cursor")
+	}
+	// Retention intentionally keeps ordinal metadata after removing old bytes.
+	// Clear/trim move this boundary, and rollback excludes retained spans. None
+	// of those rows is required live content. A live reference's older Source
+	// remains required and is checked by validatePublishedRowLocked.
+	for from := meta.Skip; from < n; from += scanChunk {
+		rows, err := s.readOrdinalRowsRepairedLocked(from, min(n, from+scanChunk))
+		if err != nil {
+			return fmt.Errorf("saved input integrity: current partition %q: read publication rows: %w", mark, err)
 		}
-		if err := s.validatePublishedRowLocked(row); err != nil {
-			return fmt.Errorf("saved input integrity: current partition %q: publication row %d: %w", mark, ordinal, err)
+		for _, row := range rows {
+			if retractedOrdinal(meta.Retracted, row.Ordinal) {
+				continue
+			}
+			if err := s.validatePublishedRowLocked(row); err != nil {
+				return fmt.Errorf("saved input integrity: current partition %q: publication row %d: %w", mark, row.Ordinal, err)
+			}
 		}
-		offset += int64(size)
+	}
+	if a := meta.AnchorLine; a != nil {
+		if *a < 0 || *a >= meta.Skip || *a >= n {
+			return fmt.Errorf("saved input integrity: invalid retained user anchor")
+		}
+		rows, err := s.readOrdinalRowsRepairedLocked(*a, *a+1)
+		if err != nil {
+			return fmt.Errorf("saved input integrity: read retained user anchor: %w", err)
+		}
+		if len(rows) != 1 || rows[0].Role != "user" {
+			return fmt.Errorf("saved input integrity: invalid retained user anchor")
+		}
+		if !retractedOrdinal(meta.Retracted, *a) {
+			if err := s.validatePublishedRowLocked(rows[0]); err != nil {
+				return fmt.Errorf("saved input integrity: retained user anchor %d: %w", *a, err)
+			}
+		}
 	}
 	return nil
 }
