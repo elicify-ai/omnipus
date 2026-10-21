@@ -4,6 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { expect } from '@playwright/test';
 import { test, fixtureId } from './fixtures/chat-history-paging/harness';
 
+test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
+test.describe.configure({ retries: 0 });
 test.setTimeout(600_000); // Seeding100,000 real fsynced writes belongs on Fly only.
 
 function historyDiagnostics(file: string) {

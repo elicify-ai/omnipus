@@ -3,6 +3,9 @@ import { chatInput } from './fixtures/selectors';
 import { openSessionByDeepLink } from './fixtures/session-setup';
 import { test, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
 
+test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
+test.describe.configure({ retries: 0 }); // Deterministic fixtures; never retry an assertion into green.
+
 // T16; independent oracles: D5/D8/D9, D-A3/4, D-G1/2/3. No injected
 // virtualizer, row heights or styles. GREEN/mutation are deferred to CHECK.
 test('T16 B01: opens only the newest whole groups and settles at bottom after complete', async ({ history, page }) => {

@@ -6,6 +6,8 @@ import { chatInput, waitForConnected } from './fixtures/selectors';
 import { test, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
 import { browseBack, dropSocket, prepareRetentionScenario } from './fixtures/chat-history-paging/actions';
 
+test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
+test.describe.configure({ retries: 0 });
 test.setTimeout(240_000); // Real3,000-row UI traversal, not a clock-based oracle.
 
 test('T24 B04:transport loss after real replay but before complete retains the prior reader and never claims catch-up success', async ({ history, page }) => {

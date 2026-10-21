@@ -9,6 +9,8 @@ import { terminalLogRows } from './fixtures/terminal-outcome-acceptance';
 import { test, UNAVAILABLE, HistoryHarness } from './fixtures/chat-history-paging/harness';
 import { dropSocket, removeDeclaredHistoryIndex } from './fixtures/chat-history-paging/actions';
 
+test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
+test.describe.configure({ retries: 0 });
 test.setTimeout(120_000);
 
 function canonicalRecords(history: HistoryHarness) {

@@ -160,9 +160,8 @@ export const test = base.extend<{ history: HistoryHarness }>({
     }
   },
 });
-// All specs run against their own gateway and account, never the shared admin.
-test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
-test.describe.configure({ retries: 0 });
+// Per-file test.use/retries are explicit in each spec: module caching means
+// top-level configuration in this shared import only reaches its first importer.
 
 export function assertPage(page: ReturnType<typeof SessionHistoryResponse.parse>) {
   expect(page.page_info.soft_byte_budget, 'D4a positive budget').toBeGreaterThan(0);

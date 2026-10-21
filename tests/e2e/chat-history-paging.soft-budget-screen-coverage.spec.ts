@@ -2,6 +2,9 @@ import { expect } from '@playwright/test';
 import { SessionHistoryResponse } from '../../src/lib/api/generated/schemas';
 import { test, BUDGET, anchor, expectAnchor, geometry, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
 
+test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
+test.describe.configure({ retries: 0 });
+
 // T28; D-B1/B1b/B2/B3: independently authored ASCII result sizes. The fixture
 // uses real tool projection. No mocked page weights, styles or virtual rows.
 test('T28 B37:200KiB tool results byte-cut at20 whole groups after the20-row floor', async ({ history }) => {

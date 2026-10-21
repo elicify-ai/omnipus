@@ -2,6 +2,9 @@ import { expect } from '@playwright/test';
 import { chatInput } from './fixtures/selectors';
 import { test, anchor, expectAnchor, geometry, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
 
+test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
+test.describe.configure({ retries: 0 }); // No paid-model timing variance in these scripted fixtures.
+
 // T21: D8 is the focus/announcement oracle, not current implementation output.
 for (const key of ['Enter', 'Space'] as const) {
   test(`T21 B28: ${key} activates Show earlier once; focused pending control survives failure and Retry`, async ({ history, page }) => {
