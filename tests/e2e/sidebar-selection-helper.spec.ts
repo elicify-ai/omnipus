@@ -1,5 +1,17 @@
+import { createRequire } from 'node:module'
 import { expect, test, type Page } from '@playwright/test'
 import { selectAgent } from './fixtures/selectors'
+
+// Temporary Linux crash diagnostics: remove before final verification.
+const { debug } = createRequire(import.meta.url)('playwright-core/lib/utilsBundle')
+debug.enable([process.env.DEBUG, 'pw:browser'].filter(Boolean).join(','))
+test.describe.configure({ retries: 0 })
+test.beforeEach(async ({ page, browser }) => {
+  console.info('[sidebar-probe] context ready', process.platform, browser.version(), page.url())
+  page.on('crash', () => console.error('[sidebar-probe] PAGE CRASH'))
+  page.on('pageerror', error => console.error('[sidebar-probe] pageerror', error.message))
+  page.on('console', message => console.info('[sidebar-probe] console', message.type(), message.text()))
+})
 
 /**
  * Real Chromium + real Playwright Locator/expect API. The external page fixture
@@ -11,10 +23,12 @@ async function mountSidebar(
   selectRequestedAgent = true,
   initialAgent: 'Mia' | 'Jim' = 'Mia',
 ): Promise<void> {
+  console.info('[sidebar-probe] before setContent')
   await page.setContent(`
     <button aria-label="Show sidebar" id="show">Show sidebar</button>
     <div id="drawer"></div>
     <script>
+      console.info('[sidebar-probe] inline script entered');
       let selected = '${initialAgent}';
       let selectedWorkspace = 'My Workspace';
       const show = document.getElementById('show');
@@ -49,8 +63,10 @@ async function mountSidebar(
       document.addEventListener('click', event => {
         if (event.clientX > 280) close();
       });
+      console.info('[sidebar-probe] inline script ready', document.body.children.length);
     </script>
   `)
+  console.info('[sidebar-probe] setContent resolved; initial helper lookup next')
 }
 
 test.describe('selectAgent helper after immediate sidebar unmount', () => {
