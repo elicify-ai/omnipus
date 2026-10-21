@@ -112,8 +112,10 @@ func TestSF1_UnreadableTranscriptOfAValidMainLeaksNothing(t *testing.T) {
 	require.Equal(t, "This session could not be read because session storage failed. Check disk space and permissions, then retry. Details are in the server log.", *detail.HistoryState.Message)
 	// All original identity/path bans still apply to the sanitized error text.
 	sf1AssertNoInternalDetail(t, env, *detail.HistoryState.Message, ws, "mia", "transcript")
-	// Physical paths/raw errors remain forbidden across the entire response.
-	sf1AssertNoPhysicalStorageDetail(t, env, body)
+	// Security-approved exact-node identity exception; every other field keeps
+	// the legacy identity/transcript bans, and original whole-body paths/cause
+	// bans are never masked. NewMain + this sole mia append has participant mia.
+	sf1AssertAuthorizedIdentityPolicy(t, env, body, sf1IdentityFixture{sessionID: id, agentID: "mia", workspaceID: ws, agentIDs: []string{"mia"}})
 	for _, value := range []any{detail.Messages, detail.PageInfo, detail.HasEarlier, detail.HasLater, detail.NextBefore, detail.NextAfter} {
 		require.Nil(t, value, "unavailable detail must not fabricate history/page/continuation fields")
 	}
@@ -122,17 +124,13 @@ func TestSF1_UnreadableTranscriptOfAValidMainLeaksNothing(t *testing.T) {
 	require.Empty(t, message)
 	code, body = sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id+"/messages", "")
 	sf1AssertFixedStorageMessage(t, env, code, body, "read", ws, "mia", "transcript")
+	require.JSONEq(t, `{"error":"This session could not be read because session storage failed. Check disk space and permissions, then retry. Details are in the server log."}`, body, "exact fixed refusal, never a permitted prefix followed by raw OS error text")
+	sf1AssertNoPhysicalStorageDetail(t, env, body)
 }
 
 func sf1AssertNoPhysicalStorageDetail(t *testing.T, env *u1Env, body string) {
 	t.Helper()
-	home, homeErr := os.UserHomeDir()
-	require.NoError(t, homeErr)
-	for _, fragment := range []string{env.home, env.store(t).BaseDir(), os.TempDir(), home, "/Users/", "/var/", "/tmp", "~", "meta.json", ".jsonl", "OMNIPUS_HOME", "ENOTDIR", "not a directory", "permission denied"} {
-		if fragment != "" {
-			assert.NotContains(t, body, fragment, "physical storage/cause data must remain private in every union variant")
-		}
-	}
+	require.Empty(t, sf1PrivacyFragmentsFound(t, []byte(body), sf1PhysicalFragments(t, env)), "original whole response must hide physical storage/cause data in both serialized and decoded strings/keys")
 }
 
 func TestSF1_UnauthorizedUnreadableHistoryNeverReturnsMetadata(t *testing.T) {
