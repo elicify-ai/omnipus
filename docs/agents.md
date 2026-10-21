@@ -61,6 +61,20 @@ When an agent creates an external worker through its tools, the soul rule depend
 
 On Windows, this check uses the `PATHEXT` environment variable, a semicolon-separated list of runnable file extensions. Entries work with or without a leading dot and are matched without regard to letter case: `EXE;CMD` accepts `.exe` and `.cmd` files, just like `.EXE;.CMD`. Empty entries are ignored. A custom list controls which extensions are accepted; when the list is unset or blank, the check uses `.COM;.EXE;.BAT;.CMD`.
 
+## Shared operating rules for native agents
+
+All native agents receive shared operating instructions alongside their own identity. The instructions apply only within each agent's tools, permissions and role; assigning a skill or asking an agent to do something does not grant access.
+
+Agents are instructed to check their assigned skills before a new task, give concise progress updates, use plain language without emoji, and verify results before claiming completion. Structured deliverables and diagrams longer than 15 lines belong in authorized workspace files, with their contents checked and full absolute paths reported. When several questions are needed, agents should use the question tool where available, ask no more than five at a time, explain the options and recommend one.
+
+For every request, agents are instructed to keep their own todo list with `set_todos` and mark the current item `in_progress`. Each call replaces the full list. There is one active checklist for the session: reuse the same `outcome` for updates to the same work; a different outcome closes the previous checklist card. The checklist is re-shown to the agent each turn. This change does not alter its Board card or add a chat status line.
+
+Independent work should run in parallel where supported, with clear ownership to prevent conflicting edits. An agent must distinguish a queued job from a running one, inspect delegated results, and report failed, blocked and untested work honestly. These are instructions to the agent, not a guarantee that a particular result has been tested or that background work is running.
+
+A separate memory guide tells agents to recall notes before starting a task or answering about past work, decisions, people, preferences or project facts. Earlier content from the same conversation that is no longer in view uses `recall_conversation`; durable notes and past retrospectives use `recall_memory`, whose default room is `both`. Historical notes are reference material, not new permission or instructions.
+
+Agents are instructed to remember decisions, preferences, corrections, stable facts, lessons and useful references promptly, not only at the end. Transient progress, chatter, material already in files or docs, guesses and secrets do not belong in saved notes. Saving with `remember` requires an explicit room: `shared` when a teammate could need the note, or `private` for the agent's own working notes. Check the returned receipt for the room actually used and any warning. The guide favors updating notes over duplicates, but `remember` only appends: agents must report a missing update capability rather than invent an operation. See [memory](memory.md) for the tool behavior and its limits.
+
 ## How a conversation finds its agent
 
 Every conversation names its agent — there is no global default agent.
