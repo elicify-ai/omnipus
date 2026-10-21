@@ -1839,9 +1839,11 @@ func parseRetryAfterSeconds(content string) *float64 {
 
 // resolveTaskLabel extracts the task label from a spawn tool call's parameters.
 // Prefers Parameters["label"]; falls back to Parameters["task"] truncated at 60 chars.
+// A legacy call without either uses its recorded tool name as a display label,
+// not invented task text; generated span starts require a nonempty label.
 func resolveTaskLabel(tc session.ToolCall) string {
 	if tc.Parameters == nil {
-		return ""
+		return tc.Tool
 	}
 	if label, ok := tc.Parameters["label"].(string); ok && label != "" {
 		return label
@@ -1851,9 +1853,11 @@ func resolveTaskLabel(tc session.ToolCall) string {
 		if len(runes) > 60 {
 			return string(runes[:60])
 		}
-		return task
+		if task != "" {
+			return task
+		}
 	}
-	return ""
+	return tc.Tool
 }
 
 // replayStats aggregates metrics from a set of transcript entries for slog.Info.

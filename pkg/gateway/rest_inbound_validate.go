@@ -94,6 +94,7 @@ func (inboundSchemaLoader) Load(rawURL string) (any, error) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("inboundSchemaLoader: unmarshal %s: %w", path, err)
 	}
+	normalizeOpenAPINullability(doc)
 
 	// ContextSettings and ContextSettingsUpdate use the OpenAPI-3.0.3-dialect
 	// boolean exclusiveMinimum/exclusiveMaximum form (paired with

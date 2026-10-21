@@ -181,7 +181,10 @@ func (r *historyPageRequest) prepare(ctx context.Context, p session.ChatHistoryP
 		out.terminalAskEmitted = out.terminalAskEmitted || group.terminalAskEmitted
 	}
 	// Historical completion overhead is emitted/metered once, not per owner.
-	done := generated.DoneFrame{Type: string(generated.WsFrameTypeDone), SessionId: p.SessionID}
+	// Count the actual prepared content frames, excluding this terminator, just
+	// as full replay does. This distinguishes replay completion from turn done.
+	framesEmitted := float64(len(out.ReplayFrames))
+	done := generated.DoneFrame{Type: string(generated.WsFrameTypeDone), SessionId: p.SessionID, Stats: &generated.DoneStats{FramesEmitted: &framesEmitted}}
 	b, err := json.Marshal(done)
 	if err != nil {
 		return out, err

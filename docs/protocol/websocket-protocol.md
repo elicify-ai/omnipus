@@ -40,7 +40,7 @@ A missing/inconsistent index or suffix above 64 records is not a reason to stop 
 
 `session_snapshot` carries canonical `page_info`, `has_earlier` / `has_later`, optional `next_before` / `next_after`, and the actual selected source range/context. It has no second messages array or ordinal ownership manifest. A historical reader keeps its loaded window, anchor and focus, stages the recent page into its separate tail cache, and revalidates only its already loaded closed interval through REST. A snapshot reason such as `boot_mismatch` or `retention_exceeded` does not authorize a passive jump to latest.
 
-Replay `done` and `catch_up_complete` are different boundaries: active projection can follow replay done. Matching clients stage historical replay through successful catch-up completion and commit the batch once, not once per content frame. The completion mode must be handled explicitly; `live_only` releases live/control attach locks but never sets history-loaded or replay-completed state. Deploy the matching server and client together and reload old tabs.
+Replay `done` and `catch_up_complete` are different boundaries: active projection can follow replay done. Replay done's `stats.frames_emitted` counts the actual prepared content frames, excluding the done terminator; it is not a lifetime-history count. Matching clients stage historical replay through successful catch-up completion and commit the batch once, not once per content frame. The completion mode must be handled explicitly; `live_only` releases live/control attach locks but never sets history-loaded or replay-completed state. Deploy the matching server and client together and reload old tabs.
 
 ### `auth`
 
@@ -200,7 +200,7 @@ These frames are sent by the backend to the frontend over the WebSocket connecti
 
 ### Historical source ownership and readiness
 
-Each entry-derived historical frame has generated `history_origin={position, entry_id?}`. The opaque 47-character position names its actual persisted source occurrence; the optional entry ID is that occurrence's recorded nonempty ID. It is not an ordering number, transport sequence, model position or permission grant. A tool-only entry can own tool frames without a preceding prose bubble. Finished start/result frames share their owning source; relevant span dependencies are bounded public facts, not a child's full history.
+Each entry-derived historical frame has generated `history_origin={position, entry_id?}`. The opaque 47-character position names its actual persisted source occurrence; the optional entry ID is that occurrence's recorded nonempty ID. It is not an ordering number, transport sequence, model position or permission grant. A tool-only entry can own tool frames without a preceding prose bubble. Finished start/result frames share their owning source; relevant span dependencies are bounded public facts, not a child's full history. For a legacy delegation with no saved task or label, its span uses the recorded tool name as a display label rather than inventing task text.
 
 Tool-derived media is deduplicated across the selected page by its resolved underlying file, not merely by reference string or source group. If two distinct references name the same file, the earliest selected occurrence keeps the media frame and its original `history_origin`; a genuinely different file still appears. Tool rows and their saved results remain intact. Selection reuses prepared media and resolved references rather than resolving or replaying each cumulative candidate again.
 
