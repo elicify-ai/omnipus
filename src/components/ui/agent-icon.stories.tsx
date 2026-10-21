@@ -94,7 +94,14 @@ export const Size48: Story = { args: { size: 48 } }
 export const MotionNone: Story = { args: { motion: 'none' } }
 export const Thinking: Story = { args: { motion: 'thinking' } }
 export const Working: Story = {
+  // Leave reducedMotion omitted so the browser's system preference owns all three loops.
   args: { motion: 'working' },
+  parameters: {
+    designSystem: {
+      ...designSystemParameters,
+      motionTargets: ['[data-ink]', '[data-glow]', '[data-agent-icon-sheen]'],
+    },
+  },
   play: async ({ canvasElement }) => {
     const icon = canvasElement.querySelector<HTMLElement>('[data-testid="agent-icon"]')!
     const sheen = icon.querySelector<HTMLElement>('[data-agent-icon-sheen]')!
@@ -110,6 +117,8 @@ export const Working: Story = {
     for (const selector of ['[data-ink]', '[data-glow]']) {
       const layer = icon.querySelector<HTMLElement>(selector)!
       await expect(layer).not.toBeNull()
+      await expect(getComputedStyle(layer).animationName, `${selector} animates before the system requests reduced motion`).not.toBe('none')
+      await expect(layer.getAnimations()).toHaveLength(1)
       await expect(clip, 'ink and glow are outside the clip').not.toContainElement(layer)
       for (let ancestor: HTMLElement | null = layer; ancestor && ancestor !== icon.parentElement; ancestor = ancestor.parentElement) {
         await expect(getComputedStyle(ancestor).overflowX, `${selector} must not be clipped`).toBe('visible')

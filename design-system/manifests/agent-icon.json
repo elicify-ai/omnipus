@@ -103,6 +103,14 @@
       "applicable": true
     },
     {
+      "id": "agent-icon-working-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-working-reduced-motion] reduced-motion",
+      "story": "Working",
+      "applicable": true
+    },
+    {
       "id": "agent-icon-forced-colors",
       "kind": "forced-colors",
       "file": "tests/design-system/browser.spec.ts",
