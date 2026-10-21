@@ -691,7 +691,7 @@ func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf, w
 	// different on-disk state between the two reads.
 	agentDef := cb.LoadAgentDefinition()
 
-	// Bootstrap files (SOUL.md, AGENT.md, USER.md) — pass the already-loaded
+	// Bootstrap files (SOUL.md, USER.md) — pass the already-loaded
 	// definition to avoid a second LoadAgentDefinition call inside.
 	bootstrapContent := cb.loadBootstrapFilesWithDef(agentDef)
 
@@ -1130,13 +1130,14 @@ func (cb *ContextBuilder) variantCarryForwardPath(workspaceID string) string {
 // variant tracks its own carry-forward pair path instead — see
 // variantCarryForwardPath / buildCacheBaseline / workspaceVariantStaleLocked.
 func (cb *ContextBuilder) sourcePaths() []string {
-	agentDefinition := cb.LoadAgentDefinition()
-	paths := agentDefinition.trackedPaths(cb.workspace)
 	// Track the private room's memories directory for cache invalidation.
 	// The memories dir mtime changes on any new .md write (directory mtime update).
 	privateRoomRoot := filepath.Join(cb.workspace, memrooms.OmnipusRoomDir)
-	paths = append(paths, filepath.Join(privateRoomRoot, memrooms.MemoriesSubdir))
-	return uniquePaths(paths)
+	return uniquePaths([]string{
+		filepath.Join(cb.workspace, "SOUL.md"),
+		config.UserProfilePath(),
+		filepath.Join(privateRoomRoot, memrooms.MemoriesSubdir),
+	})
 }
 
 // skillRoots returns all skill root directories that can affect
@@ -1354,13 +1355,6 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 func (cb *ContextBuilder) loadBootstrapFilesWithDef(agentDefinition AgentContextDefinition) string {
 	var sb strings.Builder
 
-	if agentDefinition.Agent != nil {
-		label := string(agentDefinition.Source)
-		if label == "" {
-			label = relativeWorkspacePath(cb.workspace, agentDefinition.Agent.Path)
-		}
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", label, agentDefinition.Agent.Body)
-	}
 	// M6: only emit the Soul section when content is non-whitespace.
 	if agentDefinition.Soul != nil && strings.TrimSpace(agentDefinition.Soul.Content) != "" {
 		fmt.Fprintf(
@@ -1372,16 +1366,6 @@ func (cb *ContextBuilder) loadBootstrapFilesWithDef(agentDefinition AgentContext
 	}
 	if agentDefinition.User != nil {
 		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
-	}
-
-	if agentDefinition.Source != AgentDefinitionSourceAgent {
-		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
-		if data, err := os.ReadFile(filePath); err == nil {
-			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "IDENTITY.md", data)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			logger.WarnCF("agent", "Could not read IDENTITY.md",
-				map[string]any{"path": filePath, "error": err.Error()})
-		}
 	}
 
 	return sb.String()
@@ -1404,7 +1388,7 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 }
 
 // buildDynamicContext renders live metadata in its original system-prefix slot.
-// Clock and skill-reminder text are rendered separately by buildVolatileContext.
+// The clock is rendered separately by buildVolatileContext.
 func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, channel, chatID, senderID, senderDisplayName string) string {
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
@@ -1456,7 +1440,7 @@ func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, 
 //     recalled turns precede the recent window (FR-019 chronology).
 //  3. history messages (the Skip-trimmed sliding window, post-eviction).
 //  4. Current user message.
-//  5. One request-only user-role block for the clock and skill reminder.
+//  5. One request-only user-role block for the clock.
 //
 // delegationDepth is the turn's current delegation-chain depth (ts.depth, the
 // value the enforcement gate compares against its cap); it lets the
@@ -1491,7 +1475,7 @@ func (cb *ContextBuilder) BuildMessages(
 
 	// The static part (identity, bootstrap, skills, memory) is cached locally to
 	// avoid repeated file I/O and string building on every call (fixes issue #607).
-	// Only the clock and skill reminder move behind history. Live sender/session
+	// Only the clock moves behind history. Live sender/session
 	// metadata stays in the system stream for provider compatibility:
 	// - Anthropic adapter extracts messages[0] (Role=="system") and maps its content
 	//   to the top-level "system" parameter in the Messages API request. A single

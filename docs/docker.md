@@ -238,7 +238,7 @@ Either way, the directory layout is the same:
 | `cli.token` | Plaintext CLI key (0600), used by one-shot `omnipus <agent> "…"` runs |
 | `sessions/` | Day-partitioned JSONL transcripts |
 | `tasks/` | Per-task JSON files |
-| `agents/` | Custom agent definitions (AGENT.md + SOUL.md) |
+| `agents/` | Agent home folders, including `SOUL.md` for custom native agents |
 | `logs/` | `gateway.log`, `gateway_panic.log` |
 
 Mount the entire data directory as a single named volume or bind-mount. Splitting sub-paths into separate mounts is not supported.

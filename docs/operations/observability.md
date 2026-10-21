@@ -265,8 +265,9 @@ the unpriced portion free. Native Anthropic's documented one-hour multiplier is
 
 Caching does not change who supplied a message. Current-sender, session and
 runtime metadata remain in the system context—the request's instruction prefix.
-Only the changing clock, tool-summary, scratchpad and goal-checklist notes, plus
-the per-turn skill reminder, follow the conversation in one user-role text block.
+Only the changing clock, tool-summary, scratchpad and goal-checklist notes follow
+the conversation in one user-role text block. Skill-use guidance remains in the
+stable instructions and Skills menu; no per-request skill reminder is added.
 When a turn is assembled, its current user message retains its caption and
 attachments immediately before that block. Tool-call follow-ups keep complete
 call/result groups ahead of the notes. Removing old history from the live window
