@@ -33,6 +33,24 @@ func grBrakeBackgroundCommands(t *testing.T) {
 			manager.Add(&tools.ProcessSession{ID: id, OwnerSessionID: owner, Background: true, Status: tools.StatusRunning})
 			t.Cleanup(func() { manager.Remove(id) })
 			require.Equal(t, 1, manager.CountRunningBackgroundCommands(owner), "SETUP: exact owner has a real registered running background command")
+			if ownerClass == "CompletedDescendant" {
+				// This reviewer really completed AFTER the goal boundary. Its
+				// positive progress may reset the streak while its process is
+				// busy; it must not publish a reminder or start another execution.
+				grSetStreak(t, h, 1)
+				h.age(t)
+				before := h.load(t)
+				rootCalls, reviewerCalls := h.root.count(), h.reviewer.count()
+				h.al.goalQuietWindowSettle(time.Now())
+				grNoPublishedReminder(t, h.al)
+				assert.Equal(t, 0, goalRecordForSession(t, h.id).ZeroOutputPushes, "fresh real completed helper activity resets progress even while its background command remains busy")
+				assert.Equal(t, before, h.load(t), "observing helper progress must not start another root execution")
+				assert.Equal(t, rootCalls, h.root.count())
+				assert.Equal(t, reviewerCalls, h.reviewer.count())
+				require.Equal(t, 1, manager.CountRunningBackgroundCommands(owner))
+			}
+			// For the descendant this seed is AFTER its completed activity was
+			// observed. The same no-output busy work must not reset it again.
 			grSetStreak(t, h, 1) // below both the old lifetime-two cap and the R6 brake: only genuine busy suppression can pass
 			h.age(t)
 			before := h.load(t)
