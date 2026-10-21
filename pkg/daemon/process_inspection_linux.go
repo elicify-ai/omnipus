@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -66,7 +67,7 @@ func inspectNativeProcess(pid int) (ProcessInspection, error) {
 func linuxProcessBirth(stat []byte) (string, string, error) {
 	// comm is parenthesized and may contain whitespace or ')'. Field 22 is
 	// starttime; fields after the final ')' begin with state (field 3).
-	end := strings.LastIndexByte(string(stat), ')')
+	end := bytes.LastIndexByte(stat, ')')
 	if end < 0 {
 		return "", "", errors.New("invalid native process stat")
 	}

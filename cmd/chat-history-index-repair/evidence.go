@@ -147,9 +147,9 @@ func nativeStopped(b instanceBinding) (string, error) {
 		return "", integrity("io_error", err)
 	}
 	if err == nil {
-		pid, err := parsePositivePID(pidBytes)
-		if err != nil {
-			return "", err
+		pid, parseErr := parsePositivePID(pidBytes)
+		if parseErr != nil {
+			return "", parseErr
 		}
 		if pid != b.PreviousPID || digestBytes(pidBytes) != b.PIDFileSHA256 {
 			p, probeErr := daemon.InspectProcess(pid)
