@@ -102,11 +102,12 @@
 #   wiring point is ci-cluster.sh's preflight_machine, right after
 #   verify_md5_on_machine, so the watchdog starts on every dispatcher-driven
 #   boot with no human action. setsid (Linux) detaches it fully from the SSH
-#   session, which is precisely the failure mode being backstopped. Known gap
-#   for the lead to close (Dockerfile and ci-cluster.sh are outside this
-#   script's lane): a machine started but never dispatched to has no watchdog
-#   until the image CMD is changed to something like
-#     CMD ["sh", "-c", "/cache/idle-watchdog.sh start; exec sleep infinity"]
+#   session, which is precisely the failure mode being backstopped. Since
+#   2026-10-21 the image CMD starts it on EVERY boot from the image copy
+#   (Dockerfile: CMD ["sh", "-c", "/usr/local/bin/idle-watchdog.sh start;
+#   exec sleep infinity"]), so a machine started by hand or never dispatched
+#   to is covered too. `start` is idempotent, so a dispatcher that also starts
+#   it is harmless.
 #
 # STATE AND LOGS — what survives a stop/start lives on /cache (constraint 2):
 #   /cache/idle-watchdog/idle-since   epoch of the first idle observation of the
