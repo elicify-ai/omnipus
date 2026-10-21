@@ -43,6 +43,7 @@ import { chatInput, waitForConnected } from './fixtures/selectors'
 
 import type { ClientFrame, CancelFrame, DoneFrame, SessionStartedFrame, TokenFrame } from '../../src/lib/api/generated/asyncapi-types'
 import type { Message as WireMessage } from '../../src/lib/api/generated/openapi-types'
+import { wireHistoryPage } from '../chat-history-paging/legacy-wire'
 
 type CapturedFrame = ClientFrame
 
@@ -70,7 +71,7 @@ async function mockChatWebSocket(
   // session_started promises a durably saved first message. Its synthetic
   // session therefore needs matching HTTP history, not a real-gateway 404.
   const savedHistory: WireMessage[] = []
-  await page.route(`**/api/v1/sessions/${E2E_SESSION_ID}/messages`, (route) => route.fulfill({ status: 200, json: savedHistory }))
+  await page.route(`**/api/v1/sessions/${E2E_SESSION_ID}/messages`, (route) => route.fulfill({ status: 200, json: wireHistoryPage(E2E_SESSION_ID, savedHistory, savedHistory.length) }))
   await page.routeWebSocket(/api\/v1\/chat\/ws/, (ws: WebSocketRoute) => {
     let turnStarted = false
     ws.onMessage((raw: string | Buffer) => {

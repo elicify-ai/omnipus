@@ -48,7 +48,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       const head = opts.queryKey[0]
       if (head === 'agents') return { data: AGENTS, isError: false, refetch: vi.fn() }
       if (head === 'workspaces') return { data: WORKSPACES, isError: false, refetch: vi.fn() }
-      return { data: queryDataWithEmptyHistory(key), isError: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(opts.queryKey), isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),

@@ -2,7 +2,7 @@
 // D3/D4/D10: fixed, small retained archives become positioned page envelopes.
 // This is NOT the product position encoder, selector, projector or byte meter.
 import { createHash } from 'node:crypto'
-import type { SessionHistoryResponse } from '@/lib/api/generated/openapi-types'
+import type { SessionDetail, SessionHistoryResponse } from '@/lib/api/generated/openapi-types'
 
 // not-wire-format: deliberately malformed per-item test input can remain unknown;
 // the envelope/metadata still derive from the generated contract, not a clone.
@@ -18,6 +18,31 @@ export type LegacyPageOptions = {
 
 export function fixtureHistoryPosition(sessionId: string, sourceLabel: string): string {
   return `hp1_${createHash('sha256').update(`legacy-test-source\0${sessionId}\0${sourceLabel}`).digest('base64url')}`
+}
+
+export function clearHistoryPage(sessionId: string, sources: readonly unknown[], drawnRows: number): FixtureHistoryPage {
+  const marker = sources[0]
+  if (!object(marker) || typeof marker.id !== 'string') {
+    throw new Error('Invalid clear-history fixture: the reached marker must be the first positioned source')
+  }
+  const markerPosition = typeof marker.history_position === 'string'
+    ? marker.history_position
+    : fixtureHistoryPosition(sessionId, `${marker.id}\0${1}`)
+  // Include the marker metadata before the fixture's advertised bytes are set.
+  return wireHistoryPage(sessionId, sources, drawnRows, {
+    earlier: true, info: {
+      stop_reason: 'clear', stopped_at_clear: true,
+      latest_clear: { entry_id: marker.id, history_position: markerPosition },
+    },
+  })
+}
+
+// not-wire-format: malformed-session/item cases deliberately keep unknown input;
+// the metadata is still the generated detail/page metadata, never a wire clone.
+export function wireAvailableDetail(session: unknown, history: FixtureHistoryPage): Omit<SessionDetail, 'session' | 'messages'> & { session: unknown; messages: unknown[] } {
+  const { session_id, entries, ...metadata } = history
+  void session_id
+  return { session, history_state: { status: 'available' }, messages: entries, ...metadata }
 }
 
 function object(value: unknown): value is Record<string, unknown> {

@@ -2,8 +2,8 @@
 // The real adapter is never wrapped/coerced into the new shape. Missing or old
 // output fails at the assertion, while test-owned mocks use the agreed seam J.
 import { expect } from 'vitest'
-import type { Message as DisplayMessage } from '@/lib/api/sessions'
-import type { Message as WireMessage, SessionHistoryResponse, operations } from '@/lib/api/generated/openapi-types'
+import type { Message as DisplayMessage, Session as DisplaySession } from '@/lib/api/sessions'
+import type { Message as WireMessage, SessionDetail, SessionHistoryResponse, operations } from '@/lib/api/generated/openapi-types'
 import { page } from './fixtures'
 import { fixtureHistoryPosition, wireHistoryPage } from './legacy-wire'
 
@@ -11,6 +11,14 @@ import { fixtureHistoryPosition, wireHistoryPage } from './legacy-wire'
 export type HistoryPageView = Omit<SessionHistoryResponse, 'entries'> & {
   entries: (DisplayMessage & { historyPosition: NonNullable<WireMessage['history_position']> })[]
 }
+
+// not-wire-format: available normalized detail observation, not a wire clone.
+export type AvailableHistoryDetailView = Omit<SessionDetail, 'session' | 'messages' | 'history_state'>
+  & Omit<SessionHistoryResponse, 'session_id' | 'entries'> & {
+    session: DisplaySession
+    messages: HistoryPageView['entries']
+    history_state: SessionDetail['history_state'] & { status: 'available' }
+  }
 
 // not-wire-format: a test-owned dependency port, not a production declaration.
 export type HistoryReadPort = (
@@ -37,6 +45,22 @@ export function narrationHistoryPage(sessionId: string, messages: DisplayMessage
   })
   const metadata = wireHistoryPage(sessionId, messages, messages.length, { positions })
   return { ...metadata, entries: messages.map((message, index) => ({ ...message, historyPosition: positions[index] })) }
+}
+
+export function availableHistoryDetail(session: DisplaySession, messages: DisplayMessage[] = []): AvailableHistoryDetailView {
+  const { session_id, entries, ...metadata } = narrationHistoryPage(session.id, messages)
+  void session_id
+  return { session, messages: entries, history_state: { status: 'available' }, ...metadata }
+}
+
+export function expectAvailableHistoryDetail(value: unknown): asserts value is AvailableHistoryDetailView {
+  expect(value).toHaveProperty('history_state', { status: 'available' })
+  expect(value).toHaveProperty('session')
+  expect(value).toHaveProperty('messages')
+  if (typeof value !== 'object' || value === null) throw new Error('D10: missing available session detail')
+  const session: unknown = Reflect.get(value, 'session')
+  if (typeof session !== 'object' || session === null) throw new Error('D10: missing normalized session')
+  expectHistoryPage({ ...value, session_id: Reflect.get(session, 'id'), entries: Reflect.get(value, 'messages') })
 }
 
 // not-wire-format: query-cache test double, preserving unrelated list data.

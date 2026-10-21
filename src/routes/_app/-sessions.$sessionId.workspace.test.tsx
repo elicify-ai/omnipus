@@ -66,12 +66,13 @@ import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatStore } from '@/store/chat'
 import type { SessionDetail } from '@/lib/api'
+import { availableHistoryDetail } from '../../../tests/chat-history-paging/legacy-fixtures'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeChatSessionWithWorkspace(overrides?: Partial<SessionDetail['session']>): SessionDetail {
   return {
-    session: {
+    ...availableHistoryDetail({
       id: mockSessionId,
       agent_id: 'mia',
       title: 'Chat in ws-1',
@@ -81,15 +82,14 @@ function makeChatSessionWithWorkspace(overrides?: Partial<SessionDetail['session
       updated_at: '2026-01-01T00:00:00Z',
       message_count: 5,
       ...overrides,
-    },
-    messages: [],
+    }),
     agent_removed: false,
   }
 }
 
 function makeChatSessionNoWorkspace(overrides?: Partial<SessionDetail['session']>): SessionDetail {
   return {
-    session: {
+    ...availableHistoryDetail({
       id: mockSessionId,
       agent_id: 'mia',
       title: 'Standalone chat',
@@ -98,8 +98,7 @@ function makeChatSessionNoWorkspace(overrides?: Partial<SessionDetail['session']
       updated_at: '2026-01-01T00:00:00Z',
       message_count: 2,
       ...overrides,
-    },
-    messages: [],
+    }),
     agent_removed: false,
   }
 }

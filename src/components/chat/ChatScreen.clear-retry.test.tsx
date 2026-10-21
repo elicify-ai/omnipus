@@ -24,6 +24,7 @@ import { ApiSchemaError } from '@/lib/api/http'
 import type { WsConnection } from '@/lib/ws'
 import type { ChatMessage } from '@/store/chat'
 import { MockButton, MockTextarea } from '@/test/assistantUiMock'
+import { clearHistoryPage, wireHistoryPage, type FixtureHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
 
 if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function () {}
@@ -42,7 +43,7 @@ vi.mock('@/lib/api/http', async (importOriginal) => {
 })
 
 let sentFrames: unknown[] = []
-let messageResponses: Array<() => unknown[]> = []
+let messageResponses: Array<() => FixtureHistoryPage> = []
 let messageRequests = 0
 
 function rawUser(id: string, clientMessageId: string | undefined, content: string, ts: string): Record<string, unknown> {
@@ -57,12 +58,13 @@ function rawSystem(id: string, content: string, ts: string): Record<string, unkn
 const MARKER_TEXT = 'Conversation context cleared'
 const SUCCESS_REPLY = 'Context cleared. The conversation and its history are kept; the assistant continues from here with a fresh context.'
 
-function rawPostClear(clearCmid: string): Record<string, unknown>[] {
-  return [
-    rawUser('srv-u-clear', clearCmid, '/clear', '2026-10-10T00:00:00Z'),
+function rawPostClear(_clearCmid: string): FixtureHistoryPage {
+  // D3/D6: latest starts at the reached clear, never with the cleared command
+  // or content before it. The original response/marker identity is retained.
+  return clearHistoryPage(SID, [
+    rawSystem('srv-clear-marker', MARKER_TEXT, '2026-10-10T00:00:00Z'),
     rawAssistant('srv-a-reply', SUCCESS_REPLY, '2026-10-10T00:00:01Z'),
-    rawSystem('srv-clear-marker', MARKER_TEXT, '2026-10-10T00:00:02Z'),
-  ]
+  ], 2)
 }
 
 function nextMessageResponse(): unknown {
@@ -210,7 +212,7 @@ afterEach(() => {
 describe('ChatScreen — the history Retry completes a failed /clear refresh (V3)', () => {
   it('T4: a failed operation read is VISIBLE as the history-error state; Retry recovers with one /clear frame', async () => {
     // The initial history load succeeds.
-    messageResponses.push(() => [rawUser('srv-u-seed', undefined, 'earlier question', '2026-10-10T00:00:00Z')])
+    messageResponses.push(() => wireHistoryPage(SID, [rawUser('srv-u-seed', undefined, 'earlier question', '2026-10-10T00:00:00Z')], 1))
     let container!: HTMLElement
     await act(async () => {
       const result = render(
