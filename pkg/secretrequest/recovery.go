@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -215,7 +216,7 @@ func (r *Registry) resumeLocked(rec Record) error {
 	}
 	entries, err := r.opts.Sessions.ReadTranscript(rec.Card.SessionId)
 	if err != nil {
-		return err
+		return &continuationFaultError{stage: continuationStageTranscript, err: err}
 	}
 	for _, entry := range entries {
 		if entry.ID == ResumeEntryID(rec.Card.RequestId) {
@@ -223,10 +224,10 @@ func (r *Registry) resumeLocked(rec Record) error {
 		}
 	}
 	if r.opts.Resume == nil {
-		return errors.New("secret continuation dispatcher is unavailable")
+		return &continuationFaultError{stage: continuationStageDispatch, err: errors.New("secret continuation dispatcher is unavailable")}
 	}
 	if err := r.opts.Resume(cloneRecord(rec)); err != nil {
-		return err
+		return &continuationFaultError{stage: continuationStageDispatch, err: err}
 	}
 	r.inFlight[rec.Card.RequestId] = true
 	return nil
@@ -259,10 +260,48 @@ func (r *Registry) RetryResumes() error {
 			}
 		}
 		if err := r.ensureDeliveryLocked(rec); err != nil {
+			// The warning flag is set; the operator also gets the request,
+			// the failed stage, a safe cause and the repair (gate r3 T2-SF-02).
+			logContinuationRetryFault(rec, err)
 			failures = append(failures, err)
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// Stages of a continuation delivery a retry can fail at, and the repair for a
+// dispatch failure (a storage failure uses repairSessionStorage).
+const (
+	continuationStageTranscript = "continuation_transcript_read"
+	continuationStageDispatch   = "continuation_dispatch"
+	repairContinuationDispatch  = "the follow-up could not be handed to the agent; reopen the chat or restart the gateway to retry it, " +
+		"and check the agent loop in the server log if it keeps failing"
+)
+
+// continuationFaultError names the stage a continuation delivery failed at. Its
+// text is the cause's; only the stage and a safe category are ever logged.
+type continuationFaultError struct {
+	stage string
+	err   error
+}
+
+func (e *continuationFaultError) Error() string { return e.err.Error() }
+func (e *continuationFaultError) Unwrap() error { return e.err }
+
+// logContinuationRetryFault writes one Error-level, value-free diagnostic for
+// a failed continuation retry: request and session ids, stage, safe cause
+// category and repair — never the raw error text.
+func logContinuationRetryFault(rec Record, err error) {
+	var fault *continuationFaultError
+	if errors.As(err, &fault) && fault.stage == continuationStageDispatch {
+		logger.ErrorCF("secretrequest", "Secret request follow-up failed at stage "+fault.stage+"; "+repairContinuationDispatch,
+			map[string]any{
+				"request_id": rec.Card.RequestId, "session_id": rec.Card.SessionId, "stage": fault.stage,
+				"cause_category": "dispatch_failed", "repair": repairContinuationDispatch,
+			})
+		return
+	}
+	logStorageFault(continuationStageTranscript, rec.Card.RequestId, rec.Card.SessionId, err, repairSessionStorage)
 }
 
 // ensureDeliveryLocked runs the one ensure-delivery primitive (resumeLocked)
