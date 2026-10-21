@@ -12,10 +12,11 @@
 // generated body verbatim), so its F6 leg is exercised by the reply-context
 // producer's own tests — the panel tests assert the quote renders verbatim
 // and stays editable, which is this file's half.
-import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+// Load the real panel during collection, outside the reply scenarios' budgets.
+import { MailPanel } from './MailPanel'
 
 const NOW = new Date('2026-10-02T10:00:00Z')
 
@@ -104,21 +105,7 @@ const FOLDERS = {
   metadata: FRESH_META,
 }
 
-async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>> {
-  const specifier = './MailPanel'
-  try {
-    const mod = await import(/* @vite-ignore */ specifier) as { MailPanel?: React.ComponentType<{ workspaceId: string }> }
-    if (typeof mod.MailPanel !== 'function') throw new Error('MailPanel is not a function export')
-    return mod.MailPanel
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err)
-    if (detail.startsWith('BLOCKED:')) throw err
-    throw new Error('BLOCKED: MailPanel not implemented — required by W3 spec §8.4 C10. ' + detail, { cause: err })
-  }
-}
-
 async function openMessageAndCompose(mode: 'reply' | 'reply_all'): Promise<void> {
-  const MailPanel = await loadPanel()
   fetchMailMessages.mockResolvedValue({
     messages: [SUMMARY],
     has_more: false, next_cursor: null, view_limit_reached: false, truncated: false, next_before_uid: null,
