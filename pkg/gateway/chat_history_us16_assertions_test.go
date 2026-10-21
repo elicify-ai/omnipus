@@ -59,22 +59,17 @@ func historyUS16LiveOnly(t *testing.T, frames [][]byte, sid, pendingID, turnID s
 		require.Equal(t, sid, pending.SessionId)
 		require.Equal(t, "mia", pending.AgentId)
 		require.Equal(t, "write_file", pending.ToolName)
-		// Current contract: these fields are optional until WU-8, but a supplied
-		// value must be exact. Raw presence keeps explicit null from masquerading
-		// as omission after generated pointer/map decoding.
+		// The combined release contract now REQUIRES these fields. Call/turn
+		// are generated strings, not pointers; keep the same exact fixture values
+		// and reject absent/null metadata rather than accepting zero values.
 		require.Len(t, pendingWire, 1)
-		if _, present := pendingWire[0]["tool_call_id"]; present {
-			require.NotNil(t, pending.ToolCallId)
-			require.Equal(t, historyUS16CallID, *pending.ToolCallId)
+		for _, field := range []string{"tool_call_id", "args", "turn_id"} {
+			require.Contains(t, pendingWire[0], field)
 		}
-		if _, present := pendingWire[0]["args"]; present {
-			require.NotNil(t, pending.Args)
-			require.Equal(t, map[string]any{"path": historyUS16Filename, "content": historyUS16Proof}, pending.Args)
-		}
-		if _, present := pendingWire[0]["turn_id"]; present {
-			require.NotNil(t, pending.TurnId)
-			require.Equal(t, turnID, *pending.TurnId)
-		}
+		require.Equal(t, historyUS16CallID, pending.ToolCallId)
+		require.NotNil(t, pending.Args)
+		require.Equal(t, map[string]any{"path": historyUS16Filename, "content": historyUS16Proof}, pending.Args)
+		require.Equal(t, turnID, pending.TurnId)
 	}
 	if turnID != "" {
 		require.NotNil(t, state.ActiveTurn, "actual active work remains reachable beside history failure")

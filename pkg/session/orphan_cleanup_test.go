@@ -40,8 +40,8 @@ func newUnifiedStoreForExternalTest(t *testing.T) *session.UnifiedStore {
 //
 // Traces to: temporal-puzzling-melody.md §4 Axis-1 — TestOrphanSessionsParticipateInRetention
 func TestOrphanSessionsParticipateInRetention(t *testing.T) {
-	// Step 1: Instantiate the real UnifiedStore in a temp dir.
-	store := newUnifiedStoreForExternalTest(t)
+	// Step 1: Instantiate the real UnifiedStore in an owned native fixture root.
+	store := newOrphanRetentionStore(t)
 
 	// Step 2: Create a session for agent "orphan-agent".
 	meta, err := store.NewSession(session.SessionTypeChat, "", "orphan-agent")
@@ -53,19 +53,20 @@ func TestOrphanSessionsParticipateInRetention(t *testing.T) {
 	// means the owning agent has been removed from the system; the session directory
 	// remains on disk. RetentionSweep treats all session directories identically.
 
-	// Write a stale .jsonl file into the session directory and backdate its mtime
-	// so it falls outside a 7-day retention window.
+	// The real canonical/day writers create both rolled files with explicit
+	// membership and a healthy derived index. Only file age is planted here;
+	// no raw id-only archive or separate history-readiness outcome is accepted.
+	store = seedOrphanRetentionCanonicalDays(t, store, sessionID)
 	staleDir := store.BaseDir()
 	staleFile := filepath.Join(staleDir, sessionID, "2026-01-01.jsonl")
-	require.NoError(t, os.WriteFile(staleFile, []byte(`{"id":"orphan-entry"}`+"\n"), 0o600))
+	require.FileExists(t, staleFile)
 	staleTime := time.Now().Add(-30 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(staleFile, staleTime, staleTime))
 
-	// Step 4 (additional): Write a recent .jsonl file for the same orphan session
-	// that is within the retention window and must NOT be deleted.
+	// Step 4 (additional): The writer-created recent rolled file is within the
+	// retention window and must NOT be deleted; its real mtime needs no override.
 	recentFile := filepath.Join(staleDir, sessionID, "2026-04-21.jsonl")
-	require.NoError(t, os.WriteFile(recentFile, []byte(`{"id":"recent-entry"}`+"\n"), 0o600))
-	// mtime is current (within 7 days) — no Chtimes needed.
+	require.FileExists(t, recentFile)
 
 	// Step 5: Call store.RetentionSweep(7).
 	removed, err := store.RetentionSweep(7)
