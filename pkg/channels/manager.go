@@ -150,6 +150,7 @@ type Manager struct {
 	reactionUndos         sync.Map          // "channel:chatID" → reactionEntry
 	streamActive          sync.Map          // "channel:chatID" → streamEntry (set when streamer.Finalize sent the message)
 	channelHashes         map[string]string // channel name → config hash
+	resourceConfigOrders  map[string]uint64 // originating snapshot carried by each constructed resource
 	// credSigs mirrors channelHashes with a credential-availability signature
 	// per enabled instance (#1277): which of the instance's configured refs
 	// were present in the bundle when the hash was committed. Reload diffs it
@@ -716,6 +717,7 @@ func (m *Manager) initChannel(name, instanceID, displayName string) error {
 		return nil // construction lost to a newer exact config write; never publish it
 	}
 	m.channels[instanceID] = ch
+	m.recordResourceConfigOrder(instanceID, m.config)
 	order.Unlock()
 	logger.InfoCF("channels", "Channel enabled successfully", map[string]any{
 		"channel":    displayName,
@@ -2143,7 +2145,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	mr.m.mu.Lock()
 	defer mr.m.mu.Unlock()
 
-	if err := m.PairingAttempts().CheckConfigSnapshot(cfg); err != nil {
+	if !mr.publishConfigSnapshot() {
 		return nil // obsolete continuation; the coalesced current reload owns the effect
 	}
 	mr.prepareDispatch()
@@ -2161,18 +2163,9 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 
 // prepareDispatch saves rollback state, installs the new configuration, and refreshes the dispatch context.
 func (mr *managerReload) prepareDispatch() {
-	// Save old config and secrets so we can revert on error.
-	mr.oldConfig = mr.m.config
-	mr.oldSecrets = mr.m.secrets
-	mr.oldCredSigs = mr.m.credSigs
-
-	// Update config and secrets early: initChannel uses m.config and m.secrets via factory call.
-	mr.m.config = mr.cfg
-	mr.m.liveCfg.Store(mr.cfg)
-	mr.m.secrets = mr.secrets
-
 	mr.list = toChannelHashes(mr.cfg)
 	mr.added, mr.removed = compareChannels(mr.m.channelHashes, mr.list)
+	mr.addGenerationRestarts()
 	// #1277 (founder decision 2026-10-12): a config-hash-identical instance
 	// whose credential availability changed — its secret was deleted from the
 	// vault, became unreadable, or was restored — must still be re-initialized,
@@ -2199,15 +2192,19 @@ func (mr *managerReload) prepareDispatch() {
 	// admission's token on this serialized path (gate r3 M4, M10).
 	for id, intent := range mr.m.forcedRestarts {
 		order := mr.m.PairingAttempts().LockChannel(id)
+		if !order.MatchesConfig(mr.cfg) {
+			order.Unlock()
+			continue // this snapshot must not consume a later accepted restart
+		}
 		_, enabled := mr.list[id]
 		_, known := mr.m.channelHashes[id]
 		if order.acceptsRestart(intent, mr.cfg) && enabled && known && !slices.Contains(mr.added, id) {
 			mr.added = append(mr.added, id)
 			mr.removed = append(mr.removed, id)
 		}
+		delete(mr.m.forcedRestarts, id)
 		order.Unlock()
 	}
-	mr.m.forcedRestarts = nil
 
 	// Fix 16: cancel the existing dispatcher before creating a new one to prevent context leak.
 	//
@@ -2500,36 +2497,22 @@ func (mr *managerReload) startAdded() {
 				// (gate r4 T2-SF-16).
 				mr.m.notifyPairingLocked(n, token, PairingStatusError, PairingStartFailureMessage(err))
 			}
-			mr.m.noteStartLocked(n, err)
-			// Fix 35: don't commit the hash for channels that failed to start.
-			delete(mr.list, n)
+			mr.recordStartFailure(n, channel, err)
 			continue
 		}
-		mr.m.noteStartLocked(n, nil)
 		if token != "" {
 			// The start ran without activating a pairing for its admission
 			// (the channel needed none): close it, so it can never start late.
 			mr.m.PairingAttempts().Release(n, token, PairingOutcomeNoPairing)
 		}
-		// Lazily create worker only after channel starts successfully. Resolve
-		// TYPE from instance ID for rate limiting (see channelTypeForRateLimit).
-		w := newChannelWorker(mr.m.channelTypeForRateLimit(n), channel)
-		w.gen = mr.m.dispatchGen
-		mr.m.workers[n] = w
-		// Snapshot m.config (already the NEW cfg, assigned above) while still
-		// holding m.mu.Lock() — see runWorker's doc comment.
-		go mr.m.runWorker(mr.dispatchCtx, n, w, mr.m.config)
-		go mr.m.runMediaWorker(mr.dispatchCtx, n, w)
-		mr.deferFuncs = append(mr.deferFuncs, func() {
-			mr.m.registerChannelLocked(n, channel)
-		})
+		mr.publishStartedWorker(n, channel)
 	}
 }
 
 // restartExisting commits channel hashes and restarts dispatchers and unchanged-channel workers.
 func (mr *managerReload) restartExisting() error {
 	// Commit hashes only for successfully started channels.
-	mr.m.channelHashes = mr.list
+	mr.commitAppliedHashes()
 
 	// Restart the bus dispatchers + TTL janitor against the new dispatchCtx so
 	// outbound routing and stale-entry eviction resume after the old context was
@@ -2559,17 +2542,7 @@ func (mr *managerReload) restartExisting() error {
 			// must not be joined as if it were cancelled.
 			continue
 		}
-		// Wait for old goroutines to finish (they were canceled above).
-		<-w.done
-		<-w.mediaDone
-		// Reset done channels so the new goroutines can close them cleanly.
-		w.done = make(chan struct{})
-		w.mediaDone = make(chan struct{})
-		w.gen = mr.m.dispatchGen
-		// Snapshot m.config (already the NEW cfg) while still holding
-		// m.mu.Lock() — see runWorker's doc comment.
-		go mr.m.runWorker(mr.dispatchCtx, name, w, mr.m.config)
-		go mr.m.runMediaWorker(mr.dispatchCtx, name, w)
+		mr.restartDrainedWorker(name, w)
 	}
 
 	// Execute the register/unregister mutations while STILL holding m.mu.

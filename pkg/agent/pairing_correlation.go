@@ -103,6 +103,9 @@ func (al *AgentLoop) CommitPairing(channelID, attemptID string) bool {
 		// current exact snapshot. Ordered writers already committed readiness and
 		// never enter this branch or bind against a later GetConfig.
 		err := al.MutateConfig(func(candidate *config.Config) error {
+			if err := store.CheckConfigSnapshot(candidate); err != nil {
+				return err
+			}
 			if !order.MarkReady(attemptID, channels.ChannelRevision(candidate, channelID)) {
 				return channels.ErrPairingConflict
 			}

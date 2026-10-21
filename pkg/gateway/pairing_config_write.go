@@ -54,13 +54,36 @@ func (a *restAPI) prepareConfigJSONLocked(mutate func(map[string]any) error) ([]
 		return nil, nil, nil, fmt.Errorf("parse candidate config: %w", err)
 	}
 	candidate.CopyChannelOrderFrom(a.agentLoop.GetConfig())
+	if store := a.pairingOrderStore(); store != nil {
+		store.CarrySavedConfigOrders(&candidate)
+	}
 	return out, &before, &candidate, nil
+}
+
+func (a *restAPI) publishWrittenConfig(candidate, source *config.Config, exactWrite bool) error {
+	if exactWrite {
+		candidate.CopyChannelWriteFrom(source)
+		a.agentLoop.SwapWrittenConfig(candidate)
+		return nil
+	}
+	if store := a.pairingOrderStore(); store != nil {
+		// Split-phase non-channel writers also reload actual saved bytes. Bind
+		// there, not from a later GetConfig, then validate at publication.
+		progress, err := store.BindSavedConfigRead(candidate)
+		if err != nil {
+			return err
+		}
+		a.publishPairingAfterConfigUnlock(progress)
+		return a.agentLoop.SwapReadConfig(candidate)
+	}
+	a.agentLoop.SwapWrittenConfig(candidate)
+	return nil
 }
 
 // orderedConfigJSONLocked is the common local commit for channel settings,
 // routing, bulk/cascade writes and single-channel enable/disable. The config
 // write lock is already held. Fixed orders belong to the caller's admission.
-func (a *restAPI) orderedConfigJSONLocked(store *channels.PairingAttempts, fixed []*channels.PairingOrder, reservations map[string]string, mutate func(map[string]any) error) error {
+func (a *restAPI) orderedConfigJSONLocked(store *channels.PairingAttempts, fixed []*channels.PairingOrder, reservations map[string]string, mutate func(map[string]any) error, exclusiveDeletes ...string) error {
 	if store == nil {
 		out, err := a.writeConfigJSONLocked(mutate)
 		if err != nil {
@@ -85,6 +108,7 @@ func (a *restAPI) orderedConfigJSONLocked(store *channels.PairingAttempts, fixed
 	if err != nil {
 		return err
 	}
+	commit.ProtectDeletes(exclusiveDeletes...)
 	if err := fileutil.WriteFileAtomic(a.configPath(), out, 0o600); err != nil {
 		return err // no ready/revoke transition before persistence
 	}

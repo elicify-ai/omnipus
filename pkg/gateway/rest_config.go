@@ -318,13 +318,14 @@ func (a *restAPI) credentialRefResolves(refName string) (bool, error) {
 // scrubbing is re-armed with the new credentials (A1+A2 fix). If the in-memory
 // refresh fails the error is returned to the caller so the HTTP handler can surface
 // a 500 rather than silently serving stale state.
-func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) error {
+func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error, exclusiveDeletes ...string) error {
 	// configMu serializes concurrent REST config writes (read-modify-write cycles).
 	// Sysagent mutations go through MutateConfig (al.mu) with SaveConfigLocked,
 	// which does not acquire configMu — so there is no lock ordering conflict.
+	store := a.pairingOrderStore()
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
-	return a.updateConfigJSONLocked(mutate)
+	return a.orderedConfigJSONLocked(store, nil, nil, mutate, exclusiveDeletes...)
 }
 
 // updateConfigJSONLocked is safeUpdateConfigJSON's body with the configMu
@@ -550,8 +551,9 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string, snapshots ..
 				"agent roster population failed (no credential store variant)", "error", rosterErr)
 			return fmt.Errorf("agent roster population failed: %w", rosterErr)
 		}
-		newCfg.CopyChannelOrderFrom(snapshot)
-		a.agentLoop.SwapConfig(newCfg)
+		if err := a.publishWrittenConfig(newCfg, snapshot, len(snapshots) > 0); err != nil {
+			return err
+		}
 		// Hot-apply the log level: gateway.log_level is a hot-reload key (not
 		// restart-gated), so a Settings save must take effect immediately
 		// rather than waiting for a manual restart.
@@ -630,8 +632,9 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string, snapshots ..
 	newCfg.RegisterSensitiveValues(values)
 	// Atomically swap the config pointer so all subsequent requests see the
 	// new config with scrubbing fully re-armed.
-	newCfg.CopyChannelOrderFrom(snapshot)
-	a.agentLoop.SwapConfig(newCfg)
+	if err := a.publishWrittenConfig(newCfg, snapshot, len(snapshots) > 0); err != nil {
+		return err
+	}
 	// Hot-apply the log level: gateway.log_level is a hot-reload key (not
 	// restart-gated), so a Settings save must take effect immediately
 	// rather than waiting for a manual restart.

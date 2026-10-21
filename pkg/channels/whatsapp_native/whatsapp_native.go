@@ -245,6 +245,9 @@ func (c *WhatsAppNativeChannel) activate(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	store, instance := c.attempts, c.instance
+	if c.stopping.Load() || c.runCtx != nil && c.runCtx.Err() != nil {
+		return "", channels.ErrPairingConflict
+	}
 	if store == nil {
 		return "", nil
 	}

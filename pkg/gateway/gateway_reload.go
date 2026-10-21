@@ -751,6 +751,15 @@ func reloadConfigForSwap(runningServices *services, loaded *config.Config) (*con
 	if prepErr := prepareReloadConfig(fresh, runningServices); prepErr != nil {
 		return nil, prepErr
 	}
+	if a := runningServices.restAPIRef; a != nil {
+		if store := a.pairingOrderStore(); store != nil {
+			progress, bindErr := store.BindSavedConfigRead(fresh)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			a.publishPairingAfterConfigUnlock(progress)
+		}
+	}
 	runningServices.lastAppliedConfigReadSeq = runningServices.reloadOutcome.markConfigRead()
 	return fresh, nil
 }

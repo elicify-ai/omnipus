@@ -976,7 +976,7 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 			}
 		}
 		return nil
-	}); err != nil {
+	}, channelID); err != nil {
 		slog.Error("rest: delete channel instance: save config", "id", channelID, "error", err)
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return

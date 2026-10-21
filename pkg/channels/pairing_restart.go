@@ -85,6 +85,9 @@ func (s *PairingAttempts) ReadyForSnapshot(instance string, cfg *config.Config) 
 	if !order.matchesConfigLocked(cfg) || c.retired || c.deleting || c.hasStopping() {
 		return "", false
 	}
+	if c.configGeneration != 0 && c.generation != c.configGeneration {
+		return "", false // explicit Stop or an as-yet-uncommitted later admission
+	}
 	rec := c.latest
 	if rec != nil && !c.hasStopping() && rec.Generation == c.generation && rec.Phase == PairingPhaseReady && !rec.startFenced && rec.Revision == revision {
 		return rec.AttemptID, true

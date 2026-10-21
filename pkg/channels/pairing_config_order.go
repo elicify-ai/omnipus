@@ -18,14 +18,15 @@ import (
 // before persistence succeeds. No continuation may use this to mint a new stamp.
 // not-wire-format: private Go transaction metadata, never configuration JSON.
 type PairingConfigIntent struct {
-	Generation  uint64 `json:"-"`
-	previous    uint64
-	revision    string
-	fingerprint string
-	exists      bool
-	enabled     bool
-	changed     bool
-	attemptID   string
+	Generation      uint64 `json:"-"`
+	previous        uint64
+	revision        string
+	fingerprint     string
+	exists          bool
+	enabled         bool
+	changed         bool
+	attemptID       string
+	exclusiveDelete bool
 }
 
 func (o *PairingOrder) PrepareConfig(revision string, exists, enabled, changed bool, attemptID string) (PairingConfigIntent, error) {
@@ -69,7 +70,7 @@ func (o *PairingOrder) CommitConfig(intent PairingConfigIntent, applied bool) ([
 	}
 	c.revision, c.configGeneration, c.configFingerprint = intent.revision, intent.Generation, intent.fingerprint
 	c.retired = !intent.exists
-	c.deleting = !intent.exists
+	c.deleting = !intent.exists && intent.exclusiveDelete
 	if intent.attemptID != "" {
 		rec := c.attempts[intent.attemptID]
 		if rec == nil || rec != c.latest || rec.Generation != intent.Generation || rec.Phase != PairingPhasePending {
@@ -192,6 +193,18 @@ func PreparePairingConfig(before, candidate *config.Config, orders []*PairingOrd
 	return commit, nil
 }
 
+// ProtectDeletes retains the endpoint's exclusion through its additional
+// credential/state cleanup. A bulk config removal has no such deferred cleanup.
+func (c *PairingConfigCommit) ProtectDeletes(instances ...string) {
+	for i, order := range c.orders {
+		for _, id := range instances {
+			if order.instance == id && !c.intents[i].exists {
+				c.intents[i].exclusiveDelete = true
+			}
+		}
+	}
+}
+
 // Commit accepts notifications inside the write's order, before any later
 // admission. Emit the returned immutable envelopes only after ALL locks release.
 func (c *PairingConfigCommit) Commit(applied bool) []PairingProgress {
@@ -209,11 +222,23 @@ func (c *PairingConfigCommit) Commit(applied bool) []PairingProgress {
 // save using stale live state. It takes only the short state mutex, never an
 // order; callers serialize config writes before entering their mutator.
 func (s *PairingAttempts) CheckConfigSnapshot(cfg *config.Config) error {
+	if cfg == nil {
+		return errors.New("channel config snapshot is missing")
+	}
+	type snapshotEntry struct {
+		generation  uint64
+		fingerprint string
+	}
+	entries := make(map[string]snapshotEntry)
+	for _, id := range s.ConfigOrderInstances() {
+		stamp, _ := cfg.ChannelOrderGeneration(id)
+		entries[id] = snapshotEntry{stamp, channelConfigFingerprint(cfg, id)}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, c := range s.connectors {
-		stamp, _ := cfg.ChannelOrderGeneration(id)
-		if c.configGeneration != 0 && stamp != c.configGeneration {
+		entry := entries[id]
+		if c.configGeneration != 0 && (entry.generation != c.configGeneration || c.configFingerprint != "" && entry.fingerprint != c.configFingerprint) {
 			return errors.New("saved channel configuration is not applied; reload it before writing")
 		}
 	}

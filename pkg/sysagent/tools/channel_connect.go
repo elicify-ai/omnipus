@@ -89,9 +89,7 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 	if missing != nil {
 		return missing
 	}
-	if refusal := t.validateBinding(ws, agentID); refusal != nil {
-		return refusal
-	}
+	var bindingRefusal *tools.ToolResult
 	chType, _ := config.ParseInstanceKey(id)
 	var attemptID string
 	var pairingErr error
@@ -105,6 +103,10 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 	var saved config.ChannelInstanceConfig
 	var savedRevision string
 	writeErr := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
+		bindingRefusal = t.validateBinding(ws, agentID)
+		if bindingRefusal != nil {
+			return errors.New("invalid channel binding; nothing saved")
+		}
 		if whatsappChannel(chType) {
 			attemptID, pairingErr = write.admit(ctx, id, channels.PairingAdmissionConnect,
 				&channels.PairingOwner{SessionID: tools.ToolTranscriptSessionID(ctx), RequestID: tools.ToolCallID(ctx)})
@@ -143,6 +145,9 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 	})
 	if r, ok := revisionConflictResult(writeErr, "list_channels"); ok {
 		return r
+	}
+	if bindingRefusal != nil {
+		return bindingRefusal
 	}
 	if pairingErr != nil {
 		err := pairingErr
