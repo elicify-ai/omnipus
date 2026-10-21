@@ -25,14 +25,9 @@ import (
 
 func newUnifiedStoreForExternalTest(t *testing.T) *session.UnifiedStore {
 	t.Helper()
-	store, err := session.NewUnifiedStore(t.TempDir())
-	require.NoError(t, err, "NewUnifiedStore must succeed")
-	// See pkg/session's u2NewTestStore doc comment / issue #634: without
-	// this, the store's background stats-flusher goroutine outlives this
-	// test and can pollute a later in-package test's FR-101 lock-recorder
-	// trace via the shared package-level seam.
-	t.Cleanup(func() { _ = store.Close() })
-	return store
+	// Preserve the external test's factory while using a genuine canonical/day
+	// fixture root. Its constructor still checks errors and joins the flusher.
+	return newOrphanRetentionStore(t)
 }
 
 // TestOrphanSessionsParticipateInRetention verifies that session JSONL files from
@@ -41,7 +36,7 @@ func newUnifiedStoreForExternalTest(t *testing.T) *session.UnifiedStore {
 // Traces to: temporal-puzzling-melody.md §4 Axis-1 — TestOrphanSessionsParticipateInRetention
 func TestOrphanSessionsParticipateInRetention(t *testing.T) {
 	// Step 1: Instantiate the real UnifiedStore in an owned native fixture root.
-	store := newOrphanRetentionStore(t)
+	store := newUnifiedStoreForExternalTest(t)
 
 	// Step 2: Create a session for agent "orphan-agent".
 	meta, err := store.NewSession(session.SessionTypeChat, "", "orphan-agent")
