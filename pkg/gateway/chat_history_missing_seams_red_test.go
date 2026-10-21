@@ -3,7 +3,7 @@ package gateway
 import "testing"
 
 func TestGetSessionHistory_MalformedKeyAndResolvedRangePrecedence(t *testing.T) {
-	t.Fatal("BLOCKED: chat-specific raw-key query parser/resolved-window seam not implemented and malformed unrecognized-key exact error copy is not specified — required by D11/T11/B19/B20/D-V1c; malformed values/multiplicity have real REST/WS cases, but malformed key (%ZZ), reversed same-session range, before outside closed range and unknown/foreign404-before-order need explicit resolved-range fixtures without inventing positions or parser API")
+	t.Fatal("BLOCKED: chat-specific malformed unrecognized-key error-copy contract not specified — required by D11/T11/B19/B20; malformed values/multiplicity and real reversed/outside/foreign resolved-range requests now have independent existing-surface tests, but malformed key bad%ZZkey must be an explicit400 with architect-agreed fixed copy, never silently dropped or guessed here")
 }
 
 func TestSessionHistory_AllPersistedFrameClassesHaveLocalOrigin(t *testing.T) {
