@@ -36,15 +36,22 @@ func grRecordlessPauseAnchorContract(t *testing.T, channel bool) {
 		}
 	}
 	if channel {
-		var pauseCount int
+		var pauseCount, ordinaryReplies int
 		for {
 			select {
 			case msg := <-h.al.bus.OutboundChan():
-				assert.Equal(t, grPauseLine, msg.Content, "one visible pause replaces retired compile echo/narration")
 				assert.Equal(t, "telegram", msg.Channel)
 				assert.Equal(t, "r6-no-compile-channel", msg.ChatID)
-				pauseCount++
+				switch msg.Content {
+				case grReply: // the deterministic external provider returns this once per real reminder
+					ordinaryReplies++
+				case grPauseLine:
+					pauseCount++
+				default:
+					t.Errorf("unexpected channel narration: %q; only five ordinary fixture replies and the exact R6 pause are permitted", msg.Content)
+				}
 			default:
+				assert.Equal(t, 5, ordinaryReplies, "each of the five actual reminder turns keeps its ordinary channel reply")
 				assert.Equal(t, 1, pauseCount)
 				return
 			}

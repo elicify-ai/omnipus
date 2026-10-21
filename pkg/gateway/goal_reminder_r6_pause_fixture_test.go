@@ -113,8 +113,8 @@ func r6NewPublicFixture(t *testing.T) *r6PublicFixture {
 		provider.releaseAll()
 		cancel()
 		select {
-		case err := <-done:
-			require.True(t, err == nil || errors.Is(err, context.Canceled), "real runtime shutdown failed: %v", err)
+		case runErr := <-done:
+			require.True(t, runErr == nil || errors.Is(runErr, context.Canceled), "real runtime shutdown failed: %v", runErr)
 		case <-time.After(10 * time.Second):
 			t.Error("real gateway test runtime did not join")
 		}

@@ -178,7 +178,7 @@ func (al *AgentLoop) reminderBackgroundProcesses(scope *goalReminderScope, work 
 }
 
 func (al *AgentLoop) reminderOwnedJobs(root string, scope *goalReminderScope, work *goalReminderWork, since time.Time) (bool, bool, error) {
-	busy, progress := false, false
+	busy := false
 	for id := range scope.sessions {
 		if id != root {
 			if active, _ := al.sessionWorkInFlight(id); active {
@@ -186,11 +186,10 @@ func (al *AgentLoop) reminderOwnedJobs(root string, scope *goalReminderScope, wo
 			}
 		}
 	}
-	taskProgress, err := al.reminderTaskHistory(scope, work, since)
+	progress, err := al.reminderTaskHistory(scope, work, since)
 	if err != nil {
 		return false, false, err
 	}
-	progress = taskProgress
 	for _, item := range scope.tasks {
 		owned := item.SessionID != "" && scope.sessions[item.SessionID]
 		queued := item.SessionID == "" && item.Initiator != nil && scope.sessions[item.Initiator.SessionID]
