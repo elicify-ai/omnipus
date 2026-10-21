@@ -13,7 +13,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -23,7 +22,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -154,12 +152,6 @@ func newGoalLoopTestLoop(
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), workerProvider)
 	t.Cleanup(func() { al.Close() })
-	// Supply ordinary reminder admission, not unrelated task authority or
-	// launcher behavior. Synthetic task-unit tests control those separately.
-	al.SetSessionMessagingStores(session.NewMessageInboxStore(filepath.Join(home, "session_messages")),
-		session.NewLifecycleStore(filepath.Join(home, "session_lifecycle")))
-	mintGenuineBootEpochForLoop(t, al)
-
 	judgeInst, ok := al.GetRegistry().GetAgent(string(coreagent.IDJudge))
 	if !ok {
 		t.Fatal("judge agent not registered")

@@ -95,6 +95,7 @@ func TestKeeperReachesSessionMintedByARealTaskRun(t *testing.T) {
 	// record, then the REAL dispatch-path session mint. Nothing here reaches
 	// into a session store by hand.
 	tk, _ := seedDefiningTaskGoal(t, al, "t-keeper-reach-1", agentInst.ID)
+	prepareKeeperTaskRuntimeForTest(t, al)
 	sid, err := al.taskExecutor.createTaskSessionSync(tk)
 	if err != nil {
 		t.Fatalf("createTaskSessionSync: %v", err)

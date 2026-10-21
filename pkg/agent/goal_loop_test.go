@@ -52,6 +52,7 @@ func newLoopSchedulerForTest(t *testing.T, al *AgentLoop) (*LoopScheduler, *trig
 
 func newGoalTestSession(t *testing.T, al *AgentLoop, agentID string) (*session.UnifiedStore, string) {
 	t.Helper()
+	ensureOrdinaryGoalRuntimeForTest(t, al)
 	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatal("shared session store not available")

@@ -392,6 +392,7 @@ func TestKeeperReachesAQuietTaskWithoutTestWiring(t *testing.T) {
 	const condition = "ship the CSV exporter"
 	tk, _ := seedTaskWithJudgeableGoal(t, al, "t-keeper-1", condition, "webchat", "c1")
 
+	prepareKeeperTaskRuntimeForTest(t, al)
 	sid, err := al.taskExecutor.createTaskSessionSync(tk)
 	if err != nil {
 		t.Fatalf("createTaskSessionSync: %v", err)

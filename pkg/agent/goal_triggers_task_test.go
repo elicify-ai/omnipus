@@ -135,6 +135,7 @@ func mintTaskRunGoal(
 	}
 
 	// The production mint. This is the line the old helper faked.
+	prepareKeeperTaskRuntimeForTest(t, al)
 	sid, serr := al.taskExecutor.createTaskSessionSync(tk)
 	if serr != nil {
 		t.Fatalf("mintTaskRunGoal: createTaskSessionSync: %v", serr)
