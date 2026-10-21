@@ -12,6 +12,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -239,34 +240,72 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 	// A third scripted answer, for the turn that carries the held request, is
 	// staged before the first turn starts so no field is written under a
 	// running provider call.
-	al, original, provider := r5AdmitRootWithAnswers(t, "partial root work", "root resumed exactly once", "request answered")
+	t.Setenv(config.EnvHome, t.TempDir())
+	const receiverWorkspace = testHarnessWorkspaceMembershipID
+	al, original, provider := r5AdmitScopedRootWithAnswers(t, receiverWorkspace, "partial root work", "root resumed exactly once", "request answered")
 	r5StopRoot(t, al, original)
 	provider.open(0)
 	joinGoalFixtureRuns(t, al)
-	asker, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "ray")
+	stopped := rootReopenedRecord(t, al, original.SessionID)
+	if stopped.State != session.LifecycleStopped || stopped.Stop != nil || stopped.StopNote == nil {
+		t.Fatalf("SETUP: real receiver Stop has not landed: %+v", stopped)
+	}
+	store := al.GetSessionStore()
+	receiverMeta, err := store.GetMeta(original.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receiverMeta == nil || receiverMeta.WorkspaceID != receiverWorkspace || receiverMeta.AgentID != testDefaultAgentID {
+		t.Fatalf("SETUP: receiver was not created in its declared workspace: %+v", receiverMeta)
+	}
+	archiveBefore, err := store.ReadArchive(t.Context(), original.SessionID)
+	if err != nil || len(archiveBefore) == 0 {
+		t.Fatalf("SETUP: original receiver archive must be readable and nonempty: %v %v", archiveBefore, err)
+	}
+	transcriptBefore, err := store.ReadTranscript(original.SessionID)
+	if err != nil || len(transcriptBefore) == 0 {
+		t.Fatalf("SETUP: original receiver transcript must be readable and nonempty: %v %v", transcriptBefore, err)
+	}
+	asker, err := store.NewSession(session.SessionTypeChat, "webchat", "ray")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ws := addrWS
-	if err = al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+	if err = store.SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
 		t.Fatal(err)
+	}
+	askerMeta, err := store.GetMeta(asker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if askerMeta == nil || askerMeta.WorkspaceID != addrWS || askerMeta.AgentID != "ray" {
+		t.Fatalf("SETUP: the held request must retain its genuine asker scope: %+v", askerMeta)
 	}
 	const body = "Please summarise the Q3 numbers"
 	c := addressing.Capture{
 		RequestID: "held-1", ReceiverSessionID: original.SessionID,
-		Receiver: addressing.Pair{WorkspaceID: addrWS, AgentID: testDefaultAgentID},
+		Receiver: addressing.Pair{WorkspaceID: receiverMeta.WorkspaceID, AgentID: receiverMeta.AgentID},
 		Source: addressing.Source{
-			Kind: addressing.SourceConversation, Owner: addressing.Pair{WorkspaceID: addrWS, AgentID: "ray"}, SessionID: asker.ID,
+			Kind: addressing.SourceConversation, Owner: addressing.Pair{WorkspaceID: askerMeta.WorkspaceID, AgentID: askerMeta.AgentID}, SessionID: asker.ID,
 		},
 		AdmittedAt: time.Now().UTC(),
 		Text:       composeRequestText("held-1", "agent ray", body),
+		Held:       true,
 	}
 	if err = al.RequestLedger().Put(c); err != nil {
 		t.Fatalf("SETUP: hold a request: %v", err)
 	}
+	// Match real admission's chat-only request row. Do not put the body in
+	// the model archive: held delivery must still carry it through the wake.
+	if err = store.AppendTranscriptStrict(original.SessionID, session.TranscriptEntry{
+		ID: c.RequestID, Role: "user", AgentID: receiverMeta.AgentID, Content: c.Text, Timestamp: c.AdmittedAt,
+	}); err != nil {
+		t.Fatalf("SETUP: persist the held request's visible row: %v", err)
+	}
 
 	msg := rootHumanMessage(original.SessionID)
 	msg.GatewayUserID = "r5-owner"
+	msg.Metadata["workspace_id"] = receiverWorkspace
 	if err = al.enqueueSteeringFromMessage(msg); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -286,13 +325,24 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 	// preceded by WaitForActiveRequests: that closes intake for good.)
 	provider.open(2)
 	var processed chan struct{}
+	var wakeResult <-chan error
 	select {
 	case in := <-al.bus.InboundChan():
 		if in.SessionID != original.SessionID || in.TranscriptEntryID != "held-1" {
 			t.Fatalf("delivered wake = %+v, want the held request for the resumed session", in)
 		}
+		if in.Metadata["workspace_id"] != receiverWorkspace || in.Metadata["agent_id"] != receiverMeta.AgentID ||
+			in.Metadata[ownerWakeMetadataKey] != "1" || in.UserInitiated || in.OperatorPrompt {
+			t.Fatalf("held wake lost its receiver scope or non-human provenance: %+v", in)
+		}
 		processed = make(chan struct{})
-		go func() { defer close(processed); _, _, _ = al.processMessageAsPrimaryForTest(ctx, in) }()
+		result := make(chan error, 1)
+		wakeResult = result
+		go func(done chan struct{}, results chan error) {
+			defer close(done)
+			_, _, wakeErr := al.processMessageAsPrimaryForTest(ctx, in)
+			results <- wakeErr
+		}(processed, result)
 	case <-time.After(5 * time.Second):
 		// The text may instead have been steered straight into the resumed turn.
 	}
@@ -309,6 +359,11 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 	}
 	for !seen() {
 		select {
+		case wakeErr := <-wakeResult:
+			if wakeErr != nil {
+				t.Fatalf("held request wake execution failed before model delivery: %v", wakeErr)
+			}
+			wakeResult = nil
 		case <-deadline:
 			t.Fatalf("the model never received the held request's text; provider calls=%d", len(provider.Requests()))
 		case <-time.After(50 * time.Millisecond):
@@ -321,11 +376,53 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 	if processed != nil {
 		select {
 		case <-processed:
+			if wakeResult != nil {
+				if wakeErr := <-wakeResult; wakeErr != nil {
+					t.Fatalf("held request wake execution failed: %v", wakeErr)
+				}
+			}
 		case <-ctx.Done():
 			t.Fatal("the wake's turn did not finish")
 		}
 	}
-	al.WaitForActiveRequestsContext(ctx)
+	if !al.WaitForActiveRequestsContext(ctx) {
+		t.Fatal("resumed receiver's active-request tail did not finish")
+	}
+	joinGoalFixtureRuns(t, al)
+	archiveAfter, err := store.ReadArchive(t.Context(), original.SessionID)
+	if err != nil || len(archiveAfter) < len(archiveBefore) || !reflect.DeepEqual(archiveBefore, archiveAfter[:len(archiveBefore)]) {
+		t.Fatalf("held delivery rewrote the receiver's old model history: %v %v", archiveAfter, err)
+	}
+	transcriptAfter, err := store.ReadTranscript(original.SessionID)
+	if err != nil || len(transcriptAfter) < len(transcriptBefore) || !reflect.DeepEqual(transcriptBefore, transcriptAfter[:len(transcriptBefore)]) {
+		t.Fatalf("held delivery rewrote the receiver's old visible history: %v %v", transcriptAfter, err)
+	}
+	requestRows := 0
+	for _, entry := range transcriptAfter {
+		if entry.ID == c.RequestID {
+			requestRows++
+			if entry.Content != c.Text {
+				t.Fatalf("held request's visible body changed: %q", entry.Content)
+			}
+		}
+	}
+	if requestRows != 1 {
+		t.Fatalf("held delivery must preserve exactly one visible request row, got %d", requestRows)
+	}
+	metaAfter, err := store.GetMeta(original.SessionID)
+	if err != nil || metaAfter == nil || metaAfter.WorkspaceID != receiverWorkspace {
+		t.Fatalf("human resume changed the receiver's workspace: %+v %v", metaAfter, err)
+	}
+	undelivered, err := al.RequestLedger().Undelivered(original.SessionID)
+	if err != nil || len(undelivered) != 0 {
+		t.Fatalf("request remains held after real model delivery: %+v %v", undelivered, err)
+	}
+	al.deliverHeldRequests(original.SessionID)
+	select {
+	case duplicate := <-al.bus.InboundChan():
+		t.Fatalf("an already-delivered request was republished: %+v", duplicate)
+	default:
+	}
 }
 
 // S1-03: an asker that cannot be READ (a corrupt or unreadable meta file) is not
