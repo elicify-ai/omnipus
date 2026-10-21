@@ -66,8 +66,12 @@ func ordinaryDispositionFromContext(ctx context.Context) *executionDisposition {
 type ordinaryExecutionPreparation struct{ execution *executionDisposition }
 
 // prepareOrdinaryExecution reuses identity preparation, not steered capacity or
-// FIFO admission. Only an actual human message may revive a saved session.
+// FIFO admission. System goal/owner wakes can continue a finished root but never
+// acquire a person's authority to resume an operator-stopped session.
 func (al *AgentLoop) prepareOrdinaryExecution(ctx context.Context, msg bus.InboundMessage, opts processOptions) (ordinaryExecutionPreparation, error) {
+	if opts.goalWake != nil {
+		return al.prepareOrdinarySessionExecution(ctx, msg.SessionID, opts, &handbackRevivalPrincipal)
+	}
 	if msg.Metadata[ownerWakeMetadataKey] != "" {
 		return al.prepareOrdinarySessionExecution(ctx, msg.SessionID, opts, &ownerWakeRevivalPrincipal, msg.TranscriptEntryID)
 	}
@@ -151,6 +155,11 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 	if err != nil {
 		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: read saved session: %w", err)
 	}
+	if opts.goalWake != nil {
+		if err := al.checkOrdinaryGoalWake(rec, opts.goalWake); err != nil {
+			return ordinaryExecutionPreparation{}, err
+		}
+	}
 	if fenceErr := al.inboundStopFenceInFlight(sessionID); fenceErr != nil {
 		return ordinaryExecutionPreparation{}, fenceErr
 	}
@@ -227,6 +236,14 @@ func (al *AgentLoop) newTurnStateForAdmission(agent *AgentInstance, opts process
 	if _, err := commitSteeredExecutionState(al.GetSessionLifecycleStore(), d.claim, session.LifecycleRunning, ""); err != nil {
 		al.activeTurnStates.CompareAndDelete(ts.sessionKey, ts)
 		return nil, refuseOrdinaryIfStale(err)
+	}
+	if opts.goalWake != nil {
+		frame, err := al.recordOrdinaryGoalReminder(ts)
+		if err != nil {
+			al.finishRefusedSteeredTurnBody(ts)
+			return nil, err
+		}
+		ts.opts.goalReminderFrame = frame
 	}
 	return ts, nil
 }

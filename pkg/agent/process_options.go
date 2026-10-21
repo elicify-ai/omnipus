@@ -12,6 +12,7 @@
 package agent
 
 import (
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -152,4 +153,8 @@ type processOptions struct {
 	// executionDisposition carries canonical admission ownership separately
 	// from routing, transcript containment and delegate tool authority.
 	executionDisposition *executionDisposition
+	// goalWake is an ordinary system input's expected pre-admission identity.
+	goalWake *ordinaryGoalWake
+	// goalReminderFrame is the durable chat row carried by this turn's start.
+	goalReminderFrame *generated.ReplayMessageFrame
 }

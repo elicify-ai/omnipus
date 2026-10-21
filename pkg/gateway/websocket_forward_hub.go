@@ -36,6 +36,10 @@ import (
 // per-connection eventForwarder path.
 func (h *WSHandler) hubSyncTap(evt agent.Event) {
 	switch evt.Kind {
+	case agent.EventKindTurnStart:
+		if p, ok := evt.Payload.(agent.TurnStartPayload); ok && p.ChatNotice != nil {
+			h.hubPublishFrame(p.ChatNotice.SessionId, string(generated.WsFrameTypeReplayMessage), *p.ChatNotice, nil)
+		}
 	case agent.EventKindTurnEnd:
 		h.hubTurnEnd(evt)
 	case agent.EventKindSubTurnSpawn:

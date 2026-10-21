@@ -300,6 +300,8 @@ const (
 
 // TurnStartPayload describes the start of a turn.
 type TurnStartPayload struct {
+	// ChatNotice is internal plumbing: only the generated frame reaches viewers.
+	ChatNotice  *generated.ReplayMessageFrame `json:"-"`
 	Channel     string
 	ChatID      string
 	UserMessage string

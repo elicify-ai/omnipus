@@ -2163,6 +2163,12 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 	if al.failGoalIfOwnerMissing(sessionID, goalID, agentID) {
 		return
 	}
+	metadata, metadataErr := al.ordinaryGoalFollowUpMetadata(sessionID, goalID, agentID)
+	if metadataErr != nil {
+		al.reportGoalReadError(sessionID, "goal follow-up admission", metadataErr)
+		al.goalMarkIdleSettling(goalID, false)
+		return
+	}
 	notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
@@ -2173,6 +2179,7 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 		SourceKind:          sourceKind,
 		SenderCanonicalID:   goalLoopFollowUpSenderID,
 		Content:             content,
+		Metadata:            metadata,
 	}); err != nil {
 		logger.WarnCF("agent", "goal: follow-up turn dispatch failed",
 			map[string]any{"session_id": sessionID, "error": err.Error()})

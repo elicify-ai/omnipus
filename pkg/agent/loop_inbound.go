@@ -517,7 +517,7 @@ func (al *AgentLoop) processSystemMessage(
 			msg.Channel,
 		)
 	}
-	if msg.AsyncTranscriptSessionID != "" && inboundMetadata(msg, "steer_message_id") != "" {
+	if msg.AsyncTranscriptSessionID != "" && inboundMetadata(msg, "steer_message_id") != "" && !ordinaryGoalFollowUp(msg) {
 		return al.processSteeredSystemWake(ctx, msg)
 	}
 
@@ -621,7 +621,7 @@ func (al *AgentLoop) processSystemMessage(
 
 	workspaceID := al.resolveSystemMessageWorkspaceID(msg, transcriptStore, transcriptSessionID)
 
-	return al.runAgentLoop(ctx, agent, processOptions{
+	opts := processOptions{
 		SessionKey: sessionKey,
 		Channel:    originChannel,
 		ChatID:     originChatID,
@@ -646,7 +646,11 @@ func (al *AgentLoop) processSystemMessage(
 		TranscriptStore:      transcriptStore,
 		WorkspaceID:          workspaceID,
 		NoHistory:            noHistory,
-	})
+	}
+	if ordinaryGoalFollowUp(msg) {
+		return al.runOrdinaryGoalFollowUp(ctx, agent, msg, opts)
+	}
+	return al.runAgentLoop(ctx, agent, opts)
 }
 
 // resolveSystemMessageAgent resolves the TRUE originating agent for a system
