@@ -1,0 +1,5 @@
+[
+  {"name":"empty","entries":[],"expected_fingerprint":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+  {"name":"zero-file","entries":[{"path":"zero.bin","kind":"file","size":"0","sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","mtime":"0","content":""}],"expected_fingerprint":"1ea44f9f7432fa0c518344f4af3e13fbc75fb21f02956183e864229e6e9586ef"},
+  {"name":"utf8-directory","entries":[{"path":"é","kind":"directory","size":"0","sha256":"","mtime":"","content":""},{"path":"é/雪.txt","kind":"file","size":"6","sha256":"5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03","mtime":"1000000000","content":"hello\n"}],"expected_fingerprint":"9540a296f1531468f65c621d86c12d982044be84bc6534527ce61b6c05b1d06c"}
+]

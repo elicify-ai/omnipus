@@ -613,8 +613,12 @@ describe('WorkspaceTeamTab — atomic candidate save ordering (P0/F3)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
     )
+    // The scenario requires pagehide BEFORE the 500ms autosave. Hold that
+    // clock across the first dirty edit; rendering time must not fire a save.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
-    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId('team-node-ray')).toBeInTheDocument()
 
     // Draw the delegation edge — same onConnect invocation as the P0 test.
     expect(capturedGraphProps).not.toBeNull()
@@ -622,16 +626,17 @@ describe('WorkspaceTeamTab — atomic candidate save ordering (P0/F3)', () => {
       capturedGraphProps!.onConnect('jim', 'ray')
     })
 
-    // Fire the unload beacon IMMEDIATELY — well inside the 500ms debounce
-    // window, so the debounced saveFn (updateWorkspace/updateWorkspaceDelegation)
-    // has not fired yet. This is exactly the F3 finding's scenario.
+    // Fire the unload beacon before advancing the 500ms debounce, so the
+    // regular saveFn (updateWorkspace/updateWorkspaceDelegation) has not
+    // fired yet. This is exactly the F3 finding's scenario.
     act(() => {
       window.dispatchEvent(new Event('pagehide'))
     })
     expect(updateWorkspace).not.toHaveBeenCalled()
     expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
 
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
+    // The real pagehide listener invokes fetch synchronously.
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
 
     const [coreTeamCall] = fetchSpy.mock.calls
     expect(coreTeamCall[0]).toBe('/api/v1/workspaces/ws-1')
