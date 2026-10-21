@@ -1,10 +1,6 @@
 package agent
 
-import (
-	"time"
-
-	"github.com/elicify-ai/omnipus/pkg/goal"
-)
+import "github.com/elicify-ai/omnipus/pkg/goal"
 
 // primeGoalReminderObservation restores the transient window after a cold
 // keeper reset and rechecks owned work at admission, not only at publication.
@@ -12,14 +8,13 @@ func (al *AgentLoop) primeGoalReminderObservation(sessionID string, rec *goal.Go
 	work := goalReminderWorkFor(rec.GoalID)
 	work.mu.Lock()
 	defer work.mu.Unlock()
-	observedAt := time.Now().UTC()
 	since := goalReminderWatermark(rec.GoalID)
 	_, busy, err := al.collectGoalReminderProgress(sessionID, rec, work, since)
 	if err != nil {
 		return true, err
 	}
 	if since.IsZero() {
-		consumeGoalReminderProgress(rec.GoalID, work, observedAt)
+		setGoalReminderWatermark(rec.GoalID, goalReminderInitialBoundary(rec))
 	}
 	return busy || work.pending != nil, nil
 }

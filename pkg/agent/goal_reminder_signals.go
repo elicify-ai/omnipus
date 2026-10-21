@@ -20,6 +20,12 @@ import (
 // streak, and unknown sources never become an unproductive assessment.
 func (al *AgentLoop) collectGoalReminderProgress(sessionID string, rec *goal.Goal, work *goalReminderWork, since time.Time) (goalReminderProgress, bool, error) {
 	var progress goalReminderProgress
+	if since.IsZero() {
+		since = goalReminderInitialBoundary(rec)
+		if since.IsZero() {
+			return progress, false, errors.New("goal reminder: no persisted activity boundary")
+		}
+	}
 	scope, err := al.reminderScope(sessionID)
 	if err != nil {
 		return progress, false, err
@@ -56,19 +62,22 @@ func (al *AgentLoop) collectGoalReminderProgress(sessionID string, rec *goal.Goa
 	if err != nil {
 		return progress, false, err
 	}
-	if since.IsZero() {
-		// Initial observations are a baseline, not newly produced work.
-		progress = goalReminderProgress{}
-		work.observedProgress = false
-		return progress, busy, nil
-	}
 	if goalReminderMadeProgress(progress) {
 		work.observedProgress = true
 	}
-	// Preserve progress seen while another owned job was still running. Its
-	// consumed references/IDs need not keep old output buffers alive.
-	progress.background = progress.background || work.observedProgress
+	// Return fresh activity separately from the retained outcome latch. A busy
+	// reset may consume this window without manufacturing new activity later.
 	return progress, busy, nil
+}
+
+// goalReminderInitialBoundary bootstraps only a missing RAM watermark from
+// existing goal clocks. It never treats earlier goals' old work as new activity.
+func goalReminderInitialBoundary(rec *goal.Goal) time.Time {
+	at := effectiveGoalActivity(rec)
+	if rec != nil && rec.StartedAt != nil && rec.StartedAt.After(at) {
+		at = *rec.StartedAt
+	}
+	return at
 }
 
 func (al *AgentLoop) reminderEvidence(rec *goal.Goal, scope *goalReminderScope, work *goalReminderWork, since time.Time) (bool, error) {

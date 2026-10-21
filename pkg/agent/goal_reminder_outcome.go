@@ -86,12 +86,17 @@ func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, 
 	}
 	observedAt := time.Now().UTC()
 	progress, busy, err := al.collectGoalReminderProgress(sessionID, rec, work, goalReminderWatermark(rec.GoalID))
-	if err != nil || busy {
+	if err != nil {
 		return rec, busy, err
+	}
+	if busy {
+		updated, resetErr := resetBusyGoalReminderProgress(sessionID, rec, work, progress, observedAt)
+		return updated, true, resetErr
 	}
 	if work.pending == nil {
 		return rec, false, nil
 	}
+	progress.background = progress.background || work.observedProgress
 	updated, err := updateGoalReminderStreak(sessionID, rec.GoalID, goalReminderMadeProgress(progress), true)
 	if err != nil {
 		return rec, false, err
@@ -154,11 +159,18 @@ func (al *AgentLoop) prepareGoalReminderDispatch(sessionID string, rec *goal.Goa
 	}
 	observedAt := time.Now().UTC()
 	progress, busy, err := al.collectGoalReminderProgress(sessionID, current, work, goalReminderWatermark(rec.GoalID))
-	if err != nil || busy || work.pending != nil {
+	if err != nil || work.pending != nil {
 		work.mu.Unlock()
 		al.reportGoalReminderAssessment(sessionID, current, err)
 		return false
 	}
+	if busy {
+		current, err = resetBusyGoalReminderProgress(sessionID, current, work, progress, observedAt)
+		work.mu.Unlock()
+		al.reportGoalReminderAssessment(sessionID, current, err)
+		return false
+	}
+	progress.background = progress.background || work.observedProgress
 	current, err = updateGoalReminderStreak(sessionID, rec.GoalID, goalReminderMadeProgress(progress), false)
 	if err != nil {
 		work.mu.Unlock()
@@ -197,8 +209,31 @@ func (al *AgentLoop) rearmAbnormalGoalReminder(ts *turnState, result *turnResult
 	}
 }
 
+// A busy observation can reset on NEW productive activity, but can neither
+// assess an unproductive completion nor re-use that activity on the next poll.
+// Keep the outcome latch until the completed reminder itself is assessed.
+func resetBusyGoalReminderProgress(sessionID string, rec *goal.Goal, work *goalReminderWork, progress goalReminderProgress, at time.Time) (*goal.Goal, error) {
+	if !goalReminderMadeProgress(progress) {
+		return rec, nil
+	}
+	updated := rec
+	if rec.ZeroOutputPushes != 0 {
+		var err error
+		updated, err = updateGoalReminderStreak(sessionID, rec.GoalID, true, false)
+		if err != nil {
+			return rec, err
+		}
+	}
+	advanceGoalReminderWindow(rec.GoalID, work, at)
+	return updated, nil
+}
+
 func consumeGoalReminderProgress(goalID string, work *goalReminderWork, at time.Time) {
 	work.observedProgress = false
+	advanceGoalReminderWindow(goalID, work, at)
+}
+
+func advanceGoalReminderWindow(goalID string, work *goalReminderWork, at time.Time) {
 	setGoalReminderWatermark(goalID, at)
 	for key, eventAt := range work.events {
 		if eventAt.Before(at.Truncate(time.Second)) {

@@ -166,7 +166,8 @@ func (al *AgentLoop) reminderBackgroundProcesses(scope *goalReminderScope, work 
 		busy = busy || running
 		at := process.LastActivityAt()
 		if !since.IsZero() && at.After(since) {
-			progress, work.observedProgress = true, true
+			key := "process:" + id + ":" + at.Format(time.RFC3339Nano)
+			progress = reminderEvent(work, key, at, since) || progress
 		}
 		if !running {
 			// The progress latch retains the observation, not another 1MB buffer.

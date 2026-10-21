@@ -42,7 +42,7 @@ For a quick answer, plain chat is the right tool. A goal adds verification, and 
 4. Answer the question card if one appears.
 5. To change direction, send a normal message such as "make it dark-themed only". The agent updates the record and shows what changed. Nothing asks you to confirm.
 6. To restate the goal outright, type `/goal` with the new wording; the new intent replaces the working prompt.
-7. To check on progress, type `/goal` alone (or `/goal status`) for elapsed time, tries used, the latest Judge reason and the record.
+7. To check on progress, type `/goal` alone (or `/goal status`) for elapsed time, tries used, the latest goal or Judge reason and the record.
 8. To stop it, type `/goal clear`; the words `stop`, `off`, `reset`, `cancel` and `none` do the same.
 
 A goal runs as a loop:
@@ -80,15 +80,21 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 
 When an automatic reminder starts another work turn for a goal in your own chat—not a helper or task run—the web app shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line is saved in that chat's history and remains after you reload it.
 
-There is no lifetime limit on reminders. Instead, Omnipus counts consecutive reminder turns that **finish without progress**. Sending a reminder does not itself use up one of these outcomes, and a turn that is still running is not counted as finished. Progress resets the count to zero.
+The same system line also appears when the Judge sends the agent back to keep working in that chat. Those Judge follow-ups are not automatic idle reminders and do not add to the no-progress count.
+
+There is no lifetime limit on reminders. Instead, Omnipus counts consecutive automatic idle-reminder turns that **finish without progress**. Sending a reminder does not itself use up one of these outcomes, and a turn that is still running is not counted as finished. Progress resets the count to zero.
 
 | Counts as progress | Does not count by itself |
 |---|---|
-| New goal evidence; a goal-scoped file change; an executed tool call other than `set_todos` or a claim-only `goal_claim` call; activity in a delegated helper; output or completion from background work owned by the goal session | A text-only answer, a prose completion claim, a claim-only message, or a turn that only updates `set_todos` |
+| New goal evidence; a new saved change snapshot (commit) in the goal's workspace since the last check; an executed tool call other than `set_todos` or a claim-only `goal_claim` call; activity in a delegated helper; output or completion from background work owned by the goal session | A text-only answer, a prose completion claim, a claim-only message, or a turn that only updates `set_todos` |
+
+The file-change check reads committed workspace history, not uncommitted edits. Another chat's commit in the same workspace can count too. A file-writing tool that actually runs still counts under the tool-call rule, without needing a commit.
 
 After **five consecutive completed reminders without progress**, automatic reminders pause. The chat shows this system line:
 
 > No progress after 5 reminders — goal paused. Reply to continue.
+
+The pause message is a goal status reason, not a Judge verdict. A normal reply clears it.
 
 Send a normal reply to resume the goal and reset that count. This is a pause, not a failed or ended goal. The same rule applies before and after the agent writes its working goal record; there is no separate two-nudge fallback.
 
