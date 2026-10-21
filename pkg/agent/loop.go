@@ -1667,6 +1667,9 @@ type agentLoopProcessMessage struct {
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, *AgentInstance, error) {
 	pm := &agentLoopProcessMessage{al: al, ctx: ctx, msg: msg}
+	if err := al.validateInboundWorkspace(msg); err != nil {
+		return "", nil, err
+	}
 
 	pm.prepareInbound()
 
@@ -1747,6 +1750,8 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			pm.msg.Channel, instanceSessionID, pm.msg.ChatID, agent.ID, pm.msg.Sender.DisplayName, sessionWorkspaceID,
 		); sid != "" {
 			pm.msg.SessionID = sid
+		} else {
+			return "", nil, fmt.Errorf("could not prepare the channel conversation; check session storage and retry")
 		}
 	}
 

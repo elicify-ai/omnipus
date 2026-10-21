@@ -66,6 +66,9 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 		if meta.Type == SessionTypeMain && *patch.WorkspaceID != meta.WorkspaceID {
 			return fmt.Errorf("unified_store: session %q is a main; workspace_id is immutable", sessionID)
 		}
+		if err := us.validateWorkspaceBindingLocked(meta, *patch.WorkspaceID); err != nil {
+			return err
+		}
 		meta.WorkspaceID = *patch.WorkspaceID
 		identityTouched = true
 	}

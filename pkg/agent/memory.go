@@ -672,6 +672,9 @@ func (ms *MemoryStore) SearchEntriesInScope(
 	seenIDs := make(map[string]bool)
 
 	for _, t := range targets {
+		if _, readErr := os.ReadDir(t.room.MemoriesDir); readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("memory: could not read saved notes in %q; check storage access and retry: %w", t.room.Root, readErr)
+		}
 		if t.ri != nil {
 			// Ranked-index path (FR-7.4; BM25 per the mapping — ADR-068 D21.1).
 			// Hold indexMu across the Search() call to guard
@@ -722,9 +725,7 @@ func (ms *MemoryStore) SearchEntriesInScope(
 		// Substring-scan fallback (when bleve index is nil or errored).
 		found, scanErr := memrooms.SearchMemories(t.room.MemoriesDir, query)
 		if scanErr != nil {
-			logger.WarnCF("agent.memory", "SearchEntriesInScope: scan failed",
-				map[string]any{"dir": t.room.MemoriesDir, "error": scanErr.Error()})
-			continue
+			return nil, fmt.Errorf("memory: could not read saved notes in %q; check storage access and retry: %w", t.room.Root, scanErr)
 		}
 		agentIDScan := ms.resolveAuthor()
 		for _, mf := range found {
@@ -1011,7 +1012,12 @@ func (ms *MemoryStore) GetMemoryContextForScope(identity MemoryScope) string {
 	var sb strings.Builder
 
 	entries, err := ms.SearchEntriesInScope("", 20, memrooms.RoomScopeBoth, identity)
-	if err == nil && len(entries) > 0 {
+	if err != nil {
+		logger.WarnCF("agent.memory", "memory context could not be loaded",
+			map[string]any{"agent_id": identity.AgentID, "workspace_id": identity.WorkspaceID, "error": err.Error()})
+		return fmt.Sprintf("## Long-term memory\n\nError: %v", err)
+	}
+	if len(entries) > 0 {
 		if sb.Len() > 0 {
 			sb.WriteString("\n\n")
 		}

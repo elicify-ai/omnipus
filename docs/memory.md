@@ -10,7 +10,7 @@ Three kinds of memory, all stored as plain files on your machine:
 - **Recaps and retrospectives.** When a conversation has been idle for a while, a background call summarizes it — what it was about, what went well, what to improve. The recap is loaded back into the same agent's context in the same workspace, so it picks up where it left off.
 - **The transcript.** The full conversation stays on disk. Only the recent part sits in the agent's live view; the rest can be read back on demand.
 
-When memory is enabled for the agent, a prompt includes that workspace's last recap for the agent, when available, and up to twenty recent saved notes within a size limit: the agent's private notes plus only the current chat's workspace's shared notes. If the chat has no resolvable workspace, no shared notes are included and Omnipus logs a warning; the agent's private notes remain available. Teammates' newly saved shared notes are picked up at the next prompt build, without the agent first needing to call a memory tool.
+When memory is enabled for the agent, a prompt includes that workspace's last recap for the agent, when available, plus a size-limited selection of up to twenty saved notes: the agent's private notes and only the current chat's workspace's shared notes. Selected notes are displayed newest first; this is not a guaranteed latest-twenty list. If the chat has no resolvable workspace, no shared notes are included and Omnipus logs a warning; the agent's private notes remain available. Notes are read again at each prompt build, without requiring a local memory-tool call. A newly saved teammate note can still be left out by selection or size limits; use `recall_memory` to search beyond the injected notes. If a room cannot be read, the prompt shows an error diagnostic and Omnipus logs a warning instead of presenting missing notes as an empty memory.
 
 ## When you would use it
 
@@ -33,6 +33,12 @@ The two rooms:
 | Shared (chosen explicitly) | Teammate agents in chats in the note's workspace | Project decisions, conventions, references |
 | Private | Only the agent that saved it, across its own chats | Personal working notes, individual lessons |
 
+## Workspace boundaries
+
+An existing conversation or helper keeps its workspace. To work in another workspace, open that workspace's conversation instead. A request to reuse an existing chat or helper in a different workspace is refused with a visible error; its old messages and shared-note results are not transferred.
+
+Changing a connector's workspace binding sends subsequent input to a separate conversation scoped to the new workspace, not the old conversation with a new label. The original conversation and its archive remain in the original workspace. Private notes remain available to their owning agent across its own conversations.
+
 ## The four memory tools
 
 Omnipus provides these four memory tools. Which an agent can use depends on its effective tool policies and runtime. Catalog presence does not grant access. Check the agent's Tools tab before relying on a manual retrospective or another memory action. Automatic recap is a separate setting and is not evidence that `run_retrospective` is granted to every agent. An agent calls the tools it has on its own judgment; you trigger them by asking in chat.
@@ -40,7 +46,7 @@ Omnipus provides these four memory tools. Which an agent can use depends on its 
 | Tool | What it does | Bounds |
 |---|---|---|
 | `remember` | Saves a note as a decision, reference, or lesson | Up to 4,096 characters; every call chooses shared or private memory |
-| `recall_memory` | Keyword search over saved notes and past retrospectives | Current chat's shared room plus the agent's private room by default; 20 results, at most 50 |
+| `recall_memory` | Keyword search over saved notes and past retrospectives | Current chat's shared room plus the agent's private room by default. `limit` defaults to 20 and accepts at most 50; it applies separately to saved notes and private retrospectives. Before normal result-size/context handling, the combined result can contain up to 40 entries by default, or 100 with `limit: 50`. A room-scan failure returns an error, not successful empty or partial results. |
 | `recall_conversation` | Reads back earlier context from the current conversation | By keyword, turn numbers, time window, an addressed tool result, or an inclusive archive-line range |
 | `run_retrospective` | Records what went well and what to improve | Always the agent's private room |
 
@@ -48,10 +54,10 @@ Omnipus provides these four memory tools. Which an agent can use depends on its 
 
 With Auto recap on (Settings → Memory; it is on by default on a new install):
 
-1. A session closes after it has been idle for the timeout you set — 30 minutes by default. After a gateway restart, any session that never got a recap gets one then, spread out a few per minute.
-2. A background model call summarizes the conversation: a recap of at most 150 words, up to five wins, up to five items to improve, and up to five items worth remembering.
+1. The idle timer triggers recap after the timeout you set — 30 minutes by default. After a gateway restart, catch-up runs only when **Bootstrap recap** is also enabled. That one-time pass considers sessions with no retrospective marker whose newest transcript file is at least 30 minutes old, independently of your configured idle timeout. Sessions with no usable owning agent or no transcript are skipped, and delegated sessions do not get an automatic recap. Starts are spread out according to the bootstrap rate limit — five per minute by default.
+2. A background model call uses recent user messages and is asked for a recap of at most 150 words, up to five wins, up to five items to improve, and up to five items worth remembering. These are instructions to the model, not validated word or list-size limits; a successful response can be longer.
 3. The recap, followed by any items worth remembering, is stored per agent **and per workspace** — at `workspaces/<workspace>/.omnipus/carry-forward/<agent>.md` — and injected into that agent's next session **in the same workspace**. A summary written in one workspace never follows the agent into another workspace, and a conversation that had no workspace stores no summary at all. If writing the carry-forward summary fails, no retrospective success marker is filed. The session can be considered for a bootstrap recap after a gateway restart, subject to recap settings and eligibility checks. The current process retains its recap claim, so another recap pass in that process is not a guaranteed retry. Check the gateway log and repair the storage problem first. The retrospective is filed under its date and appears in `recall_memory` results.
-4. If the summary call fails, the most recent user messages are carried forward word for word, and the file is marked as a fallback — the session is not silently forgotten.
+4. If summary generation fails or produces an unusable reply, Omnipus tries to carry forward a bounded verbatim tail of recent user text. It keeps up to 1,500 Unicode characters of user-message text, plus formatting; an oversized final message contributes only its tail, and surrounding whitespace is trimmed. The fallback summary names the failure reason, and its retrospective is marked as a fallback. The workspace and storage requirements above still apply, so this is not a guarantee that every recent message or fact survives.
 5. The items worth remembering reach the agent's next session in that workspace through the carry-forward file, so a fact you gave in the last conversation is still in front of the agent. They are not saved as notes: only the agent's `remember` tool creates a note. Each recap replaces the workspace's carry-forward file, so the carried items last until the next recap is written; a note made with `remember` stays. Deleting an agent (or a workspace) removes its carry-forward files with it.
 
 Delegated sub-task sessions never get a recap — only real conversations do.
@@ -111,7 +117,7 @@ Cancellation is not proof that an action never happened: a tool may have acted b
 | Search matches words, not meaning | A note saved as "invoice" will not surface for "billing" unless the words overlap. There is no meaning-based search. |
 | No memory browser | No screen in the app lists saved notes, and no tool deletes one. To remove a note, delete its file under `~/.omnipus/`. |
 | Retrospectives expire | A nightly sweep deletes retrospectives older than the retention setting — 180 days by default. |
-| Transcripts expire | Session transcripts are kept 90 days by default (Settings → Data). `recall_conversation` cannot read past that. |
+| Transcripts expire | Session retention defaults to 90 days (Settings → Data). The sweep removes eligible transcript files by file-modification age, not a strict per-message read cutoff. A main chat's current transcript file is protected, while eligible older rolled files can expire. `recall_conversation` can read content that remains in the archive, including content older than 90 days; it cannot recover files the sweep removed. |
 | Saved notes never expire | Nothing prunes them; a workspace in use for years keeps every note. |
 | Writes are rate-limited | An agent can save at most 60 notes per minute, and one caller at most 600. Beyond that the save is rejected and the agent is told to wait. |
 | Sharing needs a workspace | The shared room exists only for work in a workspace. Outside one, every note is saved privately and the agent is told so. |
