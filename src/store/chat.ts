@@ -3,6 +3,7 @@
 import { syncChatForeground, useChatStore } from './chat/store'
 
 import {
+  useSessionStore,
   registerChatSetReplaying,
   registerChatResetForReplay,
   registerGetSessionCursor,
