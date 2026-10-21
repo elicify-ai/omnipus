@@ -59,9 +59,13 @@ The pairing QR renders live inside the SPA — no log scraping required.
 
 The QR reaches the Configure panel over a live connection and refreshes on its own, so you never need to reload to get a fresh code.
 
+If the gateway restarts before pairing finishes, the panel shows "A server restart interrupted this pairing. Press Retry to get a new code." Select **Retry** to request a fresh QR code. The same message and action are available in the live chat card when pairing was started there.
+
+If the connection was deleted while its pairing card was open, Retry shows "This WhatsApp connection was deleted. Add it again from Connectors." with no Retry button. Add the connection again from **Connectors**; Retry never recreates a deleted connection.
+
 ### Pair from the gateway logs (headless)
 
-When you run the gateway without the SPA in front of you, the same QR is also printed to stdout in half-block Unicode form on first run:
+When you run the gateway without the SPA in front of you, the same QR is also printed to stdout in half-block Unicode form whenever a pairing starts — when the WhatsApp connection is turned on, or turned off and on again:
 
 ```
 Starting WhatsApp native channel (whatsmeow)
@@ -74,6 +78,7 @@ The QR code data is also emitted as a structured log entry with `"event": "whats
 ### After pairing
 
 - Once paired, the session is persisted in `store.db` under `session_store_path`. Subsequent gateway starts connect without re-pairing.
+- A gateway start never resumes or begins a pairing on its own. If the connection is turned on but not yet linked to a phone, a start (or restart) of the gateway shows "A server restart interrupted this pairing. Press Retry to get a new code." in the Configure panel and in any chat that showed the pairing, and logs the same text as a warning. Press **Retry** in the panel or the chat, or turn the connection off and on again, to get a new code.
 - If the session is logged out by the server (e.g. from the phone), the channel automatically clears the stored session, reconnects, and emits a fresh QR — both in the Configure panel and to the logs — for re-pairing.
 
 ## Notes
