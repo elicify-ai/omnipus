@@ -103,7 +103,7 @@ Whole source groups stay together. A finished tool's start/result is one drawn t
 
 Session detail remains useful when history is unavailable. An available detail contains `messages`, `page_info` and continuation fields with `history_state.status=available`. An unavailable detail retains authorized `session` / optional `agent_removed` metadata and has `history_state.status=unavailable` with a fixed `reason` / `message`; it **omits** messages and every page/continuation field. Do not interpret it as `messages: []`, deletion or successful history loading. The messages endpoint instead returns the fixed `500` index-unavailable error after missing, inconsistent or over-64 recovery. Storage/projection failures retain the redacted storage-error response. Current authorized live controls can remain usable independently of historical reconstruction.
 
-The canonical [OpenAPI contract](https://github.com/elicify-ai/omnipus/blob/main/contracts/openapi.yaml) defines the complete generated shapes. Offline index preparation belongs in the separate operator runbook, not an automatic API repair loop.
+The canonical [OpenAPI contract](https://github.com/elicify-ai/omnipus/blob/main/contracts/openapi.yaml) defines the complete generated shapes. For offline index preparation and restoration, follow [Repairing a saved chat history index](https://github.com/elicify-ai/omnipus/blob/main/docs/operations/chat-history-index.md). This is a separate operator procedure, not an automatic API repair loop.
 
 ### Content-free history diagnostics
 
