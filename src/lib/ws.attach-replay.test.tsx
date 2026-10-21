@@ -12,6 +12,11 @@ import { useToolApprovalStore } from '@/store/toolApproval'
 import { ChatConnectionNotice } from '@/components/chat/ConnectionStatus'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { approvalPosts, installApprovalNetwork, renderWithClient } from '../../tests/l1-ui-red-u23/support'
+import type { ClientFrame } from '@/lib/api/generated/asyncapi-types'
+import type { Session } from '@/lib/api/generated/openapi-types'
+import { queryClient } from '@/lib/queryClient'
+import { noteForegroundAttach } from '@/store/session/foregroundAck'
+import { AttachReplayBuffer } from './attach-replay'
 
 class Socket {
   static OPEN = 1
@@ -91,6 +96,84 @@ afterEach(() => {
   vi.clearAllTimers()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+})
+
+describe('attach generations across live release and shown acknowledgements', () => {
+  it('SF-1 keeps a held live save-failure error from retiring a later A attach', () => {
+    attach()
+    receive(snapshot)
+    attach('other')
+    attach()
+    receive(complete)
+    receive({ type: 'error', session_id: SID, seq: 11, message: 'Could not save your message.' })
+    const otherDone: ServerFrame = { type: 'catch_up_complete', session_id: 'other', seq: 1, mode: 'snapshot' }
+    receive(otherDone)
+    const observedBeforeLatest = deliveries.length
+    receive(snapshot)
+    receive(history[1])
+    expect(deliveries, 'the second A history must remain out of sight after the held live error').toHaveLength(observedBeforeLatest)
+    receive(complete)
+    expect(useChatStore.getState().messages.map(message => message.content)).toEqual(['Saved question'])
+  })
+
+  it('W1 a reopened main acknowledges its own bound 9, not an older buffered response bound 7', () => {
+    const main: Session = {
+      id: SID, type: 'main', agent_id: 'mia', title: 'Mia main', status: 'active', needs_attention: true,
+      channel: 'web', partitions: [], created_at: '2026-10-06T00:00:00Z', updated_at: '2026-10-06T00:00:01Z',
+      stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 0 },
+    }
+    queryClient.setQueryData(['sessions'], [main])
+    useConnectionStore.getState().setConnection(conn)
+    const shown = (sessionId: string) => { attach(sessionId); noteForegroundAttach(sessionId) }
+    const state = (bound: number): ServerFrame => ({ type: 'session_state', session_id: SID, user_id: 'user', pending_approvals: [], emitted_at: '2026-10-06T00:00:01Z', attention_bound: bound })
+    shown(SID)
+    receive(snapshot)
+    receive(state(7))
+    shown('other')
+    shown(SID)
+    receive(complete)
+    receive({ type: 'catch_up_complete', session_id: 'other', seq: 1, mode: 'snapshot' })
+    receive(snapshot)
+    receive(state(9))
+    receive(complete)
+    const acknowledgements = Socket.latest.send.mock.calls.map(([raw]) => JSON.parse(raw) as ClientFrame)
+      .filter(frame => frame.type === 'attach_session' && frame.ack_attention)
+    expect(acknowledgements).toEqual([{ type: 'attach_session', session_id: SID, boot_id: 'boot', since_seq: 10, ack_attention: true, attention_bound: 9 }])
+    queryClient.removeQueries({ queryKey: ['sessions'] })
+  })
+})
+
+describe('bounded replay fallback', () => {
+  it('releases oversized history with a visible warning and continues instead of keeping an unbounded blank view', () => {
+    attach()
+    receive(snapshot)
+    receive(history[1])
+    receive({ type: 'tool_call_start', session_id: SID, call_id: 'large-result', tool: 'read_file', params: { path: 'large.txt' } })
+    // The serialized UTF-16 payload alone exceeds the documented 8 MiB budget.
+    receive({ type: 'tool_call_result', session_id: SID, call_id: 'large-result', tool: 'read_file', status: 'success', result: { output: 'x'.repeat(4 * 1024 * 1024) } })
+    expect(useConnectionStore.getState().connectionError).toBe('Saved history is large. Showing messages as they load.')
+    expect(useChatStore.getState().messages.some(message => message.content === 'Saved question')).toBe(true)
+    receive({ type: 'replay_message', session_id: SID, id: 'bounded-final', role: 'assistant', content: 'Final saved answer' })
+    receive(replayDone)
+    receive(complete)
+    expect(useChatStore.getState().messages.at(-1)?.content).toBe('Final saved answer')
+    expect(useChatStore.getState().isReplaying).toBe(false)
+  })
+
+  it('bounds retained frame count as well as bytes and reports the fallback once', () => {
+    const onLimit = vi.fn()
+    const replay = new AttachReplayBuffer({ maxBytes: 1024, maxFrames: 1, onLimit })
+    replay.begin(SID)
+    expect(replay.accept(snapshot)).toEqual([])
+    expect(replay.accept(history[1])).toEqual([snapshot, history[1]])
+    expect(onLimit).toHaveBeenCalledTimes(1)
+    expect(onLimit).toHaveBeenCalledWith(SID)
+    expect(replay.bufferedBytes).toBe(0)
+    expect(replay.accept(history[4])).toEqual([history[4]])
+    expect(replay.accept(complete)).toEqual([complete])
+    replay.clear()
+    expect(replay.bufferedBytes).toBe(0)
+  })
 })
 
 describe('attach replay is one visible transaction', () => {

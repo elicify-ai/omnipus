@@ -208,27 +208,26 @@ import { ChatScreen } from './ChatScreen'
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('VirtualizedMessageList', () => {
-  beforeEach(() => {
-    // Reset stores to initial state.
-    viewportAtBottom = true
-    contentResized = undefined
-    useConnectionStore.setState({
-      isConnected: true,
-      liteMode: false,
-      reconnectPhase: null,
-      reconnectAttempt: 0,
-      connectionError: null,
-      connection: null,
-    })
-    // Stub ResizeObserver so the component takes the virtualized path rather than
-    // the PlainMessageList fallback (VirtualizedMessageList feature-detects it).
-    vi.stubGlobal('ResizeObserver', StubResizeObserver)
+function resetVirtualizedFixture() {
+  // Reset stores to initial state.
+  viewportAtBottom = true
+  contentResized = undefined
+  useConnectionStore.setState({
+    isConnected: true,
+    liteMode: false,
+    reconnectPhase: null,
+    reconnectAttempt: 0,
+    connectionError: null,
+    connection: null,
   })
+  // Stub ResizeObserver so the component takes the virtualized path rather than
+  // the PlainMessageList fallback (VirtualizedMessageList feature-detects it).
+  vi.stubGlobal('ResizeObserver', StubResizeObserver)
+}
 
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
+describe('Replay completion scrolling', () => {
+  beforeEach(resetVirtualizedFixture)
+  afterEach(() => { vi.unstubAllGlobals() })
 
   // R3 oracle: a completed attach lands on the physical bottom, but a person
   // who scrolled up during loading keeps their position. jsdom has no layout;
@@ -323,6 +322,12 @@ describe('VirtualizedMessageList', () => {
     expect(el.scrollTop).toBe(1800)
     result.unmount()
   })
+
+})
+
+describe('VirtualizedMessageList', () => {
+  beforeEach(resetVirtualizedFixture)
+  afterEach(() => { vi.unstubAllGlobals() })
 
   it('mounts ≤ 50 DOM nodes for a 1000-message session', async () => {
     const messages = makeMessages(1000)

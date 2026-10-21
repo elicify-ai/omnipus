@@ -210,6 +210,9 @@ function WsLifecycle() {
       onConnected: async () => {
         setConnected(true);
         setConnectionError(null);
+        // Lifecycle recovery must not wait for replay publication: REST may
+        // finish before a held catch_up_complete, and neither depends on the other.
+        void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         // Re-bind any in-flight session to the freshly-opened WS so the
         // gateway's per-connection sessionID is restored. Without this, a
         // browser-suspended WS that auto-reconnects on focus would cause the

@@ -427,7 +427,9 @@ export class WsConnection {
 
   /** Validated frames waiting for the next rAF/microtask flush. */
   private _inboundBatch: ServerFrame[] = []
-  private readonly _attachReplay = new AttachReplayBuffer()
+  private readonly _attachReplay = new AttachReplayBuffer({
+    onLimit: () => this.callbacks.onError('Saved history is large. Showing messages as they load.'),
+  })
   /** True when a rAF/setTimeout flush is already scheduled for this batch. */
   private _rafPending = false
 

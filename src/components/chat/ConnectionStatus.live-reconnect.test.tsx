@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react'
 import { act, cleanup, render, screen } from '@testing-library/react'
-import { QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider, QueryObserver } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseFrameSafe, type ServerFrame } from '@/lib/ws'
 import type { ClientFrame } from '@/lib/api/generated/asyncapi-types'
+import type { Session } from '@/lib/api/generated/openapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -122,6 +123,46 @@ describe('U4 — reconnect behaviour through real runtime/socket callbacks', () 
     expect(screen.queryByTestId('connection-status-line')).not.toBeInTheDocument()
     expect(useConnectionStore.getState().connectionError).toBeNull()
     expect(sentMessages()).toHaveLength(1)
+  })
+
+  it('refreshes lifecycle metadata before a held catch-up boundary without publishing partial history', async () => {
+    await connect()
+    let serverLifecycle: Session['status'] = 'active'
+    const lifecycle = new QueryObserver(queryClient, {
+      queryKey: ['sessions'],
+      // Network boundary only: the production cache and lifecycle observer stay real.
+      queryFn: async (): Promise<Session[]> => [{
+        id: SID, type: 'main', agent_id: 'jim', title: 'Jim main', status: serverLifecycle,
+        channel: 'web', partitions: [], created_at: '2026-10-06T00:00:00Z', updated_at: '2026-10-06T00:00:01Z',
+        stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 0 },
+      }],
+      staleTime: Infinity,
+    })
+    const unsubscribe = lifecycle.subscribe(() => {})
+    try {
+      await flushFrames()
+      expect(lifecycle.getCurrentResult().data?.map(session => session.status)).toEqual(['active'])
+      serverLifecycle = 'interrupted'
+      act(() => latest().drop(1006))
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+      act(() => latest().open())
+      act(() => {
+        latest().frame({ type: 'session_snapshot', session_id: SID, seq: 2, boot_id: 'uat-after', reason: 'boot_mismatch' })
+        latest().frame({ type: 'replay_message', session_id: SID, id: 'held-history', role: 'assistant', content: 'Saved partial answer' })
+        latest().frame({ type: 'done', session_id: SID, stats: { frames_emitted: 1 } })
+      })
+      await flushFrames()
+      // Lifecycle-first ordering is a supported product path: it must not
+      // depend on history publication or a boundary that can be held back.
+      expect(lifecycle.getCurrentResult().data?.map(session => session.status)).toEqual(['interrupted'])
+      expect(useChatStore.getState().messages).toEqual([])
+      act(() => latest().frame({ type: 'catch_up_complete', session_id: SID, seq: 2, boot_id: 'uat-after', mode: 'snapshot' }))
+      await flushFrames()
+      expect(useChatStore.getState().messages.map(message => message.content)).toEqual(['Saved partial answer'])
+      expect(useChatStore.getState().sessionsById[SID].awaitingCatchUp).toBe(false)
+    } finally {
+      unsubscribe()
+    }
   })
 
   it('keeps the special queue catch-up close 4008 quiet, before and after its immediate reconnect', async () => {
