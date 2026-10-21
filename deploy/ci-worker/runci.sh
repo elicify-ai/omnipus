@@ -94,7 +94,14 @@ export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.
 # full disk, not a real defect. Note `df -h /` shows the small overlay, so
 # check `df -h /cache` when diagnosing space here.
 export TMPDIR=/cache/tmp
-mkdir -p "$TMPDIR"
+# Shared by root e2e (including Chromium's sandboxed children) and ci-user gates.
+# The volume persists: repair old 0755 directories on EVERY root prologue, not just creation.
+if [ -z "${RUNCI_AS_CI:-}" ]; then
+  if ! mkdir -p "$TMPDIR" || ! chmod 1777 "$TMPDIR"; then
+    echo "GATE FAILURE: cannot prepare shared TMPDIR=$TMPDIR (mode 1777) for gate $GATE" >&2
+    exit 2
+  fi
+fi
 
 # E2E SHARD STATE LIVES ON /cache, NOT /tmp.
 #
@@ -195,7 +202,8 @@ ensure_python() {
 CI_USER=ci
 ci_prepare() {
   id -u "$CI_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$CI_USER" || return 1
-  mkdir -p /cache/tmp /cache/go /cache/go-build /cache/npm
+  mkdir -p "$TMPDIR" /cache/go /cache/go-build /cache/npm || return 1
+  chmod 1777 "$TMPDIR" || return 1
   local d
   for d in "$REPO_DIR" /cache/go /cache/go-build /cache/npm /cache/tmp; do
     # Incremental: only entries not already ci's (the first run after the change
@@ -220,6 +228,18 @@ if [ -z "${RUNCI_AS_CI:-}" ]; then
       ;;
   esac
 fi
+
+# Probe AFTER the re-exec so access is checked as the user actually running the gate.
+# Never fall back to the small root /tmp overlay when the cache temp is unusable.
+if [ ! -w "$TMPDIR" ] || [ ! -x "$TMPDIR" ] \
+    || ! _tmp_probe="$(mktemp "$TMPDIR/runci-write-check.XXXXXX")"; then
+  echo "GATE FAILURE: TMPDIR=$TMPDIR is not writable/searchable for gate $GATE as $(id -un) (uid $(id -u)); no /tmp fallback" >&2
+  exit 2
+fi
+rm -f "$_tmp_probe" \
+  || { echo "GATE FAILURE: cannot remove TMPDIR probe $_tmp_probe as $(id -un)" >&2; exit 2; }
+unset _tmp_probe
+echo "temp check: TMPDIR=$TMPDIR writable/searchable for gate $GATE as $(id -un) (uid $(id -u))"
 
 # Go's //go:embed all:spa needs pkg/gateway/spa/ non-empty. For compile/unit gates a stub is enough
 # (the real SPA is only needed to produce a servable binary → the embed-build gate).
