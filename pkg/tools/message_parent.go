@@ -520,6 +520,7 @@ func (mt *messageParentToolExecute) prepareMessage() (*ToolResult, bool) {
 
 // encodeMessage validates kind-specific arguments and encodes the typed session message.
 func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
+	generation := mt.rec.Generation
 	switch mt.kind {
 	case "progress":
 		text, ok := stringArg(mt.args, "text")
@@ -527,6 +528,7 @@ func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
 			return ErrorResult("text is required and must be a non-empty string for kind=progress"), true
 		}
 		v := generated.SessionMessageProgress{
+			Generation:      &generation,
 			MessageId:       mt.messageID,
 			SessionId:       mt.childSessionID,
 			ParentSessionId: mt.parentSessionID,
@@ -553,6 +555,7 @@ func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
 			return ErrorResult("summary is required and must be a non-empty string for kind=checkpoint"), true
 		}
 		v := generated.SessionMessageCheckpoint{
+			Generation:      &generation,
 			MessageId:       mt.messageID,
 			SessionId:       mt.childSessionID,
 			ParentSessionId: mt.parentSessionID,
@@ -586,6 +589,7 @@ func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
 			return ErrorResult("paths is required and must be a non-empty array of strings for kind=artifact"), true
 		}
 		v := generated.SessionMessageArtifact{
+			Generation:      &generation,
 			MessageId:       mt.messageID,
 			SessionId:       mt.childSessionID,
 			ParentSessionId: mt.parentSessionID,

@@ -84,7 +84,7 @@ func (al *AgentLoop) upwardModelInput(child *session.LifecycleRecord, msg genera
 	if inbox == nil {
 		return "", errors.New("helper input: inbox is not configured")
 	}
-	messages, _, _, err := inbox.Drain(recipient, child.SessionID, "", session.DefaultInboxUnackedMax)
+	messages, _, hasMore, err := inbox.Drain(recipient, child.SessionID, "", session.DefaultInboxUnackedMax)
 	if err != nil {
 		return "", fmt.Errorf("helper input: read stored reports: %w", err)
 	}
@@ -119,7 +119,9 @@ func (al *AgentLoop) upwardModelInput(child *session.LifecycleRecord, msg genera
 		default:
 			continue
 		}
-		if generation != nil && *generation != child.Generation {
+		// A report without a recorded round is still inbox-readable, but it
+		// cannot be used as evidence of the helper's current round.
+		if generation == nil || *generation != child.Generation {
 			continue
 		}
 		line := fmt.Sprintf("%s %s: %s", kind, id, text)
@@ -131,6 +133,9 @@ func (al *AgentLoop) upwardModelInput(child *session.LifecycleRecord, msg genera
 		}
 		reportBytes += len(line) + 1
 		reports = append(reports, line)
+	}
+	if hasMore {
+		reports = append(reports, "Additional inbox entries remain; use delegate inbox to read the complete retained report history.")
 	}
 	if len(reports) != 0 {
 		body += "\n\nStored reports from helper " + child.SessionID + " (these reports did not wake the parent):\n" + strings.Join(reports, "\n")

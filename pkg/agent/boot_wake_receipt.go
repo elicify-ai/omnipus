@@ -78,9 +78,28 @@ func (r *SteerBootRecovery) bootWakeHandled(parentID, outcomeID string) (handled
 		return false, false, nil
 	}
 	blocked, err := al.wakeBlocked(rec)
-	if err != nil || blocked {
-		return blocked, false, err
+	if err != nil {
+		return false, false, err
 	}
-	open, err := al.openQuestionCard(parentID)
-	return open, false, err
+	if !blocked {
+		blocked, err = al.openQuestionCard(parentID)
+	}
+	if err != nil || !blocked {
+		return false, false, err
+	}
+	// Archive presence is not pending-index durability. An interrupted save
+	// can leave only the original bytes; retry that exact save before holding
+	// the input, so the next legitimate turn can discover it. This repairs
+	// storage only: no wake, placement or acknowledgement happens here.
+	body, found, err := al.savedHelperInput(parentID, outcomeID)
+	if err != nil {
+		return false, false, err
+	}
+	if !found {
+		return false, false, fmt.Errorf("held outcome %s has no readable saved input", outcomeID)
+	}
+	if _, err = r.Sessions.SaveChatInput(parentID, "saved-input-"+outcomeID, rec.AgentID, body); err != nil {
+		return false, false, fmt.Errorf("held outcome %s pending-input repair: %w", outcomeID, err)
+	}
+	return true, false, nil
 }
