@@ -5,6 +5,7 @@
 // doubles only at fetch and the WebSocket send edge.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ErrorResponse } from '@/lib/api/generated/openapi-types'
 import type { WsConnection } from '@/lib/ws'
 import { useConnectionStore } from '@/store/connection'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
@@ -136,6 +137,48 @@ describe('chat Retry — explicit REST ownership and visible failures', () => {
     expect(screen.queryByText('Generating your QR code…')).not.toBeInTheDocument()
     expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(sendSpy).not.toHaveBeenCalled()
+  })
+
+  // Round 3 F1/F3: a deleted instance is terminal at EITHER restart step.
+  it.each(['disable', 'enable'] as const)('404 on %s shows the exact deletion message, removes Retry and makes no further calls', async (step) => {
+    const deleted: ErrorResponse = { error: 'channel not found' }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => jsonResponse({ id: CHANNEL, enabled: true }))
+    if (step === 'disable') {
+      fetchSpy.mockResolvedValueOnce(jsonResponse(deleted, 404))
+    } else {
+      fetchSpy.mockResolvedValueOnce(disabledResponse())
+        .mockResolvedValueOnce(jsonResponse(deleted, 404))
+    }
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      mountChat()
+      sendSpy.mockClear()
+
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })))
+
+      const message = 'This WhatsApp connection was deleted. Add it again from Connectors.'
+      expect(screen.getByRole('alert').textContent).toBe(message)
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+      expect(screen.queryByText('Generating your QR code…')).not.toBeInTheDocument()
+      // Even after the full Retry window, no timer may replace the terminal
+      // notice, recreate the instance or send a second enable attempt.
+      await act(async () => vi.advanceTimersByTimeAsync(90_000))
+      expect(screen.getByRole('alert').textContent).toBe(message)
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+      expect(requestSequence(fetchSpy.mock.calls)).toEqual(step === 'disable' ? [
+        { url: '/api/v1/channels/whatsapp.sales/disable', method: 'PUT', body: undefined },
+      ] : [
+        { url: '/api/v1/channels/whatsapp.sales/disable', method: 'PUT', body: undefined },
+        {
+          url: '/api/v1/channels/whatsapp.sales/enable', method: 'PUT',
+          body: '{"pairing_retry":{"request_id":"original-connect-call-id","session_id":"requesting-chat-id"}}',
+        },
+      ])
+      expect(sendSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('503 says the ownership service is unavailable, offers Retry and preserves the disabled-state message', async () => {

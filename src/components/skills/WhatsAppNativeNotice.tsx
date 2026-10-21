@@ -25,6 +25,7 @@ const RETRY_TIMEOUT_MS = 90_000
 const QR_INITIAL_TIMEOUT_MS = 15_000
 
 const PAIRING_RETRY_CONFLICT_MESSAGE = 'This chat can no longer retry this pairing. Open the WhatsApp connector to start a new pairing.'
+const PAIRING_DELETED_MESSAGE = 'This WhatsApp connection was deleted. Add it again from Connectors.'
 
 // TIMEOUT_STATE: synthetic pairing state surfaced when the 15s initial-load timer
 // fires with no QR frame. Avoids an inline object literal at the effectivePairing site.
@@ -199,6 +200,7 @@ export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { chan
         step: disableSucceeded ? 'enable' : 'disable',
         message: err instanceof Error ? err.message : String(err),
       })
+      const deleted = isApiError(err) && err.status === 404
       const conflict = isApiError(err) && err.status === 409 && err.code === 'pairing_retry_conflict'
       const enableRefused = isApiError(err) && ((err.status >= 400 && err.status < 500) || err.status === 503)
       const reason = conflict
@@ -211,12 +213,14 @@ export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { chan
         })
       // A refusal does not undo disable. A lost response or config/reload
       // failure is different: only the prior disable is confirmed.
-      const message = disableSucceeded
-        ? enableRefused
-          ? `The channel is now disabled. ${reason}`
-          : `The channel was disabled before the enable request, but its current state could not be confirmed. ${reason}`
-        : reason
-      setRetryError({ message, canRetry: !conflict })
+      const message = deleted
+        ? PAIRING_DELETED_MESSAGE
+        : disableSucceeded
+          ? enableRefused
+            ? `The channel is now disabled. ${reason}`
+            : `The channel was disabled before the enable request, but its current state could not be confirmed. ${reason}`
+          : reason
+      setRetryError({ message, canRetry: !conflict && !deleted })
       useWhatsAppPairingStore.getState().apply({
         type: 'whatsapp_pairing',
         channel_id: channelId,
