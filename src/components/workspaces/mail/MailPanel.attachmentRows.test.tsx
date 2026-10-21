@@ -9,6 +9,8 @@ import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, act, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+// Load the real panel during collection, before scenario timers and fake clocks.
+import { MailPanel } from './MailPanel'
 
 const NOW = new Date('2026-10-02T10:00:00Z')
 const MIB = 1024 * 1024
@@ -118,26 +120,12 @@ const FOLDERS = {
   metadata: FRESH_META,
 }
 
-async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>> {
-  const specifier = './MailPanel'
-  try {
-    const mod = await import(/* @vite-ignore */ specifier) as { MailPanel?: React.ComponentType<{ workspaceId: string }> }
-    if (typeof mod.MailPanel !== 'function') throw new Error('MailPanel is not a function export')
-    return mod.MailPanel
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err)
-    if (detail.startsWith('BLOCKED:')) throw err
-    throw new Error('BLOCKED: MailPanel not implemented — required by W3 spec §8.4 C4. ' + detail, { cause: err })
-  }
-}
-
 function mount(node: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(<QueryClientProvider client={client}>{node}</QueryClientProvider>)
 }
 
 async function openMessageWith(attachments: Array<{ part_index: number; filename: string; content_type: string; size_bytes: number | null }>): Promise<void> {
-  const MailPanel = await loadPanel()
   fetchMailMessages.mockResolvedValue({
     messages: [summary(42, { subject: 'Quarterly report', has_attachments: true })],
     has_more: false, next_cursor: null, view_limit_reached: false, truncated: false, next_before_uid: null,
@@ -173,7 +161,6 @@ describe('MailPanel attachment rows (C4: scenarios 6.1, 6.2, 6.4; D-4)', () => {
   })
 
   it('scenario 6.1 — the paperclip shows ONLY on has_attachments=true rows, with the accessible text "Has attachments"', async () => {
-    const MailPanel = await loadPanel()
     fetchMailMessages.mockResolvedValue({
       messages: [
         summary(1, { has_attachments: false }),
