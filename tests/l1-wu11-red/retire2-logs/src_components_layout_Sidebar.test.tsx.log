@@ -1,0 +1,29 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa
+
+Not implemented: navigation to another Document
+Not implemented: navigation to another Document
+
+ Test Files  1 passed (1)
+      Tests  35 passed (35)
+   Start at  16:41:27
+   Duration  6.00s (transform 1.34s, setup 163ms, import 3.61s, tests 1.42s, environment 636ms)
+

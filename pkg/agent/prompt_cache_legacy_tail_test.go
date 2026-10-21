@@ -11,7 +11,7 @@ import (
 // requireConversationBeforeVolatileTail applies FR-007/009 to legacy tests
 // whose real subject is the conversation immediately before the new note.
 // It does not filter arbitrary user messages: there must be exactly one final
-// user text block containing the clock and reminder, with neither in front.
+// user text block containing the clock, which never appears in front.
 // Squad-lead Q1=A clarifies that the original caption/media user message is
 // last in this returned conversation, immediately before the volatile tail.
 func requireConversationBeforeVolatileTail(t *testing.T, messages []providers.Message) []providers.Message {
@@ -20,7 +20,6 @@ func requireConversationBeforeVolatileTail(t *testing.T, messages []providers.Me
 	tail := messages[len(messages)-1]
 	require.Equal(t, "user", tail.Role, "FR-007: volatile tail is user-role, never system-role")
 	require.Contains(t, tail.Content, "## Current Time", "FR-007: clock follows the conversation")
-	require.Contains(t, tail.Content, skillReminderNote, "FR-009: reminder shares the trailing text block")
 	require.Empty(t, tail.Media, "FR-007: this fixture's volatile tail is text-only")
 	require.Empty(t, tail.ToolCalls, "FR-007: the volatile tail cannot declare a tool call")
 	require.Empty(t, tail.ToolCallID, "FR-007: the volatile tail is not a tool result")
@@ -28,10 +27,8 @@ func requireConversationBeforeVolatileTail(t *testing.T, messages []providers.Me
 	conversation := messages[:len(messages)-1]
 	for i, message := range conversation {
 		require.NotContains(t, message.Content, "## Current Time", "FR-007: clock cannot precede the tail (message %d)", i)
-		require.NotContains(t, message.Content, skillReminderNote, "FR-009: reminder cannot precede the tail (message %d)", i)
 		for _, part := range message.SystemParts {
 			require.NotContains(t, part.Text, "## Current Time", "FR-007: clock cannot be in a system block")
-			require.NotContains(t, part.Text, skillReminderNote, "FR-009: reminder cannot be in a system block")
 		}
 	}
 	return conversation

@@ -24,9 +24,14 @@ import (
 // pkg/gateway/approvals.go::cancelAllPendingForSessions) — bringing the
 // table to twelve rows. A D-03 fix (ADR-092, 2026-09-24) added a thirteenth:
 // "missing_turn_id", pkg/gateway/approvals.go::approvalRegistryV2.requestApproval's
-// fail-closed guard for a request whose turn id is empty. Declared once so
-// every test below iterates the same canonical set rather than re-typing
-// the enumeration and risking drift between tests.
+// fail-closed guard for a request whose turn id is empty. A #1263 R4 fix
+// (founder 2026-10-13, L1-AMENDMENTS-20261013.md §1.2) added a fourteenth:
+// the task/plan refusal literal — the fixed reason an Ask-policy call in a
+// task or plan chain is refused with (the implementing constant is spelled
+// out here so this file still compiles against a tree that predates it; on
+// such a tree the tests below correctly fail at runtime instead).
+// Declared once so every test below iterates the same canonical set rather
+// than re-typing the enumeration and risking drift between tests.
 var denialTableFixture = []struct {
 	reason    string
 	permanent bool
@@ -44,21 +49,56 @@ var denialTableFixture = []struct {
 	{autoDenyHeadlessReason, true},
 	{"session canceled", true},
 	{"missing_turn_id", true},
+	{"auto-denied: ask-policy tool not allowed in a task or plan run", true},
 }
 
-// TestClassifyDenial_TableHasExactlyTwelveRows guards the table's own size
-// directly — a table-driven test that only checks the rows it already
-// expects would not notice an extra or missing row. Originally asserted ten
-// rows (ADR-058 spec §4.1); a post-epic-review pass added two real,
-// driveable reasons the spec table missed (see denialTableFixture's doc),
-// bringing the count to twelve, then a D-03 fix (ADR-092) added
-// "missing_turn_id", bringing it to thirteen.
-func TestClassifyDenial_TableHasExactlyTwelveRows(t *testing.T) {
-	if got, want := len(denialTable), 13; got != want {
-		t.Fatalf("denialTable has %d rows, want exactly %d", got, want)
+// TestClassifyDenial_TableHasExactlyTheSpecifiedRows guards the table's own
+// membership directly — a table-driven test that only checks the rows it
+// already expects would not notice an extra or missing row. History: ten
+// rows (ADR-058 spec §4.1); +2 post-epic-review; +1 D-03 (ADR-092) — the
+// thirteen the former TestClassifyDenial_TableHasExactlyTwelveRows pinned
+// under its stale name; +1 #1263 R4 (founder 2026-10-13,
+// L1-AMENDMENTS-20261013.md §1.2): the task/plan refusal row. The set is
+// asserted in BOTH directions against denialTableFixture, so the new row's
+// identity — not just a count — is what is pinned here.
+func TestClassifyDenial_TableHasExactlyTheSpecifiedRows(t *testing.T) {
+	if got, want := len(denialTable), len(denialTableFixture); got != want {
+		t.Fatalf("denialTable has %d rows, want exactly %d (the denialTableFixture set)", got, want)
 	}
-	if got, want := len(denialTableFixture), 13; got != want {
-		t.Fatalf("test fixture has %d rows, want exactly %d — keep denialTableFixture in sync with denialTable", got, want)
+	unmatched := make(map[string]bool, len(denialTable))
+	for reason := range denialTable {
+		unmatched[reason] = true
+	}
+	for _, tc := range denialTableFixture {
+		if !unmatched[tc.reason] {
+			t.Fatalf("fixture reason %q has no denialTable row — table and fixture have diverged", tc.reason)
+		}
+		delete(unmatched, tc.reason)
+	}
+	if len(unmatched) != 0 {
+		t.Fatalf("denialTable has row(s) outside the specified set: %v", unmatched)
+	}
+}
+
+// TestClassifyDenial_TaskPlanRow_IdentityIsTheAmendmentText pins the #1263 R4
+// row's identity (founder 2026-10-13, L1-AMENDMENTS-20261013.md §1.2): the
+// amendment's fixed reason, permanent classification, and the two
+// amendment-rendered strings — the model is told to finish what it can and
+// report what was blocked; the transcript row is the fixed "Not run:" text.
+func TestClassifyDenial_TaskPlanRow_IdentityIsTheAmendmentText(t *testing.T) {
+	const reason = "auto-denied: ask-policy tool not allowed in a task or plan run"
+	cls, known := ClassifyDenial(reason)
+	if !known {
+		t.Fatalf("ClassifyDenial(%q): known=false, want a dedicated amendment-R4 table row", reason)
+	}
+	if !cls.Permanent {
+		t.Fatalf("ClassifyDenial(%q): Permanent=false, want true — the refusal is permanent, no retry in the turn", reason)
+	}
+	if cls.ModelMessage != "Task and plan runs never ask a person for approval. This call needed approval and was refused. Do not retry; finish what you can and report what was blocked." {
+		t.Fatalf("ClassifyDenial(%q): ModelMessage %q is not the amendment R4 model instruction", reason, cls.ModelMessage)
+	}
+	if cls.TranscriptText != "Not run: needs approval, and task and plan runs never ask." {
+		t.Fatalf("ClassifyDenial(%q): TranscriptText %q is not the amendment R4 transcript row", reason, cls.TranscriptText)
 	}
 }
 

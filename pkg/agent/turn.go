@@ -87,6 +87,12 @@ type turnResult struct {
 }
 
 type turnState struct {
+	// approvalOrigin is the origin approvals raised by this turn carry: the
+	// starter input's, raised by inputs consumed later (spec §6.18; guarded
+	// by approvalOriginMu — a joined input is noted from the steering poll).
+	approvalOriginMu sync.Mutex
+	approvalOrigin   approvalOrigin
+
 	mu sync.RWMutex
 
 	// userInputInWindow is set by assembleMessages when this turn's re-read
@@ -884,19 +890,20 @@ func (ts *turnState) setOutcomeRelabel(code LLMErrorCode) {
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	ts := &turnState{
-		agent:        agent,
-		opts:         opts,
-		scope:        scope,
-		turnID:       scope.turnID,
-		sessionKey:   opts.SessionKey,
-		channel:      opts.Channel,
-		chatID:       opts.ChatID,
-		userMessage:  opts.UserMessage,
-		userID:       opts.UserID,
-		media:        append([]string(nil), opts.Media...),
-		phase:        TurnPhaseSetup,
-		startedAt:    time.Now(),
-		finishedChan: make(chan struct{}),
+		approvalOrigin: opts.approvalOrigin,
+		agent:          agent,
+		opts:           opts,
+		scope:          scope,
+		turnID:         scope.turnID,
+		sessionKey:     opts.SessionKey,
+		channel:        opts.Channel,
+		chatID:         opts.ChatID,
+		userMessage:    opts.UserMessage,
+		userID:         opts.UserID,
+		media:          append([]string(nil), opts.Media...),
+		phase:          TurnPhaseSetup,
+		startedAt:      time.Now(),
+		finishedChan:   make(chan struct{}),
 	}
 	// Bug fix (staticcheck SA5011): agentID used to be set from agent.ID
 	// directly in the struct literal above, unconditionally dereferencing
@@ -1849,4 +1856,28 @@ func withSpawnToolCallID(ctx context.Context, toolCallID string) context.Context
 func spawnToolCallIDFromContext(ctx context.Context) string {
 	id, _ := ctx.Value(spawnToolCallIDKey).(string)
 	return id
+}
+
+// currentApprovalOrigin is the origin an approval raised NOW carries: the
+// starter's origin, raised by inputs the turn has consumed since (spec §6.18,
+// chief ruling 2026-10-18; see participant.go::mergeApprovalOrigin).
+func (ts *turnState) currentApprovalOrigin() approvalOrigin {
+	if ts == nil {
+		return approvalOrigin{}
+	}
+	ts.approvalOriginMu.Lock()
+	defer ts.approvalOriginMu.Unlock()
+	return ts.approvalOrigin
+}
+
+// noteConsumedOrigin records that the turn consumed an input of origin o
+// (a joined steering message or a held group request). Approvals already
+// raised keep their label; later ones carry the merged origin.
+func (ts *turnState) noteConsumedOrigin(o approvalOrigin) {
+	if ts == nil || o.Label == "" {
+		return
+	}
+	ts.approvalOriginMu.Lock()
+	ts.approvalOrigin = mergeApprovalOrigin(ts.approvalOrigin, o)
+	ts.approvalOriginMu.Unlock()
 }

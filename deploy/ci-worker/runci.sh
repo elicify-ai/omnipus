@@ -458,9 +458,24 @@ run_gorace() {
     echo "$out" | grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' | awk '{print $3}' | sort -u | sed 's/^/    /'
     return 1
   fi
+  # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a package FAIL
+  # line and no --- FAIL line, which is the hang shape this filter exists to
+  # excuse. Never retry it. The classifier ships in the checkout: a ref that
+  # predates it does not print the token, so a missing file keeps the old path.
+  if [[ -f scripts/ci-flake-classify.sh ]]; then
+    # shellcheck source=scripts/ci-flake-classify.sh
+    source scripts/ci-flake-classify.sh || return 1
+    if ci_log_has_guard_failure "$out"; then
+      echo ""
+      echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+      echo "REAL FAILURE (guard failure detected — never excused)"
+      return 1
+    fi
+  fi
   # No race and no assertion failure — now the ordinary short-circuit applies.
   # What reaches the flake filter below is exclusively the hang/contention
-  # signature: a bare `FAIL <pkg>` summary with no `--- FAIL` line anywhere.
+  # signature: a bare `FAIL <pkg>` summary with no `--- FAIL` line and no
+  # GUARD FAILURE token anywhere.
   [ $code -eq 0 ] && return 0
 
   # Flake filter — ALSO copied from pr.yml's race step, and required for
@@ -614,9 +629,24 @@ run_gotest() {
     echo "$out" | grep -aA 12 -E '^\s*--- FAIL' | head -120
     return 1
   fi
+  # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a package FAIL
+  # line and no --- FAIL line, which is the hang shape this filter exists to
+  # excuse. Never retry it. The classifier ships in the checkout: a ref that
+  # predates it does not print the token, so a missing file keeps the old path.
+  if [[ -f scripts/ci-flake-classify.sh ]]; then
+    # shellcheck source=scripts/ci-flake-classify.sh
+    source scripts/ci-flake-classify.sh || return 1
+    if ci_log_has_guard_failure "$out"; then
+      echo ""
+      echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+      echo "REAL FAILURE (guard failure detected — never excused)"
+      return 1
+    fi
+  fi
   # No race and no assertion failure — now the ordinary short-circuit applies.
   # What reaches the flake filter below is exclusively the hang/contention
-  # signature: a bare `FAIL <pkg>` summary with no `--- FAIL` line anywhere.
+  # signature: a bare `FAIL <pkg>` summary with no `--- FAIL` line and no
+  # GUARD FAILURE token anywhere.
   [ $code -eq 0 ] && return 0
   local failed; failed=$(echo "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
   [ -z "$failed" ] && return $code

@@ -37,6 +37,22 @@ func TestPinConfigWorkspaceToTestHome_MovesAFallbackWorkspaceUnderTheTestHome(t 
 	}
 }
 
+// An empty workspace must not stay empty. initializeCore turns that into ".",
+// and the task migrations then create tasks/ in the package directory.
+func TestPinConfigWorkspaceToTestHome_FillsAnEmptyWorkspaceUnderTheTestHome(t *testing.T) {
+	cfg := &config.Config{}
+	ensureIsolatedTestOmnipusHome(t)
+	pinConfigWorkspaceToTestHome(cfg)
+
+	home := config.OmnipusHomeDir()
+	if got, want := cfg.Agents.Defaults.Home, filepath.Join(home, "workspace"); got != want {
+		t.Fatalf("workspace = %q, want %q (under the per-test home)", got, want)
+	}
+	if !filepath.IsAbs(cfg.Agents.Defaults.Home) {
+		t.Fatalf("workspace %q is not absolute; a relative workspace writes tasks/ into the working directory", cfg.Agents.Defaults.Home)
+	}
+}
+
 func TestPinConfigWorkspaceToTestHome_LeavesAnExplicitWorkspaceAlone(t *testing.T) {
 	cfg := config.DefaultConfig()
 	explicit := filepath.Join(t.TempDir(), "my-workspace")

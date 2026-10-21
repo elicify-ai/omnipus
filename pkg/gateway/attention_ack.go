@@ -16,8 +16,10 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync/atomic"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -73,10 +75,48 @@ func pendingApprovalMainsFor(reg attentionApprovalSource, getMeta func(string) (
 				out.mains[meta.ID] = struct{}{}
 				break
 			}
+			if meta.ParentSessionID == "" {
+				// The chain's root is not a main: a per-person channel
+				// conversation or a non-main chat, or a helper below one.
+				// Founder ruling 2026-10-18: the main agent's sidebar
+				// entry is triggered, so mark the root agent's main in the
+				// root's workspace.
+				out.markRootAgentMain(meta, getMeta)
+				break
+			}
 			id = meta.ParentSessionID
 		}
 	}
 	return out
+}
+
+// markRootAgentMain marks the main of a non-main root's agent in the root's
+// workspace (chief ruling 2026-10-18). When that agent has no main there, or
+// the root has no workspace or agent, there is honestly no cue — the card
+// still shows in its own chat — so nothing is marked and the answer is not
+// unknown. A main that exists but cannot be read is unknown.
+func (out *pendingApprovalMains) markRootAgentMain(root *session.UnifiedMeta, getMeta func(string) (*session.UnifiedMeta, error)) {
+	if root.WorkspaceID == "" || root.AgentID == "" {
+		return
+	}
+	mainID, err := session.MainSessionID(root.WorkspaceID, root.AgentID)
+	if err != nil {
+		return
+	}
+	meta, err := getMeta(mainID)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil || meta == nil {
+		slog.Warn("rest: attention: could not read the root agent's main while assigning a pending approval",
+			"session_id", mainID, "error", err)
+		attentionReadFailures.Add(1)
+		out.unknown = true
+		return
+	}
+	if meta.Type == session.SessionTypeMain {
+		out.mains[meta.ID] = struct{}{}
+	}
 }
 
 // pendingApprovalMains resolves the approval-to-main assignment for one request.
@@ -93,7 +133,11 @@ func (a *restAPI) pendingApprovalMains() pendingApprovalMains {
 	return pendingApprovalMainsFor(a.approvalReg, func(id string) (*session.UnifiedMeta, error) {
 		store := a.resolveSessionStore(id)
 		if store == nil {
-			return nil, fmt.Errorf("session %q: no store", id)
+			// resolveSessionStore is nil only when no store holds the
+			// session (an unreadable one still returns its store), so this
+			// is "does not exist" — markRootAgentMain relies on it to tell
+			// "the agent has no main here" (no cue) from a read failure.
+			return nil, fmt.Errorf("session %q: no store: %w", id, os.ErrNotExist)
 		}
 		return store.GetMeta(id)
 	})

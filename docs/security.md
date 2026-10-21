@@ -229,6 +229,8 @@ These file-tool reading allowances do not grant registry listing, instruction-fi
 
 Internal state — sessions and transcripts, tasks and plans, memory, agent definitions (`SOUL.md` and friends), skill instructions, audit logs, gateway state, credentials, the master key and `config.json` — stays protected from generic file tools and is hidden from their search results. Shell commands use the command-text check and, when enforcing, the kernel restrictions described below. Use Omnipus's dedicated tools to access managed state.
 
+Prompt sources are separate from these file protections. In native turns, an agent's own folder contributes no instructions from `AGENT.md`, `AGENTS.md` or `IDENTITY.md`. Its `SOUL.md` and the global `USER.md` still load. Workspace **Project Instructions** (the workspace's `AGENT.md`) and mounted projects' root `CLAUDE.md` or `AGENTS.md` continue to apply to native turns; `CLAUDE.md` wins when both project files exist. Omnipus does not automatically add the global user profile to external command-line workers' input.
+
 A refusal carrying `protected_internal_file` is displayed as **Protected Omnipus file — refused**, explaining that approval cannot open it. Filesystem-policy denials and the shell's protected-operand guard can produce this marker. Other checks can return a different refusal first: agent-definition files can direct the agent to the metadata tools, and some shell pre-flights return an ordinary secret-set error. Read that refusal's reason; approval does not make the protected path accessible.
 
 **Two accepted risks and one boundary are worth knowing:**
@@ -243,7 +245,7 @@ A refusal carrying `protected_internal_file` is displayed as **Protected Omnipus
 
 - Links (symlinks) it meets inside a folder are not followed. A link you name directly as the folder to search is followed, as `read_file` would.
 - The Linux system folders `/proc`, `/sys` and `/dev` are skipped, and device files, pipes and sockets are never read. They hold no user content, and some of them can hang a search. `read_file` of a file you name in those folders works as before.
-- Agent notes files such as `SOUL.md`, `HEARTBEAT.md`, `AGENT.md` and `MEMORY.md`, and the instruction files of installed skills (`SKILL.md`, `AGENT.md`, `AGENTS.md` in Omnipus's own skills folder), never show up in results, by name or by content. `read_file` refuses their contents. Do not assume every parent directory is unlistable: an agent working from its own home can list that working folder and see filenames. Listing the installed skill registry is still refused. A skill's other files, such as its helper scripts, can be read and found.
+- Agent notes files such as `SOUL.md`, `HEARTBEAT.md`, `AGENT.md` and `MEMORY.md`, and the instruction files of installed skills (`SKILL.md`, `AGENT.md`, `AGENTS.md` in Omnipus's own skills folder), never show up in results, by name or by content. `read_file` refuses their contents. An agent working from its own home can still list its ordinary working files and folders, but `list_directory` hides protected definitions, memory, sessions, installed-skill folders and internal state from that listing. Those hidden entries do not count toward listing pages. Ordinary nested folders with the same names remain visible when they are not protected paths. Listing the installed skill registry is still refused. A skill's other files, such as its helper scripts, can be read and found.
 
 **Denying `read_file` alone does not stop an agent reading.** The policies for `read_file` and `grep` are separate, and `grep` returns the matching lines of any file it can reach (up to the usual limits and surrounding lines). A custom agent with `grep` allowed and `read_file` denied can still read that way. To confine what an agent reads, deny `read_file`, `grep` and `bash` for it.
 
@@ -255,9 +257,21 @@ A refusal carrying `protected_internal_file` is displayed as **Protected Omnipus
 
 Each `grep` search that runs is recorded in the audit log — see "How to review security activity" below.
 
-### Scheduled and unattended runs
+### Task, plan, scheduled and other unattended runs
 
-An unattended run has nobody present to answer a prompt. The same rule applies there as in a chat: anything Auto-approve would run in a chat also runs in an unattended run. Anything that would need a person is refused straight away, with a clear error in the task's transcript:
+An unattended run has nobody present to answer a prompt. The same rule applies there as in a chat: anything Auto-approve would run in a chat also runs in an unattended run, and so does a call an operator `command_rules` rule or an existing "Always Allow" grant already covers. Anything that would still need a person is refused straight away; no approval card ever appears. In a task or plan run the agent is told:
+
+```
+Task and plan runs never ask a person for approval. This call needed approval and was refused. Do not retry; finish what you can and report what was blocked.
+```
+
+and the task's conversation shows the call as:
+
+```
+Not run: needs approval, and task and plan runs never ask.
+```
+
+The agent then reports what was blocked and the task ends **Failed** with its explanation. A scheduled run or a heartbeat shows its own wording instead:
 
 ```
 Not run: this is a headless scheduled run with no operator available to approve ask-policy tools.
@@ -265,23 +279,26 @@ Not run: this is a headless scheduled run with no operator available to approve 
 
 A shell command that would need a prompt (for example one that needs the network) is refused the same way; its error ends with `auto-denied: no operator attached to this headless/scheduled run to approve it`.
 
-For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. An unattended call must either clear Auto-approve or have an effective Allow policy. Setting one agent to Allow cannot override a global Ask or Deny. If a required tool still resolves to Ask, review both policy layers. Changing the global ceiling affects every agent; use per-agent restrictions to retain tighter access elsewhere. Do not assume that having the chat open makes an automatically dispatched run attended. See [tools](tools.md).
+For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. An unattended call must either clear Auto-approve, match an operator rule or grant, or have an effective Allow policy. An explicit Deny always stays a deny. Setting one agent to Allow cannot override a global Ask or Deny. If a required tool still resolves to Ask, review both policy layers. Changing the global ceiling affects every agent; use per-agent restrictions to retain tighter access elsewhere.
 
-**What counts as unattended (founder decision, 2026-09-24).** This is not only scheduled work. It is every run nobody sent live:
+**What counts as unattended (changed 2026-10-13).** Who answers an approval is decided by where the work started — the first conversation of the chain, not the helper doing the work and not whoever wrote last:
 
-- a task fired by its own Calendar trigger on a workspace Board (once, recurring, or an RRULE occurrence);
-- a queued task the task drain picks up on its own polling cycle;
-- a task's auto-advance dispatch, fired the moment a dependency it was blocked on finishes;
-- a plan's own member-task dispatch, driven by the plan engine's promotion loop;
-- a plan's automatic wake of its owner or supervisor agent, reacting to a plan-state change;
-- a parent task's automatic follow-up turn, fired once every child task reaches a terminal state;
-- a per-agent heartbeat, which runs on the cron engine.
+| Where the chain started | Approvals |
+|---|---|
+| A chat with an agent, an agent's main chat, a channel conversation | Asked inline. A helper the agent starts asks in that same chat. |
+| A task — however it was started: **Start Task**, **Create & Run now**, dragging to In Progress, the Calendar's **Run now**, an agent's `run_task`, its own Calendar trigger, the queue or an auto-advance | Never asked; refused as above. |
+| A plan — started from a chat with `execute_plan` or by the plan engine — including every member task and the plan's automatic wakes | Never asked; refused as above. |
+| A recurring schedule, a per-agent heartbeat, the Judge | Never asked; refused with the scheduled wording. |
 
-None of these ever shows a live approval card, even to an operator who happens to have that agent's chat window open at that moment — "someone was online" does not make a run attended. Only a turn a person actually started stays attended: a chat message, or clicking **Run now** on a task (`POST /api/v1/tasks/{id}/runs`, and the Board's "Start Task"/"Create & Run now" actions) while watching for the result. A task dispatched through the `run_task` or `execute_plan` agent tools inherits whichever of these two states the *calling* turn was already in — a chat-started delegation to `run_task` stays attended, one fired from inside an already-unattended run stays unattended.
+A helper started inside a task or plan run is unattended too, however many levels down it is. Writing into a task's conversation yourself, or reviving a finished helper of a task, does not make the run attended. A message from a task to another agent's main chat is different: the receiving agent works in its own main chat, so its approvals are asked there. If Omnipus cannot tell where a chain started (for example its saved records are damaged), it treats the run as unattended and refuses.
+
+This means the Omnipus agent's apply workflows — creating an agent or setting up a team — work from a chat only: if a task sends Omnipus to apply a plan, the run ends at the first step that needs your approval.
+
+On a host without an enforcing kernel sandbox (Windows, or the process sandbox not set to Enforce), Auto-approve runs only read-only shell commands and commands an operator `command_rules` allow rule covers, so more task runs end blocked there.
 
 ### Approve a request
 
-When a tool needs your decision, Omnipus opens an approval pop-up over the app. It accepts pending approvals from every workspace and conversation, not only the workspace or chat you are viewing. Requests are shown one at a time; a count indicates when more are queued. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
+When a tool needs your decision, an approval card appears in the chat the request belongs to, above the message box. A helper's request appears in the chat that started the helper, for example an Omnipus helper's in Omnipus's chat. Requests in one chat are shown one at a time; **+N more** indicates when more are queued. While a request waits, that main chat needs your attention: its agent's row in the sidebar shows the attention halo, and a collapsed workspace counts it among the main chats that need you (see [the sidebar](using-omnipus-ui.md#the-sidebar)). There is no separate notice; open that chat to answer. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
 
 | Button | What it does |
 |---|---|
@@ -290,7 +307,11 @@ When a tool needs your decision, Omnipus opens an approval pop-up over the app. 
 | **Deny** | Refuses the call. |
 | **Cancel** | Closes the request without running it. |
 
-Escape, the close control or clicking outside an unexpired pop-up dismisses it locally and sends Deny; it never approves the request. After reconnecting, a request whose original details are unavailable offers Deny only.
+The card never takes focus, and pressing Enter in the message box or Escape never answers it: a request is answered only when you select one of its buttons. A request nobody answers in time expires; the card then says so (a timeout, not a denial by you) and offers **Dismiss**. After a page reload or a reconnect, a request that is still pending comes back as a complete card you can approve, deny or always allow.
+
+**Where a request came from.** When the work being approved was triggered by someone other than you in the web app, the card names it: *"while answering <person> on <connection>"* for a channel message, *"for group <name>"* for a group-chat request, *"asked by <Agent>"* for another agent's request. A conversation that has taken in several such inputs shows the most significant one — a channel person first, then a group, then another agent — and keeps the first of each kind; it never drops back to a lesser one. A request that is already waiting keeps the label it was raised with.
+
+**Which sidebar entry is marked (changed 2026-10-18).** It is the asking agent's main chat in that workspace. This also holds when the request comes from another of that agent's chats, from a per-person channel conversation, or from a helper working for one of them; a helper's request marks the main chat of the agent whose chat started the work. Known limit: when that agent has no main chat in the workspace, or the conversation belongs to no workspace, no sidebar entry is marked — the request still shows in its own chat.
 
 What **Always Allow** remembers lasts only for that chat and ends with it. Agents that this chat hands work to inherit it. Nobody else's chats are affected, and there is no list of remembered approvals to review. For most tools it remembers the exact call, with the same arguments. For a shell command it offers a choice; see "Command rules compared with one-time approvals" below.
 
@@ -504,28 +525,22 @@ Rotation re-encrypts the whole vault with the new passphrase. Back up the new pa
 
 Each stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open.
 
-Installations from an earlier release are upgraded automatically, once. The first time the upgraded gateway (or any `omnipus` command) opens the vault, it re-encrypts every entry with its name, using the same master key, and saves the whole file in one step. You do not re-enter anything. The upgrade is recorded in the audit log as `credentials.store_migrated`, with the number of entries and no names or values. After it, the vault never reads the old format again.
+Normal credential reads use the name-bound version-2 format. Unlock can convert a version-1 vault before use: it authenticates every entry, binds each value to its name and replaces the complete file atomically. Key-file mode keeps the master key; passphrase mode derives a key with fresh random salt. After replacing the credential file, Omnipus attempts to save `credentials.json.migrated`. If writing that marker fails, it logs a warning; the conversion still succeeds. It then emits `credentials.store_migrated`, with counts but no entry names or values. Without the marker, a restored version-1 file can be converted again. When the marker is present, a version-1 file is refused rather than converted again.
 
-What the upgrade cannot protect against. The old format did not record which name a value belonged to, so a swap made to an old-format vault file cannot be detected. For example, someone who can write to your Omnipus home folder swaps your model provider key with another key; the upgrade cannot tell, and keeps the swap.
+**Conversion cannot authenticate the names in an unbound version-1 file.** A swap inside that file is indistinguishable from its genuine layout and is carried into the name-bound format. Someone who can write to your Omnipus home folder and still holds a version-1 copy encrypted with the current master key or passphrase can:
 
-This risk does not end at the first start. It lasts as long as your vault is still opened by the same master key or passphrase it had before the upgrade. Anyone who can write to your Omnipus home folder and still holds a copy of the pre-upgrade vault file can, at any later time:
+1. swap values inside that copy,
+2. delete `credentials.json.migrated` (it sits in the same folder, so the same person can delete it), and
+3. restore the substituted copy.
 
-1. swap values inside that old copy,
-2. delete the upgrade record `credentials.json.migrated` (it sits in the same folder, so the same person can delete it), and
-3. put the old copy back.
+The next unlock can then convert it and retain the swap. When present, the marker stops accidental or careless restores; it is not a defence against someone who can replace both the credential file and its marker. This risk lasts for the lifetime of the secret that opens the version-1 copy, not just one unlock.
 
-The next start then upgrades it again and keeps the swap. The upgrade record only stops accidental or careless restores.
-
-What closes it:
-
-| How your vault is opened | What to do after upgrading |
+| How your vault is opened | How to close the version-1 restore risk |
 |---|---|
-| Passphrase typed at start-up | Run `omnipus credentials rotate` and choose a new passphrase. The upgrade already re-keys the vault under fresh random data, so an old copy cannot be mixed with anything saved after the upgrade. Only changing the passphrase stops a whole old copy from opening. |
-| Key file (`master.key`, `OMNIPUS_KEY_FILE`) or `OMNIPUS_MASTER_KEY` | Change the master key. There is no command yet that does this while keeping your stored values. The supported way is to stop the gateway, back up and remove the old key, create a new one, remove `credentials.json`, start again, and re-enter each credential. Until then, protect old copies of `credentials.json` (backups, sync folders) as carefully as the key itself. `omnipus credentials rotate` also works, but it switches the installation to a passphrase you must type at every start, which does not suit an unattended server. |
+| Passphrase typed at start-up | Run `omnipus credentials rotate` and choose a new passphrase. Fresh salt prevents mixing entries from before and after conversion, but only changing the passphrase prevents a whole version-1 copy from opening. |
+| Key file (`master.key`, `OMNIPUS_KEY_FILE`) or `OMNIPUS_MASTER_KEY` | Change the master key. No command performs that change while retaining key-file mode and all stored values. Stop the gateway, make a trusted backup, replace the key, remove `credentials.json`, start again, and re-enter each credential. Until then, protect version-1 copies of `credentials.json` in backups and sync folders as carefully as the key itself. `omnipus credentials rotate` also works, but it switches the installation to a passphrase that must be entered at every start, which does not suit an unattended server. |
 
-A later release will remove the upgrade step entirely. From then on an old-format vault is refused outright, and this risk ends for everyone.
-
-If any entry cannot be opened during the upgrade, nothing is changed and the gateway does not start. The error names each entry at fault. See [troubleshooting](troubleshooting.md#credentials-stop-working-after-an-upgrade).
+If any entry cannot be authenticated during credential-file format conversion, the source file is left unchanged and the gateway does not start. The error names each entry at fault. See [troubleshooting](troubleshooting.md#credential-file-format-or-authentication-errors).
 
 ## How to review security activity
 

@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"syscall"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 
@@ -311,35 +312,40 @@ func (a *restAPI) ensureMainSession(wsID, agentID string) (string, error) {
 	return sessionID, nil
 }
 
-// mainSessionAddress is the wire projection of member_configs[agent].main_session_id:
-// the pair's computed main id when that main actually RESOLVES to a matching
-// stored identity, and "" otherwise (the field is then omitted).
-//
-// Resolving — never merely computing — is deliberate: a member whose stored
-// main is corrupt or owned by someone else must not be advertised an address
-// that does not work. The write path refuses to create a replacement in that
-// case, and this projection refuses to pretend one exists.
-func (a *restAPI) mainSessionAddress(ws storedWorkspace, agentID string) string {
+// mainSessionAddress resolves the read-only member main projection without
+// creating anything. Only a matching stored identity gets an address; an
+// eligible member's failure is preserved for the safe error projection.
+// Ineligible members have neither an address nor a preparation error.
+func (a *restAPI) mainSessionAddress(ws storedWorkspace, agentID string) (string, error) {
 	cfg := a.agentLoop.GetConfig()
 	if !mainSessionPairEligible(cfg, ws, agentID) {
-		return ""
+		return "", nil
 	}
 	sessionID, err := session.MainSessionID(ws.ID, agentID)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	store := a.agentLoop.GetSessionStore()
 	if store == nil {
-		return ""
+		return "", errNoSessionStore
 	}
 	meta, err := store.GetMeta(sessionID)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	if meta.Type != session.SessionTypeMain || meta.AgentID != agentID || meta.WorkspaceID != ws.ID {
-		return ""
+		return "", errMainChatNotPrepared
 	}
-	return sessionID
+	return sessionID, nil
+}
+
+// mainSessionErrorMessage is display-only, never raw error text. Classify the
+// structured cause so no path, filename or stored identity can reach the UI.
+func mainSessionErrorMessage(err error) string {
+	if errors.Is(err, syscall.ENOTDIR) {
+		return "The main chat could not be prepared because session storage has a file where a folder is required. Ask the server operator to fix it, then retry."
+	}
+	return errMainChatNotPrepared.Error()
 }
 
 // ensureMainsForTeam get-or-creates the main of every eligible member of ws's

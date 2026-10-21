@@ -41,7 +41,9 @@ func decodeToolJSON(t *testing.T, raw string) map[string]any {
 // update_workspace provisions the members' mains, exactly once per change,
 // and a provisioning failure is reported in the result, never silent.
 func TestWorkspaceTools_TeamChangeProvisionsMembersMains(t *testing.T) {
-	deps, home := newTestDepsWithHome(t)
+	// mia and jim are real agents: WU-3 (#1057 F2) refuses a core_team id
+	// that names no agent, so the members must exist for the team to save.
+	deps, home := newTestDepsWithHomeAndAgents(t, "mia", "jim")
 	mains := &recordingMains{}
 	deps.EnsureWorkspaceMains = mains.ensure
 

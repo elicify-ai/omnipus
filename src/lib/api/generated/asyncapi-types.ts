@@ -234,6 +234,7 @@ export interface RoomSnapshotFrame {
   allocated_cost_micro_usd: number;
   allocated_cost_unpriced: boolean;
   complete: boolean;
+  has_older?: boolean;
 }
 
 export interface RoomMetaFrame {
@@ -822,9 +823,9 @@ export interface AskUserAnswerFrame {
 }
 
 export interface SessionStatePendingApproval {
-  tool_call_id?: string;
-  turn_id?: string;
-  args?: {
+  tool_call_id: string;
+  turn_id: string;
+  args: {
     [key: string]: unknown;
   };
   segments?: Array<CommandSegmentInfo>;

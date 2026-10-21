@@ -216,7 +216,7 @@ func volatileTailError(messages []providers.Message, history, scratch string) er
 			text += part.Text
 		}
 		if secondsInPrefix.MatchString(text) || strings.Contains(text, "Current Time") ||
-			(scratch != "" && strings.Contains(text, scratch)) || strings.Contains(text, skillReminderNote) {
+			(scratch != "" && strings.Contains(text, scratch)) {
 			return fmt.Errorf("volatile note at message %d before the history boundary", i)
 		}
 	}
@@ -242,7 +242,7 @@ func volatileTailError(messages []providers.Message, history, scratch string) er
 // TestPrefixStable_AfterNormalizeAndAdapter is TDD row 22. Capture real HTTP
 // bytes after BOTH the window normalizer and the official Anthropic adapter.
 func TestPrefixStable_AfterNormalizeAndAdapter(t *testing.T) {
-	tmp := setupWorkspace(t, map[string]string{"AGENT.md": "# Agent\nWORKSPACE-INSTRUCTIONS-STAY-IN-FRONT"})
+	tmp := setupWorkspace(t, map[string]string{"SOUL.md": "# Agent\nWORKSPACE-INSTRUCTIONS-STAY-IN-FRONT"})
 	t.Cleanup(func() { os.RemoveAll(tmp) })
 	cb := NewContextBuilder(tmp)
 	history := []providers.Message{
@@ -301,7 +301,7 @@ func TestPrefixStable_AfterNormalizeAndAdapter(t *testing.T) {
 // captured prefix itself matched, which it does not while a seconds clock sits
 // in front.
 func TestHistoryHit_StaticOnlyFails(t *testing.T) {
-	tmp := setupWorkspace(t, map[string]string{"AGENT.md": "# Agent\nStable."})
+	tmp := setupWorkspace(t, map[string]string{"SOUL.md": "# Agent\nStable."})
 	t.Cleanup(func() { os.RemoveAll(tmp) })
 	cb := NewContextBuilder(filepath.Clean(tmp))
 	history := []providers.Message{{Role: "user", Content: "PRIOR-USER"}, {Role: "assistant", Content: "PRIOR-ASSISTANT"}}

@@ -8,8 +8,9 @@
 // header's starting point; live frames (src/store/rooms.ts) keep members,
 // mutes, pause, cost, request states and the transcript current.
 // Sending is blocked — never silently dropped — while the room cannot be
-// read, the snapshot is incomplete, the connection is down, or the server
-// marked the room read-only (§6.3, FR-204).
+// read, the first snapshot after (re)attach has not arrived, the connection
+// is down, or the server marked the room read-only (§6.3, FR-204; ruling Q2).
+// The reserved complete flag and omitted older history never block sending.
 
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
@@ -49,7 +50,7 @@ function currentRoom(room: Room, live: RoomLiveState | undefined): Room {
 function blockedReasonOf(room: Room, live: RoomLiveState | undefined, connected: boolean): string | undefined {
   if (!connected) return 'Reconnecting… messages can be sent again once the connection is back.'
   if (room.read_only_reason) return room.read_only_reason
-  if (!live?.complete) return 'Loading the conversation…'
+  if (!live?.snapshotReceived) return 'Loading the conversation…'
   return undefined
 }
 
@@ -94,12 +95,23 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
   const connection = useConnectionStore((state) => state.connection)
   const send = useRoomSend(roomId)
   const [askAgain, setAskAgain] = useState<{ agentId: string; nonce: number }>()
+  const [attachedRoomId, setAttachedRoomId] = useState<string>()
 
   // K45: attach on mount and after every reconnect (the store resumes after
   // the room's own cursor). Never an agent-session attach.
   useEffect(() => {
-    if (connected && connection) useRoomStore.getState().attachRoom(roomId)
+    if (connected && connection) {
+      useRoomStore.getState().attachRoom(roomId)
+      // Cached rows may still carry the previous opening's ready flag on
+      // the first render. Only this opening's attach can make them ready.
+      setAttachedRoomId(roomId)
+    } else {
+      // Offline navigation cannot reuse an attachment from an earlier visit.
+      setAttachedRoomId(undefined)
+    }
   }, [roomId, connected, connection])
+  // #1332 D6: leaving the room invalidates its in-flight older-page request.
+  useEffect(() => () => useRoomStore.getState().abandonOlder(roomId), [roomId])
 
   const agents = agentsQuery.data
   const agentName = useMemo(() => {
@@ -131,7 +143,18 @@ export function RoomScreen({ workspaceId, roomId }: RoomScreenProps) {
         memberStates={latestDeliveryByMember(live)}
         onAskAgain={(agentId) => setAskAgain({ agentId, nonce: Date.now() })}
       />
-      <RoomTranscript entries={live?.entries ?? []} agentName={agentName} />
+      <RoomTranscript
+        roomId={roomId}
+        snapshotReceived={connected && attachedRoomId === roomId && live?.snapshotReceived === true}
+        entries={live?.entries ?? []}
+        agentName={agentName}
+        hasOlder={live?.hasOlder}
+        history={{
+          status: live?.historyStatus ?? 'idle',
+          failed: live?.historyFailed ?? false,
+          loadOlder: () => void useRoomStore.getState().loadOlder(roomId),
+        }}
+      />
       <SendNotice send={send} members={members} workspace={workspaceQuery.data} />
       <RoomComposer
         members={members}

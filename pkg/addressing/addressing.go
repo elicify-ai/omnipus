@@ -69,6 +69,11 @@ const (
 	// SourceConnector returns through the source owner's channel instance, to
 	// the original chat/thread.
 	SourceConnector SourceKind = "connector"
+	// SourceRoom returns into a group chat (room, omnipus-system-agent US-17).
+	// A room is not a session: there is no source session and no owner to
+	// wake; the answer is appended to the room by the room reply branch
+	// (FR-166, FR-215) and the capture carries the room id instead.
+	SourceRoom SourceKind = "room"
 )
 
 // Sender is the authenticated origin of the request. Fields are filled only
@@ -92,8 +97,12 @@ type Source struct {
 	// Owner is the pair that owned the source (the session owner, or the
 	// bound instance owner at admission). Zero for an unbound instance.
 	Owner Pair `json:"owner"`
-	// SessionID is the source conversation.
+	// SessionID is the source conversation. Empty for a room source.
 	SessionID string `json:"session_id"`
+	// RoomID and RoomName identify the group chat of a SourceRoom request
+	// (RoomName as it was at admission, for display only).
+	RoomID   string `json:"room_id,omitempty"`
+	RoomName string `json:"room_name,omitempty"`
 	// Connector correlation (SourceConnector only).
 	InstanceID        string `json:"instance_id,omitempty"`
 	ChatID            string `json:"chat_id,omitempty"`
@@ -142,6 +151,12 @@ func (c Capture) Validate() error {
 	}
 	if err := c.Receiver.Validate(); err != nil {
 		return fmt.Errorf("addressing: receiver: %w", err)
+	}
+	if c.Source.Kind == SourceRoom {
+		if strings.TrimSpace(c.Source.RoomID) == "" {
+			return errors.New("addressing: room source needs a room id")
+		}
+		return nil
 	}
 	if strings.TrimSpace(c.Source.SessionID) == "" {
 		return errors.New("addressing: capture has no source session")

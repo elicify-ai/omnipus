@@ -383,7 +383,7 @@ func TestBuildSystemPrompt_CustomAgentUsesDefaultIdentity(t *testing.T) {
 //
 // Traces to: CLAUDE.md "No emoji in stored data or UI chrome".
 func TestBuildSystemPrompt_NoEmojiRule_AppliesUniformly(t *testing.T) {
-	const noEmojiMarker = "**No emoji**"
+	const noEmojiMarker = "Use words, not emoji, in every response, introduction, report, and consolidation of delegated results."
 
 	t.Run("core agent with compiled prompt (jim)", func(t *testing.T) {
 		workspace := t.TempDir()

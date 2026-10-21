@@ -45,7 +45,7 @@ func TestL11274CLIPathRespectsCurrentUserExecuteAccess(t *testing.T) {
 			if accessErr == nil {
 				// Root/capability-bearing users may execute a file with any x
 				// bit. Both branches test the product; neither skips the case.
-				l11274AssertCreated(t, f, f.execute(t, "create_agent", args), "created-"+cli, cli, path, "#6E8BA8")
+				l11274AssertCreated(t, f, f.execute(t, "create_agent", args), cli, path, "#6E8BA8")
 			} else {
 				if !errors.Is(accessErr, unix.EACCES) {
 					t.Fatalf("SETUP: execute-access check failed for another reason: %v", accessErr)

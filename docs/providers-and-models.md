@@ -39,14 +39,21 @@ For a custom endpoint, choose either the `openai-compatible` or `anthropic` prot
 
 ## Picking a model when two providers offer it
 
-The model pickers — next to the chat message box, on an agent's profile, in the new-agent wizard, and on the **Default model** card — list every model offered by your connected and signed-in providers, grouped under the provider that serves it.
+The model pickers — next to the chat message box, on an agent's profile, and on the **Default model** card — list every model offered by your connected and signed-in providers, grouped under the provider that serves it.
 
 The same model name can appear under more than one provider, for example when a local proxy serves models that a subscription provider also offers. When that happens, the check mark appears only under the provider whose row you actually picked — by mouse or by keyboard — and picking the same model under a different provider moves the check mark to that provider's row.
 
 Two limits to know:
 
 - A value restored from a saved setting or conversation rather than picked in this session carries no provider record (for example a recap model saved earlier, or the model a conversation was last answered with). When exactly one provider offers that model, its row is marked; when several providers offer it, no row is marked, because the UI cannot know which one served it.
-- In the chat composer the provider choice is currently display-only: the message is sent with the model name only, and the server decides which provider serves it. The agent profile, the new-agent wizard, the **Default model** card, and fallback entries do save the chosen provider.
+- In the chat composer the provider choice is currently display-only: the message is sent with the model name only, and the server decides which provider serves it. The agent profile, the **Default model** card, and fallback entries do save the chosen provider. There is no create form in the app: new agents are created by asking Omnipus or through the REST API (see [agents](agents.md)).
+
+## Model requirements
+
+- **Minimum:** a model with a context window of at least **16,384 tokens (16k)**. Omnipus's built-in instructions need this much room.
+- **Recommended:** **256,000 tokens or more** for long conversations, delegation and goals.
+
+Choose models that meet these requirements for both the main model and its fallbacks. A context-length override cannot enlarge a model's actual window.
 
 ## Models known to support tools
 
@@ -68,6 +75,14 @@ The following short list contains examples marked as tool-capable in the shipped
 For any other model, check the provider's documentation for **tool use**, **tool calling**, or **function calling** for that exact model name. Do not assume every model from a supported provider can use tools. The model picker shows the live list but does not currently show the catalog's tool-use marker.
 
 Some providers cannot be enumerated from a published catalog. Ollama and other local providers depend on what is installed on your machine, so Omnipus requests their live list. A custom endpoint has no catalog to enumerate; you maintain its model names under **Models** in that provider's settings.
+
+## What the provider check proves
+
+When Omnipus configures a provider with `configure_provider`, it checks the saved entry straight away: the configured endpoint (your own address if you set one, otherwise the catalog's) is asked for its model list over that provider's protocol, with the saved key. A local provider such as Ollama is checked without a key. The result is `working` when the list comes back and `saved but not working` with the reason otherwise — a refused key, an unreachable address, or a protocol that has no model list. A passing check does not prove that a particular model runs, that you have quota, or that the model supports tools.
+
+`configure_provider` also has a dry run (`dry_run`): it checks the provider id, the key's shape and the address's shape, saves nothing and contacts nobody.
+
+`list_models` lists models through each configured provider's saved endpoint the same way. Asking it for a provider that is not configured is an error that says so, instead of an empty list. `list_providers` shows each provider's effective endpoint (`api_base`), protocol and the name of its saved key reference (`api_key_ref`, never the key), and `test_provider` accepts every provider `list_providers` shows.
 
 ## Limits and things to watch
 
