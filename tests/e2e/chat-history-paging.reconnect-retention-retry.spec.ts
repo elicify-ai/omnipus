@@ -4,7 +4,9 @@ import { WsFrame } from '../../src/lib/api/generated/ws-schemas';
 import type { WebSocketRoute } from '@playwright/test';
 import { chatInput, waitForConnected } from './fixtures/selectors';
 import { test, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
-import { browseBack, dropSocket, prepareRetentionScenario } from './fixtures/chat-history-paging/actions';
+import { browseBack, dropSocket, expectedReaderOrdinals } from './fixtures/chat-history-paging/actions';
+import { ageRolledHistoryPartitions, sweepChatHistoryFixture } from './fixtures/chat-history';
+import { readerFixtureDays } from './fixtures/chat-history-paging/day-fixtures';
 
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
 test.describe.configure({ retries: 0 });
@@ -181,17 +183,29 @@ test('T24 B11: an obsolete A→B→A older response cannot overwrite the new vie
 
 for (const survival of ['anchor-kept', 'anchor-gone', 'none'] as const) {
   test(`T24 B27 B48: real retained range expiry (${survival}) uses exact copy and never passively returns to latest`, async ({ history, page }) => {
-    await history.seed({ label: 'expire', count: 3400 });
+    const days = readerFixtureDays('expire', history.ids.agent.id);
+    await history.seedDays(days);
     await history.authenticate();
     await history.open();
     await browseBack(history, 300);
     const saved = await anchor(page);
     await historyScroller(page).focus();
+    const heldOrdinals = expectedReaderOrdinals(history);
+    expect(heldOrdinals, 'D9 real backward traversal reached its500-group window').toHaveLength(500);
+    expect(heldOrdinals.every((n) => n < 1000), 'the whole retained reader is in genuine rolled fixture partitions').toBe(true);
+    const savedOrdinal = Number(saved.id.slice(-6));
+    const fallback = (await geometry(page)).rows.find((row) => row.id === fixtureId('expire', savedOrdinal + 1));
+    if (survival === 'anchor-gone') expect(fallback, 'pre-refresh offset of nearest later old-range survivor is observable').toBeDefined();
+    const expired = survival === 'none' ? heldOrdinals : survival === 'anchor-gone' ? [savedOrdinal] : [heldOrdinals[0]];
+    if (survival === 'anchor-kept') expect(expired).not.toContain(savedOrdinal);
     const before = history.traffic.frames.length;
     await history.gateway.kill9();
-    // This must delete genuine rolled partitions through the real owner/shared
-    // index engine, not fabricate a refresh response claiming everything expired.
-    const receipt = prepareRetentionScenario(history, survival, saved.id);
+    history.gateway.assertStoppedForFixture();
+    // Actual rollover exists before aging. Only the real retention owner deletes
+    // the chosen rolled files and updates the real index; no fabricated frames.
+    ageRolledHistoryPartitions(history.gateway, history.sessionId, expired.map((n) => days[n].day), new Date(Date.now() - 60 * 24 * 60 * 60 * 1000));
+    const receipt = await sweepChatHistoryFixture(history.gateway, 30);
+    expect(receipt.removed_partitions).toBe(expired.length);
     await history.gateway.restart({ relogin: false });
     await waitForConnected(page);
     await expect.poll(() => history.traffic.frames.slice(before).filter((f) => f.type === 'catch_up_complete').length).toBe(1);
@@ -207,8 +221,10 @@ for (const survival of ['anchor-kept', 'anchor-gone', 'none'] as const) {
         // The scenario removes exactly the anchor, leaving its next authored
         // source group. D7 chooses that nearest later OLD-range survivor.
         // Never take an expected anchor from a producer's reported output.
-        const expected = fixtureId('expire', Number(saved.id.slice(-6)) + 1);
+        const expected = fixtureId('expire', savedOrdinal + 1);
         await expect(historyRow(page, expected)).toBeVisible();
+        if (!fallback) throw new Error('nearest later survivor pre-refresh geometry is missing');
+        await expectAnchor(page, fallback);
         await expect(historyRow(page, saved.id)).toHaveCount(0);
       }
     }
@@ -219,13 +235,14 @@ for (const survival of ['anchor-kept', 'anchor-gone', 'none'] as const) {
 }
 
 test('T24 B47:500 held tool groups can require MORE than5 bounded byte-limited refresh requests', async ({ history, page }) => {
-  await history.seed({ label: 'range-bytes', count: 3400 });
+  await history.seedDays(readerFixtureDays('range-bytes', history.ids.agent.id, true));
   await history.authenticate();
   await history.open();
   await browseBack(history, 300);
   const saved = await anchor(page);
+  expect(expectedReaderOrdinals(history), 'held500-group interval is the real large-tool fixture').toHaveLength(500);
   await history.gateway.kill9();
-  prepareRetentionScenario(history, 'budget-range');
+  history.gateway.assertStoppedForFixture();
   const before = history.traffic.pages.length;
   await history.gateway.restart({ relogin: false });
   await waitForConnected(page);

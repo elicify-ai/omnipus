@@ -7,7 +7,8 @@ import { chatInput } from './fixtures/selectors';
 import { TERMINAL_NARRATION } from './fixtures/terminal-outcome-provider';
 import { terminalLogRows } from './fixtures/terminal-outcome-acceptance';
 import { test, UNAVAILABLE, HistoryHarness } from './fixtures/chat-history-paging/harness';
-import { dropSocket, removeDeclaredHistoryIndex } from './fixtures/chat-history-paging/actions';
+import { dropSocket } from './fixtures/chat-history-paging/actions';
+import { removeSessionHistoryIndex, corruptSessionHistoryIndex } from './fixtures/chat-history';
 
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
 test.describe.configure({ retries: 0 });
@@ -22,19 +23,23 @@ function canonicalRecords(history: HistoryHarness) {
   }
   return records;
 }
-async function unavailableFixture(history: HistoryHarness) {
+async function unavailableFixture(history: HistoryHarness, fault: 'missing' | 'corrupt' = 'missing') {
   await history.seed({ label: 'saved-before-index-loss', count: 80 });
+  expect(() => history.gateway.assertStoppedForFixture(), 'positive safety control: a running gateway cannot be mutated').toThrow('owned gateway has not actually exited');
   await history.gateway.kill9();
+  history.gateway.assertStoppedForFixture();
   const file = path.join(history.gateway.homeDir, 'sessions', history.sessionId, 'transcript.jsonl');
   const before = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-  removeDeclaredHistoryIndex(history); // Loud BLOCKED until backend names only derived artifacts.
+  if (fault === 'missing') await removeSessionHistoryIndex(history.gateway, history.sessionId);
+  else await corruptSessionHistoryIndex(history.gateway, history.sessionId);
   expect(createHash('sha256').update(fs.readFileSync(file)).digest('hex'), 'missing-index fixture never rewrites canonical chat bytes').toBe(before);
   await history.gateway.restart();
   await history.authenticate();
 }
 
-test('T35 B31 B51: metadata-only unavailable detail still reaches the actual session route and independent composer', async ({ history, page }) => {
-  await unavailableFixture(history);
+for (const fault of ['missing', 'corrupt'] as const) {
+test(`T35 B31 B51: ${fault} index keeps metadata-only route and independent composer reachable`, async ({ history, page }) => {
+  await unavailableFixture(history, fault);
   const messages = await page.request.get(`${history.gateway.baseURL}/api/v1/sessions/${history.sessionId}/messages`);
   expect(messages.status(), 'D11 missing baseline is not empty/full-history success').toBe(500);
   expect(await messages.json()).toEqual({ error: UNAVAILABLE });
@@ -42,13 +47,13 @@ test('T35 B31 B51: metadata-only unavailable detail still reaches the actual ses
   expect(response.status()).toBe(200);
   const detail = SessionDetail.parse(await response.json());
   expect(detail.session.id).toBe(history.sessionId);
-  expect(detail.history_state).toEqual({ status: 'unavailable', reason: 'index_missing', message: UNAVAILABLE });
+  expect(detail.history_state).toEqual({ status: 'unavailable', reason: fault === 'missing' ? 'index_missing' : 'index_inconsistent', message: UNAVAILABLE });
   expect([detail.messages, detail.page_info, detail.has_earlier, detail.has_later, detail.next_before, detail.next_after])
     .toEqual([undefined, undefined, undefined, undefined, undefined, undefined]);
   await history.open();
   const scoped = history.traffic.frames.filter((f) => f.type === 'session_state' && f.session_id === history.sessionId);
   expect(scoped.map((f) => f.type === 'session_state' ? f.history_state : undefined))
-    .toContainEqual({ status: 'unavailable', reason: 'index_missing', message: UNAVAILABLE });
+    .toContainEqual({ status: 'unavailable', reason: fault === 'missing' ? 'index_missing' : 'index_inconsistent', message: UNAVAILABLE });
   expect(history.traffic.frames.filter((f) => f.type === 'session_snapshot' && f.session_id === history.sessionId)).toEqual([]);
   const completed = history.traffic.frames.filter((f) => f.type === 'catch_up_complete' && f.session_id === history.sessionId);
   expect(completed.map((f) => f.type === 'catch_up_complete' ? f.mode : undefined)).toEqual(['live_only']);
@@ -56,8 +61,9 @@ test('T35 B31 B51: metadata-only unavailable detail still reaches the actual ses
   await expect(chatInput(page)).toBeEnabled();
   await expect(page.getByText(/preparing history/i)).toHaveCount(0);
   await expect(page.locator(`[data-active-session-id="${history.sessionId}"]`)).toBeVisible();
-  await history.record('metadata-only-route-live-ready');
+  await history.record(`metadata-only-route-${fault}`);
 });
+}
 
 test('T35 B42 B43 B49: canonical send once and REAL running engine survive history Retry/reconnect; Stop actually ends that turn', async ({ history, page }) => {
   await unavailableFixture(history);

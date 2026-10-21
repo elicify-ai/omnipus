@@ -12,6 +12,7 @@ import { startTerminalOutcomeProvider } from '../terminal-outcome-provider';
 import { createTerminalSession } from '../terminal-outcome-acceptance';
 import { openSessionByDeepLink } from '../session-setup';
 import { chatInput } from '../selectors';
+import { seedChatHistoryDayPartitions, type ChatHistoryFixtureDay } from '../chat-history';
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
 export const UNAVAILABLE = 'Session history is unavailable. Retry after the operator restores its index.';
@@ -88,9 +89,17 @@ export class HistoryHarness {
   }
   get sessionId() { return this.ids.session.id; }
   async seed(seed: Seed, sessionId = this.sessionId) {
-    await this.gateway.kill9(); // Actual process exit barrier; no concurrent file writer.
+    await this.gateway.kill9();
+    this.gateway.assertStoppedForFixture(); // Observe actual exit, not kill9's timeout completion.
     canonicalSeed(this.gateway.homeDir, sessionId, seed);
     await this.gateway.restart();
+  }
+  async seedDays(days: readonly ChatHistoryFixtureDay[], sessionId = this.sessionId) {
+    await this.gateway.kill9();
+    this.gateway.assertStoppedForFixture();
+    const receipt = await seedChatHistoryDayPartitions(this.gateway, sessionId, days);
+    await this.gateway.restart();
+    return receipt;
   }
   async createSession() {
     const result = await this.gateway.apiFetch('POST', '/api/v1/sessions', {
