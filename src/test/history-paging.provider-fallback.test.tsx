@@ -137,8 +137,16 @@ function observeItem(source: Source) {
 function expectNote(source: Source, retired = false) {
   const row = useChatStore.getState().sessionsById[sid].messagesById[source.id]
   observeItem(source)
+  // Pre-RED oracle correction (team-lead Q2=A): Q4 specifies these values,
+  // not the live builder's whole private key set; pair metadata may coexist.
   expect.soft(row.providerFallbackNote, 'Q4: persisted fallback display marker must survive real REST normalization and accepted history merge')
-    .toStrictEqual({ message: source.content, ...(retired ? { pickNewModelHint: true } : {}) })
+    .toMatchObject({ message: source.content })
+  if (retired) {
+    expect.soft(row.providerFallbackNote?.pickNewModelHint, 'Q4: recorded model_retired enables the hint').toBe(true)
+  } else {
+    expect.soft([false, undefined], 'Q4: non-retired hint flag is false or absent, never invented true')
+      .toContain(row.providerFallbackNote?.pickNewModelHint)
+  }
   expect.soft(row, 'Q2/Q4: original saved identity/content/author/turn/occurrence stay intact').toMatchObject({
     id: source.id, role: 'system', status: 'done', content: source.content, timestamp: STAMP,
     agentId: 'mia', turnId: 'saved-turn', historyPosition: source.position,
@@ -235,8 +243,9 @@ it.each(unknownCases)('missing optional facts remain unknown: $name', async ({ f
   await load([source]); show('historical')
   expectNote(source, retired)
   const bucket = useChatStore.getState().sessionsById[sid]
-  expect.soft(bucket.providerFallbackPairsSeen?.has(PAIR) ?? false,
-    'Q4: seed only both recorded model facts; never infer them from the saved sentence/config').toBe(paired)
+  expect.soft(new Set(bucket.providerFallbackPairsSeen),
+    'Q4: ENTIRE pair set contains only both recorded model facts; never any pair invented from prose/config')
+    .toStrictEqual(paired ? new Set([PAIR]) : new Set())
   deliver(live())
   expect.soft(useChatStore.getState().sessionsById[sid].messageOrder,
     'unknown pair must not suppress a legitimate subsequent live note; known pair must suppress it')
@@ -280,8 +289,9 @@ it('does not erase or duplicate a genuine replay occurrence when the same REST h
   void entries
   const snapshot: SessionSnapshotFrame = { type: 'session_snapshot', seq: 100, boot_id: 'pf-history-boot', reason: 'unknown_position', ...metadata }
   deliver(snapshot, source.carrier, { type: 'catch_up_complete', session_id: sid, boot_id: 'pf-history-boot', seq: 100, mode: 'snapshot' })
-  expect(useChatStore.getState().sessionsById[sid].messagesById[source.id].providerFallbackNote,
-    'control: real generated replay owner created the note before overlapping REST').toStrictEqual({ message: BASE })
+  const replayMarker = useChatStore.getState().sessionsById[sid].messagesById[source.id].providerFallbackNote
+  expect(replayMarker, 'control: real generated replay owner created the note before overlapping REST').toMatchObject({ message: BASE })
+  expect([false, undefined], 'control: replay non-retired hint is false or absent').toContain(replayMarker?.pickNewModelHint)
   await load([source]); show('historical')
   expectNote(source)
   deliver(source.carrier)
