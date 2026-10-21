@@ -47,6 +47,7 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
     const agentResult = await gw.apiFetch('POST', '/api/v1/agents', {
       type: 'Main',
       name: 'Parent wake',
+      tool_policy_changes: { set: { delegate: 'allow' } },
       soul: 'When asked, delegate the task to yourself with the delegate tool and do not poll for the result.',
       provider: 'openrouter',
       model: E2E_MODEL,

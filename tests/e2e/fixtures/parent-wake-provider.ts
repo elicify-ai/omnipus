@@ -96,6 +96,11 @@ export async function startParentWakeProvider(): Promise<ParentWakeProvider> {
         );
         return;
       }
+      if (!delegated) {
+        failures.push('delegate tool was not offered');
+        res.end(chunk({ role: 'assistant', content: 'FIXTURE_ERROR: delegate tool was not offered' }, 'stop') + 'data: [DONE]\n\n');
+        return;
+      }
       // The matching person's sentence precedes the delegate call. A real
       // wake input follows it, so old positive-control text cannot wake us.
       if (parentCallAt >= 0 && blob.lastIndexOf(wakeText) > parentCallAt) {

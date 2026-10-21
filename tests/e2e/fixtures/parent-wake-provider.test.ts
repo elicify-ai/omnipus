@@ -23,6 +23,23 @@ describe('parent-wake browser provider', () => {
     }
   });
 
+  it('reports missing delegation permission instead of holding a parent request as the helper', async () => {
+    const provider = await startParentWakeProvider();
+    try {
+      provider.releaseHelper();
+      const response = await fetch(`${provider.url}/chat/completions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: E2E_MODEL, stream: true, tools: [],
+          messages: [{ role: 'user', content: `Delegate: ${PARENT_WAKE_TASK}` }] }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('FIXTURE_ERROR: delegate tool was not offered');
+      expect(provider.failures()).toEqual(['delegate tool was not offered']);
+    } finally {
+      await provider.close();
+    }
+  });
+
   it('acknowledges genuine matching user text without launching a helper', async () => {
     const provider = await startParentWakeProvider();
     try {
