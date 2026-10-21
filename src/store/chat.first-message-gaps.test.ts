@@ -172,12 +172,12 @@ const ANSWER_ENTRY = '1090-red5-answer-entry'
 const ANSWER_CONTENT = 'This answer was already completed before recovery.'
 const ACTIVE_TURN = '1090-red5-active-turn'
 
-function replayOriginal() {
+function replayOriginal(rowCount: 1 | 2 = 1) {
   act(() => {
     // Zero is a valid fixture cursor. D7 explicitly distinguishes this
     // recovered unknown_position snapshot from a boot-mismatch snapshot.
     useChatStore.getState().handleFrame({
-      ...makeSnapshotHistory(1),
+      ...makeSnapshotHistory(rowCount),
       type: 'session_snapshot', session_id: OLD_SESSION, reason: 'unknown_position', seq: 0, boot_id: '1090-red5-boot',
     })
     useChatStore.getState().handleFrame({
@@ -468,7 +468,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     sendFirst(sender)
     render(createElement(GapRows))
     recoverFirst()
-    replayOriginal()
+    replayOriginal(2)
     replayExistingAnswer()
 
     finishRecovery()
@@ -497,7 +497,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
       sendFirst(sender)
       render(createElement(GapRows))
       recoverFirst()
-      replayOriginal()
+      replayOriginal(outcome === 'completed answer' ? 2 : 1)
       if (outcome === 'active turn') seedExistingActiveTurn()
       else replayExistingAnswer()
       finishRecovery()
