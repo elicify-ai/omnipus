@@ -87,8 +87,8 @@ type ChatHistoryPage struct {
 	Cut        ChatHistoryReadCut
 }
 
-// ChatHistoryReadCut is opaque outside session. Its private representation is
-// limited to identity declarations until the immutable reader is implemented.
+// ChatHistoryReadCut is opaque outside session. It identifies the immutable
+// published root and retained set used by one bounded reader.
 type ChatHistoryReadCut struct {
 	sessionID           string
 	generation          string
@@ -115,12 +115,12 @@ type ChatHistoryWeight struct {
 
 type ChatHistoryWeigher func(context.Context, ChatHistoryPage) (ChatHistoryWeight, error)
 
-// ReadChatHistoryPage declares the shared reader seam. Selection, content I/O
-// and weighing are not implemented; this stub never returns a successful page.
+// ReadChatHistoryPage selects whole source groups at one immutable read cut.
+// The caller supplies the public-carrier meter; no guessed default is installed.
 func (us *UnifiedStore) ReadChatHistoryPage(
 	ctx context.Context,
 	sessionID string,
 	opts ChatHistoryPageOptions,
 ) (ChatHistoryPage, error) {
-	return ChatHistoryPage{}, ErrChatHistoryNotImplemented
+	return us.readChatHistoryPage(ctx, sessionID, opts)
 }

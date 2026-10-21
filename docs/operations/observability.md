@@ -67,6 +67,16 @@ When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying
 
 The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, call `UnifiedStore.ReadTranscript(sessionID)` (`pkg/session/unified_write.go::ReadTranscript`) — it reads the day files in order and returns the entries in order.
 
+### Derived paging index and recovery
+
+Paged history keeps content in the canonical archive. Its separate, content-free index stores occurrence locations and correction references, not another copy of messages or tool results. Fresh sessions publish a durable empty baseline before their identity becomes readable. Each accepted archive or discarded-input record is saved before the derived checkpoint advances. A derived write failure does not make an already saved message unsaved.
+
+Startup, open and Retry may reconcile **at most 64** combined records after a valid checkpoint: archive records (including private model records), discarded-input records, and confirmed missing rolled partitions. Zero pending records is a no-op. A gap of 65 or more records is not repaired in repeated batches. Missing, incompatible or inconsistent baselines require the separate offline operator repair; ordinary sending does not build a newest-only replacement index.
+
+Positions identify occurrences, not message IDs, timestamps, model positions or live WebSocket sequence numbers. Treat them as opaque strings; do not sort or decode them. A known expired position remains an ordering boundary. Retention keeps only its opaque token and private rank, not its former ID, timestamp, size, content or disk address. This ledger can grow with expired occurrences on disk; deleting the session removes it. Rich expired index fragments are retired when old-cut readers close.
+
+A page captures a short immutable read cut. Content reads then open and close one bounded record handle at a time, outside session and append locks. Later writes are excluded from that cut. If retention changes the retained set during a read, the result is discarded and selected again. On Windows a genuine sharing violation postpones only that present partition's removal; later eligible partitions are still processed, and the next ordinary sweep retries after the handle closes. Other permission or storage failures are not treated as expiry.
+
 ## Live event stream
 
 While a turn is running, the agent loop emits typed events into the in-process event bus (`pkg/agent/events.go`). The event kinds in `pkg/agent/events.go::EventKind` (the names come from `eventKindNames`, which is the complete list):
