@@ -78,24 +78,19 @@ ENV GOPATH=/cache/go \
 
 WORKDIR /work
 COPY runci.sh /usr/local/bin/runci.sh
-COPY idle-watchdog.sh /usr/local/bin/idle-watchdog.sh
-RUN chmod +x /usr/local/bin/runci.sh /usr/local/bin/idle-watchdog.sh
+COPY idle-watchdog.sh ci-boot.sh ci-machine-halt /usr/local/bin/
+RUN chmod +x /usr/local/bin/runci.sh /usr/local/bin/idle-watchdog.sh /usr/local/bin/ci-boot.sh \
+        /usr/local/bin/ci-machine-halt
 
-# Every boot starts the idle-watchdog backstop (2026-10-21, founder: the self-stop timer must
-# run on every machine, not only on dispatcher-driven boots — a machine started by hand, or by
-# an SSH console auto-start, otherwise has no watchdog and bills until someone notices). A
-# watchdog that fails to start must not keep the box from booting: `;`, not `&&`.
-#
-# How the watchdog stops the machine: NOT `poweroff`. Here poweroff is a symlink to systemctl,
-# there is no systemd under /fly/init, and it returns 1 — measured live 2026-10-21, the watchdog
-# logged "POWERING OFF" every poll and the machine stayed up. Fly stops a machine when its main
-# process exits; exit 0 is not a failure, so the on-failure restart policy leaves it stopped.
-# The watchdog's poweroff command therefore only drops a halt marker in /tmp, and the main
-# process below (instead of `sleep infinity`) exits 0 as soon as it appears. /tmp is wiped on
-# every stop, so a marker can never outlive the machine life that wrote it.
-# Stays alive otherwise so the orchestrator can `fly ssh console` / `fly machine exec` gates.
-RUN printf '#!/bin/sh\n# idle-watchdog poweroff hook: ask the main process to exit 0 (see Dockerfile)\n: > /tmp/ci-machine.halt\n' \
-        > /usr/local/bin/ci-machine-halt \
-    && chmod +x /usr/local/bin/ci-machine-halt
+# The main process is ci-boot.sh (2026-10-21, founder: the self-stop timer must run on every
+# machine, not only on dispatcher-driven boots). It supervises the idle-watchdog — a watchdog
+# that dies is logged and restarted, never a reason to stop a possibly busy box — and it is what
+# stops the machine: Fly stops a machine when its main process exits, and exit 0 is not a failure
+# for the on-failure restart policy. `poweroff` cannot do it here (it is systemctl, and there is no
+# systemd under /fly/init; measured live: it returned 1 and the machine stayed up). The watchdog's
+# poweroff hook (ci-machine-halt) only drops a /tmp marker; ci-boot.sh takes runci.sh's run lock,
+# re-checks for a run under it, and only then exits 0. Proof: deploy/ci-worker/ci-boot.test.sh.
+# Between those events it stays alive so the orchestrator can `fly ssh console` / `fly machine
+# exec` gate commands.
 ENV IDLE_WATCHDOG_POWEROFF_CMD=/usr/local/bin/ci-machine-halt
-CMD ["sh", "-c", "/usr/local/bin/idle-watchdog.sh start; while [ ! -e /tmp/ci-machine.halt ]; do sleep 2; done; echo 'ci-worker: idle-watchdog halt marker found, main process exits 0, Fly stops the machine'; exit 0"]
+CMD ["/usr/local/bin/ci-boot.sh"]
