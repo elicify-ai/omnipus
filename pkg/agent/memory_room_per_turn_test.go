@@ -136,8 +136,10 @@ func testMemoryRoomConcurrentSessions(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		f.save(t, ctxA, "ROOM_ALPHA_SHARED", "shared")
-		close(aSaved)
+		func() {
+			defer close(aSaved) // release B even if fixture setup fails
+			f.save(t, ctxA, "ROOM_ALPHA_SHARED", "shared")
+		}()
 		<-bSaved
 		// Deterministic interleaving: B saved while A's session is still
 		// alive. A must not inherit B's room when it builds its prompt.
@@ -146,8 +148,10 @@ func testMemoryRoomConcurrentSessions(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-aSaved
-		f.save(t, ctxB, "ROOM_BETA_SHARED", "shared")
-		close(bSaved)
+		func() {
+			defer close(bSaved) // release A even if fixture setup fails
+			f.save(t, ctxB, "ROOM_BETA_SHARED", "shared")
+		}()
 		requireTurnMemoryNotes(t, f.prompt(b), "ROOM_BETA_SHARED", "ROOM_SELF_PRIVATE")
 	}()
 	wg.Wait()
