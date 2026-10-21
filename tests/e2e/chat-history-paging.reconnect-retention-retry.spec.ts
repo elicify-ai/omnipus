@@ -1,10 +1,57 @@
 import { expect } from '@playwright/test';
 import { SessionHistoryResponse } from '../../src/lib/api/generated/schemas';
+import { WsFrame } from '../../src/lib/api/generated/ws-schemas';
+import type { WebSocketRoute } from '@playwright/test';
 import { chatInput, waitForConnected } from './fixtures/selectors';
 import { test, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
 import { browseBack, dropSocket, prepareRetentionScenario } from './fixtures/chat-history-paging/actions';
 
 test.setTimeout(240_000); // Real3,000-row UI traversal, not a clock-based oracle.
+
+test('T24 B04:transport loss after real replay but before complete retains the prior reader and never claims catch-up success', async ({ history, page }) => {
+  await history.seed({ label: 'incomplete', count: 800, shape: 'varied' });
+  await history.authenticate();
+  let armed = false;
+  let held!: () => void;
+  const completeHeld = new Promise<void>((resolve) => { held = resolve; });
+  let interruptedRoute: WebSocketRoute | undefined;
+  let upstreamCompletions = 0;
+  // Real server forwarding is explicit. Only DELIVERY of its actual final
+  // frame is held; no generated snapshot/replay/control frame is fabricated.
+  await page.routeWebSocket((url) => url.origin.replace(/^ws/, 'http') === history.gateway.baseURL, (socket) => {
+    const server = socket.connectToServer();
+    server.onMessage((message) => {
+      const frame = WsFrame.parse(JSON.parse(message.toString()));
+      if (armed && frame.type === 'catch_up_complete' && frame.session_id === history.sessionId) {
+        upstreamCompletions++;
+        interruptedRoute = socket;
+        held();
+      } else socket.send(message);
+    });
+  });
+  await history.open();
+  await scrollToDistance(page, (await geometry(page)).H);
+  const saved = await anchor(page);
+  const before = history.traffic.frames.length;
+  armed = true;
+  await history.gateway.kill9();
+  await history.gateway.restart({ relogin: false });
+  await completeHeld;
+  expect(upstreamCompletions, 'positive transport instrument saw one actual server completion').toBe(1);
+  await settled(page);
+  await expectAnchor(page, saved);
+  await page.context().setOffline(true);
+  try {
+    if (!interruptedRoute) throw new Error('real attach completion was not intercepted');
+    await interruptedRoute.close({ code: 1001, reason: 'history-acceptance-transport-loss' });
+    await settled(page);
+    expect(history.traffic.frames.slice(before).filter((f) => f.type === 'catch_up_complete' && f.session_id === history.sessionId),
+      'undelivered control catch-up cannot manufacture successful complete').toEqual([]);
+    await expectAnchor(page, saved);
+    await expect(historyRow(page, saved.id)).toBeVisible();
+    await history.record('interrupted-before-complete');
+  } finally { armed = false; await page.context().setOffline(false); }
+});
 
 test('T24 B26: boot-mismatch snapshot3000 rows back retains reader/focus/draft and directly refreshes its closed interval', async ({ history, page }) => {
   await history.seed({ label: 'snapshot', count: 3400 });

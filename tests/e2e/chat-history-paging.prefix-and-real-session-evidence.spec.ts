@@ -1,7 +1,5 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import os from 'node:os';
-import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { expect } from '@playwright/test';
 import { test, fixtureId } from './fixtures/chat-history-paging/harness';
@@ -60,43 +58,9 @@ test('T18 B21 B22:equal suffix after1000 and100000 prefixes has the same bounded
   await expect(page.getByTestId('virtualized-message-list')).toBeVisible();
 });
 
-// D-U1 is external acceptance, not something an agent can synthesize. This
-// test deliberately remains loud when that independent input is missing.
-test('T18 B25:genuine long-session campaign is permissioned, exact-commit and independently validated, not synthetic-only', async ({}, info) => {
-  const filename = process.env.OMNIPUS_E2E_GENUINE_HISTORY_EVIDENCE;
-  if (!filename) throw new Error('BLOCKED: permissioned anonymized genuine long-session campaign/evidence not supplied — required by B25/D-U1/T18; synthetic prefix fixtures cannot satisfy this acceptance criterion');
-  expect(path.isAbsolute(filename), 'evidence location must be explicit').toBe(true);
-  const manifest: unknown = JSON.parse(fs.readFileSync(filename, 'utf8'));
-  expect(manifest, 'private campaign receipt must describe real independently gathered evidence').toMatchObject({
-    dataset_kind: 'genuine-anonymized', permission_receipt: expect.any(String), candidate_commit: expect.any(String),
-    tester_account: expect.any(String), validator_account: expect.any(String), independent_validator_receipt: expect.any(String),
-    actual_group_count: expect.any(Number), actual_encoded_bytes: expect.any(Number),
-    open_samples_ms: expect.any(Array), boundary_drift_px: expect.any(Array), evidence: expect.any(Array),
-  });
-  // This is a private evidence-manifest type, never a hand-written gateway type.
-  const receipt = manifest as { dataset_kind: string; permission_receipt: string; candidate_commit: string;
-    tester_account: string; validator_account: string; independent_validator_receipt: string;
-    actual_group_count: number; actual_encoded_bytes: number; open_samples_ms: number[]; boundary_drift_px: number[];
-    evidence: { path: string; sha256: string }[] };
-  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-  expect(receipt.candidate_commit, 'a receipt from another candidate is stale, never green').toBe(commit);
-  expect(receipt.tester_account).not.toBe(receipt.validator_account);
-  expect(receipt.actual_group_count).toBeGreaterThan(500);
-  expect(receipt.actual_encoded_bytes).toBeGreaterThan(0);
-  expect(receipt.open_samples_ms, 'D-U1 requires30 actual opens').toHaveLength(30);
-  expect(receipt.boundary_drift_px, 'D-U1 requires30 normal-use boundaries').toHaveLength(30);
-  expect(receipt.open_samples_ms.every((n) => Number.isFinite(n) && n >= 0)).toBe(true);
-  expect(receipt.boundary_drift_px.every((n) => Number.isFinite(n) && Math.abs(n) <= 1)).toBe(true);
-  const sorted = [...receipt.open_samples_ms].sort((a, b) => a - b);
-  expect(sorted[Math.ceil(0.95 * 30) - 1], 'adopted UI p95≤1.5seconds, not a relaxed measured threshold').toBeLessThanOrEqual(1500);
-  for (const required of [receipt.permission_receipt, receipt.independent_validator_receipt]) {
-    expect(path.isAbsolute(required)).toBe(true);
-    expect(fs.statSync(required).size, 'actual independent/permission artifact, not a success boolean').toBeGreaterThan(0);
-  }
-  expect(receipt.evidence.length, 'must retain actual screenshots/network/geometry/heap/read artifacts').toBeGreaterThanOrEqual(5);
-  for (const file of receipt.evidence) {
-    expect(path.isAbsolute(file.path)).toBe(true);
-    expect(createHash('sha256').update(fs.readFileSync(file.path)).digest('hex'), 'receipt binds the actual evidence bytes').toBe(file.sha256);
-  }
-  await info.attach('genuine-history-campaign-manifest', { path: filename, contentType: 'application/json' });
-});
+// B25/D-U1: squad-lead/founder clarification2026-10-21 assigns genuine
+// permissioned long-session acceptance to team-lead's later hands-on UAT and
+// independent validator. It is NOT an automated fixture gate and synthetic
+// success above must never be reported as genuine-session acceptance.
+// Required handoff: exact candidate, actual dataset shape,30 opens/30 normal
+// boundaries, network/read/heap/geometry/focus artifacts and separate accounts.
