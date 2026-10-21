@@ -21,6 +21,7 @@ import { GatewayProcess } from './fixtures/gateway-process';
 import { E2E_MODEL } from './fixtures/e2e-model';
 import { chatInput, waitForConnected } from './fixtures/selectors';
 import { openTerminalSession } from './fixtures/terminal-outcome-acceptance';
+import { assertSessionHistoryExcludes } from './fixtures/session-history';
 import {
   PARENT_WAKE_PARTIAL,
   PARENT_WAKE_TASK,
@@ -93,9 +94,10 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
     expect(provider.failures(), 'scripted provider stayed on the delegate / helper / wake sequence').toEqual([]);
 
     // Browser login replaced gw's cookie session; use the browser's current cookies.
-    const otherMessages = await page.request.get(`${gw.baseURL}/api/v1/sessions/${other.id}/messages`);
-    expect(otherMessages.ok(), await otherMessages.text()).toBe(true);
-    expect(JSON.stringify(await otherMessages.json())).not.toContain(PARENT_WAKE_PARTIAL);
+    // HTTP success/shape/progress checks live in the shared real helper; the
+    // original absence assertion still covers the ENTIRE retained history.
+    const otherMessages = await assertSessionHistoryExcludes(page, gw.baseURL, other.id, PARENT_WAKE_PARTIAL);
+    expect(JSON.stringify(otherMessages)).not.toContain(PARENT_WAKE_PARTIAL);
 
     provider.releaseWake();
     await page.reload();
