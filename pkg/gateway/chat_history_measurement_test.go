@@ -102,8 +102,12 @@ func historyMeasureCompletePage(t *testing.T, fixture historyMeasurementFixture,
 				// A real deliberately wrong full-read composition: this should fail
 				// the SAME prefix-allocation comparator, without mutating production.
 				entries, readErr := fixture.store.ReadTranscript(fixture.sid)
-				if readErr != nil || len(entries) != prefix+200 {
-					benchmarkErr = fmt.Errorf("real full-read instrument failed: count=%d err=%v", len(entries), readErr)
+				if readErr != nil {
+					benchmarkErr = fmt.Errorf("real full-read instrument failed: %w", readErr)
+					b.Fatal(benchmarkErr)
+				}
+				if len(entries) != prefix+200 {
+					benchmarkErr = fmt.Errorf("real full-read instrument count=%d, expected=%d", len(entries), prefix+200)
 					b.Fatal(benchmarkErr)
 				}
 				runtime.KeepAlive(entries)
