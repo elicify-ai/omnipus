@@ -176,6 +176,10 @@ type Deps struct {
 	// after the last reload, with a value-free failure reason (connect_channel).
 	// WireSysagentDeps fills it from the agent loop's channel manager.
 	ChannelLiveStatus func(id string) (running bool, failure string, known bool)
+	// PairingAttempts returns the one manager-owned pairing store for channel
+	// writer ordering. Resolve it before taking a channel guard; a guard holder
+	// must never acquire the manager lock. Nil means no manager is wired.
+	PairingAttempts func() *channels.PairingAttempts
 	// AdmitPairing reserves the next QR pairing attempt of a channel for the
 	// approved connect call (request id) in its chat (session id), before
 	// anything is saved; an error refuses it (another attempt is in flight
