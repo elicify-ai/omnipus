@@ -231,7 +231,7 @@ describe('chat Retry — explicit REST ownership and visible failures', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })))
 
     expect(screen.getByRole('alert').textContent).toBe(
-      'The channel was disabled before the enable request, but its current state could not be confirmed. The server is unavailable. Please try again in a moment.Retry',
+      'The channel was disabled before the enable request, but its current state could not be confirmed. config reload failedRetry',
     )
     expect(fetchSpy).toHaveBeenCalledTimes(2)
   })
