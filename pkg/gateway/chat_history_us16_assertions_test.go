@@ -17,6 +17,7 @@ import (
 func historyUS16LiveOnly(t *testing.T, frames [][]byte, sid, pendingID, turnID string) generated.SessionStateFrame {
 	t.Helper()
 	var state generated.SessionStateFrame
+	var pendingWire []map[string]json.RawMessage
 	states, completes := 0, 0
 	for _, raw := range frames {
 		var envelope wsTypeOnly
@@ -25,6 +26,9 @@ func historyUS16LiveOnly(t *testing.T, frames [][]byte, sid, pendingID, turnID s
 		case "session_state":
 			states++
 			require.NoError(t, json.Unmarshal(raw, &state))
+			var fields map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(raw, &fields))
+			require.NoError(t, json.Unmarshal(fields["pending_approvals"], &pendingWire))
 			require.NotNil(t, state.SessionId)
 			require.Equal(t, sid, *state.SessionId)
 			require.NotNil(t, state.HistoryState)
@@ -55,11 +59,22 @@ func historyUS16LiveOnly(t *testing.T, frames [][]byte, sid, pendingID, turnID s
 		require.Equal(t, sid, pending.SessionId)
 		require.Equal(t, "mia", pending.AgentId)
 		require.Equal(t, "write_file", pending.ToolName)
-		require.NotNil(t, pending.ToolCallId)
-		require.Equal(t, historyUS16CallID, *pending.ToolCallId)
-		require.Equal(t, map[string]any{"path": historyUS16Filename, "content": historyUS16Proof}, pending.Args)
-		require.NotNil(t, pending.TurnId)
-		require.Equal(t, turnID, *pending.TurnId)
+		// Current contract: these fields are optional until WU-8, but a supplied
+		// value must be exact. Raw presence keeps explicit null from masquerading
+		// as omission after generated pointer/map decoding.
+		require.Len(t, pendingWire, 1)
+		if _, present := pendingWire[0]["tool_call_id"]; present {
+			require.NotNil(t, pending.ToolCallId)
+			require.Equal(t, historyUS16CallID, *pending.ToolCallId)
+		}
+		if _, present := pendingWire[0]["args"]; present {
+			require.NotNil(t, pending.Args)
+			require.Equal(t, map[string]any{"path": historyUS16Filename, "content": historyUS16Proof}, pending.Args)
+		}
+		if _, present := pendingWire[0]["turn_id"]; present {
+			require.NotNil(t, pending.TurnId)
+			require.Equal(t, turnID, *pending.TurnId)
+		}
 	}
 	if turnID != "" {
 		require.NotNil(t, state.ActiveTurn, "actual active work remains reachable beside history failure")

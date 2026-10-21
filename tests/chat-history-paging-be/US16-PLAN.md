@@ -1,4 +1,6 @@
-# US1.6 real ordinary-send / approval / Stop test plan — draft
+# US1.6 real ordinary-send / approval / Stop test plan
+
+**Correction:** the first source9cbcbcdf01b0d90aa81456422bb851b4311b5ebf required pending `tool_call_id`, `turn_id` and `args`. That exceeded the current canonical SessionStatePendingApproval contract, which makes them optional until WU-8. The run passed its initial unavailable/live_only and ordinary-save/genuine-approval controls, then failed at the first Retry's optional-field assertion; approval action and user Stop were not reached. The later cancellation was cleanup, not acceptance. Team-lead Q2=A authorized exact assertions WHEN PRESENT, including rejecting explicit null, while always retaining the same required approval identity and independently checking the real registry's complete call/turn/args. No other assertion is removed. This test uses the session's OWN real approval, not a delegated helper's approval or the separate release helper-Stop defect.
 
 Target: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_us16_controls_test.go`::TestUnavailableHistory_US16_CurrentApprovalSendAndEngineStop.
 
