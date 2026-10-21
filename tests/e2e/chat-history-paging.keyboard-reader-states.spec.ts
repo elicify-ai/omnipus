@@ -1,0 +1,143 @@
+import { expect } from '@playwright/test';
+import { chatInput } from './fixtures/selectors';
+import { test, anchor, expectAnchor, geometry, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
+
+// T21: D8 is the focus/announcement oracle, not current implementation output.
+for (const key of ['Enter', 'Space'] as const) {
+  test(`T21 B28: ${key} activates Show earlier once; focused pending control survives failure and Retry`, async ({ history, page }) => {
+    await history.seed({ label: 'keyboard', count: 40, clearAt: [19] });
+    await history.authenticate();
+    await history.open();
+    await scrollToDistance(page, 0);
+    const earlier = page.getByRole('button', { name: 'Show earlier messages', exact: true });
+    const held = await holdPage(page, (url) => url.searchParams.has('before'));
+    try {
+      await earlier.focus();
+      const saved = await anchor(page);
+      await page.keyboard.press(key);
+      await held.requested;
+      await page.keyboard.press(key);
+      await expect(earlier, 'aria-disabled must not native-disable/remove the focused trigger').toBeFocused();
+      await expect(earlier).toHaveAttribute('aria-disabled', 'true');
+      expect(held.requests).toHaveLength(1);
+      held.release(500);
+      const alert = page.getByRole('alert').filter({ hasText: 'Could not load earlier messages.' });
+      await expect(alert).toBeVisible();
+      await expectAnchor(page, saved);
+      await held.dispose();
+      const retry = alert.getByRole('button', { name: 'Retry', exact: true });
+      const final = await holdPage(page, (url) => url.searchParams.has('before'));
+      try {
+        await retry.focus();
+        await page.keyboard.press(key);
+        await final.requested;
+        await expect(retry).toBeFocused();
+        expect(final.requests).toHaveLength(1);
+        expect(new URL(final.requests[0]).searchParams.get('before')).toBe(new URL(held.requests[0]).searchParams.get('before'));
+        final.release();
+        await expect(alert).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Show earlier messages', exact: true })).toHaveCount(0);
+        await expect(page.getByLabel('Conversation history', { exact: true }), 'D8 terminal removed-control fallback').toBeFocused();
+        await expectAnchor(page, saved);
+        expect(history.traffic.sends, 'reading and Retry do not resend /clear or user input').toEqual([]);
+      } finally { final.release(); await final.dispose(); }
+    } finally { held.release(); await held.dispose(); }
+    await history.record(`keyboard-${key}`);
+  });
+}
+
+test('T21 B34: Return-to-latest failure keeps the old reader, focused action and draft; Retry fetches latest without resending', async ({ history, page }) => {
+  await history.seed({ label: 'latest', count: 360, shape: 'varied' });
+  await history.authenticate();
+  await history.open();
+  await scrollToDistance(page, (await geometry(page)).H);
+  const latest = page.getByRole('button', { name: 'Return to latest', exact: true });
+  await expect(latest).toBeVisible();
+  const draft = 'UNSENT: keep this text through a latest-read failure';
+  await chatInput(page).fill(draft);
+  const saved = await anchor(page);
+  const held = await holdPage(page, (url) => !['before', 'after', 'window_start'].some((key) => url.searchParams.has(key)));
+  try {
+    await latest.focus();
+    await page.keyboard.press('Enter');
+    await held.requested;
+    await expect(latest).toBeFocused();
+    await expect(page.getByText('Loading latest messages…', { exact: true })).toBeVisible();
+    held.release(500);
+    const alert = page.getByRole('alert').filter({ hasText: 'Could not load latest messages.' });
+    await expect(alert).toBeVisible();
+    await expectAnchor(page, saved);
+    await expect(chatInput(page)).toHaveValue(draft);
+    await held.dispose();
+    const again = await holdPage(page, (url) => !['before', 'after', 'window_start'].some((key) => url.searchParams.has(key)));
+    try {
+      await alert.getByRole('button', { name: 'Retry', exact: true }).focus();
+      await page.keyboard.press('Space');
+      await again.requested;
+      expect(again.requests).toHaveLength(1);
+      again.release();
+      await expect(alert).toHaveCount(0);
+      await expect.poll(async () => (await geometry(page)).bottom).toBeLessThanOrEqual(1);
+      await expect(chatInput(page)).toHaveValue(draft);
+      expect(history.traffic.sends).toEqual([]);
+      await expect(page.getByLabel('Conversation history', { exact: true })).toBeFocused();
+    } finally { again.release(); await again.dispose(); }
+  } finally { held.release(); await held.dispose(); }
+  await history.record('latest-retry-draft');
+});
+
+for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as const) {
+  test(`T21 B29: ${presentation} announces one transition, not historical New response, and clears busy`, async ({ history, page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    if (presentation === 'plain-no-observer') {
+      // Platform capability boundary only; actual plain list/store/styles remain real.
+      await page.addInitScript(() => { Object.defineProperty(window, 'ResizeObserver', { value: undefined }); });
+    } else {
+      // A640px CSS viewport is the reflow surface of1280px at200% zoom.
+      // This tests reflow; it does not pretend deviceScaleFactor changes CSS zoom.
+      await page.setViewportSize({ width: 640, height: 500 });
+    }
+    await history.seed({ label: 'a11y', count: 40, clearAt: [19] });
+    await history.authenticate();
+    await history.open();
+    await page.evaluate(() => {
+      const events: string[] = [];
+      Object.assign(window, { __historyAnnouncements: events });
+      new MutationObserver((mutations) => {
+        const live = new Set<Element>();
+        for (const mutation of mutations) {
+          const node = mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
+          const owner = node?.closest('[role="status"], [role="alert"], [aria-live="polite"], [aria-live="assertive"]');
+          if (owner) live.add(owner);
+          for (const child of mutation.addedNodes) if (child instanceof Element) {
+            if (child.matches('[role="status"], [role="alert"], [aria-live]')) live.add(child);
+            child.querySelectorAll('[role="status"], [role="alert"], [aria-live]').forEach((el) => live.add(el));
+          }
+        }
+        for (const owner of live) if (owner.getAttribute('aria-hidden') !== 'true' && owner.textContent?.trim()) events.push(owner.textContent.trim());
+      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+    });
+    await scrollToDistance(page, 0);
+    const held = await holdPage(page, (url) => url.searchParams.has('before'));
+    try {
+      const earlier = page.getByRole('button', { name: 'Show earlier messages', exact: true });
+      await earlier.focus();
+      await page.keyboard.press('Enter');
+      await held.requested;
+      await expect(page.getByRole('status').filter({ hasText: 'Loading earlier messages…' })).toHaveCount(1);
+      await expect(historyScroller(page)).toHaveAttribute('aria-busy', 'true');
+      const before = await anchor(page);
+      held.release();
+      await expect(page.getByText('Loading earlier messages…', { exact: true })).toHaveCount(0);
+      await expect(historyScroller(page)).not.toHaveAttribute('aria-busy', 'true');
+      await expectAnchor(page, before);
+      const announcements = await page.evaluate(() => (window as unknown as { __historyAnnouncements: string[] }).__historyAnnouncements);
+      expect(announcements.filter((value) => value === 'Loading earlier messages…'), 'one polite transition, not Button pending plus duplicate live region').toHaveLength(1);
+      expect(announcements.filter((value) => value.includes('New response')), 'historical hydration is not a new assistant answer').toEqual([]);
+      const smooth = await historyScroller(page).evaluate((el) => getComputedStyle(el).scrollBehavior);
+      expect(smooth, 'reduced-motion anchor correction is not smooth').not.toBe('smooth');
+      await settled(page);
+    } finally { held.release(); await held.dispose(); }
+    await history.record(presentation);
+  });
+}

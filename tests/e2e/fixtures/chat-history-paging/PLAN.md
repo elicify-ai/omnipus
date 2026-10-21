@@ -6,7 +6,7 @@ A reader opens recent history, browses whole older groups without losing their c
 
 Independent oracle: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-e2e/docs/internal/specs/chat-history-paging-spec.md` — D1–D15, B01–B51, T16/T18/T21/T24/T28/T35 and the test datasets. Expected IDs are fixture-authored; limits/floors derive from D5; settled drift is at most **1 CSS pixel**, never a tolerance fitted to a run.
 
-Pre-RED source read: `origin/fix/chat-replay-render-once` at **5fd851c5efaca429adb2267c779930ef37efae80**. Read `AttachReplayBuffer::{begin,accept,retain,clear}`, `WsConnection::{send,_enqueueValidatedFrame,disconnect,_onClose}` and `ChatScreen::VirtualizerAutoFollow`, plus transport/virtualization regressions. Normal attach buffering ends at **catch_up_complete**, not replay `done`; oversized replay can enter bounded progressive delivery. Paging must not add a second replay buffer, fabricate completion, or fight upward intent. Source reading is not execution evidence.
+Pre-RED source read: `origin/fix/chat-replay-render-once` at **5fd851c5efaca429adb2267c779930ef37efae80**. Read `AttachReplayBuffer::{begin,accept,retain,clear}`, `WsConnection::{send,_onFrameParsed,disconnect,_handleClose}` and `ChatScreen::VirtualizerAutoFollow`, plus transport/virtualization regressions. Normal attach buffering ends at **catch_up_complete**, not replay `done`; oversized replay can enter bounded progressive delivery. Paging must not add a second replay buffer, fabricate completion, or fight upward intent. Source reading is not execution evidence.
 
 ## Boundary and instruments
 
