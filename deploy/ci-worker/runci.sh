@@ -866,7 +866,7 @@ _e2e_build() {
 
   # Once per candidate, before any shard fan-out. The official fixture driver
   # is a session test executable, never a product test endpoint or copied engine.
-  python3 -I scripts/chat-history-ci.py fixtures || return 1
+  python3 -I deploy/ci-worker/chat-history-ci.py fixtures || return 1
   export OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY="$REPO_DIR/build/tools/chat-history-fixture.test"
   export OMNIPUS_CHAT_HISTORY_SEED_BINARY="$REPO_DIR/build/tools/chat-history-seed"
 
@@ -1481,7 +1481,7 @@ run_all_no_e2e() {
 # Standalone command/native evidence gates stay sequential within the Go tier.
 # Keep this additive seam separate from the worker lifecycle/locking code.
 run_history_index_repair() {
-  python3 -I scripts/chat-history-ci.py repair
+  python3 -I deploy/ci-worker/chat-history-ci.py repair
 }
 
 case "$GATE" in

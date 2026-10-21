@@ -1724,11 +1724,11 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build standalone history-index repair command
-        run: python3 -I scripts/chat-history-ci.py build
+        run: python3 -I deploy/ci-worker/chat-history-ci.py build
       - name: Test repair command and manifest
-        run: python3 -I scripts/chat-history-ci.py command
+        run: python3 -I deploy/ci-worker/chat-history-ci.py command
       - name: Test bounded recovery and retention/read-handle semantics
-        run: python3 -I scripts/chat-history-ci.py core
+        run: python3 -I deploy/ci-worker/chat-history-ci.py core
       - name: Preserve history repair named-test receipts
         if: always()
         uses: actions/upload-artifact@v7
@@ -1753,7 +1753,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build official history fixture driver and seed once per candidate
-        run: python3 -I scripts/chat-history-ci.py fixtures
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
       - name: Upload candidate history fixture tools
         uses: actions/upload-artifact@v7
         with:

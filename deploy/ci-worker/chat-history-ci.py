@@ -11,7 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 TOOLS = ROOT / "build" / "tools"
 SUFFIX = ".exe" if os.name == "nt" else ""
 GO_ENV = {**os.environ, "CGO_ENABLED": "0"}
