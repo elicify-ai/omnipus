@@ -12,6 +12,14 @@ type MCPSource interface {
 	MCPSource() (serverID, remoteToolName string)
 }
 
+// MCPManagementBuiltin marks a static builtin that MANAGES MCP servers
+// (add_mcp_server, remove_mcp_server, list_mcp_servers). It carries
+// CategoryMCP for grouping, but it is not a tool published by a connected
+// server, so a per-agent connector assignment never applies to it.
+type MCPManagementBuiltin interface {
+	IsMCPManagementBuiltin()
+}
+
 // CloneMCPBindings preserves omitted versus explicitly empty tool selections.
 // Policy builders call it before publishing their immutable snapshot.
 func CloneMCPBindings(bindings []config.AgentMCPServerBinding) []config.AgentMCPServerBinding {
@@ -23,6 +31,13 @@ func CloneMCPBindings(bindings []config.AgentMCPServerBinding) []config.AgentMCP
 }
 
 func mcpAssignmentAllows(tool Tool, cfg *ToolPolicyCfg) bool {
+	if _, builtin := tool.(MCPManagementBuiltin); builtin {
+		// The MCP-management builtins share CategoryMCP for the tool picker
+		// but are not connector tools: only their tool policy governs them
+		// (#1063 F1 — the fail-closed branch below denied them to every
+		// agent while the policy read-back said allow).
+		return true
+	}
 	source, isMCP := tool.(MCPSource)
 	if !isMCP {
 		return tool.Category() != CategoryMCP

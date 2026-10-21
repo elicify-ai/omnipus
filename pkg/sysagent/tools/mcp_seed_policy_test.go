@@ -67,11 +67,11 @@ func TestSeededPolicy_AddMCPServerOmnipusOnly(t *testing.T) {
 func TestMCPAddTool_HasNoHardcodedRefusal(t *testing.T) {
 	deps, cfg := newTestDeps(t)
 
-	result := systools.NewMCPAddTool(deps).Execute(context.Background(), map[string]any{
+	result := systools.NewMCPAddTool(deps).Execute(context.Background(), systools.WithCurrentRevisionForTest(systools.NewMCPAddTool(deps), map[string]any{
 		"name":      "operator-granted",
 		"transport": "stdio",
 		"command":   "/usr/bin/true",
-	})
+	}))
 	if result.IsError {
 		t.Fatalf("add_mcp_server refused an operator-granted call: %s\n"+
 			"The default must be seeded DATA (sandbox.tool_policies), never a code branch "+

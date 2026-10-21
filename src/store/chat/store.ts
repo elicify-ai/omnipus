@@ -308,7 +308,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
           clearTimeout(replayingClearTimers[sid])
           delete replayingClearTimers[sid]
         }
-        withBucket(sid, () => ({ isReplaying: true }))
+        // Recovery metadata is immediate even while transcript frames are buffered.
+        withBucket(sid, () => ({ isReplaying: true, awaitingCatchUp: true }))
         return
       }
       // No-op if already false.

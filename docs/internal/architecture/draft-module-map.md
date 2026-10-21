@@ -373,7 +373,7 @@ These pre-existing packages are not in the mermaid diagram or target-folders blo
 
 | Kernel (part of the runtime engine) | Shared / cross-cutting util | Module-internal (belongs to a product module above, not top-level) |
 |---|---|---|
-| `bus` (MessageBus), `security`, `policy`, `sandbox`, `credentials`, `auth`, `entity`, `state`, `daemon`, `migrate` | `fileutil`, `pathsafe`, `fspolicy`, `filegrep`, `logger`, `constants`, `utils`, `validation`, `testutil`, `identity`, `clidetect`, `docextract`, `gitevidence` (new 2026-09-15 — evidence capture for git operations) | `agentstore`, `askuser`, `commands`, `cron`, `datamodel`, `devices`, `email` (tools family, not top-level), `health`, `heartbeat`, `memrooms`, `notifications`, `onboarding`, `pairing`, `voice` |
+| `bus` (MessageBus), `security`, `policy`, `sandbox`, `credentials`, `auth`, `entity`, `state`, `daemon` | `fileutil`, `pathsafe`, `fspolicy`, `filegrep`, `logger`, `constants`, `utils`, `validation`, `testutil`, `identity`, `clidetect`, `docextract`, `gitevidence` (new 2026-09-15 — evidence capture for git operations) | `agentstore`, `askuser`, `commands`, `cron`, `datamodel`, `devices`, `email` (tools family, not top-level), `health`, `heartbeat`, `memrooms`, `notifications`, `onboarding`, `pairing`, `voice` |
 
 `env.go` at `pkg/` root is a loose file, not a package dir — leave it where it is.
 

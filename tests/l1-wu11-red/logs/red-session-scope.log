@@ -1,0 +1,132 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa
+
+ ❯ src/lib/api/-wu11-session-scope-client.test.ts (4 tests | 4 failed) 450ms
+     × src/lib/api.ts no longer imports or re-exports the SessionScope wire types 34ms
+     × src/lib/api/config.ts carries no session-scope client remnants or "future Settings surface" reservation 6ms
+     × src/lib/api/security.ts no longer hand-writes the DMScope type 5ms
+     × no SPA-authored source references the session-scope route or wire types 399ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/api/-wu11-session-scope-client.test.ts > WU-11 RED — the session-scope SPA client is removed (FR-148, K22) > src/lib/api.ts no longer imports or re-exports the SessionScope wire types
+AssertionError: FR-148/K22: the SPA client of /api/v1/security/session-scope must go: expected [ …(6) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/api.ts:91: SessionScopeRequest,",
++   "src/lib/api.ts:92: SessionScopeResponse,",
++   "src/lib/api.ts:158: SessionScopeUpdateResponse,",
++   "src/lib/api.ts:288: SessionScopeRequest,",
++   "src/lib/api.ts:289: SessionScopeResponse,",
++   "src/lib/api.ts:354: SessionScopeUpdateResponse,",
++ ]
+
+ ❯ src/lib/api/-wu11-session-scope-client.test.ts:39:90
+     37|       .map((line, i) => (/SessionScope/.test(line) ? `src/lib/api.ts:$…
+     38|       .filter(Boolean)
+     39|     expect(hits, 'FR-148/K22: the SPA client of /api/v1/security/sessi…
+       |                                                                                          ^
+     40|   })
+     41|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  src/lib/api/-wu11-session-scope-client.test.ts > WU-11 RED — the session-scope SPA client is removed (FR-148, K22) > src/lib/api/config.ts carries no session-scope client remnants or "future Settings surface" reservation
+AssertionError: K22: the session-scope client lives in src/lib/api/config.ts — nothing of it may remain: expected [ …(7) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/api/config.ts:340: // SessionScopeResponse is re-exported from generated openapi-types above.",
++   "src/lib/api/config.ts:341: // SessionScopeRequest (request body) — re-exported from generated openapi-types.",
++   "src/lib/api/config.ts:342: // See contracts/components/schemas/SessionScopeRequest.yaml.",
++   "src/lib/api/config.ts:343: // SessionScopeUpdateResponse — re-exported from generated openapi-types (contract-first #8).",
++   "src/lib/api/config.ts:344: // See contracts/components/schemas/SessionScopeUpdateResponse.yaml.",
++   "src/lib/api/config.ts:346: // No current caller reads or writes DM scope (fetchSessionScope/",
++   "src/lib/api/config.ts:347: // updateSessionScope were removed as zero-consumer exports) — DMScope and",
++ ]
+
+ ❯ src/lib/api/-wu11-session-scope-client.test.ts:52:109
+     50|       )
+     51|       .filter(Boolean)
+     52|     expect(hits, 'K22: the session-scope client lives in src/lib/api/c…
+       |                                                                                                             ^
+     53|   })
+     54|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  src/lib/api/-wu11-session-scope-client.test.ts > WU-11 RED — the session-scope SPA client is removed (FR-148, K22) > src/lib/api/security.ts no longer hand-writes the DMScope type
+AssertionError: FR-148: dm_scope is retired — no hand-written DMScope type may remain in the SPA client: expected [ Array(1) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/api/security.ts:237: export type DMScope = 'main' | 'per-peer' | 'per-channel-peer' | 'per-account-channel-peer'",
++ ]
+
+ ❯ src/lib/api/-wu11-session-scope-client.test.ts:65:109
+     63|       )
+     64|       .filter(Boolean)
+     65|     expect(hits, 'FR-148: dm_scope is retired — no hand-written DMScop…
+       |                                                                                                             ^
+     66|   })
+     67|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  src/lib/api/-wu11-session-scope-client.test.ts > WU-11 RED — the session-scope SPA client is removed (FR-148, K22) > no SPA-authored source references the session-scope route or wire types
+AssertionError: FR-148: the SPA no longer touches /api/v1/security/session-scope or dm_scope anywhere: expected [ 'src/lib/api/config.ts', …(2) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/lib/api/config.ts",
++   "src/lib/api/security.ts",
++   "src/lib/api.ts",
++ ]
+
+ ❯ src/lib/api/-wu11-session-scope-client.test.ts:90:113
+     88|     }
+     89|     walk(join(ROOT, 'src'))
+     90|     expect(violations, 'FR-148: the SPA no longer touches /api/v1/secu…
+       |                                                                                                                 ^
+     91|   })
+     92| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed (4)
+   Start at  13:39:06
+   Duration  3.57s (transform 234ms, setup 744ms, import 42ms, tests 450ms, environment 1.91s)
+

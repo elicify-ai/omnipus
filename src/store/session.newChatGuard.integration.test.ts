@@ -25,8 +25,8 @@ const PAIR = `${WS}::mia`
 const POINTER_KEY = 'omnipus.sessionByWorkspace.v1'
 
 vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
-  // Real seam for everything the stubs don't override (notably
-  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
+  // Real seam for everything the stubs don't override. (WU-11 GREEN removed the
+  // Admin-main seam reader with the retired Admin row — FR-008.)
   ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
   mainSessionIdOfMember: () => MAIN,
   isMainSession: (session: unknown) => {

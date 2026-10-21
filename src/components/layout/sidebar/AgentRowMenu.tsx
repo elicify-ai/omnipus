@@ -33,7 +33,6 @@ import {
   setHiddenFromSidebar,
   surfaceActionError,
 } from './agentRowActions'
-import { ADMIN_AGENT_ID } from './workspaceRoster'
 
 export function AgentRowMenu({
   workspace,
@@ -47,7 +46,6 @@ export function AgentRowMenu({
   agentName: string
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false)
-  const isAdminRow = agentId === ADMIN_AGENT_ID
   const removeReason = removeDisabledReason(agent, workspace)
 
   const openHistory = () => {
@@ -56,12 +54,9 @@ export function AgentRowMenu({
   }
 
   const openEditor = () => {
-    // D6: the unified create/edit flow's Team-tab entry point — the same
-    // store-driven AgentProfile slide-over, no second editor. Admin is not a
-    // workspace member (CR F8): opening it WITH workspace context would show
-    // the Heartbeat tab and a save would submit member_configs.admin, which
-    // the server refuses with 422 — so Admin gets the global profile.
-    useUiStore.getState().openEditAgentSlideOver(agentId, isAdminRow ? undefined : workspace.id)
+    // D6: the Team-tab entry point — the same store-driven AgentProfile
+    // slide-over, no second editor, opened with this workspace's context.
+    useUiStore.getState().openEditAgentSlideOver(agentId, workspace.id)
   }
 
   const hide = () => {
@@ -118,9 +113,7 @@ export function AgentRowMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuItem onSelect={openHistory}>History</DropdownMenuItem>
-        {!isAdminRow && (
-          <DropdownMenuItem onSelect={hide}>Hide from sidebar</DropdownMenuItem>
-        )}
+        <DropdownMenuItem onSelect={hide}>Hide from sidebar</DropdownMenuItem>
         <DropdownMenuItem onSelect={openEditor}>Edit</DropdownMenuItem>
         {removeReason === null ? (
           <DropdownMenuItem onSelect={() => setConfirmOpen(true)}>Remove</DropdownMenuItem>
@@ -153,7 +146,7 @@ export function AgentRowMenu({
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={`Remove ${agentName} from ${workspace.name}?`}
-        description={`${agentName} leaves this workspace's team. ${agentName} stays in the Agents list and in other workspaces; chat history is kept.`}
+        description={`${agentName} leaves only this workspace's team; the agent still exists, stays in its other workspaces and keeps its chat history.`}
         confirmLabel="Remove"
         destructive
         onConfirm={confirmRemove}

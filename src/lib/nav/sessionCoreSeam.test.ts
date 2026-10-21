@@ -89,6 +89,8 @@ describe('sessionCoreSeam reads the generated wire fields', () => {
   })
 })
 
+// WU-11 GREEN (FR-008): EligibleInput no longer carries adminDefault —
+// the retired Admin entry (and its tests) are deleted with the feature.
 describe('sessionCoreSeam end to end at eligibleMainAgents (unmocked)', () => {
   it('a roster member with a real main_session_id produces ready rows from the seam id', async () => {
     const { eligibleMainAgents } = await import('@/lib/nav/eligibleMains')
@@ -98,7 +100,6 @@ describe('sessionCoreSeam end to end at eligibleMainAgents (unmocked)', () => {
       isDefaultWorkspace: false,
       rosterState: 'fresh',
       roster: [{ agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member }],
-      adminDefault: null,
       sessions: [session],
       cachedRows: [],
     })
@@ -120,7 +121,6 @@ describe('sessionCoreSeam end to end at eligibleMainAgents (unmocked)', () => {
       isDefaultWorkspace: false,
       rosterState: 'fresh',
       roster: [{ agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: miaMember }],
-      adminDefault: null,
       sessions: [session],
       cachedRows: [],
     })

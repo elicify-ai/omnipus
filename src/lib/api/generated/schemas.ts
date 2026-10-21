@@ -2534,6 +2534,7 @@ type WorkspaceDelegationEdge = {
 };
 type WorkspaceMemberConfig = Partial<{
   main_session_id: string;
+  main_session_error: string;
   heartbeat: WorkspaceMemberHeartbeat;
   hidden_from_sidebar: boolean;
 }>;
@@ -4038,7 +4039,7 @@ export const AgentCreateRequestMain =
     mcp_servers: z.array(AgentMCPBinding).optional(),
     tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Main"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
@@ -4062,7 +4063,7 @@ export const AgentCreateRequestSubagent =
     mcp_servers: z.array(AgentMCPBinding).optional(),
     tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Subagent"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
@@ -4083,7 +4084,7 @@ export const AgentCreateRequestSubagent =
 export const AgentCreateRequestSubagent3p =
   z.object({
     type: z.literal("subagent_3p"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
@@ -4118,7 +4119,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   mcp_servers: z.array(AgentMCPBinding).optional(),
   tool_policy_changes: ToolPolicyChanges.optional(),
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).max(100).optional(),
   description: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().max(64).optional(),
@@ -5583,6 +5584,7 @@ export const WorkspaceMemberHeartbeat: z.ZodType<WorkspaceMemberHeartbeat> = z
 export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
   .object({
     main_session_id: z.string().max(255),
+    main_session_error: z.string().min(1),
     heartbeat: WorkspaceMemberHeartbeat,
     hidden_from_sidebar: z.boolean(),
   })
@@ -6894,8 +6896,8 @@ export const Room = z.object({
   workspace_id: z.string().min(1).max(128),
   kind: z.enum(["team", "squad", "adhoc"]),
   name: z.string().min(1).max(80),
-  members: z.array(z.string().min(1).max(128)).max(256),
-  muted: z.array(z.string().min(1).max(128)).max(256),
+  members: z.array(z.string().min(1).max(128)),
+  muted: z.array(z.string().min(1).max(128)),
   paused: z.boolean(),
   generation: z.number().int().gte(0),
   origin_session_id: z.string().min(1).max(255).optional(),
@@ -6915,6 +6917,15 @@ export const RoomMembersUpdateRequest = z.object({
   action: z.enum(["add", "remove", "mute", "unmute"]),
   agent_ids: z.array(z.string().min(1).max(128)).min(1).max(256),
 });
+export const RoomHistoryResponse = z.object({
+  entries: z
+    .array(
+      z.lazy(() => RoomEntry)
+    )
+    .max(1000),
+  has_older: z.boolean(),
+  next_before_seq: z.number().int().gte(1).optional(),
+}).strict();
 export const RoomMessageRequest = z.object({
   client_message_id: z.string().min(1).max(128),
   text: z.string().min(1).max(5242880),
@@ -12739,6 +12750,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
@@ -12775,6 +12791,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -12820,6 +12841,62 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         description: `Validation failed — semantically invalid input.`,
         schema: ErrorResponse,
       },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/rooms/:id/messages",
+    alias: "getRoomHistory",
+    description: `#1332. Read the complete retained transcript, including entries older than the newest 10,000 returned by attach. With before_seq omitted, select the newest page including the newest entry. Otherwise select only entries with seq strictly less than before_seq. Return the newest limit eligible entries in strictly ascending seq order. A cursor need not equal an entry sequence; gaps do not prove that older entries exist.
+The newest entry sequence is the greatest actual entry seq in the room at the locked read, or 0 for an empty room, not the room stream&#x27;s high-water sequence. A cursor greater than that entry sequence is a 400, never clamped. Select entries, continuation and delivery projections from the same room-locked view. Paging does not change entries, membership, the live stream cursor or the forward attach subscription.
+Uses exactly the existing authenticated room-read access and room-open path. Authenticate first, validate limit, validate before_seq syntax, open the room, then check the cursor&#x27;s room-dependent upper bound. Query rules apply with inbound validation enabled or disabled. Missing, invalid or deleted rooms and missing workspaces return the existing 404 ErrorResponse with error &quot;no such group chat&quot;. Paused, read-only and hidden-but-not-deleted rooms remain readable while the room and workspace exist. Storage/recovery failures remain errors, normally 500, never successful empty pages. No new reader-membership model or 403.
+Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 400 {&quot;error&quot;:&quot;limit must be an integer from 1 to 1000&quot;}. Invalid, empty, duplicated, overflowing or non-positive before_seq returns exactly 400 {&quot;error&quot;:&quot;before_seq must be a positive int64 integer&quot;}. A valid positive cursor beyond the newest entry sequence returns exactly 400 {&quot;error&quot;:&quot;before_seq must not be greater than the newest entry seq&quot;}. These use the existing ErrorResponse with no additional error fields.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "before_seq",
+        type: "Query",
+        schema: z.number().int().gte(1).optional(),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().gte(1).lte(1000).optional().default(100),
+      },
+    ],
+    response: RoomHistoryResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
@@ -12861,6 +12938,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -15519,6 +15601,8 @@ Returns HTTP 201 on success.
     method: "get",
     path: "/workspaces/:id",
     alias: "getWorkspace",
+    description: `Reads the workspace and makes one idempotent main-chat preparation attempt for each currently eligible member. A preparation failure does not undo saved membership or fail the workspace read: that member has main_session_error instead of main_session_id. Repeating this read retries preparation after storage is repaired; unreadable or mismatched saved identities are never replaced.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -16954,7 +17038,7 @@ This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-
     method: "get",
     path: "/workspaces/:id/rooms",
     alias: "listWorkspaceRooms",
-    description: `Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+    description: `Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md). A storage or read failure is an explicit 500 with the error body, never 200 with an empty list (#1314).
 `,
     requestFormat: "json",
     parameters: [
@@ -16979,6 +17063,11 @@ This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -17022,6 +17111,11 @@ This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -17151,9 +17245,9 @@ export const RoomEntry = z
     client_message_id: z.string().min(1).max(128).optional(),
     author: RoomEntryAuthor,
     text: z.string().max(5242880),
-    addressees: z.array(z.string().min(1).max(128)).max(256),
+    addressees: z.array(z.string().min(1).max(128)),
     after_pause: z.boolean(),
-    deliveries: z.array(RoomDeliveryState).max(256),
+    deliveries: z.array(RoomDeliveryState),
     timestamp: z.string(),
   })
   .strict();
@@ -17190,15 +17284,16 @@ export const RoomSnapshotFrame = z
     room_id: z.string().min(1).max(128),
     seq: z.number().int().min(0),
     entries: z.array(RoomEntry).max(10000),
-    members: z.array(z.string().min(1).max(128)).max(256),
-    muted: z.array(z.string().min(1).max(128)).max(256),
-    member_states: z.array(RoomDeliveryState).max(10000),
+    members: z.array(z.string().min(1).max(128)),
+    muted: z.array(z.string().min(1).max(128)),
+    member_states: z.array(RoomDeliveryState),
     paused: z.boolean(),
     generation: z.number().int().min(0),
     read_only_reason: z.string().min(1).max(200).optional(),
     allocated_cost_micro_usd: z.number().int().min(0),
     allocated_cost_unpriced: z.boolean(),
     complete: z.boolean(),
+    has_older: z.boolean().optional(),
   })
   .strict();
 
@@ -17207,8 +17302,8 @@ export const RoomMetaFrame = z
     type: z.literal("room_meta"),
     room_id: z.string().min(1).max(128),
     seq: z.number().int().min(1),
-    members: z.array(z.string().min(1).max(128)).max(256),
-    muted: z.array(z.string().min(1).max(128)).max(256),
+    members: z.array(z.string().min(1).max(128)),
+    muted: z.array(z.string().min(1).max(128)),
     paused: z.boolean(),
     generation: z.number().int().min(0),
     read_only_reason: z.string().min(1).max(200).optional(),
@@ -17916,9 +18011,9 @@ export const AskUserAnswerFrame = z
 
 export const SessionStatePendingApproval = z
   .object({
-    tool_call_id: z.string().min(1).optional(),
-    turn_id: z.string().min(1).optional(),
-    args: z.record(z.unknown()).optional(),
+    tool_call_id: z.string().min(1),
+    turn_id: z.string().min(1),
+    args: z.record(z.unknown()),
     segments: z.array(CommandSegmentInfo).optional(),
     root_session_id: z.string().min(1).max(255).optional(),
     acting_agent_name: z.string().min(1).max(128).optional(),

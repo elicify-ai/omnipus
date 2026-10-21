@@ -9,6 +9,7 @@ export const PARENT_WAKE_PARTIAL = 'WOKEN_PARTIAL';
 export interface ParentWakeProvider {
   url: string;
   setAgentId: (id: string) => void;
+  releaseHelper: () => void;
   releaseWake: () => void;
   failures: () => string[];
   close: () => Promise<void>;
@@ -16,17 +17,22 @@ export interface ParentWakeProvider {
 
 /**
  * Scripted OpenAI-compatible provider for Test 26.
- * The first request that offers `delegate` launches one helper.
- * The helper's own request answers HELLO_HELPER.
- * The later parent request whose prompt already contains that word is the
- * wake turn: it emits one partial token and holds until releaseWake().
+ * A genuine matching user sentence is acknowledged without delegation.
+ * The next request that offers `delegate` launches one helper. Its completion
+ * is held until releaseHelper(), so the parent can finish its launch reply.
+ * Only a parent request with a delegate tool-call history AND the actual
+ * hand-back sentence starts the held partial wake response.
  */
 export async function startParentWakeProvider(): Promise<ParentWakeProvider> {
   let agentId = '';
   let delegated = false;
   let helperDone = false;
+  let matchingRecorded = false;
   let release!: () => void;
+  let releaseHelper!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
+  const helperHeld = new Promise<void>((resolve) => { releaseHelper = resolve; });
+  const wakeText = `A delegated session handed back (final): ${PARENT_WAKE_HELPER}`;
   const failures: string[] = [];
 
   const server = http.createServer((req, res) => {
@@ -64,7 +70,13 @@ export async function startParentWakeProvider(): Promise<ParentWakeProvider> {
       }
       const names = toolNames(body.tools);
       const blob = JSON.stringify(body.messages ?? []);
+      const parentCallAt = blob.indexOf('"id":"parent-wake-delegate"');
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      if (!matchingRecorded && !delegated && blob.includes(wakeText)) {
+        matchingRecorded = true;
+        res.end(chunk({ role: 'assistant', content: 'Recorded your matching sentence.' }, 'stop') + 'data: [DONE]\n\n');
+        return;
+      }
       if (!delegated && names.includes('delegate')) {
         if (agentId === '') {
           failures.push('delegate was offered before the test set the agent id');
@@ -84,16 +96,29 @@ export async function startParentWakeProvider(): Promise<ParentWakeProvider> {
         );
         return;
       }
-      if (blob.includes(PARENT_WAKE_HELPER)) {
+      if (!delegated) {
+        failures.push('delegate tool was not offered');
+        res.end(chunk({ role: 'assistant', content: 'FIXTURE_ERROR: delegate tool was not offered' }, 'stop') + 'data: [DONE]\n\n');
+        return;
+      }
+      // The matching person's sentence precedes the delegate call. A real
+      // wake input follows it, so old positive-control text cannot wake us.
+      if (parentCallAt >= 0 && blob.lastIndexOf(wakeText) > parentCallAt) {
         res.write(chunk({ role: 'assistant', content: PARENT_WAKE_PARTIAL }, null));
         void held.then(() => {
           res.end(chunk({ content: ' and the rest' }, 'stop') + 'data: [DONE]\n\n');
         });
         return;
       }
+      if (parentCallAt >= 0) {
+        res.end(chunk({ role: 'assistant', content: 'Launched' }, 'stop') + 'data: [DONE]\n\n');
+        return;
+      }
       if (!helperDone) {
         helperDone = true;
-        res.end(chunk({ role: 'assistant', content: PARENT_WAKE_HELPER }, 'stop') + 'data: [DONE]\n\n');
+        void helperHeld.then(() => {
+          res.end(chunk({ role: 'assistant', content: PARENT_WAKE_HELPER }, 'stop') + 'data: [DONE]\n\n');
+        });
         return;
       }
       res.end(chunk({ role: 'assistant', content: 'ok' }, 'stop') + 'data: [DONE]\n\n');
@@ -115,9 +140,11 @@ export async function startParentWakeProvider(): Promise<ParentWakeProvider> {
   return {
     url,
     setAgentId: (id: string) => { agentId = id; },
+    releaseHelper,
     releaseWake: release,
     failures: () => [...failures],
     close: async () => {
+      releaseHelper();
       release();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

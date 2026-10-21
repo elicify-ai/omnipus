@@ -390,7 +390,8 @@ test('UAT-47 (b) the disclosure is plain text in the picker, not a tooltip and n
 // ── Screen walk: every screen the plan touches, zero console errors ───────────
 
 const SCREENS: ReadonlyArray<{ name: string; path: string; expect: RegExp }> = [
-  { name: 'Agents', path: '/#/agents', expect: /Browse, configure, and create your AI agents/i },
+  // WU-11 (FR-108): the Agents screen is retired — the walk covers the
+  // surviving screens.
   { name: 'Skills & Tools', path: '/#/skills', expect: /Manage agent capabilities/i },
   { name: 'Connectors', path: '/#/connectors', expect: /Connect Telegram, Discord, Slack/i },
   { name: 'Library', path: '/#/library', expect: /items/i },

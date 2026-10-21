@@ -751,7 +751,7 @@ jobs:
           # *.test.ts only, so the sibling *.spec.ts Playwright files are not
           # picked up by this pattern. It ran in NO shard until 2026-08-23.
           - group: lib-store
-            patterns: "src/main.test.tsx src/lib/ src/store/ src/routes/ src/test/ src/design-system/ tests/e2e/fixtures/ tests/design-system/"
+            patterns: "src/main.test.tsx src/lib/ src/store/ src/routes/ src/test/ src/design-system/ tests/e2e/fixtures/ tests/design-system/ tests/wu15-rooms-contract/"
           # Group B: chat components — heaviest component group
           - group: components-chat
             patterns: "src/components/chat/"
@@ -770,7 +770,7 @@ jobs:
           # fails the build if that happens, so add new directories HERE (or to
           # a group above) rather than letting them go unexecuted.
           - group: components-misc
-            patterns: "src/components/screens/ src/components/browser/ src/components/calendar/ src/components/library/ src/components/connectors/ src/components/providers/ src/components/search/ src/components/sessions/ src/hooks/ src/assets/ src/styles/ tests/browser-acceptance/"
+            patterns: "src/components/screens/ src/components/browser/ src/components/calendar/ src/components/library/ src/components/connectors/ src/components/providers/ src/components/rooms/ src/components/search/ src/components/sessions/ src/hooks/ src/assets/ src/styles/ tests/browser-acceptance/"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -2022,6 +2022,20 @@ jobs:
             fi
             exit 1
           fi
+          # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a
+          # package FAIL line and no --- FAIL line, which is the hang shape
+          # this filter exists to excuse. Never retry it.
+          # shellcheck source=scripts/ci-flake-classify.sh
+          source scripts/ci-flake-classify.sh || {
+            echo "REAL FAILURE: cannot load scripts/ci-flake-classify.sh"
+            exit 1
+          }
+          if ci_log_has_guard_failure "$out"; then
+            echo ""
+            echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+            echo "REAL FAILURE (guard failure detected — never excused)"
+            exit 1
+          fi
           [ $code -eq 0 ] && exit 0
           failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
           [ -z "$failed" ] && exit $code
@@ -2545,6 +2559,20 @@ jobs:
             else
               echo "REAL FAILURE (assertion failure detected — never excused): --- FAIL detected but no package-level FAIL line matched; see full output above"
             fi
+            exit 1
+          fi
+          # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a
+          # package FAIL line and no --- FAIL line, which is the hang shape
+          # this filter exists to excuse. Never retry it.
+          # shellcheck source=scripts/ci-flake-classify.sh
+          source scripts/ci-flake-classify.sh || {
+            echo "REAL FAILURE: cannot load scripts/ci-flake-classify.sh"
+            exit 1
+          }
+          if ci_log_has_guard_failure "$out"; then
+            echo ""
+            echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+            echo "REAL FAILURE (guard failure detected — never excused)"
             exit 1
           fi
           [ $code -eq 0 ] && exit 0

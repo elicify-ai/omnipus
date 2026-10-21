@@ -33,6 +33,8 @@ The two rooms:
 | Shared (chosen explicitly) | Every agent in the workspace | Project decisions, conventions, references |
 | Private | One agent only | Personal working notes, individual lessons |
 
+**Glossary.** The shared and private rooms on this page are **memory rooms**, where agents save and recall notes. They are not **group-chat rooms** (team rooms, squads or ad-hoc rooms), which hold conversations between you and several agents; see [group chats](group-chats.md).
+
 ## The four memory tools
 
 Omnipus provides these four memory tools. Which an agent can use depends on its effective tool policies and runtime. Catalog presence does not grant access. Check the agent's Tools tab before relying on a manual retrospective or another memory action. Automatic recap is a separate setting and is not evidence that `run_retrospective` is granted to every agent. An agent calls the tools it has on its own judgment; you trigger them by asking in chat.

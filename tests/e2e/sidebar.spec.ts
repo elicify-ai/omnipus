@@ -21,7 +21,8 @@ import { expectA11yClean } from './fixtures/a11y';
 // inside that nav — a `nav ... a[href="/#/settings"]` selector can never
 // match it. It has to be reached by opening the profile menu instead.
 const LIBRARY_NAV_ITEMS = [
-  { href: '/#/agents', urlPattern: /agents/ },
+  // WU-11 (FR-108): the Agents entry is retired with the Agents screen —
+  // every SURVIVING nav item must still route correctly.
   { href: '/#/connectors', urlPattern: /connectors/ },
   { href: '/#/skills', urlPattern: /skills/ },
 ] as const;

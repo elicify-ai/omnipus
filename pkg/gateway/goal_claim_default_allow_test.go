@@ -26,6 +26,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -134,7 +135,12 @@ func TestGoalClaimDefaultsToAllow_EveryAgentCreationPath(t *testing.T) {
 		})
 		require.False(t, result.IsError, "create_agent failed: %s", result.ForLLM)
 
-		stored, err := agentstore.New(home).Get("tool-made")
+		// New agents get a generated id (founder decision 2026-10-14, WU-3).
+		var created struct {
+			ID string `json:"id"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &created))
+		stored, err := agentstore.New(home).Get(created.ID)
 		require.NoError(t, err)
 		require.NotNil(t, stored.Tools)
 		assert.Equal(t, config.ToolPolicyAllow, stored.Tools.Builtin.Policies[tools.GoalClaimToolName])

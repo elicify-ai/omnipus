@@ -13,6 +13,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -56,15 +57,22 @@ func TestNewAgent_CreatedByAvaInWorkspace_GetsItsMainListed(t *testing.T) {
 			"model": "test/model", "color": "#6E8BA8",
 		})
 	require.False(t, res.IsError, "create failed: %s", res.ForLLM)
+	// New agents get a generated id (founder decision 2026-10-14, WU-3).
+	var created struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(res.ForLLM), &created))
+	id := created.ID
+	require.NotEmpty(t, id)
 
 	got := env.getWorkspace(t, ws)
 	team, _ := got["core_team"].([]any)
-	require.Contains(t, team, "newbie", "instrument check: the agent joined the team")
+	require.Contains(t, team, id, "instrument check: the agent joined the team")
 
 	mains, _ := got["member_configs"].(map[string]any)
-	member, _ := mains["newbie"].(map[string]any)
-	assert.Equal(t, u1MainID(ws, "newbie"), member["main_session_id"],
+	member, _ := mains[id].(map[string]any)
+	assert.Equal(t, u1MainID(ws, id), member["main_session_id"],
 		"the new member must be listed with its main (the sidebar's source); member_configs=%v", mains)
-	_, err := env.store(t).GetMeta(u1MainID(ws, "newbie"))
+	_, err := env.store(t).GetMeta(u1MainID(ws, id))
 	assert.NoError(t, err, "the new member's main session must exist after create_agent returns")
 }

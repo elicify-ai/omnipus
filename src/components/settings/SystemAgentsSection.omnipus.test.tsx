@@ -132,7 +132,8 @@ describe('WU-10 System agents through the shared editor', () => {
       expect(instructions).toBeEnabled()
       expect(instructions).not.toHaveAttribute('readonly')
       await user.clear(instructions)
-      await user.type(instructions, 'Evaluate the supplied requirements and report the evidence.')
+      // One real paste exercises the long-form edit without timing every keystroke.
+      await user.paste('Evaluate the supplied requirements and report the evidence.')
       await waitFor(() => expect(updateAgent).toHaveBeenCalledWith(id, expect.objectContaining({
         soul: 'Evaluate the supplied requirements and report the evidence.', revision: REVISION,
       })))
