@@ -578,8 +578,14 @@ func (r *ToolRegistry) ExecuteWithContext(
 	if err := validateToolArgs(tool.Parameters(), args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
 			map[string]any{"tool": name, "error": err.Error()})
-		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
+		refusal := ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
 			WithError(fmt.Errorf("argument validation failed: %w", err))
+		if _, isChange := tool.(ChangeTool); isChange {
+			// The tool never ran, so nothing was saved: a change tool's refusal
+			// carries the FR-030 envelope here too (WU-3 CHECK F01).
+			refusal = FinalizeChangeResult(name, refusal)
+		}
+		return refusal
 	}
 
 	// Inject channel/chatID into ctx so tools read them via ToolChannel(ctx)/ToolChatID(ctx).

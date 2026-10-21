@@ -940,6 +940,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 	// delegated sessions, and because it needs no late re-bind — every
 	// store is read through a live adapter (see wireJobRosterForAgent).
 	rw.rs.al.wireJobRosterForAgent(agent)
+	agent.configureSetTodosGuidance()
 }
 
 // registerSharedToolsWire3RegisterBrowserTools carries the shared state of registerBrowserTools across its stages.

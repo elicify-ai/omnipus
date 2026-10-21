@@ -41,15 +41,16 @@ func (t *SetTodosTool) Scope() ToolScope       { return ScopeCore }
 func (t *SetTodosTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *SetTodosTool) Description() string {
-	return "Set your working scratchpad: a flat checklist of steps for the outcome you're currently focused on. " +
-		"Pass the FULL list every call (replace-semantics — no item IDs). " +
-		"Use this for the throwaway checklist of what you're doing this turn; " +
-		"use create_task + dependencies for a durable multi-wave plan. " +
-		"Your checklist is shown on the board and re-shown to you each turn. " +
-		"You have ONE active checklist at a time: calling this with a different `outcome` closes the " +
-		"previous checklist card as done and starts a fresh one, so reuse the exact same `outcome` string " +
-		"for every update to the same unit of work. " +
-		"Optionally give each item an `active_form`: how it reads while in progress, e.g. \"Drafting the Q4 summary\"."
+	return "Use set_todos for every request, including one-line answers, before your first reply or other tool call. " +
+		"Keep your own checklist: mark the current item `in_progress`, future items `pending`, and finished items " +
+		"`completed`; update it as work advances and before your final reply. Pass `outcome` and the FULL `todos` " +
+		"list on every call; each call replaces the list, with no item IDs. Reuse the exact same `outcome` for " +
+		"the same unit of work. You have one active checklist in this session: changing `outcome` closes the " +
+		"previous checklist card as done and starts a new one. Your checklist is shown on the board and re-shown " +
+		"to you each turn. Optionally give each item an `active_form`: a present-participle phrase such as " +
+		"\"Drafting the Q4 summary\", up to 500 characters, used for the chat's working-on line while that item is " +
+		"`in_progress`. Use create_task with dependencies for a durable multi-wave plan, while tracking your own " +
+		"current work here."
 }
 
 func (t *SetTodosTool) Parameters() map[string]any {

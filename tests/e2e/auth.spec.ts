@@ -117,7 +117,8 @@ test('(c) dev_mode_bypass = true shows red persistent banner on every route', as
   await expect(banner).toBeVisible({ timeout: 15_000 });
 
   // Banner must persist when navigating to another route
-  await page.goto('/#/agents');
+  // (WU-11 FR-108: the retired /#/agents is swapped for /#/skills).
+  await page.goto('/#/skills');
   await expect(banner).toBeVisible({ timeout: 10_000 });
 
   // Unregister routes to avoid "route in flight" errors during cleanup

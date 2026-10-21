@@ -5,6 +5,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import type { ReactNode } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import type { ServerFrame, ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
+import { Todo as TodoSchema } from '@/lib/api/generated/schemas'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
 import { emptySessionState } from '@/store/chat/session'
 import { useSessionStore } from '@/store/session'
@@ -121,6 +122,18 @@ afterEach(() => {
 })
 
 describe('chat current todo in the existing status indicator', () => {
+  it('renders the merged backend active_form through accepted frames, reducer and mounted chat', async () => {
+    await renderChat()
+    const item = TodoSchema.parse({ text: 'Draft the Q4 summary', status: 'in_progress', active_form: 'Drafting the Q4 summary' })
+    const callId = startList([item])
+    expect(screen.queryByTestId('reply-current-todo')).not.toBeInTheDocument()
+    finishList(callId)
+    const line = expectLine('Drafting the Q4 summary')
+    expect(line.querySelector('[title]')).toHaveAttribute('title', 'Drafting the Q4 summary')
+    expect(line.textContent).not.toContain('Draft the Q4 summary')
+    expect(screen.getByTestId('composer-card')).toBeInTheDocument()
+  })
+
   it('shows only the in-progress item inside the indicator, never above the composer', async () => {
     await renderChat()
     setList([

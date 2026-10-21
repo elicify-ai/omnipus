@@ -8,46 +8,8 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/gomarkdown/markdown/parser"
-	"gopkg.in/yaml.v3"
-
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
-
-// AgentDefinitionSource identifies which agent bootstrap file produced the definition.
-type AgentDefinitionSource string
-
-const (
-	// AgentDefinitionSourceAgent indicates the new AGENT.md format.
-	AgentDefinitionSourceAgent AgentDefinitionSource = "AGENT.md"
-	// AgentDefinitionSourceAgents indicates the legacy AGENTS.md format.
-	AgentDefinitionSourceAgents AgentDefinitionSource = "AGENTS.md"
-)
-
-// AgentFrontmatter holds machine-readable AGENT.md configuration.
-//
-// Known fields are exposed directly for convenience. Fields keeps the full
-// parsed frontmatter so future refactors can read additional keys without
-// changing the loader contract again.
-type AgentFrontmatter struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Tools       []string       `json:"tools,omitempty"`
-	Model       string         `json:"model,omitempty"`
-	MaxTurns    *int           `json:"maxTurns,omitempty"`
-	Skills      []string       `json:"skills,omitempty"`
-	MCPServers  []string       `json:"mcpServers,omitempty"`
-	Fields      map[string]any `json:"fields,omitempty"`
-}
-
-// AgentPromptDefinition represents the parsed AGENT.md or AGENTS.md prompt file.
-type AgentPromptDefinition struct {
-	Path           string           `json:"path"`
-	Raw            string           `json:"raw"`
-	Body           string           `json:"body"`
-	RawFrontmatter string           `json:"raw_frontmatter,omitempty"`
-	Frontmatter    AgentFrontmatter `json:"frontmatter"`
-}
 
 // SoulDefinition represents the resolved SOUL.md file linked to the agent.
 type SoulDefinition struct {
@@ -67,19 +29,13 @@ type UserDefinition struct {
 	Content string `json:"content"`
 }
 
-// AgentContextDefinition captures the workspace agent definition in a runtime-friendly shape.
+// AgentContextDefinition captures the agent's soul and the global user profile.
 type AgentContextDefinition struct {
-	Source AgentDefinitionSource  `json:"source,omitempty"`
-	Agent  *AgentPromptDefinition `json:"agent,omitempty"`
-	Soul   *SoulDefinition        `json:"soul,omitempty"`
-	User   *UserDefinition        `json:"user,omitempty"`
+	Soul *SoulDefinition `json:"soul,omitempty"`
+	User *UserDefinition `json:"user,omitempty"`
 }
 
-// LoadAgentDefinition parses the workspace agent bootstrap files.
-//
-// It prefers the new AGENT.md format and its paired SOUL.md file. When the
-// structured files are absent, it falls back to the legacy AGENTS.md layout so
-// the current runtime can transition incrementally.
+// LoadAgentDefinition loads the agent's SOUL.md and the global USER.md profile.
 func (cb *ContextBuilder) LoadAgentDefinition() AgentContextDefinition {
 	return loadAgentDefinition(cb.workspace)
 }
@@ -89,76 +45,22 @@ func loadAgentDefinition(workspace string) AgentContextDefinition {
 	// USER.md is deliberately NOT resolved from `workspace`. It describes the
 	// user, so it is global — see config.ReadUserProfile.
 	definition.User = loadUserDefinition()
-	agentPath := filepath.Join(workspace, string(AgentDefinitionSourceAgent))
-	agentContent, agentErr := os.ReadFile(agentPath)
-	if agentErr == nil {
-		prompt := parseAgentPromptDefinition(agentPath, string(agentContent))
-		definition.Source = AgentDefinitionSourceAgent
-		definition.Agent = &prompt
-		soulPath := filepath.Join(workspace, "SOUL.md")
-		if content, err := os.ReadFile(soulPath); err != nil {
-			// M8: distinguish permission/IO errors from expected absence.
-			if !errors.Is(err, os.ErrNotExist) {
-				logger.WarnCF("agent", "Could not read SOUL.md",
-					map[string]any{"path": soulPath, "error": err.Error()})
-			}
-		} else {
-			definition.Soul = &SoulDefinition{
-				Path:    soulPath,
-				Content: string(content),
-			}
-		}
-		return definition
-	} else if !errors.Is(agentErr, os.ErrNotExist) {
-		// A permission error or other I/O failure reading AGENT.md. Log a warning
-		// and fall through to the legacy AGENTS.md path rather than silently
-		// treating a readable AGENT.md as absent.
-		logger.WarnCF("agent", "Could not read AGENT.md; falling through to legacy path",
-			map[string]any{"path": agentPath, "error": agentErr.Error()})
-	}
 
-	legacyPath := filepath.Join(workspace, string(AgentDefinitionSourceAgents))
-	if content, err := os.ReadFile(legacyPath); err == nil {
-		definition.Source = AgentDefinitionSourceAgents
-		definition.Agent = &AgentPromptDefinition{
-			Path: legacyPath,
-			Raw:  string(content),
-			Body: string(content),
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	if content, err := os.ReadFile(soulPath); err != nil {
+		// M8: distinguish permission/IO errors from expected absence.
+		if !errors.Is(err, os.ErrNotExist) {
+			logger.WarnCF("agent", "Could not read SOUL.md",
+				map[string]any{"path": soulPath, "error": err.Error()})
 		}
-	}
-
-	defaultSoulPath := filepath.Join(workspace, "SOUL.md")
-	if definition.Source != "" || fileExists(defaultSoulPath) {
-		if content, err := os.ReadFile(defaultSoulPath); err != nil {
-			// M8: distinguish permission/IO errors from expected absence.
-			if !errors.Is(err, os.ErrNotExist) {
-				logger.WarnCF("agent", "Could not read SOUL.md",
-					map[string]any{"path": defaultSoulPath, "error": err.Error()})
-			}
-		} else {
-			definition.Soul = &SoulDefinition{
-				Path:    defaultSoulPath,
-				Content: string(content),
-			}
+	} else {
+		definition.Soul = &SoulDefinition{
+			Path:    soulPath,
+			Content: string(content),
 		}
 	}
 
 	return definition
-}
-
-func (definition AgentContextDefinition) trackedPaths(workspace string) []string {
-	paths := []string{
-		filepath.Join(workspace, string(AgentDefinitionSourceAgent)),
-		filepath.Join(workspace, "SOUL.md"),
-		config.UserProfilePath(),
-	}
-	if definition.Source != AgentDefinitionSourceAgent {
-		paths = append(paths,
-			filepath.Join(workspace, string(AgentDefinitionSourceAgents)),
-			filepath.Join(workspace, "IDENTITY.md"),
-		)
-	}
-	return uniquePaths(paths)
 }
 
 func loadUserDefinition() *UserDefinition {
@@ -172,85 +74,6 @@ func loadUserDefinition() *UserDefinition {
 		return nil // no profile yet — normal on a fresh install
 	}
 	return &UserDefinition{Path: path, Content: content}
-}
-
-func parseAgentPromptDefinition(path, content string) AgentPromptDefinition {
-	frontmatter, body := splitAgentFrontmatter(content)
-	return AgentPromptDefinition{
-		Path:           path,
-		Raw:            content,
-		Body:           body,
-		RawFrontmatter: frontmatter,
-		Frontmatter:    parseAgentFrontmatter(path, frontmatter),
-	}
-}
-
-func parseAgentFrontmatter(path, frontmatter string) AgentFrontmatter {
-	frontmatter = strings.TrimSpace(frontmatter)
-	if frontmatter == "" {
-		return AgentFrontmatter{}
-	}
-
-	rawFields := make(map[string]any)
-	if err := yaml.Unmarshal([]byte(frontmatter), &rawFields); err != nil {
-		logger.WarnCF("agent", "Failed to parse AGENT.md frontmatter", map[string]any{
-			"path":  path,
-			"error": err.Error(),
-		})
-		return AgentFrontmatter{}
-	}
-
-	var typed struct {
-		Name        string   `yaml:"name"`
-		Description string   `yaml:"description"`
-		Tools       []string `yaml:"tools"`
-		Model       string   `yaml:"model"`
-		MaxTurns    *int     `yaml:"maxTurns"`
-		Skills      []string `yaml:"skills"`
-		MCPServers  []string `yaml:"mcpServers"`
-	}
-	if err := yaml.Unmarshal([]byte(frontmatter), &typed); err != nil {
-		logger.WarnCF("agent", "Failed to decode AGENT.md frontmatter fields", map[string]any{
-			"path":  path,
-			"error": err.Error(),
-		})
-		return AgentFrontmatter{}
-	}
-
-	return AgentFrontmatter{
-		Name:        strings.TrimSpace(typed.Name),
-		Description: strings.TrimSpace(typed.Description),
-		Tools:       append([]string(nil), typed.Tools...),
-		Model:       strings.TrimSpace(typed.Model),
-		MaxTurns:    typed.MaxTurns,
-		Skills:      append([]string(nil), typed.Skills...),
-		MCPServers:  append([]string(nil), typed.MCPServers...),
-		Fields:      rawFields,
-	}
-}
-
-func splitAgentFrontmatter(content string) (frontmatter, body string) {
-	normalized := string(parser.NormalizeNewlines([]byte(content)))
-	lines := strings.Split(normalized, "\n")
-	if len(lines) == 0 || lines[0] != "---" {
-		return "", content
-	}
-
-	end := -1
-	for i := 1; i < len(lines); i++ {
-		if lines[i] == "---" {
-			end = i
-			break
-		}
-	}
-	if end == -1 {
-		return "", content
-	}
-
-	frontmatter = strings.Join(lines[1:end], "\n")
-	body = strings.Join(lines[end+1:], "\n")
-	body = strings.TrimLeft(body, "\n")
-	return frontmatter, body
 }
 
 func relativeWorkspacePath(workspace, path string) string {
@@ -277,9 +100,4 @@ func uniquePaths(paths []string) []string {
 		result = append(result, cleaned)
 	}
 	return result
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }

@@ -40,6 +40,7 @@ func TestTaskTodosActiveForm(t *testing.T) {
 				}
 				require.Equal(t, http.StatusOK, response.Code, "%s: %s", operation, response.Body.String())
 			}
+			assertTaskTodosResponseJSON(t, response.Body.Bytes(), todosJSON)
 			var updated gen.Task
 			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &updated))
 			id = updated.Id
@@ -51,6 +52,7 @@ func TestTaskTodosActiveForm(t *testing.T) {
 			read := httptest.NewRecorder()
 			api.HandleTasks(read, httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+id, nil))
 			require.Equal(t, http.StatusOK, read.Code, "read: %s", read.Body.String())
+			assertTaskTodosResponseJSON(t, read.Body.Bytes(), todosJSON)
 			var reloaded gen.Task
 			require.NoError(t, json.Unmarshal(read.Body.Bytes(), &reloaded))
 			data, err = json.Marshal(reloaded.Todos)
@@ -67,6 +69,7 @@ func TestTaskTodosActiveForm(t *testing.T) {
 			replaced := putTaskTodos(t, api, id, withoutForm)
 			require.Equal(t, http.StatusOK, replaced.Code, "replace: %s", replaced.Body.String())
 			t.Logf("replacement response: %s", replaced.Body.String())
+			assertTaskTodosResponseJSON(t, replaced.Body.Bytes(), withoutForm)
 			var replacement gen.Task
 			require.NoError(t, json.Unmarshal(replaced.Body.Bytes(), &replacement))
 			data, err = json.Marshal(replacement.Todos)
@@ -79,4 +82,11 @@ func TestTaskTodosActiveForm(t *testing.T) {
 			require.JSONEq(t, withoutForm, string(data), "saved replacement without active_form must omit it")
 		})
 	}
+}
+
+func assertTaskTodosResponseJSON(t *testing.T, body []byte, want string) {
+	t.Helper()
+	var response map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(body, &response))
+	require.JSONEq(t, want, string(response["todos"]), "raw response todos must preserve the exact shape")
 }

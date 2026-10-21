@@ -69,7 +69,7 @@ Convention:
 | 6 | `model` | R (seeded) | R (seeded) | R (picker) | R (picker) | R (free text) |
 | 7 | `model_params.{temperature, max_tokens, top_p}` | ro | ro | O | O | **—** |
 | 8 | `soul` ⭐ (mandatory everywhere) | ro | ro | **R** ⭐ | **R** ⭐ | **R** ⭐ |
-| 9 | `instructions` | ro | ro | O | O | O |
+| 9 | `instructions` (not an automatic prompt source; §3.8) | — | — | — | — | — |
 | 10 | `heartbeat` | ro | **—** | O | **—** | **—** |
 | 11 | `heartbeat_enabled` | O | **—** | O | **—** | **—** |
 | 12 | `heartbeat_interval` | O | **—** | O | **—** | **—** |
@@ -170,10 +170,14 @@ agent identity inline.
 This corrected an earlier draft where Subagent (External) had `—` for
 `soul`. Soul is universal.
 
-### 3.8 `instructions` (row 9)
-The AGENT.md body. Same scoping as `soul` (everywhere), but **optional**
-(empty is valid — agents start with just `soul.md` and add `instructions`
-later when needed).
+### 3.8 `instructions` (row 9) — not an automatic prompt source
+The agent-folder instruction body is not a prompt or agent-form input. Since the
+2026-10-21 founder decision, the native prompt loader reads the agent's `SOUL.md`
+and the global `USER.md`; it does not load agent-folder `AGENT.md`, `AGENTS.md` or
+`IDENTITY.md`. The body must not be described as following `soul` into a request.
+Workspace Project Instructions and mounted-project root instructions remain
+separate supported sources. This is a prompt/form mapping correction, not a claim
+that a wire-format field was removed.
 
 ### 3.9 `heartbeat*` (rows 10–12)
 The HEARTBEAT.md periodic poll. **Only meaningful for chat agents**
@@ -323,7 +327,7 @@ wire schema where they were never load-bearing):
 |---|---|
 | `tool_feedback` (per-agent bool) | This is **channel behavior**, not an agent property. The web chat surface already renders tool calls inline (`SessionPanel.tsx`, `ToolCallBadge`, `SubagentBlock`); publishing them again as outbound messages is duplication. The right behavior is per-channel routing at runtime: `webchat` → never, messaging → always, `system`/`cli`/`cron` → never. |
 | `executor.auth_method` | Each CLI handles its own auth (claude-code OAuth, etc.). Omnipus just spawns the CLI process — the CLI runs `login` on first use and stores credentials locally. Trying to surface auth in Omnipus duplicates CLI UX. |
-| `executor.instructions_file` | Omnipus passes `soul` + `instructions` as prompt content at invocation time, not via a file the CLI reads. There is no file path to configure. |
+| `executor.instructions_file` | Omnipus passes the resolved soul (when present) and task content at invocation time, not an agent-folder instruction body or a file path for the CLI to read. |
 | `executor.model_override` | `model` IS the model name passed to the CLI. The reason `model` is free text for Subagent (External) is exactly so it matches the CLI's model naming. No separate override field needed. |
 | `executor.workdir` | Set by the calling Main agent at runtime (the invocation context). It's not part of the Subagent's static definition. |
 
@@ -444,8 +448,8 @@ wire schema where they were never load-bearing):
 
 | Type | Subsequent steps |
 |---|---|
-| **Main** | ① Identity → ② Personality (soul ⭐ R + heartbeat + voice + instructions) → ③ Tools (tools_cfg + skills + fallback_models) → Advanced disclosure (sandbox_profile + shell_policy + rate_limits + timeout + max_iter + steering + tool_feedback REMOVED + **delegation_policy REMOVED — ADR-037**) |
-| **Subagent** | ① Identity → ② Personality (soul ⭐ R + instructions only — no heartbeat/voice) → ③ Tools (tools_cfg + skills + fallback_models) → Advanced disclosure (sandbox_profile + shell_policy + rate_limits + timeout + max_iter) |
+| **Main** | ① Identity → ② Personality (soul ⭐ R + heartbeat + voice) → ③ Tools (tools_cfg + skills + fallback_models) → Advanced disclosure (sandbox_profile + shell_policy + rate_limits + timeout + max_iter + steering + tool_feedback REMOVED + **delegation_policy REMOVED — ADR-037**) |
+| **Subagent** | ① Identity → ② Personality (soul ⭐ R only — no heartbeat/voice) → ③ Tools (tools_cfg + skills + fallback_models) → Advanced disclosure (sandbox_profile + shell_policy + rate_limits + timeout + max_iter) |
 | **Subagent (External)** | ① CLI choice (claude-code / codex / opencode) → ② Identity → ③ Runtime config (cli_path R + env_overrides + cli_args) → ④ Tools (skills + fallback_models; tools_cfg hidden) → Advanced disclosure (model, rate_limits, timeout, max_iter) |
 
 ### 6.2 Edit slide-over (the layout for each type)
@@ -453,7 +457,7 @@ wire schema where they were never load-bearing):
 | Tab | Main | Subagent | Subagent (External) |
 |---|---|---|---|
 | **Basics** | name, description, color, icon, default, model, model_params, voice, timeout, max_iter | name, description, color, icon, model, model_params, timeout, max_iter | name, color, icon, model, timeout, max_iter |
-| **Personality** | soul ⭐, heartbeat, heartbeat_enabled, heartbeat_interval, instructions | soul ⭐, instructions | soul ⭐, instructions |
+| **Personality** | soul ⭐, heartbeat, heartbeat_enabled, heartbeat_interval | soul ⭐ | soul ⭐ |
 | **Tools** | tools_cfg, skills, fallback_models | tools_cfg, skills, fallback_models | skills (tools_cfg and fallback_models hidden) |
 | **Advanced** | sandbox_profile, shell_policy, rate_limits, timeout, max_iter, steering_mode, cli (hidden) | sandbox_profile, shell_policy, rate_limits, timeout, max_iter, cli (hidden) | executor.{cli, cli_path, env_overrides, cli_args}, rate_limits, timeout, max_iter |
 

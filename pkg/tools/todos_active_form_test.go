@@ -73,9 +73,11 @@ func TestSetTodosActiveForm(t *testing.T) {
 			{name: "499_characters", item: map[string]any{"text": "Draft the Q4 summary", "active_form": strings.Repeat("a", 499)}, want: strings.Repeat("a", 499)},
 			{name: "500_characters", item: map[string]any{"text": "Draft the Q4 summary", "active_form": strings.Repeat("a", 500)}, want: strings.Repeat("a", 500)},
 			{name: "500_unicode_characters", item: map[string]any{"text": "Draft the Q4 summary", "active_form": strings.Repeat("界", 500)}, want: strings.Repeat("界", 500)},
+			{name: "500_supplementary_characters", item: map[string]any{"text": "Draft the Q4 summary", "active_form": strings.Repeat("\U00020000", 500)}, want: strings.Repeat("\U00020000", 500)},
 			{name: "trim_before_limit", item: map[string]any{"text": "Draft the Q4 summary", "active_form": " " + strings.Repeat("a", 500) + " "}, want: strings.Repeat("a", 500)},
 			{name: "501_characters", item: map[string]any{"text": "Draft the Q4 summary", "active_form": strings.Repeat("a", 501)}, wantErr: "todos[0]: active_form must be 500 characters or fewer"},
 			{name: "501_unicode_characters", item: map[string]any{"text": "Draft the Q4 summary", "active_form": strings.Repeat("界", 501)}, wantErr: "todos[0]: active_form must be 500 characters or fewer"},
+			{name: "501_supplementary_characters", item: map[string]any{"text": "Draft the Q4 summary", "active_form": strings.Repeat("\U00020000", 501)}, wantErr: "todos[0]: active_form must be 500 characters or fewer"},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {

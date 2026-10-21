@@ -2194,7 +2194,6 @@ components:
           maxLength: 5242880
         addressees:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
@@ -2207,7 +2206,6 @@ components:
             never forwards its mentions (§6.11).
         deliveries:
           type: array
-          maxItems: 256
           items:
             $ref: '#/components/schemas/RoomDeliveryState'
           description: Per-member delivery states for this entry. Never null.
@@ -2306,10 +2304,10 @@ components:
       title: RoomSnapshotFrame
       description: >
         Server → client (spec omnipus-system-agent K45, K26, K27). The answer to
-        attach_room: the room entries after the cursor in order, the members,
-        mutes, member states, pause state, generation and allocated cost.
-        `complete` is false when the server could not serve every entry after the
-        cursor. THIS FILE EXISTS for the Constraint #8 5-step process and the
+        attach_room: the room entries after the cursor in seq order (at most the
+        newest 10,000; `has_older` is true when older entries after the cursor
+        were left out), the members, mutes, member states, pause state,
+        generation and allocated cost. THIS FILE EXISTS for the Constraint #8 5-step process and the
         pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
         schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
         Landing 1, WU-15 produces it.
@@ -2349,24 +2347,24 @@ components:
           description: Entries after the cursor, in seq order. Never null.
         members:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         muted:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         member_states:
           type: array
-          maxItems: 10000
           items:
             $ref: '#/components/schemas/RoomDeliveryState'
-          description: Current delivery states of outstanding requests. Never null.
+          description: >-
+            Every outstanding (non-terminal) delivery state plus the latest terminal
+            state of each member. Never null. Live states are never dropped (ruling
+            Q2), so this array has no fixed upper bound.
         paused:
           type: boolean
         generation:
@@ -2385,6 +2383,12 @@ components:
           type: boolean
         complete:
           type: boolean
+          description: always true; reserved.
+        has_older:
+          type: boolean
+          description: >
+            True when entries after the cursor older than the ones served were
+            left out (a snapshot carries at most the newest 10,000 entries).
     RoomMetaFrame:
       title: RoomMetaFrame
       description: >
@@ -2420,14 +2424,12 @@ components:
           minimum: 1
         members:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         muted:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
@@ -5832,6 +5834,9 @@ components:
       - tool_name
       - agent_id
       - expires_in_ms
+      - tool_call_id
+      - turn_id
+      - args
       additionalProperties: false
       properties:
         tool_call_id:
@@ -5840,19 +5845,18 @@ components:
           description: >
             L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as
             ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete
-            and approvable. Optional until bundle B3 (WU-8) makes it required.
+            and approvable.
         turn_id:
           type: string
           minLength: 1
           description: >
-            Same value as ToolApprovalRequiredFrame.turn_id. Optional until
-            bundle B3 (WU-8).
+            Same value as ToolApprovalRequiredFrame.turn_id.
         args:
           type: object
           additionalProperties: true
           description: >
             Same value as ToolApprovalRequiredFrame.args — an object, never null.
-            Optional until bundle B3 (WU-8). The snapshot reaches exactly the
+            The snapshot reaches exactly the
             connections the live frame reaches (same audience rule).
         segments:
           type: array

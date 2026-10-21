@@ -43,16 +43,35 @@ OMNIPUS_BEARER_TOKEN="" ./omnipus gateway --allow-empty &
   optional-auth. `RequireNotBypass` 503s high-blast-radius admin routes while
   bypass is on; never remove it without an ADR.
 
-## Default agent — one singleton, two ladders (ADR-054 D6.4)
+## Explicit agent selection — no fallback agent
 
-`config.Agents.Defaults.DefaultAgentID` is the ONLY input default-agent
-resolution consults. Registry's `GetDefaultAgent()` and
-`routing::resolveDefaultAgentID` carry DIFFERENT Priority-2 fallbacks by
-design; they agree only via Priority 1. The wire `default` field is derived
-(`ac.ID == DefaultAgentID`), never read from the per-entity
-`AgentConfig.Default` bool (once nothing wrote the singleton: PUT toasted
-success, changed no routing). Regression:
-`rest_agents_update_test.go::TestUpdateAgent_DefaultToggle_RegistryAndRoutingAgree`.
+There is no default agent. Authority: **The Omnipus system agent: one
+technical partner, workflows as skills, a narrow ask list and a secure secret
+field**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/a2-module-text/docs/internal/architecture/ADR-20261011-omnipus-system-agent.md::Founder answers after correction (FQ-17, FQ-18)`.
+
+New REST sessions require a nonblank `agent_id`;
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/a2-module-text/pkg/gateway/rest_sessions.go::createSessionHTTP`
+returns HTTP 400 when it is missing, even with schema validation off. New
+WebSocket chats likewise return an error if no agent is named. Existing
+sessions use their stored owner; a conflicting agent or an owner no longer
+registered is refused. See `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/a2-module-text/pkg/gateway/websocket_chat.go::wsHandlerHandleChatMessage.resolveTargetAgent`.
+
+An agent update carrying the retired `default` field is refused with HTTP 400
+before any write by
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/a2-module-text/pkg/gateway/rest_agents_update.go::rejectRetiredDefaultField`.
+An obsolete install-wide selector in saved config has no effect and produces
+a load-time warning
+(`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/a2-module-text/pkg/config/ignored_default_agent.go::warnIgnoredDefaultAgentKey`);
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/a2-module-text/pkg/gateway/rest_config.go::sanitizeConfigForWire`
+removes it from config responses.
+
+Channels require a workspace and a named main agent. Unbound connections and
+missing or ineligible main agents drop messages instead of selecting another
+agent (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/a2-module-text/pkg/routing/route.go::RouteResolver.ResolveRoute`).
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/a2-module-text/pkg/agent/routing_drops.go::AgentLoop.recordRouteDrop`
+logs the drop and records its reason;
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/a2-module-text/pkg/gateway/rest_channels.go::applyRoutingDropOverlay`
+exposes the channel's degraded status, reason and last-drop time.
 
 ## Preview shares the main listener (ADR-044)
 
