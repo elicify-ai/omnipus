@@ -110,15 +110,27 @@ func historyWireMessage(sid string, e session.ChatHistoryEntry) (generated.Messa
 		if serverErr {
 			return message, nil, errors.New("message projection schema unavailable")
 		}
-		// A bad individual public item keeps its source position and recorded ID.
-		// It never gets a new persisted identity or replaces valid neighbors.
-		message = generated.Message{Id: e.Entry.ID, AgentId: e.Entry.AgentID, Timestamp: e.Entry.Timestamp, HistoryPosition: &position}
-		text := "This saved message could not be displayed."
-		message.Content = &text
-		role := generated.MessageRoleSystem
-		message.Role = &role
-		raw, err = json.Marshal(message)
+		if e.Entry.Type == session.EntryTypeProviderFallback {
+			return historyPendingProviderFallback(e)
+		}
+		return historyMessagePlaceholder(e)
 	}
+	return message, raw, err
+}
+func historyPendingProviderFallback(e session.ChatHistoryEntry) (generated.Message, []byte, error) {
+	// TODO(PF=A, seams section Q): the additive Message mapping is explicitly
+	// held until the release lane repairs real live fallback publication. A
+	// valid saved note is not corrupt. This isolated placeholder is a known RED,
+	// not fallback parity; do not widen schemas or invent wire aliases here.
+	return historyMessagePlaceholder(e)
+}
+func historyMessagePlaceholder(e session.ChatHistoryEntry) (generated.Message, []byte, error) {
+	// Keep the owning occurrence and recorded identity, never a replacement row.
+	position := string(e.Position)
+	text := "This saved message could not be displayed."
+	role := generated.MessageRoleSystem
+	message := generated.Message{Id: e.Entry.ID, AgentId: e.Entry.AgentID, Timestamp: e.Entry.Timestamp, HistoryPosition: &position, Content: &text, Role: &role}
+	raw, err := json.Marshal(message)
 	return message, raw, err
 }
 func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHistoryPage, e session.ChatHistoryEntry) (historyPreparedGroup, error) {

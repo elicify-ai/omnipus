@@ -60,15 +60,17 @@ Every entry carries `agent_id` so multi-agent transcripts can be filtered to a s
 
 Each `ToolCall` records the full parameters AND the full result. When sub-agents are involved, `parent_tool_call_id` correlates child calls to their parent spawn (FR-H-001), so a deeply nested `subagent` → `spawn` → tool chain is reconstructable.
 
+The entry-level `parent_spawn_call_id` is different: it is private archive provenance for internal readers, **not a public `Message` property**. Paged REST messages and session detail omit that key, including for older archives that retain it. The tagged entry and its public narration still appear; this is field projection, not an entry filter. API clients must not depend on that private key. Contracted event relationships such as `parent_call_id`, `span_id` and `child_session_id` keep their existing meanings; none is an alias for the omitted archive field.
+
 ### Cancel context
 
 When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying `turn_id`, `canceled_by_user`, `canceled_by_channel`, `cancel_method` (graceful or hard), and any `descendants_canceled` (sub-agent IDs that were cascade-cancelled). Plus the assistant entry that got interrupted is marked `truncated: true`.
 
 ### Replay
 
-For the chat-history view in code or tests, call `UnifiedStore.ReadTranscriptView(sessionID)` and use its `Entries`. REST history and WebSocket snapshot replay use this view. It begins at the last `/clear` marker, applies input-disposition labels, and excludes private continuation inputs.
+REST history and WebSocket snapshot replay use the bounded `UnifiedStore.ReadChatHistoryPage` path. The latest page stops at the last exact `/clear` marker, applies input-disposition and correction rules, and excludes private continuation inputs. Earlier segments require explicit paging across the marker. A page does not read the whole transcript before selecting its recent end.
 
-`UnifiedStore.ReadTranscript(sessionID)` returns the complete merged transcript for internal readers, including those saved inputs. It is not interchangeable with the displayed chat-history view. Both readers use the session's day files in order; the archive remains the single on-disk record.
+`UnifiedStore.ReadTranscriptView(sessionID)` remains a full current-segment helper for internal callers and tests. `UnifiedStore.ReadTranscript(sessionID)` returns the complete merged transcript for internal readers, including saved inputs. Neither full reader is the paged API implementation. The archive remains the single on-disk record.
 
 ### Derived paging index and recovery
 
