@@ -6,28 +6,41 @@ import { selectAgent } from './fixtures/selectors'
  * implements the sidebar's documented selection/unmount contract without a
  * gateway or model. No helper, assertion API or successful result is mocked.
  */
-async function mountSidebar(page: Page, selectRequestedAgent = true): Promise<void> {
+async function mountSidebar(
+  page: Page,
+  selectRequestedAgent = true,
+  initialAgent: 'Mia' | 'Jim' = 'Mia',
+): Promise<void> {
   await page.setContent(`
     <button aria-label="Show sidebar" id="show">Show sidebar</button>
     <div id="drawer"></div>
     <script>
-      let selected = 'Mia';
+      let selected = '${initialAgent}';
+      let selectedWorkspace = 'My Workspace';
       const show = document.getElementById('show');
       const drawer = document.getElementById('drawer');
       document.body.dataset.selectedAgent = selected;
+      document.body.dataset.selectedWorkspace = selectedWorkspace;
       function close() { drawer.replaceChildren(); show.hidden = false; }
       show.onclick = () => {
         show.hidden = true;
         drawer.innerHTML = '<div role="dialog" aria-label="Main navigation" style="width:280px;height:500px">' +
-          '<nav aria-label="Main navigation"><div role="group" aria-label="My Workspace">' +
-          '<button aria-label="Hide My Workspace agents" aria-expanded="true">Agents</button>' +
-          ['Mia', 'Jim'].map(name => '<div role="group" aria-label="' + name + '" data-selected="' + (name === selected) + '">' +
-            '<div class="sidebar-agent-row"><button aria-current="' + (name === selected) + '" data-agent="' + name + '">' + name + '</button></div></div>').join('') +
-          '</div></nav></div>';
+          '<nav aria-label="Main navigation">' +
+          ['My Workspace', 'Other Workspace'].map(workspace =>
+            '<div role="group" aria-label="' + workspace + '">' +
+            '<button aria-label="Hide ' + workspace + ' agents" aria-expanded="true">Agents</button>' +
+            ['Mia', 'Jim'].map(name => {
+              const isSelected = workspace === selectedWorkspace && name === selected;
+              return '<div role="group" aria-label="' + name + '" data-selected="' + isSelected + '">' +
+                '<div class="sidebar-agent-row"><button' + (isSelected ? ' aria-current="true"' : '') +
+                ' data-agent="' + name + '" data-workspace="' + workspace + '">' + name + '</button></div></div>';
+            }).join('') + '</div>'
+          ).join('') + '</nav></div>';
         drawer.querySelectorAll('[data-agent]').forEach(button => {
           button.onclick = () => {
-            selected = ${selectRequestedAgent ? "button.dataset.agent" : "'Mia'"};
+            ${selectRequestedAgent ? 'selected = button.dataset.agent; selectedWorkspace = button.dataset.workspace;' : ''}
             document.body.dataset.selectedAgent = selected;
+            document.body.dataset.selectedWorkspace = selectedWorkspace;
             // No exit-animation grace: the original assertion always loses.
             close();
           };
@@ -58,5 +71,25 @@ test.describe('selectAgent helper after immediate sidebar unmount', () => {
       'selectAgent: clicked /Jim/i\'s row but neither its aria-current nor the selected row confirmed the switch',
     )
     await expect(page.locator('body')).toHaveAttribute('data-selected-agent', 'Mia')
+  })
+
+  test('selects the requested non-default workspace rather than its same-named agent in the default workspace', async ({ page }) => {
+    await mountSidebar(page)
+
+    await selectAgent(page, /Jim/i, 'Other Workspace')
+
+    await expect(page.locator('body')).toHaveAttribute('data-selected-agent', 'Jim')
+    await expect(page.locator('body')).toHaveAttribute('data-selected-workspace', 'Other Workspace')
+    await expect(page.locator('nav[aria-label="Main navigation"]')).toHaveCount(0)
+  })
+
+  test('rejects a failed target-workspace selection while the default workspace\'s same-named agent remains selected', async ({ page }) => {
+    await mountSidebar(page, false, 'Jim')
+
+    await expect(selectAgent(page, /Jim/i, 'Other Workspace')).rejects.toThrow(
+      'selectAgent: clicked /Jim/i\'s row but neither its aria-current nor the selected row confirmed the switch',
+    )
+    await expect(page.locator('body')).toHaveAttribute('data-selected-agent', 'Jim')
+    await expect(page.locator('body')).toHaveAttribute('data-selected-workspace', 'My Workspace')
   })
 })

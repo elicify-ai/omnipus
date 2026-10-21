@@ -408,7 +408,7 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | C→S | `session_mode_update` | Set or clear an existing session's Auto-approve choice |
 | C→S | `cancel` | Cancel in-progress turn |
 | C→S | `ping` | Keep-alive |
-| C→S | `attach_session` | Attach to an existing session and replay its transcript (with optional `since` for incremental replay) |
+| C→S | `attach_session` | Attach to an existing session. Supply both `since_seq` and `boot_id` to request incremental catch-up; if either is omitted or the requested position cannot be served, the gateway sends a transcript snapshot. |
 | C→S | `device_pairing_response` | Admin approval/rejection of a pending device pairing request |
 | C→S | `whatsapp_pairing_subscribe` | Start/stop receiving WhatsApp pairing frames on this connection (#283) |
 | S→C | `session_started` | New session ID minted by the server (response to a `message` without `session_id`) |

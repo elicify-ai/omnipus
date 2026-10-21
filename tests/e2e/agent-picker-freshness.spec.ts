@@ -142,7 +142,7 @@ test.describe("selectAgent when the row click closes the sidebar (static harness
             <button aria-label="Hide My Workspace agents" aria-expanded="true">My Workspace</button>
             <div role="group" aria-label="My Workspace">
               <div role="group" aria-label="Probe Agent" data-selected="\${selected}">
-                <div class="sidebar-agent-row"><button id="main">Probe Agent</button></div>
+                <div class="sidebar-agent-row"><button id="main" \${selected === 'true' ? 'aria-current="true"' : ''}>Probe Agent</button></div>
               </div>
             </div>
           </nav>\`;
