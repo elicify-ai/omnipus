@@ -11,7 +11,7 @@ package agent
 // membership under the RAW cfg.Agents.List[i].ID, but the real agent
 // registry (registry.go:109) and AgentInstance (instance.go:160) both
 // key/resolve every agent under routing.NormalizeAgentID(ID) — trimmed,
-// lower-cased, sanitized. For a mixed-case config ID that mismatch meant
+// sanitized without case folding (#1330). For an untrimmed config ID that mismatch meant
 // workspace.FindForAgent's EXACT string-match CoreTeam lookup silently
 // missed at real-turn time: resolveTurnWorkDirOrRefuse (the shared ADR-046
 // P1 gate) refused the turn with only a WARN log ("turn refused: agent is
@@ -44,7 +44,7 @@ import (
 // TestTestHarnessAgentIDs_MixedCaseAgent_NormalizedBeforeSeeding is the
 // regression pin described above.
 func TestTestHarnessAgentIDs_MixedCaseAgent_NormalizedBeforeSeeding(t *testing.T) {
-	const rawAgentID = "MixedCaseAgent"
+	const rawAgentID = " MixedCaseAgent "
 	normalized := routing.NormalizeAgentID(rawAgentID)
 	require.NotEqual(t, rawAgentID, normalized,
 		"sanity: the test id must actually need normalizing, or this test proves nothing")

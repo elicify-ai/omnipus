@@ -1,7 +1,10 @@
 # Agents (UI)
 
-The screen shell `AgentListScreen.tsx` lives in `src/components/screens/`;
-this folder holds the profile, form, wizard, and tool-approval pieces.
+There is no Agents screen (omnipus-system-agent FR-108): a workspace's Team
+(`src/components/workspaces/`) is the home of its agents, and Settings → System
+agents edits Judge, Plan Supervisor and Omnipus. This folder holds the shared
+agent editor (`AgentProfile`, hosted once by the app shell), its form pieces,
+and the tool-approval pieces.
 
 ## Design system
 
@@ -13,21 +16,23 @@ the script or test for each.
 
 - Wire taxonomy: `Main` (chat colleague) / `Subagent` (delegation-only worker
   on the Omnipus engine) / `subagent_3p` (delegation-only worker on an external
-  CLI). The built-in colleagues (Mia/Jim/Ava/Admin) are `type: core, locked: true`.
+  CLI). The built-in colleagues (Mia, Jim) are `type: core, locked: true`;
+  Ava and Admin are retired (FR-008) and must not reappear as agent ids.
   ADR-090 protects their identity and base instructions while allowing capability
   configuration. Judge and Plan Supervisor allow instruction edits with fixed
   capabilities. Use backend editable-field descriptors, including
   `tool_policy_changes` for the Tools editor; never infer capability locks from
-  `locked` alone. `CreateAgentWizard` offers only the three user types.
+  `locked` alone.
 - Worker detection is `src/lib/api/agents.ts::isWorker` (recognises `Subagent`,
   `subagent_3p`, legacy `worker`). One helper — do not inline a second
   type-string check per component.
 
-## Creation has one path
+## Creation has one path: Omnipus
 
-`CreateAgentWizard` (steps in `./wizard/`), hosted by `CreateAgentModal` and
-opened via `openCreateAgentModal(type, cli?)` from AgentListScreen. A second
-creation form for some new agent type is a regression — extend the wizard.
+The app has no manual create form (FR-108, BDD-12.8). Every "Add agent" entry
+point opens Omnipus's chat with the create-agent workflow (`useOpenOmnipus`,
+FR-045). REST `POST /api/v1/agents` stays as a non-UI API. Re-adding a create
+form, wizard or modal is a regression.
 
 ## Boundaries
 

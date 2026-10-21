@@ -25,6 +25,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
@@ -99,6 +101,28 @@ type Deps struct {
 	// Tests that do not need real persistence can set it to a no-op or leave it
 	// nil (WithConfig will return an error in that case).
 	SaveConfigLocked func(cfg *config.Config) error
+	// LockConfigWrites takes the gateway config write lock (restAPI.configMu,
+	// the lock every Settings config write holds) and returns its unlock.
+	// Tool writes to the install-wide shared resources — providers, MCP
+	// servers, channel instances — take it BEFORE entering MutateConfig, so
+	// they serialize with Settings in the same order Settings uses (config
+	// lock → agent-loop lock, never the reverse; omnipus-system-agent FR-085,
+	// see withSharedResourceWrite). It must never be called while the
+	// agent-loop lock is held. The gateway wires it to lockConfigWrites; nil
+	// (unit tests building Deps by hand) adds no outer lock.
+	LockConfigWrites func() (unlock func())
+	// URLChecker is the SSRF guard for outbound checks a change tool makes to
+	// an operator- or agent-supplied endpoint (configure_provider's model
+	// listing, FR-031). A row whose catalog locality is local always uses
+	// providers.NoopChecker (a local endpoint is loopback/private by
+	// definition — the same rule as the gateway's entitlement listing). The
+	// gateway wires its SSRF checker; nil means no guard (unit tests).
+	URLChecker providers.URLChecker
+	// ListProviderModels replaces providers.ListModels in configure_provider's
+	// check. Nil (production) uses providers.ListModels; tests set it so a
+	// catalog provider's real endpoint is never called from a unit test.
+	ListProviderModels func(ctx context.Context, protocol catalog.Protocol, baseURL, apiKey string,
+		checker providers.URLChecker) ([]string, error)
 	// CredStore is the encrypted credential store.
 	CredStore *credentials.Store
 	// ReloadFunc triggers a hot-reload of the agent loop so newly created agents
@@ -189,6 +213,14 @@ type Deps struct {
 	// workspace save. Nil in tests or when not wired; callers nil-check. The
 	// gateway wires it to restAPI.ensureWorkspaceMains.
 	EnsureWorkspaceMains func(workspaceID string) error
+
+	// UnbindWorkspaceChannels is the SAME hard channel-cleanup operation used
+	// by HTTP workspace deletion. Called under the workspace lock, before any
+	// deletion cascade. Returns the instance IDs whose disabled/unbound state
+	// was saved; a non-empty list with an error means persistence succeeded
+	// but live config refresh failed. The gateway owns its raw-JSON config
+	// transaction and config-lock -> agent-loop-lock ordering.
+	UnbindWorkspaceChannels func(workspaceID string) ([]string, error)
 
 	// DeleteSessionStore returns the loop's ONE live session store for the
 	// agent-delete cascade (DEL-10). It must not open a store: a nil return (or a
@@ -285,6 +317,10 @@ type Deps struct {
 	// ResolveToolPolicy returns the live compositor verdict for a registered
 	// caller. ok is false when the identity is absent or no longer registered.
 	ResolveToolPolicy func(agentID, toolName string) (policy string, ok bool)
+	// GodModeActive reports whether the God Mode override is in effect now
+	// (agent.GodModeActive), so a reported effective policy matches what the
+	// runtime compositor resolves. Nil means not active.
+	GodModeActive func() bool
 
 	// ListSessions returns all sessions across all stores (shared + legacy per-agent),
 	// deduplicating entries that appear in both. Errors are per-store and non-fatal;

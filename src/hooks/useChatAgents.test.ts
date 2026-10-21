@@ -111,7 +111,10 @@ describe('useChatAgents — status + worker scoping (no workspace set)', () => {
     expect(result.current.chatAgents.map((a) => a.id).sort()).toEqual(['jim', 'mia'])
   })
 
-  it('includes Admin but excludes a retired locked Ray record by built-in identity', async () => {
+  // WU-11 GREEN retarget (FR-008): the pinned rule flips with the retired
+  // seeds — a stale cache carrying retired built-in records (Admin, Ray)
+  // yields NO chat agent from them.
+  it('excludes retired built-in records (Admin, Ray) from chatAgents by identity', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([
       makeAgent({ id: 'admin', name: 'Admin', type: 'core', locked: true, status: 'idle' }),
       makeAgent({ id: 'ray', name: 'Ray', type: 'core', locked: true, status: 'idle' }),
@@ -121,7 +124,7 @@ describe('useChatAgents — status + worker scoping (no workspace set)', () => {
     const { result } = renderHook(() => useChatAgents(), { wrapper: makeWrapper(makeClient()) })
 
     await waitFor(() => expect(result.current.agents).toHaveLength(2))
-    expect(result.current.chatAgents.map((agent) => agent.id)).toEqual(['admin'])
+    expect(result.current.chatAgents.map((agent) => agent.id)).toEqual([])
   })
 })
 

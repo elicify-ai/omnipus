@@ -2,6 +2,48 @@
 
 **Bottom line:** all accepted follow-ups are included. The final pack has **14 retargeted existing files and 21 new cases** (18 real-shell behaviours plus 3 shipped-value guards). All **290 cases in 16 files** have successful, serial, one-file execution receipts on the requested UI head. **629 original assertion expressions and all original case declarations remain**, with five stronger visibility assertions added. The original nine real-shell acceptance oracles also remain unchanged. Independent GREEN verification, production mutations and the skill's Proof-of-failability checklist are **deferred to a fresh CHECK instance**, not claimed as completed.
 
+## SUPERSESSION — founder decision 2026-10-18, Train 3 re-cut: "rooms switched on"
+
+Recorded in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/PLAN-omnipus-L1-v2-20261013.md`
+line 143: "WU-15 rooms + room screens, rooms switched on". This supersedes the 2026-10-14
+stage-1 decision FOR ROOMS ONLY. Every test pin that asserted rooms hidden/unreachable
+under `ROOMS_ENABLED = false` was re-aimed to the matching switched-on pin at the SAME
+assertion strength — no assertion was weakened, and each superseded "must be false /
+absent / null" expression became its "must be true / visible" counterpart. Re-aimed in
+this retarget (stream C, branch `work/wu15-stage1-retarget`):
+
+| Case | 2026-10-14 pin (superseded) | 2026-10-18 pin (current) | File |
+|---|---|---|---|
+| S1-g rooms | ships `ROOMS_ENABLED` exactly false | ships `ROOMS_ENABLED` exactly true | `src/lib/featureSwitches.stage1.test.ts` |
+| S1-a1 | expanded workspace: no Group chats section, no room read | section + room row visible, room-list read exactly once | `src/components/layout/AppShell.stage1.test.tsx` |
+| S1-a2 | member main: no Add participant entry, no room request | Add participant entry visible, no attach_room/room-detail read (sidebar's one list read aside) | same |
+| S1-a3 | direct room URL redirects to chat, no room REST, no attach_room | same URL mounts the room, reads it, attaches it, renders from a real snapshot | same |
+| S1-a traffic ×4 | room_ref carrier renders no entry/toggle/link | exactly one entry + visible toggle, expanding to the "Open group" link, no room REST read | same |
+
+The S1-b (secrets) and S1-c…S1-exp (approval modal) pins are NOT affected — they keep
+the 2026-10-14 stage-1 oracles. The switch-flip proof for the re-aimed pins: with the
+shipped `ROOMS_ENABLED = false` each re-aimed pin FAILS; with a temporary local flip to
+`true` (never committed) each PASSES. CHECK mutants for the re-aimed pins invert
+accordingly (`ROOMS_ENABLED true → false`).
+
+### Switch-flip proof receipts (stream C)
+
+Two-sided proof, one file at a time by explicit path, serial:
+
+| Direction | Tree | Result | Log (in `tests/l1-room-ui/retarget-logs/`) |
+|---|---|---|---|
+| Must FAIL with the switch off | `94977f1c0` (shipped `ROOMS_ENABLED = false`), scratch clone, only the two re-aimed test files applied | `featureSwitches.stage1.test.ts`: **1 failed / 2 passed** (S1-g rooms), exit 1; `AppShell.stage1.test.tsx`: **7 failed / 11 passed** (S1-a1, S1-a2, S1-a3, four S1-a traffic rows — exactly the steered set), exit 1 | `fail-switch-off-featureSwitches.log`, `fail-switch-off-AppShell.log` |
+| Must PASS with the switch on | `470d56f54` merged (the dev's real flip, `ROOMS_ENABLED = true`), no test-side switch mock | `featureSwitches.stage1.test.ts`: 3/3, exit 0; `AppShell.stage1.test.tsx`: **18/18** (all 7 re-aimed pins green, all 11 untouched pins still green), exit 0 | `pass-switch-on-featureSwitches.log`, `pass-switch-on-AppShell.log` |
+
+Every off-switch failure names its superseded pole: missing `group-chats-sales` /
+`add-participant` / `room-traffic-entry`, and S1-a3's redirect observed as
+`expected '/workspaces/sales/chat' to be '/workspaces/sales/rooms/launch'`. `npm run
+typecheck` exit 0 on the merged tree (`typecheck.log`). No production file was authored
+or reverted by QA: the switch flip arrives only through the merged dev commit, and the
+branch delta over `470d56f54` touches test files, the ledger and its logs only.
+
+
+
 ## Accepted scope and tested states
 
 | Item | Evidence/source |
@@ -78,25 +120,25 @@ Mutation target aliases (all absolute):
 
 | New case | Frozen oracle | Exact mutant for fresh CHECK (not executed by RED) |
 |---|---|---|
-| S1-a1 expanded workspace | Populated member controls visible, no Group chats, no room REST reads | Switches: ROOMS_ENABLED=false → true |
-| S1-a2 member main header | Main context genuinely active, no Add participant, no room reads | Switches: ROOMS_ENABLED=false → true |
-| S1-a3 direct room URL | Actual beforeLoad redirects to workspace chat; no room REST or attach_room | Switches: ROOMS_ENABLED=false → true; alternatively remove disabled-room Route.beforeLoad redirect |
+| S1-a1 expanded workspace | **Re-aimed 2026-10-18:** Group chats section + room row visible, room-list read exactly once (was: no Group chats, no room REST reads) | Switches: ROOMS_ENABLED=true → false |
+| S1-a2 member main header | **Re-aimed 2026-10-18:** Add participant entry visible, no attach_room/room-detail read (was: no Add participant, no room reads) | Switches: ROOMS_ENABLED=true → false |
+| S1-a3 direct room URL | **Re-aimed 2026-10-18:** same URL mounts the room, reads it, attaches it, renders from a real snapshot (was: beforeLoad redirect, no room REST, no attach_room) | Switches: ROOMS_ENABLED=true → false |
 | S1-b profile Tools | Sidebar Edit opens shell-owned profile; Tools loads, no Private secrets or GET secrets | Switches: AGENT_PRIVATE_SECRETS_ENABLED=false → true |
 | S1-c Approve Once on Settings | Current-chat approval shown globally; exact POST action allow_once; no navigation | Modal host: delete its conditional ToolApprovalModal mount |
 | S1-c Deny on Settings | Exact POST action deny; no navigation | Modal host: delete its conditional ToolApprovalModal mount |
 | S1-d child without root id | Incoming child approval actionable with parent main unchanged; no Go there detour | Modal host: delete modal mount; narrower: visible queue filtered by entry.sessionId === useSessionStore.getState().activeSessionId |
 | S1-e own-chat single display | One modal and one Approve Once button including hidden nodes; no inline panel/tail/banner | Switches: INLINE_TOOL_APPROVALS_ENABLED=false → true |
 | S1-f other workspace | Marketing approval actionable while Sales/main remain active | Modal host: delete modal mount; narrower: import useWorkspacesStore and filter visible queue by entry.workspaceId === its activeWorkspaceId |
-| S1-a traffic plain request | Actual wire room_ref retained; ordinary row visible; no room entry/toggle/link | Switches: ROOMS_ENABLED=false → true; narrower: remove check at PlainMessageList room mount |
-| S1-a traffic virtual request | Same oracle through real measured virtualized historical rows | Switches: ROOMS_ENABLED=false → true; narrower: remove check in rowForMessage |
-| S1-a traffic streaming answer | Real token frame carries room_ref; no room entry in streaming slot | Switches: ROOMS_ENABLED=false → true; narrower: remove check at streaming RoomTrafficMessage mount |
-| S1-a traffic completed answer | Real token/done transitions keep room_ref without a room entry | Switches: ROOMS_ENABLED=false → true; narrower: remove historical-row check |
+| S1-a traffic plain request | **Re-aimed 2026-10-18:** actual wire room_ref retained; ordinary row visible; exactly one compact entry + visible toggle expanding to the "Open group" link; no room REST read (was: no entry/toggle/link) | Switches: ROOMS_ENABLED=true → false; narrower: remove check at PlainMessageList room mount |
+| S1-a traffic virtual request | **Re-aimed 2026-10-18:** same switched-on oracle through real measured virtualized historical rows — closes the WU-15 CHECK finding 2 jsdom gap for the virtualized branch | Switches: ROOMS_ENABLED=true → false; narrower: remove check in rowForMessage |
+| S1-a traffic streaming answer | **Re-aimed 2026-10-18:** real token frame carries room_ref; the streaming slot renders the compact entry + toggle (was: no entry in streaming slot) — closes the jsdom gap for the streaming branch | Switches: ROOMS_ENABLED=true → false; narrower: remove check at streaming RoomTrafficMessage mount |
+| S1-a traffic completed answer | **Re-aimed 2026-10-18:** real token/done transitions keep room_ref and render the compact entry (was: no room entry) | Switches: ROOMS_ENABLED=true → false; narrower: remove historical-row check |
 | S1-b live secret_request | Exact pending record arrives in real store; no card/tail/value field/secret request | Switches: AGENT_PRIVATE_SECRETS_ENABLED=false → true; narrower: remove SecretRequestThreadTail mount guard |
 | S1-b session_state.secret_requests | Same absence after real reconnect-style snapshot; exact pending payload retained | Same AGENT_PRIVATE_SECRETS_ENABLED false → true, or secret-tail guard removal |
 | S1-q three-entry queue | Parent/child/other-workspace queue is shown in arrival order; approve/deny/approve produce exact 3 POSTs, no navigation or lost request | Modal host: delete modal mount; narrower: filter visible queue by active session, losing child/other-workspace |
 | S1-exp deadline | Actions available at deadline−1, absent at deadline; no automatic POST; denied_timeout removes head and promotes next | Modal host: delete modal mount; narrower: force ToolApprovalCard's hasExpired=false |
 | S1-exp zero lifetime | Contract-minimum expires_in_ms=0 is non-actionable on arrival; dismiss removes notice without POST | Modal host: delete modal mount; narrower: force hasExpired=false. Dismiss follows agreed release UI; non-actionability/no automatic submission are the safety oracles. |
-| S1-g rooms guard | REAL ROOMS_ENABLED is exactly false, founder stage-1 decision 2026-10-14 cited in test | Switches: ROOMS_ENABLED=false → true |
+| S1-g rooms guard | **Re-aimed 2026-10-18:** REAL ROOMS_ENABLED is exactly true, founder Train 3 decision cited in test (was: exactly false per 2026-10-14) | Switches: ROOMS_ENABLED=true → false |
 | S1-g secrets guard | REAL AGENT_PRIVATE_SECRETS_ENABLED is exactly false | Switches: AGENT_PRIVATE_SECRETS_ENABLED=false → true |
 | S1-g approvals guard | REAL INLINE_TOOL_APPROVALS_ENABLED is exactly false | Switches: INLINE_TOOL_APPROVALS_ENABLED=false → true |
 

@@ -332,19 +332,21 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 		}
 		defer t.file.Close()
 	}
+	reuseOnly := false
 	if hasSaved && len(expired) == 0 {
-		expected := historyCloneCheckpoint(cp)
-		if err = historyApplyMutations(t, &expected, items); err != nil {
+		var remaining []historyMutation
+		remaining, err = historyReuseSaved(t, cp, saved, items)
+		if err != nil {
 			return result, historyUnavailable("index_inconsistent", err)
 		}
-		if !historySameCoverage(expected, saved) {
-			return result, historyUnavailable("index_inconsistent", errors.New("saved history transaction does not match canonical suffix"))
-		}
 		candidate = saved
-		t.buffer = nil
-		t.pending = nil
-		t.root = saved.Root
-		t.end = saved.MutationEnd
+		reuseOnly = len(remaining) == 0
+		if !reuseOnly {
+			candidate = historyCloneCheckpoint(saved)
+			if err = historyApplyMutations(t, &candidate, remaining); err != nil {
+				return result, historyUnavailable("index_inconsistent", err)
+			}
+		}
 	} else {
 		if err = historyApplyMutations(t, &candidate, items); err != nil {
 			return result, historyUnavailable("index_inconsistent", err)
@@ -363,7 +365,7 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 	if len(expired) > 0 {
 		operation = "retention"
 	}
-	if hasSaved && len(expired) == 0 {
+	if reuseOnly {
 		if err = t.file.Sync(); err == nil {
 			err = historyPublishRoot(dir, t, candidate, chatHistoryPublicationEvent{SessionID: sid, Operation: operation, IndexGeneration: candidate.Generation, Item: len(items)})
 		}

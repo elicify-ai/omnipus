@@ -183,10 +183,6 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 //   - pkg/skills: GitHubRegistryConfig.Workspace and the MarketplaceEntry
 //     .Workspace it's built from (the skills-marketplace install directory,
 //     unrelated to any agent's own home directory).
-//   - pkg/migrate/sources/openclaw: OpenClawAgentDefaults.Workspace (the
-//     FROZEN third-party JSON schema — renaming breaks parsing real openclaw
-//     configs) and the package-private staging types that shuttle data into the
-//     REAL config.AgentConfig/AgentDefaults .Home field.
 //
 // Adding a new entry is a deliberate, reviewed exception: confirm which type is
 // genuinely involved before silencing a failure this way.
@@ -213,8 +209,9 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 	},
 	// TestL11274NativeMainAndSubagentAcceptAndPersistSoul: membership readback.
 	"pkg/agent/l1_1274_fix1_soul_test.go": {
-		`if err != nil || !reflect.DeepEqual(state.Workspace.CoreTeam, []string{"omnipus", "native-soul-boundary"}) {`: true,
-		`t.Errorf("native create membership readback = %v, err=%v", state.Workspace.CoreTeam, err)`:                    true,
+		// WU-3: the created agent's id is a generated UUID read from the result.
+		`if err != nil || !reflect.DeepEqual(state.Workspace.CoreTeam, []string{"omnipus", id}) {`:  true,
+		`t.Errorf("native create membership readback = %v, err=%v", state.Workspace.CoreTeam, err)`: true,
 	},
 	// ADR-090 workspace.State.Workspace — the multi-agent workspace record.
 	"pkg/gateway/rest_workspace_delegation.go": {
@@ -233,6 +230,15 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 		"rd.ws = state.Workspace": true,
 		"return &workspace.State{Workspace: rw.ws, Delegation: edges, Revision: revision}": true,
 		"rw.ws = state.Workspace": true,
+		// Train 1 main-chat retry: ReadStateLocked returns workspace.State;
+		// these read its shared workspace record, not an agent's home.
+		"if len(state.Workspace.CoreTeam) > 0 {":                                  true,
+		"if mainsErr := a.ensureMainsForTeam(state.Workspace); mainsErr != nil {": true,
+	},
+	// Train 1 #1363: ReadState returns workspace.State; this is the default
+	// multi-agent workspace record, not an agent's home directory.
+	"pkg/gateway/train1_default_workspace_delete_test.go": {
+		`require.True(t, before.Workspace.IsDefault)`: true,
 	},
 	"pkg/sysagent/tools/workspace.go": {
 		"\"core_team\":   state.Workspace.CoreTeam,":    true,
@@ -242,9 +248,36 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 		"\"pin_order\":   state.Workspace.PinOrder,":    true,
 		"\"pinned\":      state.Workspace.Pinned,":      true,
 		"\"status\":      state.Workspace.Status,":      true,
-		"return workspaceMutationError(id, \"save_delegation\", \"partial\", \"\", workspaceChangedFields(state.Workspace, w), map[string]any{\"exists\": true, \"state_read_failed\": true})": true,
-		"return workspaceMutationError(id, \"save_delegation\", \"partial\", actual.Revision, workspaceChangedFields(state.Workspace, actual.Workspace), workspaceActualState(actual))":        true,
-		"w := state.Workspace": true,
+		// Train 1 #1363: CheckRevisionLocked returns workspace.State;
+		// default-workspace protection reads that record, not AgentConfig.
+		`if refusal := workspacepkg.RefuseDefaultDeletion(state.Workspace.IsDefault); refusal != nil {`: true,
+		// WU-3 (FR-032, #1057): update_workspace's staged read-back and the
+		// canonical workspace view read workspace.State.Workspace.
+		`resp := workspaceView(state.Workspace, state.Delegation, state.Revision, computeWorkspaceTaskCount(home, id))`:                                                                    true,
+		`members := workspacepkg.TeamSet(state.Workspace.CoreTeam, nil)`:                                                                                                                   true,
+		`u := &workspaceUpdate{t: t, args: args, id: id, state: state, w: state.Workspace,`:                                                                                                true,
+		`oldTeam: append([]string(nil), state.Workspace.CoreTeam...)}`:                                                                                                                     true,
+		`changed := workspaceChangedFields(u.state.Workspace, u.w)`:                                                                                                                        true,
+		`resp := workspaceView(u.state.Workspace, u.state.Delegation, u.state.Revision, computeWorkspaceTaskCount(home, u.id))`:                                                            true,
+		`return workspaceMutationError(u.id, "save_delegation", "partial", "", workspaceChangedFields(u.state.Workspace, u.w), map[string]any{"exists": true, "state_read_failed": true})`: true,
+		`return workspaceMutationError(u.id, "save_delegation", "partial", actual.Revision, workspaceChangedFields(u.state.Workspace, actual.Workspace), workspaceActualState(actual))`:    true,
+		`return tools.NewToolResult(successJSON(workspaceView(state.Workspace, state.Delegation, state.Revision,`:                                                                          true,
+	},
+	// WU-3 RED real-registry tests: workspace.ReadState returns workspace.State.
+	"pkg/gateway/wu3_real_registry_test.go": {
+		`assert.Equal(t, []string{id}, target.Workspace.CoreTeam)`:                                                                                       true,
+		`assert.Equal(t, []string{"omnipus"}, anchor.Workspace.CoreTeam)`:                                                                                true,
+		`assert.Equal(t, "real WU3 turn write", after.Workspace.Description, "actual registered Execute must have committed, not returned model prose")`: true,
+	},
+	// WU-3 create_agent workspace_id test: ReadState returns workspace.State.
+	// WU-3 team-admission test (b39cfe2fe): workspace.ReadState returns
+	// workspace.State; after.Workspace is that state's record, not AgentConfig.
+	"pkg/sysagent/tools/wu3_fix_team_admission_test.go": {
+		`assert.Empty(t, after.Workspace.CoreTeam)`: true,
+	},
+	"pkg/sysagent/tools/wu3dev_create_agent_target_test.go": {
+		`require.Contains(t, sales.Workspace.CoreTeam, id, "the agent joins the target team")`:          true,
+		`require.NotContains(t, other.Workspace.CoreTeam, id, "the caller's workspace is not touched")`: true,
 	},
 	"pkg/sysagent/tools/ava_configuration_context_test.go": {
 		"require.Equal(t, \"Coordination for the launch\", state.Workspace.Description)": true,
@@ -289,22 +322,6 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 		"{Name: \"github-corp\", Type: \"github\", Enabled: true, Workspace: ws2},":         true,
 		"{Name: \"github-good\", Type: \"github\", Enabled: true, Workspace: t.TempDir()},": true,
 		"{Name: \"github-public\", Type: \"github\", Enabled: true, Workspace: ws1},":       true,
-	},
-
-	// pkg/migrate/sources/openclaw: frozen OpenClaw schema + local staging types.
-	"pkg/migrate/sources/openclaw/openclaw_config.go": {
-		"Home:   a.Workspace,": true,
-		"agentCfg.Workspace = rewriteWorkspacePath(*entry.Workspace)":                            true,
-		"cfg.Agents.Defaults.Home = c.Agents.Defaults.Workspace":                                 true,
-		"cfg.Agents.Defaults.Workspace = c.GetDefaultWorkspace()":                                true,
-		"if c.Agents == nil || c.Agents.Defaults == nil || c.Agents.Defaults.Workspace == nil {": true,
-		"if entry.Workspace != nil {":                                                            true,
-		"return rewriteWorkspacePath(*c.Agents.Defaults.Workspace)":                              true,
-	},
-	"pkg/migrate/sources/openclaw/openclaw_config_test.go": {
-		"Workspace: \"~/.omnipus/workspace\",":                                                                    true,
-		"if omnipusCfg.Agents.Defaults.Workspace != \"~/.omnipus/workspace\" {":                                   true,
-		"t.Errorf(\"expected workspace '~/.omnipus/workspace', got '%s'\", omnipusCfg.Agents.Defaults.Workspace)": true,
 	},
 }
 

@@ -260,9 +260,7 @@ func historyPageContext(t *chatHistoryIndexTree, dir string, cp historyCheckpoin
 			case 3:
 				span.End = &e
 			}
-			if m := historyMetrics(t.ctx); m != nil {
-				m.DependencyCount++
-			}
+			t.resolvedDependency("archive", rank)
 		}
 		context.Spans = append(context.Spans, span)
 	}

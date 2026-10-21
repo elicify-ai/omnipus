@@ -213,13 +213,16 @@ func TestAgentCreate_NotifyFiresOnlyAfterAgentIsListable(t *testing.T) {
 //     fails deterministically and portably (no reliance on permission bits,
 //     which behave inconsistently as root or across platforms).
 //
-// toSlug("Init Home Fail Agent") deterministically yields
-// "init-home-fail-agent" (lowercase, spaces to hyphens). The test asserts
+// The test-only name-keyed id generator (UseNameKeyedAgentIDsForTest) makes
+// "Init Home Fail Agent" yield the id "init-home-fail-agent", so the fixture
+// path above is known in advance; production ids are random UUIDs. The test asserts
 // the PARTIAL envelope (persistence_status="partial", error_stage="init_home",
 // the "agent home could not be initialized" message — the shape
 // createHomePartialResult emits), not just a generic IsError + zero-notify
 // proof, so it actually proves the InitAgentHome branch was reached.
 func TestAgentCreate_InitAgentHomeFailure_DoesNotNotifyAgentCreated(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
 	al := buildSysagentFastUpsertTestLoop(t, home, provider, nil)
@@ -333,9 +336,12 @@ func TestAgentCreate_NilNotifyAgentCreatedIsSafe(t *testing.T) {
 // Setup: pre-create the EXACT path persistAndJoin will try to WriteFile
 // (home/agents/<id>/HEARTBEAT.md) as a DIRECTORY — os.WriteFile on a
 // directory path fails deterministically and portably (no reliance on
-// permission bits). toSlug("Hb Notify Fail Agent") deterministically yields
-// "hb-notify-fail-agent".
+// permission bits). The test-only name-keyed id generator
+// (UseNameKeyedAgentIDsForTest) makes "Hb Notify Fail Agent" yield the id
+// "hb-notify-fail-agent"; production ids are random UUIDs.
 func TestAgentCreate_HeartbeatWriteFailure_DoesNotNotifyAgentCreated(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
 	al := buildSysagentFastUpsertTestLoop(t, home, provider, nil)

@@ -409,6 +409,9 @@ func historyWriteFormat(dir string) error {
 	return fileutil.WriteFileAtomicSyncDir(filepath.Join(historyIndexPath(dir), "FORMAT"), []byte(historyFormatMarker), 0o600)
 }
 func historyTokenRank(t *chatHistoryIndexTree, p HistoryPosition) (uint64, error) {
+	if rank, ok := t.positions[p]; ok {
+		return rank, nil
+	}
 	var rank uint64
 	ok, err := t.get("p/"+string(p), &rank)
 	if err != nil {

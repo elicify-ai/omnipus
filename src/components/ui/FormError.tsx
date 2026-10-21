@@ -15,8 +15,7 @@
 //   - `id` is exposed so callers can wire `aria-describedby` on the
 //     associated input (the standard ARIA pattern for field errors).
 //   - The styling reuses the existing --color-error token so the look is
-//     consistent with the in-place name/executor error rows in
-//     CreateAgentModal today.
+//     consistent with the in-place field error rows elsewhere in the app.
 //
 // 3.3.3 (Error Suggestion) is a CALLER responsibility — pass actionable
 // suggestion strings when the failure mode is known; this component only

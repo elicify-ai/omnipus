@@ -699,7 +699,7 @@ export function BrowserLiveView({
 
   // ── ADR-040 D6 / ADR-043 D3 — agent identity for the header chip ──────────
   // Best-effort, read-only cache lookup against the SAME `['agents']` query
-  // key the Activity Bar / Agents screen already populate (useRunningActivity.ts)
+  // key the Activity Bar already populates (useRunningActivity.ts)
   // — deliberately NOT a fresh `useQuery` subscription here: this component is
   // mounted standalone by two very different hosts (the docked Sheet and the
   // fullscreen pop-out, which has no app-wide providers set up beyond its own

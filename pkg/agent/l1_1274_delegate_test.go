@@ -173,9 +173,8 @@ func TestL11274CreatedExternalWorkerCanBeDelegatedToEachDriver(t *testing.T) {
 		t.Run(cli, func(t *testing.T) {
 			f := newL11274Fixture(t, "", false)
 			path := l11274Executable(t, f.home, cli, true)
-			id := "created-" + cli
 			result := f.execute(t, "create_agent", l11274CreateArgs("Created "+cli, cli, path))
-			l11274AssertCreated(t, f, result, id, cli, path, "#6E8BA8")
+			id := l11274AssertCreated(t, f, result, cli, path, "#6E8BA8")
 			l11274AssertExternalDelegate(t, f, id, cli, path)
 		})
 	}

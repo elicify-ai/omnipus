@@ -21,7 +21,8 @@ import React from 'react'
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-// Keep the original cross-workspace-banner oracle in the enabled configuration.
+// (The old cross-workspace-banner oracle was retired with the banner —
+// founder ruling 2026-10-18, bundle B3.)
 // Shipped stage-1 approval reachability is covered by AppShell.stage1.test.tsx.
 vi.mock('@/lib/featureSwitches', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/featureSwitches')>(),
@@ -84,9 +85,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchNotifications: vi.fn(),
     fetchTasks: vi.fn().mockResolvedValue([]),
     fetchAgents: vi.fn().mockResolvedValue([]),
-    // CrossWorkspaceApprovalBanner (rendered for real below, not stubbed —
-    // the coexistence test needs it to actually mount) resolves workspace
-    // names via this call.
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
     // The corner dot (GodModeIndicators.tsx, mounted by AppShell since the
     // banner removal) queries god-mode via useGodModeOn; the banner-removal
@@ -101,8 +99,6 @@ import { ApiError } from '@/lib/api-error'
 import { AppShell } from './AppShell'
 import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
-import { useToolApprovalStore } from '@/store/toolApproval'
-import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSidebarStore } from '@/store/sidebar'
 
 // ADR-0010 / login-and-onboarding-spec.md §2.2 — `identity` is a required
@@ -615,92 +611,15 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
   })
 })
 
-// ── Cross-workspace approval banner coexists with the connection-error
-// banner (founder decision 2026-09-14) ─────────────────────────────────────
+// ── Cross-workspace approval banner: RETIRED (founder ruling 2026-10-18) ────
 //
-// CrossWorkspaceApprovalBanner (src/components/layout/CrossWorkspaceApprovalBanner.tsx)
-// is mounted in the same stacked-banner column as connectionError/
-// devModeBypass/appStateError, right above <main>. Both are plain block-level
-// children of a flex column (never `fixed`/`absolute`), so when more than one
-// is visible at once they simply stack — neither can visually cover or
-// replace the other, and <main> (flex-1) still gets whatever height remains.
-// This proves that stacking holds for real, not just by code inspection.
-describe('AppShell — cross-workspace approval banner coexists with other banners', () => {
-  afterEach(() => {
-    useConnectionStore.setState({ connectionError: null })
-    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
-    useWorkspacesStore.setState({ activeWorkspaceId: null })
-  })
-
-  it('renders both the connection-error banner and the cross-workspace approval banner at once, neither hiding the other', async () => {
-    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
-    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
-    vi.mocked(api.fetchWorkspaces).mockResolvedValue([
-      {
-        revision: '0'.repeat(64),
-        id: 'ws-other',
-        name: 'UAT-T2',
-        status: 'active',
-        pinned: false,
-        pin_order: 0,
-        task_count: 0,
-        created_at: '2026-09-14T00:00:00Z',
-        updated_at: '2026-09-14T00:00:00Z',
-      },
-    ])
-    useConnectionStore.setState({ connectionError: 'Lost connection to gateway' })
-    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-active' })
-    useToolApprovalStore.getState().enqueue({
-      type: 'tool_approval_required',
-      approval_id: 'appr-cross',
-      tool_call_id: 'call-cross',
-      tool_name: 'write_file',
-      args: {},
-      agent_id: 'agent-x',
-      session_id: 'sess-x',
-      turn_id: 'turn-x',
-      expires_in_ms: 300_000,
-      workspace_id: 'ws-other',
-    })
-
-    renderShell()
-
-    const connectionBanner = await waitFor(() => screen.getByText('Lost connection to gateway'))
-    const approvalBanner = await waitFor(() =>
-      // L1 amendment §1.2 R6 / BDD-11.3 names the target chat, not just
-      // the workspace. Known owner and unknown-agent descriptions are valid.
-      screen.getByText(/^1 approval waiting in (?:a chat|[^\n]+'s chat) in UAT-T2$/),
-    )
-    expect(connectionBanner).toBeInTheDocument()
-    expect(approvalBanner).toBeInTheDocument()
-    // Follow-up (h): mounted-but-hidden banners cannot satisfy coexistence.
-    expect(connectionBanner).toBeVisible()
-    expect(approvalBanner).toBeVisible()
-
-    // Stacked siblings, not overlapping: the approval banner's ancestor
-    // button must come AFTER the connection-error alert in document order
-    // (matching source order — connectionError renders first), and the two
-    // must not be the same element or contained one-in-the-other.
-    const approvalButton = screen.getByTestId('cross-workspace-approval-banner')
-    const alertBanner = connectionBanner.closest('[role="alert"]')
-    expect(alertBanner).not.toBeNull()
-    expect(approvalButton).not.toBe(alertBanner)
-    expect(alertBanner?.contains(approvalButton)).toBe(false)
-    expect(approvalButton.contains(alertBanner)).toBe(false)
-    // DOCUMENT_POSITION_FOLLOWING (4): approvalButton comes after alertBanner.
-    expect(
-      alertBanner
-        ? (alertBanner.compareDocumentPosition(approvalButton) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-        : false,
-    ).toBe(true)
-
-    // <main> is still present and not pushed out of the DOM/collapsed to
-    // nothing — both banners take their natural height in the flex column,
-    // <main> (flex-1) absorbs the rest.
-    const main = screen.getByTestId('app-main-content')
-    expect(main).toBeInTheDocument()
-  })
-})
+// The old "cross-workspace approval banner coexists with other banners"
+// describe is deleted with CrossWorkspaceApprovalBanner itself (bundle B3,
+// commit 8f740826e): the founder ruled the app shows NO "N approvals waiting
+// — Go there" notice — the approval card shows in its parent chat and the
+// attention mechanisms (sidebar halo / count cue) carry cross-chat pending
+// state instead. The connection-error banner's own stacking behaviour is
+// covered by the remaining banner cases in this file.
 
 // ── God-mode banner is gone (founder decision 2026-09-25) ────────────────────
 //

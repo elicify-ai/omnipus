@@ -79,6 +79,8 @@ func avaSeedCustomAgent(t *testing.T, ctx context.Context, deps *systools.Deps) 
 // every execution context — attended (control), delegated, unattended, and
 // missing-session.
 func TestADR090_AvaAgentWritesDoNotRequireOwnerSession(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	for _, operation := range []string{"create", "update", "delete"} {
 		for _, mode := range avaWriteModes {
 			t.Run(operation+"/"+mode, func(t *testing.T) {
@@ -195,6 +197,8 @@ func avaAgentDeletePersists(t *testing.T, ctx context.Context, deps *systools.De
 // create_workspace, update_workspace and delete_workspace persist real
 // workspace-record writes from Ava in every execution context.
 func TestADR090_AvaWorkspaceWritesDoNotRequireOwnerSession(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	for _, operation := range []string{"create", "update", "delete"} {
 		for _, mode := range avaWriteModes {
 			t.Run(operation+"/"+mode, func(t *testing.T) {
@@ -306,6 +310,8 @@ func avaWorkspaceDeletePersists(t *testing.T, ctx context.Context, deps *systool
 // subtest on the SAME record proves the protection is field-scoped, never a
 // blanket deny that would amount to a new approval gate.
 func TestADR090_AvaConfigurationWriteGuardsStillHold(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	ctx := avaWriteCtx("delegated")
 	t.Run("protected fields on an ordinary builtin refuse with zero writes", func(t *testing.T) {
 		avaGuardProtectedFieldsRefuseWithZeroWrites(t, ctx)

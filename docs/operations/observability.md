@@ -2,7 +2,7 @@
 
 Every action an Omnipus agent takes is visible. There are two complementary surfaces.
 
-The **session transcript** is the persistent, on-disk JSONL of everything that happened in a conversation. It survives restarts, replays at any time, and drives the SPA's chat history.
+The **session transcript** is the persistent, on-disk record of a conversation. The server builds chat history from a filtered view of it. Private continuation inputs remain in the archive for model delivery and recovery; they are not displayed as messages from you.
 
 The **event stream** is the live runtime feed of typed events emitted as the agent loop runs. It powers the SPA in real time, drives subprocess hooks, and feeds the audit log.
 
@@ -24,6 +24,7 @@ Each session has a folder at `$OMNIPUS_HOME/sessions/<session-id>/` (`~/.omnipus
 | `provider_fallback` | The note that a fallback model answered, with the models involved, written once per session and model pair |
 | `judge_verdict` | The Judge agent's verdict on a task's completion claim |
 | `context_window_notice` | A context-window diagnostic shown only in Verbose chat; never part of the model's history |
+| `saved_input` | A private, deferred continuation input. Retained for model delivery and recovery, but excluded from REST chat history and WebSocket snapshot replay. |
 | `model_ref`, `tool_call_effect` | Internal records that point at, or correct, an earlier entry. They are written into the same files and are not shown in chat |
 
 ### What's on every entry (`pkg/session/daypartition.go::TranscriptEntry`)
@@ -59,13 +60,17 @@ Every entry carries `agent_id` so multi-agent transcripts can be filtered to a s
 
 Each `ToolCall` records the full parameters AND the full result. When sub-agents are involved, `parent_tool_call_id` correlates child calls to their parent spawn (FR-H-001), so a deeply nested `subagent` → `spawn` → tool chain is reconstructable.
 
+The entry-level `parent_spawn_call_id` is different: it is private archive provenance for internal readers, **not a public `Message` property**. Paged REST messages and session detail omit that key, including for older archives that retain it. The tagged entry and its public narration still appear; this is field projection, not an entry filter. API clients must not depend on that private key. Contracted event relationships such as `parent_call_id`, `span_id` and `child_session_id` keep their existing meanings; none is an alias for the omitted archive field.
+
 ### Cancel context
 
 When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying `turn_id`, `canceled_by_user`, `canceled_by_channel`, `cancel_method` (graceful or hard), and any `descendants_canceled` (sub-agent IDs that were cascade-cancelled). Plus the assistant entry that got interrupted is marked `truncated: true`.
 
 ### Replay
 
-The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, call `UnifiedStore.ReadTranscript(sessionID)` (`pkg/session/unified_write.go::ReadTranscript`) — it reads the day files in order and returns the entries in order.
+REST history and WebSocket snapshot replay use the bounded `UnifiedStore.ReadChatHistoryPage` path. The latest page stops at the last exact `/clear` marker, applies input-disposition and correction rules, and excludes private continuation inputs. Earlier segments require explicit paging across the marker. A page does not read the whole transcript before selecting its recent end.
+
+`UnifiedStore.ReadTranscriptView(sessionID)` remains a full current-segment helper for internal callers and tests. `UnifiedStore.ReadTranscript(sessionID)` returns the complete merged transcript for internal readers, including saved inputs. Neither full reader is the paged API implementation. The archive remains the single on-disk record.
 
 ### Derived paging index and recovery
 
@@ -311,8 +316,9 @@ the unpriced portion free. Native Anthropic's documented one-hour multiplier is
 
 Caching does not change who supplied a message. Current-sender, session and
 runtime metadata remain in the system context—the request's instruction prefix.
-Only the changing clock, tool-summary, scratchpad and goal-checklist notes, plus
-the per-turn skill reminder, follow the conversation in one user-role text block.
+Only the changing clock, tool-summary, scratchpad and goal-checklist notes follow
+the conversation in one user-role text block. Skill-use guidance remains in the
+stable instructions and Skills menu; no per-request skill reminder is added.
 When a turn is assembled, its current user message retains its caption and
 attachments immediately before that block. Tool-call follow-ups keep complete
 call/result groups ahead of the notes. Removing old history from the live window

@@ -97,8 +97,20 @@ func (t *AgentReadMetadataTool) Execute(ctx context.Context, args map[string]any
 			"agent_id is required when the calling agent ID is not available",
 			"Pass agent_id explicitly"))
 	}
-	if err := validateID(agentID); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
+	// #1032 F-2/F-3: the same id rule as get_agent_tools, and the agent must
+	// exist under exactly that id — so a typo or a case variant ("OMNIPUS" on a
+	// case-insensitive filesystem) is AGENT_NOT_FOUND, never another agent's
+	// file and never confused with an existing agent whose file is absent.
+	if refusal := agentIDRefusal(agentID); refusal != nil {
+		return refusal
+	}
+	known, err := t.agentKnownExact(agentID)
+	if err != nil {
+		return tools.ErrorResult(errorJSON("READ_ERROR", err.Error(), "Retry list_agents"))
+	}
+	if !known {
+		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND", fmt.Sprintf("No agent with ID %q", agentID),
+			"Use list_agents to see the agent ids"))
 	}
 
 	wsPath := datamodel.AgentHomePath(t.deps.Home, agentID)
@@ -121,4 +133,19 @@ func (t *AgentReadMetadataTool) Execute(ctx context.Context, args map[string]any
 		"file":     fileKey,
 		"content":  string(data),
 	}))
+}
+
+// agentKnownExact reports whether an agent with exactly this id exists: in
+// the live roster or as an entity record of exactly that name.
+func (t *AgentReadMetadataTool) agentKnownExact(id string) (bool, error) {
+	if t.deps.GetCfg != nil {
+		if cfg := t.deps.GetCfg(); cfg != nil {
+			for i := range cfg.Agents.List {
+				if cfg.Agents.List[i].ID == id {
+					return true, nil
+				}
+			}
+		}
+	}
+	return agentRecordExistsExact(t.deps.Home, id)
 }
