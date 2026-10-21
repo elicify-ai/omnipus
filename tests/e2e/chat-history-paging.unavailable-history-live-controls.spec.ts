@@ -9,6 +9,8 @@ import { terminalLogRows } from './fixtures/terminal-outcome-acceptance';
 import { test, UNAVAILABLE, HistoryHarness } from './fixtures/chat-history-paging/harness';
 import { dropSocket } from './fixtures/chat-history-paging/actions';
 import { removeSessionHistoryIndex, corruptSessionHistoryIndex } from './fixtures/chat-history';
+import { activatePendingControl, controlProvider, reconnectWithPending, sendControlInstruction,
+  stopPendingControl, stopRunningControlTurn, waitForPendingControl } from './fixtures/chat-history-paging/control-actions';
 
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
 test.describe.configure({ retries: 0 });
@@ -133,4 +135,57 @@ test('T35 B20: unauthorized read with an invalid paging limit refuses before rev
   } finally { await anonymous.dispose(); }
   await history.open();
   await expect(page.getByRole('alert').filter({ hasText: UNAVAILABLE })).toBeVisible();
+});
+
+for (const kind of ['approval', 'question'] as const) {
+  test.describe(`T35 genuine ${kind} under unavailable history`, () => {
+    test.use({ historyControlKind: kind });
+
+    test(`T35 B43 B49: real pending ${kind} survives reconnect, its action works, then Stop ends the real resumed turn`, async ({ history, page }) => {
+      await unavailableFixture(history);
+      await history.open();
+      await sendControlInstruction(page);
+      const pending = await waitForPendingControl(history);
+      const calls = controlProvider(history).calls();
+      await reconnectWithPending(history, pending, true);
+      expect(controlProvider(history).calls(), 'reconnect does not rerun the model/tool request').toBe(calls);
+      await activatePendingControl(history, pending);
+      const before = history.traffic.frames.length;
+      await page.getByRole('alert').filter({ hasText: UNAVAILABLE }).getByRole('button', { name: 'Retry', exact: true }).click();
+      await expect(page.getByTestId('stop-btn'), 'history Retry cannot disable an already authorized Stop').toBeEnabled();
+      await expect.poll(() => history.traffic.frames.slice(before).filter((f) => f.type === 'catch_up_complete' && f.session_id === history.sessionId).length).toBe(1);
+      expect(history.traffic.attaches.at(-1)?.since_seq).toBeUndefined();
+      await stopRunningControlTurn(history);
+      await expect(page.getByRole('alert').filter({ hasText: UNAVAILABLE })).toBeVisible();
+      expect(history.traffic.sends, 'control action/history Retry/reconnect never repost the saved instruction').toHaveLength(1);
+      const response = await page.request.get(`${history.gateway.baseURL}/api/v1/sessions/${history.sessionId}/messages`);
+      expect(response.status()).toBe(500);
+      expect(await response.json()).toEqual({ error: UNAVAILABLE });
+      await history.record(`genuine-${kind}-action-and-engine-stop`);
+    });
+
+    test(`T35 B43 B49: Stop cancels the genuine pending ${kind}, without granting or answering it`, async ({ history, page }) => {
+      await unavailableFixture(history);
+      await history.open();
+      await sendControlInstruction(page);
+      const pending = await waitForPendingControl(history);
+      await reconnectWithPending(history, pending, true);
+      await stopPendingControl(history, pending);
+      await expect(page.getByRole('alert').filter({ hasText: UNAVAILABLE })).toBeVisible();
+      if (pending.kind === 'approval') {
+        expect(history.traffic.frames.filter((f) => f.type === 'tool_approval_resolved' && f.approval_id === pending.frame.approval_id && f.state === 'approved')).toEqual([]);
+      } else {
+        expect(history.traffic.frames.filter((f) => f.type === 'ask_user_question' && f.card.card_id === pending.frame.card.card_id && f.card.status === 'answered')).toEqual([]);
+      }
+      expect(history.traffic.sends).toHaveLength(1);
+      expect(controlProvider(history).failures()).toEqual([]);
+      await history.record(`genuine-${kind}-pending-stop`);
+    });
+  });
+}
+
+test('T35 B43 B49: genuine secret action and Stop require the external request_secret runtime', async () => {
+  // Explicit squad/chief decision: do not guess another work unit's tool
+  // arguments or fabricate a secret card. This dependency remains visible.
+  throw new Error('BLOCKED: request_secret not implemented (WU-4/5) — T35/B43/B49 genuine secret action and Stop require that external runtime');
 });

@@ -1,18 +1,20 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test as base, expect, type Page, type TestInfo, type Route } from '@playwright/test';
-import { Session, SessionHistoryResponse } from '../../../../src/lib/api/generated/schemas';
-import type { SessionCreateRequest } from '../../../../src/lib/api/generated/openapi-types';
+import { Agent, Workspace, Session, SessionHistoryResponse } from '../../../../src/lib/api/generated/schemas';
+import type { AgentCreateRequestMain, WorkspaceCreateRequest, SessionCreateRequest } from '../../../../src/lib/api/generated/openapi-types';
 import { WsFrame } from '../../../../src/lib/api/generated/ws-schemas';
 import { GatewayProcess } from '../gateway-process';
 import { startTerminalOutcomeProvider } from '../terminal-outcome-provider';
 import { createTerminalSession } from '../terminal-outcome-acceptance';
 import { openSessionByDeepLink } from '../session-setup';
-import { chatInput } from '../selectors';
+import { chatInput, waitForConnected } from '../selectors';
 import { seedChatHistoryDayPartitions, type ChatHistoryFixtureDay } from '../chat-history';
+import { E2E_MODEL } from '../e2e-model';
+import { startHistoryControlProvider, type HistoryControlKind, type HistoryControlProvider } from './control-provider';
+type HistoryProvider = Awaited<ReturnType<typeof startTerminalOutcomeProvider>> | HistoryControlProvider;
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
 export const UNAVAILABLE = 'Session history is unavailable. Retry after the operator restores its index.';
@@ -58,15 +60,12 @@ export function observeTraffic(page: Page) {
   return { frames, attaches, failures, pages, sends };
 }
 
-let seedBinary = '';
-/** Remote E2E builds this lightweight test-tree helper once per worker process. */
+/** CI prebuilds this test-tree appender once, just like the session test driver.
+ * Failed Playwright worker restarts must not trigger repeated Go compilation. */
 function canonicalSeed(home: string, sessionId: string, seed: Seed) {
-  if (!seedBinary) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-history-test-seed-'));
-    seedBinary = path.join(dir, 'seed');
-    execFileSync('go', ['build', '-tags', 'goolm,stdjson', '-o', seedBinary, './tests/e2e/fixtures/chat-history-paging/seed'], {
-      cwd: REPO, env: { ...process.env, CGO_ENABLED: '0' }, stdio: 'pipe',
-    });
+  const seedBinary = process.env.OMNIPUS_CHAT_HISTORY_SEED_BINARY;
+  if (!seedBinary || !path.isAbsolute(seedBinary) || !fs.existsSync(seedBinary)) {
+    throw new Error('BLOCKED: prebuilt canonical append fixture not supplied (OMNIPUS_CHAT_HISTORY_SEED_BINARY); compile the test-tree seed command once before E2E, never inside an assertion');
   }
   const args = ['--sessions-root', path.join(home, 'sessions'), '--session', sessionId,
     '--label', seed.label, '--count', String(seed.count), '--start', String(seed.start ?? 0),
@@ -84,7 +83,7 @@ function canonicalSeed(home: string, sessionId: string, seed: Seed) {
 export class HistoryHarness {
   readonly traffic: Traffic;
   constructor(readonly page: Page, readonly gateway: GatewayProcess, readonly ids: Awaited<ReturnType<typeof createTerminalSession>>,
-    readonly provider: Awaited<ReturnType<typeof startTerminalOutcomeProvider>>, readonly info: TestInfo, readonly logPath: string) {
+    readonly provider: HistoryProvider, readonly info: TestInfo, readonly logPath: string) {
     this.traffic = observeTraffic(page);
   }
   get sessionId() { return this.ids.session.id; }
@@ -115,9 +114,16 @@ export class HistoryHarness {
     await this.page.context().clearCookies();
     await this.page.context().addCookies(state.cookies);
   }
-  async open(sessionId = this.sessionId) {
+  async open(sessionId = this.sessionId, options: { currentControlMayLockComposer?: boolean } = {}) {
     const prior = this.traffic.frames.length;
-    await openSessionByDeepLink(this.page, sessionId, this.gateway.baseURL);
+    if (options.currentControlMayLockComposer) {
+      // A real pending AskUserQuestion intentionally locks the composer. Its
+      // enabled state is NOT a catch-up-completion barrier for this fresh viewer.
+      await this.page.goto(`${this.gateway.baseURL}/#/sessions/${sessionId}`);
+      await expect(this.page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible();
+      await expect(chatInput(this.page)).toBeVisible();
+      await waitForConnected(this.page);
+    } else await openSessionByDeepLink(this.page, sessionId, this.gateway.baseURL);
     await expect.poll(() => this.traffic.frames.slice(prior).filter((frame) =>
       frame.type === 'catch_up_complete' && frame.session_id === sessionId).length,
     { message: 'opening readiness waits for catch_up_complete, never replay done' }).toBe(1);
@@ -150,16 +156,53 @@ function object(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : { value };
 }
 
-export const test = base.extend<{ history: HistoryHarness }>({
-  history: async ({ page }, use, info) => {
-    const provider = await startTerminalOutcomeProvider();
+async function createControlSessions(gateway: GatewayProcess) {
+  // Eight rounds accommodate discovery + actual control + resumed stream; the
+  // old terminal-outcome fixture deliberately stays cap1 and is not weakened.
+  const result = await gateway.apiFetch('POST', '/api/v1/agents', { type: 'Main', name: 'History control acceptance',
+    soul: 'Use the requested tool. Ask the human when their format choice is needed.', provider: 'openrouter', model: E2E_MODEL,
+    max_tool_iterations: 8 } satisfies AgentCreateRequestMain);
+  expect(result.status, result.raw).toBe(201);
+  const agent = Agent.parse(result.body);
+  expect(agent.max_tool_iterations).toBe(8);
+  const workspaceResult = await gateway.apiFetch('POST', '/api/v1/workspaces', {
+    name: 'History control acceptance', core_team: [agent.id],
+  } satisfies WorkspaceCreateRequest);
+  expect(workspaceResult.ok, workspaceResult.raw).toBe(true);
+  const workspace = Workspace.parse(workspaceResult.body);
+  const sessionResult = await gateway.apiFetch('POST', '/api/v1/sessions', {
+    type: 'chat', agent_id: agent.id, workspace_id: workspace.id,
+  } satisfies SessionCreateRequest);
+  expect(sessionResult.status, sessionResult.raw).toBe(201);
+  const otherResult = await gateway.apiFetch('POST', '/api/v1/sessions', {
+    type: 'chat', agent_id: agent.id, workspace_id: workspace.id,
+  } satisfies SessionCreateRequest);
+  expect(otherResult.status, otherResult.raw).toBe(201);
+  return { agent, session: Session.parse(sessionResult.body), otherSession: Session.parse(otherResult.body) };
+}
+
+export const test = base.extend<{ history: HistoryHarness; historyControlKind: 'none' | HistoryControlKind }>({
+  historyControlKind: ['none', { option: true }],
+  history: async ({ page, historyControlKind }, use, info) => {
+    const provider = historyControlKind === 'none' ? await startTerminalOutcomeProvider() : await startHistoryControlProvider(historyControlKind);
     let gateway: GatewayProcess | undefined;
     const logPath = info.outputPath('history-gateway.jsonl');
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     try {
       gateway = await GatewayProcess.start({ apiBase: provider.url, adminUsername: 'history-reader',
         env: { OMNIPUS_LOG_FILE: logPath, OMNIPUS_LOG_LEVEL: 'debug' } });
-      const ids = await createTerminalSession(gateway);
+      const ids = historyControlKind === 'none' ? await createTerminalSession(gateway) : await createControlSessions(gateway);
+      if (historyControlKind === 'approval') {
+        await gateway.kill9();
+        gateway.assertStoppedForFixture();
+        // not-wire-format: isolated private gateway config, not a SPA payload.
+        const filename = path.join(gateway.homeDir, 'config.json');
+        const config = JSON.parse(fs.readFileSync(filename, 'utf8')) as { sandbox?: { auto_approve?: boolean; tool_policies?: Record<string, string> } };
+        config.sandbox = { ...config.sandbox, auto_approve: false,
+          tool_policies: { ...config.sandbox?.tool_policies, bash: 'ask' } };
+        fs.writeFileSync(filename, JSON.stringify(config), { mode: 0o600 });
+        await gateway.restart();
+      }
       const harness = new HistoryHarness(page, gateway, ids, provider, info, logPath);
       await use(harness);
     } finally {
