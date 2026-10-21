@@ -29,6 +29,7 @@ import { act } from 'react'
 import { useChatStore, getMessages, __resetFinishedTurnIdsForTests } from '../chat'
 import { useSessionStore } from '../session'
 import type { SessionStateFrame, ReplayMessageFrame, TokenFrame, DoneFrame } from '@/lib/ws'
+import { makeSnapshotHistory } from '@/test/factories'
 
 const SID = 'reconnect-active-turn-session'
 const AGENT_ID = 'agent-jim'
@@ -445,6 +446,7 @@ describe('chat.reconnect — turn finishes before catch-up reaches the SPA (#822
     beginAttach()
     act(() => {
       useChatStore.getState().handleFrame({
+        ...makeSnapshotHistory(1),
         type: 'session_snapshot',
         session_id: SID,
         seq: 5,
