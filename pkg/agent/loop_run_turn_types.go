@@ -116,6 +116,11 @@ type agentLoopRunTurnTools struct {
 	rr                 *agentLoopRunTurnResponse
 	turnChannelManager *channels.Manager
 	finalContent       string
+	// finalIsModelAnswer reports that finalContent is the model's own
+	// completed answer (set by finishTextResponse), not a synthetic stop
+	// notice. A truncation outcome is kept separately with its mark when
+	// a late follow-up continues the turn (keepAnswerBeforeSteering).
+	finalIsModelAnswer bool
 	midTurnGuardErr    error
 	ret0               turnResult
 	ret1               error

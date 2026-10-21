@@ -1323,6 +1323,12 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 				Reason: errMsg,
 			},
 		)
+		// Asked again, in a later round, for a call already refused this
+		// turn: end the turn after this round (finishToolIteration) rather
+		// than pay a provider round per repeat until the iteration cap.
+		if ex.rx.rr.rq.ri.rf.rt.ts.recordBrokenSignatureRefusal(ex.toolCBSig, ex.rx.rr.rq.ri.rf.rt.iteration) {
+			ex.rx.rr.rq.ri.rf.rt.ts.requestToolFailureStop(toolFailureStopNotice(ex.toolName))
+		}
 		return agentLoopRunTurnToolsExecuteContinue
 	}
 
@@ -1498,6 +1504,7 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		}
 	} else {
 		ex.rx.rr.rq.ri.rf.rt.ts.recordToolSuccess(ex.toolCBSig)
+		ex.rx.rr.rq.ri.rf.rt.ts.noteRoundProgress()
 		// Feeds the same-response ask refusal above: a set_goal that
 		// succeeded in this response makes any trailing AskUserQuestion
 		// in the same batch a refusal, not a park.
@@ -2017,7 +2024,7 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 	// turn, and the parked turn's waiter resolves instead of
 	// dying. ASKUSER-FIX.
 	if !parked {
-		if steerMsgs, steerCorrelationIDs := ex.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if steerMsgs, steerCorrelationIDs, _ := ex.rx.rr.rq.ri.dequeueSteeringForContinuation(); len(steerMsgs) > 0 {
 			ex.rx.rr.rq.ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 			ex.rx.rr.rq.ri.pendingMessages = append(ex.rx.rr.rq.ri.pendingMessages, steerMsgs...)
 			ex.rx.rr.rq.ri.pendingSteeringReceipts = append(ex.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
@@ -2156,6 +2163,7 @@ func (ex *agentLoopRunTurnToolsExecute) releaseAsyncCallback() {
 // finishToolIteration ticks tool state and stops a turn that repeats successful calls without progress.
 func (rx *agentLoopRunTurnTools) finishToolIteration() agentLoopRunTurnToolsFlow {
 	rx.rr.rq.ri.rf.rt.ts.agent.Tools.TickTTL()
+	progressed := rx.rr.rq.ri.rf.rt.ts.takeRoundProgress()
 	logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 		"agent_id": rx.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": rx.rr.rq.ri.rf.rt.iteration,
 	})
@@ -2178,9 +2186,28 @@ func (rx *agentLoopRunTurnTools) finishToolIteration() agentLoopRunTurnToolsFlow
 					"threshold": toolRepeatStopThreshold,
 				})
 			rx.finalContent = notice
+			rx.finalIsModelAnswer = false
 			rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
 			return agentLoopRunTurnToolsBreakL1
 		}
+	}
+	// The model asked again for a call the identical-failure breaker had
+	// already refused (tool_failure_circuit_breaker.go). Same exit as the
+	// identical-success stop above. A queued user message is new input, and
+	// a round in which another call succeeded made progress the model can
+	// still use: either lets the turn continue.
+	if notice := rx.rr.rq.ri.rf.rt.ts.takeToolFailureStop(); notice != "" && !progressed && len(rx.rr.rq.ri.pendingMessages) == 0 {
+		logger.WarnCF("agent", "Turn stopped: the model asked again for a tool call the circuit breaker had already refused",
+			map[string]any{
+				"agent_id":  rx.rr.rq.ri.rf.rt.ts.agent.ID,
+				"turn_id":   rx.rr.rq.ri.rf.rt.ts.turnID,
+				"iteration": rx.rr.rq.ri.rf.rt.iteration,
+				"threshold": toolFailureCircuitBreakThreshold,
+			})
+		rx.finalContent = notice
+		rx.finalIsModelAnswer = false
+		rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+		return agentLoopRunTurnToolsBreakL1
 	}
 	return agentLoopRunTurnToolsNext
 }

@@ -252,9 +252,9 @@ func siblingGrants(rule PathRule, blocked, nodes, prefixes []string, branchAcces
 			//
 			// denySet holds the exact paths that existed when the policy was
 			// BUILT. This walk runs later, at spawn. A backup created in between
-			// — `config.json.bak`, which pkg/migrate writes — is by then an
-			// existing child, is absent from denySet, and was therefore granted
-			// the parent's full access.
+			// — a `config.json.bak`, for example — is by then an existing
+			// child, is absent from denySet, and was therefore granted the
+			// parent's full access.
 			//
 			// macOS never had this gap: renderSeatbeltProfile emits
 			// DeniedPathPrefixes as anchored regex denies, which match whenever

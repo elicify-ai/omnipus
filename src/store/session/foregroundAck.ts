@@ -34,6 +34,7 @@
 import type { Session, SessionDetail } from '@/lib/api'
 import type { AttachSessionFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
+import { isSupersededAttachFrame } from '@/lib/attach-replay'
 import { logDiagnostic } from '@/lib/telemetry'
 import {
   attachAckFields,
@@ -80,6 +81,7 @@ function documentIsHidden(): boolean {
  * it yielded a number). A completion alone never sets the bound.
  */
 export function noteServerAttentionFrame(sessionId: string, frame: unknown): void {
+  if (isSupersededAttachFrame(frame)) return
   snapshotBySession.set(sessionId, frame)
   if (commit && commit.sessionId === sessionId) commit.answerSeen = true
 }

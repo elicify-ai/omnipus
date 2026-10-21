@@ -8450,6 +8450,13 @@ paths:
     get:
       operationId: getWorkspace
       summary: Get a workspace by ID
+      description: >
+        Reads the workspace and makes one idempotent main-chat preparation
+        attempt for each currently eligible member. A preparation failure
+        does not undo saved membership or fail the workspace read: that
+        member has main_session_error instead of main_session_id. Repeating
+        this read retries preparation after storage is repaired; unreadable
+        or mismatched saved identities are never replaced.
       tags:
       - Workspaces
       security:

@@ -29,10 +29,13 @@ var knownFields = map[string]struct{}{
 	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "model": {}, "provider": {},
 	"fallback_models": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
 	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {}, "cli_path": {},
+	// AGENT.md beside SOUL.md (#1064), written by the update_agent tool; it
+	// follows soul's protection rules.
+	"agent_md": {},
 }
 
 var alwaysImmutable = map[string]struct{}{"type": {}, "locked": {}}
-var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}}
+var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}, "agent_md": {}}
 var hiddenProtected = map[string]struct{}{
 	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
 	"tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {}, "executor": {}, "default": {}, "voice": {},
@@ -40,6 +43,7 @@ var hiddenProtected = map[string]struct{}{
 var externalUnsupported = map[string]struct{}{
 	"soul": {}, "skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {},
 	"voice": {}, "context_window_override": {}, "model_params": {}, "fallback_models": {},
+	"agent_md": {},
 	// max_tool_iterations is supported (#904 D14): an external CLI worker
 	// follows the global tool-iteration limit and may lower it; the
 	// effective value is the CLI's turn cap.
@@ -56,6 +60,26 @@ type FieldDescriptor struct {
 }
 
 var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "voice", "type"}
+
+// metadataFileFields are the agent metadata files the update_agent tool writes
+// beside SOUL.md (#1064). They are described separately because the REST
+// agent update does not take them.
+var metadataFileFields = []string{"agent_md"}
+
+// MetadataFileDescriptors reports whether the update_agent tool may write the
+// agent's AGENT.md (same rules as soul).
+func MetadataFileDescriptors(agent config.AgentConfig) []FieldDescriptor {
+	out := make([]FieldDescriptor, 0, len(metadataFileFields))
+	for _, field := range metadataFileFields {
+		err := ValidateFields(agent, []string{field})
+		descriptor := FieldDescriptor{Name: field, Editable: err == nil}
+		if err != nil {
+			descriptor.Reason = err.Error()
+		}
+		out = append(out, descriptor)
+	}
+	return out
+}
 
 // FieldDescriptors reports which fields may be changed on agent.
 func FieldDescriptors(agent config.AgentConfig) []FieldDescriptor {

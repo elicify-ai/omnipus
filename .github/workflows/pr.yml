@@ -279,7 +279,15 @@ jobs:
     # handful of ~1-minute download+extract steps.
     runs-on: ubuntu-latest
     needs: [changes]
-    if: success() && needs.changes.outputs.code == 'true'
+    # NOT gated on `code`: tool-error-status-lint runs its guard suite on
+    # documentation-only changes too (its two docs guards exist for exactly
+    # those), and its size-budget guard needs this job's node_modules. With a
+    # `code == 'true'` gate here, a docs-only PR skipped setup, which skipped
+    # the guard job, and ci-required accepts a skip — so a docs-only PR that
+    # reintroduced a retired surface went green unchecked (review finding F1
+    # on c7faf3098). Every other consumer of setup keeps its own `code`
+    # gate, so a docs-only PR pays only this one install.
+    if: success()
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1254,7 +1262,15 @@ jobs:
     # docs-only PR reintroducing "Command Center" would have gone green.
     # This also makes the `changes` job's "no job in this workflow reads
     # docs/**" rationale obsolete for this job specifically.
-    if: success()
+    # Explicit result checks, same shape as fast-tier and browser-e2e:
+    # `!cancelled()` drops the implicit success() gate, and the job runs
+    # exactly when both direct needs really succeeded. setup now runs on
+    # docs-only changes too (see its comment), so a docs-only PR reaches
+    # the guards instead of skipping them.
+    if: >-
+      !cancelled() &&
+      needs.changes.result == 'success' &&
+      needs.setup.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1353,6 +1369,7 @@ jobs:
       # carry no !cgo build tags (see the cgo-gate job, which builds the module
       # under both CGO_ENABLED=0 and =1).
       CGO_ENABLED: "0"
+      GOLANGCI_LINT_VERSION: v2.10.1
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1383,11 +1400,32 @@ jobs:
       - name: Run go generate
         run: go generate ./...
 
+      # 2026-10-21 SA5011 incident: the old analyzer cache made unchanged
+      # release tests fail. Isolate toolchain, linter, OS, config and modules;
+      # never fall back across those boundaries or delete the old caches.
+      # Investigation and earlier triage:
+      # /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/l1/ci-tooling-cache-experiment-20261021/REPORT.md
+      # /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/l1/ci-tooling-lint-triage-20261021/REPORT.md
+      # The v9 action cannot accept this key, so its cache is disabled below.
+      - name: Determine linter cache Go version
+        id: lint-cache
+        run: |
+          go_version=$(go env GOVERSION)
+          printf 'go-version=%s\n' "$go_version" >> "$GITHUB_OUTPUT"
+          printf 'GOLANGCI_LINT_CACHE=%s/golangci-lint\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Cache golangci-lint analyzers
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.GOLANGCI_LINT_CACHE }}
+          key: golangci-lint-analyzers-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.lint-cache.outputs.go-version }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('.golangci.yaml') }}-${{ hashFiles('go.mod') }}-${{ hashFiles('go.sum') }}
+
       - name: Golangci Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.10.1
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --build-tags=goolm,stdjson
+          skip-cache: true
 
   fast-tier:
     name: Fast tier checks passed
@@ -1524,7 +1562,8 @@ jobs:
           # go.mod's toolchain. Two bumps clear the 2026-10-08 advisory batch and
           # BOTH are required: go1.26.9 clears the Go-stdlib advisories — GO-2026-
           # 6604 (os), 6605/6609/6613 (net/http), 6607 (crypto/tls), 6608
-          # (mime/multipart) — while the golang.org/x/net v0.60.0 bump in go.mod
+          # (mime/multipart); go1.26.10 clears GO-2026-6809 (crypto/x509) — while
+          # the golang.org/x/net v0.60.0 bump in go.mod
           # clears GO-2026-6603, 6610, 6611, 6612 and 6617, each of which carries
           # an x/net range as well as a stdlib one.
           #
@@ -1534,7 +1573,7 @@ jobs:
           # running against an older stdlib than the release ships (a false green
           # on a security gate). This literal is the one place to keep in sync
           # with the `go` directive in go.mod.
-          go-version-input: '1.26.9'
+          go-version-input: '1.26.10'
           # The job's own "Setup Go" step above already restored the Go module
           # cache into $GOMODCACHE. The action bundles its OWN setup-go, which
           # by default restores a SECOND module cache into that same, already
@@ -1981,6 +2020,20 @@ jobs:
                 echo "REAL FAILURE (assertion failure detected — never excused): $p"
               done
             fi
+            exit 1
+          fi
+          # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a
+          # package FAIL line and no --- FAIL line, which is the hang shape
+          # this filter exists to excuse. Never retry it.
+          # shellcheck source=scripts/ci-flake-classify.sh
+          source scripts/ci-flake-classify.sh || {
+            echo "REAL FAILURE: cannot load scripts/ci-flake-classify.sh"
+            exit 1
+          }
+          if ci_log_has_guard_failure "$out"; then
+            echo ""
+            echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+            echo "REAL FAILURE (guard failure detected — never excused)"
             exit 1
           fi
           [ $code -eq 0 ] && exit 0
@@ -2506,6 +2559,20 @@ jobs:
             else
               echo "REAL FAILURE (assertion failure detected — never excused): --- FAIL detected but no package-level FAIL line matched; see full output above"
             fi
+            exit 1
+          fi
+          # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a
+          # package FAIL line and no --- FAIL line, which is the hang shape
+          # this filter exists to excuse. Never retry it.
+          # shellcheck source=scripts/ci-flake-classify.sh
+          source scripts/ci-flake-classify.sh || {
+            echo "REAL FAILURE: cannot load scripts/ci-flake-classify.sh"
+            exit 1
+          }
+          if ci_log_has_guard_failure "$out"; then
+            echo ""
+            echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+            echo "REAL FAILURE (guard failure detected — never excused)"
             exit 1
           fi
           [ $code -eq 0 ] && exit 0

@@ -127,6 +127,8 @@ For scripts, the same setting is `context.tool_result_share_fraction` in configu
 
 The existing Usage screen counts recorded agent-turn-loop tokens, not money. Auxiliary provider calls such as automatic recaps, fallback goal compilation and audio-model transcription are outside that per-call accounting path; see [observability](operations/observability.md#model-call-cache-accounting) for the coverage limits. Choose a period and use **By agent**, **By model**, **By provider**, or **By session** to see the breakdown. **Cached** is cache reads plus cache writes, already included in the total; **Uncached** is the rest. **By agent** and **By provider** also show **Cache hit**, the share of all input tokens read from the provider's cache. For example, a ratio of `0.8` appears as **80%**. A row with no input tokens shows no percentage, not **0%**. These numbers are on Usage, not a separate caching page. A ChatGPT sign-in call still counts tokens but is not given a dollar cost. See the provider's invoice for costs.
 
+For **ChatGPT (subscription)**, Omnipus uses the same conversation identifier on successive calls to help the provider reuse cached input. This routing identifier is not built from credentials or message text. Reuse is not guaranteed: **Cache hit** measures the share of input tokens actually read from cache, not the percentage of calls with any cache reuse.
+
 There is no longer a computed default for `performance.max_parallel_agents`. Leave the field blank to let live available memory govern each new agent turn; the Performance tab reports this as "automatic — bounded by available memory". Set a positive whole number when you need an explicit cap.
 
 If the host cannot measure available memory, Omnipus holds agent concurrency at a floor of **two** turns. It refuses to grow, never to run: the first two turns can start, while a third concurrent turn is refused. Set `performance.max_parallel_agents` explicitly if the host can safely support more.
@@ -144,6 +146,8 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 ## Tool calls per turn
 
 **Max tool calls per turn**, on the Performance tab, caps how many tool steps any agent may take in one turn. A turn is one message, one task run, or one heartbeat run. When an agent reaches the limit without a final answer, the turn stops and the agent replies that it hit its limit of tool steps for one turn. You can then ask it to continue.
+
+A turn can also stop before the limit when the agent repeats itself without progress: after the same tool call with the same arguments succeeds eight times in a row, or when, in a round where nothing else succeeded, it asks again for a call that already failed five times with the same arguments and was then blocked. The agent's last reply names the tool and says why it stopped; a task run in that state counts as a try that did not finish, so the task retries or ends Failed instead of staying in progress.
 
 - The limit applies to every agent, including the built-in roster and [external workers](agents.md#workers-and-delegation).
 - It accepts a whole number from **1 to 1000**. The shipped value is **200**.
@@ -168,6 +172,10 @@ Every change is recorded in the audit log as a `security_setting_change` event. 
 | **Raise**, for example from 50 to 200 | No dialog opens, and no agent's own limit changes. An agent you lowered to 50 stays at 50. Raising the limit again does not restore values an earlier lowering replaced. |
 
 If an agent's own limit changes between the dialog opening and your confirmation, nothing is saved. The dialog shows **"The list of affected agents changed — review and confirm again."** with the new list, and you confirm again.
+
+### A save that reloads the configuration can pause
+
+When a save makes the gateway reload its configuration, the reload first waits for a background queued-task check or mail check that is already in progress, so it is not cut off halfway. Each of the two checks gets up to 10 seconds, one after the other. Do not repeat the save while the first one is still pending. If a check is still running when its wait runs out, the reload goes ahead without it and the log shows a warning that names the poller (for example, "the mail poller was still in a mail check after its stop wait"). That check finishes on its own; if the warning repeats, check the mailbox connection or, for the queued-task poller, the task store.
 
 ### When a save is not applied yet
 

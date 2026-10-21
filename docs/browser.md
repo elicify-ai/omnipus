@@ -25,7 +25,7 @@ On a fresh install, Mia and Jim have browser tools. Omnipus and the shipped work
 
 1. In a workspace chat, click **Open browser** in the top bar. The panel docks on the right with a blank tab if browsing has not started.
 2. Alternatively, click **Watch live** on a browser action in the thread.
-3. Wait for the picture. A spinner shows until the first frame arrives.
+3. Wait for the picture. A spinner shows until the first frame arrives. When the server confirms the same page and capture settings during startup, Omnipus keeps the capture already in progress rather than starting it again. A later recovery request can still restart capture, even if the page and settings have not changed.
 4. Read the status chip in the toolbar: "<Agent> is browsing…" while the agent drives, "Click to drive" when idle, "Also viewing" when someone else has the panel open.
 5. Select **Expand Browser panel** in the panel heading. In a normal browser tab, it opens the full-screen Browser in a new tab or switches to a recognised existing tab for that Browser session and agent. In an installed app or standalone Chrome window, it opens full screen in that same window; **Back to chat** returns there with Browser re-docked. Use the heading's **Close** control to dismiss the docked panel; closing it does not stop the agent's run. The full-screen view has **Back to chat**; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how it returns.
 
@@ -71,6 +71,8 @@ To annotate, click the button, mark a region, write your comment, and click **Se
 ## Limits and things to watch
 
 Every failure is shown as an error with its reason and a Retry button.
+
+If video capture fails during reconnection, Omnipus restarts the failed video connection. A late failure from a discarded attempt does not interrupt its replacement.
 
 | The panel says | What it means |
 |---|---|

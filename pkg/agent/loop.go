@@ -594,6 +594,11 @@ type AgentLoop struct {
 	// Value: *sessionWorker.
 	// Workers self-remove after workerIdleTimeout; Close() cancels all remaining.
 	sessionWorkers sync.Map
+	// workerSpawnMu guards workerSpawnClosed: Close sets it before draining
+	// the workers and dispatchSessionWorker checks it while spawning, so no
+	// worker can start after Close's drain snapshot (Train 2 gate r1).
+	workerSpawnMu     sync.Mutex
+	workerSpawnClosed bool
 
 	// admission is the soft-cap gate for concurrent session workers.
 	// Phase 1: gates inbound user-message dispatch only, per unique scope.
@@ -1074,18 +1079,12 @@ func (al *AgentLoop) Close() {
 		al.taskExecutor.Drain(30 * time.Second)
 	}
 
-	// Drain ADR-091's steered-dispatch front for exactly the reason the two
-	// drains above exist: an admitted steered turn runs on a detached
-	// goroutine that writes lifecycle, inbox and transcript files, and so
-	// does the queue promotion it fires on the way out. Neither was joined
-	// by anything, so both outlived Close() and raced a caller's teardown.
-	// See admission.go::goSteeredTurn for the full note.
-	al.drainSteeredTurns(30 * time.Second)
-
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their
-	// own context; a double-cancel is a no-op.
+	// own context; a double-cancel is a no-op. New spawns are refused first,
+	// so no worker can start after the drain snapshot and outlive Close.
+	al.closeSessionWorkerSpawns()
 	al.stopSessionWorkers()
 
 	// Drain the detached request goroutines tracked by activeRequests — the
@@ -1097,6 +1096,13 @@ func (al *AgentLoop) Close() {
 	// turn's writes against its own temp-dir removal
 	// (TestAdr093StopDuringRevivedTurn_DelegateRefuses).
 	al.waitActiveRequestsDrain(30 * time.Second)
+
+	// Drain ADR-091's steered turns (detached goroutines writing lifecycle,
+	// inbox and transcript files; admission.go::goSteeredTurn). LAST of the
+	// drains, because the ones above can still dispatch a steered turn —
+	// delegate redirect's resume waiter is an active request that revives
+	// through goSteeredTurn (TestClose_JoinsTheTurnARedirectWaiterDispatchesDuringClose).
+	al.drainSteeredTurns(30 * time.Second)
 
 	// Drop every browser's manager connection (one per browsing key). In ADR-043
 	// shared-Chrome mode this closes each manager's WS connection + detaches

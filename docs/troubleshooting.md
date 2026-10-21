@@ -25,7 +25,9 @@ A kernel that is too old for a right Omnipus asks for is different: Omnipus star
 
 ### It exits with "bind: address already in use"
 
-The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port. Check what holds it:
+The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port.
+
+Before returning the final bind error, the gateway runs cleanup for services created during that startup attempt. It requests shutdown of scheduled jobs, the task and mail pollers, task triggers and the plan engine, where present. Cleanup can delay the final error while active work is stopping; the delay is not guaranteed to be short. Some stop requests do not wait for every in-flight operation to finish. The same cleanup runs for errors returned by other steps in this service-startup sequence, skipping services that were not created. Check what holds the port:
 
 ```bash
 lsof -i :5000 | grep LISTEN
@@ -40,6 +42,14 @@ Stop that process, or set another port in `~/.omnipus/config.json` and start aga
 ```
 
 The port is read at startup; a running gateway does not move its listener.
+
+### Stopping the gateway takes a moment
+
+When you stop the gateway normally — Ctrl-C, or SIGTERM from a service manager — Omnipus stops its chat channels and cancels the agent loop. It tries to let tracked work finish writing before tearing down the stores it uses, including background task runs and helper-agent turns. This cleanup also covers a helper turn already being resumed by a redirect as shutdown begins.
+
+Shutdown has several wait budgets, not one 30-second limit. The gateway waits up to 65 seconds for active requests, limited by the time remaining on its 70-second shutdown context. Agent cleanup has separate waits of up to 30 seconds for recaps, task dispatches and helper-agent turns, and up to five seconds for each session worker. These are individual wait budgets, not a guaranteed total stop time. If the gateway's shutdown context expires, it can continue shutdown without waiting for agent cleanup to finish.
+
+When a wait runs out, cleanup continues and the log shows a warning such as `Close: steered-turn drain budget exceeded; proceeding with teardown`. Some work or its final writes may be left unfinished.
 
 ## A connection shows a credential error (degraded)
 
@@ -91,7 +101,7 @@ If the agent reaches its tool-call limit before a final answer, chat keeps the n
 
 ## A helper finished but the open parent chat is blank
 
-After upgrading, reload the page once to refresh an older open chat. On the current version, a helper's outcome and the parent's new reply appear without a reload, and the Judge's outcome row also appears in the parent chat. If they appear only in the helper's chat, that is the old behaviour. Do not restart the gateway as a workaround. If the problem persists on the updated page, report the parent and helper session ids and whether a reload shows the missing reply.
+Check the parent's current state first. Progress, checkpoints and shared artifacts do not start a parent reply. An intentionally stopped parent retains a helper's result until a legitimate continuation; a parent with an unanswered question card handles the report with your answer rather than starting a separate reply. A helper's finished result, question, blocker or failure is also saved as an event line in the parent chat, independently of whether the parent repeats it. If an expected event or reply is missing, inspect the helper's current state and the gateway's delivery or storage errors before assuming the report was lost. A storage failure can leave an event pending repair, and a failed wake publication remains retryable. Report the parent and helper session IDs and whether reloading reveals the missing event or reply. Do not restart the gateway as a workaround.
 
 ## A task is refused before work starts
 
@@ -214,29 +224,29 @@ The encrypted credential store needs a master key. The gateway looks for one in 
 
 A fresh install warns you to back up `master.key`. Heed it: losing that file makes every stored credential permanently unreadable, with no recovery. See [Security for users](security.md).
 
-## Credentials stop working after an upgrade
+## Credential-file format or authentication errors
 
-Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. A vault from an earlier release is upgraded to this format automatically, once, the first time the new gateway or any `omnipus` command opens it. You do not need to re-enter anything. The upgrade writes the whole file in one step: if it is interrupted, the old file is left as it was and the next start tries again.
+Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. Normal credential reads require the name-bound, version-2 file format. Unlock can convert a version-1 file before use, but refuses it when `credentials.json.migrated` already records a completed conversion. The conversion authenticates every entry and replaces the whole file atomically. A crash leaves either the original file or a complete converted file, not a mixture. Saving `credentials.json.migrated` is a separate, best-effort step after that replacement. If its write fails, a warning is logged, but conversion and unlocking can still succeed; the success event `credentials.store_migrated` is emitted even when the marker could not be saved. Without the marker, a restored version-1 file can be converted again.
 
-The gateway refuses to start, and changes nothing, in three cases:
+During that format conversion, the gateway refuses to start and leaves the credential file unchanged in these cases:
 
 | Message says | What it means | What to do |
 |---|---|---|
 | "every entry failed" | The master key is not the one the vault was written with | Supply the original master key (`master.key`, `OMNIPUS_MASTER_KEY` or `OMNIPUS_KEY_FILE`) |
-| "N of M entries failed authentication" and names them | Those entries were edited or copied on disk | Remove the named entries from `credentials.json`, restart, then enter them again |
-| "already migrated it once" | An old-format vault appeared after this installation had already been upgraded | If you restored a pre-upgrade backup on purpose, delete `credentials.json.migrated` next to the vault and restart. If you did not, treat the vault as tampered with |
+| "N of M entries failed authentication" and names them | The named entries could not be authenticated | Back up `credentials.json`, remove the named entries, restart, then enter their values again |
+| "already migrated it once" | A version-1 file is present alongside the completed-conversion marker | Remove `credentials.json.migrated` only if you deliberately restored a trusted version-1 backup. Otherwise treat the file as potentially tampered with and investigate it |
 
 To remove an entry by hand: stop the gateway, back up `credentials.json`, open it in a text editor, and delete the named entry (its name and its `nonce` and `ciphertext` lines) from the `credentials` section. Restart the gateway, then enter the value again in **Settings**, **Security**, **Credential Vault**, or with `omnipus credentials set <name> <value>`.
 
-### Going back to an older release, and coming back
+### Restoring a credential backup
 
-A release from before this change cannot read an upgraded vault. If you go back to one anyway, and re-enter credentials there so it writes an old-format vault, the next start of the newer release refuses with "already migrated it once". To recover, delete `credentials.json.migrated` next to the vault and start again. The vault is then upgraded a second time. Only do this when you know the old-format file came from you.
+Restore only a backup whose source you trust, with the master key or passphrase that opens it. A version-1 backup with a completed-conversion marker is refused. If that restore was deliberate, stop the gateway, remove `credentials.json.migrated` next to the vault, and start again to permit conversion. Do not remove the marker to bypass an unexplained file change.
 
-### Windows: two processes upgrading at once
+### Windows: concurrent credential-file conversion
 
-On Windows, Omnipus has no lock between separate processes. If two Omnipus processes (for example the gateway and an `omnipus credentials` command) open the same old-format vault at the same moment, both may run the upgrade. Each writes a complete, valid vault, and the last one written wins. No value is mixed up or swapped. In passphrase mode, the process whose write was replaced holds a key for the overwritten file and fails to read credentials until it is restarted. Start the gateway alone for the first run after upgrading.
+On Windows, separate processes do not share a file lock. If two Omnipus processes (for example the gateway and an `omnipus credentials` command) open the same version-1 file concurrently, both may convert it. Each writes a complete, valid vault, and the last write wins. In passphrase mode, the process whose write was replaced holds a key for the overwritten file and cannot read credentials until it is restarted. Run only one Omnipus process while converting a version-1 credential file.
 
-After the upgrade there is deliberately no fallback that reads an old entry: it would let a value be moved between names again. If one entry fails while the others still work, that entry was edited on disk or copied from another entry. The gateway names the entry at fault in its log. Re-enter it the same way.
+Normal entry reads never fall back to a different encryption format after an authentication failure. The gateway names a failing entry in its log. Inspect the named entry and its key, and re-enter the value through the same credential controls when needed.
 
 ## The page shows "Something went wrong loading this page"
 
@@ -277,6 +287,14 @@ Opening an agent's main chat (see [Each agent's own chat, per workspace](workspa
 > This agent's main chat could not be prepared because session storage failed. Check disk space and permissions, then retry. Details are in the server log.
 
 It means the agent is entitled to a main chat in that workspace, but Omnipus could not create it, or could not trust the one it found. The message deliberately names no file, folder or id; the full cause is in the gateway log as an error-level line starting `rest: main session could not be prepared on open`, with the `workspace_id`, `agent_id` and the underlying error. (A missing chat for an agent that is *not* on the team, a worker, or Omnipus outside the default workspace is different: that stays a plain "session not found".)
+
+**A workspace can be saved while its main chat is unavailable.** Saving team membership and preparing the chat are separate steps. The workspace-details response includes a safe preparation reason for each failed member instead of a main-chat address. It does not expose filesystem paths or the contents of a damaged saved identity. If a file occupies a location that must be a folder, the reason is:
+
+> The main chat could not be prepared because session storage has a file where a folder is required. Ask the server operator to fix it, then retry.
+
+When this failure prevents the workspace's first conversation agent from opening, Chat shows the server's reason with **Retry**, keeps the message box disabled, and does not say **Your agent is ready**. If no reason is provided, Chat keeps the generic **This chat is unavailable right now** notice instead. It never switches to the next teammate to hide the failure.
+
+The operator must correct the storage layout; **Retry** does not remove or replace the blocking file. Retry reads the same workspace's details and makes one preparation attempt per eligible member. Once storage is repaired, the next read returns the matching main-chat address and no preparation error; Chat opens that main and clears the notice. Sending resumes after the conversation finishes loading. Corrupt, mismatched or unclassified failures keep the fixed generic message above; full diagnostics stay in the server log. A healthy teammate's main chat remains available.
 
 **Why it can happen at startup too.** On every start Omnipus creates the main chats of the default workspace's team (the system agent Omnipus included) and of every saved workspace team. A failure there does not stop the gateway. It is logged at error level — `rest: boot mains: ...`, naming the workspace (and the agent) — and the chat is tried again the next time someone opens it.
 

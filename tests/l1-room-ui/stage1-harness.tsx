@@ -10,7 +10,7 @@ import type {
   GlobalToolPolicies, NotificationList, PerformanceSettings, Session,
   SessionDetail, SessionPage, Task, ToolRegistryEntry, VersionResponse,
 } from '@/lib/api/generated/openapi-types'
-import type { ServerFrame, ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
+import type { ClientFrame, ServerFrame, ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
 // tsconfig.tests follows this harness into the full application route tree.
 // Include the ACTUAL production router type registration in that project too;
 // type-only import is erased and never runs main.tsx or creates a second app.
@@ -20,6 +20,7 @@ import { queryClient } from '@/lib/queryClient'
 import { useAuthStore } from '@/store/auth'
 import { useSidebarStore } from '@/store/sidebar'
 import { useSessionStore } from '@/store/session'
+import { useChatStore } from '@/store/chat'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { useSecretRequestStore } from '@/store/secretRequests'
 import { useNotificationsStore } from '@/store/notifications'
@@ -154,6 +155,30 @@ export function resetStage1App() {
   })
 }
 
+const answeredAttachCount = new WeakMap<TestSocket, number>()
+
+/** Answer setup's actual attaches before any supposedly LIVE fixture traffic.
+ * TestSocket stays a transport edge; it does not fabricate replies on send. */
+async function completeSetupAttaches(socket: TestSocket) {
+  const requests = socket.sent.filter((frame): frame is Extract<ClientFrame, { type: 'attach_session' }> => frame.type === 'attach_session')
+  const unanswered = requests.slice(answeredAttachCount.get(socket) ?? 0)
+  answeredAttachCount.set(socket, requests.length)
+  await act(async () => {
+    for (const request of unanswered) {
+      socket.receive({ type: 'session_snapshot', session_id: request.session_id, seq: 1, boot_id: 'stage1-fixture', reason: 'unknown_position' })
+      socket.receive({ type: 'session_state', session_id: request.session_id, user_id: 'stage1-tester', emitted_at: NOW, pending_approvals: [] })
+      socket.receive({ type: 'catch_up_complete', session_id: request.session_id, seq: 1, boot_id: 'stage1-fixture', mode: 'snapshot' })
+    }
+  })
+  await waitFor(() => {
+    for (const request of unanswered) {
+      if (useChatStore.getState().sessionsById[request.session_id]?.isReplaying !== false) {
+        throw new Error(`Setup attach for ${request.session_id} has not reached its real boundary`)
+      }
+    }
+  })
+}
+
 export async function mountStage1App(path = MAIN_PATH) {
   const history = createMemoryHistory({ initialEntries: [path] })
   const router = createRouter({ routeTree, history, defaultPendingMinMs: 0 })
@@ -167,6 +192,7 @@ export async function mountStage1App(path = MAIN_PATH) {
   })
   const socket = TestSocket.instances[0]!
   await act(async () => { socket.open() })
+  await completeSetupAttaches(socket)
   return { ...mounted, router, socket }
 }
 
@@ -184,6 +210,7 @@ export async function settledMainChat(socket: TestSocket) {
       throw new Error('Positive socket control: main chat has not attached')
     }
   })
+  await completeSetupAttaches(socket)
 }
 
 export function approval(overrides: Partial<ToolApprovalRequiredFrame> = {}): ToolApprovalRequiredFrame {

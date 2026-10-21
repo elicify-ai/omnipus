@@ -197,6 +197,8 @@ func newSysagentFastUpsertDeps(
 // ResolveRoute against a channel binding configured BEFORE the agent existed
 // (an operator can bind a channel to an agent ID that gets created later).
 func TestAgentCreate_DoesNotTriggerFullReload(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
 	const agentID = "fast-path-create-agent"
@@ -254,6 +256,8 @@ func TestAgentCreate_DoesNotTriggerFullReload(t *testing.T) {
 // genuinely visible afterward (a NEW instance carrying the updated model),
 // not merely a config-file change nobody re-read.
 func TestAgentUpdate_DoesNotTriggerFullReload(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
 	const agentID = "fast-path-update-agent"
@@ -327,6 +331,8 @@ func TestAgentUpdate_DoesNotTriggerFullReload(t *testing.T) {
 // TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart's existing
 // coverage from the reload-mechanism side.
 func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
 	const agentID = "fast-path-delete-agent"

@@ -1345,11 +1345,29 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		SaveConfigLocked: func(c *config.Config) error {
 			return config.SaveConfig(rc.configPath, c)
 		},
-		CredStore:  rc.credStore,
-		ReloadFunc: rc.reloadTrigger,
+		// omnipus-system-agent FR-085: tool writes to providers, MCP servers
+		// and channel instances take the Settings config write lock first
+		// (config lock -> agent-loop lock, the Settings order).
+		LockConfigWrites: func() func() { return lockConfigWrites(rc.runningServices) },
+		CredStore:        rc.credStore,
+		ReloadFunc:       rc.reloadTrigger,
 		// EnsureWorkspaceMains (final-gate H2): create_agent's team join gives the
-		// new member its main chat through the workspace-save path.
-		EnsureWorkspaceMains: rc.runningServices.ensureWorkspaceMains,
+		// new member its main chat through the workspace-save path. Resolved at
+		// call time through the one restAPI (the same method boot stores in
+		// runningServices.ensureWorkspaceMains), so the hook never depends on
+		// which of the two was wired first (FR-041).
+		EnsureWorkspaceMains: func(workspaceID string) error {
+			if rc.runningServices == nil || rc.runningServices.restAPIRef == nil {
+				return errors.New("workspace main provisioning is not wired")
+			}
+			return rc.runningServices.restAPIRef.ensureWorkspaceMains(workspaceID)
+		},
+		UnbindWorkspaceChannels: func(workspaceID string) ([]string, error) {
+			if rc.runningServices == nil || rc.runningServices.restAPIRef == nil {
+				return nil, errors.New("workspace channel cleanup is not wired")
+			}
+			return unbindChannelInstancesForWorkspace(rc.runningServices.restAPIRef, workspaceID)
+		},
 		// DEL-10: the delete_agent cascade uses the loop's one live store and stops
 		// each session first.
 		DeleteSessionStore: func() systools.AgentSessionStore {
@@ -1426,6 +1444,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		SkillInstaller:    rc.sysSkillInstaller,
 		SkillWriter:       rc.sysSkillWriter,
 		ResolveToolPolicy: rc.agentLoop.ResolveRegisteredToolPolicy,
+		GodModeActive:     func() bool { return agent.GodModeActive(rc.agentLoop.GetConfig()) },
 		// ADR-057 U9 changed ListAllSessions' signature to
 		// (limit, offset int, parentSessionID string, flat bool), so it can no
 		// longer be assigned here as a bare method value — this field's type
@@ -1449,6 +1468,13 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		AgentActiveRevision: func(id string) string {
 			return sysagentAgentActiveRevision(rc.agentLoop, rc.homePath, id)
 		},
+	}
+	// FR-031: configure_provider's model-listing check calls an operator- or
+	// agent-supplied endpoint; it goes through the same SSRF guard as the
+	// gateway's own provider listings. Assigned only when non-nil so a
+	// disabled guard is never a typed-nil interface.
+	if chk := agent.GetSSRFChecker(rc.agentLoop); chk != nil {
+		sysAgentDeps.URLChecker = chk
 	}
 	rc.agentLoop.WireSysagentDeps(sysAgentDeps)
 
@@ -1762,6 +1788,32 @@ type catalogLogAdapter struct{}
 // against a wedged transport.
 const catalogRefreshStopTimeout = 10 * time.Second
 
+// stopPollersReporting stops the queued-task and mail pollers. Each Stop
+// waits, bounded, for a cycle already in flight; when that wait runs out the
+// cycle is still running (it is never cancelled mid-cycle), so the operator
+// gets a warning naming the poller, what it may still be doing, and that the
+// reload or stop otherwise went ahead.
+func stopPollersReporting(runningServices *services, isReload bool) {
+	phase := "stopping services"
+	if isReload {
+		phase = "applying the configuration reload"
+	}
+	if runningServices.TaskDrain != nil {
+		if err := runningServices.TaskDrain.Stop(); err != nil {
+			slog.Warn("gateway: the queued-task poller was still in a check after its stop wait; "+phase+
+				" continued without it. The check finishes on its own; if this repeats, look for a slow or locked task store.",
+				"error", err.Error())
+		}
+	}
+	if runningServices.MailWatch != nil {
+		if err := runningServices.MailWatch.Stop(); err != nil {
+			slog.Warn("gateway: the mail poller was still in a mail check after its stop wait; "+phase+
+				" continued without it. The check finishes on its own; if this repeats, check the mailbox connection.",
+				"error", err.Error())
+		}
+	}
+}
+
 func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Duration, isReload bool) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
@@ -1774,12 +1826,7 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if !isReload && runningServices.ChannelManager != nil {
 		runningServices.ChannelManager.StopAll(shutdownCtx)
 	}
-	if runningServices.TaskDrain != nil {
-		runningServices.TaskDrain.Stop()
-	}
-	if runningServices.MailWatch != nil {
-		runningServices.MailWatch.Stop()
-	}
+	stopPollersReporting(runningServices, isReload)
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
