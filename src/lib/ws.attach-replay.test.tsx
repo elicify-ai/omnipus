@@ -227,8 +227,11 @@ describe('bounded replay fallback', () => {
 
   it('bounds retained frame count as well as bytes and reports the fallback once', () => {
     const snapshot = snapshotFor([questionSource, recordedSource('answer', 'assistant', 'Saved answer')], 2, [history[1], history[4]])
+    // Squad-lead Q3 A: exact sufficient serialized UTF-16 fixture capacity.
+    // The required header must fit; ONLY maxFrames1 may trip on frame2.
+    const maxBytes = [snapshot, history[1], history[4]].reduce((bytes, frame) => bytes + JSON.stringify(frame).length * 2, 0)
     const onLimit = vi.fn()
-    const replay = new AttachReplayBuffer({ maxBytes: 1024, maxFrames: 1, onLimit })
+    const replay = new AttachReplayBuffer({ maxBytes, maxFrames: 1, onLimit })
     replay.begin(SID)
     expect(replay.accept(snapshot)).toEqual([])
     expect(replay.accept(history[1])).toEqual([snapshot, history[1]])
@@ -240,6 +243,25 @@ describe('bounded replay fallback', () => {
     replay.clear()
     expect(replay.bufferedBytes).toBe(0)
   })
+})
+
+it('frame-count control: all fixture bytes fit, but one frame beyond the frame capacity still trips', () => {
+  const snapshot = snapshotFor([questionSource, recordedSource('answer', 'assistant', 'Saved answer')], 2, [history[1], history[4]])
+  const traffic = [snapshot, history[1], history[4]]
+  const maxBytes = traffic.reduce((bytes, frame) => bytes + JSON.stringify(frame).length * 2, 0)
+  const byteControl = new AttachReplayBuffer({ maxBytes, maxFrames: traffic.length })
+  byteControl.begin(SID)
+  for (const frame of traffic) expect(byteControl.accept(frame), 'all exact fixture bytes fit without byte overflow').toEqual([])
+  expect(byteControl.bufferedBytes).toBe(maxBytes)
+  byteControl.clear()
+  const onLimit = vi.fn()
+  const frameControl = new AttachReplayBuffer({ maxBytes, maxFrames: traffic.length - 1, onLimit })
+  frameControl.begin(SID)
+  for (const frame of traffic.slice(0, -1)) expect(frameControl.accept(frame)).toEqual([])
+  expect(frameControl.accept(traffic[traffic.length - 1]), 'exactly one frame beyond the cap releases the full batch').toEqual(traffic)
+  expect(onLimit).toHaveBeenCalledTimes(1)
+  expect(frameControl.bufferedBytes).toBe(0)
+  frameControl.clear()
 })
 
 describe('attach replay is one visible transaction', () => {
