@@ -30,7 +30,17 @@ export async function sessionMessages(page: HistoryHTTPReader, origin: string, s
     if (body.session_id !== sessionId) throw new Error('history enumeration received the wrong session');
     const info = body.page_info;
     if (info.mode !== (before === undefined ? 'latest' : 'older')) throw new Error('history enumeration received the wrong page mode');
-    if (info.min_rows > info.limit || info.source_group_count !== body.entries.length) throw new Error('history page has contradictory counts');
+    // D4: every ordinary nonempty narration/system source contributes one
+    // drawn row, plus any visible logical tools. Hidden special metadata is
+    // not a narration row and must not be falsely counted by this lower bound.
+    const narration = body.entries.filter((entry) =>
+      (entry.type === undefined || entry.type === 'message' || entry.type === 'system') &&
+      typeof entry.content === 'string' && entry.content.length > 0);
+    const narrationOnly = narration.length === body.entries.length && body.entries.every((entry) => !entry.tool_calls?.length);
+    if (info.min_rows > info.limit || info.source_group_count !== body.entries.length ||
+      info.row_count < narration.length || (narrationOnly && info.row_count !== body.entries.length)) {
+      throw new Error('history page has contradictory counts');
+    }
     if (body.has_earlier !== (body.next_before !== undefined) || body.has_later !== (body.next_after !== undefined)) throw new Error('history page has contradictory continuation');
     if (info.stop_reason === 'byte_budget' && info.row_count < info.min_rows) throw new Error('history page byte budget cut below the height floor');
     if (info.byte_budget_exceeded !== (info.projected_bytes > info.soft_byte_budget) || info.byte_budget_exceeded !== (info.budget_override !== undefined)) throw new Error('history page has contradictory byte accounting');
