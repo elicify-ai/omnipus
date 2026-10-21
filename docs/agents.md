@@ -29,7 +29,7 @@ The three built-in chat agents cover the everyday jobs.
 | Jim | Planner and Orchestrator | Turns a complex goal into tasks, delegates them to the right agents, and tracks the work to completion. |
 | Omnipus | System agent | Sets up and changes your agents, teams, skills, connectors, providers and channels, for every workspace, from one conversation. |
 
-Any chat colleague can ask a teammate for help: start a message with `@` and pick the agent, and the request is delivered to that agent's own chat. Omnipus no longer moves your conversation over to another agent.
+Any chat colleague can ask a teammate for help: start a message with `@` and pick the agent, and the request is delivered to that agent's own chat. Omnipus keeps your conversation with its current agent.
 
 ### The Omnipus system agent
 
@@ -50,7 +50,7 @@ On Windows, this check uses the `PATHEXT` environment variable, a semicolon-sepa
 
 ## How a conversation finds its agent
 
-Every conversation names its agent — there is no global default agent any more.
+Every conversation names its agent — there is no global default agent.
 
 - A chat in the sidebar always opens one agent's main chat; you pick the agent by the row you click.
 - A new chat names its agent on the first message: pick an agent before you send, because there is no default to fall back to.
@@ -59,9 +59,9 @@ Every conversation names its agent — there is no global default agent any more
 
 ## How to create your own agent
 
-**With Omnipus (the way the app is moving to).** In a workspace, select **Add agent** under it in the sidebar, or **Team → Add agent → Create with Omnipus**. Omnipus's chat opens with creating an agent for that workspace already started: it asks what the agent is for, shows one summary of what it will create (and any gaps it cannot cover), and creates the agent in that workspace after you choose **Go**. It needs a working model — fix providers in **Settings → Providers** and Omnipus's own model in **Settings → System agents**. The workspace's **Team** panel is the home of its agents: each card offers **Edit**, **Remove from this workspace** and **Delete everywhere…**.
+**With Omnipus.** In a workspace, select **Add agent** under it in the sidebar, or **Team → Add agent → Create with Omnipus**. Omnipus's chat opens with creating an agent for that workspace already started: it asks what the agent is for, shows one summary of what it will create (and any gaps it cannot cover), and creates the agent in that workspace after you choose **Go**. It needs a working model — fix providers in **Settings → Providers** and Omnipus's own model in **Settings → System agents**. The workspace's **Team** panel is the home of its agents: each card offers **Edit**, **Remove from this workspace** and **Delete everywhere…**.
 
-**With the form (until it is retired).** You create one of three types. The create buttons sit in the section headers of the roster.
+**With the form.** You create one of three types. The create buttons sit in the section headers of the roster.
 
 | Type | Runs on | Works for | You can chat with it |
 |---|---|---|---|
@@ -155,7 +155,7 @@ Every agent may make at most a set number of tool calls in one turn. The global 
 |---|---|
 | Using the global limit (200) | The agent has no own value and follows the global limit. |
 | Lowered for this agent: 50 (global limit 200) | The agent's own value, 50, applies. |
-| Own value 500 is above the global limit (200) and has no effect | See "An old higher value" below. |
+| Own value 500 is above the global limit (200) and has no effect | See "A stored value above the global limit" below. |
 
 4. To go back to the global limit, click **Use global limit** next to the field. That clears the agent's own value.
 
@@ -165,7 +165,7 @@ A value above the global limit is not saved. On the profile, the field shows the
 
 The same rules apply everywhere an agent is created or changed, including when you ask an agent in a chat to do it, as you would with Omnipus. The `create_agent` and `update_agent` tools refuse a value above the global limit or outside 1 to 1000, and sending an empty value (`null`) to `update_agent` clears the agent's own value.
 
-**An old higher value.** Earlier releases let an agent's own limit be higher than the global one. Upgrading keeps that stored value untouched, but it no longer applies: the agent runs at the global limit, and its profile says the value has no effect. The gateway log lists every such agent in one warning at start-up. Type a lower value or click **Use global limit** to clear the warning. Lowering the global limit in Settings is the only thing that ever rewrites an agent's own value, and it asks you first.
+**A stored value above the global limit.** A saved per-agent limit above the global limit is kept but ignored: the agent runs at the global limit, and its profile says that its own value has no effect. The gateway log lists every such agent in one warning at start-up. Type a lower value or click **Use global limit** to clear the warning. Lowering the global limit in Settings is the only thing that ever rewrites an agent's own value, and it asks you first.
 
 A change applies from the agent's next turn; a turn already running keeps the limit it started with.
 
@@ -208,11 +208,11 @@ What this looks like in practice:
 - **No person-only wait.** When a helper needs a person, it asks its parent with an ordinary message and keeps working; the parent reaches you through ordinary chat text. There is no special pause and no 24-hour expiry — a helper never fails because a person was unavailable.
 - When too many workers are already running, the next one is **queued** — the parent's tool result tells it its place in line, and queued workers start in order as slots free. There is no blocking wait, and `delegate stop_all` stops a queued worker.
 
-The parent's open chat shows its next reply as it is written, without a reload. A helper's finished result, question, blocker or failure also leaves a lasting event line in that parent chat, even when the parent does not repeat it. A Judge ending appears in the parent chat as well as the helper's own chat. Progress, checkpoints and shared artifacts still update **Activity** and are kept when the inbox limits allow; they do not start a parent turn. Event lines stay after reload. To read a long line in full, click it, or focus it with Tab and press Enter or Space. New helper lines do not move focus from the composer or an open approval or question card; replay and reload do not announce old helper lines again.
+The parent's open chat shows its next reply as it is written, without a reload. A helper's finished result, question, blocker or failure also leaves a lasting event line in that parent chat, even when the parent does not repeat it. A Judge ending appears in the parent chat as well as the helper's own chat. Progress, checkpoints and shared artifacts still update **Activity** and are kept when the inbox limits allow; they do not start a parent turn. When a helper's final result, question, blocker or failure is prepared to wake the parent, the input includes a bounded snapshot of retained, unacknowledged progress, checkpoint and artifact reports with that helper's recorded round identifier. Reports from a different round, or with no recorded round, stay readable through `delegate inbox` but are not presented as current-round evidence. The snapshot reads at most 200 inbox entries and has a separate report-body size budget; it explicitly says when another inbox page or further report bodies remain to be read with `delegate inbox`. Including a report in the snapshot does not acknowledge or delete it. Once an outcome's input is saved, retries keep that original snapshot rather than refreshing it after reports are read or the helper changes state. A restart notice or a saved timeout-stop notice uses its own event input rather than this report snapshot. Not receiving a separate progress wake does not mean a report was dropped. Event lines stay after reload. To read a long line in full, click it, or focus it with Tab and press Enter or Space. New helper lines do not move focus from the composer or an open approval or question card; replay and reload do not announce old helper lines again.
 
-One outcome starts at most one new parent turn. If the parent is already working, a new outcome joins that turn at a safe boundary. An open tool approval stays open; the report is not inserted ahead of that tool's result. A parked question card also stays valid. A helper report arriving meanwhile is shown and retained, and is handled together with your answer to that card rather than starting a separate outcome-only turn.
+One outcome starts at most one new parent turn. If the parent is already working, a new outcome joins that turn at a safe boundary. An open tool approval stays open; the report is not inserted ahead of that tool's result. A parked question card also stays valid. A helper report arriving meanwhile is shown and retained, and is handled together with your answer to that card rather than starting a separate outcome-only turn. A result already read by the parent is not delivered again on every gateway start. If the parent was intentionally stopped, the saved report waits for a legitimate continuation without repeatedly trying to wake it at startup; it is not marked read just because it was saved. A real delivery failure remains visible to the operator and can be retried after its cause is repaired.
 
-A native helper cut off by a gateway restart while running or queued continues from saved history through normal admission. The runtime does not replay a historical tool invocation that already finished; a later new model decision may call the tool again. Both chats show **Interrupted by a restart.** That line records the interruption and does not change when **Activity** later says waiting, running or finished. If continuation cannot start, a second line says **Resume did not start.** The parent is still told once. Continuation also does not start when the workspace the helper was working in has been deleted, or when the helper's agent is no longer a member of it: its saved work is never continued in a different workspace. An external command-line helper is not automatically resumed or replaced after restart; the retained-conversation and new-delegation rules above still apply.
+A native helper cut off by a gateway restart while running or queued continues from saved history through normal admission. The runtime does not replay a historical tool invocation that already finished; a later new model decision may call the tool again. Both chats show **Interrupted by a restart.** That line records the interruption and does not change when **Activity** later says waiting, running or finished. Separately, the parent agent's restart input identifies the helper and says whether automatic continuation was admitted and what its state was when the notice was saved; it is not an instruction to resume a helper that is already continuing. If continuation cannot start, a second line says **Resume did not start.** The parent is still told once. Continuation also does not start when the workspace the helper was working in has been deleted, or when the helper's agent is no longer a member of it: its saved work is never continued in a different workspace. An external command-line helper is not automatically resumed or replaced after restart; the retained-conversation and new-delegation rules above still apply.
 
 If an event line cannot be saved, chat shows **A helper event could not be saved in this chat. Omnipus will retry. This is not a failure of the helper's work.** A later repair keeps that line and adds the event once. A missing, hidden or removed parent is never replaced with another conversation or workspace.
 
@@ -261,7 +261,7 @@ A heartbeat is a scheduled check-in for one agent in one workspace. The same age
 4. Write the **Heartbeat body**, which is the prompt the agent receives at each check-in. For example: "Check the inbox and start a task for anything new."
 5. Click **Save heartbeat**. The agent now runs the prompt on that interval.
 
-If nothing needs attention, the agent records an all-clear. The sidebar lists chat agents, not individual heartbeat sessions. With the matching main-chat server update, heartbeat check-ins use that agent's main chat. After a successful check-in, the next interval is counted from that check-in's completion, in the same heartbeat conversation; no gateway restart is needed between check-ins. Scheduled task work is a different feature; the [calendar](calendar.md) page covers it.
+If nothing needs attention, the agent records an all-clear. The sidebar lists chat agents, not individual heartbeat sessions. Heartbeat check-ins use that agent's main chat. After a successful check-in, the next interval is counted from that check-in's completion, in the same heartbeat conversation; no gateway restart is needed between check-ins. Scheduled task work is a different feature; the [calendar](calendar.md) page covers it.
 
 ## Limits and things to watch
 

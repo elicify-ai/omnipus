@@ -14,10 +14,10 @@ import (
 
 // resumeRestartHelper admits only a native helper whose lasting state is a
 // restart stop. It uses the normal revival and launcher, not a running stamp.
-func (r *SteerBootRecovery) resumeRestartHelper(ctx context.Context, stopped *session.LifecycleRecord, notice func(string, string)) {
+func (r *SteerBootRecovery) resumeRestartHelper(ctx context.Context, stopped *session.LifecycleRecord, notice func(string, string)) bool {
 	if stopped.State != session.LifecycleStopped || stopped.StopNote == nil ||
 		stopped.StopNote.Cause != session.StopCauseRestart || stopped.Is3P {
-		return
+		return false
 	}
 	if stopped.Origin != nil && stopped.Origin.Kind == session.OriginKindTask {
 		// A create_task run has its own restart rule: boot reconciliation
@@ -25,14 +25,14 @@ func (r *SteerBootRecovery) resumeRestartHelper(ctx context.Context, stopped *se
 		// reconcileStuckTasks), and its session stays stopped(restart). Resuming
 		// the session would split the task (failed) from its session (working).
 		// PW-D6 resumes delegated native helpers only.
-		return
+		return false
 	}
 	al, err := r.noticeLoop()
 	if err == nil {
 		var pending bool
 		pending, err = r.acceptedStopPending(stopped)
 		if pending {
-			return
+			return false
 		}
 	}
 	if err == nil {
@@ -59,7 +59,7 @@ func (r *SteerBootRecovery) resumeRestartHelper(ctx context.Context, stopped *se
 		_, err = launcher.Dispatch(ctx, stopped.SessionID, generation)
 	}
 	if err == nil {
-		return
+		return true
 	}
 	// A failed admission must not leave the helper looking queued/running.
 	// A newer Stop or execution still owns its state and is never rolled back.
@@ -87,6 +87,7 @@ func (r *SteerBootRecovery) resumeRestartHelper(ctx context.Context, stopped *se
 	if writeErr := r.recordResumeRefused(stopped); writeErr != nil {
 		notice("resume-refused-row:"+stopped.SessionID, fmt.Sprintf("helper %s resume refusal row could not be saved: %v", stopped.SessionID, writeErr))
 	}
+	return false
 }
 
 func (r *SteerBootRecovery) recordResumeRefused(rec *session.LifecycleRecord) error {

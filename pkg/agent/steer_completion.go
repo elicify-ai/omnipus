@@ -526,36 +526,14 @@ var completeStateWriteTestHook func(sessionID string)
 // at the exact side-effect boundary without using sleeps.
 var completeBeforeDeliveryTestHook func(sessionID string)
 
-// reportUndeliveredWake is the ONE place every pkg/agent `Deliver` call site
-// ACTS on steer.Delivery.Outcome.
-//
-// [ADR-091 fix lane RX-OUTCOME, HIGH] That field carries the single fact
-// separating "the parent knows" (DeliveryWoke / DeliveryQueuedIntoLiveTurn)
-// from "the parent will never know" (DeliveryStoredNotWoken), and until this
-// lane every caller in this package threw it away with
-// `_, err := deliverer.Deliver(...)`. A stored-not-woken outcome on a
-// wake-eligible message means the entry IS durable but nothing will re-enter
-// the recipient until boot recovery re-nudges it — an indefinite, completely
-// invisible stall. We spent hours chasing exactly this class of silent hang;
-// it is now an ERROR line naming child, parent, message id and generation.
-//
-// It deliberately only LOGS. The inbox entry is already durable by the time
-// Deliver returns, so refusing the caller's own follow-on write (the terminal
-// lifecycle write, the frames, the tool result) would add a SECOND
-// inconsistency on top of the first rather than repair anything — the same
-// posture steer_cancel.go::deliverTerminalReport settled on for the identical
-// question, and the same reason steer_audience.go::Deliver itself treats a
-// failed wake as non-fatal.
-//
-// Wake-eligibility, not the outcome kind, is what makes a stored-not-woken
-// result newsworthy: for `progress`, `checkpoint` and a non-fatal `error`,
-// stored-not-woken IS the contract (FR-B-010) and must stay silent, or the
-// log fills with non-events. Classification is read from the message itself
-// via session.ClassifySessionMessage — the SAME authority Deliver used to
-// decide whether to wake at all — so the two can never drift apart. An
-// unclassifiable message is reported, never swallowed.
+// reportUndeliveredWake reports unexplained wake failures, not deliberate
+// holds, a pending publication or a consumed duplicate. Stored-not-woken alone
+// says nothing about whether the parent already read the result; the delivery
+// disposition preserves that distinction. Unknown reasons stay ERROR-visible.
+// A reported failure leaves its durable inbox entry retryable. Boot recovery
+// additionally surfaces it through OperatorNotice; it never acknowledges it.
 func reportUndeliveredWake(op string, event steer.UpwardEvent, parentSessionID string, generation int, delivery steer.Delivery) {
-	if delivery.Outcome != steer.DeliveryStoredNotWoken {
+	if delivery.Outcome != steer.DeliveryStoredNotWoken || delivery.ExpectedNoWake() {
 		return
 	}
 	// Q1=A (#984 follow-up): a producer-suppressed wake is a deliberate
