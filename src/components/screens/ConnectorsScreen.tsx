@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback, useSyncExternalStore } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Gear, Envelope, Plus, Trash, Warning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
@@ -90,7 +90,7 @@ type ConfiguredChannelEntry = ChannelEntry & { instance_id: string }
  *  instance ChannelConfigPanel is currently open (or was last open) for — both
  *  the live `configuringChannel` state and its close-animation-surviving ref
  *  carry this same shape. */
-type ConfiguringChannel = { id: string; name: string; nativeAvailable?: boolean; enabled?: boolean }
+type ConfiguringChannel = { id: string; name: string; nativeAvailable?: boolean }
 
 function isTemplateStub(channel: ChannelEntry): boolean {
   // Bare-type key = no "." (ADR-029 instance grammar is <type>.<slug>; only
@@ -936,6 +936,21 @@ export function ConnectorsScreen() {
     queryKey: ['channels'],
     queryFn: fetchChannels,
   })
+  // Query observer notifications are deferred. Read the same cache synchronously
+  // so a settled mutation cannot briefly unmount the viewer and erase its QR
+  // before the parent's enabled prop catches up with the completed readback.
+  const subscribeToChannels = useCallback((onChange: () => void) =>
+    queryClient.getQueryCache().subscribe((event) => {
+      if (event.query.queryKey[0] === 'channels') onChange()
+    }), [queryClient])
+  const readChannelsState = useCallback(
+    () => queryClient.getQueryState<ChannelEntry[]>(['channels']), [queryClient],
+  )
+  const channelsState = useSyncExternalStore(subscribeToChannels, readChannelsState)
+  // Selection retains identity for the close animation, not mutable state.
+  const currentConfiguringChannel = channelsState?.data?.find(
+    (channel) => (channel.instance_id ?? channel.id) === configuringChannelProps?.id,
+  )
 
   // Split channels: email is surfaced separately as a "mailbox account" (M11 decision —
   // email is a tool, not a conversational channel), and webchat is a singleton
@@ -1023,7 +1038,6 @@ export function ConnectorsScreen() {
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
       enabled ? disableChannel(id) : enableChannel(id),
     onSuccess: (_, { enabled }) => {
-      queryClient.invalidateQueries({ queryKey: ['channels'] })
       addToast({ message: enabled ? 'Channel disabled' : 'Channel enabled', variant: 'success' })
     },
     onError: (err: Error, { id, enabled }) =>
@@ -1033,6 +1047,7 @@ export function ConnectorsScreen() {
           : isApiError(err) ? err.userMessage : err.message,
         variant: 'error',
       }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['channels'] }),
   })
 
   function openCreateFor(baseType?: string) {
@@ -1050,7 +1065,6 @@ export function ConnectorsScreen() {
       id: created.id,
       name: typeDisplayName.get(created.type) ?? created.type,
       nativeAvailable: nativeAvailableByType.get(created.type),
-      enabled: created.enabled,
     })
   }
 
@@ -1066,7 +1080,6 @@ export function ConnectorsScreen() {
       id: channel.instance_id ?? channel.id,
       name: channel.name,
       nativeAvailable: channel.native_available,
-      enabled: channel.enabled,
     })
 
   // A11 — a single if/else render function instead of a 4-way nested ternary.
@@ -1093,7 +1106,6 @@ export function ConnectorsScreen() {
                 id: channel.instance_id,
                 name: channel.name,
                 nativeAvailable: channel.native_available,
-                enabled: channel.enabled,
               })
             }
             onToggle={(channel) =>
@@ -1294,7 +1306,8 @@ export function ConnectorsScreen() {
           channelId={configuringChannelProps?.id ?? ''}
           channelName={configuringChannelProps?.name ?? ''}
           nativeAvailable={configuringChannelProps?.nativeAvailable}
-          enabled={configuringChannelProps?.enabled}
+          enabled={channelsState?.status === 'success' ? currentConfiguringChannel?.enabled : undefined}
+          enabledStateUnknown={channelsState?.status === 'error'}
           open={configuringChannel !== null}
           onOpenChange={(open) => {
             if (!open) setConfiguringChannel(null)
