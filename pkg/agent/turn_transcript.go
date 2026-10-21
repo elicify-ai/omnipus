@@ -158,12 +158,18 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine .
 // have just overwritten). Pass "" to fall back to ts.lastProducedModel
 // for callers that don't have a per-message producer.
 func (ts *turnState) appendIntermediateAssistantTranscript(content string, producedModel ...string) {
+	ts.appendIntermediateAssistantTranscriptImpl(content, "", producedModel...)
+}
+
+// appendIntermediateAssistantTranscriptImpl also keeps a terminal partial
+// answer's truncation mark when steering starts another reply in this turn.
+func (ts *turnState) appendIntermediateAssistantTranscriptImpl(content, truncationReason string, producedModel ...string) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		ts.warnAbandonedTranscriptWrite("appendIntermediateAssistantTranscript")
 		return
 	}
-	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || (content == "" && !ts.pendingCallAccounting()) {
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || (content == "" && truncationReason == "" && !ts.pendingCallAccounting()) {
 		return
 	}
 	agentID := ts.resolveActiveAgentID()
@@ -183,6 +189,10 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		Content:   content,
 		Timestamp: time.Now().UTC(),
 		Model:     model,
+		// A partial answer kept before steering retains its annotation on
+		// this write, under the same round id as the original answer.
+		Truncated:        truncationReason != "",
+		TruncationReason: truncationReason,
 		// TurnID: without this, neither the former truncation rewrite's own
 		// turn-scoped backward-walk (H2 fix — it matches on e.TurnID ==
 		// turnID) nor the frontend's turn_canceled -> assistant-message

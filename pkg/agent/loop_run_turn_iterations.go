@@ -280,7 +280,7 @@ turnLoop:
 	if hook := naturalExitSteeringPollTestHook; hook != nil {
 		hook()
 	}
-	if steerMsgs, steerCorrelationIDs := er.cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+	if steerMsgs, steerCorrelationIDs := er.cn.rc.rx.rr.rq.ri.dequeueSteeringForContinuation(); len(steerMsgs) > 0 {
 		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
 			map[string]any{
 				"agent_id":       er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -294,11 +294,12 @@ turnLoop:
 		// re-entering turnLoop, which would be invalid at this point anyway;
 		// the completed answer then stays the turn's final content.
 		if er.cn.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() < 2*er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations {
-			// Keep the completed answer before continuing for the steering:
-			// clearing it unrecorded lost it from history and transcript. A
+			// Keep the completed or cut-off answer before continuing for the
+			// steering, including a partial answer's truncation mark. A
 			// synthetic stop notice is not an answer: the follow-up
 			// supersedes it, as in finishToolIteration.
-			if er.cn.rc.rx.finalIsModelAnswer && er.cn.keepAnswerBeforeSteering(er.cn.rc.rx.finalContent, false) {
+			keepAnswer := er.cn.rc.rx.finalIsModelAnswer || er.cn.rc.rx.rr.rq.ri.rf.rt.ts.getTruncationReason() != ""
+			if keepAnswer && er.cn.keepAnswerBeforeSteering(er.cn.rc.rx.finalContent, false) {
 				return er.cn.ret0
 			}
 			er.cn.rc.rx.finalContent = ""
@@ -567,7 +568,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 	if cn.rc.rx.rr.citationTracker != nil {
 		cn.rc.rx.rr.citationTracker.EmitCitations(cn.responseContent)
 	}
-	if steerMsgs, steerCorrelationIDs := cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+	if steerMsgs, steerCorrelationIDs := cn.rc.rx.rr.rq.ri.dequeueSteeringForContinuation(); len(steerMsgs) > 0 {
 		logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
 			map[string]any{
 				"agent_id":       cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -782,6 +783,7 @@ var naturalExitSteeringPollTestHook func()
 func (cn *agentLoopRunTurnConductorRunIterations) keepAnswerBeforeSteering(content string, fromDirectResponse bool) bool {
 	ri := cn.rc.rx.rr.rq.ri
 	ts := ri.rf.rt.ts
+	truncationReason := ts.getTruncationReason()
 	if fromDirectResponse && ts.continuationAccumulated() != "" {
 		content = ts.appendToAccumulator(content)
 	}
@@ -801,14 +803,15 @@ func (cn *agentLoopRunTurnConductorRunIterations) keepAnswerBeforeSteering(conte
 			}
 			ri.messages = append(ri.messages, msg)
 		}
-		ts.appendIntermediateAssistantTranscript(content)
+		ts.appendIntermediateAssistantTranscriptImpl(content, truncationReason)
 		if err := ts.callAccountingError(); err != nil {
 			return err
 		}
-		if content != "" {
+		if content != "" || truncationReason != "" {
 			ts.markLastStreamerTranscriptPersisted()
 		}
 		ts.retireContinuationAccumulator()
+		ts.setTruncationReason("")
 		return nil
 	}()
 	if err == nil {
