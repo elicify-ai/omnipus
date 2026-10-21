@@ -113,7 +113,6 @@ import {
   RestartInterruptedNotice,
 } from './ConnectionStatus'
 import { RowDeliveryStatus } from './RowDeliveryStatus'
-import { WorkingOnLine } from './WorkingOnLine'
 
 function placementOf(message: ChatMessage): DelegationPlacementMessage {
   return {
@@ -1079,6 +1078,16 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     return false
   })
 
+  // Replay finalizes saved bubbles even when their producing turn is still
+  // running. Keep the existing indicator on the last confirmed active reply,
+  // without waiting for another token or marking older replies as running.
+  const recoveredRunning = useChatStore((state) => {
+    if (!isLastAssistant || !activeSessionId || !message.turnId) return false
+    const bucket = state.sessionsById[activeSessionId]
+    return bucket?.isStreaming === true && !bucket.isReplaying && bucket.activeTurnId === message.turnId
+  })
+  const replyStreaming = !!message.isStreaming || recoveredRunning
+
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
   const agentDisplayName = agent?.name ?? (messageAgentId || null)
@@ -1182,11 +1191,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     : null
   const positionedToolLabel = derivePositionedHiddenRunningLabel(positionedToolCalls, verboseChatEnabled)
   const replyPhase = useReplySlotPhase({
-    streaming: !!message.isStreaming,
+    streaming: replyStreaming,
     hasRunningTool: runningToolNames.length > 0,
     toolLabel: positionedToolLabel,
     goalLabel: emptyPlaceholderLabel,
-    idleEligible: isLastAssistant && !message.isStreaming,
+    idleEligible: isLastAssistant && !replyStreaming,
   })
   // 1b (founder UI feedback 2026-10-11): while THIS reply is streaming, the
   // inline indicator never disappears — streamed text, a visible tool card,
@@ -1197,7 +1206,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // no "Idle" word and no "Unavailable/reconnecting" word on a finished
   // reply — connection state has its own surfaces
   // (ChatConnectionStatusLine / UnavailableChatNotice).
-  const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || !!message.isStreaming)
+  const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || replyStreaming)
 
   return (
     <div
@@ -3258,7 +3267,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             <GoalPillTray />
             {/* No gradient fade here: it painted the container's top edge (founder feedback 2026-10-11 p5; ChatScreen.composer-topedge.test.tsx). */}
             <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[max(var(--space-2),env(safe-area-inset-bottom,var(--space-0)))]">
-              <WorkingOnLine />
               <OmnipusComposer agentRemoved={agentRemoved} />
             </div>
           </div>

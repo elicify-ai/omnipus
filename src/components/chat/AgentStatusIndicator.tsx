@@ -6,6 +6,8 @@ import { useEffect, useState } from 'react'
 import '@/styles/agent-icon-motion.css'
 
 import { AgentIcon } from '@/components/ui/agent-icon'
+import { WordBoundaryText } from '@/components/ui/word-boundary-text'
+import { useCurrentTodo } from './useCurrentTodo'
 import type { AgentColor, AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
 import { AGENT_ICON_PALETTE } from '@/design-system/agent-identity'
 import { FIGURE_ART, ROLE_VOCABULARY } from '@/lib/agentIdentity'
@@ -180,10 +182,24 @@ function motionFor(phase: MarkPhase, reduced: boolean): 'none' | 'thinking' | 'w
   return 'thinking'
 }
 
+function ThinkingPhrase({ rotating }: { rotating: boolean }) {
+  const [phrase, setPhrase] = useState<string>(THINKING_PHRASES[0])
+  useEffect(() => {
+    if (!rotating) return
+    const interval = setInterval(() => setPhrase((previous) => pickNextThinkingPhrase(previous)), 2000)
+    return () => clearInterval(interval)
+  }, [rotating])
+  return (
+    <>
+      {rotating && <span className="sr-only">Thinking</span>}
+      <span aria-hidden={rotating ? true : undefined} className="text-[length:var(--type-utility-xs-size)]">{phrase}</span>
+    </>
+  )
+}
+
 /**
- * Figure, role badge, and the status phrase, inline in the feed.
- * Phrase rotation is hidden from assistive tech; the stable word "Thinking"
- * does not change when the visible phrase does.
+ * Figure, role badge, and the status phrase, inline in the feed. Changing
+ * checklist/rotating copy is visual only; assistive text stays calm and stable.
  */
 export function AgentStatusIndicator({
   phase,
@@ -202,18 +218,9 @@ export function AgentStatusIndicator({
   name?: string
 }) {
   const reduced = usePrefersReducedMotion()
-  const rotating = phase === 'thinking' && label == null && !reduced
-  const [rotatingPhrase, setRotatingPhrase] = useState<string>(THINKING_PHRASES[0])
-
-  useEffect(() => {
-    if (!rotating) return
-    const interval = setInterval(() => {
-      setRotatingPhrase((prev) => pickNextThinkingPhrase(prev))
-    }, 2000)
-    return () => clearInterval(interval)
-  }, [rotating])
-
-  const visual = label ?? rotatingPhrase
+  // Connection/approval/question copy keeps its existing priority over work copy.
+  const todo = useCurrentTodo(phase === 'thinking' || phase === 'working')
+  const itemLabel = todo.unavailable ? 'Current checklist unavailable' : todo.text ? `Working on: ${todo.text}` : null
   const drawnFigure = isFigure(figure) ? figure : null
   const drawnRole = isRole(role) ? role : null
   const drawnColor = isPaletteColor(color) ? color : null
@@ -226,10 +233,10 @@ export function AgentStatusIndicator({
   return (
     <span
       data-testid="reply-status-indicator"
-      className="inline-flex items-center gap-[var(--space-2)] py-[var(--space-1)] text-[var(--color-muted)] italic"
+      className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-2)] py-[var(--space-1)] text-[var(--color-muted)] italic"
     >
       {drawnFigure && drawnRole && drawnColor && nameAvailable && (
-        <span data-art={FIGURE_ART[drawnFigure].art}>
+        <span className="shrink-0" data-art={FIGURE_ART[drawnFigure].art}>
           <AgentIcon
             figure={drawnFigure}
             role={drawnRole}
@@ -242,13 +249,16 @@ export function AgentStatusIndicator({
           />
         </span>
       )}
-      {rotating && <span className="sr-only">Thinking</span>}
-      <span
-        aria-hidden={rotating ? true : undefined}
-        className="text-[length:var(--type-utility-xs-size)]"
-      >
-        {visual}
-      </span>
+      {todo.text && <span className="sr-only">Working on a checklist item</span>}
+      {itemLabel ? (
+        <span data-testid={todo.text ? 'reply-current-todo' : 'reply-current-todo-error'} aria-hidden={todo.text ? true : undefined} className="min-w-0 flex-1">
+          <WordBoundaryText text={itemLabel} title={itemLabel} className="truncate text-[length:var(--type-utility-xs-size)]" />
+        </span>
+      ) : label != null ? (
+        <span className="text-[length:var(--type-utility-xs-size)]">{label}</span>
+      ) : (
+        <ThinkingPhrase rotating={phase === 'thinking' && !reduced} />
+      )}
     </span>
   )
 }
