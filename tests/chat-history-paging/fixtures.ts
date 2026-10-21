@@ -101,6 +101,7 @@ export function replay(source: Message, sessionId = SID): ReplayMessageFrame {
   return {
     type: 'replay_message', session_id: sessionId, id: source.id,
     role: source.role ?? 'assistant', content: source.content ?? '', timestamp: source.timestamp,
+    ...(source.agent_id ? { agent_id: source.agent_id } : {}),
     history_origin: { position: source.history_position, entry_id: source.id },
     ...(source.turn_id ? { turn_id: source.turn_id } : {}),
     ...(source.terminal_outcome ? { terminal_outcome: source.terminal_outcome } : {}),

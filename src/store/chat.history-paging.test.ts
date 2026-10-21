@@ -9,7 +9,7 @@ import { queryClient } from '@/lib/queryClient'
 import type { SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
 import { resetRealStores } from '../../tests/l1-room-ui/harness'
 import {
-  SID, STAMP, UNAVAILABLE, entry, expectPageAccounting, page, pos, replay, snapshot,
+  SID, STAMP, UNAVAILABLE, entry, expectPageAccounting, expectValidPage, page, pos, replay, snapshot,
 } from '../../tests/chat-history-paging/fixtures'
 import { historyTransport } from '../../tests/chat-history-paging/transport'
 
@@ -107,6 +107,32 @@ describe('T08 replay completion composes with render-once base — B06/B26', () 
 })
 
 describe('T08 snapshot semantic accounting — B23 / earlier CHECK survivor', () => {
+  it('one narration owner and a finished start/result pair retain one source position and exactly two logical rows', () => {
+    const source = entry(1, { id: 'history-tool-owner', type: 'message', role: 'assistant', content: 'Read a file', tool_calls: [{
+      id: 'grouped-read', tool: 'read_file', status: 'success', parameters: { path: 'report.txt' },
+      result: { content: 'Stored bytes' }, content_state: 'full',
+    }] })
+    const origin = { position: pos(1), entry_id: source.id }
+    const start = { type: 'tool_call_start', session_id: SID, call_id: 'grouped-read', tool: 'read_file', params: { path: 'report.txt' }, history_origin: origin } as const
+    const result = { type: 'tool_call_result', session_id: SID, call_id: 'grouped-read', tool: 'read_file', status: 'success', result: { content: 'Stored bytes' }, history_origin: origin } as const
+    const history = page([source], { rows: 2 })
+    // Independently encode this fixture's paired carriers, excluding diagnostic
+    // accounting and separately governed current controls from their meter.
+    const { soft_byte_budget, projected_bytes, byte_budget_exceeded, budget_override, ...metadata } = history.page_info
+    void soft_byte_budget; void projected_bytes; void byte_budget_exceeded; void budget_override
+    const historical = [{ ...snapshot(history), page_info: metadata }, replay(source), start, result, { type: 'done', session_id: SID }]
+    history.page_info.projected_bytes = Math.max(Buffer.byteLength(JSON.stringify({ ...history, page_info: metadata })), Buffer.byteLength(JSON.stringify(historical)))
+    expectValidPage(history, [pos(1)], 2) // D4: narration1 + tool pair1, NOT three frames or one row.
+    transport = historyTransport()
+    transport.attach()
+    transport.deliver(snapshot(history), state(), replay(source), start, result, { type: 'done', session_id: SID }, complete())
+    expect(useChatStore.getState().messages).toHaveLength(1)
+    expect(useChatStore.getState().messages).toMatchObject([{
+      id: 'history-tool-owner', content: 'Read a file', historyPosition: pos(1),
+      tool_calls: [{ id: 'grouped-read', tool: 'read_file', status: 'success', result: { content: 'Stored bytes' }, textOffset: 11 }],
+    }])
+  })
+
   it.each([
     ['source_group_count', 0], ['source_group_count', 1], ['source_group_count', 3],
     ['row_count', 0], ['row_count', 1], ['row_count', 3],
