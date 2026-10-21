@@ -152,6 +152,11 @@ func newGoalLoopTestLoop(
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), workerProvider)
 	t.Cleanup(func() { al.Close() })
+	// Goal follow-ups now enter the ordinary execution spine. Match gateway
+	// boot's lifecycle/inbox/epoch/launcher wiring, without supplying any goal
+	// route (the cold-route regressions must still prove production does it).
+	installTestSessionLauncher(t, al)
+	pwWireRuntime(t, al)
 
 	judgeInst, ok := al.GetRegistry().GetAgent(string(coreagent.IDJudge))
 	if !ok {
