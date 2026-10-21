@@ -14,7 +14,7 @@ When memory is enabled for the agent, a prompt includes that workspace's last re
 
 ## When you would use it
 
-- You tell an agent something worth keeping — "Remember that we invoice on the 15th" — and any teammate in the workspace can recall it in a later conversation.
+- You ask an agent to save a shared note — "Remember for this workspace that we invoice on the 15th" — and a teammate can recall it in a later chat in that same workspace.
 - You return the next day and the agent already knows what happened yesterday, without you restating it.
 - A conversation runs long, and the agent reads an earlier exchange back instead of guessing at it.
 - You change how often recaps happen, or which model writes them, in Settings.

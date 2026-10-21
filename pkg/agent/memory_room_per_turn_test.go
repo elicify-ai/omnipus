@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/memrooms"
@@ -24,6 +25,7 @@ import (
 func TestMemoryRoomPerTurn(t *testing.T) {
 	t.Run("AThenB", testMemoryRoomAThenB)
 	t.Run("ConcurrentSessions", testMemoryRoomConcurrentSessions)
+	t.Run("ConcurrentCitations", testMemoryRoomConcurrentCitations)
 	t.Run("NoWorkspace", testMemoryRoomNoWorkspace)
 	t.Run("TeammateFreshness", testMemoryRoomTeammateFreshness)
 }
@@ -62,8 +64,8 @@ func (f turnMemoryFixture) chat(t *testing.T, workspaceID string) (*session.Unif
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.sessions.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); err != nil {
-		t.Fatal(err)
+	if setErr := f.sessions.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); setErr != nil {
+		t.Fatal(setErr)
 	}
 	meta, err = f.sessions.GetMeta(meta.ID)
 	if err != nil {
@@ -190,11 +192,23 @@ func testMemoryRoomConcurrentSessions(t *testing.T) {
 		for _, note := range notes {
 			got = append(got, note.Body)
 		}
-		want := []string{"ROOM_" + strings.ToUpper(ws) + "_SHARED"}
+		want := make([]string, 0, 9) // one shared seed plus eight concurrent writes
+		want = append(want, "ROOM_"+strings.ToUpper(ws)+"_SHARED")
 		for i := range 8 {
 			want = append(want, fmt.Sprintf("ROOM_%s_WRITE_%d", strings.ToUpper(ws), i))
 		}
 		requireTurnMemoryNotes(t, strings.Join(got, "\n"), want...)
+		sharedCtx := ctxA
+		if ws == "beta" {
+			sharedCtx = ctxB
+		}
+		// A common term exposes over-inclusion: own-note presence alone
+		// would accept foreign or private notes returned alongside it.
+		result := f.recall.Execute(sharedCtx, map[string]any{"query": "roomnote", "room": "shared"})
+		if result == nil || result.IsError {
+			t.Fatalf("%s shared-only recall: %+v", ws, result)
+		}
+		requireTurnMemoryNotes(t, result.ForLLM, want...)
 	}
 }
 
@@ -289,5 +303,70 @@ func testMemoryRoomTeammateFreshness(t *testing.T) {
 			want = append(want, "ROOM_ALPHA_TEAMMATE_NEW")
 			requireTurnMemoryNotes(t, f.prompt(a), want...)
 		})
+	}
+}
+
+// Both citation trackers belong to concurrent sessions of one agent. B's
+// recall occurs between A's recall and A's citation, so citation routing must
+// retain A's original workspace rather than following another session.
+func testMemoryRoomConcurrentCitations(t *testing.T) {
+	f := newTurnMemoryFixture(t)
+	now := time.Date(2026, time.October, 21, 12, 0, 0, 0, time.UTC)
+	f.cb.Memory().SetClock(func() time.Time { return now })
+	_, ctxA := f.chat(t, "alpha")
+	_, ctxB := f.chat(t, "beta")
+	f.save(t, ctxA, "ROOM_ALPHA_SHARED", "shared")
+	f.save(t, ctxB, "ROOM_BETA_SHARED", "shared")
+	f.save(t, ctxA, "ROOM_SELF_PRIVATE", "private")
+	trackers := map[string]*citationTracker{
+		"alpha": newCitationTracker(f.cb.Memory(), "alpha"),
+		"beta":  newCitationTracker(f.cb.Memory(), "beta"),
+	}
+	ids := make(map[string]string, 2)
+	for _, chat := range []struct {
+		ws  string
+		ctx context.Context
+	}{
+		{"alpha", ctxA},
+		{"beta", ctxB},
+	} {
+		room := memrooms.ResolveWorkspaceSharedRoom(f.home, chat.ws)
+		files, err := memrooms.ScanMemories(room.MemoriesDir)
+		if err != nil || len(files) != 1 {
+			t.Fatalf("%s citation fixture must have one persisted shared note: files=%+v err=%v", chat.ws, files, err)
+		}
+		ids[chat.ws] = files[0].Frontmatter.ID
+		if ids[chat.ws] == "" {
+			t.Fatalf("%s citation fixture has no stable ID", chat.ws)
+		}
+		ctx := tools.WithCitationTracker(chat.ctx, trackers[chat.ws])
+		result := f.recall.Execute(ctx, map[string]any{"query": "roomnote", "room": "shared"})
+		if result == nil || result.IsError {
+			t.Fatalf("%s tracked shared recall: %+v", chat.ws, result)
+		}
+		requireTurnMemoryNotes(t, result.ForLLM, "ROOM_"+strings.ToUpper(chat.ws)+"_SHARED")
+	}
+
+	// The expected IDs come from the input files, independently of recall's
+	// output. The fixed clock makes the ENTIRE cited counter record exact.
+	for _, ws := range []string{"alpha", "beta"} {
+		trackers[ws].EmitCitations("Based on memory id:" + ids[ws])
+	}
+	for _, ws := range []string{"alpha", "beta"} {
+		room := memrooms.ResolveWorkspaceSharedRoom(f.home, ws)
+		cited := make([]memrooms.CounterRecord, 0, 1) // exactly one shared note in this fixture
+		for _, record := range readCounterRecords(t, room.CountersPath) {
+			if record.Op == memrooms.CounterOpCited {
+				cited = append(cited, record)
+			}
+		}
+		want := []memrooms.CounterRecord{{TS: now, MemoryID: ids[ws], Op: memrooms.CounterOpCited, By: "self"}}
+		if !reflect.DeepEqual(cited, want) {
+			t.Errorf("%s cited records = %+v, want exactly %+v", ws, cited, want)
+		}
+	}
+	private := readCounterRecords(t, f.cb.Memory().PrivateRoom().CountersPath)
+	if got := countOp(private, memrooms.CounterOpCited); got != 0 {
+		t.Errorf("shared citations added %d records to private memory, want zero", got)
 	}
 }
