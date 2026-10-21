@@ -76,17 +76,25 @@ func TestPairingStartFailureMessage_NamesTheCauseClass(t *testing.T) {
 	require.NotContains(t, other, "banned")
 }
 
-// TestManager_StaleAdmissionIsReportedInterrupted is the gate r4 sibling of
-// T2-SF-16 (M14): an admission whose configuration changed after it committed
-// never starts, and its chat is told it was interrupted.
-func TestManager_StaleAdmissionIsReportedInterrupted(t *testing.T) {
-	registerFailOnceFactory(t, "gate-r4-stale", 0)
-	cfg := minimalCfg(map[string]config.ChannelInstanceConfig{
-		"gate-r4-stale": {Type: "gate-r4-stale", Enabled: true},
+// TestManager_AnOlderReloadNeverInterruptsANewerAttempt is gate r5 R5-A05
+// (M2, M4, M8, M10): a reload built from an older configuration snapshot
+// (rA) starts after A was stopped and a newer connect B committed at its own
+// revision (rB). That older reload neither consumes nor interrupts B — it is
+// not B's operation; B stays startable and B's own reload starts it. (Gate r4
+// sibling, re-aimed: a stale admission is no longer interrupted by an older
+// reload; it is closed by its own operation or by the next admission.)
+func TestManager_AnOlderReloadNeverInterruptsANewerAttempt(t *testing.T) {
+	built := registerFailOnceFactory(t, "gate-r5-older", 0)
+	cfgA := minimalCfg(map[string]config.ChannelInstanceConfig{
+		"gate-r5-older": {Type: "gate-r5-older", Enabled: true, WorkspaceID: "ws-a"},
 	})
+	cfgB := minimalCfg(map[string]config.ChannelInstanceConfig{
+		"gate-r5-older": {Type: "gate-r5-older", Enabled: true, WorkspaceID: "ws-b"},
+	})
+	require.NotEqual(t, ChannelRevision(cfgA, "gate-r5-older"), ChannelRevision(cfgB, "gate-r5-older"), "instrument: two revisions")
 	mb := bus.NewMessageBus()
 	t.Cleanup(mb.Close)
-	m, err := NewManager(cfg, credentials.SecretBundle{}, mb, nil)
+	m, err := NewManager(cfgA, credentials.SecretBundle{}, mb, nil)
 	require.NoError(t, err)
 	var mu sync.Mutex
 	var events []pairingEvent
@@ -98,13 +106,26 @@ func TestManager_StaleAdmissionIsReportedInterrupted(t *testing.T) {
 	require.NoError(t, m.StartAll(context.Background()))
 	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
 	store := m.PairingAttempts()
-	stale, err := store.Admit("gate-r4-stale", PairingAdmissionConnect, &PairingOwner{SessionID: "chat-a", RequestID: "req-a"})
+
+	a, err := store.Admit("gate-r5-older", PairingAdmissionConnect, &PairingOwner{SessionID: "chat-a", RequestID: "req-a"})
 	require.NoError(t, err)
-	require.True(t, store.MarkReady("gate-r4-stale", stale.AttemptID, "an-older-revision"))
-	m.RequestRestart("gate-r4-stale", stale.AttemptID)
-	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
+	require.True(t, store.MarkReady("gate-r5-older", a.AttemptID, ChannelRevision(cfgA, "gate-r5-older")))
+	_, revoked := store.BeginStop(a)
+	require.True(t, revoked, "Stop revoked A")
+	b, err := store.Admit("gate-r5-older", PairingAdmissionConnect, &PairingOwner{SessionID: "chat-b", RequestID: "req-b"})
+	require.NoError(t, err)
+	require.True(t, store.MarkReady("gate-r5-older", b.AttemptID, ChannelRevision(cfgB, "gate-r5-older")))
+
+	m.RequestRestart("gate-r5-older", "") // the older operation's restart
+	require.NoError(t, m.Reload(context.Background(), cfgA, credentials.SecretBundle{}))
+	all := built()
+	require.Equal(t, []startIntent{{}}, all[len(all)-1].startIntents(), "the older reload starts without a token")
+	require.True(t, store.IsReady("gate-r5-older", b.AttemptID), "B is neither consumed nor interrupted")
 	mu.Lock()
-	defer mu.Unlock()
-	require.Equal(t, []pairingEvent{{"gate-r4-stale", stale.AttemptID, PairingStatusError,
-		"This pairing was interrupted because the WhatsApp connection was changed or restarted. Press Retry to get a new code."}}, events)
+	require.Empty(t, events, "nothing is reported for B")
+	mu.Unlock()
+
+	require.NoError(t, m.Reload(context.Background(), cfgB, credentials.SecretBundle{}))
+	all = built()
+	require.Equal(t, []startIntent{{token: b.AttemptID}}, all[len(all)-1].startIntents(), "B's own reload starts B")
 }

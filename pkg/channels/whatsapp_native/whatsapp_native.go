@@ -78,6 +78,11 @@ type WhatsAppNativeChannel struct {
 	instance        string
 	attemptID       string
 	attemptObserver func(attemptID string, status channels.PairingStatus, qr, message string)
+	// unfinishedTeardowns holds, per attempt whose own Stop timed out, the
+	// signal that its tracked work finally joined (gate r5 R5-A02): a retry of
+	// that attempt's handle waits on it, never treating the already-cleared
+	// running attempt as proof of disposal. Guarded by mu.
+	unfinishedTeardowns map[string]<-chan struct{}
 
 	// pairingObserver, if set, receives linked-device pairing updates (QR code +
 	// status) so the gateway can surface them in the SPA (#283). Wired at boot
@@ -257,11 +262,25 @@ func (c *WhatsAppNativeChannel) activate(
 func (c *WhatsAppNativeChannel) stopAttempt(ctx context.Context, attemptID string) error {
 	c.mu.Lock()
 	current := c.attemptID
+	unfinished := c.unfinishedTeardowns[attemptID]
 	c.mu.Unlock()
-	if current != attemptID {
-		return nil // that attempt's loop is already gone
+	if attemptID != "" && current == attemptID {
+		return c.stop(ctx, false)
 	}
-	return c.stop(ctx, false)
+	if unfinished == nil {
+		return nil // that attempt's loop is gone and its teardown completed
+	}
+	// An earlier teardown of this attempt timed out with its work still
+	// running: this retry joins that same work (gate r5 R5-A02, M6, M7).
+	select {
+	case <-unfinished:
+		c.mu.Lock()
+		delete(c.unfinishedTeardowns, attemptID)
+		c.mu.Unlock()
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("the WhatsApp client did not finish stopping: %w", ctx.Err())
+	}
 }
 
 // mapQRLifecycle maps a non-"code" whatsmeow QR event to an SPA pairing status
@@ -591,6 +610,16 @@ func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error 
 		// Context canceled or timed out; log and proceed with best-effort cleanup.
 		logger.WarnC("whatsapp", fmt.Sprintf("Stop context canceled before all goroutines finished: %v", ctx.Err()))
 		teardownErr = fmt.Errorf("the WhatsApp client did not finish stopping: %w", ctx.Err())
+		if !interrupt && attemptID != "" {
+			// The attempt's own Stop: a retry of its handle must join this
+			// same unfinished work (gate r5 R5-A02).
+			c.mu.Lock()
+			if c.unfinishedTeardowns == nil {
+				c.unfinishedTeardowns = make(map[string]<-chan struct{})
+			}
+			c.unfinishedTeardowns[attemptID] = done
+			c.mu.Unlock()
+		}
 	}
 
 	// Now it is safe to clear and close resources.

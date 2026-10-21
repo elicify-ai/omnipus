@@ -335,3 +335,26 @@ func TestPairingAttempts_FailedTeardownIsRetriedOnItsOwnHandle(t *testing.T) {
 	require.Equal(t, PairingOutcomeStopped, done.Outcome)
 	require.Empty(t, s.OwnedBy("chat-a"))
 }
+
+// TestPairingAttempts_AStaleReadyAttemptIsClosedByTheNextAdmission is gate r5
+// R5-A05's other half: a ready attempt whose committed configuration was
+// replaced can never start; the next admission at the current revision
+// interrupts it (reported), while a ready attempt at the current revision
+// still refuses that admission.
+func TestPairingAttempts_AStaleReadyAttemptIsClosedByTheNextAdmission(t *testing.T) {
+	s := NewPairingAttempts()
+	admitted, err := s.Admit(testInstance, PairingAdmissionConnect, ownerA)
+	require.NoError(t, err)
+	require.True(t, s.MarkReady(testInstance, admitted.AttemptID, "rev-old"))
+	_, stale := s.InterruptStaleReady(testInstance, "rev-old")
+	require.False(t, stale, "a ready attempt at the current revision is not stale")
+	_, err = s.Admit(testInstance, PairingAdmissionEnable, nil)
+	require.ErrorIs(t, err, ErrPairingConflict)
+
+	rec, stale := s.InterruptStaleReady(testInstance, "rev-new")
+	require.True(t, stale)
+	require.Equal(t, admitted.AttemptID, rec.AttemptID)
+	require.Equal(t, PairingOutcomeInterrupted, rec.Outcome)
+	_, err = s.Admit(testInstance, PairingAdmissionEnable, nil)
+	require.NoError(t, err, "the stale attempt no longer blocks a new one")
+}

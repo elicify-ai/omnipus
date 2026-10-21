@@ -318,9 +318,10 @@ func TestManager_Starts_CarryTheirPairingIntent(t *testing.T) {
 	// token can never begin a pairing loop: the store refuses it, so no
 	// fallback unowned attempt exists after the stale admission.
 	require.Equal(t, []startIntent{{}}, all[len(all)-1].startIntents(), "the start carries no token")
-	got, ok := store.Attempt("gate-r3-intent", stale.AttemptID)
-	require.True(t, ok)
-	require.Equal(t, PairingOutcomeInterrupted, got.Outcome)
+	// Gate r5 R5-A05: the reload does not interrupt it either — a reload
+	// never decides on behalf of an attempt it was not built for; a stale
+	// admission is closed by its own operation or the next admission.
+	require.True(t, store.IsReady("gate-r3-intent", stale.AttemptID), "not consumed, not interrupted")
 	latest, ok := store.Latest("gate-r3-intent")
 	require.True(t, ok)
 	require.Equal(t, stale.AttemptID, latest.AttemptID, "no fallback attempt was minted")

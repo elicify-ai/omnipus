@@ -321,21 +321,36 @@ func (s *PairingAttempts) IsCurrent(instance, attemptID string) bool {
 	return c != nil && c.latest != nil && c.latest.AttemptID == attemptID && c.latest.Phase == PairingPhaseActive
 }
 
-// TakeReady returns instance's ready attempt for a start at revision:
-// a token whose committed revision no longer matches is interrupted instead
-// (M14), so a stale admission never starts.
+// TakeReady returns instance's ready attempt for a start at revision: only an
+// attempt committed at exactly that revision starts (M14). An attempt at
+// another revision is left alone — a reload built from an older (or newer)
+// configuration snapshot never consumes or interrupts an attempt it was not
+// built for (gate r5 R5-A05). A stale attempt is closed by its own operation
+// once its reload is confirmed, or by the next admission
+// (InterruptStaleReady).
 func (s *PairingAttempts) TakeReady(instance, revision string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.connectors[instance]
-	if c == nil || c.latest == nil || c.latest.Phase != PairingPhaseReady {
-		return ""
-	}
-	if c.latest.Revision != revision {
-		c.latest.Phase, c.latest.Outcome = PairingPhaseTerminal, PairingOutcomeInterrupted
+	if c == nil || c.latest == nil || c.latest.Phase != PairingPhaseReady || c.latest.Revision != revision {
 		return ""
 	}
 	return c.latest.AttemptID
+}
+
+// InterruptStaleReady closes instance's ready attempt when it was committed at
+// a revision other than currentRevision — the connector's configuration was
+// replaced since, so it can never start (M14). It returns that attempt so its
+// chat can be told. An attempt at the current revision is left ready.
+func (s *PairingAttempts) InterruptStaleReady(instance, currentRevision string) (PairingAttempt, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.connectors[instance]
+	if c == nil || c.latest == nil || c.latest.Phase != PairingPhaseReady || c.latest.Revision == currentRevision {
+		return PairingAttempt{}, false
+	}
+	c.latest.Phase, c.latest.Outcome = PairingPhaseTerminal, PairingOutcomeInterrupted
+	return copyAttempt(c.latest), true
 }
 
 // Activate makes the start's own admitted attempt active just before the

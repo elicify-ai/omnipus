@@ -103,7 +103,7 @@ func TestDisableChannel_RevokesAnUnstartedAdmission(t *testing.T) {
 		map[string]any{"id": "whatsapp", "expected_revision": channelRevision(cfg, "whatsapp")})
 	require.NotNil(t, res)
 	require.False(t, res.IsError, res.ForLLM)
-	require.Equal(t, []string{"whatsapp enabled=true"}, revoked, "revoked before the disable is saved")
+	require.Equal(t, []string{"whatsapp enabled=false"}, revoked, "revoked once the disable is accepted and saved (gate r5 R5-A03)")
 	require.False(t, cfg.Channels["whatsapp"].Enabled)
 }
 
@@ -149,4 +149,67 @@ func TestConnectChannel_ReportsWhatItsOwnPairingDid(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDisableChannel_ARefusedStaleDisableHasNoPairingEffect is gate r5
+// CR-T2-R5-01 / T2-SF-18 / R5-A03 (M2): a disable refused for a stale
+// expected_revision changes NOTHING — the configuration stays on, the real
+// attempt store keeps the winner ready with its owner, nothing is published
+// and the winner's token still starts. An accepted disable (control) revokes
+// the unstarted admission after the disable is saved.
+func TestDisableChannel_ARefusedStaleDisableHasNoPairingEffect(t *testing.T) {
+	connect, cfg := connectRevisionFixture(t, func(*config.Config) {})
+	whatsappOff(cfg)
+	ch := cfg.Channels["whatsapp"]
+	ch.Enabled = true
+	cfg.Channels["whatsapp"] = ch
+	store := channels.NewPairingAttempts()
+	winner, err := store.Admit("whatsapp", channels.PairingAdmissionConnect, &channels.PairingOwner{SessionID: "chat-a", RequestID: "req-a"})
+	require.NoError(t, err)
+	require.True(t, store.MarkReady("whatsapp", winner.AttemptID, "rev"))
+	published := 0
+	connect.deps.RevokePairingForDisable = func(id string) {
+		if _, revoked := store.RevokeForDisable(id); revoked {
+			published++ // the agent publishes the interruption of a revoked attempt
+		}
+	}
+
+	stale := NewChannelDisableTool(connect.deps).Execute(context.Background(),
+		map[string]any{"id": "whatsapp", "expected_revision": "a-stale-revision-from-an-older-plan"})
+	require.NotNil(t, stale)
+	require.True(t, stale.IsError, stale.ForLLM)
+	require.Contains(t, stale.ForLLM, "CONFLICT")
+	require.True(t, cfg.Channels["whatsapp"].Enabled, "nothing was saved")
+	require.True(t, store.IsReady("whatsapp", winner.AttemptID), "the winner is untouched")
+	latest, _ := store.Latest("whatsapp")
+	require.Equal(t, channels.PairingOwner{SessionID: "chat-a", RequestID: "req-a"}, *latest.Owner)
+	require.Zero(t, published, "no interruption was published")
+	require.Equal(t, winner.AttemptID, store.TakeReady("whatsapp", "rev"), "the winner's token still starts")
+
+	// Control: an accepted disable revokes an unstarted admission.
+	next := NewPairingFixtureAdmission(t, store)
+	accepted := NewChannelDisableTool(connect.deps).Execute(context.Background(),
+		map[string]any{"id": "whatsapp", "expected_revision": channelRevision(cfg, "whatsapp")})
+	require.False(t, accepted.IsError, accepted.ForLLM)
+	require.False(t, cfg.Channels["whatsapp"].Enabled)
+	require.False(t, store.IsReady("whatsapp", next), "an accepted disable revokes the unstarted admission")
+	require.Equal(t, 1, published)
+}
+
+// NewPairingFixtureAdmission ends the store's latest attempt and admits a new
+// ready one, returning its id.
+func NewPairingFixtureAdmission(t *testing.T, store *channels.PairingAttempts) string {
+	t.Helper()
+	if latest, ok := store.Latest("whatsapp"); ok && latest.Phase == channels.PairingPhaseReady {
+		_, err := store.Activate("whatsapp", latest.AttemptID, func(string) func(context.Context) error { return nil })
+		require.NoError(t, err)
+		store.Complete("whatsapp", latest.AttemptID, channels.PairingOutcomeTimeout)
+	}
+	if latest, ok := store.Latest("whatsapp"); ok && latest.Phase == channels.PairingPhaseActive {
+		store.Complete("whatsapp", latest.AttemptID, channels.PairingOutcomeTimeout)
+	}
+	admitted, err := store.Admit("whatsapp", channels.PairingAdmissionConnect, &channels.PairingOwner{SessionID: "chat-b", RequestID: "req-b"})
+	require.NoError(t, err)
+	require.True(t, store.MarkReady("whatsapp", admitted.AttemptID, "rev"))
+	return admitted.AttemptID
 }

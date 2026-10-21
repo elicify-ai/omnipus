@@ -204,6 +204,10 @@ type Deps struct {
 	// (channels.ErrPairingConflict) or the connector is being deleted
 	// (channels.ErrPairingDeleting). WireSysagentDeps fills it.
 	AdmitEnablePairing func(channelID string) (attemptID string, err error)
+	// SettlePairing closes an admitted attempt its own confirmed reload did
+	// not start, and tells its chat (gate r5 R5-A05). WireSysagentDeps fills
+	// it.
+	SettlePairing func(channelID, attemptID string)
 	// RevokePairingForDisable ends a not-yet-started pairing admission of a
 	// connector disable_channel turns off, so it can never start late (gate r4
 	// R4-A02). WireSysagentDeps fills it.

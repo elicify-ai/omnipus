@@ -2455,16 +2455,9 @@ func (mr *managerReload) startAdded() {
 		})
 		// An admitted pairing start for n (ready, at this revision) is
 		// consumed by this start only (gate r3 M2, M14).
-		store := mr.m.PairingAttempts()
-		before, hadLatest := store.Latest(n)
-		token := store.TakeReady(n, mr.list[n])
-		if token == "" && hadLatest && before.Phase == PairingPhaseReady {
-			// Its configuration changed after it committed: the stale
-			// admission was interrupted (M14) — say so, never start it.
-			if after, ok := store.Attempt(n, before.AttemptID); ok && after.Outcome == PairingOutcomeInterrupted {
-				mr.m.notifyPairingLocked(n, before.AttemptID, PairingStatusError, PairingInterruptedMessage)
-			}
-		}
+		// Only an attempt committed at this reload's own revision starts; any
+		// other is left to the reload built for it (gate r5 R5-A05).
+		token := mr.m.PairingAttempts().TakeReady(n, mr.list[n])
 		if err := channel.Start(WithPairingStart(mr.ctx, token, false)); err != nil {
 			logger.ErrorCF("channels", "Failed to start channel", map[string]any{
 				"channel": n,

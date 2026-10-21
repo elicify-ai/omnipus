@@ -37,6 +37,13 @@ const pairingRetryUnconfirmedText = "The WhatsApp connection is enabled, but its
 const pairingCancelledText = "The WhatsApp connection is turned on, but its pairing was cancelled before it started. " +
 	"Press Retry to start a new one."
 
+// ordinaryUnconfirmedText answers an ordinary (Connectors) enable whose
+// configuration saved but whose reload did not confirm the start in time: its
+// unowned reservation is kept, because that start can still happen (gate r5
+// R5-A04).
+const ordinaryUnconfirmedText = "The WhatsApp connection is enabled, but its restart could not be " +
+	"confirmed yet. The new code appears here when the pairing starts."
+
 // pairingInProgressText refuses an ordinary enable while another pairing of
 // the connector is reserved, running or stopping: nothing is saved (gate r4
 // T2-SF-13, R4-A02, M2). Code pairing_in_progress.
@@ -91,9 +98,10 @@ func (a *restAPI) enableChannel(w http.ResponseWriter, r *http.Request, channelI
 	case enableUnconfirmed:
 		jsonErr(w, http.StatusInternalServerError, pairingRetryUnconfirmedText)
 	default:
-		// The reload completed: an admission no start consumed (the device
-		// was already linked) is closed; one the start took is left to it.
-		a.agentLoop.ReleasePairing(channelID, attemptID)
+		// The reload completed: an admission no start consumed is closed and
+		// its chat told; one the start took (or a linked device closed) is
+		// left as it is (gate r5 R5-A05).
+		a.agentLoop.SettlePairing(channelID, attemptID)
 		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
 	}
 }
@@ -121,10 +129,19 @@ func (a *restAPI) enableChannelOrdinary(w http.ResponseWriter, channelID string)
 		}
 	}
 	outcome := a.applyChannelEnabled(w, channelID, true, opts)
-	if attemptID != "" && outcome != enableUnconfirmed {
+	switch {
+	case attemptID == "":
+		if outcome != enableFailed {
+			jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
+		}
+	case outcome == enableFailed:
 		a.agentLoop.ReleasePairing(channelID, attemptID)
-	}
-	if outcome != enableFailed {
+	case outcome == enableUnconfirmed:
+		// The start can still happen: keep the reservation and say the restart
+		// is unconfirmed, never a plain success (gate r5 R5-A04, M10, M14).
+		jsonErr(w, http.StatusInternalServerError, ordinaryUnconfirmedText)
+	default:
+		a.agentLoop.SettlePairing(channelID, attemptID)
 		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
 	}
 }
@@ -156,10 +173,18 @@ func (a *restAPI) admitOrdinaryPairing(w http.ResponseWriter, channelID string) 
 // admission of a connector being turned off can never start late (gate r3
 // M2), and a missing connector is a 404, never created (M12).
 func (a *restAPI) disableChannel(w http.ResponseWriter, channelID string) {
+	opts := channelEnableOptions{requireExisting: true}
 	if a.agentLoop != nil {
-		a.agentLoop.RevokePairingForDisable(channelID)
+		// Only an accepted (saved) disable revokes an unstarted admission; a
+		// refused or failed one changes nothing (gate r5 R5-A03 sibling).
+		opts.afterCommit = func(http.ResponseWriter) bool {
+			a.agentLoop.RevokePairingForDisable(channelID)
+			return true
+		}
 	}
-	_ = a.setChannelEnabled(w, channelID, false)
+	if a.applyChannelEnabled(w, channelID, false, opts) != enableFailed {
+		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: false})
+	}
 }
 
 func pairingCapable(channelID string) bool {

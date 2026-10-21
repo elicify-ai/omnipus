@@ -264,7 +264,24 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 	if !f.wc.wantsPairing(p.ChannelID) {
 		return
 	}
+	// A lagging forwarder never sends an event older than the channel's newest
+	// published one: that newer state may already have reached this page
+	// through the cache replay, and the newer event itself still follows in
+	// this forwarder's own queue (gate r5 R5-A01, M8).
+	if f.h.pairingEventSuperseded(p) {
+		return
+	}
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
+}
+
+// pairingEventSuperseded reports whether a newer pairing event of p's channel
+// was already published (the sync tap records every event's sequence at
+// emission).
+func (h *WSHandler) pairingEventSuperseded(p agent.WhatsAppPairingPayload) bool {
+	h.pairingCacheMu.Lock()
+	defer h.pairingCacheMu.Unlock()
+	last, seen := h.pairingCacheSeq[p.ChannelID]
+	return seen && p.Seq < last
 }
 
 // pairingFrameFromPayload builds the K10 whatsapp_pairing frame for p.

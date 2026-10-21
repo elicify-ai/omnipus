@@ -182,12 +182,12 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 		t.deps.RequestChannelRestart(id)
 	}
 	res, confirmed := t.liveResult(id, ws, agentID, chType, savedRevision, attemptID)
-	if attemptID != "" && confirmed && t.deps.ReleasePairing != nil {
-		// The reload completed: an admission no start consumed (the device was
-		// already linked, or nothing started) must not pass to a later attempt.
-		// One the start took is left to it. An unconfirmed reload keeps the
+	if attemptID != "" && confirmed && t.deps.SettlePairing != nil {
+		// The reload completed: an admission no start consumed must not pass
+		// to a later attempt, and its chat is told (gate r5 R5-A05). One the
+		// start took is left to it. An unconfirmed reload keeps the
 		// reservation, since that start can still happen (M10).
-		t.deps.ReleasePairing(id, attemptID)
+		t.deps.SettlePairing(id, attemptID)
 	}
 	return res
 }

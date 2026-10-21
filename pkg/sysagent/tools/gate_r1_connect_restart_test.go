@@ -35,6 +35,7 @@ func (p *pairingDepsRecorder) wire(d *Deps, cfg *config.Config) {
 		return p.commitOK
 	}
 	d.ReleasePairing = func(_, attemptID string) { p.calls = append(p.calls, "release "+attemptID) }
+	d.SettlePairing = func(_, attemptID string) { p.calls = append(p.calls, "settle "+attemptID) }
 	d.RequestChannelRestart = func(id string) bool {
 		p.restarted = append(p.restarted, id)
 		return true
@@ -62,8 +63,8 @@ func TestConnectChannel_RestartsAChannelStoppedInPlace(t *testing.T) {
 		res := tool.Execute(context.Background(), map[string]any{
 			"id": "whatsapp", "workspace_id": "sales", "agent_id": "mia", "expected_revision": "absent"})
 		require.NotNil(t, res)
-		require.Equal(t, []string{"admit saved=false", "commit attempt-1 saved=true", "release attempt-1"}, rec.calls,
-			"the attempt is reserved before anything is saved, made startable after the save, and closed once the confirmed reload is done")
+		require.Equal(t, []string{"admit saved=false", "commit attempt-1 saved=true", "settle attempt-1"}, rec.calls,
+			"the attempt is reserved before anything is saved, made startable after the save, and settled once the confirmed reload is done")
 		require.Empty(t, rec.restarted, "the committed attempt arms the restart; no second start is requested")
 		require.Contains(t, strings.ToLower(res.ForLLM), "pairing not finished", res.ForLLM)
 	})

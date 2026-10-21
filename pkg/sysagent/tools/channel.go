@@ -438,11 +438,6 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (re
 	if missing != nil {
 		return missing
 	}
-	// A not-yet-started pairing admission of the connector being turned off
-	// can never start late (gate r4 R4-A02, M2).
-	if t.deps.RevokePairingForDisable != nil {
-		t.deps.RevokePairingForDisable(id)
-	}
 	if err := t.deps.withSharedResourceWrite(sharedChannel, id, expected, func() error {
 		return t.deps.WithConfig(func(cfg *config.Config) error {
 			ch, ok := cfg.Channels[id]
@@ -458,6 +453,12 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (re
 			return r
 		}
 		return tools.ErrorResult(errorJSON("DISABLE_FAILED", err.Error(), ""))
+	}
+	// Only the accepted, saved disable revokes a not-yet-started pairing
+	// admission, so it can never start late (gate r4 R4-A02, M2); a refused
+	// or failed disable changes nothing (gate r5 R5-A03, T2-SF-18).
+	if t.deps.RevokePairingForDisable != nil {
+		t.deps.RevokePairingForDisable(id)
 	}
 	return channelWriteResult(t.deps.GetCfg(), id, map[string]any{
 		"enabled": false,

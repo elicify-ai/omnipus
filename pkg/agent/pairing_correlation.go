@@ -42,6 +42,12 @@ func (al *AgentLoop) admitPairing(channelID string, kind channels.PairingAdmissi
 	if store == nil {
 		return "", ErrPairingUnavailable
 	}
+	// A ready attempt committed at a configuration since replaced can never
+	// start: close it visibly instead of letting it block this admission
+	// (gate r5 R5-A05; an older reload no longer decides for it).
+	if stale, ok := store.InterruptStaleReady(channelID, channels.ChannelRevision(al.GetConfig(), channelID)); ok {
+		al.publishInterrupted(stale)
+	}
 	rec, err := store.Admit(channelID, kind, owner)
 	if err != nil {
 		return "", err
@@ -127,6 +133,22 @@ func (al *AgentLoop) PairingAttemptState(channelID, attemptID string) (channels.
 func (al *AgentLoop) ReleasePairing(channelID, attemptID string) {
 	if store := al.pairingAttempts(); store != nil && attemptID != "" {
 		store.Release(channelID, attemptID, channels.PairingOutcomeInterrupted)
+	}
+}
+
+// SettlePairing closes an admitted attempt that its own confirmed reload did
+// not start — its configuration was replaced meanwhile, so it never will — and
+// tells its chat (gate r5 R5-A05). A started, linked or already-closed attempt
+// is left as it is.
+func (al *AgentLoop) SettlePairing(channelID, attemptID string) {
+	store := al.pairingAttempts()
+	if store == nil || attemptID == "" {
+		return
+	}
+	if rec, ok := store.Attempt(channelID, attemptID); ok && rec.Phase == channels.PairingPhaseReady &&
+		store.Release(channelID, attemptID, channels.PairingOutcomeInterrupted) {
+		rec.Phase, rec.Outcome = channels.PairingPhaseTerminal, channels.PairingOutcomeInterrupted
+		al.publishInterrupted(rec)
 	}
 }
 

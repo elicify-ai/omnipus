@@ -2160,6 +2160,9 @@ func (al *AgentLoop) WireSysagentDeps(deps *systools.Deps) {
 	if depsCopy.AdmitEnablePairing == nil {
 		depsCopy.AdmitEnablePairing = al.admitEnablePairingForTool
 	}
+	if depsCopy.SettlePairing == nil {
+		depsCopy.SettlePairing = al.SettlePairing
+	}
 	if depsCopy.RevokePairingForDisable == nil {
 		depsCopy.RevokePairingForDisable = al.RevokePairingForDisable
 	}
