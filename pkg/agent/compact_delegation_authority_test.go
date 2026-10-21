@@ -12,20 +12,27 @@ import (
 // access through names/descriptions elsewhere, and preserves runtime checks.
 // These helpers remap only the founder-authorized obsolete wording assertions.
 func compactGuidanceFactPattern(fact string) string {
+	// These are individual fact clauses from the approved 2026-10-21 payload,
+	// not a snapshot of the guidance paragraph. Arbitrary intervening words
+	// are unsafe: K30's "checks do not apply" satisfied "checks...apply".
+	var clause string
 	switch fact {
-	case "authority":
-		return `(?is)(?:workspace[^.!?\n]*(?:roster|directory)|(?:roster|directory)[^.!?\n]*workspace)[^.!?\n]*(?:alone|complete|authoritative)[^.!?\n]*(?:permitted|delegation|routes)`
+	case "authority", "exclusive":
+		clause = regexp.QuoteMeta("This current workspace roster alone defines your permitted delegation routes.")
 	case "no discovery":
-		return `(?is)(?:do not|don't|never)[^.!?\n]*list_agents[^.!?\n]*memory[^.!?\n]*(?:target|route)`
-	case "exclusive":
-		return `(?is)(?:roster[^.!?\n]*alone[^.!?\n]*permitted|only permitted[^.!?\n]*(?:targets|routes))`
+		clause = regexp.QuoteMeta("do not use list_agents or memory to find additional routes.")
 	case "no extra grants":
-		return `(?is)(?:names|descriptions)[^.!?\n]*elsewhere[^.!?\n]*(?:no additional access|no additional[^.!?\n]*grant)`
+		clause = regexp.QuoteMeta("Descriptions or names elsewhere grant no additional access.")
 	case "runtime checks":
-		return `(?is)runtime[^.!?\n]*graph[^.!?\n]*mode[^.!?\n]*depth[^.!?\n]*tool[^.!?\n]*checks[^.!?\n]*apply`
+		clause = regexp.QuoteMeta("Runtime graph, mode, depth and tool checks still apply") +
+			`(?:, including each listed edge's maximum chain depth)?\.`
 	default:
 		return ""
 	}
+	// A clause must start at a real guidance/sentence boundary, not inside
+	// "It is false that <positive words>". Capture the clause independently
+	// of its boundary so the ordering helper keeps its actual byte position.
+	return `(?i)(?:^|<delegation_guidance>|[.;!?])\s*(` + clause + `)`
 }
 
 func compactGuidanceHasFact(t *testing.T, got, fact string) bool {
@@ -49,9 +56,9 @@ func compactGuidanceDeniesUnlisted(t *testing.T, got string) bool {
 func compactGuidanceExclusivityIndex(t *testing.T, got string) int {
 	t.Helper()
 	guidance := compactDelimitedBlock(t, got, "delegation_guidance")
-	match := regexp.MustCompile(compactGuidanceFactPattern("exclusive")).FindStringIndex(guidance)
+	match := regexp.MustCompile(compactGuidanceFactPattern("exclusive")).FindStringSubmatchIndex(guidance)
 	if match == nil {
 		return -1
 	}
-	return strings.Index(got, "<delegation_guidance>") + match[0]
+	return strings.Index(got, "<delegation_guidance>") + match[2]
 }
