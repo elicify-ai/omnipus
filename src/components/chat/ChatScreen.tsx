@@ -113,6 +113,7 @@ import {
   RestartInterruptedNotice,
 } from './ConnectionStatus'
 import { RowDeliveryStatus } from './RowDeliveryStatus'
+import { WorkingOnLine } from './WorkingOnLine'
 
 function placementOf(message: ChatMessage): DelegationPlacementMessage {
   return {
@@ -3257,6 +3258,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             <GoalPillTray />
             {/* No gradient fade here: it painted the container's top edge (founder feedback 2026-10-11 p5; ChatScreen.composer-topedge.test.tsx). */}
             <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[max(var(--space-2),env(safe-area-inset-bottom,var(--space-0)))]">
+              <WorkingOnLine />
               <OmnipusComposer agentRemoved={agentRemoved} />
             </div>
           </div>
