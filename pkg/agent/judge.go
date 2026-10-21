@@ -282,6 +282,10 @@ type JudgeCriteriaResult struct {
 	// back-off as an outage, re-invoked the Judge a second time and then
 	// false-failed the child). Neutral for every availability streak.
 	ConcurrencyBackoff bool
+	// NeedsOperator distinguishes a permanent settings refusal from a transient
+	// outage. It must survive every outer retry boundary; Reason is safe copy
+	// assembled by judgeDispatchNeedsOperator for this case.
+	NeedsOperator bool
 	// Reason is a short, human-readable cause (unavailability cause, or a
 	// summary of the produced verdict).
 	Reason string
@@ -551,7 +555,7 @@ func (jc *agentLoopJudgeCriteria) runProseRungAndFinalize() JudgeCriteriaResult 
 			// resolveVerifierDiffText's own doc comment for why a retried
 			// call must still see the same cumulative diff, not a
 			// spuriously-empty one.
-			return JudgeCriteriaResult{Unavailable: true, Reason: reason, ConcurrencyBackoff: reason == VerifierConcurrencyBackoffReason}
+			return JudgeCriteriaResult{Unavailable: true, Reason: reason, ConcurrencyBackoff: reason == VerifierConcurrencyBackoffReason, NeedsOperator: strings.HasPrefix(reason, JudgeMisconfiguredReasonPrefix)}
 		}
 		// ADR-084 D9 prerequisite 3 / FR-054 (this wave): a post-progress
 		// failure comes back unavailable=FALSE with every prose criterion

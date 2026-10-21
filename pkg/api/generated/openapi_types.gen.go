@@ -4598,6 +4598,48 @@ func (e HealthResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for HelperEventKind.
+const (
+	HelperEventKindBlocker       HelperEventKind = "blocker"
+	HelperEventKindFailed        HelperEventKind = "failed"
+	HelperEventKindFinished      HelperEventKind = "finished"
+	HelperEventKindNotVerified   HelperEventKind = "not_verified"
+	HelperEventKindQuestion      HelperEventKind = "question"
+	HelperEventKindRestarted     HelperEventKind = "restarted"
+	HelperEventKindResumeRefused HelperEventKind = "resume_refused"
+	HelperEventKindStopped       HelperEventKind = "stopped"
+	HelperEventKindTimedOut      HelperEventKind = "timed_out"
+	HelperEventKindVerdictUnmet  HelperEventKind = "verdict_unmet"
+)
+
+// Valid indicates whether the value is a known member of the HelperEventKind enum.
+func (e HelperEventKind) Valid() bool {
+	switch e {
+	case HelperEventKindBlocker:
+		return true
+	case HelperEventKindFailed:
+		return true
+	case HelperEventKindFinished:
+		return true
+	case HelperEventKindNotVerified:
+		return true
+	case HelperEventKindQuestion:
+		return true
+	case HelperEventKindRestarted:
+		return true
+	case HelperEventKindResumeRefused:
+		return true
+	case HelperEventKindStopped:
+		return true
+	case HelperEventKindTimedOut:
+		return true
+	case HelperEventKindVerdictUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for IntegrationProviderId.
 const (
 	IntegrationProviderIdAudioModel IntegrationProviderId = "audio-model"
@@ -6179,6 +6221,48 @@ func (e MessageGoalOutcomeEnding) Valid() bool {
 	}
 }
 
+// Defines values for MessageHelperEventKind.
+const (
+	MessageHelperEventKindBlocker       MessageHelperEventKind = "blocker"
+	MessageHelperEventKindFailed        MessageHelperEventKind = "failed"
+	MessageHelperEventKindFinished      MessageHelperEventKind = "finished"
+	MessageHelperEventKindNotVerified   MessageHelperEventKind = "not_verified"
+	MessageHelperEventKindQuestion      MessageHelperEventKind = "question"
+	MessageHelperEventKindRestarted     MessageHelperEventKind = "restarted"
+	MessageHelperEventKindResumeRefused MessageHelperEventKind = "resume_refused"
+	MessageHelperEventKindStopped       MessageHelperEventKind = "stopped"
+	MessageHelperEventKindTimedOut      MessageHelperEventKind = "timed_out"
+	MessageHelperEventKindVerdictUnmet  MessageHelperEventKind = "verdict_unmet"
+)
+
+// Valid indicates whether the value is a known member of the MessageHelperEventKind enum.
+func (e MessageHelperEventKind) Valid() bool {
+	switch e {
+	case MessageHelperEventKindBlocker:
+		return true
+	case MessageHelperEventKindFailed:
+		return true
+	case MessageHelperEventKindFinished:
+		return true
+	case MessageHelperEventKindNotVerified:
+		return true
+	case MessageHelperEventKindQuestion:
+		return true
+	case MessageHelperEventKindRestarted:
+		return true
+	case MessageHelperEventKindResumeRefused:
+		return true
+	case MessageHelperEventKindStopped:
+		return true
+	case MessageHelperEventKindTimedOut:
+		return true
+	case MessageHelperEventKindVerdictUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageInputDispositionReason.
 const (
 	MessageInputDispositionReasonStoppedBeforeDelivery MessageInputDispositionReason = "stopped_before_delivery"
@@ -6556,6 +6640,7 @@ const (
 	MessageSystemSubtypeBrowserHandoverNotice MessageSystemSubtype = "browser_handover_notice"
 	MessageSystemSubtypeExpiryNotice          MessageSystemSubtype = "expiry_notice"
 	MessageSystemSubtypeGoalOutcome           MessageSystemSubtype = "goal_outcome"
+	MessageSystemSubtypeHelperEvent           MessageSystemSubtype = "helper_event"
 	MessageSystemSubtypeSubagentEnd           MessageSystemSubtype = "subagent_end"
 	MessageSystemSubtypeSubagentMessage       MessageSystemSubtype = "subagent_message"
 	MessageSystemSubtypeSubagentStart         MessageSystemSubtype = "subagent_start"
@@ -6570,6 +6655,8 @@ func (e MessageSystemSubtype) Valid() bool {
 	case MessageSystemSubtypeExpiryNotice:
 		return true
 	case MessageSystemSubtypeGoalOutcome:
+		return true
+	case MessageSystemSubtypeHelperEvent:
 		return true
 	case MessageSystemSubtypeSubagentEnd:
 		return true
@@ -10064,6 +10151,48 @@ func (e SessionDetailMessagesGoalOutcomeEnding) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesHelperEventKind.
+const (
+	SessionDetailMessagesHelperEventKindBlocker       SessionDetailMessagesHelperEventKind = "blocker"
+	SessionDetailMessagesHelperEventKindFailed        SessionDetailMessagesHelperEventKind = "failed"
+	SessionDetailMessagesHelperEventKindFinished      SessionDetailMessagesHelperEventKind = "finished"
+	SessionDetailMessagesHelperEventKindNotVerified   SessionDetailMessagesHelperEventKind = "not_verified"
+	SessionDetailMessagesHelperEventKindQuestion      SessionDetailMessagesHelperEventKind = "question"
+	SessionDetailMessagesHelperEventKindRestarted     SessionDetailMessagesHelperEventKind = "restarted"
+	SessionDetailMessagesHelperEventKindResumeRefused SessionDetailMessagesHelperEventKind = "resume_refused"
+	SessionDetailMessagesHelperEventKindStopped       SessionDetailMessagesHelperEventKind = "stopped"
+	SessionDetailMessagesHelperEventKindTimedOut      SessionDetailMessagesHelperEventKind = "timed_out"
+	SessionDetailMessagesHelperEventKindVerdictUnmet  SessionDetailMessagesHelperEventKind = "verdict_unmet"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesHelperEventKind enum.
+func (e SessionDetailMessagesHelperEventKind) Valid() bool {
+	switch e {
+	case SessionDetailMessagesHelperEventKindBlocker:
+		return true
+	case SessionDetailMessagesHelperEventKindFailed:
+		return true
+	case SessionDetailMessagesHelperEventKindFinished:
+		return true
+	case SessionDetailMessagesHelperEventKindNotVerified:
+		return true
+	case SessionDetailMessagesHelperEventKindQuestion:
+		return true
+	case SessionDetailMessagesHelperEventKindRestarted:
+		return true
+	case SessionDetailMessagesHelperEventKindResumeRefused:
+		return true
+	case SessionDetailMessagesHelperEventKindStopped:
+		return true
+	case SessionDetailMessagesHelperEventKindTimedOut:
+		return true
+	case SessionDetailMessagesHelperEventKindVerdictUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesInputDispositionReason.
 const (
 	SessionDetailMessagesInputDispositionReasonStoppedBeforeDelivery SessionDetailMessagesInputDispositionReason = "stopped_before_delivery"
@@ -10441,6 +10570,7 @@ const (
 	SessionDetailMessagesSystemSubtypeBrowserHandoverNotice SessionDetailMessagesSystemSubtype = "browser_handover_notice"
 	SessionDetailMessagesSystemSubtypeExpiryNotice          SessionDetailMessagesSystemSubtype = "expiry_notice"
 	SessionDetailMessagesSystemSubtypeGoalOutcome           SessionDetailMessagesSystemSubtype = "goal_outcome"
+	SessionDetailMessagesSystemSubtypeHelperEvent           SessionDetailMessagesSystemSubtype = "helper_event"
 	SessionDetailMessagesSystemSubtypeSubagentEnd           SessionDetailMessagesSystemSubtype = "subagent_end"
 	SessionDetailMessagesSystemSubtypeSubagentMessage       SessionDetailMessagesSystemSubtype = "subagent_message"
 	SessionDetailMessagesSystemSubtypeSubagentStart         SessionDetailMessagesSystemSubtype = "subagent_start"
@@ -10455,6 +10585,8 @@ func (e SessionDetailMessagesSystemSubtype) Valid() bool {
 	case SessionDetailMessagesSystemSubtypeExpiryNotice:
 		return true
 	case SessionDetailMessagesSystemSubtypeGoalOutcome:
+		return true
+	case SessionDetailMessagesSystemSubtypeHelperEvent:
 		return true
 	case SessionDetailMessagesSystemSubtypeSubagentEnd:
 		return true
@@ -15342,7 +15474,7 @@ type AgentUpdateRequest struct {
 	} `json:"executor,omitempty"`
 
 	// FallbackModels Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
-	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
+	// Wire format is always the object form `[{model, provider}]`, and every entry must name both: an entry missing its provider or its model is refused 400, naming the entry (issue #1340).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
 	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
@@ -17857,6 +17989,15 @@ type FallbackModel struct {
 	Provider *string `json:"provider,omitempty"`
 }
 
+// FallbackModelPair One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry missing its provider or its model, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected.
+type FallbackModelPair struct {
+	// Model Model id exactly as the provider names it (a `/` inside it is data).
+	Model string `json:"model"`
+
+	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). The fallback uses this provider's connection — independent of the primary's provider.
+	Provider string `json:"provider"`
+}
+
 // FileSearchHit One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.
 // KB-7b exception: when the request set match_all_words, a hit is instead ONE matching DOCUMENT — every query word must be present somewhere in the file (not necessarily on the same line), and every matching file collapses to this ONE row regardless of how many lines actually matched. match_count carries how many lines that was; line/excerpt/context describe the FIRST (file-order) matching line as the representative one.
 type FileSearchHit struct {
@@ -18646,7 +18787,7 @@ type GoalTerminalHistoryVerdictPerCriterionProvenance string
 // GoalTerminalHistoryVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type GoalTerminalHistoryVerdictScope string
 
-// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written once per goal ending on the helper transcript and, when a parent exists, once on the parent transcript, with different message ids but the same goal id, ending, rounds and Judge reason. Written by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
 type GoalOutcome struct {
 	// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
 	CriteriaTotal *int `json:"criteria_total,omitempty"`
@@ -18746,6 +18887,21 @@ type HealthResponseAuditLogger string
 
 // HealthResponseStatus "ok" when the gateway is serving; "degraded" alongside HTTP 503.
 type HealthResponseStatus string
+
+// HelperEvent An immutable helper event shown in the addressed chat independently of the model's reply. Source-event identity plus destination transcript determines the message id. Live, replay and cold load carry the same filtered payload.
+type HelperEvent struct {
+	CreatedAt       time.Time       `json:"created_at"`
+	GoalId          *string         `json:"goal_id,omitempty"`
+	HelperSessionId string          `json:"helper_session_id"`
+	HelperTitle     *string         `json:"helper_title,omitempty"`
+	Kind            HelperEventKind `json:"kind"`
+
+	// Text Sensitive-data-filtered sentence saved before live publication.
+	Text string `json:"text"`
+}
+
+// HelperEventKind defines model for HelperEvent.Kind.
+type HelperEventKind string
 
 // HostFolderEntry One directory inside a HostFolderListing, with the verdict on whether it may be mounted. The verdict travels WITH the row so the client can disable the choice at the point of selection, rather than letting the operator pick a folder and only then be told no.
 type HostFolderEntry struct {
@@ -21063,7 +21219,7 @@ type Message struct {
 	// GoalId session-core FR-039 / C-GOAL. The goal the entry's producing turn was dispatched under (from session.TranscriptEntry.GoalID). REST history, live delivery and replay retain the SAME association so the SPA joins each message to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier message.
 	GoalId *string `json:"goal_id,omitempty"`
 
-	// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+	// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written once per goal ending on the helper transcript and, when a parent exists, once on the parent transcript, with different message ids but the same goal id, ending, rounds and Judge reason. Written by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
 	GoalOutcome *struct {
 		// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
 		CriteriaTotal *int `json:"criteria_total,omitempty"`
@@ -21089,6 +21245,18 @@ type Message struct {
 		// RoundsUsed Adjudication rounds consumed when the goal ended (shown to the user as "tries"). For `rounds_exhausted` this is the round that hit the limit (normally equal to `max_rounds`); for every other ending it is the number of rounds actually completed. Always the real persisted count — never defaulted to `max_rounds`.
 		RoundsUsed int `json:"rounds_used"`
 	} `json:"goal_outcome,omitempty"`
+
+	// HelperEvent An immutable helper event shown in the addressed chat independently of the model's reply. Source-event identity plus destination transcript determines the message id. Live, replay and cold load carry the same filtered payload.
+	HelperEvent *struct {
+		CreatedAt       time.Time              `json:"created_at"`
+		GoalId          *string                `json:"goal_id,omitempty"`
+		HelperSessionId string                 `json:"helper_session_id"`
+		HelperTitle     *string                `json:"helper_title,omitempty"`
+		Kind            MessageHelperEventKind `json:"kind"`
+
+		// Text Sensitive-data-filtered sentence saved before live publication.
+		Text string `json:"text"`
+	} `json:"helper_event,omitempty"`
 
 	// Id Unique message identifier.
 	Id string `json:"id"`
@@ -21472,6 +21640,9 @@ type MessageContextWindowNoticeKind string
 
 // MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type MessageGoalOutcomeEnding string
+
+// MessageHelperEventKind defines model for Message.HelperEvent.Kind.
+type MessageHelperEventKind string
 
 // MessageInputDispositionReason defines model for Message.InputDisposition.Reason.
 type MessageInputDispositionReason string
@@ -24884,7 +25055,7 @@ type SessionDetail struct {
 		// GoalId session-core FR-039 / C-GOAL. The goal the entry's producing turn was dispatched under (from session.TranscriptEntry.GoalID). REST history, live delivery and replay retain the SAME association so the SPA joins each message to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier message.
 		GoalId *string `json:"goal_id,omitempty"`
 
-		// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+		// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written once per goal ending on the helper transcript and, when a parent exists, once on the parent transcript, with different message ids but the same goal id, ending, rounds and Judge reason. Written by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
 		GoalOutcome *struct {
 			// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
 			CriteriaTotal *int `json:"criteria_total,omitempty"`
@@ -24910,6 +25081,18 @@ type SessionDetail struct {
 			// RoundsUsed Adjudication rounds consumed when the goal ended (shown to the user as "tries"). For `rounds_exhausted` this is the round that hit the limit (normally equal to `max_rounds`); for every other ending it is the number of rounds actually completed. Always the real persisted count — never defaulted to `max_rounds`.
 			RoundsUsed int `json:"rounds_used"`
 		} `json:"goal_outcome,omitempty"`
+
+		// HelperEvent An immutable helper event shown in the addressed chat independently of the model's reply. Source-event identity plus destination transcript determines the message id. Live, replay and cold load carry the same filtered payload.
+		HelperEvent *struct {
+			CreatedAt       time.Time                            `json:"created_at"`
+			GoalId          *string                              `json:"goal_id,omitempty"`
+			HelperSessionId string                               `json:"helper_session_id"`
+			HelperTitle     *string                              `json:"helper_title,omitempty"`
+			Kind            SessionDetailMessagesHelperEventKind `json:"kind"`
+
+			// Text Sensitive-data-filtered sentence saved before live publication.
+			Text string `json:"text"`
+		} `json:"helper_event,omitempty"`
 
 		// Id Unique message identifier.
 		Id string `json:"id"`
@@ -25459,6 +25642,9 @@ type SessionDetailMessagesContextWindowNoticeKind string
 
 // SessionDetailMessagesGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type SessionDetailMessagesGoalOutcomeEnding string
+
+// SessionDetailMessagesHelperEventKind defines model for SessionDetail.Messages.HelperEvent.Kind.
+type SessionDetailMessagesHelperEventKind string
 
 // SessionDetailMessagesInputDispositionReason defines model for SessionDetail.Messages.InputDisposition.Reason.
 type SessionDetailMessagesInputDispositionReason string

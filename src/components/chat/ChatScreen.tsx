@@ -34,7 +34,6 @@ import { FeedKindLabel } from './FeedKindLabel'
 import { UnavailableChatNotice } from './UnavailableChatNotice'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ProviderRetryIndicator } from './ProviderRetryIndicator'
-import { ProviderFallbackNoteLine } from './ProviderFallbackNoteLine'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
@@ -50,8 +49,7 @@ import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { ClearContextDivider } from './ClearContextDivider'
-import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
+import { isClearCommandText } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
 import { AgentReplyLabel, ParticipantMessageRow, useParticipantLabelParts } from './ParticipantLabels'
 import { collectPairedReplyToIds, isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
@@ -85,7 +83,7 @@ import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
-import { GoalOutcomeRow } from './GoalOutcomeRow'
+import { SystemMessage, VirtualSystemMessageRow } from './SystemMessageRows'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import { MainChatAddParticipant } from './AddParticipant'
 import { AGENT_PRIVATE_SECRETS_ENABLED, INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED } from '@/lib/featureSwitches'
@@ -284,76 +282,6 @@ export function UserMessage() {
           />
         )}
         {(!storeMessage?.firstSendStatus || storeMessage.firstSendStatus === 'saved') && <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />}
-      </div>
-    </MessagePrimitive.Root>
-  )
-}
-
-function SystemMessage() {
-  const message = useMessage()
-  // Operator-reported UX fix, 2026-09-08: the goal-ack line is a synthetic
-  // `role: 'system'` ChatMessage (chat.ts's `case 'goal_status'` handler,
-  // buildGoalAckInsertion) carrying `goalAckGoalId` — everything else on
-  // this generic system-banner surface (help text, `/new`, etc.) has none,
-  // so this stays a no-op for those. Cross-referencing the store message
-  // (rather than AssistantUI's own `message`) mirrors AssistantMessage's
-  // identical storeMsg lookup a few components up.
-  const storeMsg = useChatStore((s) => s.messagesById[message.id])
-  const isGoalAck = !!storeMsg?.goalAckGoalId
-  // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): the browser-handover
-  // waiting notice is the same kind of synthetic `role: 'system'`
-  // ChatMessage, this time carrying `browserHandoverNoticeId` (chat.ts's
-  // `case 'browser_handover_notice'` handler, buildBrowserHandoverInsertion)
-  // — copying the shipped two-site `isGoalAck` pattern exactly. The e2e spec
-  // (tests/e2e/browser-control-handover.spec.ts) names this discriminator
-  // as its positive observable.
-  const isBrowserHandoverNotice = !!storeMsg?.browserHandoverNoticeId
-  // Goal outcome line (founder decision 2026-09-14): how a goal ended —
-  // always shown, never gated by Verbose chat. See src/lib/goalOutcome.ts.
-  if (storeMsg?.goalOutcome) {
-    return (
-      <MessagePrimitive.Root className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
-        <GoalOutcomeRow outcome={storeMsg.goalOutcome} />
-      </MessagePrimitive.Root>
-    )
-  }
-  // Provider-messages spec §6 (US-5): the failover note is the same kind of
-  // synthetic `role: 'system'` ChatMessage (provider-frames.ts
-  // buildFallbackNoteMessage) carrying the `providerFallbackNote`
-  // discriminator — the third member of the shipped isGoalAck /
-  // isBrowserHandoverNotice pattern above.
-  if (storeMsg?.providerFallbackNote) {
-    return (
-      <MessagePrimitive.Root>
-        <ProviderFallbackNoteLine
-          message={storeMsg.providerFallbackNote.message}
-          pickNewModelHint={storeMsg.providerFallbackNote.pickNewModelHint}
-        />
-      </MessagePrimitive.Root>
-    )
-  }
-  // FR-030/031 (U10b): the /clear marker row (see ClearContextDivider and
-  // VirtualSystemMessageRow's identical branch — the two paths must not
-  // drift).
-  if (storeMsg && isClearContextMarker(storeMsg)) {
-    return (
-      <MessagePrimitive.Root className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
-        <ClearContextDivider messageId={storeMsg.id} content={storeMsg.content ?? ''} />
-      </MessagePrimitive.Root>
-    )
-  }
-  return (
-    <MessagePrimitive.Root
-      className="flex justify-center py-[var(--space-2)]"
-      data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
-    >
-      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-1)] rounded-full">
-        <MessagePrimitive.Parts>
-          {({ part }) => {
-            if (part.type !== 'text') return null
-            return <span>{part.text}</span>
-          }}
-        </MessagePrimitive.Parts>
       </div>
     </MessagePrimitive.Root>
   )
@@ -1042,57 +970,6 @@ export function VirtualUserMessageRow({
           />
         )}
         {(!message.firstSendStatus || message.firstSendStatus === 'saved') && <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />}
-      </div>
-    </div>
-  )
-}
-
-/** Standalone system message row for the virtualizer. */
-function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
-  // Operator-reported UX fix, 2026-09-08: see SystemMessage's identical
-  // discriminator (live path) for the full rationale.
-  const isGoalAck = !!message.goalAckGoalId
-  // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): see SystemMessage's
-  // identical isBrowserHandoverNotice discriminator for the full rationale.
-  const isBrowserHandoverNotice = !!message.browserHandoverNoticeId
-  // Goal outcome line — see SystemMessage's identical branch (live path).
-  if (message.goalOutcome) {
-    return (
-      <div data-message-role="system" data-message-id={message.id} className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
-        <GoalOutcomeRow outcome={message.goalOutcome} />
-      </div>
-    )
-  }
-  // Provider-messages spec §6 (US-5): same providerFallbackNote branch as the
-  // live SystemMessage above — the virtualizer path must render the note
-  // identically.
-  if (message.providerFallbackNote) {
-    return (
-      <div data-message-role="system" data-message-id={message.id}>
-        <ProviderFallbackNoteLine
-          message={message.providerFallbackNote.message}
-          pickNewModelHint={message.providerFallbackNote.pickNewModelHint}
-        />
-      </div>
-    )
-  }
-  // FR-030/031 (U10b): the ONE chat-view marker entry a successful /clear
-  // appends server-side renders as a quiet divider, not a chat bubble — see
-  // ClearContextDivider. Every OTHER system row keeps the ordinary pill
-  // below: an unknown future marker is never a crash and never a silent
-  // drop.
-  if (isClearContextMarker(message)) {
-    return <ClearContextDivider messageId={message.id} content={message.content ?? ''} />
-  }
-  return (
-    <div
-      data-message-role="system"
-      data-message-id={message.id}
-      data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
-      className="flex justify-center py-[var(--space-2)]"
-    >
-      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-1)] rounded-full">
-        <span>{message.content}</span>
       </div>
     </div>
   )

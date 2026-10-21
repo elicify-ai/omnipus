@@ -4,7 +4,7 @@ Omnipus is a single static Go binary. Most Go cross-compile targets will build, 
 
 Omnipus supports three operating systems: **Linux, macOS, and Windows**. What "supported" means differs per platform, and the differences are stated below rather than averaged away. The BSD family (FreeBSD, OpenBSD, NetBSD) is **not supported**: no CI leg builds it, no release artifact ships for it, and nothing is tested there. A binary you cross-compile for a BSD target yourself is untested and unsupported.
 
-The minimum supported Go toolchain is `go 1.26.9` (`go.mod:3`). All listed platforms build with `CGO_ENABLED=0` and the standard release build tags `goolm,stdjson`.
+The minimum supported Go toolchain is `go 1.26.10` (`go.mod:3`). All listed platforms build with `CGO_ENABLED=0` and the standard release build tags `goolm,stdjson`.
 
 ## Officially supported in v0.1 (CI-tested)
 
@@ -65,7 +65,7 @@ Each of these targets is deferred from v0.1; the linked tracking issue (where on
 
 ### macOS amd64 (Intel)
 
-The cross-compile path works (`GOOS=darwin GOARCH=amd64 go build ./cmd/omnipus`) and is explicitly excluded from `.goreleaser.yaml:60-64`. Adding a `macos-13` smoke runner to `cross-platform.yml` is a v0.1.1 task. The sandbox behaves as on arm64: Seatbelt confines spawned children, and the gateway process itself is not confined.
+The cross-compile path works (`GOOS=darwin GOARCH=amd64 go build -tags goolm,stdjson ./cmd/omnipus`) and is explicitly excluded from `.goreleaser.yaml`'s `builds.ignore` (the `goos: darwin` / `goarch: amd64` entry). Adding a `macos-13` smoke runner to `cross-platform.yml` is a v0.1.1 task. The sandbox behaves as on arm64: Seatbelt confines spawned children, and the gateway process itself is not confined.
 
 ### Windows amd64
 
@@ -81,7 +81,7 @@ This differs from Linux with an unreadable `/proc/meminfo`, such as a gVisor, di
 
 ### Linux riscv64, loong64, armv7, mipsle
 
-Go has cross-compile targets but there are no GitHub Actions runners and no smoke tests. Build with `GOOS=linux GOARCH=<arch> go build -tags goolm,stdjson ./cmd/omnipus`. The seccomp BPF emitter is currently architecture-gated to amd64 and arm64 (`pkg/sandbox/seccomp_linux_amd64.go`, `pkg/sandbox/seccomp_linux_arm64.go`); on other architectures the gateway should fall back gracefully but the path is not exercised.
+Go has cross-compile targets but there are no GitHub Actions runners and no smoke tests. Build with `GOOS=linux GOARCH=<arch> go build -tags goolm,stdjson ./cmd/omnipus`. The seccomp BPF emitter (`pkg/sandbox/seccomp_linux.go::assembleBPFMode`) carries per-arch constants for six architectures — amd64, arm64, arm, mipsle, riscv64 and loong64, one `seccomp_linux_<arch>.go` file each — and arms on all of them; only amd64 and arm64 are exercised by CI, so on these targets the kernel sandbox compiles in and arms but has never been smoke-tested.
 
 ## Building for an unsupported platform
 

@@ -475,7 +475,8 @@ func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 		if strings.TrimSpace(ToolRunningTaskID(mt.ctx)) != "" {
 			return ErrorResult("message_parent: this task run has no parent session to message — " +
 				"it was dispatched directly, not delegated. Report progress in your reasoning, and report " +
-				"your outcome with goal_claim (status \"met\" when verified done, \"blocked\" when something " +
+				"your outcome with goal_claim (status \"met\" when verified done — with one-line evidence of what " +
+				"you verified, \"blocked\" when something " +
 				"stops you, \"waiting_on_user\" when only the operator can proceed)."), true
 		}
 		return ErrorResult("message_parent: no session context available for this call"), true

@@ -279,7 +279,16 @@ export function CreateAgentWizard({
   const stepNames = isExternal ? STEP_NAMES_EXTERNAL : STEP_NAMES
   const totalSteps = stepNames.length
 
+  // #1341 CR9-1: every fallback is a complete provider+model pair before the
+  // step can be left — the create endpoint refuses (400) an entry missing
+  // either half, so an unpaired fallback must be completed or removed here.
+  const fallbacks = payload.fallback_models ?? []
+  const fallbackMissingModel = fallbacks.some((f) => f.model.trim().length === 0)
+  const fallbackMissingProvider = fallbacks.some((f) => (f.provider ?? '').trim().length === 0)
+  const fallbacksComplete = !fallbackMissingModel && !fallbackMissingProvider
+
   const step1Valid = payload.name.trim().length > 0 &&
+    fallbacksComplete &&
     (modelInherited || payload.model.trim().length > 0) &&
     (!isWorker || payload.description.trim().length > 0) &&
     (!isExternal || (!!payload.cli && (payload.executor_cli_path?.trim().length ?? 0) > 0))
@@ -312,6 +321,8 @@ export function CreateAgentWizard({
       if (isWorker && payload.description.trim().length === 0) missing.push('Description')
       if (isExternal && !payload.cli) missing.push('CLI')
       if (isExternal && (payload.executor_cli_path?.trim().length ?? 0) === 0) missing.push('CLI path')
+      if (fallbackMissingModel) missing.push('Fallback model')
+      if (fallbackMissingProvider) missing.push('Fallback provider')
     } else if (step === 2) {
       if (payload.soul.trim().length === 0) missing.push('Soul')
     }
@@ -325,6 +336,13 @@ export function CreateAgentWizard({
     // but this check protects the API call if anything bypasses the gate.
     if (isExternal && !payload.executor_cli_path?.trim()) {
       setSubmitError('CLI path is required for an external subagent')
+      setSubmitting(false)
+      return
+    }
+    // #1341 CR9-1: step 1 already blocks an unpaired fallback; this keeps
+    // one from ever reaching the create request if anything bypasses it.
+    if (!fallbacksComplete) {
+      setSubmitError('Every fallback needs both a model and a provider — complete or remove it on the Identity step.')
       setSubmitting(false)
       return
     }

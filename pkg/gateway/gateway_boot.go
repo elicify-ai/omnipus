@@ -312,6 +312,22 @@ func setupAndStartServices(
 ) (rs *services, retErr error) {
 	stg := &setupAndStartServicesState{ctx: ctx, cfg: cfg, bundle: bundle, agentLoop: agentLoop, msgBus: msgBus, homePath: homePath, credStore: credStore, sandboxResult: sandboxResult, builtinReg: builtinReg, mcpReg: mcpReg, allowGodMode: allowGodMode}
 
+	// If any boot step fails and this function returns an error, tear down
+	// whatever was already started — otherwise the caller aborts boot on the
+	// error and the started services leak: the cron and drain services, the
+	// plan engine's tick loop (which keeps sweeping goals for the life of the
+	// process), and, once StartAll ran, the channel workers and the accepting
+	// listener. Registered before the first service starts and gated on
+	// retErr, so the success path leaves the services running.
+	// stopAndCleanupServices nil-checks each subsystem, so it is safe on a
+	// partially-started state; runningServices itself is nil until
+	// startSchedulers creates it.
+	defer func() {
+		if retErr != nil && stg.runningServices != nil {
+			stopAndCleanupServices(stg.runningServices, 5*time.Second, false)
+		}
+	}()
+
 	// First act of boot recovery pass one (ADR D8.5): persist the monotonic
 	// boot epoch before schedulers, channels, or SteerBootRecovery.Run.
 	// Run does not mint. A failure here stops boot; nothing else writes
@@ -345,20 +361,6 @@ func setupAndStartServices(
 	if runningServices, stop, err := stg.prepareListener(); stop {
 		return runningServices, err
 	}
-
-	// The HTTP listener is now accepting connections. If any later boot step
-	// fails and this function returns an error, tear the started services down
-	// first — otherwise the caller aborts boot on the error and the accepting
-	// listener goroutine (plus device service / drains) leaks. Registered only
-	// after StartAll so it never fires when the listener was not started, and
-	// gated on retErr so the success path leaves the services running.
-	// stopAndCleanupServices nil-checks each subsystem, so it is safe on a
-	// partially-started state.
-	defer func() {
-		if retErr != nil {
-			stopAndCleanupServices(stg.runningServices, 5*time.Second, false)
-		}
-	}()
 
 	if runningServices, stop, err := stg.registerProcess(); stop {
 		return runningServices, err

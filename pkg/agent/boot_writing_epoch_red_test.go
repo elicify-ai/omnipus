@@ -50,15 +50,22 @@ func TestSteerBootRecovery_WritingEpochAndRestartActor(t *testing.T) {
 			if err := recovery.Run(context.Background()); err != nil {
 				t.Fatalf("actual full recovery: %v", err)
 			}
-			transitions := assertBootNoticeCurrentRunStoppedWithoutDispatch(t, f)
+			// PW-D6 (founder 2026-10-15): a configured native helper resumes;
+			// a missing target/loop refuses visibly, without weakening the epoch writer.
+			transitions := assertBootNoticeCurrentRunStoppedWithoutDispatch(t, f, mode == "registered")
 			assertBootNoticeNoFatalFinal(t, f)
-			if mode != "loopless_minted_store" {
-				if len(notices) != 0 {
-					t.Errorf("actual boot emitted an unrelated refusal: %q", notices)
+			if mode == "registered" && len(notices) != 0 {
+				t.Errorf("actual boot emitted an unrelated refusal: %q", notices)
+			}
+			if mode != "registered" {
+				rows := pwHelperEventRows(t, f.al, f.parent, "resume_refused")
+				if len(rows) != 1 || !strings.Contains(rows[0].Content, "Resume did not start.") {
+					t.Errorf("refused native resume rows=%+v, want one Resume did not start. (PW-D6/FR-015)", rows)
 				}
-				if f.wakes(messageIDOf(f.canonical)) != 2 {
-					t.Errorf("C5: historical A notice did not independently re-ring: %d, want original+boot=2", f.wakes(messageIDOf(f.canonical)))
-				}
+			}
+			// PW-D13 (founder 2026-10-15): historical intentional Stop never re-rings.
+			if got := f.wakes(messageIDOf(f.canonical)); got != 0 {
+				t.Errorf("historical intentional Stop wakes=%d, want 0 (PW-D13)", got)
 			}
 			bootAssertInterruptedLedgerIdentity(t, f, transitions[1])
 			bootAssertEpochUnchanged(t, f, before)
@@ -71,6 +78,9 @@ func TestSteerBootRecovery_MissingWritingEpochRefusesBeforeAnyWrite(t *testing.T
 		t.Run(mode, func(t *testing.T) {
 			f := newBootNoticeControlFixture(t)
 			if mode != "nil_with_historical_notice" {
+				// This third call is a pre-boot fixture admission, not a restart
+				// continuation; release its provider gate so its real tail can join.
+				f.bootGate.open()
 				// A distinct actual goal run with no prior stop history forces the
 				// full caller's legacy fatal fallback, not just the writer check.
 				child := launchGoalBearingChild(t, f.al, f.parent, "boot-missing-epoch-live-run")
@@ -138,8 +148,9 @@ func TestSteerBootRecovery_MissingWritingEpochRefusesBeforeAnyWrite(t *testing.T
 			if callsAfter != callsBefore {
 				t.Errorf("boot dispatched model calls after refusal: before=%d after=%d", callsBefore, callsAfter)
 			}
-			if mode == "nil_with_historical_notice" && f.wakes(messageIDOf(f.canonical)) != historicalBefore+1 {
-				t.Errorf("C5: current-write refusal concealed historical notice replay: before=%d after=%d", historicalBefore, f.wakes(messageIDOf(f.canonical)))
+			// PW-D13 (founder 2026-10-15): an epoch refusal cannot re-ring old Stop.
+			if mode == "nil_with_historical_notice" && f.wakes(messageIDOf(f.canonical)) != historicalBefore {
+				t.Errorf("epoch-refused boot re-rang intentional Stop: before=%d after=%d, want unchanged (PW-D13)", historicalBefore, f.wakes(messageIDOf(f.canonical)))
 			}
 			if f.al.steerAdmission().activeCount() != 0 || f.al.steerAdmission().queueLen() != 0 || f.al.getActiveTurnState(before.SessionID) != nil {
 				t.Error("missing writing epoch admitted or resumed work")

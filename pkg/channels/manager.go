@@ -1167,11 +1167,15 @@ func (m *Manager) StartAll(ctx context.Context) error {
 			cancel()
 			return fmt.Errorf("channels: bind shared HTTP server at %s: %w", m.httpServer.Addr, bindErr)
 		}
+		// Capture the server: StopAll may nil m.httpServer (after Shutdown)
+		// before this goroutine is scheduled; Serve on a shut-down server
+		// returns http.ErrServerClosed, which is handled below.
+		srv := m.httpServer
 		go func() {
 			logger.InfoCF("channels", "Shared HTTP server listening", map[string]any{
-				"addr": m.httpServer.Addr,
+				"addr": srv.Addr,
 			})
-			if err := m.httpServer.Serve(ln); err != nil &&
+			if err := srv.Serve(ln); err != nil &&
 				!errors.Is(err, http.ErrServerClosed) &&
 				!errors.Is(err, net.ErrClosed) {
 				// Log at Error and return — do NOT call os.Exit here.

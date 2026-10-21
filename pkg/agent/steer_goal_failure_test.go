@@ -294,8 +294,13 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 				t.Errorf("parent fatal=%v, want %v (Stop/timeout are not provider failures)", e.Fatal, tc.fatal)
 			}
 			if tc.fatal {
-				if !strings.HasPrefix(e.Text, "failed:") || !strings.Contains(e.Text, tc.providerErr.Error()) {
-					t.Errorf("provider failure text=%q, want failed: plus actual provider error", e.Text)
+				// SFH F2: unclassified provider text is untrusted. The fixed
+				// unknown-failure sentence survives the real durable handback.
+				if want := "failed: " + UserMessageForCode(CodeUnknown); e.Text != want {
+					t.Errorf("provider failure text=%q, want exact safe translated sentence %q", e.Text, want)
+				}
+				if strings.Contains(e.Text, tc.providerErr.Error()) {
+					t.Errorf("raw provider failure reached the parent: %q", e.Text)
 				}
 				raw, marshalErr := msgs[0].MarshalJSON()
 				if marshalErr != nil || !bytes.Equal(raw, got.FinalDelivery.Payload) {
@@ -304,13 +309,24 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 			} else if !strings.HasPrefix(e.Text, "stopped_child:") || !strings.Contains(e.Text, "cause: "+string(tc.cause)) {
 				t.Errorf("nonfatal notice=%q, want stopped_child: cause: %s", e.Text, tc.cause)
 			}
-			select {
-			case wake := <-al.bus.InboundChan():
-				if wake.AsyncTranscriptSessionID != parentID {
-					t.Errorf("wake session=%q, want direct parent %q", wake.AsyncTranscriptSessionID, parentID)
+			// PW-D13 (founder 2026-10-15): an intentional Stop of a helper
+			// never wakes its parent — only a fatal provider failure does.
+			// The stopped row above stays durable either way.
+			if tc.fatal {
+				select {
+				case wake := <-al.bus.InboundChan():
+					if wake.AsyncTranscriptSessionID != parentID {
+						t.Errorf("wake session=%q, want direct parent %q", wake.AsyncTranscriptSessionID, parentID)
+					}
+				default:
+					t.Error("disposed child did not wake its direct parent")
 				}
-			default:
-				t.Error("disposed child did not wake its direct parent")
+			} else {
+				select {
+				case wake := <-al.bus.InboundChan():
+					t.Errorf("intentional helper Stop woke its direct parent with %+v (PW-D13: a helper Stop never wakes)", wake)
+				default:
+				}
 			}
 			select {
 			case extra := <-al.bus.InboundChan():
@@ -486,7 +502,8 @@ func TestGoalDelegation_DeadChildUnblocksTheWaitingParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("root handback: %v", err)
 	}
-	if !strings.Contains(handback.ResultSoFar, "failed:") || !strings.Contains(handback.ResultSoFar, "downstream provider failure") || strings.Contains(handback.ResultSoFar, "stale parent answer must not reach root") {
-		t.Errorf("root received %q, want real re-entry's child failure, never stale parent text", handback.ResultSoFar)
+	wantFailure := "failed: " + UserMessageForCode(CodeUnknown)
+	if !strings.Contains(handback.ResultSoFar, wantFailure) || strings.Contains(handback.ResultSoFar, "downstream provider failure") || strings.Contains(handback.ResultSoFar, "stale parent answer must not reach root") {
+		t.Errorf("root received %q, want the real re-entry's safe child failure %q, never raw provider or stale parent text", handback.ResultSoFar, wantFailure)
 	}
 }

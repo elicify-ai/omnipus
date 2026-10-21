@@ -66,6 +66,10 @@ const (
 	// (CodeModelRetired) — the operator picks a new model in the agent's
 	// settings.
 	operatorFixModelRetired
+	// A wrong configured pair needs a model choice, never an unchanged retry.
+	operatorFixBadModel
+	// No usable named client could be constructed; no provider request ran.
+	operatorFixModelRouteUnavailable
 )
 
 // classifyOperatorOnlyTurnError reports err's translated code and, when only an
@@ -102,6 +106,10 @@ func classifyOperatorOnlyTurnError(err error) (LLMErrorCode, operatorFixCause) {
 		return code, operatorFixQuotaBilling
 	case CodeModelRetired:
 		return code, operatorFixModelRetired
+	case CodeBadModel:
+		return code, operatorFixBadModel
+	case CodeModelRouteUnavailable:
+		return code, operatorFixModelRouteUnavailable
 	}
 	return code, operatorFixNone
 }

@@ -248,7 +248,8 @@ func assertU1NoticeStable(t *testing.T, al *AgentLoop, parentID string, original
 	if id != noticeID || note != stopNote {
 		t.Errorf("retry/replay changed notice identity or stop event: id %q -> %q; note %s -> %s (D6)", noticeID, id, stopNote, note)
 	}
-	if got := wakeCount(noticeID); got != 1 {
-		t.Errorf("working-parent wakes for stopped-child notice = %d, want exactly 1 across retry/replay (D6)", got)
+	// PW-D13 (founder 2026-10-15): intentional Stop stays silent across retry/replay.
+	if got := wakeCount(noticeID); got != 0 {
+		t.Errorf("working-parent wakes for intentional Stop = %d, want 0 across retry/replay (PW-D13)", got)
 	}
 }

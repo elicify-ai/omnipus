@@ -459,6 +459,9 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 
 	unknownProvider := &candidateCaptureProvider{requests: map[string][]providers.Message{}, fail: map[string]error{}}
 	unknownAgent := &AgentInstance{ID: "mia", Provider: unknownProvider}
+	// Unknown capability metadata is not a missing transport: bind this named
+	// fake client so the optimistic, authorized-image attempt remains tested.
+	unknownAgent.StoreProviderPool(map[string]providers.LLMProvider{"future-provider": unknownProvider})
 	unknownChecks := 0
 	unknownRT := &agentLoopRunTurn{
 		al: &AgentLoop{}, ts: newTurnState(unknownAgent, processOptions{}, turnEventScope{}), turnCtx: context.Background(), activeProvider: unknownProvider,

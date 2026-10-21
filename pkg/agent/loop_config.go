@@ -358,7 +358,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	// while the model field still says OLD. Holding the lock across the
 	// full tuple flip makes (Model, Provider, Candidates, ProviderPool) a
 	// single coherent swap from any reader's perspective.
-	agent.StoreProviderPool(newBuild.pool)
+	agent.storeProviderPoolBuild(newBuild)
 	// ADR-067 FR-016: the degrade is part of the model identity too — a
 	// switch onto a provider the catalog does not know must leave the agent
 	// refusing turns, and a switch OFF one must clear the refusal without a

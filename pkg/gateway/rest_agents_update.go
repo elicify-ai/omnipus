@@ -445,6 +445,15 @@ func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 		jsonErr(uf.w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
 		return true
 	}
+	// Issue #1340 (founder rule 2026-10-18): a fallback is a (provider, model)
+	// pair — FallbackModelPair on the update body. An entry missing either
+	// half is refused before any write, naming the entry.
+	if uf.ru.req.FallbackModels != nil {
+		if msg := unpairedFallbackError(*uf.ru.req.FallbackModels); msg != "" {
+			jsonErr(uf.w, http.StatusBadRequest, msg)
+			return true
+		}
+	}
 
 	if fieldErr := agentmutation.ValidateFields(uf.foundAgent, uf.suppliedFields()); fieldErr != nil {
 		var classified *agentmutation.FieldError
@@ -1256,4 +1265,26 @@ func rejectRetiredDefaultField(w http.ResponseWriter, raw []byte) bool {
 		Field: strPtr("default"),
 	})
 	return true
+}
+
+// unpairedFallbackError returns a refusal naming the first fallback entry that
+// lacks its provider or its model, or "" when every entry is a complete pair.
+// A fallback is always a (provider, model) pair (issue #1340, founder rule
+// 2026-10-18); every REST writer (create and update) enforces it before any
+// write.
+func unpairedFallbackError(entries []gen.FallbackModel) string {
+	for i, fm := range entries {
+		provider := ""
+		if fm.Provider != nil {
+			provider = strings.TrimSpace(*fm.Provider)
+		}
+		model := strings.TrimSpace(fm.Model)
+		switch {
+		case provider == "":
+			return fmt.Sprintf("fallback_models[%d] (model %q) has no provider: every fallback must name both a provider and a model", i, fm.Model)
+		case model == "":
+			return fmt.Sprintf("fallback_models[%d] (provider %q) has no model: every fallback must name both a provider and a model", i, provider)
+		}
+	}
+	return ""
 }

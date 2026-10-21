@@ -776,10 +776,13 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 
 	var usedLight bool
 	rp.rc.rx.rr.rq.ri.rf.rt.activeCandidates, rp.rc.rx.rr.rq.ri.activeModel, usedLight = rp.rc.rx.rr.rq.ri.rf.rt.al.selectCandidates(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage, rp.rc.rx.rr.rq.ri.messages)
-	rp.rc.rx.rr.rq.ri.rf.rt.activeProvider = rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Provider
-	if usedLight && rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.LightProvider != nil {
-		rp.rc.rx.rr.rq.ri.rf.rt.activeProvider = rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.LightProvider
+	rt := rp.rc.rx.rr.rq.ri.rf.rt
+	rt.activeProvider = rt.ts.agent.Provider
+	rt.providerSelectionErr = nil
+	if len(rt.activeCandidates) > 0 {
+		rt.activeProvider, rt.providerSelectionErr = rt.ts.agent.providerForTurnCandidate(rt.activeCandidates[0], usedLight)
 	}
+	rt.providerSelectionChecked = true
 	rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.mu.RUnlock()
 	rp.rc.rx.rr.rq.ri.pendingMessages = append([]providers.Message(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.InitialSteeringMessages...)
 	rp.rc.rx.rr.rq.ri.pendingSteeringReceipts = append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.InitialSteeringCorrelationIDs...)
@@ -1314,11 +1317,24 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		for i, pm := range ri.pendingMessages {
 			// Persist original compact media refs before using the resolved
 			// provider-only message. Failed admission cannot emit an applied receipt.
-			if _, err := ri.rf.rt.ts.appendWindowMessage(pm, ri.rf.rt.al.inputProducer(ri.rf.rt.ts)); err != nil {
+			correlationID := ""
+			if i < len(ri.pendingSteeringReceipts) {
+				correlationID = ri.pendingSteeringReceipts[i]
+			}
+			include, err := ri.rf.rt.al.admitSteeringInput(ri.rf.rt.ts, pm, correlationID)
+			if err != nil {
+				// The rest of this dequeued batch is never attempted: give back
+				// the saved inputs' claims so they are not stranded in flight.
+				if i+1 < len(ri.pendingSteeringReceipts) {
+					ri.rf.rt.al.releaseSavedWakeClaims(ri.rf.rt.ts.transcriptSessionID, ri.pendingSteeringReceipts[i+1:])
+				}
 				var status TurnEndStatus
 				ri.ret0, status, ri.ret1 = ri.rf.rt.al.contextWindowTurnExit(ri.rf.rt.ts, ri.rf.rt.iteration, ri.rf.rt.llmModel, err)
 				ri.turnStatus = status
 				return agentLoopRunTurnIterationReturn
+			}
+			if !include {
+				continue
 			}
 			ri.messages = append(ri.messages, resolvedPending[i])
 			totalContentLen += len(pm.Content)
@@ -1346,7 +1362,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		// deliverSteeringReceiptsForInjection is a no-op for a plain,
 		// unsteered session — the child lifecycle lookup it performs finds
 		// no steering parent, so nothing is emitted).
-		ri.rf.rt.al.deliverSteeringReceiptsForInjection(ri.rf.rt.ts.sessionKey, ri.pendingSteeringReceipts)
+		ri.rf.rt.al.deliverSteeringReceiptsForInjection(ri.rf.rt.ts.sessionKey, visibleSteeringReceiptIDs(ri.pendingSteeringReceipts))
 		ri.pendingMessages = nil
 		ri.pendingSteeringReceipts = nil
 	}
@@ -1364,6 +1380,9 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 
 // tryPDFTextFallback retries a rejected native PDF request after converting its media to text.
 func (rf *agentLoopRunTurnFallbacks) tryPDFTextFallback() bool {
+	if permanentModelFailure(rf.err) {
+		return false
+	}
 	if !downgradePDFMediaToText(rf.callMessages) {
 		return false
 	}
@@ -1392,6 +1411,9 @@ const ModelSyntheticImageRejection = "synthetic:image-rejection"
 
 // synthesizeImageRejection turns an image-only capability rejection into actionable model guidance.
 func (rf *agentLoopRunTurnFallbacks) synthesizeImageRejection(pe *ProviderError, rejectionErr error) bool {
+	if permanentModelFailure(rejectionErr) {
+		return false
+	}
 	// FIX 5: this is the IMAGE-only friendly-rejection path — it must
 	// consult ts.imageRetryDone, the image-class guard, NOT
 	// ts.mediaRetryDone (the PDF-class guard). turn.go's design
@@ -1445,6 +1467,22 @@ func (rf *agentLoopRunTurnFallbacks) synthesizeImageRejection(pe *ProviderError,
 // callProviderOnce calls the configured provider or fallback chain once and records streaming progress.
 // Provider rate-limit retries for every turn, delegated included, live in the fallback chain (§7.4).
 func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (response *providers.LLMResponse, err error) {
+	if !rt.providerSelectionChecked && len(rt.activeCandidates) > 0 {
+		rt.ts.agent.mu.RLock()
+		rt.activeProvider, rt.providerSelectionErr = rt.ts.agent.providerForTurnCandidate(rt.activeCandidates[0], false)
+		rt.ts.agent.mu.RUnlock()
+		rt.providerSelectionChecked = true
+	}
+	if rt.providerSelectionErr != nil {
+		if ctxErr := rt.turnCtx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		var route *providers.ModelRouteUnavailableError
+		if errors.As(rt.providerSelectionErr, &route) {
+			return nil, &providers.ModelRouteUnavailableError{Provider: route.Provider, Model: rt.llmModel, Cause: route.Cause}
+		}
+		return nil, rt.providerSelectionErr
+	}
 	if accountingErr := rt.ts.callAccountingError(); accountingErr != nil {
 		return nil, accountingErr
 	}
@@ -1571,22 +1609,22 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 			// running.
 			chain = rt.al.fallback.WithCooldown(providers.NewCooldownTracker()).WithoutPerCandidateTimeout()
 		}
+		// A single-candidate attempt uses the hook-modified model. Give the
+		// chain the same per-call identity without mutating shared candidates.
+		candidates := rt.activeCandidates
+		if len(candidates) == 1 && candidates[0].Model != rt.llmModel {
+			candidates = append([]providers.FallbackCandidate(nil), candidates...)
+			candidates[0].Model = rt.llmModel
+		}
 		fbResult, fbErr := chain.Execute(
 			retryCtx,
-			rt.activeCandidates,
+			candidates,
 			func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
 				if len(rt.activeCandidates) == 1 {
-					// F1: the one candidate IS the active provider (rt sets
-					// activeProvider from the same candidate list selectCandidates
-					// returned), so the attempt runs exactly what today's plain
-					// path runs — same instance, same streaming behavior, same
-					// rt.llmModel. rt.llmModel is what the attempt calls with:
-					// it is activeModel as selected, plus any BeforeLLM hook's
-					// model override (applied just above, at the hook block) —
-					// the chain's `model` parameter would silently drop the
-					// override. FR-007's per-candidate pool lookup only
-					// distinguishes providers when there is more than one
-					// candidate.
+					// selectTurnProvider binds the candidate's pool client even
+					// for one candidate. Keep this attempt path for streaming
+					// and rt.llmModel: a BeforeLLM hook may have overridden the
+					// selected model, which the chain's model would discard.
 					rt.providerCallStreamedBytes.Store(0) // C-10 counts THIS attempt only
 					return rt.runProviderAttempt(ctx, rt.activeProvider, provider, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes)
 				}
@@ -1613,16 +1651,16 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 				if imageErr != nil {
 					return nil, imageErr
 				}
-				// FR-007: look up the provider instance that matches
-				// this candidate's pinned Provider. Without this,
-				// every fallback routes through activeProvider (the
-				// primary's instance) — defeating the point of
-				// provider-aware fallbacks. Falls back to
-				// activeProvider when the candidate has no Provider
-				// pinned (legacy wire shape) or no pool entry.
-				p := rt.ts.agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: provider, Model: model})
+				// Resolve the exact configured pair. A missing named fallback
+				// is a refusal, never permission to borrow another client.
+				rt.ts.agent.mu.RLock()
+				p, routeErr := rt.ts.agent.providerForTurnCandidate(providers.FallbackCandidate{Provider: provider, Model: model}, false)
+				rt.ts.agent.mu.RUnlock()
+				if routeErr != nil {
+					return nil, routeErr
+				}
 				if p == nil {
-					p = rt.activeProvider
+					p = rt.activeProvider // legacy, explicitly unpinned candidate
 				}
 				rt.ts.setLastProducedModel(model)
 				rt.ts.setLastProducedProvider(provider)

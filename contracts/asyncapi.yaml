@@ -139,6 +139,8 @@ channels:
         $ref: '#/components/messages/BrowserHandoverNoticeFrame'
       GoalOutcomeFrame:
         $ref: '#/components/messages/GoalOutcomeFrame'
+      HelperEventFrame:
+        $ref: '#/components/messages/HelperEventFrame'
       LibraryChangedFrame:
         $ref: '#/components/messages/LibraryChangedFrame'
       AgentCreatedFrame:
@@ -808,6 +810,14 @@ operations:
     messages:
       - $ref: '#/channels/chat/messages/BrowserHandoverNoticeFrame'
 
+  receiveHelperEvent:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: Immutable helper-event row, saved in the addressed transcript and replayed by subtype.
+    messages:
+      - $ref: '#/channels/chat/messages/HelperEventFrame'
+
   receiveGoalOutcome:
     action: receive
     channel:
@@ -1402,6 +1412,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserHandoverNoticeFrame'
+    HelperEventFrame:
+      name: HelperEventFrame
+      title: helper_event
+      summary: Durable helper-event row (server to client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/HelperEventFrame'
     GoalOutcomeFrame:
       name: GoalOutcomeFrame
       title: goal_outcome
@@ -2550,6 +2567,7 @@ components:
       - browser_input_control_ack
       - browser_handover_notice
       - goal_outcome
+      - helper_event
       - library_changed
       - session_snapshot
       - catch_up_complete
@@ -3310,6 +3328,18 @@ components:
         context_window_unknown:
           message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
           attribution: config
+        bad_model:
+          message: "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings."
+          attribution: config
+          provider_message: "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings."
+        provider_request_rejected:
+          message: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+          attribution: product
+          provider_message: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+        model_route_unavailable:
+          message: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
+          attribution: config
+          provider_message: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -3344,6 +3374,9 @@ components:
             - judge_conclusion_failed
             - delegated_task_limit
             - context_window_unknown
+            - bad_model
+            - provider_request_rejected
+            - model_route_unavailable
             - unknown
         message:
           type: string
@@ -3558,6 +3591,18 @@ components:
         context_window_unknown:
           message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
           attribution: config
+        bad_model:
+          message: "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings."
+          attribution: config
+          provider_message: "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings."
+        provider_request_rejected:
+          message: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+          attribution: product
+          provider_message: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+        model_route_unavailable:
+          message: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
+          attribution: config
+          provider_message: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
@@ -3592,6 +3637,9 @@ components:
             - judge_conclusion_failed
             - delegated_task_limit
             - context_window_unknown
+            - bad_model
+            - provider_request_rejected
+            - model_route_unavailable
             - unknown
         message:
           type: string
@@ -7942,6 +7990,76 @@ components:
             reason (plain text, truncated to 200 runes) when that is the
             producer.
 
+    HelperEventFrameEvent:
+      title: HelperEventFrameEvent
+      description: Hand-synced WS copy of components/schemas/HelperEvent.yaml. Keep both shapes identical.
+      type: object
+      additionalProperties: false
+      required:
+        - helper_session_id
+        - kind
+        - text
+        - created_at
+      properties:
+        helper_session_id:
+          type: string
+          minLength: 1
+        helper_title:
+          type: string
+          minLength: 1
+        kind:
+          type: string
+          enum:
+            - verdict_unmet
+            - not_verified
+            - stopped
+            - restarted
+            - resume_refused
+            - timed_out
+            - finished
+            - question
+            - blocker
+            - failed
+        text:
+          type: string
+          minLength: 1
+        goal_id:
+          type: string
+          minLength: 1
+        created_at:
+          type: string
+          format: date-time
+
+    HelperEventFrame:
+      title: HelperEventFrame
+      description: >
+        Server to client. Immutable helper-event row addressed to one transcript.
+        Emitted live after save and replayed by the stamped helper_event subtype.
+        Keep components/schemas/HelperEventFrame.yaml in sync.
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - session_id
+        - message_id
+        - helper_event
+      properties:
+        type:
+          type: string
+          const: helper_event
+        session_id:
+          type: string
+          minLength: 1
+        message_id:
+          type: string
+          minLength: 1
+        helper_event:
+          $ref: '#/components/schemas/HelperEventFrameEvent'
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+
     GoalOutcomeFrameOutcome:
       title: GoalOutcomeFrameOutcome
       description: >
@@ -7950,6 +8068,8 @@ components:
         Named differently because pkg/api/generated holds the OpenAPI and
         AsyncAPI Go types in one package and cannot declare `GoalOutcome`
         twice. Any field edit MUST be mirrored in GoalOutcome.yaml.
+        An ending is stored once per transcript: helper and parent have different
+        message ids but share the goal id, ending, rounds and Judge reason.
       type: object
       required:
         - goal_id

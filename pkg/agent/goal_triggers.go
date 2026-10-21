@@ -812,7 +812,7 @@ const (
 	agentLoopRunGoalAdjudicationAdvanceBreak
 )
 
-// runGoalAdjudication is the SINGLE shared adjudication body (INV-1: one
+// runGoalAdjudicationOutcome is the SINGLE shared adjudication body (INV-1: one
 // adjudication invokes the Judge EXACTLY once and consumes EXACTLY one round)
 // called by both the claim path (checkGoalLoopAfterTurn) and the idle path
 // (goalQuietWindowSettlement). It contains the met→done / unmet→one-round+steer
@@ -844,17 +844,16 @@ const (
 //     Notify-delivered turn). An empty steer means no re-dispatch (met or
 //     exhausted).
 //
-// Returns (met, unavailable): met is true when the verdict was Met and the
-// goal cleared (the pre-fix single bool); unavailable is true ONLY when the
-// judge round could not run at all — the D7 judge_unavailable arm, where no
-// round was consumed and no verdict exists. The re-drive wrapper
-// (goal_child_completion.go::redriveGoalAdjudication) re-drives exactly that
-// arm; every other false is final for this adjudication. A registry
+// Returns the detailed outcome: met records a successful verdict; unavailable
+// means no round/verdict exists. needsOperator and its safe reason retain a
+// permanent refusal across the outer retry boundary. The legacy bool wrapper
+// keeps bookkeeping callers compatible. Only a transient unavailable outcome
+// is re-driven by goal_child_completion.go::redriveGoalAdjudication. A registry
 // concurrency back-off (JudgeCriteriaResult.ConcurrencyBackoff, #984) is NOT
 // unavailable for re-drive purposes: it is resolved here to (false, false) —
 // silent stop, no retry, no child failure — because the in-flight
 // adjudication it backed off from resolves the goal.
-func (al *AgentLoop) runGoalAdjudication(
+func (al *AgentLoop) runGoalAdjudicationOutcome(
 	ctx context.Context,
 	agentInst *AgentInstance,
 	workspaceID, sessionID string,
@@ -862,14 +861,14 @@ func (al *AgentLoop) runGoalAdjudication(
 	rec *goal.Goal,
 	claimText string,
 	deliverSteer func(string),
-) (met, unavailable bool) {
+) goalAdjudicationOutcome {
 	aa := &agentLoopRunGoalAdjudicationAdvance{deliverSteer: deliverSteer}
 
 	aa.ag = &agentLoopRunGoalAdjudication{al: al, agentInst: agentInst, sessionID: sessionID, store: store, rec: rec, claimText: claimText,
 		producer: goalProducerFromContext(ctx), answer: goalAnswerFromContext(ctx)}
 
 	if aa.ag.agentInst == nil || aa.ag.rec == nil || aa.ag.store == nil || aa.ag.sessionID == "" {
-		return false, false
+		return goalAdjudicationOutcome{}
 	}
 	aa.ag.gstore = resolveGoalRecordStore()
 	// JUDGE-FR-095 (D13, this wave): the claimless-adjudication contract is
@@ -882,7 +881,7 @@ func (al *AgentLoop) runGoalAdjudication(
 	if strings.TrimSpace(claimText) == "" {
 		logger.WarnCF("agent", "goal: refusing a claimless adjudication (JUDGE-FR-095 retires the claimless contract)",
 			map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID})
-		return false, false
+		return goalAdjudicationOutcome{}
 	}
 	// Emit the ephemeral judging pill BEFORE dispatch (D14 crosswalk: judging
 	// ← ephemeral engine-phase signal, pill-only).
@@ -926,12 +925,13 @@ func (al *AgentLoop) runGoalAdjudication(
 		logger.InfoCF("agent", "goal: adjudication outcome discarded — the goal ended while the Judge was running",
 			map[string]any{"component": "goal", "session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID,
 				"state": string(cur.State), "unavailable": jr.Unavailable})
-		return false, false
+		return goalAdjudicationOutcome{}
 	}
 
 	if jr.Unavailable {
 		if jr.ConcurrencyBackoff {
-			return aa.ag.reportConcurrencyBackoff(jr.Reason)
+			aa.ag.reportConcurrencyBackoff(jr.Reason)
+			return goalAdjudicationOutcome{}
 		}
 		// (c) #947 defect 1: report the unavailability to the caller — the
 		// deferred dispatch's re-drive wrapper (goal_child_completion.go::
@@ -939,7 +939,7 @@ func (al *AgentLoop) runGoalAdjudication(
 		// fails the child visibly through the completion tail; the single
 		// pre-fix return ended the goroutine in silence on this arm.
 		aa.ag.reportJudgeUnavailable(jr.Reason)
-		return false, true
+		return goalAdjudicationOutcome{unavailable: true, needsOperator: jr.NeedsOperator, reason: jr.Reason}
 	}
 
 	// A real judge round ran → this IS genuine activity (F5): bump the
@@ -967,7 +967,7 @@ func (al *AgentLoop) runGoalAdjudication(
 		logger.InfoCF("agent", "goal: verdict discarded — the goal was restated while the Judge was running, so it judged a superseded definition",
 			map[string]any{"component": "goal", "session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "attempt": aa.ag.attempt})
 		aa.ag.al.emitGoalStatusFrame(aa.ag.sessionID, cur.GoalID, cur.Prompt, cur.Round, cur.MaxRounds, cur.LatestReason, goalPillActive)
-		return false, false
+		return goalAdjudicationOutcome{}
 	}
 	bumpGoalRecordActivity(aa.ag.rec.GoalID, time.Now().UTC())
 
@@ -1039,7 +1039,7 @@ func (al *AgentLoop) runGoalAdjudication(
 
 		switch aa.ag.finishMetGoal() {
 		case agentLoopRunGoalAdjudicationReturn:
-			return aa.ag.ret0, false
+			return goalAdjudicationOutcome{met: aa.ag.ret0}
 		}
 	}
 
@@ -1070,22 +1070,22 @@ func (al *AgentLoop) runGoalAdjudication(
 		}); !ok {
 			logger.ErrorCF("agent", "goal trigger: round-bound termination failed; no handover written (the goal is still active)",
 				map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "attempt": aa.ag.attempt, "max_rounds": aa.ag.maxRounds})
-			return false, false
+			return goalAdjudicationOutcome{}
 		}
 		// (b) #947 defect 1: the goal decision is settled — the goal path's
 		// second terminal arm hands the completion tail the child's final
 		// answer, exactly as its met arm does, so an exhausted goal no longer
 		// leaves the child `running` with a settled goal above it.
 		aa.ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), aa.ag.producer), aa.ag.sessionID, aa.ag.upwardAnswer(), nil)
-		return false, false
+		return goalAdjudicationOutcome{}
 	}
 
 	switch aa.advanceUnmetGoal() {
 	case agentLoopRunGoalAdjudicationAdvanceReturn:
-		return aa.ret0, false
+		return goalAdjudicationOutcome{met: aa.ret0}
 	}
 
-	return false, false
+	return goalAdjudicationOutcome{}
 }
 
 // reportJudgeUnavailable is the D7/D14 judge-unavailable arm's side effects:
@@ -1297,18 +1297,12 @@ func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudica
 		ag.ret0 = true
 		return agentLoopRunGoalAdjudicationReturn
 	}
-	finalWoke := ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), ag.producer), ag.sessionID, ag.upwardAnswer(), nil)
-	// Q1=A (founder, #984 follow-up): the met verdict's inbox entry was
-	// delivered without a wake (deliverGoalVerdictUpward's SuppressWake);
-	// acknowledge it only after the deterministic final hand-back is known
-	// durable AND its delivery woke (or queued into) the parent. If the tail
-	// was gated, failed, or only stored the hand-back, re-deliver the still-
-	// unacknowledged verdict without suppression so the parent is never silent.
-	if finalWoke {
-		ag.al.ackMetVerdictEntry(ag.sessionID, ag.rec.GoalID, ag.verdict.Round)
-	} else if err := ag.al.wakeMetVerdictEntry(ag.sessionID, ag.rec.GoalID, ag.verdict.Round); err != nil {
-		logger.WarnCF("agent", "goal: met verdict fallback wake failed — the verdict remains unacknowledged for boot recovery",
-			map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID, "error": err.Error()})
+	ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), ag.producer), ag.sessionID, ag.upwardAnswer(), nil)
+	// PW-D16/PW-D17: acknowledge only after the exact combined chat input
+	// exists, even when Stop or a parked card holds its later placement. The
+	// final id owns the only wake; never fall back under the verdict-round id.
+	if err := ag.al.ackMetVerdictEntry(ag.sessionID, ag.rec.GoalID, ag.verdict.Round); err != nil {
+		ag.al.emitJudgeConclusionFailed(ag.sessionID, "The verdict remains unread and will be retried: "+err.Error())
 	}
 	ag.ret0 = true
 	return agentLoopRunGoalAdjudicationReturn

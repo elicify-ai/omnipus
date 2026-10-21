@@ -50,12 +50,12 @@ func TranscriptWriteFailures() uint64 {
 }
 
 // outcomeRelabelApplies reports whether FR-017a's media-retry stamp should
-// override this persist/emit. Residual 4xx stays CodeUnknown so the stamp
-// can label that inconclusive trigger as media after a successful
+// override this persist/emit. Inconclusive400 is promoted only at terminal
+// presentation, so both it and CodeUnknown accept the successful recovery's
 // strip-retry. A later distinct classified failure must keep its own code
 // — otherwise reload tells the user the model rejected an image.
 func outcomeRelabelApplies(current, relabel LLMErrorCode) bool {
-	return relabel != "" && (current == "" || current == CodeUnknown)
+	return relabel != "" && (current == "" || current == CodeUnknown || current == CodeProviderRequestRejected)
 }
 
 // warnAbandonedTranscriptWrite emits the ADR-057 FR-003/BDD-04 WARN record
@@ -527,7 +527,8 @@ func (ts *turnState) writeErrorTranscriptCore(
 
 	// FR-017a: label an *inconclusive* residual 4xx after a successful
 	// strip-retry. Do not overwrite a later distinct classified code.
-	if outcomeRelabelApplies(llm.Code, ts.outcomeRelabel) {
+	relabeled := outcomeRelabelApplies(llm.Code, ts.outcomeRelabel)
+	if relabeled {
 		llm.Code = ts.outcomeRelabel
 		llm.Message = defaultUserMessage(ts.outcomeRelabel)
 	}
@@ -550,6 +551,10 @@ func (ts *turnState) writeErrorTranscriptCore(
 	providerMessage := llm.ProviderMessage
 	if providerMessageOverride != nil {
 		providerMessage = *providerMessageOverride
+	}
+	if relabeled {
+		providerMessage = false
+		written = llm.Message
 	}
 	ts.persistErrorTranscript(kind, stage, llm, written, providerMessage)
 }

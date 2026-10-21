@@ -2,6 +2,9 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
+// PW-D6/PW-D13 (founder 2026-10-15): cause-stop never rings; a native restart
+// cut-off resumes after its durable landing. The historical plan below keeps
+// its ledger/identity guarantees, not its superseded ring/no-dispatch clauses.
 // C3/C5 of ADR-20261004 (steering commands: no person question) — the
 // fence-less stop's durable identity and boot's two independent obligations.
 //
@@ -215,8 +218,9 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	if got := len(w1hNoticesWithID(t, al, parentID, notice1)); got != 1 {
 		t.Fatalf("parent inbox holds %d line(s) of %s after stop 1, want exactly 1", got, notice1)
 	}
-	if c := wakes.count(notice1); c != 1 {
-		t.Fatalf("the landing rang the parent %d time(s) for %s, want exactly 1", c, notice1)
+	// PW-D13 (founder 2026-10-15): neither intentional Stop may ring.
+	if c := wakes.count(notice1); c != 0 {
+		t.Errorf("first intentional Stop rang the parent %d time(s) for %s, want 0 (PW-D13)", c, notice1)
 	}
 
 	// Resume (Revive), then dispatch — a live run again, SAME generation.
@@ -257,14 +261,12 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	if got := len(w1hNoticesWithID(t, al, parentID, notice2)); got != 1 {
 		t.Fatalf("parent inbox holds %d line(s) of %s after stop 2, want exactly 1", got, notice2)
 	}
-	if c := wakes.count(notice2); c != 1 {
-		t.Fatalf("stop 2's landing rang the parent %d time(s) for %s, want exactly 1", c, notice2)
+	if c := wakes.count(notice2); c != 0 {
+		t.Errorf("second intentional Stop rang the parent %d time(s) for %s, want 0 (PW-D13)", c, notice2)
 	}
-	// Decision 1/C3: the first id is still untaken during stop 2's landing
-	// delivery pass, so it re-rings once too. Only taking it below silences
-	// later passes; entry dedup is not once-ever wake suppression.
-	if c := wakes.count(notice1); c != 2 {
-		t.Fatalf("stop 2's landing left the untaken first notice at %d ring(s), want exactly 2 — one initial ring and one landing-pass re-ring (decision 1/C3)", c)
+	// PW-D13 keeps the first intentional Stop silent even while it is untaken.
+	if c := wakes.count(notice1); c != 0 {
+		t.Errorf("second landing left the first Stop notice at %d ring(s), want 0 (PW-D13)", c)
 	}
 
 	// The parent TAKES the FIRST notice — the production ack the wake
@@ -279,11 +281,14 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	// The next delivery pass rings the SECOND notice still — the first is
 	// taken and stays silent.
 	rerStartupPass(t, al, childID)
-	if c := wakes.count(notice2); c != 2 {
-		t.Errorf("after taking the first notice, a delivery pass left the second at %d ring(s), want 2 — taking the first must not acknowledge the second stop's distinct notice", c)
+	if c := wakes.count(notice2); c != 0 {
+		t.Errorf("after taking the first notice, the second intentional Stop rang %d time(s), want 0 (PW-D13)", c)
 	}
-	if c := wakes.count(notice1); c != 2 {
-		t.Errorf("the taken first notice rang %d time(s) total, want still 2 — taking it adds zero rings on the later pass (decision 1/C3)", c)
+	if c := wakes.count(notice1); c != 0 {
+		t.Errorf("the taken first intentional Stop rang %d time(s), want still 0 (PW-D13)", c)
+	}
+	if rerNoteAcked(t, al, parentID, notice2) {
+		t.Errorf("taking the first notice also acknowledged the second distinct Stop notice %s", notice2)
 	}
 	// The ring is a doorbell: one durable line per notice, no new history,
 	// the child untouched by it.
@@ -331,8 +336,9 @@ func TestFencelessLedger_UntakenNoticeStillRingsAfterResumeClearsTheNote(t *test
 		t.Fatalf("landed history = %s, want exactly 1 fence-less transition", w1hFormatTransitions(trs))
 	}
 	noticeID := w1hNoticeID(parentID, childID, generation, trs[0].StopSeq)
-	if c := wakes.count(noticeID); c != 1 {
-		t.Fatalf("the landing rang the parent %d time(s) for %s, want exactly 1", c, noticeID)
+	// PW-D13 (founder 2026-10-15): clearing a Stop note cannot make it wake.
+	if c := wakes.count(noticeID); c != 0 {
+		t.Errorf("intentional Stop landing rang the parent %d time(s) for %s, want 0 (PW-D13)", c, noticeID)
 	}
 	if rerNoteAcked(t, al, parentID, noticeID) {
 		t.Fatalf("%s is already acked — the untaken-notice scenario requires an untaken note", noticeID)
@@ -359,8 +365,8 @@ func TestFencelessLedger_UntakenNoticeStillRingsAfterResumeClearsTheNote(t *test
 	// The next delivery pass discovers the transition from the LEDGER and
 	// rings the parent again for the untaken notice.
 	rerStartupPass(t, al, childID)
-	if c := wakes.count(noticeID); c != 2 {
-		t.Errorf("after the resume cleared the note, a delivery pass left the untaken notice at %d ring(s), want 2 — an untaken notice survives Resume clearing the active note (C3)", c)
+	if c := wakes.count(noticeID); c != 0 {
+		t.Errorf("after explicit resume cleared the note, the old intentional Stop rang %d time(s), want 0 (PW-D13)", c)
 	}
 	if got := len(w1hNoticesWithID(t, al, parentID, noticeID)); got != 1 {
 		t.Errorf("parent inbox holds %d line(s) of %s after the re-ring, want exactly 1 — the ring re-rings the stored line", got, noticeID)
@@ -378,18 +384,17 @@ func TestFencelessLedger_UntakenNoticeStillRingsAfterResumeClearsTheNote(t *test
 	}
 }
 
-// TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed is the C5
-// boot oracle: stop, untaken notice, resume, crash — the boot pass lands
-// BOTH obligations independently: the resumed run is stopped (cause restart,
-// its transition ledgered, no run started), and the OLD untaken notice is
-// still owed and rings again. The current-run stop happens before any parent
-// wake, and the old notice's replay outcome gates nothing.
+// PW-D6/PW-D13 (founder 2026-10-15): after explicit resume and a later crash,
+// boot retains the old Stop notice silently, lands a distinct restart event,
+// then resumes the native run. The old notice cannot suppress that new event.
+// Preserve both landed transitions and their distinct stop-sequence identities.
 func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testing.T) {
 	al, _, _ := w1hSetup(t)
 	provider, releaseTurns := w1hInstallSignalProvider(t, al)
 	t.Cleanup(releaseTurns)
 	lifecycle := al.GetSessionLifecycleStore()
 
+	provisionTestWorkspace(t, "ws-c5-boot", testDefaultAgentID) // PW-SEC-01 fixture provisioning
 	parentID := newTestSteeringSession(t, al, "ws-c5-boot")
 	wakes := w1hObserveWakes(t, al)
 	rec := w1hLaunchLiveChild(t, al, provider.entered, parentID, "call-c5-boot")
@@ -413,10 +418,15 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 			return false
 		}
 		oldNoticeID = w1hNoticeID(parentID, childID, generation, trs[0].StopSeq)
-		return len(w1hNoticesWithID(t, al, parentID, oldNoticeID)) == 1 && wakes.count(oldNoticeID) == 1
+		return len(w1hNoticesWithID(t, al, parentID, oldNoticeID)) == 1
 	}); !settled {
 		trs, _ := lifecycle.ListStoppedTransitions(childID)
 		t.Fatalf("setup: stop 1 never settled: transitions=%s", w1hFormatTransitions(trs))
+	}
+	// PW-D13 (founder 2026-10-15): the old Stop is durable but never a wake.
+	joinGoalFixtureRuns(t, al)
+	if got := wakes.count(oldNoticeID); got != 0 {
+		t.Errorf("old intentional Stop rang %d time(s), want 0 (PW-D13)", got)
 	}
 	if rerNoteAcked(t, al, parentID, oldNoticeID) {
 		t.Fatalf("setup: %s is already acked — the owed-notice scenario requires an untaken notice", oldNoticeID)
@@ -434,6 +444,8 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 	}
 	home := al.GetConfig().Agents.Defaults.Home
 	restart := rerRestartLoop(t, home)
+	resumeGate := newGoalRunGate("native continuation after restart", nil)
+	installGoalRunProvider(t, restart, resumeGate)
 	rings := w1hObserveWakes(t, restart)
 	if c := rings.count(oldNoticeID); c != 0 {
 		t.Fatalf("setup: the fresh process's doorbell already rang %d time(s) for %s — it must start silent", c, oldNoticeID)
@@ -462,22 +474,20 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 	}
 	recovery.recoverSteered(context.Background(), childID, func(string, string) {})
 
-	// ORACLE (C5 pass one): the resumed run is STOPPED — the boot stopped it,
-	// no run was started (D8.5).
+	// PW-D6 (founder 2026-10-15): the durable restart stop precedes a native resume.
+	landing := pwLegacyRestartLanding(t, restart, childID, writingEpoch)
+	if landing.Generation != generation || landing.Stop != nil || landing.Terminal() || landing.StopNote.By != session.StopActorRestart {
+		t.Fatalf("restart landing=%+v, want the original stopped, unfenced, same-generation event", landing)
+	}
 	after, err := restart.GetSessionLifecycleStore().Load(childID)
 	if err != nil {
 		t.Fatalf("Load(after boot): %v", err)
 	}
-	if after.State != session.LifecycleStopped {
-		t.Fatalf("after the boot pass the resumed child is state=%q, want stopped — an old untaken notice must never skip the current-run stop (C5)", after.State)
+	if after.State != session.LifecycleRunning || after.Generation != generation || after.ExecutionID == nil ||
+		after.ExecutionID.RunID == resumed.ExecutionID.RunID || after.ExecutionID.BootSeq != writingEpoch {
+		t.Fatalf("after boot native helper=%q generation=%d execution=%+v, want a fresh admitted continuation in boot %d (PW-D6)", after.State, after.Generation, after.ExecutionID, writingEpoch)
 	}
-	if after.Generation != generation {
-		t.Fatalf("after the boot pass the child is at generation %d, want %d — boot stops, it never revives (D8.5)", after.Generation, generation)
-	}
-
-	if after.StopNote == nil || after.StopNote.By != session.StopActorRestart || after.StopNote.BootSeq != writingEpoch {
-		t.Fatalf("restart stop note = %+v, want by=%q boot_seq=%d (the freshly minted WRITING boot, D8.3)", after.StopNote, session.StopActorRestart, writingEpoch)
-	}
+	awaitGoalProvider(t, resumeGate)
 
 	// ORACLE (C3 + C5 pass one): the restart stop is its OWN ledgered
 	// transition — cause restart, same generation, seq advancing the old
@@ -506,8 +516,11 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 	if got := len(w1hNoticesWithID(t, restart, parentID, oldNoticeID)); got != 1 {
 		t.Errorf("parent inbox holds %d line(s) of the old notice %s after boot, want exactly 1 — the ring re-rings the stored line under the same id", got, oldNoticeID)
 	}
-	if c := rings.count(oldNoticeID); c < 1 {
-		t.Errorf("the fresh process rang the parent %d time(s) for the still-untaken old notice %s, want at least 1 — the old notice is still owed after the boot stopped the new run (C5)", c, oldNoticeID)
+	if c := rings.count(oldNoticeID); c != 0 {
+		t.Errorf("the fresh process rang the parent %d time(s) for old intentional Stop %s, want 0 (PW-D13)", c, oldNoticeID)
+	}
+	if c := rings.count(restartNoticeID); c != 1 {
+		t.Errorf("fresh restart notice rang %d time(s), want 1 distinct event wake (PW-D6/PW-D17)", c)
 	}
 	if rerNoteAcked(t, restart, parentID, oldNoticeID) {
 		t.Errorf("the old notice %s came back acked — nothing in a boot pass takes a notice on the parent's behalf", oldNoticeID)

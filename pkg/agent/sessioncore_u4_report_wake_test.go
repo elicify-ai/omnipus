@@ -5,13 +5,12 @@
 // session-core U4 — helper report class, wake/retain/queue behaviour
 // (FR-012, BDD-04.1/04.2, T06/T16).
 //
-// RED pack, qa-lead. Oracle source: docs/internal/specs/session-core-spec.md
-// FR-012 and BDD-04.1/04.2, read from the spec text — never from the
-// implementation. The spec: every accepted helper report kind (progress,
-// checkpoint, artifact, question, blocker, handback-final, engine lifecycle)
-// wakes an idle non-stopped parent, joins a live parent's safe boundary, or is
-// retained in a stopped parent's inbox without revival; and the wake expansion
-// must not widen the preserved rate/count exemptions.
+// Oracle: docs/internal/specs/parent-wake-visibility-spec.md, PW-D4/PW-D13,
+// FR-010/011/012/025 and §16 (narrows session-core FR-012/BDD-04.1/04.2).
+// PW-D4 (founder 2026-10-15): progress, checkpoint and artifact never wake or join.
+// Accepted chatter is stored/shown under the same rate/count caps. Questions
+// still wake/join; an intentional Stop still refuses revival. Legacy test names
+// are retained for traceability; their assertions follow the new policy.
 
 package agent
 
@@ -29,7 +28,7 @@ import (
 )
 
 // u4GeneratedProgress / Checkpoint / Artifact build one message of each
-// newly-wake-eligible accepted kind (field shapes mirror the generated structs
+// accepted non-waking chatter kind (field shapes mirror the generated structs
 // the spec cites: contracts/components/schemas/SessionMessage*.yaml).
 func u4GeneratedProgress(t *testing.T, childID, messageID string) generated.SessionMessage {
 	t.Helper()
@@ -78,26 +77,34 @@ func u4ProgressEvent(t *testing.T, childID, messageID string) steer.UpwardEvent 
 	}
 }
 
-// TestDeliver_AcceptedReportKinds_WakeIdleNonStoppedParent covers FR-012 /
-// BDD-04.1: an accepted report kind delivered to an idle, non-stopped parent
-// wakes it (DeliveryWoke) and is stored once in the parent's inbox.
-//
-// RED today: progress/checkpoint/artifact are not wake-eligible
-// (session.classifyEnvelope), so every one of them returns
-// DeliveryStoredNotWoken and the idle parent never learns of the report.
+// u4QuestionEvent supplies a real wake reason for Stop and live-join controls.
+func u4QuestionEvent(t *testing.T, childID, messageID string) steer.UpwardEvent {
+	t.Helper()
+	var sm generated.SessionMessage
+	if err := sm.FromSessionMessageQuestion(generated.SessionMessageQuestion{
+		MessageId: messageID, SessionId: childID, CreatedAt: time.Now().UTC(), Depth: 1,
+		SenderIdentity: "worker", CorrelationId: "corr-" + messageID, Text: "which file?",
+	}); err != nil {
+		t.Fatalf("FromSessionMessageQuestion: %v", err)
+	}
+	return steer.UpwardEvent{ChildSessionID: childID, Outcome: steer.OutcomeParkedQuestion, Message: sm}
+}
+
+// PW-D4 (founder 2026-10-15): accepted chatter is stored once, never an idle wake.
+// The legacy wake-expansion test keeps all three kinds and their inbox checks.
 func TestDeliver_AcceptedReportKinds_WakeIdleNonStoppedParent(t *testing.T) {
 	t.Run("progress", func(t *testing.T) {
-		_, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
+		al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 		const parentID, childID = "parent-1", "child-1"
 		seedParentAndChild(t, lifecycle, parentID, childID)
+		seedUnifiedSession(t, al, parentID)
 
 		delivery, err := deliverer.Deliver(context.Background(), u4ProgressEvent(t, childID, "p-1"))
 		if err != nil {
 			t.Fatalf("Deliver(progress): %v", err)
 		}
-		if delivery.Outcome != steer.DeliveryWoke {
-			t.Fatalf("progress delivery outcome = %q, want %q — FR-012 requires an accepted report to "+
-				"wake an idle non-stopped parent (BDD-04.1)", delivery.Outcome, steer.DeliveryWoke)
+		if delivery.Outcome != steer.DeliveryStoredNotWoken {
+			t.Errorf("progress delivery outcome = %q, want %q — PW-D4 forbids chatter wakes", delivery.Outcome, steer.DeliveryStoredNotWoken)
 		}
 		msgs, _, _, derr := inbox.Drain(parentID, childID, "", 10)
 		if derr != nil {
@@ -109,9 +116,10 @@ func TestDeliver_AcceptedReportKinds_WakeIdleNonStoppedParent(t *testing.T) {
 	})
 
 	t.Run("checkpoint", func(t *testing.T) {
-		_, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
+		al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 		const parentID, childID = "parent-1", "child-1"
 		seedParentAndChild(t, lifecycle, parentID, childID)
+		seedUnifiedSession(t, al, parentID)
 
 		event := steer.UpwardEvent{
 			ChildSessionID: childID,
@@ -122,8 +130,8 @@ func TestDeliver_AcceptedReportKinds_WakeIdleNonStoppedParent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Deliver(checkpoint): %v", err)
 		}
-		if delivery.Outcome != steer.DeliveryWoke {
-			t.Fatalf("checkpoint delivery outcome = %q, want %q — FR-012/BDD-04.1", delivery.Outcome, steer.DeliveryWoke)
+		if delivery.Outcome != steer.DeliveryStoredNotWoken {
+			t.Errorf("checkpoint delivery outcome = %q, want %q — PW-D4 forbids chatter wakes", delivery.Outcome, steer.DeliveryStoredNotWoken)
 		}
 		msgs, _, _, derr := inbox.Drain(parentID, childID, "", 10)
 		if derr != nil || len(msgs) != 1 {
@@ -132,9 +140,10 @@ func TestDeliver_AcceptedReportKinds_WakeIdleNonStoppedParent(t *testing.T) {
 	})
 
 	t.Run("artifact", func(t *testing.T) {
-		_, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
+		al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 		const parentID, childID = "parent-1", "child-1"
 		seedParentAndChild(t, lifecycle, parentID, childID)
+		seedUnifiedSession(t, al, parentID)
 
 		event := steer.UpwardEvent{
 			ChildSessionID: childID,
@@ -145,8 +154,8 @@ func TestDeliver_AcceptedReportKinds_WakeIdleNonStoppedParent(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Deliver(artifact): %v", err)
 		}
-		if delivery.Outcome != steer.DeliveryWoke {
-			t.Fatalf("artifact delivery outcome = %q, want %q — FR-012/BDD-04.1", delivery.Outcome, steer.DeliveryWoke)
+		if delivery.Outcome != steer.DeliveryStoredNotWoken {
+			t.Errorf("artifact delivery outcome = %q, want %q — PW-D4 forbids chatter wakes", delivery.Outcome, steer.DeliveryStoredNotWoken)
 		}
 		msgs, _, _, derr := inbox.Drain(parentID, childID, "", 10)
 		if derr != nil || len(msgs) != 1 {
@@ -155,26 +164,23 @@ func TestDeliver_AcceptedReportKinds_WakeIdleNonStoppedParent(t *testing.T) {
 	})
 }
 
-// TestDeliver_AcceptedReportKind_WakesIdleThenRetainedWhenParentStopped covers
-// FR-012 / BDD-04.2: the same accepted kind wakes an idle parent, but once the
-// parent is stopped the report is retained in its inbox with no
-// report-triggered dispatch and no revival; a duplicate replay adds no copy.
-//
-// RED today: the idle-parent half fails (progress is not wake-eligible), so the
-// test names the idle wake as its first assertion.
+// PW-D4/PW-D13 (founder 2026-10-15): a question wakes only a non-stopped parent.
+// Use questions, not chatter, so Stop refusal still tests a genuinely eligible
+// wake. Keep the no-revival generation and duplicate-retention assertions.
 func TestDeliver_AcceptedReportKind_WakesIdleThenRetainedWhenParentStopped(t *testing.T) {
-	_, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
+	al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
+	seedUnifiedSession(t, al, parentID)
 	ctx := context.Background()
 
-	// 1. Idle, non-stopped parent: the report wakes it (RED).
-	idle, err := deliverer.Deliver(ctx, u4ProgressEvent(t, childID, "p-idle"))
+	// 1. Idle, non-stopped parent: a question still wakes it (PW-D4).
+	idle, err := deliverer.Deliver(ctx, u4QuestionEvent(t, childID, "q-idle"))
 	if err != nil {
-		t.Fatalf("Deliver(progress, idle parent): %v", err)
+		t.Fatalf("Deliver(question, idle parent): %v", err)
 	}
 	if idle.Outcome != steer.DeliveryWoke {
-		t.Fatalf("idle-parent progress outcome = %q, want %q (FR-012/BDD-04.1)", idle.Outcome, steer.DeliveryWoke)
+		t.Fatalf("idle-parent question outcome = %q, want %q (PW-D4)", idle.Outcome, steer.DeliveryWoke)
 	}
 
 	// 2. Parent stops (current generation). A new report must be retained, not
@@ -190,13 +196,13 @@ func TestDeliver_AcceptedReportKind_WakesIdleThenRetainedWhenParentStopped(t *te
 	}
 	genBefore := u4Generation(t, lifecycle, parentID)
 
-	stopped, err := deliverer.Deliver(ctx, u4ProgressEvent(t, childID, "p-stopped"))
+	stopped, err := deliverer.Deliver(ctx, u4QuestionEvent(t, childID, "q-stopped"))
 	if err != nil {
-		t.Fatalf("Deliver(progress, stopped parent): %v", err)
+		t.Fatalf("Deliver(question, stopped parent): %v", err)
 	}
 	if stopped.Outcome != steer.DeliveryStoredNotWoken {
-		t.Fatalf("stopped-parent progress outcome = %q, want %q — a stopped parent must not be revived "+
-			"by a report (FR-012/BDD-04.2)", stopped.Outcome, steer.DeliveryStoredNotWoken)
+		t.Fatalf("stopped-parent question outcome = %q, want %q — PW-D13 forbids revival by a report",
+			stopped.Outcome, steer.DeliveryStoredNotWoken)
 	}
 	if got := u4Generation(t, lifecycle, parentID); got != genBefore {
 		t.Fatalf("parent generation after a report to a stopped parent = %d, want %d (no revival)",
@@ -204,8 +210,8 @@ func TestDeliver_AcceptedReportKind_WakesIdleThenRetainedWhenParentStopped(t *te
 	}
 
 	// 3. Duplicate replay of the retained report adds no copy.
-	if _, err := deliverer.Deliver(ctx, u4ProgressEvent(t, childID, "p-stopped")); err != nil {
-		t.Fatalf("Deliver(progress replay): %v", err)
+	if _, err := deliverer.Deliver(ctx, u4QuestionEvent(t, childID, "q-stopped")); err != nil {
+		t.Fatalf("Deliver(question replay): %v", err)
 	}
 	msgs, _, _, derr := inbox.Drain(parentID, childID, "", 10)
 	if derr != nil {
@@ -217,46 +223,67 @@ func TestDeliver_AcceptedReportKind_WakesIdleThenRetainedWhenParentStopped(t *te
 	}
 }
 
-// TestDeliver_ProgressToLiveParent_QueuesIntoLiveTurn covers FR-012's "join
-// live safe boundary": a report delivered while the parent has a live turn is
-// enqueued into that turn (DeliveryQueuedIntoLiveTurn), never a second turn.
-//
-// RED today: progress is not wake-eligible, so it never reaches the live-turn
-// path and returns DeliveryStoredNotWoken with an empty steering queue.
+// PW-D4 (founder 2026-10-15): live progress stays stored without joining a turn.
+// A question control retains the original identity-bearing live-join assertion.
 func TestDeliver_ProgressToLiveParent_QueuesIntoLiveTurn(t *testing.T) {
+	t.Run("progress is stored and does not join", func(t *testing.T) {
+		al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
+		const parentID, childID = "parent-1", "child-1"
+		seedParentAndChild(t, lifecycle, parentID, childID)
+		seedUnifiedSession(t, al, parentID)
+		al.activeTurnStates.Store(parentID, &turnState{sessionKey: parentID})
+		t.Cleanup(func() { al.activeTurnStates.Delete(parentID) })
+
+		delivery, err := deliverer.Deliver(context.Background(), u4ProgressEvent(t, childID, "p-live"))
+		if err != nil {
+			t.Fatalf("Deliver(progress, live parent): %v", err)
+		}
+		if delivery.Outcome != steer.DeliveryStoredNotWoken {
+			t.Errorf("live-parent progress outcome = %q, want %q — PW-D4 forbids chatter joins", delivery.Outcome, steer.DeliveryStoredNotWoken)
+		}
+		al.steering.mu.Lock()
+		items := append([]steeringQueueItem(nil), al.steering.queues[parentID]...)
+		al.steering.mu.Unlock()
+		if len(items) != 0 {
+			t.Errorf("live steering queue after progress = %+v, want empty (PW-D4)", items)
+		}
+		msgs, _, _, err := inbox.Drain(parentID, childID, "", 10)
+		if err != nil || len(msgs) != 1 || messageIDOf(msgs[0]) != "p-live" {
+			t.Fatalf("stored progress = %+v (err=%v), want exactly p-live", msgs, err)
+		}
+	})
+
+	t.Run("question joins with its identity", func(t *testing.T) {
+		al, lifecycle, _, deliverer := newDeliverTestLoop(t)
+		const parentID, childID = "parent-1", "child-1"
+		seedParentAndChild(t, lifecycle, parentID, childID)
+		seedUnifiedSession(t, al, parentID)
+		al.activeTurnStates.Store(parentID, &turnState{sessionKey: parentID})
+		t.Cleanup(func() { al.activeTurnStates.Delete(parentID) })
+
+		delivery, err := deliverer.Deliver(context.Background(), u4QuestionEvent(t, childID, "q-live"))
+		if err != nil {
+			t.Fatalf("Deliver(question, live parent): %v", err)
+		}
+		if delivery.Outcome != steer.DeliveryQueuedIntoLiveTurn {
+			t.Fatalf("live-parent question outcome = %q, want %q (PW-D4)", delivery.Outcome, steer.DeliveryQueuedIntoLiveTurn)
+		}
+		al.steering.mu.Lock()
+		items := append([]steeringQueueItem(nil), al.steering.queues[parentID]...)
+		al.steering.mu.Unlock()
+		if len(items) != 1 || items[0].wake == nil || items[0].wake.messageID != "q-live" {
+			t.Fatalf("live steering queue = %+v, want one identity-bearing q-live wake", items)
+		}
+	})
+}
+
+// PW-D4 (founder 2026-10-15): progress under the cap stores without waking.
+// Keep the typed over-cap refusal: non-waking chatter is still rate-limited.
+func TestDeliver_ProgressRateCap_RefusedAfterExpansion(t *testing.T) {
 	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
-	al.activeTurnStates.Store(parentID, &turnState{sessionKey: parentID})
-	t.Cleanup(func() { al.activeTurnStates.Delete(parentID) })
-
-	delivery, err := deliverer.Deliver(context.Background(), u4ProgressEvent(t, childID, "p-live"))
-	if err != nil {
-		t.Fatalf("Deliver(progress, live parent): %v", err)
-	}
-	if delivery.Outcome != steer.DeliveryQueuedIntoLiveTurn {
-		t.Fatalf("live-parent progress outcome = %q, want %q — an accepted report must join the live "+
-			"safe boundary, not start a second turn (FR-012)", delivery.Outcome, steer.DeliveryQueuedIntoLiveTurn)
-	}
-
-	al.steering.mu.Lock()
-	items := append([]steeringQueueItem(nil), al.steering.queues[parentID]...)
-	al.steering.mu.Unlock()
-	if len(items) != 1 || items[0].wake == nil {
-		t.Fatalf("live steering queue = %+v, want one identity-bearing wake for the report", items)
-	}
-}
-
-// TestDeliver_ProgressRateCap_RefusedAfterExpansion covers FR-012's
-// "expanded wake eligibility cannot widen preserved rate/count exemptions" at
-// the delivery boundary: a progress report under the rate cap wakes the parent
-// (RED today) AND the over-cap report is still refused with the typed rate
-// error — i.e. making progress wake-eligible must not silently exempt it from
-// the rate window.
-func TestDeliver_ProgressRateCap_RefusedAfterExpansion(t *testing.T) {
-	_, lifecycle, _, deliverer := newDeliverTestLoop(t)
-	const parentID, childID = "parent-1", "child-1"
-	seedParentAndChild(t, lifecycle, parentID, childID)
+	seedUnifiedSession(t, al, parentID)
 	ctx := context.Background()
 
 	const rateCap = session.DefaultChildSendRatePerMinute // 10/min (C-LIMIT)
@@ -265,9 +292,9 @@ func TestDeliver_ProgressRateCap_RefusedAfterExpansion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Deliver progress #%d (under cap): %v", i, err)
 		}
-		if d.Outcome != steer.DeliveryWoke {
-			t.Fatalf("progress #%d under the rate cap: outcome = %q, want %q (FR-012 idle wake)",
-				i, d.Outcome, steer.DeliveryWoke)
+		if d.Outcome != steer.DeliveryStoredNotWoken {
+			t.Errorf("progress #%d under the rate cap: outcome = %q, want %q (PW-D4)",
+				i, d.Outcome, steer.DeliveryStoredNotWoken)
 		}
 	}
 

@@ -20,8 +20,10 @@ func i1R3RestartStopped(t *testing.T) *d2bRoot {
 	return h
 }
 
-// W1 lower-boundary RED: helper hand-back authority is not normal schedule
-// authority and cannot revive an Interrupted root even if it reaches admission.
+// PW-D14 (founder 2026-10-15): only a fresh helper outcome from the same restart
+// gets the new wake entry's exception. This lower-boundary fixture supplies an
+// anonymous system message, no helper event/id/restart correlation; it must
+// still be refused. Normal schedule/heartbeat continuation remains unchanged.
 func TestI1R3HandbackCannotContinueRestartStop(t *testing.T) {
 	for _, trigger := range []string{"heartbeat", "scheduled"} {
 		t.Run(trigger, func(t *testing.T) {

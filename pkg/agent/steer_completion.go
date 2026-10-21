@@ -735,7 +735,10 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 	case errors.Is(runErr, context.Canceled), result.status == TurnEndStatusAborted:
 		return steer.OutcomeInterrupted, session.LifecycleStopped, "interrupted: the session was cancelled"
 	case runErr != nil:
-		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + runErr.Error()
+		// Every untrusted failure can echo request data, including an unknown
+		// stream code with no HTTP facts. Only curated Omnipus text bypasses
+		// translation, through userVisibleTurnError's existing exception.
+		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + userVisibleTurnError(runErr)
 	case result.finalContent == toolLimitResponse:
 		// The turn hit the tool-iteration ceiling with no final response
 		// (loop_run_turn.go::finalizeTurn sets finalContent to the

@@ -932,7 +932,9 @@ func (al *AgentLoop) enqueueDelegateSteer(scope, agentID string, msg providers.M
 	if err != nil {
 		return "", EnqueueStatusNormal, fmt.Errorf("check steering session lifecycle: %w", err)
 	}
-	correlationID = strings.TrimSpace(correlationID)
+	if correlationID, err = callerSteeringCorrelation(correlationID); err != nil {
+		return "", EnqueueStatusNormal, err
+	}
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
@@ -968,7 +970,10 @@ func (al *AgentLoop) enqueueHumanSteeringMessage(scope, agentID string, msg prov
 }
 
 func (al *AgentLoop) enqueueSteeringMessageEntry(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string) (string, EnqueueStatus, error) {
-	correlationID = strings.TrimSpace(correlationID)
+	correlationID, err := callerSteeringCorrelation(correlationID)
+	if err != nil {
+		return "", EnqueueStatusNormal, err
+	}
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
@@ -1223,6 +1228,43 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 			}
 		}
 		if item.wake != nil {
+			// A saved helper input is only dequeued here. Placement and its
+			// consumed marker wait for the model fence, after all tool results.
+			if store := al.GetSessionStore(); store != nil {
+				addr, _, savedErr := store.SavedChatInput(item.wake.transcriptSessionID, "saved-input-"+item.wake.messageID)
+				if savedErr != nil {
+					al.steering.prependItemsScope(scope, items[i:])
+					// The live tool-boundary polls drop this error, so it is made
+					// visible here; the item stays queued and retryable.
+					logger.ErrorCF("agent", "saved helper input could not be looked up; restored to the steering queue",
+						map[string]any{"scope": scope, "session_id": item.wake.transcriptSessionID,
+							"outcome_id": item.wake.messageID, "error": savedErr.Error()})
+					al.publishSavedWakeReadPending(item.wake.transcriptSessionID, item.wake.messageID)
+					return msgs, correlationIDs, consumedItems, savedErr
+				}
+				if addr.EntryID != "" {
+					// PW-D15: a card parked after this item was queued holds it.
+					// The saved record stays pending for the answer's fence; the
+					// claim goes back so nothing treats it as in flight.
+					open, cardErr := al.openQuestionCard(item.wake.transcriptSessionID)
+					if cardErr != nil {
+						al.steering.prependItemsScope(scope, items[i:])
+						logger.ErrorCF("agent", "question card unreadable; saved helper input restored to the steering queue",
+							map[string]any{"scope": scope, "session_id": item.wake.transcriptSessionID,
+								"outcome_id": item.wake.messageID, "error": cardErr.Error()})
+						al.publishSavedWakeReadPending(item.wake.transcriptSessionID, item.wake.messageID)
+						return msgs, correlationIDs, consumedItems, cardErr
+					}
+					if open {
+						al.releaseWakePublication(item.wake.transcriptSessionID, item.wake.messageID)
+						continue
+					}
+					msgs = append(msgs, item.message)
+					correlationIDs = append(correlationIDs, savedWakeCorrelation(item.wake.transcriptSessionID, item.wake.messageID))
+					consumedItems = append(consumedItems, item)
+					continue
+				}
+			}
 			if err := al.recordAcceptedSteeredInstruction(*item.wake, item.message); err != nil {
 				al.steering.prependItemsScope(scope, items[i:])
 				slog.Error("agent: accepted steered instruction not recorded; restored unmarked suffix to queue",
@@ -1262,8 +1304,18 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 				return msgs, correlationIDs, consumedItems, ackErr
 			}
 		}
+		correlationID := item.correlationID
+		if item.wake == nil && strings.HasPrefix(correlationID, savedWakeCorrelationPrefix) {
+			// PW-SEC-R3: only a wake item mints the saved-wake form. An ordinary
+			// item carrying it (an intake that bypassed callerSteeringCorrelation)
+			// is delivered as plain text with no receipt, never as another
+			// session's saved input.
+			logger.ErrorCF("agent", "ordinary steering item carried a reserved saved-wake correlation; receipt dropped",
+				map[string]any{"scope": scope})
+			correlationID = ""
+		}
 		msgs = append(msgs, item.message)
-		correlationIDs = append(correlationIDs, item.correlationID)
+		correlationIDs = append(correlationIDs, correlationID)
 		consumedItems = append(consumedItems, item)
 	}
 	return msgs, correlationIDs, consumedItems, nil
@@ -1417,8 +1469,11 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	steeringMsgs []providers.Message,
 	steeringCorrelationIDs []string,
 ) (string, error) {
+	transcriptSessionID, transcriptStore := al.continuationTranscript(sessionKey)
 	resp, err := al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:                    sessionKey,
+		TranscriptSessionID:           transcriptSessionID,
+		TranscriptStore:               transcriptStore,
 		Channel:                       channel,
 		ChatID:                        chatID,
 		DefaultResponse:               defaultResponse,
@@ -1437,6 +1492,26 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	// continuation's outcome replaces the first turn's.
 	ordinaryDispositionFromContext(ctx).recordTurnOutcome(err)
 	return resp, err
+}
+
+// continuationTranscript binds a steering continuation to the concrete session
+// its session-scoped key "agent:<agent>:session:<id>" names, so the
+// continuation's transcript rows (its reply, tool rows and a refused Ask call's
+// visible refusal, amendment §1.2 R4) land in that conversation and its audit
+// rows name the acting session rather than the routing key (gate round 2,
+// code-reviewer F01 residual / security S1 remainder). A chat-scoped key names
+// no session, and a session that does not exist has no transcript: both stay
+// unbound, exactly as before.
+func (al *AgentLoop) continuationTranscript(sessionKey string) (string, *session.UnifiedStore) {
+	_, sessionID, ok := strings.Cut(sessionKey, ":session:")
+	if !ok || sessionID == "" {
+		return "", nil
+	}
+	store := al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return "", nil
+	}
+	return sessionID, store
 }
 
 // errContinuePostDequeueFailure marks a Continue failure that happened AFTER
@@ -1565,6 +1640,12 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 	}
 
 	resp, err := run(agent, steeringMsgs, steeringCorrelationIDs)
+	// SFH-02: this consumer owns every saved input it dequeued until it exits.
+	// A run refused before its turn took the receipts (workspace, provider or
+	// model preparation) gives the claims back here; a placed input already
+	// released its own, so this is a no-op for it. Wake items are not restored
+	// below, so the saved record stays pending for the next legitimate fence.
+	al.releaseSavedWakeClaims("", steeringCorrelationIDs)
 	if err != nil {
 		// Gate finding, CRITICAL: continueWithSteeringMessages's own turn can
 		// fail with an ordinary error (provider error, mid-turn failure — the

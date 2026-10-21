@@ -22,7 +22,7 @@ Email works differently. An email mailbox belongs to one agent in one workspace.
 1. Open **Connectors**. Platforms that are not connected yet show **Configure**.
 2. Select **Configure** for the platform you want. A panel opens with its required fields.
 3. Enter the platform credentials. Use the platform guide below to find the values you need.
-4. Choose a **Workspace** and an agent. The agent list contains members of that workspace.
+4. Choose a **Workspace** and a **Main agent**, the agent that answers messages on this account. The **Main agent** list contains members of that workspace.
 5. Select **Save & Enable**. The connected account appears with an **Enabled** status.
 6. To connect another account on the same platform, select **Add another…** beside its group.
 
@@ -89,7 +89,7 @@ Back in the workspace, select **Mail** to open the [mailbox panel](mail.md#set-u
 - Deleting an account removes its configuration, credentials, cached mail metadata, and new-mail watching state. The removal result says which of the two happened: **removed** (everything succeeded) or **removed, cleanup pending** (the account is gone and can no longer be used, but erasing its cached files did not fully finish). Cleanup pending is never shown as a full success; the response carries a retry key, and the separately authorized cleanup operation (`POST /api/v1/mailboxes/cleanup` with that key) finishes the job — it keeps working after the mailbox row is gone. Deleting an agent or a workspace runs the same erase for every mailbox it held.
 - Omnipus keeps the mailbox's cached mail metadata in its own private storage under the data directory, and the application makes sure its own backups and restores never copy that storage or the new-mail watching state. A **cache unavailable** warning means Omnipus could not prove that protection on your install — a genuine failure such as a disk or permission problem — not missing external setup. Mail keeps working live while the warning shows; only the cached metadata is off.
 - A workspace-bound connector cannot fall back to another agent if its selected agent is later deleted or becomes ineligible. Update the connector's routing choice.
-- WhatsApp may be unavailable in a lite build.
+- WhatsApp ships in every build on the supported platforms; it is unavailable only on a few unsupported architectures (mipsle, netbsd, freebsd/arm) where its SQLite dependency cannot compile. There is no separate lite build.
 - LINE and Google Chat webhook mode need a public HTTPS address.
 
 ## Related pages

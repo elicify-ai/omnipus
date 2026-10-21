@@ -240,9 +240,10 @@ func TestW1HistoricalLedgerNotice_TwoSameGenerationStopsDeliverTwoDistinctOrigin
 		for _, msg := range notices2 {
 			w1hAssertNoticeMatchesTransition(t, msg, parentID, tr2)
 		}
-		w1hWaitFor(t, 10*time.Second, "stop-2 wake observed", func() bool { return wakes.count(id2) >= 1 })
-		if c := wakes.count(id2); c != 1 {
-			t.Errorf("wakes for %s = %d, want 1 (the working parent is woken once per notice)", id2, c)
+		// PW-D13 (founder 2026-10-15): join the real tail; two Stops still wake nobody.
+		joinGoalFixtureRuns(t, al)
+		if c := wakes.count(id2); c != 0 {
+			t.Errorf("wakes for intentional Stop %s = %d, want 0 (PW-D13)", id2, c)
 		}
 	}
 	if ids := w1hStoppedNoticeIDsIn(t, al, grandparentID); len(ids) != 0 {

@@ -164,7 +164,7 @@ func (p *CodexProvider) Chat(
 			}
 		}
 		logger.ErrorCF("provider.codex", "Codex API call failed", fields)
-		return nil, fmt.Errorf("codex API call: %w", err)
+		return nil, fmt.Errorf("codex API call: %w", normalizeSDKError(err))
 	}
 	if resp == nil {
 		fields := map[string]any{

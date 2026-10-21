@@ -7,9 +7,8 @@ package agent
 //	         (direct stop, timeout, cascade from an ancestor, restart boot);
 //	case 2 — the notice's inbox identity is deterministic and deduplicated
 //	         across a live retry and a boot replay;
-//	case 3 — parent-state routing: a working parent is woken exactly once;
-//	         a stopped / waiting-for-answer / done / failed parent retains
-//	         the notice with NO wake;
+//	case 3 — parent-state routing: every parent retains an intentional Stop
+//	         notice without a wake (PW-D13); restart is a separate wake event;
 //	case 4 — a delivery failure stays pending and is VISIBLY reported, and
 //	         a boot retry after repair delivers exactly once;
 //	case 6 — the D6 Goal row: the session-owned goal stays active across
@@ -18,7 +17,9 @@ package agent
 //	         the owner_required park itself, needs_input, and its 24-hour
 //	         expiry outright, with no replacement expiry.
 //
-// Oracles are the ADR rows only (D6/D8/D2, F0929-6/7, MIN-001/MIN-005);
+// PW-D13 (founder 2026-10-15): intentional Stop never wakes, including replay.
+// PW-D6 (founder 2026-10-15): a native restart cut-off resumes from history.
+// These parent-wake decisions narrow the older D6/D8 wake/resume oracles;
 // helpers live in stopped_child_notice_u1_test.go. The plan-stop transition
 // leg lives in plan_member_stop_u1_test.go — the coordinator adjudicated it
 // in scope on 2026-10-02 (an earlier revision of this comment called the
@@ -216,8 +217,9 @@ func TestU1StoppedNoticeEveryTransitionIntoStopped(t *testing.T) {
 		rec := u1LaunchChild(t, al, parent, "u1-direct")
 		u1StopChild(t, al, rec)
 		noticeID, _ := assertU1StoppedChildNotice(t, al, parent, rec, string(session.StopCauseStop), "dan")
-		if got := wakes(noticeID); got != 1 {
-			t.Errorf("working-parent wakes for the stopped-child notice = %d, want exactly 1 (D6)", got)
+		// PW-D13 (founder 2026-10-15): even a working parent gets no Stop wake.
+		if got := wakes(noticeID); got != 0 {
+			t.Errorf("working-parent wakes for intentional Stop = %d, want 0 (PW-D13)", got)
 		}
 	})
 
@@ -252,7 +254,10 @@ func TestU1StoppedNoticeEveryTransitionIntoStopped(t *testing.T) {
 	t.Run("restart boot sweep", func(t *testing.T) {
 		al, cleanup := newSteerAL(t)
 		defer cleanup()
+		provisionTestWorkspace(t, "ws-u1-restart", testDefaultAgentID) // PW-SEC-01 fixture provisioning
 		parent := newTestSteeringSession(t, al, "ws-u1-restart")
+		resumeGate := newGoalRunGate("native helper resumed", nil)
+		installGoalRunProvider(t, al, resumeGate)
 		wakes := observeU1ParentNoticeWakes(t, al, parent)
 		rec := u1LaunchChild(t, al, parent, "u1-restart")
 		var operatorNotices []string
@@ -265,7 +270,26 @@ func TestU1StoppedNoticeEveryTransitionIntoStopped(t *testing.T) {
 		if len(operatorNotices) != 0 {
 			t.Errorf("boot recovery reported problems on a clean single-child restart: %v", operatorNotices)
 		}
-		noticeID, _ := assertU1StoppedChildNotice(t, al, parent, rec, string(session.StopCauseRestart), "")
+		// PW-D6 (founder 2026-10-15): retain the restart landing, then resume the native helper.
+		landing := pwLegacyRestartLanding(t, al, rec.SessionID, al.bootEpochFor())
+		if landing.Generation != rec.Generation || landing.Terminal() || landing.Stop != nil || landing.StopNote.By != session.StopActorRestart {
+			t.Fatalf("restart landing lost its legacy stop invariants: %+v", landing)
+		}
+		transitions, err := al.GetSessionLifecycleStore().ListStoppedTransitions(rec.SessionID)
+		if err != nil || len(transitions) != 1 || transitions[0].Cause != session.StopCauseRestart {
+			t.Fatalf("restart transitions=%+v err=%v, want exactly one restart", transitions, err)
+		}
+		noticeID := w1hNoticeID(parent, rec.SessionID, rec.Generation, transitions[0].StopSeq)
+		messages := w1hNoticesWithID(t, al, parent, noticeID)
+		if len(messages) != 1 {
+			t.Fatalf("restart notices=%d, want exactly 1", len(messages))
+		}
+		w1hAssertNoticeMatchesTransition(t, messages[0], parent, transitions[0])
+		current := rootReopenedRecord(t, al, rec.SessionID)
+		if current.State != session.LifecycleRunning || current.Generation != rec.Generation {
+			t.Fatalf("native helper after restart=%q generation=%d, want one running continuation at generation %d (PW-D6)", current.State, current.Generation, rec.Generation)
+		}
+		awaitGoalProvider(t, resumeGate)
 		if got := wakes(noticeID); got != 1 {
 			t.Errorf("working-parent wakes for the restart stopped-child notice = %d, want exactly 1 (D6/D8.4)", got)
 		}
@@ -275,9 +299,8 @@ func TestU1StoppedNoticeEveryTransitionIntoStopped(t *testing.T) {
 // TestU1StoppedNoticeIdentityDeduplicated pins D6's deterministic inbox
 // identity (parent_id, child_id, child_generation, stop_seq): a live retry
 // of the stop call and a boot replay over fresh store instances neither
-// duplicate the notice nor change its identity. ADR-20261004 locked decision
-// 1 + C3 require an untaken id to re-ring at boot; dedup applies to the durable
-// entry, not to the total wake count across distinct delivery passes.
+// duplicate the notice nor change its identity.
+// PW-D13 (founder 2026-10-15): intentional Stop never rings, even while untaken.
 func TestU1StoppedNoticeIdentityDeduplicated(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -306,11 +329,11 @@ func TestU1StoppedNoticeIdentityDeduplicated(t *testing.T) {
 	}
 	stop("first")
 	noticeID, note := assertU1StoppedChildNotice(t, al, parent, rec, string(session.StopCauseStop), "dan")
-	if got := wakes(noticeID); got != 1 {
-		t.Errorf("wakes after first delivery = %d, want exactly 1 (D6)", got)
+	if got := wakes(noticeID); got != 0 {
+		t.Errorf("wakes after intentional Stop delivery = %d, want 0 (PW-D13)", got)
 	}
 
-	t.Logf("notice wake phase landing: total=%d, want 1", wakes(noticeID))
+	t.Logf("notice wake phase landing: total=%d, want 0 (PW-D13)", wakes(noticeID))
 	// Live retry: repeating Stop on an already-stopped child changes nothing
 	// (D2/MIN-007); it is not a fresh stop transition or a boot delivery pass.
 	beforeRetry := wakes(noticeID)
@@ -322,8 +345,7 @@ func TestU1StoppedNoticeIdentityDeduplicated(t *testing.T) {
 	t.Logf("notice wake phase live repeat Stop: delta=%d, want 0", wakes(noticeID)-beforeRetry)
 
 	// Boot replay: fresh stores prove on-disk entry/identity deduplication.
-	// This id remains UNTAKEN, so decision 1/C3 require one new ring on this
-	// boot pass. A second ring must not create another durable work item.
+	// This intentional Stop remains untaken; PW-D13 still forbids a boot ring.
 	if rerNoteAcked(t, al, parent, noticeID) {
 		t.Fatal("setup: notice was taken before boot; the untaken re-ring case is not exercised")
 	}
@@ -334,10 +356,10 @@ func TestU1StoppedNoticeIdentityDeduplicated(t *testing.T) {
 	if idAfterBoot != noticeID || noteAfterBoot != note {
 		t.Errorf("boot replay changed notice identity or stop event: id %q -> %q; note %s -> %s (D6/C3)", noticeID, idAfterBoot, note, noteAfterBoot)
 	}
-	if delta := wakes(noticeID) - beforeBoot; delta != 1 {
-		t.Errorf("untaken notice's boot-pass wake delta = %d, want exactly 1 (ADR-20261004 decision 1/C3)", delta)
+	if delta := wakes(noticeID) - beforeBoot; delta != 0 {
+		t.Errorf("intentional Stop's boot-pass wake delta = %d, want 0 (PW-D13)", delta)
 	}
-	t.Logf("notice wake phase boot replay: delta=%d, total=%d, want delta 1 and total 2", wakes(noticeID)-beforeBoot, wakes(noticeID))
+	t.Logf("notice wake phase boot replay: delta=%d, total=%d, want delta 0 and total 0 (PW-D13)", wakes(noticeID)-beforeBoot, wakes(noticeID))
 }
 
 // TestU1SecondStopOfSameGenerationGetsFreshStopSeqAndNotice covers D2's
@@ -443,16 +465,16 @@ func TestU1SecondStopOfSameGenerationGetsFreshStopSeqAndNotice(t *testing.T) {
 }
 
 // TestU1ParentStateRoutingOfStoppedNotice pins D6's routing table: a working
-// parent is woken exactly once for its notice; a stopped, waiting-for-answer,
-// done or failed parent RETAINS the notice in its inbox with NO wake, reading
-// it when explicitly resumed or answered.
+// parent retains the intentional-Stop notice without a wake, whether running,
+// stopped, waiting-for-answer, done or failed. A later explicit turn may read it.
+// PW-D13 (founder 2026-10-15): intentional Stop wakes no parent state.
 func TestU1ParentStateRoutingOfStoppedNotice(t *testing.T) {
 	cases := []struct {
 		name     string
 		state    session.LifecycleState
 		wantWake bool
 	}{
-		{"working parent woken exactly once", session.LifecycleRunning, true},
+		{"working parent retains without wake", session.LifecycleRunning, false},
 		{"stopped parent retains without wake", session.LifecycleStopped, false},
 		{"waiting-for-answer parent retains without wake", session.LifecycleNeedsInput, false},
 		{"done parent retains without wake", session.LifecycleCompleted, false},
@@ -485,8 +507,8 @@ func TestU1ParentStateRoutingOfStoppedNotice(t *testing.T) {
 // inbox directory made read-only — the store's own writer, not a mock): the
 // stop still lands, the notice stays UNdelivered rather than silently
 // applied, the boot retry while still broken REPORTS the failure instead of
-// claiming delivery, and a retry after repair delivers exactly once with one
-// wake.
+// claiming delivery, and a retry after repair delivers exactly once.
+// PW-D13 (founder 2026-10-15): repairing an intentional Stop never wakes.
 func TestU1NoticeDeliveryFailureStaysPendingVisibleAndRetries(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -603,7 +625,7 @@ func TestU1NoticeDeliveryFailureStaysPendingVisibleAndRetries(t *testing.T) {
 	}
 
 	// Repair + retry: the pending notice delivers exactly once, identity
-	// stable, one wake.
+	// stable, no intentional-Stop wake (PW-D13).
 	if err := os.Chmod(inboxDir, 0o750); err != nil {
 		t.Fatalf("Chmod(inbox dir, repaired): %v", err)
 	}
@@ -615,8 +637,8 @@ func TestU1NoticeDeliveryFailureStaysPendingVisibleAndRetries(t *testing.T) {
 	for _, message := range w1hNoticesWithID(t, al, parent, pendingID) {
 		w1hAssertNoticeMatchesTransition(t, message, parent, pending)
 	}
-	if got := wakes(noticeID); got != 1 {
-		t.Errorf("wakes across failure + repair + retry = %d, want exactly 1 (D6)", got)
+	if got := wakes(noticeID); got != 0 {
+		t.Errorf("wakes across intentional Stop failure + repair + retry = %d, want 0 (PW-D13)", got)
 	}
 	assertU1NoticeStable(t, al, parent, rec, string(session.StopCauseStop), "dan", noticeID, note, wakes)
 }

@@ -254,6 +254,8 @@ interface MessageBase { // not-wire-format
    * Renderers show `GoalOutcomeRow` for it, regardless of Verbose chat.
    */
   goalOutcome?: WireGoalOutcome
+  /** Immutable helper-event payload; shared by the generated REST/WS shapes. */
+  helperEvent?: WireMessage['helper_event']
   /**
    * ADR-087 D2 — set on the last assistant entry of an incomplete turn.
    * Only populated for assistant messages (only role the backend ever
@@ -511,6 +513,8 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
    * Forwarded by rawToMessage so a reloaded thread shows how a goal ended.
    */
   goal_outcome?: WireGoalOutcome
+  system_subtype?: WireMessage['system_subtype']
+  helper_event?: WireMessage['helper_event']
   /**
    * Judge verdict payload — present on a `type: judge_verdict, role: system`
    * entry (contracts/components/schemas/JudgeVerdict.yaml, wire
@@ -644,6 +648,11 @@ function rawToMessage(raw: RawMessage): Message {
       agentId: raw.agent_id || undefined,
       status: 'done',
       ...(raw.goal_outcome ? { goalOutcome: raw.goal_outcome } : {}),
+      // Parent-wake rows are discriminated by the stored subtype, never by
+      // their sentence. Cold history has no live-announcement cue.
+      ...(raw.system_subtype === 'helper_event' && raw.helper_event
+        ? { helperEvent: raw.helper_event, content: raw.helper_event.text }
+        : {}),
       // ADR-049 D2/D4/SD-C10: a persisted `type: judge_verdict` entry cold-
       // loaded via REST must carry `type`/`verdict` through so ChatScreen's
       // `msg.type === 'judge_verdict'` branch can render

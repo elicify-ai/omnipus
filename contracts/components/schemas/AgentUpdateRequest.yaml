@@ -94,15 +94,16 @@ properties:
     type: array
     maxItems: 2
     items:
-      $ref: './FallbackModel.yaml'
+      $ref: './FallbackModelPair.yaml'
     description: >
       Replace the agent's fallback model chain (Phase 1B / FR-005). Each
       entry carries its own provider so the fallback can route through
       a different provider than the primary (FR-007). Capped at 2 entries.
       Rejected 400 on subagent_3p agents (CLI handles its own retries).
 
-      Wire format is always the object form `[{model, provider}]`. Legacy
-      `[string]` payloads are normalized at config-load time (FR-006).
+      Wire format is always the object form `[{model, provider}]`, and every
+      entry must name both: an entry missing its provider or its model is
+      refused 400, naming the entry (issue #1340).
     example:
       - model: "claude-sonnet-4.6"
         provider: "anthropic"

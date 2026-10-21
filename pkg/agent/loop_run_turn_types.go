@@ -22,16 +22,18 @@ import (
 
 // agentLoopRunTurn carries the shared state of runTurn across its stages.
 type agentLoopRunTurn struct {
-	al                 *AgentLoop
-	ts                 *turnState
-	turnCtx            context.Context
-	activeCandidates   []providers.FallbackCandidate
-	activeProvider     providers.LLMProvider
-	iteration          int
-	llmOpts            map[string]any
-	llmModel           string
-	onToolCallProgress protocoltypes.OnToolCallProgress
-	inspectionImages   map[string][]tools.InspectionImage
+	al                       *AgentLoop
+	ts                       *turnState
+	turnCtx                  context.Context
+	activeCandidates         []providers.FallbackCandidate
+	activeProvider           providers.LLMProvider
+	providerSelectionErr     error
+	providerSelectionChecked bool
+	iteration                int
+	llmOpts                  map[string]any
+	llmModel                 string
+	onToolCallProgress       protocoltypes.OnToolCallProgress
+	inspectionImages         map[string][]tools.InspectionImage
 	// providerCallStreamedBytes is reset before each single-candidate retry
 	// attempt and counts callback-emitted bytes before streamer.Update. The
 	// successful-response tail flush is outside the error/retry path. This
@@ -114,6 +116,11 @@ type agentLoopRunTurnTools struct {
 	rr                 *agentLoopRunTurnResponse
 	turnChannelManager *channels.Manager
 	finalContent       string
+	// finalIsModelAnswer reports that finalContent is the model's own
+	// completed answer (set by finishTextResponse), not a synthetic stop
+	// notice or truncation outcome - only a real answer is kept when a
+	// late follow-up continues the turn (keepAnswerBeforeSteering).
+	finalIsModelAnswer bool
 	midTurnGuardErr    error
 	ret0               turnResult
 	ret1               error

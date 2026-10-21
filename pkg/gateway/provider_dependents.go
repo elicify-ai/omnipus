@@ -217,12 +217,6 @@ func computeProviderDependents(cfg *config.Config, providerID string) []gen.Prov
 		return false
 	}
 	d := cfg.Agents.Defaults
-	if slugHits(d.ModelFallbacks...) {
-		deps = append(deps, gen.ProviderDependent{
-			Id: "agents.defaults.model_fallbacks", Name: "Default model fallbacks",
-			Role: gen.ProviderDependentRoleFallback,
-		})
-	}
 	if slugHits(d.ImageModel) {
 		deps = append(deps, gen.ProviderDependent{
 			Id: "agents.defaults.image_model", Name: "Image model",

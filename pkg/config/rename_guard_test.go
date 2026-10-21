@@ -73,11 +73,11 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 	var violations []string
 
 	for _, base := range []string{filepath.Join(root, "pkg"), filepath.Join(root, "cmd")} {
-		walkErr := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+		walkErr := walkRenameGuardSourceTree(base, func(path string, directory bool, err error) error {
 			if err != nil {
 				return err
 			}
-			if info.IsDir() {
+			if directory {
 				if skipDirs[path] {
 					return filepath.SkipDir
 				}

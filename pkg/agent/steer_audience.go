@@ -14,10 +14,8 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // errSteerUpwardDelivererNotWired is returned by every SteerUpwardDeliverer
@@ -265,19 +263,28 @@ func deliverOwnerKey(rec *session.LifecycleRecord) string {
 // which Deliver's caller cannot reach here since res.MessageID was the id
 // Append itself just resolved).
 func deliverEntryIsAcked(inbox *session.MessageInboxStore, ownerKey, childSessionID, messageID string) (bool, error) {
+	_, unacked, err := unackedDeliverEntry(inbox, ownerKey, childSessionID, messageID)
+	return !unacked, err
+}
+
+// unackedDeliverEntry returns the stored, still-unacknowledged entry for
+// messageID. A deduplicated Append keeps the FIRST stored content, so a
+// re-delivery wakes with that stored entry, never with the newer caller's
+// bytes the inbox did not keep.
+func unackedDeliverEntry(inbox *session.MessageInboxStore, ownerKey, childSessionID, messageID string) (generated.SessionMessage, bool, error) {
 	cursor := ""
 	for {
 		msgs, next, more, err := inbox.Drain(ownerKey, childSessionID, cursor, session.DefaultInboxUnackedMax)
 		if err != nil {
-			return false, err
+			return generated.SessionMessage{}, false, err
 		}
 		for _, m := range msgs {
 			if messageIDOf(m) == messageID {
-				return false, nil
+				return m, true, nil
 			}
 		}
 		if !more || next == cursor {
-			return true, nil
+			return generated.SessionMessage{}, false, nil
 		}
 		cursor = next
 	}
@@ -363,7 +370,15 @@ func deliverySummary(msg generated.SessionMessage) string {
 		}
 	case "goal_status":
 		if v, err := msg.AsSessionMessageGoalStatus(); err == nil {
-			return fmt.Sprintf("A delegated session's goal verdict: %s", v.Condition)
+			text := fmt.Sprintf("A delegated session's goal verdict: %s", v.Condition)
+			if v.Evidence != nil {
+				for _, evidence := range *v.Evidence {
+					if evidence.Note != nil && strings.TrimSpace(*evidence.Note) != "" {
+						text += "\n" + *evidence.Note
+					}
+				}
+			}
+			return text
 		}
 	case "artifact":
 		if v, err := msg.AsSessionMessageArtifact(); err == nil {
@@ -452,13 +467,23 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	event steer.UpwardEvent,
 	msg generated.SessionMessage,
 	class session.SessionMessageDeliveryClass,
-) (steer.Delivery, error) {
+) (delivery steer.Delivery, retErr error) {
+	var pendingRowError error
+	defer func() { retErr = errors.Join(retErr, pendingRowError) }()
 	// Q1=A (#984 follow-up): the producer's explicit suppression overrides the
 	// class's wake-eligibility. A suppressed event keeps EVERY other property
 	// of a wake-eligible delivery — frames, dedupe fall-through semantics,
 	// ack tracking — except the wake itself; see UpwardEvent.SuppressWake.
-	wakeEligible := class.WakeEligible && !event.SuppressWake
+	wakeEligible := class.WakeEligible && !event.SuppressWake && !isMetGoalMessage(msg)
 
+	// SFH-04: the row's repair payload is retained BEFORE the inbox entry can
+	// be polled, so a crash after a poll consumes the result still leaves the
+	// lasting event row recoverable by boot (no second turn for the repair).
+	if wakeEligible {
+		if err := al.preRetainUpwardHelperEvent(childRec, ownerKey, msg); err != nil {
+			return steer.Delivery{}, fmt.Errorf("steer: deliver: retain event row source: %w", err)
+		}
+	}
 	var res *session.AppendResult
 	var appendErr error
 	if isSystemFinal(ctx) && isTerminalOutcome(event.Outcome) {
@@ -471,6 +496,12 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	}
 	if appendErr != nil {
 		return steer.Delivery{}, al.recordNotDelivered(lifecycle, ownerKey, childRec, class.Kind, appendErr)
+	}
+	if steerUpwardAfterInboxAppendTestHook != nil {
+		// Crash-injection seam: the inbox entry is durable and pollable here.
+		if hookErr := steerUpwardAfterInboxAppendTestHook(ownerKey, res.MessageID); hookErr != nil {
+			return steer.Delivery{}, hookErr
+		}
 	}
 
 	// Finding C (ADR-091 fix lane 1, CRITICAL): a deterministic duplicate at
@@ -494,14 +525,34 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	// the SAME frames + wake path a first delivery takes — safe to repeat:
 	// deliverSubagentMessage/State/End's frame ids are deterministic and
 	// AppendTranscriptStrict rejects (id-dedupes) a repeat write.
+	// Earlier rows this child still owes (possibly to OTHER recipients) are
+	// retried, but their failure never blocks this recipient's own delivery:
+	// one chat's failed row write must not cost another chat its outcome. The
+	// payloads stay retained for boot and the next delivery, and the failure
+	// is reported where it happens (ARCH-5 / PW-D18).
+	if err := al.repairHelperEvents(childRec.SessionID); err != nil {
+		logger.ErrorCF("agent", "steer: deliver: retained event rows still pending repair; delivering this outcome anyway",
+			map[string]any{"session_id": childRec.SessionID, "recipient": ownerKey, "error": err.Error()})
+	}
+	if err := al.repairGoalOutcome(childRec.SessionID); err != nil {
+		var pending *helperEventRowPendingError
+		if !errors.As(err, &pending) {
+			return steer.Delivery{}, fmt.Errorf("steer: deliver: repair goal rows: %w", err)
+		}
+		pendingRowError = err
+	}
 	if res.Deduped {
 		shortCircuit := !wakeEligible
 		if !shortCircuit {
-			acked, ackedErr := deliverEntryIsAcked(inbox, ownerKey, event.ChildSessionID, res.MessageID)
+			stored, unacked, ackedErr := unackedDeliverEntry(inbox, ownerKey, event.ChildSessionID, res.MessageID)
 			if ackedErr != nil {
 				return steer.Delivery{}, fmt.Errorf("steer: deliver: check acknowledgement: %w", ackedErr)
 			}
-			shortCircuit = acked
+			shortCircuit = !unacked
+			if unacked {
+				// The saved wake input must match the one entry the inbox kept.
+				msg = stored
+			}
 		}
 		if shortCircuit {
 			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
@@ -695,82 +746,26 @@ func (d *SteerUpwardDeliverer) wakeOwnerOrStore(
 	msg generated.SessionMessage,
 	res *session.AppendResult,
 ) (steer.Delivery, error) {
-	ownerRec, ownerErr := lifecycle.Load(ownerKey)
-	if ownerErr != nil || ownerRec == nil {
-		// Edge case: the steering session's own record is gone (deleted
-		// while the child was running). The entry is still durably stored
-		// under the edge's owner key; surfaced to the operator, never a
-		// hard failure — the child's own outcome must still land.
-		logger.WarnCF("agent", "steer: deliver: steering session record missing — entry stored, wake skipped",
-			map[string]any{"owner_key": ownerKey, "child_session_id": event.ChildSessionID})
+	reason, helperEvent := upwardWakeDetails(childRec, msg)
+	if reason == "" {
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
-
-	// FR-B-013: a recipient carrying a Stop marker for its CURRENT
-	// generation is not woken; the entry is stored and acknowledged at
-	// revival (I-6 Revive).
-	if ownerRec.Stop != nil && ownerRec.Stop.Generation == ownerRec.Generation {
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+	body, err := al.combinedEndingInput(childRec, msg)
+	if err != nil {
+		return steer.Delivery{}, err
 	}
-
-	sessionKey := ownerKey
-	if ts := al.getActiveTurnState(sessionKey); ts != nil && ts.IsAlive() {
-		if steerUpwardDelivererAfterLiveTurnCheckTestHook != nil {
-			steerUpwardDelivererAfterLiveTurnCheckTestHook(sessionKey, ownerRec.Generation)
-		}
-		pm := providers.Message{Role: "user", Content: deliverySummary(msg)}
-		if enqErr := al.EnqueueSteeringWake(sessionKey, ownerRec.AgentID, ownerKey, res.MessageID, pm); enqErr != nil {
-			current, loadErr := lifecycle.Load(ownerKey)
-			if errors.Is(enqErr, errSteeringScopeClosed) && loadErr == nil &&
-				current.Generation == ownerRec.Generation && !current.Terminal() {
-				return d.wakeStoredMessage(ctx, childRec, current, msg, res.MessageID)
-			}
-			return steer.Delivery{}, fmt.Errorf("steer: deliver: enqueue steering message: %w", enqErr)
-		}
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryQueuedIntoLiveTurn}, nil
+	publishKind, _ := msg.Discriminator()
+	delivery, err := al.WakeSession(withUpwardWakeSource(ctx, childRec.SessionID, publishKind, helperEvent), ownerKey, reason, res.MessageID, body)
+	if errors.Is(err, errWakeRecipientUnavailable) {
+		reportUndeliveredWake("steer: deliver: recipient unavailable", event, ownerKey, childRec.Generation, delivery.Delivery)
+		return delivery.Delivery, nil
 	}
-	return d.wakeStoredMessage(ctx, childRec, ownerRec, msg, res.MessageID)
+	return delivery.Delivery, err
 }
 
-func (d *SteerUpwardDeliverer) wakeStoredMessage(
-	ctx context.Context,
-	childRec *session.LifecycleRecord,
-	ownerRec *session.LifecycleRecord,
-	msg generated.SessionMessage,
-	messageID string,
-) (steer.Delivery, error) {
-	al := d.agentLoop
-	ownerKey := ownerRec.SessionID
-	kindStr, _ := msg.Discriminator()
-	if al.asyncNotifier != nil {
-		target := childRec.SteeredBy.ReportingTarget
-		wakeEvent := tools.MessageParentWakeEvent{
-			Channel:             target.Channel,
-			ChatID:              target.ChatID,
-			AgentID:             ownerRec.AgentID,
-			TranscriptSessionID: ownerKey,
-			Content:             deliverySummary(msg),
-			MessageID:           messageID,
-			Generation:          ownerRec.Generation,
-		}
-		if wakeParentStoredMessage(ctx, al.asyncNotifier, kindStr, wakeEvent) {
-			return steer.Delivery{MessageID: messageID, Outcome: steer.DeliveryWoke}, nil
-		}
-	}
-	return steer.Delivery{MessageID: messageID, Outcome: steer.DeliveryStoredNotWoken}, nil
-}
-
-func wakeParentStoredMessage(ctx context.Context, notifier *asyncNotifierImpl, kind string, event tools.MessageParentWakeEvent) bool {
-	if err := notifier.WakeParentAlways(ctx, kind, event); err != nil {
-		// Best-effort: the message is already durable, and boot recovery can
-		// re-nudge it. Reporting false keeps error handling out of Deliver's
-		// successful stored-not-woken result.
-		logger.WarnCF("agent", "steer: deliver: wake failed (message is durable)",
-			map[string]any{"kind": kind, "error": err.Error()})
-		return false
-	}
-	return true
-}
+// steerUpwardAfterInboxAppendTestHook simulates a crash right after an upward
+// message became durable in the recipient's inbox (SFH-04). Nil in production.
+var steerUpwardAfterInboxAppendTestHook func(recipient, messageID string) error
 
 // steerUpwardDelivererAfterLiveTurnCheckTestHook is a deterministic seam for
 // the IsAlive-to-enqueue boundary. It is nil in production.

@@ -109,6 +109,14 @@ func TestAgentUpdateFallbackModelsBoundariesAndOmission(t *testing.T) {
 		model := strings.Repeat("界", length)
 		provider := strings.Repeat("p", 64)
 		result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{"id": "fallback-bounds", "revision": state.Revision, "fallback_models": []any{map[string]any{"model": model, "provider": provider}}})
+		if length == 0 {
+			// Issue #1340 (founder rule, approved expectation change): a
+			// fallback with an empty model is not a provider/model pair.
+			if !result.IsError || !strings.Contains(result.ForLLM, "INVALID_INPUT") {
+				t.Fatalf("length 0: want INVALID_INPUT for an empty model, got %s", result.ForLLM)
+			}
+			continue
+		}
 		if result.IsError {
 			t.Fatalf("length %d: %s", length, result.ForLLM)
 		}

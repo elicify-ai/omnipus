@@ -14,10 +14,9 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// TestGoalDelegation984_MetWithRunningDescendantWakesVerdict pins architect
-// re-review F1: when the met completion tail cannot store its deterministic
-// final hand-back because a descendant is still running, the suppressed goal
-// verdict must stay unacknowledged and must wake the parent itself.
+// PW-D5/PW-D17 (spec §§9.4/22, 2026-10-15): a met verdict and deferred hand-back share
+// one final-id wake, never a verdict-id wake followed by a second final wake.
+// Keep the running-descendant non-terminal guard and durable inbox assertions.
 func TestGoalDelegation984_MetWithRunningDescendantWakesVerdict(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	lifecycle := session.NewLifecycleStore(t.TempDir())
@@ -126,10 +125,15 @@ func TestGoalDelegation984_MetWithRunningDescendantWakesVerdict(t *testing.T) {
 	mu.Lock()
 	gotWakeIDs := append([]string(nil), wakeIDs...)
 	mu.Unlock()
-	if len(gotWakeIDs) != 1 || gotWakeIDs[0] != verdictID {
-		t.Fatalf("parent wakes = %v, want exactly the unacknowledged verdict %q when no final hand-back was stored", gotWakeIDs, verdictID)
+	wantFinalID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
+	if len(gotWakeIDs) > 1 || (len(gotWakeIDs) == 1 && gotWakeIDs[0] != wantFinalID) {
+		t.Errorf("parent wakes before descendant completion = %v, want at most one shared final id %q, never verdict id %q (PW-D5/PW-D17)", gotWakeIDs, wantFinalID, verdictID)
 	}
-	assertUnackedMessageIDs(t, inbox, parentMeta.ID, child.SessionID, verdictID)
+	if pwVerdictAcked(t, inbox, parentMeta.ID, verdictID) {
+		pwLegacyRequireSavedMetInput(t, al, parentMeta.ID, child.SessionID, child.Generation, "the work is complete", "verified")
+	} else {
+		assertUnackedMessageIDs(t, inbox, parentMeta.ID, child.SessionID, verdictID)
+	}
 	loaded, err := lifecycle.Load(child.SessionID)
 	if err != nil {
 		t.Fatalf("Load(goal child after met): %v", err)
@@ -143,18 +147,21 @@ func TestGoalDelegation984_MetWithRunningDescendantWakesVerdict(t *testing.T) {
 		t.Fatalf("Persist(grandchild completed): %v", persistErr)
 	}
 	al.activeTurnStates.Delete(grandchild.SessionID)
-	if woke := al.completeSteeredTurnAfterGoal(context.Background(), child.SessionID, "verified", nil); !woke {
-		t.Fatal("deferred goal-child hand-back did not wake the parent")
-	}
+	// A hand-back may be deduplicated if the same final id already owns the
+	// early turn; the aggregate wake-id and durable-input oracles below decide.
+	al.completeSteeredTurnAfterGoal(context.Background(), child.SessionID, "verified", nil)
 
 	mu.Lock()
 	gotWakeIDs = append([]string(nil), wakeIDs...)
 	mu.Unlock()
-	wantFinalID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
-	if len(gotWakeIDs) != 2 || gotWakeIDs[0] != verdictID || gotWakeIDs[1] != wantFinalID {
-		t.Fatalf("parent wakes after descendant completion = %v, want verdict %q then hand-back %q", gotWakeIDs, verdictID, wantFinalID)
+	if len(gotWakeIDs) != 1 || gotWakeIDs[0] != wantFinalID {
+		t.Errorf("parent wakes after descendant completion = %v, want exactly one shared final wake %q (PW-D5/PW-D17)", gotWakeIDs, wantFinalID)
 	}
-	assertUnackedMessageIDs(t, inbox, parentMeta.ID, child.SessionID, verdictID, wantFinalID)
+	pwLegacyRequireSavedMetInput(t, al, parentMeta.ID, child.SessionID, child.Generation, "the work is complete", "verified")
+	if !pwVerdictAcked(t, inbox, parentMeta.ID, verdictID) {
+		t.Errorf("verdict %s remains unacknowledged after its combined input was saved (PW-D16)", verdictID)
+	}
+	assertUnackedMessageIDs(t, inbox, parentMeta.ID, child.SessionID, wantFinalID)
 }
 
 // TestGoal984_CompletionTailSingleShotDuringFinishedTurnRace pins architect

@@ -25,7 +25,9 @@ A kernel that is too old for a right Omnipus asks for is different: Omnipus star
 
 ### It exits with "bind: address already in use"
 
-The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port. Check what holds it:
+The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port.
+
+Before returning the final bind error, the gateway runs cleanup for services created during that startup attempt. It requests shutdown of scheduled jobs, the task and mail pollers, task triggers and the plan engine, where present. Cleanup can delay the final error while active work is stopping; the delay is not guaranteed to be short. Some stop requests do not wait for every in-flight operation to finish. The same cleanup runs for errors returned by other steps in this service-startup sequence, skipping services that were not created. Check what holds the port:
 
 ```bash
 lsof -i :5000 | grep LISTEN
@@ -40,6 +42,14 @@ Stop that process, or set another port in `~/.omnipus/config.json` and start aga
 ```
 
 The port is read at startup; a running gateway does not move its listener.
+
+### Stopping the gateway takes a moment
+
+When you stop the gateway normally — Ctrl-C, or SIGTERM from a service manager — Omnipus stops its chat channels and cancels the agent loop. It tries to let tracked work finish writing before tearing down the stores it uses, including background task runs and helper-agent turns. This cleanup also covers a helper turn already being resumed by a redirect as shutdown begins.
+
+Shutdown has several wait budgets, not one 30-second limit. The gateway waits up to 65 seconds for active requests, limited by the time remaining on its 70-second shutdown context. Agent cleanup has separate waits of up to 30 seconds for recaps, task dispatches and helper-agent turns, and up to five seconds for each session worker. These are individual wait budgets, not a guaranteed total stop time. If the gateway's shutdown context expires, it can continue shutdown without waiting for agent cleanup to finish.
+
+When a wait runs out, cleanup continues and the log shows a warning such as `Close: steered-turn drain budget exceeded; proceeding with teardown`. Some work or its final writes may be left unfinished.
 
 ## A connection shows a credential error (degraded)
 
@@ -89,6 +99,10 @@ A billing or key error is never retried, because every attempt would be billed a
 
 If the agent reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice that remains when you reopen the conversation. Closing the originating browser connection does not cancel the turn or redirect that notice to another conversation: terminal delivery retains the conversation's session ID. Conflicting tool names produce the standard “This turn didn’t finish, and we can’t tell why” failure notice rather than silence.
 
+## A helper finished but the open parent chat is blank
+
+After upgrading, reload the page once to refresh an older open chat. On the current version, a helper's outcome and the parent's new reply appear without a reload, and the Judge's outcome row also appears in the parent chat. If they appear only in the helper's chat, that is the old behaviour. Do not restart the gateway as a workaround. If the problem persists on the updated page, report the parent and helper session ids and whether a reload shows the missing reply.
+
 ## A task is refused before work starts
 
 Errors saying the assigned agent's store was not found, or that a task session could not be created, mean Omnipus could not create the task's conversation. A queued dispatch or manual start refuses to hand work to either a native agent or an external command-line agent in that case. It does not consume an execution attempt or add a run-history entry.
@@ -111,6 +125,34 @@ Read the gateway diagnostic log. These cron warnings remain visible at the defau
 Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed to persist Running reset` diagnostics are logged at **ERROR**, with `job_id` (or `job_ids` for a batch) and the underlying storage error. Work may already have happened even though its latest state was not saved. Resolve the disk, permissions or path problem before relying on the saved state after a restart. The error does not undo completed work, and retrying may repeat earlier actions.
 
 ## The provider rejects your model requests
+
+A `model_route_unavailable` notice means Omnipus could not set up the named provider/model connection from its saved settings. No request was sent to that pair, and a global-default connection was not substituted. Check the provider's API key or sign-in and endpoint settings before trying again. The notice names the pair; scrubbed setup details are available only live under **Verbose chat**.
+
+For an HTTP 400 rejection, the failure notice distinguishes a wrong model from an otherwise unclassified bad request:
+
+| Notice | Meaning and next step |
+|---|---|
+| `bad_model`, naming the provider and model | The provider specifically reported that the model was not found or is not offered. Choose a model offered by that provider in the agent's settings. Omnipus does not try another provider for this failure. |
+| `HTTP 400: Bad Request; format`, naming the provider and model | The provider rejected the request, but did not identify a more specific cause. This does **not** prove the model is unavailable. Enable **Verbose chat** before reproducing it to inspect the available technical detail. |
+
+A confirmed wrong-model error stops all attachment recovery too: removing an image or converting a PDF cannot make a missing model exist. For availability prose, Omnipus reads the clause's **subject** — what is unavailable — rather than searching for the word “model”.
+
+The supported model wording is a simple **model is not available/offered** statement. It can start with **the**, **this** or **a**, include **requested** before **model**, and name a model identifier. It can end with **on/by this provider**. A neutral error prefix can introduce the clause with punctuation, including a colon with no following space. Input-type subjects are different, even when they mention a model:
+
+| Provider wording | How Omnipus treats it |
+|---|---|
+| `The model 'm' is not available.` or `Model 'm' is not offered by this provider.` | Positive model-unavailability evidence: `bad_model`, with no attachment retry. |
+| `This model is not available.`, `The requested model m is not available.` or `A model 'm' is not available.` | The subject is still the model: `bad_model`, with no attachment retry. |
+| `Request rejected:model m is not available.` | The colon introduces a model-subject clause; a missing space after it does not change the classification. |
+| `Model 'm': image input is not available.` or `Model 'm' is not available for image input.` | An image-input restriction, not proof that the model is missing. Existing attachment recovery can still apply. |
+| `Image input for model 'm' is not available.` or `Image input for this model is not available.` | The unavailable subject is image input, even though the sentence mentions a model. Existing image recovery can still apply. |
+| `PDF input for model 'm' is not available.` or `PDF input for this model is not available.` | A PDF-input restriction, not proof that the model is missing. Existing PDF-to-text recovery can still apply. |
+
+This is a limited diagnostic grammar, not a general English interpretation. Unsupported subjects, qualifiers or compound availability messages are not treated as proof of a missing model; existing bad-request classification and eligible attachment recovery remain available. A generic bad-request notice does not prove that the configured model is valid, either. Other specific error classifications keep their existing rules.
+
+A structured `model_not_found` code is authoritative even if its text also mentions attachments, authentication or rate limits.
+
+The same safe explanation is saved in the conversation and remains after reopening it, including when an empty-response retry fails. Helper failure handbacks use translated explanations even for unfamiliar streaming error codes. Raw provider response text is not saved as that explanation. Technical detail is live-only and scrubbed for credentials; turning **Verbose chat** on after delivery or reopening history does not recover discarded detail. Existing attachment recovery, context-length handling, and authentication, billing and rate-limit classifications still take their own paths.
 
 **"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then removes the oldest eligible whole piece — a complete old step (assistant calls plus all their matching results), or an older assistant reply that made no tool calls, whichever comes first in the conversation; if nothing can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.
 

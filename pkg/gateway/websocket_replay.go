@@ -323,6 +323,8 @@ func recordEmittedIDs(emitted map[string]bool, f any) {
 		emitted[v.SpanId] = true
 	case generated.GoalOutcomeFrame:
 		emitted[v.MessageId] = true
+	case generated.HelperEventFrame:
+		emitted[v.MessageId] = true
 	}
 }
 

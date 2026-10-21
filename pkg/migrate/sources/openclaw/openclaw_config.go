@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 type OpenClawConfig struct {
@@ -887,7 +888,14 @@ func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 		Provider: c.Agents.Defaults.Provider,
 		Model:    c.Agents.Defaults.ModelName,
 	}
-	cfg.Agents.Defaults.ModelFallbacks = c.Agents.Defaults.ModelFallbacks
+	// The global default fallback list was removed (issue #1340, founder
+	// ruling 2026-10-19): fallbacks are per-agent provider/model pairs. A
+	// migrated model_fallbacks list is dropped — loudly, never silently.
+	if len(c.Agents.Defaults.ModelFallbacks) > 0 {
+		logger.WarnCF("migrate",
+			"removed setting, ignored: agents.defaults.model_fallbacks is not migrated — set fallbacks per agent as provider/model pairs",
+			map[string]any{"dropped": c.Agents.Defaults.ModelFallbacks})
+	}
 
 	for _, m := range c.Providers {
 		// ADR-067 X-25: `model_name` is gone. An OpenClaw row's alias becomes

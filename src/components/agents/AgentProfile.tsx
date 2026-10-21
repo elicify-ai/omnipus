@@ -72,7 +72,7 @@ import { isProviderUsable } from '@/lib/providerStatus'
 import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
-import type { AgentColor as AgentColorValue, AgentFigure, AgentRole, FallbackModel } from '@/lib/api/generated/openapi-types'
+import type { AgentColor as AgentColorValue, AgentFigure, AgentRole, FallbackModel, FallbackModelPair } from '@/lib/api/generated/openapi-types'
 import { agentKindFlags } from '@/lib/agentKind'
 import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
@@ -84,8 +84,18 @@ import { ToolIterationLimitField } from './ToolIterationLimitField'
 import { useGlobalToolIterationLimit } from '@/hooks/useGlobalToolIterationLimit'
 import { useToolIterationLimitRefusal } from './useToolIterationLimitRefusal'
 
-/** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
+/**
+ * Editor's fallback entry — `FallbackModel` (the read shape) with `provider`
+ * narrowed to a string. `''` marks an INCOMPLETE entry: a legacy fallback
+ * saved without its provider (issue #1340). It is shown as incomplete and is
+ * never sent; the editor itself only ever creates full pairs.
+ */
 type FallbackEntry = FallbackModel & { provider: string }
+
+/** A fallback is a (provider, model) pair — never a model alone (#1340, founder rule). */
+function isCompleteFallback(entry: FallbackEntry): boolean {
+  return entry.provider.trim() !== '' && entry.model.trim() !== ''
+}
 
 /**
  * Echo-race fix, item 3 (belt-and-braces): true when the currently focused
@@ -597,13 +607,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setSelectedFigure(agent.figure ?? 'Omnipus')
     setSelectedRole(agent.role ?? 'general')
     // Hydrate the fallback chain from the wire. `provider` is optional on
-    // the wire type; narrow to required by looking up via modelToProvider,
-    // else empty string (renders as a muted dash in the chip).
+    // the READ shape: a legacy entry saved without it stays '' (incomplete)
+    // — no provider is guessed for it, so it is never silently re-paired
+    // and re-sent (#1340). The chip asks the person to choose or remove it.
     const rawFallbacks = agent.fallback_models ?? []
     setFallbackModels(
       rawFallbacks.map((entry) => ({
         ...entry,
-        provider: entry.provider || modelToProvider(entry.model) || '',
+        provider: (entry.provider ?? '').trim(),
       })),
     )
     setTemperature(agent.model_params?.temperature ?? 1.0)
@@ -702,9 +713,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       model,
       // O3 two-field: include provider only when non-empty.
       provider: primaryProvider.trim(),
-      // Editor state matches the wire shape 1:1; emit `undefined` for
-      // empty (treated as "no fallbacks" by the backend).
-      fallback_models: fallbackModels,
+      // #1340: the update carries FallbackModelPair[] — both fields, always.
+      // While any entry is incomplete (a legacy unpaired fallback), the
+      // chain is left out of the update entirely: the server keeps the
+      // stored chain unchanged (an omitted field is not written), nothing
+      // unpaired is re-sent, and the save does not fail on it. The editor
+      // says so until the person completes or removes that entry.
+      ...(fallbackModels.every(isCompleteFallback)
+        ? { fallback_models: fallbackModels.map((entry): FallbackModelPair => ({ model: entry.model, provider: entry.provider })) }
+        : {}),
       model_params: { temperature, max_tokens: maxTokens },
       soul,
       // ADR-052 FR-039: "Allowed on all agents" per AgentUpdateRequest.yaml —
@@ -1131,10 +1148,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     if (!trimmed) return
     const knownProvider = providerOverride || modelToProvider(trimmed)
     if (!knownProvider) {
+      // #1340: a fallback is a (provider, model) pair — a model no connected
+      // provider lists cannot be paired, so it is not added.
       addToast({
-        message: `"${trimmed}" isn't listed by any connected provider — saving anyway, but the fallback may not work.`,
-        variant: 'warning',
+        message: `"${trimmed}" isn't listed by any connected provider — choose a model under a connected provider.`,
+        variant: 'error',
       })
+      return
     }
     setFallbackModels((prev) => {
       const existing = prev.find((f) => f.model === trimmed)
@@ -1145,7 +1165,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         if (!providerOverride || existing.provider === providerOverride) return prev
         return prev.map((f) => (f.model === trimmed ? { ...f, provider: providerOverride } : f))
       }
-      return [...prev, { model: trimmed, provider: knownProvider ?? '' }]
+      return [...prev, { model: trimmed, provider: knownProvider }]
     })
   }
 
@@ -1155,11 +1175,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // W6-C2 / I9: per-chip provider picker. Picking a different provider
   // for an existing fallback updates the entry's `provider` field
-  // (the wire routing key — see FR-007 / FallbackModel.yaml). Picking
-  // "—" (empty) clears the provider so the chip flips into the
-  // "Provider not connected" state (I11). No-op when the value is
-  // unchanged.
+  // (the wire routing key — see FR-007 / FallbackModel.yaml). There is no
+  // empty choice: a fallback is always a (provider, model) pair (#1340).
   function setFallbackProvider(modelSlug: string, providerId: string) {
+    if (!providerId) return
     setFallbackModels((prev) =>
       prev.map((f) => (f.model === modelSlug ? { ...f, provider: providerId } : f)),
     )
@@ -1536,9 +1555,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             ) : (
               <div className="flex flex-wrap gap-[var(--space-1)] p-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
                 {fallbackModels.map((entry, idx) => {
+                  // #1340: '' = an incomplete legacy entry (saved without its provider).
                   const providerMissing = entry.provider === ''
                   const providerLabel = providerMissing
-                    ? '—'
+                    ? 'No provider'
                     : (usableProviders.find((p) => p.id === entry.provider)?.display_name
                         ?? usableProviders.find((p) => p.id === entry.provider)?.name
                         ?? entry.provider)
@@ -1568,7 +1588,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           onChange={(e) => { markDirty(); setFallbackProvider(entry.model, e.target.value) }}
                           className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-[var(--space-1)] pr-[var(--space-2-5)] py-0 text-[length:var(--type-caption-size)] focus-visible:border-[var(--color-accent)] rounded cursor-pointer"
                         >
-                          <option value="" data-testid={`fallback-provider-option-empty-${entry.model}`}>—</option>
+                          {/* No empty choice (#1340): an incomplete entry shows a
+                              placeholder it can only leave by choosing a provider. */}
+                          {providerMissing && (
+                            <option value="" disabled data-testid={`fallback-provider-option-placeholder-${entry.model}`}>Choose provider</option>
+                          )}
                           {usableProviders.map((p) => (
                             <option
                               key={p.id}
@@ -1622,12 +1646,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       {providerMissing && (
                         <span
                           data-testid={`fallback-chip-warning-${entry.model}`}
-                          role="img"
-                          aria-label="Provider not connected — fallback will not be used at runtime"
-                          title="Provider not connected — fallback will not be used at runtime"
-                          className="inline-flex items-center text-[var(--color-warning)]"
+                          className="inline-flex items-center gap-[var(--space-0-5)] text-[var(--color-warning)]"
                         >
-                          <Warning size={11} weight="fill" />
+                          <Warning size={11} weight="fill" aria-hidden="true" />
+                          Incomplete — choose a provider or remove it
                         </span>
                       )}
                     </span>
@@ -1653,6 +1675,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 </div>
               </div>
+            )}
+            {isFieldEditable('fallback_models') && fallbackModels.some((entry) => !isCompleteFallback(entry)) && (
+              <p data-testid="fallback-incomplete-notice" className="mt-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]">
+                A fallback without a provider is not used, and fallback changes are not saved until every fallback has a provider.
+              </p>
             )}
           </section>
           )}

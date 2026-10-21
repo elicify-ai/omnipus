@@ -34,6 +34,7 @@ type bootNoticeControlFixture struct {
 	canonical   generated.SessionMessage
 	wakes       func(string) int
 	provider    *goalRunProvider
+	bootGate    *goalRunGate
 	bootSeq     uint64
 	writingBoot *session.BootEpochStore
 }
@@ -45,7 +46,9 @@ func newBootNoticeControlFixture(t *testing.T) *bootNoticeControlFixture {
 	wireSteerCompletionDeps(t, al)
 	oldGate := newGoalRunGate("selected old request", nil)
 	freshGate := newGoalRunGate("actual admitted goal child remains resumable", nil)
-	installGoalRunProvider(t, al, oldGate, freshGate)
+	// PW-D6 (founder 2026-10-15): hold the native boot resume at the provider edge.
+	bootGate := newGoalRunGate("native helper continued from saved history", nil)
+	installGoalRunProvider(t, al, oldGate, freshGate, bootGate)
 	instance, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
 	if !ok {
 		t.Fatal("SETUP: registered agent missing")
@@ -54,6 +57,9 @@ func newBootNoticeControlFixture(t *testing.T) *bootNoticeControlFixture {
 	if !ok {
 		t.Fatal("SETUP: real model-edge gate was not installed")
 	}
+	// PW-SEC-01 fixture provisioning: restart resume continues saved work only
+	// in a workspace that exists and still holds the helper's agent.
+	provisionTestWorkspace(t, "ws-boot-canonical-boundary", testDefaultAgentID)
 	parent := newTestSteeringSession(t, al, "ws-boot-canonical-boundary")
 	otherParent := newTestSteeringSession(t, al, "ws-boot-unrelated-parent")
 	wakes := observeU1ParentNoticeWakes(t, al, parent)
@@ -76,8 +82,12 @@ func newBootNoticeControlFixture(t *testing.T) *bootNoticeControlFixture {
 	tr := transitions[0]
 	id := w1hNoticeID(parent, old.SessionID, old.Generation, tr.StopSeq)
 	notices := w1hNoticesWithID(t, al, parent, id)
-	if len(notices) != 1 || wakes(id) != 1 {
-		t.Fatalf("SETUP: actual canonical notice=%d wakes=%d, want one durable notice and ring", len(notices), wakes(id))
+	// PW-D13 (founder 2026-10-15): retain the canonical Stop notice, never its ring.
+	if len(notices) != 1 {
+		t.Fatalf("SETUP: canonical notice count=%d, want exactly 1", len(notices))
+	}
+	if wakes(id) != 0 {
+		t.Errorf("intentional Stop wakes=%d, want 0 (PW-D13)", wakes(id))
 	}
 	w1hAssertNoticeMatchesTransition(t, notices[0], parent, tr)
 	generation, err := al.steerCanceller().Revive(context.Background(), old.SessionID,
@@ -101,7 +111,7 @@ func newBootNoticeControlFixture(t *testing.T) *bootNoticeControlFixture {
 	}
 	al.SetBootEpochStore(boot)
 	return &bootNoticeControlFixture{al: al, parent: parent, otherParent: otherParent,
-		resumed: resumed, historical: tr, canonical: notices[0], wakes: wakes, provider: provider, bootSeq: epoch, writingBoot: boot}
+		resumed: resumed, historical: tr, canonical: notices[0], wakes: wakes, provider: provider, bootGate: bootGate, bootSeq: epoch, writingBoot: boot}
 }
 
 func reopenBootNoticeControlStores(t *testing.T, f *bootNoticeControlFixture) {
@@ -116,9 +126,10 @@ func reopenBootNoticeControlStores(t *testing.T, f *bootNoticeControlFixture) {
 	}
 }
 
-func assertBootNoticeCurrentRunStoppedWithoutDispatch(t *testing.T, f *bootNoticeControlFixture) []session.StoppedTransition {
+func assertBootNoticeCurrentRunStoppedWithoutDispatch(t *testing.T, f *bootNoticeControlFixture, wantResume bool) []session.StoppedTransition {
 	t.Helper()
-	current := rootReopenedRecord(t, f.al, f.resumed.SessionID)
+	// PW-D6 (founder 2026-10-15): preserve the historical stop checks, not a stopped tail.
+	current := pwLegacyRestartLanding(t, f.al, f.resumed.SessionID, f.bootSeq)
 	if current.State != session.LifecycleStopped || current.Terminal() || current.Generation != f.resumed.Generation || !reflect.DeepEqual(current.ExecutionID, f.resumed.ExecutionID) || current.Stop != nil || current.StopNote == nil || current.StopNote.Cause != session.StopCauseRestart || current.FinalDelivery != nil {
 		t.Fatalf("C5/D8: boot did not stop the actual current B without a fatal final: current=%+v note=%+v actual B=%+v", current, current.StopNote, f.resumed.ExecutionID)
 	}
@@ -137,11 +148,23 @@ func assertBootNoticeCurrentRunStoppedWithoutDispatch(t *testing.T, f *bootNotic
 	if transitions[1].Actor != session.StopActorRestart || current.StopNote.Seq != transitions[1].StopSeq || !current.StopNote.At.Equal(transitions[1].At) {
 		t.Errorf("D8.3/C3: actual restart note and landed ledger must carry the same restart actor/sequence/instant: note=%+v transition=%+v", current.StopNote, transitions[1])
 	}
+	resumed := rootReopenedRecord(t, f.al, current.SessionID)
+	if wantResume {
+		if resumed.State != session.LifecycleRunning || resumed.ExecutionID == nil ||
+			resumed.ExecutionID.RunID == f.resumed.ExecutionID.RunID || resumed.ExecutionID.BootSeq != f.bootSeq {
+			t.Fatalf("PW-D6: native helper was not admitted again after its durable restart stop: state=%q execution=%+v", resumed.State, resumed.ExecutionID)
+		}
+		awaitGoalProvider(t, f.bootGate)
+	}
 	f.provider.mu.Lock()
 	calls := f.provider.next
 	f.provider.mu.Unlock()
-	if calls != 2 || f.al.getActiveTurnState(current.SessionID) != nil || f.al.steerAdmission().activeCount() != 0 || f.al.steerAdmission().queueLen() != 0 {
-		t.Fatalf("D8.5: boot started work: model calls=%d (want original A and explicit B only), active/queued=%d/%d", calls, f.al.steerAdmission().activeCount(), f.al.steerAdmission().queueLen())
+	if wantResume {
+		if calls != 3 || f.al.getActiveTurnState(current.SessionID) == nil || f.al.steerAdmission().activeCount() != 1 || f.al.steerAdmission().queueLen() != 0 {
+			t.Fatalf("PW-D6: native boot resume calls=%d, active/queued=%d/%d, want A, B and one resumed call with one active owner", calls, f.al.steerAdmission().activeCount(), f.al.steerAdmission().queueLen())
+		}
+	} else if calls != 2 || resumed.State != session.LifecycleStopped || f.al.getActiveTurnState(current.SessionID) != nil || f.al.steerAdmission().activeCount() != 0 || f.al.steerAdmission().queueLen() != 0 {
+		t.Fatalf("PW-D6/FR-015: refused resume started work: calls=%d state=%q active/queued=%d/%d, want only A/B and stopped", calls, resumed.State, f.al.steerAdmission().activeCount(), f.al.steerAdmission().queueLen())
 	}
 	if goal := mustGoalRecord(t, current.GoalRef); goal.State != generated.GoalStateActive {
 		t.Fatalf("D6/C1: boot stop ended the active goal: %+v", goal)
@@ -153,13 +176,16 @@ func TestSteerBootRecovery_CanonicalStoppedNoticeUsesOnlyLedgerPublisher(t *test
 	f := newBootNoticeControlFixture(t)
 	reopenBootNoticeControlStores(t, f)
 	historicalID := messageIDOf(f.canonical)
-	baseline := f.wakes(historicalID)
+	if got := f.wakes(historicalID); got != 0 {
+		t.Errorf("PW-D13: historical intentional Stop already rang %d time(s), want 0", got)
+	}
+	wantWakes := make(map[string]int)
 	var operatorNotices []string
 	recovery := u1BootRecovery(t, f.al, &operatorNotices)
 	if err := recovery.Run(context.Background()); err != nil {
 		t.Fatalf("actual full boot: %v", err)
 	}
-	transitions := assertBootNoticeCurrentRunStoppedWithoutDispatch(t, f)
+	transitions := assertBootNoticeCurrentRunStoppedWithoutDispatch(t, f, true)
 	if len(operatorNotices) != 0 {
 		t.Errorf("canonical ledger notices were replayed as generic failure envelopes after their own publisher: %q", operatorNotices)
 	}
@@ -179,12 +205,12 @@ func TestSteerBootRecovery_CanonicalStoppedNoticeUsesOnlyLedgerPublisher(t *test
 		if !bytes.Equal(bootNoticeMessageBytes(t, messages[0]), bootNoticeMessageBytes(t, want)) {
 			t.Errorf("C3: canonical envelope %q diverged from the real ledger transition/builder", id)
 		}
-		before := 0
-		if id == historicalID {
-			before = baseline
+		// PW-D13/PW-D17 (founder 2026-10-15): Stop never rings; a restart is its own one wake.
+		if tr.Cause == session.StopCauseRestart {
+			wantWakes[id] = 1
 		}
-		if got := f.wakes(id); got != before+1 {
-			t.Errorf("C3: canonical notice %q rang %d times, want exactly its domain-publisher baseline+1=%d", id, got, before+1)
+		if got := f.wakes(id); got != wantWakes[id] {
+			t.Errorf("canonical notice %q rang %d times, want %d under PW-D13/PW-D17", id, got, wantWakes[id])
 		}
 	}
 	if got := w1hStoppedNoticeIDsIn(t, f.al, f.parent); !slices.Equal(got, wantIDs) {
@@ -200,12 +226,8 @@ func TestSteerBootRecovery_CanonicalStoppedNoticeUsesOnlyLedgerPublisher(t *test
 		t.Errorf("repeated boot rewrote the landed stop or produced a false generic refusal: %q", operatorNotices)
 	}
 	for _, id := range wantIDs {
-		before := 0
-		if id == historicalID {
-			before = baseline
-		}
-		if got := f.wakes(id); got != before+2 || len(w1hNoticesWithID(t, f.al, f.parent, id)) != 1 {
-			t.Errorf("untaken notice %q must re-ring once per pass without duplicate work/append: wakes=%d want=%d", id, got, before+2)
+		if got := f.wakes(id); got != wantWakes[id] || len(w1hNoticesWithID(t, f.al, f.parent, id)) != 1 {
+			t.Errorf("repeated delivery changed notice %q: wakes=%d want=%d, with one durable row (PW-D13/PW-D17)", id, got, wantWakes[id])
 		}
 	}
 	if err := f.al.GetMessageInboxStore().Ack(f.parent, wantIDs); err != nil {
@@ -215,12 +237,8 @@ func TestSteerBootRecovery_CanonicalStoppedNoticeUsesOnlyLedgerPublisher(t *test
 		t.Fatalf("boot after taking notices: %v", err)
 	}
 	for _, id := range wantIDs {
-		before := 0
-		if id == historicalID {
-			before = baseline
-		}
-		if got := f.wakes(id); got != before+2 {
-			t.Errorf("taken notice %q rang again: got=%d want=%d", id, got, before+2)
+		if got := f.wakes(id); got != wantWakes[id] {
+			t.Errorf("taken notice %q rang again: got=%d want=%d (PW-D13/PW-D17)", id, got, wantWakes[id])
 		}
 	}
 }
@@ -308,9 +326,13 @@ func TestSteerBootRecovery_NoticeLookalikesNeverGainCanonicalExemption(t *testin
 				t.Fatal("SETUP: reopened negative envelope is not exactly the intended input")
 			}
 			class, err := session.ClassifySessionMessage(msg)
-			wantEligible := name != "ordinary_nonfatal"
-			if err != nil || class.WakeEligible != wantEligible || class.Fatal || class.Kind != "error" {
-				t.Fatalf("SETUP: negative input does not reach the intended class: %+v err=%v", class, err)
+			isStopNotice := name != "ordinary_nonfatal"
+			if err != nil || class.Fatal || class.Kind != "error" {
+				t.Fatalf("SETUP: negative input does not reach the intended error class: %+v err=%v", class, err)
+			}
+			// PW-D13 (founder 2026-10-15): a stopped_child prefix grants no wake.
+			if class.WakeEligible {
+				t.Errorf("notice lookalike is wake-eligible: %+v, want false (PW-D13)", class)
 			}
 			baseline := f.wakes(bad.MessageId)
 			var operatorNotices []string
@@ -318,17 +340,17 @@ func TestSteerBootRecovery_NoticeLookalikesNeverGainCanonicalExemption(t *testin
 			if err := recovery.Run(context.Background()); err != nil {
 				t.Fatalf("actual full boot: %v", err)
 			}
-			assertBootNoticeCurrentRunStoppedWithoutDispatch(t, f)
+			assertBootNoticeCurrentRunStoppedWithoutDispatch(t, f, true)
 			assertBootNoticeNoFatalFinal(t, f)
 			cause := bad.MessageId + " does not match its landed transition's canonical message"
 			if name == "text_prefix_only" || name == "id_prefix_unledgered_seq_zero" {
 				cause = bad.MessageId + " has no matching landed transition"
 			}
 			want := fmt.Sprintf("session %s stopped-notice replay refused: steer: stopped notice: %s", f.resumed.SessionID, cause)
-			if wantEligible && !slices.Contains(operatorNotices, want) {
+			if isStopNotice && !slices.Contains(operatorNotices, want) {
 				t.Errorf("lookalike %q did not return its precise authenticated-domain refusal: want %q; got %q", name, want, operatorNotices)
 			}
-			if !wantEligible {
+			if !isStopNotice {
 				for _, notice := range operatorNotices {
 					if strings.Contains(notice, bad.MessageId) {
 						t.Errorf("ordinary nonfatal input was incorrectly replayed: %q", notice)

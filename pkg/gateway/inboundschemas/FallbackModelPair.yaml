@@ -1,0 +1,28 @@
+type: object
+description: >
+  One fallback entry written by an agent update: a (provider, model) PAIR.
+  Both fields are required and non-empty — a fallback is never a model alone
+  (issue #1340, founder rule 2026-10-18). The server refuses an update whose
+  chain carries an entry missing its provider or its model, naming the entry. Same wire
+  shape as FallbackModel (`{ "model": "<model-slug>", "provider":
+  "<provider-key>" }`); FallbackModel stays the read shape so a legacy
+  unpaired entry already saved is still visible and can be corrected.
+additionalProperties: false
+required:
+  - model
+  - provider
+properties:
+  model:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Model id exactly as the provider names it (a `/` inside it is data).
+    example: "claude-sonnet-4.6"
+  provider:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: >
+      Routing key (e.g. "openrouter", "anthropic", "openai"). The fallback uses
+      this provider's connection — independent of the primary's provider.
+    example: "anthropic"

@@ -177,6 +177,8 @@ export interface PendingFirstSend {
 
 export type ChatMessage = Message & {
   isStreaming?: boolean
+  /** SPA-only arrival cue; absent on cold history and false during replay. */
+  announceHelperEvent?: boolean
   /** Original wire identity, independent of a replay-rekeyed display id. */
   clientMessageId?: string
   /** Ordinary first-send status only. */

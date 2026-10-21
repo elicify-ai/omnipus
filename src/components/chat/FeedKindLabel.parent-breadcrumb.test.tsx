@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchAgents, fetchSessions, fetchWorkspaces } from '@/lib/api'
@@ -127,15 +127,52 @@ describe('FeedKindLabel — child chat breadcrumb', () => {
 
   it('a main parent whose agent roster is still loading stays plain "Helper" (no fabricated name)', async () => {
     vi.mocked(fetchAgents).mockReturnValue(new Promise(() => {}))
-    vi.mocked(fetchSessions).mockResolvedValue([
+    const resolvedSessions = [
       session({ id: PARENT_ID, type: 'main' }),
       session({ id: CHILD_ID, type: 'delegate', parent_session_id: PARENT_ID }),
-    ])
-    renderLabel()
+    ]
+    vi.mocked(fetchSessions).mockResolvedValue(resolvedSessions)
+
+    // Observe the same real queries without fetching: a request starting is
+    // not proof that the parent data has reached a committed React render.
+    // Render the real label beneath the observer so that the witness commits
+    // alongside a label render that can read the resolved sessions.
+    function LabelWithQueryState() {
+      const sessionsQuery = useQuery({
+        queryKey: ['sessions', 'flat'],
+        queryFn: () => fetchSessions(undefined, undefined, { flat: true }),
+        enabled: false,
+      })
+      const agentsQuery = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, enabled: false })
+      return (
+        <>
+          <FeedKindLabel />
+          <output data-testid="breadcrumb-query-state">
+            {JSON.stringify({
+              sessions: sessionsQuery.data,
+              sessionsStatus: sessionsQuery.status,
+              rosterStatus: agentsQuery.status,
+              rosterFetchStatus: agentsQuery.fetchStatus,
+            })}
+          </output>
+        </>
+      )
+    }
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={qc}><LabelWithQueryState /></QueryClientProvider>)
     await waitFor(() => {
       expect(vi.mocked(fetchSessions)).toHaveBeenCalled()
+      expect(vi.mocked(fetchSessions)).toHaveBeenCalledWith(undefined, undefined, { flat: true })
+      expect(screen.getByTestId('breadcrumb-query-state').textContent).toBe(JSON.stringify({
+        sessions: resolvedSessions,
+        sessionsStatus: 'success',
+        rosterStatus: 'pending',
+        rosterFetchStatus: 'fetching',
+      }))
     })
     expect(label()?.textContent).toBe('Helper')
     expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.queryByRole('link')).toBeNull()
   })
 })

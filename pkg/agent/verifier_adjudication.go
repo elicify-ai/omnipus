@@ -1899,6 +1899,13 @@ func judgeDispatchNeedsOperator(callErr error) (code LLMErrorCode, message strin
 		return code, "the Judge's provider account is out of credit; top up the account or give the Judge agent a provider with credit", true
 	case operatorFixModelRetired:
 		return code, "the Judge's model has been withdrawn; pick a new model on the Judge agent", true
+	case operatorFixBadModel, operatorFixModelRouteUnavailable:
+		llm := TranslateTurnError(callErr)
+		pair := operatorModelPair(llm.Provider, llm.Model)
+		if cause == operatorFixBadModel {
+			return code, "the Judge cannot use " + pair + "; pick an offered model/provider pair in the Judge agent's settings", true
+		}
+		return code, "the Judge's connection for " + pair + " could not be set up; check the provider's API key and endpoint settings", true
 	}
 	return code, "", false
 }

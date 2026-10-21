@@ -253,9 +253,9 @@ func TestW1HistoricalLedgerNotice_AppendFailureKeepsStopLandedAndResumedRetryDel
 	if len(afterRetryTransitions) != 1 {
 		t.Errorf("landed history after the retry = %s, want still exactly the original transition — a retry must not fabricate history", w1hFormatTransitions(afterRetryTransitions))
 	}
-	// ORACLE (D8.4): no duplicate wake for the one original notice.
-	if c := wakes.count(id1); c != 1 {
-		t.Errorf("wakes for the original notice %s = %d, want exactly 1 across the whole failure/repair/retry cycle", id1, c)
+	// PW-D13 (founder 2026-10-15): no Stop wake across failure/repair/retry.
+	if c := wakes.count(id1); c != 0 {
+		t.Errorf("wakes for intentional Stop %s = %d, want 0 across failure/repair/retry (PW-D13)", id1, c)
 	}
 	if len(pass2Failures) != 0 {
 		t.Errorf("the repaired retry pass still reported failures %v — after repair the original notice delivers cleanly", pass2Failures)

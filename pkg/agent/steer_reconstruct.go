@@ -13,9 +13,9 @@
 // I-3's consumption marker (step 3: "before executing, the turn appends a
 // `consumed <MessageID>` marker") once the woken turn is certain to run; the
 // drain writes the equivalent marker through Continue's shared dequeue path.
-// Boot recovery (boot_sweep.go::SteerBootRecovery) does not call this
-// function — a steered session still mid-flight at boot is marked
-// OutcomeInterrupted and delivered to its parent rather than resumed.
+// Boot recovery resumes native restart-stopped helpers through the normal
+// launcher/Dispatch path. That entry reconstructs from saved model history,
+// rather than replaying a historical tool invocation or launch instruction.
 package agent
 
 import (
@@ -89,19 +89,19 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 	// live view is a real webchat surface (ADR-091 D1: each child owns its
 	// own store-backed session, rendered through the identical ChatScreen/
 	// WS path a root session uses) — stamp it explicitly rather than
-	// inheriting the reporting-target's empty placeholder. An
-	// ordinary_root revival (rec.SteeredBy == nil) keeps meta.Channel
-	// untouched: that session's channel is real (webchat, whatsapp, ...)
-	// and must never be overwritten.
-	channel := meta.Channel
+	// inheriting the reporting-target's empty placeholder.
+	// Ordinary roots resolve their stream address without rewriting metadata.
+	// A main/empty address is the session's web chat (PW-D1).
+	channel, chatID := wakeStreamAddress(meta)
 	if rec.SteeredBy != nil {
 		channel = "webchat"
+		chatID = meta.PeerID
 	}
 
 	opts := processOptions{
 		SessionKey:          rec.SessionID,
 		Channel:             channel,
-		ChatID:              meta.PeerID,
+		ChatID:              chatID,
 		TranscriptSessionID: rec.SessionID,
 		TranscriptStore:     store,
 		// I-5: a steered session has no user audience — reconstruction
@@ -127,32 +127,50 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		// single durable mutation BEFORE the turn can start. If that write
 		// fails, return an error: running while the prompts remain persisted
 		// would replay the same content on a later promotion.
-		if len(rec.PendingUserMessages) > 0 {
+		if len(rec.PendingUserMessages) > 0 || len(rec.PendingSavedInputs) > 0 {
 			var pending []string
 			if persistErr := al.GetSessionLifecycleStore().Mutate(rec.SessionID, func(r *session.LifecycleRecord) error {
 				if r == nil {
 					return session.ErrLifecycleNotFound
 				}
-				if len(r.PendingUserMessages) == 0 {
+				if len(r.PendingUserMessages) == 0 && len(r.PendingSavedInputs) == 0 {
 					return fmt.Errorf("steer: reconstruct %q: queued wakes disappeared before promotion", rec.SessionID)
 				}
 				pending = append([]string(nil), r.PendingUserMessages...)
 				r.PendingUserMessages = nil
+				r.PendingSavedInputs = nil
 				return nil
 			}); persistErr != nil {
 				return nil, fmt.Errorf("steer: reconstruct %q: consume queued wakes: %w", rec.SessionID, persistErr)
 			}
 			opts.UserMessage = strings.Join(pending, "\n\n")
-		} else {
-			entries, readErr := store.ReadTranscript(rec.SessionID)
-			if readErr != nil {
-				return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
+			if len(pending) == 0 {
+				// Only saved wakes were queued: each is placed once from its
+				// saved record at the consumption fence (PW-D16). No fresh user
+				// message, and not a person's instruction.
+				opts.InputAlreadyArchived = true
+				opts.UserInitiated = false
 			}
-			for i := len(entries) - 1; i >= 0; i-- {
-				if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
-					opts.UserMessage = entries[i].Content
-					opts.InputAlreadyArchived = true
-					break
+		} else {
+			resumeHistory, historyErr := al.restartHistoryResume(rec)
+			if historyErr != nil {
+				return nil, historyErr
+			}
+			if resumeHistory {
+				// The next model decision reads saved calls/results. Do not turn
+				// the old launch instruction into a new user message at boot.
+				opts.InputAlreadyArchived = true
+			} else {
+				entries, readErr := store.ReadTranscript(rec.SessionID)
+				if readErr != nil {
+					return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
+				}
+				for i := len(entries) - 1; i >= 0; i-- {
+					if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
+						opts.UserMessage = entries[i].Content
+						opts.InputAlreadyArchived = true
+						break
+					}
 				}
 			}
 		}

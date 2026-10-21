@@ -160,19 +160,6 @@ func TestAgentInstance_Model(t *testing.T) {
 	}
 }
 
-func TestAgentInstance_FallbackInheritance(t *testing.T) {
-	cfg := testCfg([]config.AgentConfig{
-		{ID: "inherit"},
-	})
-	cfg.Agents.Defaults.ModelFallbacks = []string{"openai/gpt-4o-mini", "anthropic/haiku"}
-	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
-
-	agent, _ := registry.GetAgent("inherit")
-	if len(agent.Fallbacks) != 2 {
-		t.Errorf("expected 2 fallbacks inherited from defaults, got %d", len(agent.Fallbacks))
-	}
-}
-
 func TestAgentInstance_FallbackExplicitEmpty(t *testing.T) {
 	model := &config.AgentModelConfig{
 		Primary:   "gpt-4",
@@ -181,7 +168,6 @@ func TestAgentInstance_FallbackExplicitEmpty(t *testing.T) {
 	cfg := testCfg([]config.AgentConfig{
 		{ID: "no-fallback", Model: model},
 	})
-	cfg.Agents.Defaults.ModelFallbacks = []string{"should-not-inherit"}
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
 
 	agent, _ := registry.GetAgent("no-fallback")

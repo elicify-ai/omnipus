@@ -1,6 +1,8 @@
 package systools
 
 import (
+	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
@@ -13,9 +15,9 @@ func fallbackModelsParameters() map[string]any {
 	return map[string]any{
 		"type": "array", "maxItems": 2,
 		"description": "Ordered fallback model/provider objects. At most two; [] clears the chain. Unsupported for external CLI workers.",
-		"items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"model"}, "properties": map[string]any{
-			"model":    map[string]any{"type": "string", "maxLength": 256},
-			"provider": map[string]any{"type": "string", "maxLength": 64},
+		"items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"model", "provider"}, "properties": map[string]any{
+			"model":    map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
+			"provider": map[string]any{"type": "string", "minLength": 1, "maxLength": 64},
 		}},
 	}
 }
@@ -46,12 +48,18 @@ func applyFallbackModels(a *config.AgentConfig, raw any) error {
 		if !ok || utf8.RuneCountInString(model) > 256 {
 			return invalid("model is required and must be a string of at most 256 characters")
 		}
-		provider := ""
-		if value, present := fields["provider"]; present {
-			provider, ok = value.(string)
-			if !ok || utf8.RuneCountInString(provider) > 64 {
-				return invalid("provider must be a string of at most 64 characters")
-			}
+		if strings.TrimSpace(model) == "" {
+			provider, _ := fields["provider"].(string)
+			return invalid(fmt.Sprintf("fallback for provider %q has no model: every fallback must name both a provider and a model", provider))
+		}
+		// Issue #1340 (founder rule 2026-10-18): a fallback is a (provider,
+		// model) pair; an entry without a provider is refused, naming it.
+		provider, ok := fields["provider"].(string)
+		if !ok || strings.TrimSpace(provider) == "" {
+			return invalid(fmt.Sprintf("fallback model %q has no provider: every fallback must name both a provider and a model", model))
+		}
+		if utf8.RuneCountInString(provider) > 64 {
+			return invalid("provider must be a string of at most 64 characters")
 		}
 		chain = append(chain, config.FallbackModel{Model: model, Provider: provider})
 	}

@@ -2,11 +2,10 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// W1 direct-parent stopped-child notice — FENCE-LESS re-ring until taken
-// (founder decision, 2026-10-04): "a stop notice keeps ringing until the
-// parent takes it, including a stop that has no saved control history, and
-// including after a restart. A second ring must not make the parent do the
-// work twice. There is no periodic timer."
+// PW-D13 (founder 2026-10-15): a fence-less intentional Stop never wakes.
+// Parent-wake-visibility §9.6 supersedes the old ring-until-taken rule below.
+// The historical plan's ring counts are retired; its durable ledger, notice,
+// identity, no-re-stop and real acknowledgment guarantees remain unchanged.
 //
 // Updated the same day to ADR-20260928 Correction C3 (every landed stop
 // ledgered): the fence-less landing now appends its transition to the
@@ -144,8 +143,9 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 		t.Fatalf("parent inbox holds %d line(s) of %s after the landing, want exactly 1 — the fence-less landing publishes the one D6 notice discovered from the ledger", len(notices), noticeID)
 	}
 	w1hAssertNoticeMatchesTransition(t, notices[0], parentID, tr)
-	if c := wakes.count(noticeID); c != 1 {
-		t.Fatalf("the landing rang the parent %d time(s) for %s, want exactly 1", c, noticeID)
+	// PW-D13 (founder 2026-10-15): a cause-stop landing never rings.
+	if c := wakes.count(noticeID); c != 0 {
+		t.Errorf("the intentional Stop landing rang the parent %d time(s) for %s, want 0 (PW-D13)", c, noticeID)
 	}
 	if rerNoteAcked(t, al, parentID, noticeID) {
 		t.Fatalf("the notice %s is already acked at the landing — the re-ring scenario requires an untaken note", noticeID)
@@ -164,8 +164,8 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 	// replay discovers the transition from the LEDGER history: the record's
 	// note is never re-read.
 	rerStartupPass(t, restart, childID)
-	if got := rings.count(noticeID); got != 1 {
-		t.Errorf("after the boot pass the restart rang the parent %d time(s) for the unacked fence-less notice %s, want exactly 1 — a stop with no accepted control still keeps ringing after a restart", got, noticeID)
+	if got := rings.count(noticeID); got != 0 {
+		t.Errorf("boot replay rang the parent %d time(s) for intentional Stop %s, want 0 (PW-D13)", got, noticeID)
 	}
 
 	// ORACLE (the ring rides the stored note): still exactly one line, the
@@ -182,8 +182,8 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 	// periodic timer and this test adds none — this is the next delivery
 	// pass, the rule any such cycle must satisfy.)
 	rerStartupPass(t, restart, childID)
-	if got := rings.count(noticeID); got != 2 {
-		t.Errorf("after the second delivery pass the parent was rung %d time(s) total for unacked %s, want exactly 2 — every delivery pass rings until the parent takes the note", got, noticeID)
+	if got := rings.count(noticeID); got != 0 {
+		t.Errorf("second replay rang the parent %d time(s) for intentional Stop %s, want 0 (PW-D13)", got, noticeID)
 	}
 
 	// ORACLE (a second ring never applies the stop twice): one durable line,
@@ -215,7 +215,7 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 	// ORACLE (founder decision — "until the parent takes it"): a further
 	// delivery pass after the ack rings ZERO times.
 	rerStartupPass(t, restart, childID)
-	if got := rings.count(noticeID); got != 2 {
-		t.Errorf("after the note was taken a further pass left the ring count at %d, want still 2 — a taken note must never ring the parent into doing the work twice", got)
+	if got := rings.count(noticeID); got != 0 {
+		t.Errorf("after the intentional Stop note was taken, ring count = %d, want still 0 (PW-D13)", got)
 	}
 }

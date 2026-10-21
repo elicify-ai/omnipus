@@ -183,21 +183,19 @@ func (f FallbackModelSlice) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// NormalizeFallbacks is the single entry-point used at config load to
-// resolve fallback entries that arrived without a provider field (legacy
-// strings, or empty-providers on legacy objects). The resolver mirrors the
-// chat-side `buildModelListResolver` passthrough logic: any slug that
-// matches a configured provider entry is taken verbatim; any slug that
-// doesn't match but where a passthrough provider (openrouter, vivgrid)
-// is configured is routed through the passthrough provider; otherwise the
-// entry is left with an empty provider (the resolver above will fail
-// closed at apply time).
+// NormalizeFallbacks is the single entry-point used at config load for an
+// agent's fallback chain. A fallback is a (provider, model) PAIR, never a model
+// alone (founder rule 2026-10-18, issue #1340): an entry without a provider is
+// kept verbatim — NEVER given a guessed provider (no configured-row match, no
+// OpenRouter/Vivgrid passthrough) — so the routing layer can report it and
+// refuse to route it instead of silently dropping or re-pointing it.
 //
-// Order is preserved (FR-006). nil input → nil output. Already-resolved
-// entries (Provider != "") are passed through unchanged.
+// Order is preserved (FR-006). nil input → nil output. Entries with an empty
+// model are left as zero values (the routing layer skips them). cfg is
+// accepted for call-site compatibility and is deliberately unused.
 //
 // Traces to: spec §11 Dataset 2 / FR-006 / FR-007.
-func NormalizeFallbacks(cfg *Config, in []FallbackModel) []FallbackModel {
+func NormalizeFallbacks(_ *Config, in []FallbackModel) []FallbackModel {
 	if len(in) == 0 {
 		return nil
 	}
@@ -206,52 +204,15 @@ func NormalizeFallbacks(cfg *Config, in []FallbackModel) []FallbackModel {
 		if strings.TrimSpace(fb.Model) == "" {
 			continue // drop empty entries
 		}
-		if strings.TrimSpace(fb.Provider) != "" {
-			out[i] = fb // already resolved
-			continue
-		}
-		// Legacy string entry — resolve provider.
-		out[i] = FallbackModel{
-			Model:    fb.Model,
-			Provider: resolveFallbackProvider(cfg, fb.Model),
-		}
+		out[i] = fb
 	}
 	return out
-}
-
-// resolveFallbackProvider picks a provider for a fallback model slug when
-// the caller didn't pin one. Mirrors the passthrough logic in
-// pkg/agent/model_resolution.go::buildModelListResolver (kept duplicated
-// here to avoid a config→agent import cycle — pkg/agent already imports
-// pkg/config).
-//
-// Resolution order (mirrors FindModelConfigBySlug's rungs):
-//  1. Exact match against any configured provider's Model (the slug)
-//     → that provider's Provider field.
-//  2. Any configured provider is a passthrough (openrouter / vivgrid) →
-//     that passthrough provider.
-//  3. Otherwise empty string (apply-time resolver will error out).
-//
-// The display-alias rung is gone with ModelConfig.ModelName (ADR-067
-// FR-013 / X-25): a row is addressed by its (provider, model) pair.
-//
-// Step 3 cannot call providers.IsPassthroughProvider directly — pkg/providers
-// already imports pkg/config, so the reverse direction would be a cycle. The
-// check below mirrors that helper's passthrough-name list, but the provider-id
-// comparison itself is exact after TrimSpace with no case folding (ADR-067
-// FR-036: every provider-id comparison in pkg/agent, pkg/gateway, pkg/providers
-// — and this in-package duplicate — MUST be exact). pkg/providers' own copy is
-// deliberately case-insensitive on the name (its own doc comment says so) and
-// is out of scope here; the two are no longer byte-identical by design.
-func resolveFallbackProvider(cfg *Config, slug string) string {
-	provider, _ := ResolveSlugProvider(cfg, slug)
-	return provider
 }
 
 // ResolveSlugProvider resolves the provider a bare model slug would route
 // through today, and reports whether that resolution happened only via the
 // passthrough rung (rule 3: openrouter / vivgrid). It is the exported face
-// of resolveFallbackProvider's rungs, added for ADR-068 FR-012: the
+// of the slug-resolution rungs, added for ADR-068 FR-012: the
 // dependents computation in pkg/gateway (provider_dependents.go) must apply
 // the exact same rungs — an agent whose slug exact-matches a provider row is
 // a `primary` dependent, one that resolves only through rule 3 is a

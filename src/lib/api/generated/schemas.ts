@@ -224,6 +224,7 @@ type Message = {
         | "browser_handover_notice"
         | "expiry_notice"
         | "goal_outcome"
+        | "helper_event"
         | "subagent_start"
         | "subagent_state"
         | "subagent_message"
@@ -231,6 +232,7 @@ type Message = {
       )
     | undefined;
   goal_outcome?: GoalOutcome | undefined;
+  helper_event?: HelperEvent | undefined;
   subagent_start?:
     | {
         type: "subagent_start";
@@ -436,6 +438,24 @@ type GoalOutcome = {
   judge_reason?: string | undefined;
   criteria_total?: number | undefined;
   ended_at: string;
+};
+type HelperEvent = {
+  helper_session_id: string;
+  helper_title?: string | undefined;
+  kind:
+    | "verdict_unmet"
+    | "not_verified"
+    | "stopped"
+    | "restarted"
+    | "resume_refused"
+    | "timed_out"
+    | "finished"
+    | "question"
+    | "blocker"
+    | "failed";
+  text: string;
+  goal_id?: string | undefined;
+  created_at: string;
 };
 type SessionPage = {
   sessions: Array<Session>;
@@ -1508,7 +1528,7 @@ type AgentUpdateRequest = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  fallback_models?: Array<FallbackModel> | undefined;
+  fallback_models?: Array<FallbackModelPair> | undefined;
   model_params?:
     | Partial<{
         temperature: number;
@@ -1520,6 +1540,10 @@ type AgentUpdateRequest = {
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
   memory_enabled?: boolean | undefined;
+};
+type FallbackModelPair = {
+  model: string;
+  provider: string;
 };
 type ExecutorDefaults = {
   cli: ExternalCliTool;
@@ -3600,6 +3624,25 @@ export const GoalOutcome: z.ZodType<GoalOutcome> = z.object({
   criteria_total: z.number().int().gte(1).optional(),
   ended_at: z.string().datetime({ offset: true }),
 });
+export const HelperEvent: z.ZodType<HelperEvent> = z.object({
+  helper_session_id: z.string().min(1),
+  helper_title: z.string().min(1).optional(),
+  kind: z.enum([
+    "verdict_unmet",
+    "not_verified",
+    "stopped",
+    "restarted",
+    "resume_refused",
+    "timed_out",
+    "finished",
+    "question",
+    "blocker",
+    "failed",
+  ]),
+  text: z.string().min(1),
+  goal_id: z.string().min(1).optional(),
+  created_at: z.string().datetime({ offset: true }),
+});
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
   client_message_id: z.string().min(1).max(128).optional(),
@@ -3668,6 +3711,7 @@ export const Message: z.ZodType<Message> = z.object({
       "browser_handover_notice",
       "expiry_notice",
       "goal_outcome",
+      "helper_event",
       "subagent_start",
       "subagent_state",
       "subagent_message",
@@ -3675,6 +3719,7 @@ export const Message: z.ZodType<Message> = z.object({
     ])
     .optional(),
   goal_outcome: GoalOutcome.optional(),
+  helper_event: HelperEvent.optional(),
   subagent_start: z
     .object({
       type: z.literal("subagent_start"),
@@ -4064,6 +4109,10 @@ export const AgentCreateRequest =
     AgentCreateRequestSubagent,
     AgentCreateRequestSubagent3p,
   ]) satisfies z.ZodType<AgentCreateRequest>;
+export const FallbackModelPair: z.ZodType<FallbackModelPair> = z.object({
+  model: z.string().min(1).max(256),
+  provider: z.string().min(1).max(64),
+});
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   mcp_servers: z.array(AgentMCPBinding).optional(),
@@ -4078,7 +4127,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   figure: AgentFigure.optional(),
   role: AgentRole.optional(),
   color: AgentColor.optional(),
-  fallback_models: z.array(FallbackModel).max(2).optional(),
+  fallback_models: z.array(FallbackModelPair).max(2).optional(),
   model_params: z
     .object({ temperature: z.number(), max_tokens: z.number().int() })
     .partial()
@@ -16978,7 +17027,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "helper_event", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta"]);
 
 export const RoomRef = z
   .object({
@@ -17338,7 +17387,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -17355,7 +17404,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     provider_message: z.boolean().optional(),
@@ -18370,6 +18419,27 @@ export const BrowserHandoverNoticeFrame = z
   })
   .strict();
 
+export const HelperEventFrameEvent = z
+  .object({
+    helper_session_id: z.string().min(1),
+    helper_title: z.string().min(1).optional(),
+    kind: z.enum(["verdict_unmet", "not_verified", "stopped", "restarted", "resume_refused", "timed_out", "finished", "question", "blocker", "failed"]),
+    text: z.string().min(1),
+    goal_id: z.string().min(1).optional(),
+    created_at: z.string(),
+  })
+  .strict();
+
+export const HelperEventFrame = z
+  .object({
+    type: z.literal("helper_event"),
+    session_id: z.string().min(1),
+    message_id: z.string().min(1),
+    helper_event: HelperEventFrameEvent,
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
 export const GoalOutcomeFrameOutcome = z
   .object({
     goal_id: z.string().min(1),
@@ -18624,6 +18694,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   PlanStatusFrame,
   JudgeVerdictFrame,
   BrowserHandoverNoticeFrame,
+  HelperEventFrame,
   GoalOutcomeFrame,
   KnowledgeIndexProgressFrame,
   BrowserInputOfferFrame,

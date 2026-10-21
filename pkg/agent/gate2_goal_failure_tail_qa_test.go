@@ -44,10 +44,11 @@ func TestQAGate2GoalFailureTail_ObsoleteProducerCannotStopReplacementHelpers(t *
 					close(judgeEntered)
 					<-releaseJudge
 				}
-				// A real provider-edge refusal, not a fabricated completion error.
-				// It is unavailable without transient in-round retry. The real
-				// three-attempt goal re-drive and its 5/15 s waits are preserved.
-				return nil, providers.ErrProviderNeedsSignIn
+				// A zero-output token-limit exit is genuinely unavailable: no
+				// verdict or partial answer to continue. An expired sign-in is
+				// operator-only and correctly stops at once, so it cannot stand
+				// in for this three-attempt control. Keep real 5/15 s outer waits.
+				return &providers.LLMResponse{FinishReason: "length"}, nil
 			}}
 			f.judge.Provider = judge
 			go func() { f.al.dispatchDeferredGoalAdjudication(work); close(tailDone) }()

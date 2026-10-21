@@ -575,6 +575,8 @@ type TranscriptEntry struct {
 	// re-sent on replay as the goal_outcome WS frame with this entry's ID as
 	// its message id. nil, and omitted from JSON, on every other entry.
 	GoalOutcome *generated.GoalOutcome `json:"goal_outcome,omitempty"`
+	// HelperEvent is an immutable event row, not a goal ending or model input.
+	HelperEvent *generated.HelperEvent `json:"helper_event,omitempty"`
 
 	// TerminalOutcome marks an assistant entry that is a turn's distinct
 	// terminal outcome sentence — the text written AFTER the turn's earlier

@@ -684,14 +684,9 @@ func TestMessageParent_StoredNotWoken_LoggedAtError(t *testing.T) {
 	}
 }
 
-// TestMessageParent_ProgressStoredNotWoken_LoggedAtError (FR-012): every
-// accepted helper report kind — progress included — wakes an idle non-stopped
-// parent now, so a progress entry stored without a wake is a STALL, not a
-// contract, and must be logged at ERROR exactly like a blocker. The
-// non-wake-eligible kinds this test's predecessor covered (progress/checkpoint)
-// no longer exist among message_parent's accepted kinds
-// (progress/checkpoint/artifact/blocker/question/handback are all
-// wake-eligible), so the gate's silent branch is unreachable from this tool.
+// PW-D4 (founder 2026-10-15): progress stored without a wake is normal, not a stall.
+// Keep the legacy test name for traceability; the blocker ERROR control above
+// stays unchanged, while progress must persist without a false ERROR.
 func TestMessageParent_ProgressStoredNotWoken_LoggedAtError(t *testing.T) {
 	logs := captureSlogInfo(t)
 	tool, deliverer := newStoredNotWokenSetup(t)
@@ -704,12 +699,20 @@ func TestMessageParent_ProgressStoredNotWoken_LoggedAtError(t *testing.T) {
 	}
 
 	captured := logs.String()
-	if !strings.Contains(captured, `"level":"ERROR"`) {
-		t.Fatalf("a progress entry stored without a wake produced no ERROR line — under FR-012 every accepted report kind wakes the parent, so this is a stall; captured log:\n%s", captured)
+	if strings.Contains(captured, `"level":"ERROR"`) {
+		t.Errorf("normal stored-not-woken progress emitted a false ERROR (PW-D4); captured log:\n%s", captured)
 	}
-	for _, want := range []string{"child-not-woken", "parent-1", deliverer.messageID, string(steer.DeliveryStoredNotWoken), "progress"} {
-		if !strings.Contains(captured, want) {
-			t.Errorf("captured ERROR log does not name %q; captured log:\n%s", want, captured)
-		}
+	msgs, _, _, err := deliverer.inbox.Drain("parent-1", "child-not-woken", "", 10)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("stored progress entries = %d (err=%v), want exactly 1", len(msgs), err)
+	}
+	progress, err := msgs[0].AsSessionMessageProgress()
+	if err != nil {
+		t.Fatalf("AsSessionMessageProgress: %v", err)
+	}
+	if progress.MessageId != deliverer.messageID || progress.SessionId != "child-not-woken" ||
+		progress.ParentSessionId == nil || *progress.ParentSessionId != "parent-1" ||
+		progress.Text != "still checking the checkout page" {
+		t.Errorf("stored progress = %+v, want original id, child, direct parent and text (PW-D4)", progress)
 	}
 }

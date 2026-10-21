@@ -402,11 +402,12 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 		got = append(got, bootEnvelope(t, event.Message).MessageID)
 	}
 	slices.Sort(got)
-	// FR-012: every accepted report kind is wake-eligible, so the unconsumed
-	// progress entry is re-nudged too — only the genuinely delivered
-	// (consumed) handback stays quiet.
-	if !slices.Equal(got, []string{"handback-open", "progress-open", "question-open"}) {
-		t.Fatalf("re-woken = %v", got)
+	// PW-D4 / §9.8 / FR-011: progress is stored and shown and never wakes, so
+	// boot re-nudges only the wake-eligible unconsumed entries (the handback
+	// and the question); the unconsumed progress entry stays stored and
+	// quiet, exactly like the genuinely delivered (consumed) handback.
+	if !slices.Equal(got, []string{"handback-open", "question-open"}) {
+		t.Fatalf("re-woken = %v, want handback-open and question-open only (PW-D4: progress never wakes)", got)
 	}
 	remaining, _, _, err := h.inbox.Drain(parent, child, "", 20)
 	if err != nil {
@@ -695,6 +696,9 @@ func TestBoot_ClassifiesAllClasses(t *testing.T) {
 	}
 }
 
+// PW-D6 (founder 2026-10-15): this fixture was already stopped before boot.
+// It has no landed timeout transition; it does not exercise a historical timeout
+// event's required wake (§9.6). Keep the retained-note/no-resume regression.
 // TestBoot_TimeoutStoppedStaysStopped pins ADR-20260928 D8 (founder
 // decision, 2026-10-04): a steered session whose lifetime budget expired —
 // stop_note.cause=timeout, the shape steer_completion.go::completeSteeredTurn

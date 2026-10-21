@@ -143,7 +143,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, _ string, sub agent.EventSubscrip
 		case agent.EventKindSubTurnSpawn, agent.EventKindSubTurnEnd,
 			agent.EventKindSubagentMessage, agent.EventKindSubagentState,
 			agent.EventKindToolExecStart, agent.EventKindToolExecEnd,
-			agent.EventKindError, agent.EventKindGoalStatusChanged, agent.EventKindGoalOutcome,
+			agent.EventKindError, agent.EventKindGoalStatusChanged, agent.EventKindGoalOutcome, agent.EventKindHelperEvent,
 			agent.EventKindLLMRetry,
 			agent.EventKindJudgeVerdict, agent.EventKindLoopStatusChanged, agent.EventKindToolResultProjection:
 			// #823 catch-up redesign (BE-DESIGN.md §1.2): these kinds are

@@ -411,12 +411,40 @@ func (al *AgentLoop) dispatchSessionWorker(scope string, msg bus.InboundMessage)
 	}
 
 	// Spawn a new worker for this scope. The worker holds the admission
-	// slot via release() and calls it in its deferred runLoop cleanup.
+	// slot via release() and calls it in its deferred runLoop cleanup. The
+	// spawn happens under workerSpawnMu so it cannot interleave with Close's
+	// drain snapshot: once Close has begun, the message is not delivered
+	// (a secret resume stays submitted and unclaimed for boot recovery).
+	al.workerSpawnMu.Lock()
+	if al.workerSpawnClosed {
+		al.workerSpawnMu.Unlock()
+		release()
+		logger.WarnCF("agent", "Agent loop is closing — message not dispatched to a new session worker",
+			map[string]any{"scope": scope, "channel": msg.Channel, "session_id": msg.SessionID})
+		return false
+	}
 	w := newSessionWorker(scope, al, release)
 	al.sessionWorkers.Store(scope, w)
+	al.workerSpawnMu.Unlock()
 	go w.runLoop()
 	return w.enqueue(msg)
 }
+
+// closeSessionWorkerSpawns makes every later dispatchSessionWorker refuse to
+// spawn a worker. Close calls it before stopSessionWorkers takes its snapshot.
+func (al *AgentLoop) closeSessionWorkerSpawns() {
+	al.workerSpawnMu.Lock()
+	al.workerSpawnClosed = true
+	al.workerSpawnMu.Unlock()
+	if afterWorkerSpawnFenceTestHook != nil {
+		afterWorkerSpawnFenceTestHook(al)
+	}
+}
+
+// afterWorkerSpawnFenceTestHook is a test-only seam fired inside Close after
+// the spawn fence is set and before stopSessionWorkers takes its snapshot. It
+// is nil in production.
+var afterWorkerSpawnFenceTestHook func(al *AgentLoop)
 
 // dispatchSystemMessageToSessionWorker routes an async-origin system message
 // (#505, AsyncTranscriptSessionID set) through the per-session sessionWorker
@@ -960,6 +988,13 @@ func (w *sessionWorker) abandonQueuedSteering(ctx context.Context, target *conti
 	// window would restore it minus the pointer writeSteeringConsumedMarker's
 	// consume-ack bookkeeping depends on.
 	abandonedScope, abandonedItems, _, _ = al.dequeueSteeringItemsForScopeWithFallback(target.SessionKey)
+	// SFH-02: an abandoned saved helper input gives back its in-process claim;
+	// its saved record stays pending for the next legitimate fence.
+	for _, item := range abandonedItems {
+		if item.wake != nil {
+			al.releaseWakePublication(item.wake.transcriptSessionID, item.wake.messageID)
+		}
+	}
 
 	// Load-bearing (see doc comment above): the next message for this
 	// session must go to the inbox as a fresh turn, not be steered into a

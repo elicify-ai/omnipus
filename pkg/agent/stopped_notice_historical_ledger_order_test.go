@@ -186,10 +186,11 @@ func TestW1HistoricalLedgerNotice_NoNoticeOrWakeWithoutLandedStoppedEvent(t *tes
 			"(the W1 prepare hook delivered the notice before the landed event existed); bodies: %+v",
 			len(got), wantID, got)
 	}
+	// PW-D13 (founder 2026-10-15): even a wrongly landed intentional Stop may not wake.
 	for _, tr := range transitions {
 		id := w1hNoticeID(parentID, childID, tr.Generation, tr.StopSeq)
-		if c := wakes.count(id); c == 0 {
-			t.Errorf("landed transition %s exists but its notice never woke the working parent (D6: a working parent is woken once by the notice) — count %d", id, c)
+		if c := wakes.count(id); c != 0 {
+			t.Errorf("intentional Stop transition %s woke the parent %d time(s), want 0 (PW-D13)", id, c)
 		}
 	}
 	// D6: the wake rides the notice, and the notice rides the landed event.

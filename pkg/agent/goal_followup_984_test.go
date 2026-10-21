@@ -25,20 +25,10 @@ import (
 // (coordination/logs/fix890-opus/lc947-defect1-design-note.md) and the
 // post-merge reviews (rev984-architect F1-F4, rev984-pta, rev984-sfh).
 
-// TestGoalDelegation984_MetPathOneWakeVerdictAcked pins the founder Q1=A
-// ruling (2026-09-28): "on the session-goal 'met' path only the hand-back
-// wakes the parent; the goal_status verdict entry is delivered without a wake
-// and ACKED at hand-back time so boot recovery does not re-wake it. Task
-// goals are untouched."
-//
-// One judged-MET delegation must therefore produce EXACTLY ONE parent wake —
-// the completion handback (whose wake carries the child's actual answer, the
-// re-entry-worthy payload). The goal_status verdict entry is still delivered
-// (the side panel keeps its status line) but is stored not woken and is
-// acknowledged at hand-back time, so it can never reach a second wake through
-// boot recovery (boot_sweep.go::unacknowledged re-delivers unacked
-// wake-eligible entries). The two-ENTRY contract of design-note decision (b)
-// stands unchanged; Q1=A corrects the WAKE count on top of it.
+// PW-D5/PW-D16/PW-D17 (spec §§9.5/22, 2026-10-15): one met ending has one final-id
+// wake; its combined chat input must exist before the verdict is acknowledged.
+// Keep both inbox entries and the original exact wake/ack assertions. A bus
+// publish alone is not the save, so the legacy ack-at-hand-back oracle is narrowed.
 func TestGoalDelegation984_MetPathOneWakeVerdictAcked(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	lifecycle := session.NewLifecycleStore(t.TempDir())
@@ -125,6 +115,7 @@ func TestGoalDelegation984_MetPathOneWakeVerdictAcked(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
+	pwLegacyRequireSavedMetInput(t, al, parentMeta.ID, rec.SessionID, rec.Generation, "the work is complete", "verified", "verified the work")
 	assertGoal984OneParentWakeVerdictAcked(t, inbox, parentMeta.ID, rec, wakeIDs)
 }
 
@@ -139,8 +130,8 @@ func assertGoal984OneParentWakeVerdictAcked(t *testing.T, inbox *session.Message
 	}
 
 	// The verdict entry was stored (two entries stand — decision (b)) and is
-	// acked at hand-back time; only the handback stays unacked for the parent
-	// to consume.
+	// acked only after its combined chat input is saved (PW-D16); the handback
+	// stays unacked until the parent consumes it.
 	entries, err := inbox.Entries(parentID)
 	if err != nil {
 		t.Fatalf("inbox.Entries(parent): %v", err)
@@ -386,24 +377,23 @@ func testGoal984ClearDeferredChild(t *testing.T) {
 	}
 	assertCleared()
 	noticeID, stopNote := assertU1StoppedChildNotice(t, al, parentMeta.ID, rec, "", "")
-	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 1)
+	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 0)
 
 	// A repeated clear is not another stopped transition. The direct-parent
 	// notice must also survive store reopening and repeated boot replay.
 	al.clearGoalByUser(rec.SessionID, al.GetSessionStore(), "native-agent")
-	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 1)
-	// ADR-20261004 decision 1 supersedes the old one-ring-across-boot
-	// oracle: "A stop notice rings until the parent takes it". Replays
-	// ring this one immutable notice; after the durable take they stop.
+	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 0)
+	// PW-D13 (founder 2026-10-15): cause-stop notices stay silent on every
+	// replay, before and after the durable take; goal state and notice stay.
 	for pass := 0; pass < 2; pass++ {
 		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
-		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, pass+2)
+		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 0)
 		assertCleared()
 	}
 	takeG5StoppedNotice(t, al, parentMeta.ID, noticeID)
 	for range 2 {
 		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
-		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 3)
+		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 0)
 		assertCleared()
 	}
 }
@@ -478,22 +468,21 @@ func testGoal984IdleExpiryDeferredChild(t *testing.T) {
 	}
 	assertExpired()
 	noticeID, stopNote := assertU1StoppedChildNotice(t, al, parentMeta.ID, rec, "", "")
-	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 1)
+	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 0)
 
 	al.goalIdleExpirySweep(config.PlanningConfig{}, now)
-	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 1)
-	// ADR-20261004 decision 1 supersedes the old one-ring-across-boot
-	// oracle: "A stop notice rings until the parent takes it". Replays
-	// ring this one immutable notice; after the durable take they stop.
+	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 0)
+	// PW-D13 (founder 2026-10-15): cause-stop notices stay silent on every
+	// replay, before and after the durable take; goal state and notice stay.
 	for pass := 0; pass < 2; pass++ {
 		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
-		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, pass+2)
+		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 0)
 		assertExpired()
 	}
 	takeG5StoppedNotice(t, al, parentMeta.ID, noticeID)
 	for range 2 {
 		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
-		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 3)
+		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 0)
 		assertExpired()
 	}
 }

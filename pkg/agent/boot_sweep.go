@@ -155,6 +155,9 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 		}
 		switch class {
 		case steer.ClassOrdinaryRoot:
+			// A no-edge create_task root retains event rows for its captured
+			// recipients; repair them here too (delivery-only, no wake/resume).
+			r.repairRetainedRows(id, false, notice)
 			if err := r.recoverOrdinaryRoot(id, notice); err != nil {
 				refusals = append(refusals, err)
 			}
@@ -242,6 +245,13 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		notice("stop-intents:"+id, fmt.Sprintf("session %s accepted Stop controls unreadable at boot: %v", id, pendingErr))
 		return pendingErr
 	}
+	if rec.ExecutionID != nil && r.BootEpoch != nil && rec.ExecutionID.BootSeq == r.BootEpoch.Current() &&
+		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued) {
+		// A repeated repair pass in this process must not interrupt the native
+		// continuation this same boot already admitted.
+		r.recoverStoppedChildNotice(ctx, rec, notice)
+		return nil
+	}
 	stopLandedByBoot := false
 	var interruptedErr error
 	if !pendingStop && !rec.Terminal() && rec.State != session.LifecycleNeedsInput &&
@@ -277,6 +287,12 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	// older untaken one ring here); its true must not short-circuit the
 	// interrupted arm below, which finishes D8.3's parent notification for
 	// the run this restart interrupted.
+	if !pendingStop && interruptedErr == nil {
+		// Resume admission (or its visible refusal) precedes the one restart
+		// wake. The immutable restart row is still sourced from the ledger.
+		r.resumeRestartHelper(ctx, rec, notice)
+	}
+	r.repairRetainedRows(id, true, notice)
 	stopNoticeRecovered := r.recoverStoppedChildNotice(ctx, rec, notice)
 	if interruptedErr != nil {
 		// Historical replay is independent, but cannot erase a refused current
@@ -1654,4 +1670,24 @@ func (r *SteerBootRecovery) acceptedStopPending(rec *session.LifecycleRecord) (b
 		return false, err
 	}
 	return acceptedStopSelectsExecution(rec, intents), nil
+}
+
+// repairRetainedRows re-applies the durable row-repair payloads a session
+// retained for its destinations (helper events, including a failed goal-ending
+// copy). It is delivery-only: no turn, no resume, no wake. A failure stays
+// retained and is reported to the operator; the next boot or delivery retries.
+// Only a steered helper also rebuilds its goal-ending rows from the goal
+// record; an ordinary root's own retained payloads are its complete source.
+func (r *SteerBootRecovery) repairRetainedRows(id string, steered bool, notice func(string, string)) {
+	al, err := r.noticeLoop()
+	if err != nil {
+		return
+	}
+	repairErr := al.repairHelperEvents(id)
+	if steered {
+		repairErr = errors.Join(repairErr, al.repairGoalOutcome(id))
+	}
+	if repairErr != nil {
+		notice("helper-event-repair:"+id, fmt.Sprintf("session %s event rows are pending repair: %v", id, repairErr))
+	}
 }

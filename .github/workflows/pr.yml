@@ -279,7 +279,15 @@ jobs:
     # handful of ~1-minute download+extract steps.
     runs-on: ubuntu-latest
     needs: [changes]
-    if: success() && needs.changes.outputs.code == 'true'
+    # NOT gated on `code`: tool-error-status-lint runs its guard suite on
+    # documentation-only changes too (its two docs guards exist for exactly
+    # those), and its size-budget guard needs this job's node_modules. With a
+    # `code == 'true'` gate here, a docs-only PR skipped setup, which skipped
+    # the guard job, and ci-required accepts a skip — so a docs-only PR that
+    # reintroduced a retired surface went green unchecked (review finding F1
+    # on c7faf3098). Every other consumer of setup keeps its own `code`
+    # gate, so a docs-only PR pays only this one install.
+    if: success()
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1254,7 +1262,15 @@ jobs:
     # docs-only PR reintroducing "Command Center" would have gone green.
     # This also makes the `changes` job's "no job in this workflow reads
     # docs/**" rationale obsolete for this job specifically.
-    if: success()
+    # Explicit result checks, same shape as fast-tier and browser-e2e:
+    # `!cancelled()` drops the implicit success() gate, and the job runs
+    # exactly when both direct needs really succeeded. setup now runs on
+    # docs-only changes too (see its comment), so a docs-only PR reaches
+    # the guards instead of skipping them.
+    if: >-
+      !cancelled() &&
+      needs.changes.result == 'success' &&
+      needs.setup.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1524,7 +1540,8 @@ jobs:
           # go.mod's toolchain. Two bumps clear the 2026-10-08 advisory batch and
           # BOTH are required: go1.26.9 clears the Go-stdlib advisories — GO-2026-
           # 6604 (os), 6605/6609/6613 (net/http), 6607 (crypto/tls), 6608
-          # (mime/multipart) — while the golang.org/x/net v0.60.0 bump in go.mod
+          # (mime/multipart); go1.26.10 clears GO-2026-6809 (crypto/x509) — while
+          # the golang.org/x/net v0.60.0 bump in go.mod
           # clears GO-2026-6603, 6610, 6611, 6612 and 6617, each of which carries
           # an x/net range as well as a stdlib one.
           #
@@ -1534,7 +1551,7 @@ jobs:
           # running against an older stdlib than the release ships (a false green
           # on a security gate). This literal is the one place to keep in sync
           # with the `go` directive in go.mod.
-          go-version-input: '1.26.9'
+          go-version-input: '1.26.10'
           # The job's own "Setup Go" step above already restored the Go module
           # cache into $GOMODCACHE. The action bundles its OWN setup-go, which
           # by default restores a SECOND module cache into that same, already

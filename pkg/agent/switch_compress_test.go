@@ -475,6 +475,9 @@ func TestSwitchTime_UnknownModel_SurfacesToUserNotJustLog(t *testing.T) {
 
 	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
+	// The failed-switch oracle still runs the old model, through its explicitly
+	// bound mock client rather than the fixture row's non-routable URL.
+	agent.StoreProviderPool(map[string]providers.LLMProvider{"openai": agent.Provider})
 	oldModel := agent.Model
 	require.NotEmpty(t, oldModel, "test setup: default agent must have a model")
 

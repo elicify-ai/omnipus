@@ -198,6 +198,9 @@ func TestFallbackNote_NoteAfterAssistantEntry_FB2(t *testing.T) {
 		{Provider: "prov", Model: fbNotePrimary},
 		{Provider: "prov", Model: fbNoteFinal},
 	}
+	// Bind the scripted transport explicitly; named turns never borrow the
+	// injected default client when their configured pool is missing.
+	workerInst.StoreProviderPool(map[string]providers.LLMProvider{"prov": workerInst.Provider})
 	store, sid := fbNoteStore(t)
 
 	opts := processOptions{

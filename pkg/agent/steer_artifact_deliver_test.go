@@ -141,12 +141,13 @@ func TestMessageParentArtifact_DeliversThroughRealDeliverer(t *testing.T) {
 	}
 }
 
-// TestDeliver_ArtifactStoredNotWoken: artifact, like checkpoint, is not
-// wake-eligible (session.classifyEnvelope) — stored, parent not woken.
+// PW-D4 (founder 2026-10-15): artifact, like checkpoint, is stored but never wakes.
+// Retain the legacy test name so its changed oracle stays traceable.
 func TestDeliver_ArtifactWakesIdleParent(t *testing.T) {
-	_, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
+	seedUnifiedSession(t, al, parentID)
 
 	delivery, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
 		ChildSessionID: childID, Outcome: steer.OutcomeCheckpoint, Message: artifactMessage(t, childID, "a-1"),
@@ -154,10 +155,12 @@ func TestDeliver_ArtifactWakesIdleParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
-	// FR-012: an artifact (checkpoint kind) is wake-eligible too, so an idle
-	// non-stopped parent is woken, not left at stored_not_woken.
-	if delivery.Outcome != steer.DeliveryWoke {
-		t.Fatalf("Delivery.Outcome = %q, want woke (FR-012: artifact wakes an idle non-stopped parent)", delivery.Outcome)
+	if delivery.Outcome != steer.DeliveryStoredNotWoken {
+		t.Errorf("Delivery.Outcome = %q, want stored_not_woken (PW-D4: artifact never wakes)", delivery.Outcome)
+	}
+	msgs, _, _, err := inbox.Drain(parentID, childID, "", 10)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("parent inbox artifact entries = %d (err=%v), want exactly 1", len(msgs), err)
 	}
 }
 
@@ -225,10 +228,14 @@ func TestMessageParentHandbackPause_DeliversThroughRealDeliverer(t *testing.T) {
 
 // TestDeliver_PauseHandbackWakesParent: a pause handback is wake-eligible
 // (session.classifyEnvelope) — unlike an artifact, the parent is woken.
+// §9.4 recipient table, last row (PW-D12 / FR-019): the fixture seeds the
+// parent's real unified session metadata — a delegating parent has one, and
+// without it the wake is correctly refused as missing-metadata.
 func TestDeliver_PauseHandbackWakesParent(t *testing.T) {
-	_, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
+	seedUnifiedSession(t, al, parentID)
 
 	delivery, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
 		ChildSessionID: childID, Outcome: steer.OutcomeBlocker, Message: pauseHandbackMessage(t, childID, "pause-wake"),

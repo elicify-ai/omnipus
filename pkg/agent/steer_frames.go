@@ -623,20 +623,10 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
 		return
 	}
-	// Q1=A (founder, #984 follow-up): on the SESSION-goal met path the
-	// verdict's wake is suppressed — the completion handback that follows it
-	// (finishMetGoal's tail) is the one parent wake for the whole "met", and
-	// this entry is acknowledged at hand-back time (ackMetVerdictEntry) so
-	// boot recovery cannot re-wake it later. Task-owned goals are excluded by
-	// the OwnerKind check: their verdict wake is load-bearing (no handback
-	// follows a task verdict). Unmet verdicts never suppress: they leave the
-	// goal active and the parent must see the round's outcome.
-	suppressWake := false
-	if verdict.Met && rec.OwnerKind == generated.GoalOwnerKindSession {
-		if childRec, lerr := al.GetSessionLifecycleStore().Load(sessionID); lerr == nil && childRec != nil {
-			suppressWake = childRec.SteeredBy != nil
-		}
-	}
+	// PW-D16/PW-D17: met verdicts are saved suppressed. The final hand-back
+	// (or task completion) owns their shared final id and combined input.
+	// Unmet rounds retain their own verdict-round wake identity.
+	suppressWake := verdict.Met
 	event := steer.UpwardEvent{ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: sm, SuppressWake: suppressWake}
 	delivery, err := deliverer.Deliver(ctx, event)
 	if err != nil {

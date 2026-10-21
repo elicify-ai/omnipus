@@ -4,8 +4,10 @@ description: >
   always-visible goal outcome line in the chat thread (founder decision
   2026-09-14: a goal's ending must leave a clear, lasting line in the chat,
   not only a pill that hides 4 seconds after turning terminal, and not only
-  the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per
-  goal ending, by the same terminal transition that ends the goal record
+  the Verbose-chat-gated `judge_verdict` card). Written once per goal ending
+  on the helper transcript and, when a parent exists, once on the parent
+  transcript, with different message ids but the same goal id, ending, rounds
+  and Judge reason. Written by the same terminal transition that ends the goal record
   (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows
   through it). An intermediate UNMET Judge round with rounds remaining is
   NOT an ending (the worker is steered and keeps going) and never produces
