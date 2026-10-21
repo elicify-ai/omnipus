@@ -47,6 +47,7 @@ const history: ServerFrame[] = [
 ]
 let conn: WsConnection
 let deliveries: ServerFrame[][]
+let replayNotices: [sessionId: string, message: string][]
 
 function VisibleTranscript() {
   const messages = useChatStore(s => s.messages)
@@ -74,6 +75,7 @@ beforeEach(() => {
   useSecretRequestStore.getState().reset()
   useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
   deliveries = []
+  replayNotices = []
   conn = new WsConnection({
     onFrames: frames => {
       deliveries.push(frames)
@@ -85,6 +87,7 @@ beforeEach(() => {
       useChatStore.getState().clearStreamingState()
     },
     onError: message => useConnectionStore.getState().setConnectionError(message),
+    onReplayNotice: (sessionId, message) => { replayNotices.push([sessionId, message]) },
     onReconnectStateChange: (phase, attempt) => useConnectionStore.getState().setReconnectState(phase, attempt),
   })
   conn.connect()
@@ -141,6 +144,37 @@ describe('attach generations across live release and shown acknowledgements', ()
     expect(acknowledgements).toEqual([{ type: 'attach_session', session_id: SID, boot_id: 'boot', since_seq: 10, ack_attention: true, attention_bound: 9 }])
     queryClient.removeQueries({ queryKey: ['sessions'] })
   })
+
+  it('W1 ignores a completed A1 batch queued before reopening A2 and acknowledges only its bound 9', () => {
+    const main: Session = {
+      id: SID, type: 'main', agent_id: 'mia', title: 'Mia main', status: 'active', needs_attention: true,
+      channel: 'web', partitions: [], created_at: '2026-10-06T00:00:00Z', updated_at: '2026-10-06T00:00:01Z',
+      stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 0 },
+    }
+    queryClient.setQueryData(['sessions'], [main])
+    useConnectionStore.getState().setConnection(conn)
+    const shown = (sessionId: string) => { attach(sessionId); noteForegroundAttach(sessionId) }
+    const state = (bound: number): ServerFrame => ({ type: 'session_state', session_id: SID, user_id: 'user', pending_approvals: [], emitted_at: '2026-10-06T00:00:01Z', attention_bound: bound })
+    shown(SID)
+    receive(snapshot)
+    receive(state(7))
+    shown('other')
+    // Parse A1's completion, but HOLD its scheduled delivery. Its pending
+    // buffer is already deleted when the user next explicitly reopens A.
+    act(() => Socket.latest.receive(complete))
+    expect(deliveries).toEqual([])
+    shown(SID)
+    act(() => vi.advanceTimersByTime(32))
+    expect(deliveries).toHaveLength(1) // Positive control: old batch DID deliver.
+    receive({ type: 'catch_up_complete', session_id: 'other', seq: 1, mode: 'snapshot' })
+    receive(snapshot)
+    receive(state(9))
+    receive(complete)
+    const acknowledgements = Socket.latest.send.mock.calls.map(([raw]) => JSON.parse(raw) as ClientFrame)
+      .filter(frame => frame.type === 'attach_session' && frame.ack_attention)
+    expect(acknowledgements).toEqual([{ type: 'attach_session', session_id: SID, boot_id: 'boot', since_seq: 10, ack_attention: true, attention_bound: 9 }])
+    queryClient.removeQueries({ queryKey: ['sessions'] })
+  })
 })
 
 describe('bounded replay fallback', () => {
@@ -151,7 +185,9 @@ describe('bounded replay fallback', () => {
     receive({ type: 'tool_call_start', session_id: SID, call_id: 'large-result', tool: 'read_file', params: { path: 'large.txt' } })
     // The serialized UTF-16 payload alone exceeds the documented 8 MiB budget.
     receive({ type: 'tool_call_result', session_id: SID, call_id: 'large-result', tool: 'read_file', status: 'success', result: { output: 'x'.repeat(4 * 1024 * 1024) } })
-    expect(useConnectionStore.getState().connectionError).toBe('Saved history is large. Showing messages as they load.')
+    // Chief Q1 A: replace the one assertion that required SF-2's misclassification.
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+    expect(replayNotices).toEqual([[SID, 'Saved history is large. Showing messages as they load.']])
     expect(useChatStore.getState().messages.some(message => message.content === 'Saved question')).toBe(true)
     receive({ type: 'replay_message', session_id: SID, id: 'bounded-final', role: 'assistant', content: 'Final saved answer' })
     receive(replayDone)

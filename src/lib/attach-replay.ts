@@ -39,7 +39,12 @@ export class AttachReplayBuffer {
 
   get bufferedBytes(): number { return this.retainedBytes }
 
-  begin(sessionId: string): void {
+  begin(sessionId: string, queuedFrames: readonly ServerFrame[] = []): void {
+    // A completed answer may already have left pending but still await a paint.
+    // Its controls must not consume a later foreground open's acknowledgement.
+    for (const frame of queuedFrames) {
+      if ('session_id' in frame && frame.session_id === sessionId) markSuperseded(frame)
+    }
     const generation = ++this.generation
     this.requests.push({ sessionId, generation, started: false })
     const replay = this.pending.get(sessionId)

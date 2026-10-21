@@ -7,6 +7,7 @@ import { useOmnipusRuntime } from "@/lib/omnipus-runtime";
 import { useChatStore } from "@/store/chat";
 import { getPendingFirstSend } from "@/store/chat/first-send";
 import { useConnectionStore } from "@/store/connection";
+import { useUiStore } from "@/store/ui";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
 import { useSessionStore, attachSessionCursorFields, attachAlreadyInFlight, noteAttachSent } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
@@ -246,6 +247,12 @@ function WsLifecycle() {
         useChatStore.getState().clearStreamingState();
       },
       onError: setConnectionError,
+      onReplayNotice: (sessionId, message) => {
+        const ui = useUiStore.getState();
+        // Reopening the same large chat must not stack persistent notices.
+        if (ui.toasts.some(toast => toast.sessionId === sessionId && toast.message === message)) return;
+        ui.addToast({ sessionId, message, variant: 'default', duration: 0 });
+      },
       // Fix 2: wire reconnect phase changes into the connection store so the
       // chat header banner can show live progress (attempt N / gave_up CTA).
       onReconnectStateChange: (phase, attempt) => setReconnectState(phase, attempt),

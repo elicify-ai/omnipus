@@ -103,9 +103,13 @@ The chat is a conversation with the workspace's agents. When the open conversati
 
 Saved messages load quietly and appear together when loading finishes. Old tool calls and status changes do not play through as if the agent were working again. Opening a chat, switching to another chat, or refreshing the page brings you to the latest messages at the bottom. If you scroll up while a chat is loading, Omnipus keeps your reading position instead of pulling you back down.
 
-For a very large history, a persistent notice says **Saved history is large. Showing messages as they load.** The chat then shows saved messages progressively instead of holding the whole replay for one update. This is history loading, not the agent starting those tool calls again. The notice does not automatically reconnect or repeat the load.
+For a very large history, an informational notice says **Saved history is large. Showing messages as they load.** The chat then shows saved messages progressively instead of holding the whole replay for one update. This is history loading, not the agent starting those tool calls again. The notice stays until you select **Dismiss**, and appears only while its chat is selected. Dismissing it does not interrupt loading. It is not a connection error, has no connection **Retry**, and does not automatically reconnect or repeat the load.
+
+When you quickly leave and reopen a main chat, Omnipus uses that visit's loaded history when marking results as seen, not an older load still waiting to appear.
 
 An answer that is still running continues to stream after the saved history appears. Pending tool approvals are restored in the approval dialog; loading history does not approve them. Secret-entry cards are not available in chat in this release while that feature is disabled. If the connection drops before history finishes loading, Omnipus retries automatically. Brief drops stay quiet; the chat's connection notice appears after two minutes disconnected, or when automatic retries give up.
+
+If you choose a connection **Retry**, Omnipus closes the previous connection first. If closing fails, it reports the failure instead of opening another connection.
 
 ### Answering a question card
 
