@@ -25,6 +25,21 @@ func TestEncoderColdStartReplayOwnership(t *testing.T) {
 	}
 }
 
+// A replacement pass belongs to the socket executing it, not the earlier
+// callback still awaiting the shared loop. Derive ownership from the dispatch,
+// including controls where the replacement itself has retired before failure.
+func TestEncoderReplacementFailureOwnership(t *testing.T) {
+	for _, failureStage := range []string{"lookup", "stream-id", "media", "offer"} {
+		for _, retiredOutcome := range []string{"resolve", "reject"} {
+			for _, owner := range []string{"current", "superseded", "shutdown"} {
+				t.Run(failureStage+"/"+retiredOutcome+"/"+owner, func(t *testing.T) {
+					runEncoderColdStartJS(t, "media", "owner-failure/"+failureStage+"/"+retiredOutcome+"/"+owner)
+				})
+			}
+		}
+	}
+}
+
 func runEncoderColdStartJS(t *testing.T, stage, mode string) {
 	t.Helper()
 	cmd := exec.Command("node", "-e", "const stage="+strconv.Quote(stage)+",mode="+strconv.Quote(mode)+";"+encoderColdStartJS)
@@ -53,6 +68,7 @@ const deferred = () => {
   return {promise,resolve,reject};
 };
 const entered = deferred(), release = deferred();
+const replacementEntered = deferred(), replacementResult = deferred();
 const counts = {}, frames = [], streams = [], peers = [], selections = [], constraints = [], replaced = [], warnings = [], sockets = [], offeredOn = [];
 const timers = new Map();
 let socket, sandbox, run, opening, recoveryBarrier;
@@ -65,6 +81,10 @@ async function barrier(name) {
   if (name === stage && counts[name] === 1) {
     entered.resolve();
     await release.promise;
+  }
+  if (mode.startsWith('owner-failure/') && name === mode.split('/')[1] && counts[name] === (name === 'offer' ? 1 : 2)) {
+    replacementEntered.resolve();
+    await replacementResult.promise;
   }
 }
 function later(fn, delay, ...args) {
@@ -84,7 +104,7 @@ function cancel(timer) {
 }
 class Socket {
   static OPEN = 1;
-  constructor() {this.readyState=0;this.listeners={};this.closes=0;socket=this;sockets.push(this)}
+  constructor() {this.readyState=0;this.listeners={};this.closes=0;this.failureNotices=[];socket=this;sockets.push(this)}
   addEventListener(name, fn) {(this.listeners[name] ||= []).push(fn)}
   open() {this.readyState=1;return Promise.all((this.listeners.open || []).map(fn=>fn({})))}
   send(raw) {
@@ -96,6 +116,7 @@ class Socket {
   }
   close() {
     this.closes++;
+    this.failureNotices.push({error:sandbox.window.__omnipusState.lastError,status:sandbox.window.__omnipusState.status});
     this.readyState=3;
     for (const fn of this.listeners.close || []) fn({});
   }
@@ -162,6 +183,60 @@ async function reconnectWhileHeld() {
   assert.deepEqual(warnings,[],'reconnect path has no hidden browser-edge failure');
   console.log('COLD_START_CASE_COMPLETE '+stage+'/'+mode);
 }
+function reconnectFromClose() {
+  socket.close();
+  const timer=run('reconnectTimer'), scheduled=timers.get(timer);
+  assert.equal(typeof scheduled.fn,'function','disconnect schedules the real reconnect callback');
+  cancel(timer);scheduled.fn(...scheduled.args);
+}
+async function replacementFailureWhileHeld() {
+  const [,failureStage,retiredOutcome,owner]=mode.split('/');
+  reconnectFromClose();
+  assert.equal(sockets.length,2,'B replaces the disconnected A socket');
+  await socket.open();await replay();
+  if (retiredOutcome==='reject') release.reject(new Error('retired A acquisition failed'));
+  else release.resolve();
+  assert.equal(await Promise.race([replacementEntered.promise.then(()=>true),opening.then(()=>false)]),true,'B must reach its own replacement acquisition');
+  if (owner==='superseded') {
+    reconnectFromClose();
+    assert.equal(sockets.length,3,'C replaces B before B fails');
+    await socket.open();await replay();
+  } else if (owner==='shutdown') await control({action:'shutdown'});
+  const message='replacement '+failureStage+' denied';
+  replacementResult.reject(new Error(message));
+  await opening;await run('senderParamsChain');
+  const state=sandbox.window.__omnipusState;
+  assert.equal(sockets[0].closes,1,'B failure must never be attributed to or re-close A');
+  assert.equal(sockets[0].failureNotices[0].error,null,'A disconnected before any current failure');
+  if (owner==='current') {
+    assert.equal(sockets[1].closes,1,'B current failure must close B to signal visible recovery');
+    assert.deepEqual(sockets[1].failureNotices,[{error:'Error: '+message,status:'error'}],'B owns the exact visible acquisition error');
+    assert.equal(state.lastError,'Error: '+message,'current failure is retained for diagnostics');
+    assert.equal(state.wsState,'closed','failed current signaling is not left open');
+    assert.equal(state.status,'reconnecting','B failure enters the existing visible recovery path');
+    assert.equal(run('pingBeaconTimer'),null,'failed B cannot keep a healthy-looking heartbeat');
+    assert.notEqual(run('reconnectTimer'),null,'B failure schedules its own restart');
+    assert.deepEqual(offers(),[],'failed replacement cannot publish an offer');
+    assert.equal(state.history.filter(item=>item.evt.includes(message)).length,1,'B failure must be published once, not again through A');
+  } else {
+    assert.equal(state.lastError,null,'retired B failure cannot poison shutdown or C');
+    assert.equal(state.history.filter(item=>item.evt.includes(message)).length,0,'retired B failure cannot be published against another owner');
+    if (owner==='superseded') {
+      assert.deepEqual(sockets.map(item=>item.closes),[1,1,0],'late B failure must not close healthy C');
+      assert.equal(offers().length,1,'C publishes the only current offer');
+      assert.equal(offeredOn[0],sockets[2],'the offer belongs to C, not A or B');
+      assert.deepEqual(streams.at(-1).tracks.map(track=>track.readyState),['live','live'],'C keeps its current audio/video');
+    } else {
+      assert.equal(state.status,'shutdown','late B failure cannot replace shutdown');
+      assert.deepEqual(offers(),[],'shutdown cannot publish replacement work');
+      assert.equal(run('reconnectTimer'),null,'shutdown cannot schedule another restart');
+    }
+  }
+  assert.equal(run('captureInFlight'),false,'shared loop drains after the owning pass settles');
+  assert.equal(run('captureRerunRequested'),false,'no abandoned queued work');
+  assert.deepEqual(warnings,[],'browser fixture must support the exercised path');
+  console.log('COLD_START_CASE_COMPLETE '+stage+'/'+mode);
+}
 async function main() {
   const initial={...first};
   if (mode==='enriched') {delete initial.expected_width;delete initial.expected_height}
@@ -189,6 +264,7 @@ async function main() {
   assert.equal(await Promise.race([entered.promise.then(()=>true),opening.then(()=>false)]),true,'startup must reach the controlled barrier');
   assert.equal(frames.filter(frame=>frame.type==='browser_capture_hello').length,1,'one hello precedes capture');
   assert.equal(offers().length,0,'no offer may escape the held stage');
+  if (mode.startsWith('owner-failure/')) {await replacementFailureWhileHeld();return}
   if (mode.startsWith('reconnect-')) {await reconnectWhileHeld();return}
   let expected=first;
   if (mode==='changed-target') {expected=replacement;await replay(expected)}
@@ -287,7 +363,7 @@ async function main() {
   console.log('COLD_START_CASE_COMPLETE '+stage+'/'+mode);
 }
 main().then(()=>{process.exitCode=0}).catch(error=>{console.error(error);process.exitCode=1}).finally(async()=>{
-  release.resolve();
+  release.resolve();replacementResult.resolve();
   try {
     if (run) await control({action:'shutdown'});
     if (opening) await opening;

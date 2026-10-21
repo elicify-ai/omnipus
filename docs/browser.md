@@ -72,6 +72,8 @@ To annotate, click the button, mark a region, write your comment, and click **Se
 
 Every failure is shown as an error with its reason and a Retry button.
 
+If video capture fails during reconnection, Omnipus restarts the failed video connection. A late failure from a discarded attempt does not interrupt its replacement.
+
 | The panel says | What it means |
 |---|---|
 | Live video is turned off for this installation | An operator disabled it; they can enable it in Settings |

@@ -1729,6 +1729,7 @@ async function runCaptureAndOffer(command, initial = false) {
 
 async function runCaptureAndOfferOnce(command, initial = false) {
   command = captureCommandFrom(command || desiredCaptureCommand || readConfig());
+  const forWs = ws;
   let generation = captureGeneration;
   try {
     captureScale = command.capture_scale;
@@ -1842,10 +1843,15 @@ async function runCaptureAndOfferOnce(command, initial = false) {
       capture_generation: command.capture_generation, target_id: command.target_id, offer_id: offerID });
     armOfferAnswerTimeout();
   } catch (error) {
-    // Chrome can reject an old lookup/media/negotiation promise after a new
-    // command or shutdown retired it. Only a current attempt owns failure.
-    if (shuttingDown || captureGeneration !== generation) return;
-    throw error;
+    // A queued pass can execute on a replacement socket while an older
+    // callback still awaits the loop. Publish and terminate the failing
+    // pass here; throwing to that callback would blame its retired socket.
+    if (shuttingDown || captureGeneration !== generation || ws !== forWs) return;
+    if (!forWs) throw error;
+    window.__omnipusState.lastError = String(error);
+    setStatus('error');
+    record('capture attempt FAILED: ' + error);
+    forWs.close();
   }
 }
 
