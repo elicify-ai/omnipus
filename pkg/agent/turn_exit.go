@@ -241,10 +241,8 @@ func (ts *turnState) Finish(isHardAbort bool) {
 	// one releases it explicitly, at the site that claimed it — the delegate
 	// front in steer_launcher.go::dispatchSteeredSessionWithReservation's
 	// dispatch goroutine, the task front through the callback handed to
-	// task_executor.go::dispatchLaunchedTask. Finish has no reliable
-	// back-reference to release through (ts.al is unset for every steered
-	// turn), so a drain here reads as the release mechanism while freeing
-	// nothing.
+	// task_executor.go::dispatchLaunchedTask. The loop back-reference is not
+	// an admission reservation: release stays with the site that claimed it.
 	ts.closeOnce.Do(func() {
 		if ch != nil {
 			close(ch)

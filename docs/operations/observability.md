@@ -87,6 +87,10 @@ While a turn is running, the agent loop emits typed events into the in-process e
 | **Tasks, plans and goals** | `task_status_changed`, `plan_status_changed`, `goal_status_changed`, `loop_status_changed`, `task_run_status`, `goal_outcome`, `judge_verdict` |
 | **Helpers** | `subagent_message`, `subagent_state` |
 
+The `provider_fallback` event is emitted live when a fallback model answers, including ordinary chats and scheduled turns. Connected chat views receive it without a refresh. The saved fallback note is separate: it is written at turn end, after the assistant answer, once per session and unavailable/answering model pair. Repeated fallback events for that pair do not add duplicate visible notes.
+
+If an event cannot be published because its agent loop or event bus is missing, the server logs **Agent event suppressed: publisher is not initialized** at warning level. The `reason` is `nil_loop` or `nil_event_bus`; `event_kind`, `agent_id`, `turn_id` and `source` identify the attempted event. The `suppressed_total` field counts these suppressed emissions across the current server process. The warning does not include the event payload. It identifies a missing event publisher, not necessarily a failed model call.
+
 ### Who consumes the events
 
 #### WebSocket subscribers (SPA chat view)
