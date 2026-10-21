@@ -80,7 +80,7 @@ The description is the part that decides whether the skill is ever used. The age
 
 ### Keep the description predictable
 
-If you omit `description` from the frontmatter, Omnipus uses the first parsed paragraph of the body as the skill's advertised description. Paragraphs inside `<div>` and `<details>` wrappers can now count too, when the tags are on their own lines with blank lines around the inner Markdown, as in the example below. An introductory banner inside such a wrapper can therefore become the description instead of the useful task-trigger paragraph after it.
+If you omit `description` from the frontmatter, Omnipus uses the first parsed paragraph with non-empty extracted text as the skill's advertised description. Paragraphs inside `<div>` and `<details>` wrappers can now count too, when the tags are on their own lines with blank lines around the inner Markdown, as in the example below. An introductory banner inside such a wrapper can therefore become the description instead of the useful task-trigger paragraph after it.
 
 Do not rely on an HTML wrapper to hide text from this fallback. Set an explicit frontmatter `description` to keep the task trigger stable:
 
