@@ -565,9 +565,10 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		retryAudience := cr.rr.rq.ri.rf.rt.al.audienceFor(cr.rr.rq.ri.rf.rt.turnCtx, steer.BoundaryRetryNotice, cr.rr.rq.ri.rf.rt.ts.transcriptSessionID)
 		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) && retryAudience == steer.AudienceUser {
 			if notifyErr := cr.rr.rq.ri.rf.rt.al.bus.PublishOutbound(cr.rr.rq.ri.rf.rt.turnCtx, bus.OutboundMessage{
-				Channel: cr.rr.rq.ri.rf.rt.ts.channel,
-				ChatID:  cr.rr.rq.ri.rf.rt.ts.chatID,
-				Content: "Retrying — please wait...",
+				Channel:        cr.rr.rq.ri.rf.rt.ts.channel,
+				ChatID:         cr.rr.rq.ri.rf.rt.ts.chatID,
+				Content:        "Retrying — please wait...",
+				ProgressNotice: true,
 			}); notifyErr != nil {
 				logger.WarnCF("agent", "Failed to send retry indicator",
 					map[string]any{"channel": cr.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
