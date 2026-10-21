@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg"
@@ -174,8 +175,8 @@ type ContextBuilder struct {
 	// in the wrong state for it.
 	memoryEnabled bool
 
-	// setTodosEnabled is construction-time guidance; see WithSetTodosEnabled.
-	setTodosEnabled bool
+	// setTodosEnabled is construction/reload-time guidance; see WithSetTodosEnabled.
+	setTodosEnabled atomic.Bool
 }
 
 // WithDelegationInjector installs the per-turn delegation context callback. fn
@@ -450,13 +451,14 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 		}
 		builtinSkillsDir = filepath.Join(wd, "skills")
 	}
-	return &ContextBuilder{
-		workspace:       workspace,
-		skillsLoader:    skills.NewSkillsLoader(workspace, globalSkillsDir(), builtinSkillsDir),
-		memory:          NewMemoryStore(workspace, omnipusHome()),
-		memoryEnabled:   true,
-		setTodosEnabled: true,
+	cb := &ContextBuilder{
+		workspace:     workspace,
+		skillsLoader:  skills.NewSkillsLoader(workspace, globalSkillsDir(), builtinSkillsDir),
+		memory:        NewMemoryStore(workspace, omnipusHome()),
+		memoryEnabled: true,
 	}
+	cb.setTodosEnabled.Store(true)
+	return cb
 }
 
 // getIdentity returns the default system identity for agents WITHOUT a SOUL.md.
@@ -498,7 +500,7 @@ func (cb *ContextBuilder) getWorkspaceAndRules() string {
 	}
 
 	todoRule := ""
-	if cb.setTodosEnabled {
+	if cb.setTodosEnabled.Load() {
 		todoRule = "3. For every request, including one-line answers, call set_todos with your own checklist and the current item marked in_progress before your first reply or other tool call, then update the list as work advances."
 	}
 
@@ -829,12 +831,16 @@ func (cb *ContextBuilder) InvalidateCache() {
 	cb.systemPromptMutex.Lock()
 	defer cb.systemPromptMutex.Unlock()
 
+	cb.invalidateSystemPromptCacheLocked()
+	logger.DebugCF("agent", "System prompt cache invalidated", nil)
+}
+
+// invalidateSystemPromptCacheLocked requires systemPromptMutex to be held.
+func (cb *ContextBuilder) invalidateSystemPromptCacheLocked() {
 	cb.cachedSystemPrompt = ""
 	cb.cachedAt = time.Time{}
 	cb.existedAtCache = nil
 	cb.skillFilesAtCache = nil
-
-	logger.DebugCF("agent", "System prompt cache invalidated", nil)
 }
 
 // maxCachedWorkspacePromptVariants is the default hard per-agent cap on the

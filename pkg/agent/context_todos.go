@@ -6,11 +6,24 @@ import (
 )
 
 // WithSetTodosEnabled gates checklist guidance independently of memory.
-// Call once before prompt caching or shared use. The default is true, matching
-// the prior unconditional guidance and the memory gate's construction pattern.
-// This interim flag is not synchronized with per-request offered tool lists.
+// Agent construction and shared-tool wiring set this from registered tools and
+// effective policy; reloading config rebuilds that snapshot. Repeated wiring can
+// revisit shared builders, so unchanged values preserve both prompt caches.
+// This is not synchronized with per-request offered tool lists.
 func (cb *ContextBuilder) WithSetTodosEnabled(enabled bool) *ContextBuilder {
-	cb.setTodosEnabled = enabled
+	cb.systemPromptMutex.Lock()
+	defer cb.systemPromptMutex.Unlock()
+	if cb.setTodosEnabled.Load() == enabled {
+		return cb
+	}
+	wc := &cb.workspacePromptCache
+	wc.mu.Lock()
+	defer wc.mu.Unlock()
+	cb.setTodosEnabled.Store(enabled)
+	cb.invalidateSystemPromptCacheLocked()
+	for workspaceID := range wc.variants {
+		cb.evictWorkspaceVariantLocked(workspaceID)
+	}
 	return cb
 }
 

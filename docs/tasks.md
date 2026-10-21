@@ -85,7 +85,7 @@ Picking a plan reveals two more fields — the files the task may touch, and whe
 
 ### Agent checklists
 
-With checklist guidance enabled, agents are instructed to use `set_todos` for every request, including a one-line answer, before their first reply or other tool call. They mark the current item `in_progress`, future items `pending`, and finished items `completed`, updating the full list as work advances and before their final reply. These are prompt instructions, not a guarantee of model compliance; see [shared operating rules](agents.md#shared-operating-rules-for-native-agents) for the guidance flag and its current tool-availability limit.
+With checklist guidance enabled, agents are instructed to use `set_todos` for every request, including a one-line answer, before their first reply or other tool call. They mark the current item `in_progress`, future items `pending`, and finished items `completed`, updating the full list as work advances and before their final reply. These are prompt instructions, not a guarantee of model compliance; see [shared operating rules](agents.md#shared-operating-rules-for-native-agents) for the registration and permission check, how reload applies changes, and the remaining per-request tool-list limit.
 
 Each item can optionally include `active_form`, a present-participle phrase describing work in progress: for example, `text: "Draft the Q4 summary"` and `active_form: "Drafting the Q4 summary"`. This phrase is stored separately; it does not replace the normal checklist text on the Board. Use `create_task` with dependencies for a durable multi-wave plan while keeping your current working checklist here.
 
