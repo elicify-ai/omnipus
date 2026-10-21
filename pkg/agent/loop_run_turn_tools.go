@@ -931,8 +931,13 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 	// and failed AC-01's "every driven reason must be known"
 	// guard. A headless scheduled run has no operator by
 	// construction, for the whole run, so Permanent: true is
-	// the correct classification (ADR D1 row 9).
-	const denialReason = autoDenyHeadlessReason
+	// the correct classification (ADR D1 row 9). A task or plan
+	// chain (#1263 R4) refuses with its own row instead; the
+	// turn's attendance classification chose which.
+	denialReason := ex.rx.rr.rq.ri.rf.rt.ts.opts.askRefusalReason
+	if denialReason == "" {
+		denialReason = autoDenyHeadlessReason
+	}
 	cls, _ := ClassifyDenial(denialReason)
 	denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
 	// Build optional extra Details for the deny.attempted entry so
@@ -946,11 +951,25 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 			"schedule_job_name": jobInfo.JobName,
 		}
 	}
+	if cause := ex.rx.rr.rq.ri.rf.rt.ts.opts.askRefusalCause; cause != "" {
+		// SF-05: an unresolved ancestry keeps its cause in the refusal's
+		// audit context, next to the fixed task/plan reason.
+		if denyExtra == nil {
+			denyExtra = map[string]any{}
+		}
+		denyExtra["attendance_cause"] = cause
+	}
 	ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason, denyExtra)
 	// O-3 / F-13 / issue #342: emit the canonical tool.policy.ask.denied
 	// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
-	// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
-	ex.rx.rr.rq.ri.rf.rt.al.emitScheduledAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, tc.ID)
+	// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit. A
+	// task or plan refusal (#1263 R4) carries AskDenyReasonTaskRun and no
+	// schedule identity.
+	if denialReason == autoDenyTaskPlanReason {
+		ex.rx.rr.rq.ri.rf.rt.al.emitTaskRunAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName)
+	} else {
+		ex.rx.rr.rq.ri.rf.rt.al.emitScheduledAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, tc.ID)
+	}
 	// Persist the refusal as a real tool_call entry. This path
 	// never blocks (there is no approver on a headless run), so
 	// there is no pending placeholder to settle — but without
@@ -1350,6 +1369,12 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// field, not a second discriminator: two independently-computed
 	// answers to "is anyone there" would eventually disagree.
 	execCtx = tools.WithAutoDenyAsk(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk)
+	if ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk && ex.rx.rr.rq.ri.rf.rt.ts.opts.askRefusalReason == autoDenyTaskPlanReason {
+		// #1263 R4 / gate round 1 SF-03: a tool that refuses its OWN
+		// escalation (the shell's pre-flights) refuses with the task/plan
+		// reason, and the loop settles it as the canonical refusal below.
+		execCtx = tools.WithAskRefusalReason(execCtx, autoDenyTaskPlanReason)
+	}
 	if ex.shellModePin != "" {
 		execCtx = withPinnedShellMode(execCtx, ex.shellModePin)
 	}
@@ -1384,6 +1409,15 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurn(ex.rx.rr.rq.ri.rf.rt.ts, "after_tool_exec", hardInterruptAbortReason)
 		ex.ret0 = agentLoopRunTurnToolsReturn
 		return agentLoopRunTurnToolsExecuteReturn
+	}
+
+	if ex.toolResult != nil && ex.toolResult.IsError && errors.Is(ex.toolResult.Err, tools.ErrUnattendedAskRefused) {
+		// The tool refused its own escalation because nobody can approve it
+		// in this task or plan chain: settle it exactly like an Ask call the
+		// loop refused (fixed model message, transcript row, audit pair —
+		// #1263 R4, gate round 1 SF-03), not as an ordinary tool error.
+		ex.releaseAsyncCallback()
+		return ex.autoDenyHeadlessAsk(tc)
 	}
 
 	if ex.rx.rr.rq.ri.rf.rt.al.hooks != nil {
@@ -1991,6 +2025,7 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 	// dying. ASKUSER-FIX.
 	if !parked {
 		if steerMsgs, steerCorrelationIDs, _ := ex.rx.rr.rq.ri.dequeueSteeringForContinuation(); len(steerMsgs) > 0 {
+			ex.rx.rr.rq.ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 			ex.rx.rr.rq.ri.pendingMessages = append(ex.rx.rr.rq.ri.pendingMessages, steerMsgs...)
 			ex.rx.rr.rq.ri.pendingSteeringReceipts = append(ex.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}

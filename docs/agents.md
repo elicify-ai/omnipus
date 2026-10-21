@@ -1,17 +1,17 @@
 # Agents
 
-Agents do the work in Omnipus. Omnipus ships three built-in chat colleagues—Mia, Jim and the system agent Omnipus—plus the native workers Planner, Researcher and General Purpose. Judge and Plan Supervisor are internal engine agents. You can create your own Main agents and workers from Agents.
+Agents do the work in Omnipus. Omnipus ships three built-in chat colleagues—Mia, Jim and the system agent Omnipus—plus the native workers Planner, Researcher and General Purpose. Judge and Plan Supervisor are internal engine agents. You add your own agents by asking Omnipus.
 
 ## What it is
 
-Open **Agents** in the sidebar and the roster has four sections:
+A workspace's **Team** is the home of its agents. Open a workspace's **Team** tab: it shows the members as a list first, with a graph view second, and each card offers **Edit**, **Remove from this workspace** and **Delete everywhere…**. The internal agents Judge and Plan Supervisor, and the system agent Omnipus, are edited in [Settings → System agents](settings.md#system-agents).
 
-- **Built-in roster** — Mia, Jim and Omnipus. Their identity and base instructions are protected.
-- **Main agents** — chat colleagues you create yourself.
-- **Sub-agent workers** — shipped and user-created workers. They are not chat colleagues; other agents delegate work to them, and you can assign workspace tasks to workers on the team.
+- **Built-in agents** — Mia, Jim and Omnipus. Their identity and base instructions are protected.
+- **Chat colleagues you add** — Main agents.
+- **Workers** — shipped and added workers. They are not chat colleagues; other agents delegate work to them, and you can assign workspace tasks to workers on the team.
 - **System** — Judge and Plan Supervisor, internal engine agents that cannot be selected for chat or delegation.
 
-A filter above the roster narrows the list to one [workspace](workspaces.md) team.
+There is no separate Agents screen. An old link to it (`#/agents`, `#/agents/<id>`) or to the former Admin chat (`#/admin/chat`) shows the not-found page and does not redirect.
 
 When addressing an agent by its ID, use the exact letter case. For example, `Jim` does not address the built-in ID `jim`; it is an unknown ID. This rule applies to new chats, existing chats and bound channels. The one exception is addressing the system agent Omnipus in chat: its ID comparison ignores case, and an existing chat keeps its stored owner spelling. Display names are labels, not ID aliases.
 
@@ -21,9 +21,9 @@ For a new chat message, an unknown or differently cased ordinary ID is refused b
 
 ## When you would use it
 
-- You want a colleague with a fixed job and personality. Create a Main agent.
-- You want focused labor behind your main agents. Create a worker.
-- You already run a command-line agent tool and want Omnipus to delegate to it. Create an external worker.
+- You want a colleague with a fixed job and personality. Ask Omnipus for a Main agent.
+- You want focused labor behind your main agents. Ask Omnipus for a worker.
+- You already run a command-line agent tool and want Omnipus to delegate to it. Ask Omnipus for an external worker.
 
 ## The base agents
 
@@ -57,7 +57,7 @@ When an agent changes another agent through its tools, permissions are a separat
 
 Permission and connector-assignment changes apply to subsequent requests and tool calls after successful live activation, without a restart. Saving and activation are separate results: check `persistence_status`, `activation_status` and the reported message. A saved change whose activation failed is not proof that the running agent uses it. Fix the reported problem and reload or restart before relying on the new permissions. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
 
-When an agent creates an external worker through its tools, the soul rule differs from the create form: a native agent (Main or Subagent) needs a soul, but an external worker takes none — it runs on its own command-line tool and has no persona prompt, and supplying one is refused with the reason shown. If that request names a `cli_path`, it must point at an existing file this machine can actually run: on macOS and Linux the user running Omnipus must hold execute permission on it, and on Windows its file extension must be one Windows recognizes as runnable (the PATHEXT list — .exe, .cmd and similar). A missing path, a directory, or a file failing this check is refused with the path named in the reason. Leaving `cli_path` out uses the tool's own launcher on the host's PATH.
+When an agent creates an external worker through its tools, the soul rule depends on the kind: a native agent (Main or Subagent) needs a soul, but an external worker takes none — it runs on its own command-line tool and has no persona prompt, and supplying one is refused with the reason shown. If that request names a `cli_path`, it must point at an existing file this machine can actually run: on macOS and Linux the user running Omnipus must hold execute permission on it, and on Windows its file extension must be one Windows recognizes as runnable (the PATHEXT list — .exe, .cmd and similar). A missing path, a directory, or a file failing this check is refused with the path named in the reason. Leaving `cli_path` out uses the tool's own launcher on the host's PATH.
 
 On Windows, this check uses the `PATHEXT` environment variable, a semicolon-separated list of runnable file extensions. Entries work with or without a leading dot and are matched without regard to letter case: `EXE;CMD` accepts `.exe` and `.cmd` files, just like `.EXE;.CMD`. Empty entries are ignored. A custom list controls which extensions are accepted; when the list is unset or blank, the check uses `.COM;.EXE;.BAT;.CMD`.
 
@@ -72,9 +72,9 @@ Every conversation names its agent — there is no global default agent.
 
 ## How to create your own agent
 
-**With Omnipus.** In a workspace, select **Add agent** under it in the sidebar, or **Team → Add agent → Create with Omnipus**. Omnipus's chat opens with creating an agent for that workspace already started: it asks what the agent is for, shows one summary of what it will create (and any gaps it cannot cover), and creates the agent in that workspace after you choose **Go**. It needs a working model — fix providers in **Settings → Providers** and Omnipus's own model in **Settings → System agents**. The workspace's **Team** panel is the home of its agents: each card offers **Edit**, **Remove from this workspace** and **Delete everywhere…**.
+In a workspace, select **Add agent** under it in the sidebar, or **Team → Add agent → Create with Omnipus**. In a workspace with no agents yet, the chat area offers **Add agent** too. Omnipus's chat opens with creating an agent for that workspace already started: it asks what the agent is for, shows one summary of what it will create (and any gaps it cannot cover), and creates the agent in that workspace after you choose **Go**. It needs a working model — fix providers in **Settings → Providers** and Omnipus's own model in **Settings → System agents**. There is no manual create form in the app.
 
-**With the form.** You create one of three types. The create buttons sit in the section headers of the roster.
+Omnipus can create three kinds of agent:
 
 | Type | Runs on | Works for | You can chat with it |
 |---|---|---|---|
@@ -82,14 +82,9 @@ Every conversation names its agent — there is no global default agent.
 | Subagent | The Omnipus engine | Other agents, through delegation | No |
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
-1. Click **+ New Main** or **+ New Subagent** in its section header. For an external worker, click **+ Add Subagent (External)** and pick the command-line tool from the menu; entries for tools not installed on the host are greyed out.
-2. Fill in **Identity**: name, the agent's look (**Role badge**, **Look**, and **Colour**), and model. The preview starts with Omnipus, General assistant, and Pewter (a grey); leaving these choices untouched saves those defaults when you create the agent. There is no agent-picture upload. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
-   Main and Subagent agents can also add up to two **fallback models** on this step, tried in order when the primary model fails. Each fallback needs both a model and a provider. When a connected provider offers the model you type, that provider is filled in; otherwise choose one in the provider picker. A fallback missing either half has to be completed or removed before **Next** is available, and the hint beside the buttons names what is missing.
-3. Fill in **Personality**: the soul, the agent's persona prompt, is required for every type.
-4. Main and Subagent have a third step, **Tools**, for tool permissions and skills. An external worker has no Tools step — it brings its own.
-5. Create the agent. Its card appears in its section.
+**Without the app.** Scripts and integrations can still create an agent through the REST endpoint `POST /api/v1/agents`. It is an API only, with no screen in the app.
 
-To change an agent, open its card. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
+To change an agent, open its card on the workspace's **Team**, or its row menu in the sidebar, and choose **Edit**. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
 
 ## How to delete an agent
 
@@ -117,7 +112,7 @@ The role badges are grouped like this:
 | People (4) | People and HR; Tutor; Knowledge and library; Translator |
 | Personal (3) | General assistant; Personal assistant; Office assistant |
 
-The editor puts the choices around one large live preview of the mark. **Role badge** is a single dropdown: type to search (for example "dev" finds Developer), and each option shows its badge. **Look** shows the five figures as pictures, drawn in your chosen colour and badge, so you can see each one before you pick it. **Colour** is a row of ten colour dots. In the create form the preview is a draft: it is saved only when creation succeeds. In the edit slide-over, **Basics** offers the same editor and saves changes automatically; its preview and the header mark show your selection immediately, before the save completes. With Monogram selected, the create preview updates the initial as you type, using the rule above; an empty or whitespace-only name shows `?`. In the edit slide-over the mark uses the agent's saved name, so a draft rename is not previewed before its save completes. Check the save indicator before treating an edit as saved. There is no agent-picture or GIF upload; this does not affect attaching files to a chat.
+The editor puts the choices around one large live preview of the mark. **Role badge** is a single dropdown: type to search (for example "dev" finds Developer), and each option shows its badge. **Look** shows the five figures as pictures, drawn in your chosen colour and badge, so you can see each one before you pick it. **Colour** is a row of ten colour dots. The editor lives in the edit slide-over's **Basics** tab and saves changes automatically; its preview and the header mark show your selection immediately, before the save completes. With Monogram selected, the mark uses the agent's saved name, so a draft rename is not previewed before its save completes. Check the save indicator before treating an edit as saved. There is no agent-picture or GIF upload; this does not affect attaching files to a chat.
 
 When creating an agent through the API, omitting `figure`, `role`, or `color`, or sending JSON `null` or an empty string for it, chooses that field's create default: `Omnipus`, `general`, or `#8E9196` (Pewter). This applies to Main agents, native workers, and external workers. A non-empty figure or role must match a listed value exactly; a whitespace-only string is not a default request. A listed palette hex accepts either letter case and is saved and returned uppercase, for example `#a97142` becomes `#A97142` (Bronze). An unlisted colour still rejects the request. These rules are the same with optional inbound schema validation enabled or disabled.
 
@@ -172,9 +167,9 @@ Every agent may make at most a set number of tool calls in one turn. The global 
 
 4. To go back to the global limit, click **Use global limit** next to the field. That clears the agent's own value.
 
-You can also set the value when you create the agent: open **Advanced** in the create form (on the **Tools** step for Main and Subagent, on the **Personality** step for an external worker). Leave it empty to follow the global limit.
+You can also give a limit when you ask Omnipus to create the agent. Leave it out to follow the global limit.
 
-A value above the global limit is not saved. On the profile, the field shows the refusal, which names the global limit and suggests raising it in Settings, Performance; your other changes on the profile still save. In the create form, creating the agent fails with the same message. Values must be whole numbers from 1 to 1000.
+A value above the global limit is not saved. On the profile, the field shows the refusal, which names the global limit and suggests raising it in Settings, Performance; your other changes on the profile still save. Values must be whole numbers from 1 to 1000.
 
 The same rules apply everywhere an agent is created or changed, including when you ask an agent in a chat to do it, as you would with Omnipus. The `create_agent` and `update_agent` tools refuse a value above the global limit or outside 1 to 1000, and sending an empty value (`null`) to `update_agent` clears the agent's own value.
 

@@ -7,6 +7,8 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -139,4 +141,120 @@ func (al *AgentLoop) publishUserEntry(sessionID string, entry session.Transcript
 			p.PublishUserEntry(sessionID, entry)
 		}
 	}
+}
+
+// approvalOrigin is a turn's server-derived approval origin (spec §6.18,
+// K7): the card label and, for a group-chat room request, the room
+// reference. The zero value is a plain web turn.
+type approvalOrigin struct {
+	Label   string
+	RoomRef *generated.RoomRef
+	// Class ranks the origin for the "inputs consumed" rule below.
+	Class originClass
+}
+
+// originClass ranks a turn's origins. Spec §6.18: a turn's origin is the set
+// of inputs it consumed, and any consumed channel-person input makes it
+// channel-triggered. Chief ruling 2026-10-18 (gate round 1, Q1 A / Q2 yes):
+// precedence channel > room > peer > web; the label never moves down once a
+// higher class was consumed, and within a class the FIRST consumed input
+// keeps the label. Approvals already pending keep the label they were raised
+// with (amendment R6: a card is immutable once raised); only approvals
+// raised after the input joined carry the new label.
+type originClass int
+
+const (
+	originWeb originClass = iota
+	originPeer
+	originRoom
+	originChannel
+)
+
+// mergeApprovalOrigin returns the origin a turn carries after it consumed
+// next, under the precedence rule above.
+func mergeApprovalOrigin(current, next approvalOrigin) approvalOrigin {
+	if next.Label == "" || next.Class <= current.Class {
+		return current
+	}
+	return next
+}
+
+// roomRefCopy returns a copy of the room reference (nil when none), so an
+// approval request never shares the turn's value.
+func (o approvalOrigin) roomRefCopy() *generated.RoomRef {
+	if o.RoomRef == nil {
+		return nil
+	}
+	ref := *o.RoomRef
+	return &ref
+}
+
+// turnApprovalOrigin derives the origin every approval card of a turn
+// carries (spec §6.18, K7) from the input that started it:
+//   - a connector (channel) message: "while answering <person> on
+//     <connection>" — the person is the adapter-stamped sender display name,
+//     the connection is the channel instance the message arrived on
+//     (BDD-16.33 "while answering Anna on tg-1");
+//   - the wake of a group-chat room request (room_request.go
+//     roomWakeMessage): "for group <name>" and the room reference {room,
+//     name, request id = delivery id, role request} (FR-169, FR-251, K7);
+//   - the wake of a request a peer agent sent (address_router.go
+//     publishRequestWake): "asked by <Agent>".
+//
+// Room and peer requests are both read from the request ledger — the
+// server-recorded capture, never the request text. Any other turn (the web
+// user, an automatic wake) gets no origin; so does a request capture that
+// cannot be read (logged).
+func (al *AgentLoop) turnApprovalOrigin(msg bus.InboundMessage, sessionID string) approvalOrigin {
+	if isConnectorChannel(msg.Channel) {
+		person := strings.TrimSpace(msg.Sender.DisplayName)
+		if person == "" {
+			person = strings.TrimSpace(msg.Sender.Username)
+		}
+		if person == "" {
+			person = strings.TrimSpace(msg.Sender.CanonicalID)
+		}
+		if person == "" {
+			person = "a person"
+		}
+		return approvalOrigin{Label: "while answering " + person + " on " + inboundInstanceID(msg), Class: originChannel}
+	}
+	requestID := msg.TranscriptEntryID
+	if sessionID == "" || requestID == "" || msg.ChatID != "request:"+requestID {
+		return approvalOrigin{}
+	}
+	ledger := al.RequestLedger()
+	if ledger == nil {
+		return approvalOrigin{}
+	}
+	capture, found, err := ledger.Get(sessionID, requestID)
+	if err != nil {
+		logger.WarnCF("agent", "approval origin: request capture unreadable; approvals of this turn carry no origin label",
+			map[string]any{"session_id": sessionID, "request_id": requestID, "error": err.Error()})
+		return approvalOrigin{}
+	}
+	if !found {
+		return approvalOrigin{}
+	}
+	if msg.Metadata[roomIDMetadataKey] != "" {
+		if capture.Source.RoomID == "" || capture.Source.RoomName == "" {
+			return approvalOrigin{}
+		}
+		return approvalOrigin{
+			Class: originRoom,
+			Label: "for group " + capture.Source.RoomName,
+			RoomRef: &generated.RoomRef{
+				RoomId: capture.Source.RoomID, RoomName: capture.Source.RoomName,
+				RequestId: requestID, Role: "request",
+			},
+		}
+	}
+	if capture.Sender.Agent.AgentID == "" {
+		return approvalOrigin{}
+	}
+	name := al.agentDisplayName(capture.Sender.Agent)
+	if name == "" {
+		name = capture.Sender.Agent.AgentID
+	}
+	return approvalOrigin{Label: "asked by " + name, Class: originPeer}
 }

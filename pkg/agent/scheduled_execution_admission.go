@@ -22,6 +22,7 @@ func (al *AgentLoop) runScheduledTurnWithAdmission(ctx context.Context, agent *A
 	if err != nil {
 		return "", err
 	}
+	opts.roomCost = preparation.roomCost
 	d := preparation.execution
 	opts.executionDisposition = d
 	defer func() { runErr = errors.Join(runErr, al.finishExecutionDisposition(d)) }()

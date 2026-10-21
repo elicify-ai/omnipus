@@ -822,7 +822,7 @@ func (al *AgentLoop) resolveSystemMessageWorkspaceID(msg bus.InboundMessage, tra
 // processSteeredSystemWake reconstructs a durable steering-session turn from
 // its lifecycle record. The consumed marker is the idempotency boundary: a
 // replayed wake is acknowledged without starting another turn.
-func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (string, error) {
+func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (resp string, runErr error) {
 	sessionID := msg.AsyncTranscriptSessionID
 	messageID := inboundMetadata(msg, "steer_message_id")
 	defer al.releaseWakePublication(sessionID, messageID)
@@ -974,6 +974,10 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		}
 		if admitted {
 			rootExecution = d
+			// The canonical consuming session owns the reminder on both worker
+			// and direct replay entry. Run after release/checked settlement.
+			defer al.remindUnansweredRequests(sessionID)
+			defer func() { runErr = errors.Join(runErr, al.finishRoomTurn(ts.opts.roomCost, runErr)) }()
 			release = func() { al.finishOrdinaryWakeExecution(msg, d) }
 		}
 	}
@@ -1086,6 +1090,7 @@ func (al *AgentLoop) admitOrdinaryRootWake(ctx context.Context, msg bus.InboundM
 		return nil, false, nil
 	}
 	ts.opts.executionDisposition = d
+	ts.opts.roomCost = preparation.roomCost
 	ts.generation = d.claim.Generation
 	if idErr := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); idErr != nil {
 		al.finishOrdinaryWakeExecution(msg, d)

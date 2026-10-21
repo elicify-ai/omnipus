@@ -59,6 +59,9 @@ const mainSession: Session = {
 }
 
 export class Stage1Network extends Network {
+  /** Server truth for the main's attention marker (U11 N2); tests flip it. */
+  mainNeedsAttention = false
+
   constructor() {
     super()
     const appState: AppState = {
@@ -83,7 +86,14 @@ export class Stage1Network extends Network {
     this.respond('GET', '/api/v1/version', () => json(version))
     this.respond('GET', '/api/v1/about', () => json(about))
     this.respond('GET', '/api/v1/gateway/god-mode', () => json({ enabled: false, available: true, supported: true, persisted: false }))
-    this.respond('GET', '/api/v1/sessions', () => json(sessions))
+    // U11 N2: a main's needs_attention is SERVER truth — the SPA refetches
+    // the roster on every approval frame and reads it here. Tests flip this
+    // flag to simulate the server having flagged the main.
+    this.mainNeedsAttention = false
+    this.respond('GET', '/api/v1/sessions', () => json({
+      sessions: sessions.sessions.map((session) =>
+        session.id === mainSession.id ? { ...session, needs_attention: this.mainNeedsAttention } : session),
+    }))
     this.respond('GET', `/api/v1/sessions/${MAIN_ID}`, () => json(detail))
     this.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json([]))
     this.respond('GET', '/api/v1/skills', () => json([]))

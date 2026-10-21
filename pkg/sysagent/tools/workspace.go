@@ -1123,7 +1123,7 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 //     newTeam is caller-supplied (a workspace's stored core_team, or the
 //     tool's raw core_team argument) and is never itself validated against
 //     the roster, while coreagent.SeedDelegationEdges keys off a compiled
-//     constant ID string ("jim", "ava", "worker", ...) rather than looking
+//     constant ID string ("jim", "mia", ...) rather than looking
 //     the agent up in cfg — so without this check a core_team entry that
 //     names a deleted-but-still-seed-keyed agent (or a stale/typo'd ID that
 //     happens to collide with a seed key) would still produce a persisted
@@ -1348,7 +1348,7 @@ func withNewMemberSelfEdges(
 // caller-supplied newTeam (a workspace's core_team, which is never itself
 // validated against the roster), so without this presence check a stale or
 // typo'd core_team entry that happens to collide with a compiled
-// coreagent.SeedDelegationEdges key ("jim", "ava", "worker", ...) could still
+// coreagent.SeedDelegationEdges key ("jim", "mia", ...) could still
 // seed an edge naming an agent that no longer exists in config.
 //
 // A nil Deps/GetCfg/Config (test scaffolding without a wired config) yields

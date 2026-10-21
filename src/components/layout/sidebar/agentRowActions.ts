@@ -32,15 +32,13 @@ export function hiddenAgentIds(workspace: Workspace): string[] {
 
 /**
  * D8: why the row's Remove is disabled, or null when removal is allowed.
- * (i) Admin is not a member and never can be (validateCoreTeamMembers), so
- * there is no membership to end; (ii) a built-in (locked) member of the
- * DEFAULT workspace is re-added at every boot (ensureBuiltinRosterPresent),
- * so a successful remove would be silently undone on restart — the menu
- * refuses it up front with that reason. Built-ins on NON-default workspaces
- * are removable; nothing re-adds them there (ADR §Rules Q3).
+ * A built-in (locked) member of the DEFAULT workspace is re-added at every
+ * boot (ensureBuiltinRosterPresent), so a successful remove would be silently
+ * undone on restart — the menu refuses it up front with that reason.
+ * Built-ins on NON-default workspaces are removable; nothing re-adds them
+ * there (ADR §Rules Q3).
  */
 export function removeDisabledReason(agent: Agent | undefined, workspace: Workspace): string | null {
-  if (agent?.id === 'admin') return 'Admin is not a workspace member.'
   if (workspace.is_default === true && agent?.locked === true) {
     return 'Built-in agents cannot leave the default workspace.'
   }

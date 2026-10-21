@@ -14,5 +14,6 @@ func (ri *agentLoopRunTurnIteration) dequeueSteeringForContinuation() ([]provide
 		return nil, nil, nil
 	}
 	_, items, messages, receipts := ri.rf.rt.al.dequeueSteeringItemsForScopeWithFallback(ts.sessionKey)
+	ri.rf.rt.al.noteConsumedOriginsForScope(ts.sessionKey, items)
 	return messages, receipts, items
 }
