@@ -894,6 +894,14 @@ _e2e_build() {
   log "e2e: build gateway binary"
   CGO_ENABLED=0 go build -tags "$TAGS" -o /tmp/omnipus-ci ./cmd/omnipus/ || return 1
 
+  # Once per candidate, before any shard fan-out. The official fixture driver
+  # is a session test executable, never a product test endpoint or copied engine.
+  python3 -I deploy/ci-worker/chat-history-ci.py fixtures || return 1
+  export OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY="$REPO_DIR/build/tools/chat-history-fixture.test"
+  export OMNIPUS_CHAT_HISTORY_SEED_BINARY="$REPO_DIR/build/tools/chat-history-seed"
+  export OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT="$REPO_DIR/build/tools/chat-history-measurements.log"
+  python3 -I deploy/ci-worker/chat-history-ci.py measurement --receipt "$OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT" || return 1
+
   # Force the chromium revision the installed @playwright/test expects (the caret range in
   # package.json may resolve past the image-baked revision). Cached after the first run;
   # shared by all shards via the image-level $PLAYWRIGHT_BROWSERS_PATH.
@@ -1502,7 +1510,14 @@ run_all_no_e2e() {
   return 0
 }
 
+# Standalone command/native evidence gates stay sequential within the Go tier.
+# Keep this additive seam separate from the worker lifecycle/locking code.
+run_history_index_repair() {
+  python3 -I deploy/ci-worker/chat-history-ci.py repair
+}
+
 case "$GATE" in
+  history-index-repair) step history-index-repair run_history_index_repair ;;
   gofmt)           step gofmt run_gofmt ;;
   go-build)        step go-build run_gobuild ;;
   go-vet)          step go-vet run_govet ;;

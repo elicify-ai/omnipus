@@ -2,17 +2,20 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// The standalone repair command is deliberately nonfunctional in Step 0. It
-// must never look like a successful dry-run, verification or publication.
+// An operator-built command only. It is never wired into the product CLI,
+// installers, gateway startup or any agent tool catalog.
 package main
 
 import (
-	"log"
+	"context"
 	"os"
-
-	"github.com/elicify-ai/omnipus/pkg/session"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
-	log.New(os.Stderr, "chat-history-index-repair: ", 0).Fatal(session.ErrChatHistoryNotImplemented)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := runRepair(ctx, os.Args[1:], os.Stdout)
+	stop()
+	os.Exit(code)
 }
