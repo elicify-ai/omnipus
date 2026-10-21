@@ -35,12 +35,12 @@ def run_logged(command, log, env=None):
         raise RuntimeError(f"command failed with exit {code}; log={log}")
 
 
-def named_tests(package, pattern, log, required):
+def named_tests(package, pattern, log, required, env=None):
     command = ["go", "test", "-json", "-count=1", "-tags", "goolm,stdjson",
                "-p", "1", "-timeout", "1200s"]
     if pattern:
         command += ["-run", pattern]
-    run_logged(command + [package], log)
+    run_logged(command + [package], log, env)
     outcomes = {}
     for line in log.read_text(encoding="utf-8").splitlines():
         if not line.startswith("{"):
@@ -107,46 +107,55 @@ def build_fixtures():
     print("OMNIPUS_CHAT_HISTORY_SEED_BINARY=" + str(seed))
 
 
-def capture_measurement(test_name, receipt):
-    if not test_name or not receipt.is_absolute():
-        raise RuntimeError("measurement needs an exact QA test name and absolute receipt path")
+def capture_measurement(receipt):
+    # Section O pins one producer. A successful zero-match go test, an old
+    # receipt or fabricated allocation values can never satisfy this step.
+    test_name = "TestHistoryPageMeasurement_SectionHReceipt"
+    if not receipt.is_absolute():
+        raise RuntimeError("T18 receipt path must be absolute")
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.unlink(missing_ok=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    env = {**GO_ENV, "OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT": str(receipt),
+           "OMNIPUS_CANDIDATE_SHA": commit}
     raw = TOOLS / "history-measurement-test.log"
-    named_tests("./pkg/gateway", "^" + test_name + "$", raw, [test_name])
-    records = []
-    for line in raw.read_text(encoding="utf-8").splitlines():
-        if not line.startswith("{"):
-            continue
-        event = json.loads(line)
-        text = event.get("Output", "").strip()
-        if not text.startswith("{"):
-            continue
-        row = json.loads(text)
-        if row.get("message") == "history_page_measurement":
-            records.append(row)
+    try:
+        named_tests("./pkg/gateway", "^" + test_name + "$", raw, [test_name], env)
+    except RuntimeError as error:
+        raise RuntimeError("T18 producer missing or failed: " + test_name) from error
+    validate_measurement_receipt(receipt, commit)
+    # The test is the sole producer. Do not rewrite its header, records or bytes.
+    print(receipt.read_text(encoding="utf-8"), end="")
+    print(f"OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT={receipt}; records=2; candidate={commit}")
+
+
+def validate_measurement_receipt(receipt, commit):
+    if not receipt.is_file():
+        raise RuntimeError("T18 producer missing: no measurement receipt was written")
+    lines = receipt.read_text(encoding="utf-8").splitlines()
+    if len(lines) != 3 or lines[0] != "HEAD:" + commit:
+        raise RuntimeError("T18 receipt missing/short or candidate HEAD does not match Section O")
+    records = [json.loads(line) for line in lines[1:]]
+    if any(not isinstance(row, dict) for row in records):
+        raise RuntimeError("T18 measurement record must be a JSON object")
     if sorted(row.get("case", "") for row in records) != ["long_prefix", "short_prefix"]:
-        raise RuntimeError("expected exactly two real allocation measurement records")
+        raise RuntimeError("T18 requires exactly two real allocation measurement records")
+    required = {"message", "case", "sample_count", "limit", "min_rows", "allocated_bytes"}
     for row in records:
+        if row.get("message") != "history_page_measurement":
+            raise RuntimeError("T18 receipt has an unrelated diagnostic")
         for key in ("sample_count", "limit", "min_rows", "allocated_bytes"):
             if type(row.get(key)) is not int:
-                raise RuntimeError(f"measurement {key} is not an integer")
+                raise RuntimeError(f"T18 measurement {key} is not an integer")
         if row["sample_count"] <= 0 or row["limit"] != 40 or row["min_rows"] != 20 or row["allocated_bytes"] < 0:
-            raise RuntimeError("invalid measured allocation record")
-        allowed = {"message", "case", "sample_count", "limit", "min_rows", "allocated_bytes"}
-        if set(row) != allowed:
-            raise RuntimeError("unexpected measurement fields: do not leak private test data")
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    receipt.parent.mkdir(parents=True, exist_ok=True)
-    with receipt.open("w", encoding="utf-8") as output:
-        output.write(f"HEAD: {commit}\n")
-        for row in records:
-            output.write(json.dumps(row, separators=(",", ":")) + "\n")
-    print(f"OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT={receipt}; records=2; candidate={commit}")
+            raise RuntimeError("invalid T18 measured allocation record")
+        if not required <= set(row) or not set(row) <= required | {"time", "level", "caller"}:
+            raise RuntimeError("unexpected T18 measurement fields: do not leak private data")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("phase", choices=["build", "command", "core", "fixtures", "measurement", "repair"])
-    parser.add_argument("--measurement-test")
     parser.add_argument("--receipt", type=Path)
     args = parser.parse_args()
     if args.phase in ("build", "repair"):
@@ -160,12 +169,12 @@ def main():
     if args.phase == "measurement":
         if args.receipt is None:
             parser.error("--receipt is required")
-        capture_measurement(args.measurement_test, args.receipt)
+        capture_measurement(args.receipt)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         print(f"GATE FAILURE: {error}", file=sys.stderr)
         sys.exit(1)

@@ -869,6 +869,8 @@ _e2e_build() {
   python3 -I deploy/ci-worker/chat-history-ci.py fixtures || return 1
   export OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY="$REPO_DIR/build/tools/chat-history-fixture.test"
   export OMNIPUS_CHAT_HISTORY_SEED_BINARY="$REPO_DIR/build/tools/chat-history-seed"
+  export OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT="$REPO_DIR/build/tools/chat-history-measurements.log"
+  python3 -I deploy/ci-worker/chat-history-ci.py measurement --receipt "$OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT" || return 1
 
   # Force the chromium revision the installed @playwright/test expects (the caret range in
   # package.json may resolve past the image-baked revision). Cached after the first run;

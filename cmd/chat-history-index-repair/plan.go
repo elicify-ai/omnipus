@@ -28,6 +28,22 @@ func classifyBuildError(err error) error {
 	if errors.As(err, &typed) {
 		return err
 	}
+	// The other backend lane supplies this typed seam at integration. A
+	// structural interface keeps this independently based command buildable
+	// without merging that lane's gateway/session production files here.
+	var buildError interface{ HistoryIndexBuildClass() string }
+	if errors.As(err, &buildError) {
+		switch buildError.HistoryIndexBuildClass() {
+		case "unconverted", "source_changed":
+			return refusal(buildError.HistoryIndexBuildClass())
+		case "corrupt_archive", "invalid_reference":
+			return integrity(buildError.HistoryIndexBuildClass(), err)
+		case "storage_error":
+			return integrity("io_error", err)
+		default:
+			return integrity("index_verification", err)
+		}
+	}
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
 		return integrity("io_error", err)

@@ -1754,6 +1754,24 @@ jobs:
           go-version-file: go.mod
       - name: Build official history fixture driver and seed once per candidate
         run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
+      - name: Prepare embed stub for isolated history measurement
+        run: |
+          mkdir -p pkg/gateway/spa/assets
+          printf '<!doctype html>' > pkg/gateway/spa/index.html
+          touch pkg/gateway/spa/assets/.keep
+      - name: Capture Section-H history page allocation receipt
+        env:
+          OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT: ${{ github.workspace }}/build/tools/chat-history-measurements.log
+        run: python3 -I deploy/ci-worker/chat-history-ci.py measurement --receipt "$OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT"
+      - name: Preserve actual T18 producer log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-measurement-${{ github.run_id }}
+          path: build/tools/history-measurement-test.log
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
       - name: Upload candidate history fixture tools
         uses: actions/upload-artifact@v7
         with:
@@ -2916,6 +2934,8 @@ jobs:
           chmod +x build/tools/chat-history-fixture.test build/tools/chat-history-seed
           test -s build/tools/chat-history-fixture.test
           test -s build/tools/chat-history-seed
+          test -s build/tools/chat-history-measurements.log
+          printf 'OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT=%s/build/tools/chat-history-measurements.log\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
           printf 'OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY=%s/build/tools/chat-history-fixture.test\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
           printf 'OMNIPUS_CHAT_HISTORY_SEED_BINARY=%s/build/tools/chat-history-seed\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
 
