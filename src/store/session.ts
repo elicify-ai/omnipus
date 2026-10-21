@@ -531,10 +531,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const recordForWorkspace = options?.recordForWorkspace !== false
     // A hidden document is a prefetch, not a foreground open (FR-013).
     if (typeof document !== 'undefined' && document.hidden === true) return false
-    const { connection } = useConnectionStore.getState()
+    const { connection, isConnected } = useConnectionStore.getState()
     const entryWasBlocked = workspaceEntryBlocksSend(get(), useWorkspacesStore.getState().activeWorkspaceId)
 
-    if (connection) {
+    // WsLifecycle registers the connection before its first socket opens. Keep
+    // that selection for onConnected to reattach, just like an offline open.
+    // An OPEN socket whose send fails must still leave every store untouched.
+    if (connection && isConnected) {
       // #823 §6.1: send the bucket's cursor; only session_snapshot wipes now (Q3).
       const alreadyInFlight = attachAlreadyInFlight(sessionId, connection)
       const sent = alreadyInFlight || connection.send({ type: 'attach_session', session_id: sessionId, ...attachSessionCursorFields(sessionId) })
@@ -581,7 +584,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       return true
     } else {
       clearPendingAutoApproveOnSessionChange() // unlike failed-send, this branch changes state
-      console.warn('[session] attachToSession: no connection — attach_session not sent')
+      console.warn('[session] attachToSession: not connected — attach_session deferred')
       logDiagnostic('sessionAttachToSessionNoConnection', { sessionId, type })
       // The click would otherwise look like it "succeeded" with no replay ever
       // arriving — surface it. Reattach retries automatically on reconnect

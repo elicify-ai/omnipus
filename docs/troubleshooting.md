@@ -73,6 +73,20 @@ The web app signs you in once, then rides a session cookie. Scripts must present
 
 For local development only, `"dev_mode_bypass": true` under `gateway` lets requests through with no token; the gateway warns at boot and answers 503 on admin routes while it is on. Never enable it on a machine others can reach.
 
+## A conversation is missing after reloading the page
+
+Omnipus remembers the conversation you last viewed in each workspace. If its
+session data loads before the chat connection finishes connecting, Omnipus keeps
+that conversation selected and shows **“Not connected — this session will finish
+loading once your connection is restored.”** Its saved history loads automatically
+when the chat connection opens; you do not need to create another conversation.
+
+**“Could not restore your last conversation. Retry to try again.”** means restoration
+failed, rather than merely waiting for the initial chat connection. Reconnect if
+needed, then choose **Retry**. Omnipus does not silently replace an unverified
+conversation with another chat. If the warning persists, check the gateway log and
+include the affected workspace and conversation IDs when reporting it.
+
 ## Chat replies with a limited-mode message
 
 On a fresh install the gateway boots into **limited mode**: it serves the web app but has no model, and every chat message returns the reason, such as `no default model configured; gateway started in limited mode`. The same happens when the API key behind your default model stops resolving; each reply then names the credential at fault.

@@ -21,7 +21,8 @@ type Sent = { type: string; session_id?: string }
 function openConnection(): { sent: Sent[]; conn: ReattachSender } {
   const sent: Sent[] = []
   const conn = { send: vi.fn((f: Sent) => { sent.push(f); return true }) }
-  useConnectionStore.setState({ connection: conn as never })
+  // WsLifecycle marks the transport connected before either attach path runs.
+  useConnectionStore.setState({ connection: conn as never, isConnected: true })
   return { sent, conn: conn as ReattachSender }
 }
 
@@ -32,7 +33,7 @@ beforeEach(() => {
   useChatStore.setState({ sessionsById: {}, messages: [], isReplaying: false })
   useSessionStore.setState({ activeSessionId: null, activeAgentId: null, activeAgentType: null, sessionByWorkspace: {}, workspaceEntry: null })
   useWorkspacesStore.setState({ activeWorkspaceId: 'ws-single' })
-  useConnectionStore.setState({ connection: null })
+  useConnectionStore.setState({ connection: null, isConnected: false })
 })
 
 describe('one owner of the initial attach', () => {
