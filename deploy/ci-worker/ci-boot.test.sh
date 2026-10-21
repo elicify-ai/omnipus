@@ -19,6 +19,16 @@
 #   OK  marker + free lock + no run process → exit 0 (the real stop path)
 #   E2E the real idle-watchdog.sh with a 2 s threshold drives ci-boot.sh to exit 0
 #       (ci-boot waits 15 s for the lock: the watchdog holds it 5 s after its hook)
+#   SF1 the watchdog's state cannot be read (no /proc entry, failing ps) → the loop
+#       must not block waiting on it: the halt marker is still handled
+#   SF2 after an aborted halt, error output still reaches stderr (a later log-write
+#       failure is reported, not swallowed by a lasting 2>/dev/null)
+#   SF3 flock itself failing (not a timeout) is reported as a lock-check failure,
+#       and is never treated as having the lock
+#   T1  a run that appears WHILE ci-boot waits for the lock aborts the halt (the
+#       run check happens after the lock is taken, not before)
+#   T2  shutdown-check errors abort the halt: an unopenable lock file, and pgrep
+#       failing (exit 2) — the machine stays up and the lock is released
 #   CTL a broken mutant setup (no interpreter / a mutation anchor gone) must stop this
 #       harness with a SETUP ERROR, exit 2 and no PASS rows — never count as a killed
 #       mutant (PR #1396 review I3). Each control re-runs this file in a child.
@@ -128,9 +138,11 @@ fake_run() {
   sleep 0.5
 }
 
-# run_boot <boot-file> <watchdog> → starts ci-boot in the background; sets BOOT_PID
+# run_boot <boot-file> <watchdog> [VAR=value...] → starts ci-boot in the background with
+# extra environment for that process only; sets BOOT_PID
 run_boot() {
-  CI_BOOT_WATCHDOG="$2" bash "$1" >"$CASE_DIR/boot.out" 2>&1 &
+  local file="$1" wd="$2"; shift 2
+  env "$@" CI_BOOT_WATCHDOG="$wd" bash "$file" >"$CASE_DIR/boot.out" 2>&1 &
   BOOT_PID=$!
   PIDS+=("$BOOT_PID")
 }
@@ -145,27 +157,57 @@ wait_exit() {
   return 1
 }
 
-# --- mutants ---------------------------------------------------------------------------------
-mutate() { # <name> <python-replace-old> <new> — any failure is a SETUP ERROR (exit 2)
-  local dst="$SB/mut-$1.sh"
-  "$PYTHON" - "$BOOT" "$dst" "$2" "$3" <<'EOF' || setup_error "mutant $1: could not be generated (interpreter failed or mutation anchor missing in $BOOT)"
-import sys
-src, dst, old, new = sys.argv[1:5]
-s = open(src).read()
-if s.count(old) != 1:
-    sys.exit("mutation anchor found %d times, want exactly 1: %r" % (s.count(old), old))
-open(dst, "w").write(s.replace(old, new, 1))
-EOF
-  [ -s "$dst" ] || setup_error "mutant $1: $dst missing or empty"
-  if cmp -s "$BOOT" "$dst"; then setup_error "mutant $1: identical to $BOOT"; fi
-  bash -n "$dst" || setup_error "mutant $1: not valid bash"
+# wait_for <seconds> <command...> → 0 as soon as the command succeeds, 1 on timeout
+wait_for() {
+  local _ n=$(( $1 * 10 )); shift
+  for _ in $(seq 1 "$n"); do "$@" && return 0; sleep 0.1; done
+  return 1
 }
-mutate no-restart '    start_watchdog
-  fi
-  sleep "$POLL_SECONDS"' '    exit 0
-  fi
-  sleep "$POLL_SECONDS"'
-mutate no-lock 'if ! flock -w "$LOCK_WAIT_SECONDS" 7 2>/dev/null; then' 'if false; then'
+counter_is() { [ "$(cat "$WD_COUNTER" 2>/dev/null)" = "$1" ]; }
+log_has() { grep -q "$1" "$CI_BOOT_LOG" 2>/dev/null; }
+flock_child_of() { pgrep -P "$1" -x flock >/dev/null; }
+
+# --- mutants ---------------------------------------------------------------------------------
+mutate() { # <name> <old> <new> [<old> <new>...] — any failure is a SETUP ERROR (exit 2)
+  local dst="$SB/mut-$1.sh" name="$1"; shift
+  "$PYTHON" - "$BOOT" "$dst" "$@" <<'EOF' || setup_error "mutant $name: could not be generated (interpreter failed or mutation anchor missing in $BOOT)"
+import sys
+src, dst, pairs = sys.argv[1], sys.argv[2], sys.argv[3:]
+if not pairs or len(pairs) % 2:
+    sys.exit("mutate needs <old> <new> pairs")
+s = open(src).read()
+for old, new in zip(pairs[0::2], pairs[1::2]):
+    if s.count(old) != 1:
+        sys.exit("mutation anchor found %d times, want exactly 1: %r" % (s.count(old), old))
+    s = s.replace(old, new, 1)
+open(dst, "w").write(s)
+EOF
+  [ -s "$dst" ] || setup_error "mutant $name: $dst missing or empty"
+  if cmp -s "$BOOT" "$dst"; then setup_error "mutant $name: identical to $BOOT"; fi
+  bash -n "$dst" || setup_error "mutant $name: not valid bash"
+}
+mutate no-restart '      start_watchdog ;;' '      exit 0 ;;'
+mutate no-lock '  flock -w "$LOCK_WAIT_SECONDS" 7
+  rc=$?' '  rc=0'
+mutate unknown-waits '    unknown)
+' '    unknown)
+      wait "$WD_PID"
+'
+mutate stderr-muted 'if ! exec 7>>"$LOCKFILE"; then' 'if ! exec 7>>"$LOCKFILE" 2>/dev/null; then'
+mutate flock-error-as-held '"lock check FAILED on $LOCKFILE (flock exit $rc; check flock and the lock path)"' \
+  '"$LOCKFILE still held after ${LOCK_WAIT_SECONDS}s (a CI run owns the machine)"'
+mutate flock-error-as-locked '    *) abort_halt "lock check FAILED' '    *) : "lock check FAILED'
+mutate stale-run-check '  flock -w "$LOCK_WAIT_SECONDS" 7
+  rc=$?' '  pgrep -f "$RUNCI_PATTERN" >/dev/null; early=$?
+  flock -w "$LOCK_WAIT_SECONDS" 7
+  rc=$?' '  pgrep -f "$RUNCI_PATTERN" >/dev/null
+  rc=$?
+  case "$rc" in
+    1) ;; # no run' '  rc=$early
+  case "$rc" in
+    1) ;; # no run'
+mutate lockopen-exits 'if ! exec 7>>"$LOCKFILE"; then' 'if ! exec 7>>"$LOCKFILE"; then exit 0; fi; if false; then'
+mutate pgrep-error-as-idle '    *) abort_halt "cannot check for CI run processes (pgrep exit $rc)"; return 1 ;;' '    *) ;;'
 mutate no-recheck '    0) abort_halt "a CI run process is present (running or queued)"; return 1 ;;' '    0) ;;'
 
 # --- cases -------------------------------------------------------------------------------------
@@ -174,9 +216,8 @@ case_i1() { # <boot-file> → 0 if behaviour correct
   new_case "i1-$(basename "$1")"
   export WD_COUNTER="$CASE_DIR/counter"
   run_boot "$1" "$SB/wd-dies-once.sh"
-  sleep 3
+  wait_for 10 counter_is 2 || { kill_tree "$BOOT_PID"; return 1; }
   kill -0 "$BOOT_PID" 2>/dev/null || return 1
-  [ "$(cat "$WD_COUNTER" 2>/dev/null)" = 2 ] || return 1
   grep -q 'WATCHDOG DIED: .* exited with status 3' "$CI_BOOT_LOG" || return 1
   kill_tree "$BOOT_PID"
   return 0
@@ -202,6 +243,7 @@ case_i2b() { # run process present, lock free
   sleep 0.5
   : >"$CI_BOOT_HALT_MARKER"
   if wait_exit "$BOOT_PID" 3; then kill_tree "$RUN_PID"; return 1; fi
+  flock -n "$IDLE_WATCHDOG_LOCKFILE" true || { kill_tree "$RUN_PID"; kill_tree "$BOOT_PID"; return 1; }
   kill_tree "$RUN_PID"; kill_tree "$BOOT_PID"
   grep -q 'halt ABORTED: a CI run process is present' "$CI_BOOT_LOG" || return 1
   return 0
@@ -232,6 +274,86 @@ case_e2e() { # the real idle-watchdog drives the stop
   return 0
 }
 
+# stays_up_aborted <seconds> <log-pattern> → ci-boot still running after a halt request,
+# marker gone, the abort reason logged, no successful-halt record. Stops ci-boot.
+stays_up_aborted() {
+  if wait_exit "$BOOT_PID" "$1"; then return 1; fi
+  kill_tree "$BOOT_PID"
+  [ ! -e "$CI_BOOT_HALT_MARKER" ] || return 1
+  grep -q "$2" "$CI_BOOT_LOG" || return 1
+  ! grep -q 'halt: run lock held' "$CI_BOOT_LOG"
+}
+
+case_sf1() { # watchdog state unreadable: no /proc entry and ps failing; marker must still work
+  new_case "sf1-$(basename "$1")"
+  mkdir -p "$CASE_DIR/noproc" "$CASE_DIR/bin"
+  printf '#!/bin/sh\nexit 1\n' >"$CASE_DIR/bin/ps"; chmod +x "$CASE_DIR/bin/ps"
+  run_boot "$1" "$SB/wd-idle.sh" CI_BOOT_PROC_DIR="$CASE_DIR/noproc" PATH="$CASE_DIR/bin:$PATH"
+  sleep 1
+  : >"$CI_BOOT_HALT_MARKER"
+  wait_exit "$BOOT_PID" 6 || { kill_tree "$BOOT_PID"; return 1; }
+  [ "$EXIT_RC" -eq 0 ] || return 1
+  grep -q 'WATCHDOG STATE UNKNOWN' "$CI_BOOT_LOG" || return 1
+  ! grep -q 'WATCHDOG DIED' "$CI_BOOT_LOG"
+}
+
+case_sf2() { # after one aborted halt, a log-write failure still reaches stderr
+  new_case "sf2-$(basename "$1")"
+  fake_run "sf2-$(basename "$1")" yes
+  run_boot "$1" "$SB/wd-idle.sh" CI_BOOT_LOCK_WAIT_SECONDS=1
+  sleep 0.5
+  : >"$CI_BOOT_HALT_MARKER"
+  wait_for 5 log_has 'halt ABORTED' || { kill_tree "$RUN_PID"; kill_tree "$BOOT_PID"; return 1; }
+  rm -f "$CI_BOOT_LOG"; mkdir "$CI_BOOT_LOG" # the log path is now unwritable
+  : >"$CI_BOOT_HALT_MARKER"                 # second abort → say → write fails
+  sleep 3
+  kill_tree "$RUN_PID"; kill_tree "$BOOT_PID"
+  grep -q "cannot write $CI_BOOT_LOG" "$CASE_DIR/boot.out"
+}
+
+case_sf3() { # flock fails (bad wait value, exit 64), no run: reported as a lock failure, stays up
+  new_case "sf3-$(basename "$1")"
+  run_boot "$1" "$SB/wd-idle.sh" CI_BOOT_LOCK_WAIT_SECONDS=notanumber
+  sleep 0.5
+  : >"$CI_BOOT_HALT_MARKER"
+  stays_up_aborted 3 'halt ABORTED: lock check FAILED on .*(flock exit [0-9]*;' || return 1
+  ! grep -q 'still held after' "$CI_BOOT_LOG"
+}
+
+case_t1() { # a queued run appears while ci-boot waits for the lock
+  local holder
+  new_case "t1-$(basename "$1")"
+  fake_run "t1-$(basename "$1")" yes; holder=$RUN_PID
+  run_boot "$1" "$SB/wd-idle.sh" CI_BOOT_LOCK_WAIT_SECONDS=15
+  sleep 0.5
+  : >"$CI_BOOT_HALT_MARKER"
+  # readiness: ci-boot is inside its flock wait (no timing guess)
+  wait_for 5 flock_child_of "$BOOT_PID" || { kill_tree "$holder"; kill_tree "$BOOT_PID"; return 1; }
+  fake_run "t1-$(basename "$1")" no # matches the run pattern, holds no lock
+  kill_tree "$holder"                 # lock released → ci-boot takes it, then checks
+  stays_up_aborted 4 'halt ABORTED: a CI run process is present'; local rc=$?
+  kill_tree "$RUN_PID"
+  return $rc
+}
+
+case_t2_lockopen() { # the lock file cannot be opened (its directory is missing)
+  new_case "t2o-$(basename "$1")"
+  run_boot "$1" "$SB/wd-idle.sh" IDLE_WATCHDOG_LOCKFILE="$CASE_DIR/no-such-dir/runci.lock"
+  sleep 0.5
+  : >"$CI_BOOT_HALT_MARKER"
+  stays_up_aborted 3 'halt ABORTED: cannot open the run lock'
+}
+
+case_t2_pgrep() { # pgrep fails (invalid pattern, exit 2): abort, and the lock is released
+  new_case "t2p-$(basename "$1")"
+  run_boot "$1" "$SB/wd-idle.sh" IDLE_WATCHDOG_RUNCI_PATTERN='['
+  sleep 0.5
+  : >"$CI_BOOT_HALT_MARKER"
+  if wait_exit "$BOOT_PID" 3; then return 1; fi
+  flock -n "$IDLE_WATCHDOG_LOCKFILE" true || { kill_tree "$BOOT_PID"; return 1; }
+  stays_up_aborted 0 'halt ABORTED: cannot check for CI run processes (pgrep exit 2)'
+}
+
 expect() { # <label> <want: green|red> <case-fn> <boot-file>
   [ -s "$4" ] || setup_error "$1: boot file $4 missing"
   if "$3" "$4"; then got=green; else got=red; fi
@@ -247,6 +369,19 @@ expect "I2b queued run process aborts the halt"         green case_i2b "$BOOT"
 expect "I2b mutant without the re-check is caught"      red   case_i2b "$SB/mut-no-recheck.sh"
 expect "OK idle + free lock exits 0"                    green case_ok  "$BOOT"
 expect "E2E real watchdog stops via ci-boot"            green case_e2e "$BOOT"
+expect "SF1 unreadable watchdog state never blocks"     green case_sf1 "$BOOT"
+expect "SF1 mutant waiting on an unknown child caught"  red   case_sf1 "$SB/mut-unknown-waits.sh"
+expect "SF2 errors still reach stderr after an abort"   green case_sf2 "$BOOT"
+expect "SF2 mutant muting stderr is caught"             red   case_sf2 "$SB/mut-stderr-muted.sh"
+expect "SF3 flock failure reported as a lock failure"   green case_sf3 "$BOOT"
+expect "SF3 mutant reporting it as a held lock caught"  red   case_sf3 "$SB/mut-flock-error-as-held.sh"
+expect "T2 mutant treating flock failure as locked"     red   case_sf3 "$SB/mut-flock-error-as-locked.sh"
+expect "T1 run arriving during the lock wait aborts"    green case_t1  "$BOOT"
+expect "T1 mutant checking runs before the lock caught" red   case_t1  "$SB/mut-stale-run-check.sh"
+expect "T2 unopenable lock file aborts, stays up"       green case_t2_lockopen "$BOOT"
+expect "T2 mutant exiting on lock-open failure caught"  red   case_t2_lockopen "$SB/mut-lockopen-exits.sh"
+expect "T2 pgrep failure aborts and frees the lock"     green case_t2_pgrep "$BOOT"
+expect "T2 mutant treating pgrep failure as idle caught" red  case_t2_pgrep "$SB/mut-pgrep-error-as-idle.sh"
 
 # control <label> <VAR=value...>: re-run this harness with a broken mutant setup; it must
 # end in a SETUP ERROR, exit 2, with no PASS rows. Skipped inside the child itself.
