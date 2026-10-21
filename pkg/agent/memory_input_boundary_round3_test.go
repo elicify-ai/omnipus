@@ -437,7 +437,7 @@ func memoryInputRound3AssertQueued(t *testing.T, al *AgentLoop, msg bus.InboundM
 	require.Equal(t, 1, al.pendingSteeringCountForScope(msg.SessionID), "same-A control: one instruction under the helper/task's own id")
 	require.NotNil(t, al.steering)
 	al.steering.mu.Lock()
-	var messages []providers.Message
+	messages := make([]providers.Message, 0, len(al.steering.queues[msg.SessionID]))
 	for _, item := range al.steering.queues[msg.SessionID] {
 		message := item.message
 		message.Media = append([]string(nil), message.Media...)
@@ -618,7 +618,7 @@ func memoryInputRound3AssertRevived(
 	require.EqualValues(t, 1, recorder.calls.Load(), "the accepted instruction caused one real no-tool turn")
 	archive, err := al.GetSessionStore().ReadArchive(context.Background(), sessionID)
 	require.NoError(t, err)
-	var pairs [][2]string
+	pairs := make([][2]string, 0, len(archive))
 	for _, message := range archive {
 		pairs = append(pairs, [2]string{message.Role, message.Content})
 	}
