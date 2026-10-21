@@ -85,7 +85,9 @@ Picking a plan reveals two more fields — the files the task may touch, and whe
 
 ### Agent checklists
 
-Agents use `set_todos` for a working checklist. Each item can optionally include `active_form`, a short phrase describing the work in progress: for example, `text: "Draft the Q4 summary"` and `active_form: "Drafting the Q4 summary"`. This phrase is stored separately; it does not replace the normal checklist text on the Board.
+With checklist guidance enabled, agents are instructed to use `set_todos` for every request, including a one-line answer, before their first reply or other tool call. They mark the current item `in_progress`, future items `pending`, and finished items `completed`, updating the full list as work advances and before their final reply. These are prompt instructions, not a guarantee of model compliance; see [shared operating rules](agents.md#shared-operating-rules-for-native-agents) for the guidance flag and its current tool-availability limit.
+
+Each item can optionally include `active_form`, a present-participle phrase describing work in progress: for example, `text: "Draft the Q4 summary"` and `active_form: "Drafting the Q4 summary"`. This phrase is stored separately; it does not replace the normal checklist text on the Board. Use `create_task` with dependencies for a durable multi-wave plan while keeping your current working checklist here.
 
 `set_todos` trims the phrase and treats empty or whitespace-only strings as absent. A supplied value must be a string of at most 500 characters. The phrase survives saved-task reloads and is included when the checklist is read back. Each call still replaces the entire checklist, so include `active_form` again on later updates if you want to keep it.
 
