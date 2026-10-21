@@ -1,5 +1,7 @@
 # Combined-base QA migrations and two new RED regressions
 
+**Correction:** the first orphan/media fixture inputs used membership `both`. That was wrong for the combined release's C-ARCHIVE transcript-append contract (FR-004 / effects D3): the canonical transcript writer accepts and writes `chat`, while model records have a separate checked append. The first orphan/media executions therefore failed fixture setup and are NOT retention/media RED proof. Correct only those private fixture inputs and the corresponding fixture-format check to explicit `ViewMembershipChat`; all retention/media behavior oracles stay unchanged. The timing run reached its intended assertion independently.
+
 Approved production inputs are consumed only by normal merge: GREEN-BE411c53b782ee73940e4a7d7255e38d32bb302c0c and feature6d68066dcebd59f2ca8fea11de905beaeef95e48. Both are ancestors of merge94246faa95384defa888e4ca3230beea1e02a702; feature was already included, so the second normal merge was up to date. QA authors test/support changes only, never production fixes. Root/module instructions were re-read after merge. GitNexus impact tools are unavailable; direct test-helper/caller sweeps are Inferred low risk for test-only edits, not graph certification.
 
 | Item | Independent oracle | Test boundary / planned proof |

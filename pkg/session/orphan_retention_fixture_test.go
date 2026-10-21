@@ -40,7 +40,7 @@ func seedOrphanRetentionCanonicalDays(t *testing.T, store *session.UnifiedStore,
 		entry := session.TranscriptEntry{
 			ID:   []string{"orphan-entry", "recent-entry", "current-entry"}[index],
 			Type: session.EntryTypeMessage, Role: "user", Content: "genuine canonical orphan retention row",
-			AgentID: "orphan-agent", Timestamp: at, ViewMembership: session.ViewMembershipBoth,
+			AgentID: "orphan-agent", Timestamp: at, ViewMembership: session.ViewMembershipChat,
 		}
 		days = append(days, map[string]any{"day": day, "entries": []session.TranscriptEntry{entry}})
 	}
@@ -84,7 +84,7 @@ func seedOrphanRetentionCanonicalDays(t *testing.T, store *session.UnifiedStore,
 	require.Len(t, entries, 3)
 	for index, entry := range entries {
 		require.Equal(t, []string{"orphan-entry", "recent-entry", "current-entry"}[index], entry.ID)
-		require.Equal(t, session.ViewMembershipBoth, entry.ViewMembership)
+		require.Equal(t, session.ViewMembershipChat, entry.ViewMembership)
 		require.Equal(t, "orphan-agent", entry.AgentID)
 	}
 	return reopened

@@ -33,7 +33,7 @@ func historyCrossGroupEntry(t *testing.T, store *session.UnifiedStore, sid, id, 
 	t.Helper()
 	require.NoError(t, store.AppendTranscriptStrict(sid, session.TranscriptEntry{
 		ID: id, Type: session.EntryTypeToolCall, Role: "assistant", AgentID: "mia",
-		Timestamp: time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC), ViewMembership: session.ViewMembershipBoth,
+		Timestamp: time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC), ViewMembership: session.ViewMembershipChat,
 		ToolCalls: []session.ToolCall{{ID: session.ToolCallID(callID), Tool: "send_file", Status: "success", Parameters: map[string]any{}, Result: map[string]any{"media": []any{map[string]any{"ref": ref, "filename": filename, "content_type": "image/png", "type": "image"}}}}},
 	}))
 }
