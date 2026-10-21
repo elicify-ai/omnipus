@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -153,16 +154,32 @@ type grHarness struct {
 	cancel   context.CancelFunc
 }
 
-func newGRHarness(t *testing.T) *grHarness {
+// Optional actor configuration changes only fixture inputs. The default path
+// and all real runtime/ownership assertions remain unchanged for R1/R2/Stop.
+type grHarnessOptions struct {
+	extraAgents   []config.AgentConfig
+	extraPolicies map[string]string
+}
+
+func newGRHarness(t *testing.T, options ...grHarnessOptions) *grHarness {
 	t.Helper()
 	resetGoalTriggerStateForTest()
 	t.Cleanup(resetGoalTriggerStateForTest)
-	t.Setenv(config.EnvHome, t.TempDir())
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
 	cfg := &config.Config{Agents: config.AgentsConfig{
-		Defaults: config.AgentDefaults{Home: t.TempDir(), DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096, MaxToolIterations: 10},
+		// The loop derives its runtime home from this parent, while tools use
+		// that home to resolve the real default workspace and task stores.
+		Defaults: config.AgentDefaults{Home: filepath.Join(home, "agents"), DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096, MaxToolIterations: 10},
 		List:     []config.AgentConfig{{ID: testDefaultAgentID, Home: t.TempDir()}, {ID: grReviewerID, Home: t.TempDir()}},
 	}}
 	cfg.Sandbox.ToolPolicies = map[string]string{tools.SetGoalToolName: "allow", "message_parent": "allow", "read_file": "allow", "set_todos": "allow", "goal_claim": "allow"}
+	for _, option := range options {
+		cfg.Agents.List = append(cfg.Agents.List, option.extraAgents...)
+		for name, policy := range option.extraPolicies {
+			cfg.Sandbox.ToolPolicies[name] = policy
+		}
+	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	t.Cleanup(al.Close)
 	installTestSessionLauncher(t, al)

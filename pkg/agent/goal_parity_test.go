@@ -517,7 +517,7 @@ func TestNudgeLadderHasNoTerminatorOfItsOwn(t *testing.T) {
 	cp := unmetJudgeProvider("no adjudication may ever run on the keeper path")
 	judgeInst.Provider = cp
 
-	const cycles = 12 // six times the push budget
+	const cycles = 12 // more than the five-consecutive-outcome brake; these are notification-only ticks
 	for cycle := 1; cycle <= cycles; cycle++ {
 		al.goalQuietWindowSettle(time.Now())
 		rewindGoalActivity(t, al, store, sid)
@@ -533,9 +533,9 @@ func TestNudgeLadderHasNoTerminatorOfItsOwn(t *testing.T) {
 			t.Fatalf("D-A/JUDGE-FR-097: after %d quiet cycles rounds_used = %d, want 0 — the ladder must never "+
 				"fall through to an adjudication when its push budget is spent", cycle, rec.Round)
 		}
-		if rec.ZeroOutputPushes > goalZeroOutputPushMax {
-			t.Fatalf("JUDGE-FR-097: the push budget must still BOUND the pushes themselves; ZeroOutputPushes = %d, "+
-				"want at most %d", rec.ZeroOutputPushes, goalZeroOutputPushMax)
+		if rec.ZeroOutputPushes > 5 {
+			t.Fatalf("R6: the consecutive-unproductive streak must not exceed five; ZeroOutputPushes = %d, "+
+				"want at most %d", rec.ZeroOutputPushes, 5)
 		}
 	}
 	if cp.callCount() != 0 {

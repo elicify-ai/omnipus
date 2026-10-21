@@ -158,10 +158,10 @@ func TestKeeperReachesSessionMintedByARealTaskRun(t *testing.T) {
 	}
 
 	// Read the counters BACK from pkg/goal's store (C-09): the push was
-	// counted, and no round was burned (the keeper never adjudicates).
+	// not yet assessed as an outcome, and no round was burned (the keeper never adjudicates).
 	after := mustGoalRecord(t, gid)
-	if after.ZeroOutputPushes != 1 {
-		t.Fatalf("goal record ZeroOutputPushes = %d, want 1 — the keeper's push must be counted on the record",
+	if after.ZeroOutputPushes != 0 {
+		t.Fatalf("goal record ZeroOutputPushes = %d, want 0 — R6 counts completed unproductive outcomes, not first publication",
 			after.ZeroOutputPushes)
 	}
 	if after.Round != 0 {

@@ -394,16 +394,19 @@ func TestIdlePush_FiresOnceConsumesNoRoundRearms_G2(t *testing.T) {
 	if after.Round != 0 {
 		t.Fatalf("after first settle: rounds_used = %d, want 0 (a push consumes no round)", after.Round)
 	}
-	if after.ZeroOutputPushes != 1 {
-		t.Fatalf("after first settle: pushes = %d, want 1", after.ZeroOutputPushes)
+	if after.ZeroOutputPushes != 0 {
+		t.Fatalf("after first settle: assessed outcomes = %d, want 0 (R6: dispatch is not an outcome)", after.ZeroOutputPushes)
 	}
+
+	grTakePublishedReminder(t, al, sid)
 
 	// Fire 2 immediately: the push bumped the goal record's LastActivityAt to
 	// ~now, so the quiet window has NOT elapsed again → no second push (re-arm).
 	al.goalQuietWindowSettle(time.Now())
-	if after2 := goalRecordForSession(t, sid); after2.ZeroOutputPushes != 1 {
-		t.Fatalf("after second immediate settle: pushes = %d, want still 1 (re-arm only on new activity)", after2.ZeroOutputPushes)
+	if after2 := goalRecordForSession(t, sid); after2.ZeroOutputPushes != 0 {
+		t.Fatalf("after second immediate settle: assessed outcomes = %d, want still 0 (no outcome ran)", after2.ZeroOutputPushes)
 	}
+	grNoPublishedReminder(t, al)
 }
 
 // =========================== G-4: bounce economics ======================
@@ -579,13 +582,16 @@ func TestVerifierInFlight_SuppressesIdlePush_NoSelfRace_F5(t *testing.T) {
 		t.Fatalf("idle settle with in-flight verifier: Judge calls = %d, want 0", cp.callCount())
 	}
 
+	grNoPublishedReminder(t, al)
+
 	// Once the verifier turn completes (unregistered), the guard opens — but
 	// the activity clock must still gate the next fire (re-arm only on activity).
 	pe.VerifierRegistry().Unregister(verifierUnitForGoal(sid))
 	al.goalQuietWindowSettle(time.Now())
-	if after := goalRecordForSession(t, sid); after.ZeroOutputPushes != 1 {
-		t.Fatalf("after verifier completes: pushes = %d, want 1 (guard opens)", after.ZeroOutputPushes)
+	if after := goalRecordForSession(t, sid); after.ZeroOutputPushes != 0 {
+		t.Fatalf("after verifier completes: assessed outcomes = %d, want 0 (R6: guard opens before first outcome)", after.ZeroOutputPushes)
 	}
+	grTakePublishedReminder(t, al, sid)
 }
 
 // =========================== FR-107: per-goal-id independence ============
@@ -622,12 +628,15 @@ func TestPerGoalId_TwoSessionsIndependent_FR107(t *testing.T) {
 	if cpA.calls != 0 {
 		t.Fatalf("Judge calls = %d, want 0 (D13: idle never judges)", cpA.calls)
 	}
-	if afterA := goalRecordForSession(t, sidA); afterA.ZeroOutputPushes != 1 {
-		t.Fatalf("goal A (window elapsed) pushes = %d, want 1", afterA.ZeroOutputPushes)
+	if afterA := goalRecordForSession(t, sidA); afterA.ZeroOutputPushes != 0 {
+		t.Fatalf("goal A (window elapsed) assessed outcomes = %d, want 0 before its first outcome (R6)", afterA.ZeroOutputPushes)
 	}
 	if afterB := goalRecordForSession(t, sidB); afterB.ZeroOutputPushes != 0 {
 		t.Fatalf("goal B (window not elapsed): pushes = %d, want 0 (independent timer)", afterB.ZeroOutputPushes)
 	}
+
+	grTakePublishedReminder(t, al, sidA)
+	grNoPublishedReminder(t, al)
 
 	// A's push must NOT mark B as settled (per-goal-id markers, DD-7(b)).
 	if idleA, idleB := al.goalIsIdleSettling(goalIDA), al.goalIsIdleSettling(goalIDB); idleA == idleB {

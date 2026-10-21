@@ -220,16 +220,18 @@ func TestKeeper_ParkedCardSuppression(t *testing.T) {
 	// keeper dispatches its first bounded continue-push rather than judging
 	// immediately (FR-014b's own first-observation rule) — the proof that
 	// suppression genuinely lifted.
+	grNoPublishedReminder(t, al)
 	reg.pending[sid] = false
 	al.goalQuietWindowSettle(time.Now())
 	if got := cp.callCount(); got != 0 {
 		t.Fatalf("Judge calls = %d, want 0 (the first post-suppression check is a bounded push, not a verdict)", got)
 	}
 	after2 := goalRecordForSession(t, sid)
-	if after2.ZeroOutputPushes != 1 {
-		t.Fatalf("after the card clears: goal record ZeroOutputPushes = %d, want 1 (suppression must lift and normal keeper processing resume)",
+	if after2.ZeroOutputPushes != 0 {
+		t.Fatalf("after the card clears: goal record ZeroOutputPushes = %d, want 0 (R6: first dispatch has no assessed outcome)",
 			after2.ZeroOutputPushes)
 	}
+	grTakePublishedReminder(t, al, sid)
 }
 
 // ================ D6b: the un-wedged Ralph push (FR-015) ===================
@@ -272,6 +274,7 @@ func TestKeeper_SenderGateUnwedged_TwoFullIdleCycles(t *testing.T) {
 	resetGoalTriggerStateForTest()
 	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	grPrepareLegacyReminderRuntime(t, al)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
 	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
@@ -289,8 +292,8 @@ func TestKeeper_SenderGateUnwedged_TwoFullIdleCycles(t *testing.T) {
 		t.Fatalf("cycle 1: Judge calls = %d, want 0 (D13: idle never judges)", got)
 	}
 	after1 := goalRecordForSession(t, sid)
-	if after1.ZeroOutputPushes != 1 {
-		t.Fatalf("cycle 1: pushes = %d, want 1", after1.ZeroOutputPushes)
+	if after1.ZeroOutputPushes != 0 {
+		t.Fatalf("cycle 1: assessed outcomes = %d, want 0 before the first reminder executes (R6)", after1.ZeroOutputPushes)
 	}
 
 	var steerMsg bus.InboundMessage
@@ -318,16 +321,17 @@ func TestKeeper_SenderGateUnwedged_TwoFullIdleCycles(t *testing.T) {
 
 	// --- Cycle 2: rewind activity and prove a SECOND full cycle completes
 	// (a second bounded push, still bounded by goalZeroOutputPushMax). ---
-	rewindGoalActivity(t, al, store, sid)
+	rewindGoalActivityTimeOnly(t, store, sid)
 	al.goalQuietWindowSettle(time.Now())
 	if got := cp.callCount(); got != 0 {
 		t.Fatalf("cycle 2: Judge calls = %d, want 0", got)
 	}
 	after2 := goalRecordForSession(t, sid)
-	if after2.ZeroOutputPushes != 2 {
-		t.Fatalf("cycle 2: pushes = %d, want 2 (a second full idle cycle must complete — no wedge)",
+	if after2.ZeroOutputPushes != 1 {
+		t.Fatalf("cycle 2: assessed outcomes = %d, want 1 after the first text-only reminder (R6)",
 			after2.ZeroOutputPushes)
 	}
+	grTakePublishedReminder(t, al, sid)
 }
 
 // =========================== FR-031: persisted + rehydrated routing =======
@@ -457,141 +461,59 @@ func TestGoalRouting_MissingRoute_NeverStompsAFreshVerdictReason(t *testing.T) {
 
 // ================ D6c: the recordless-goal nudge ladder (FR-017) ==========
 
-// TestKeeper_NudgeLadderToFallback proves FR-017: a RECORDLESS active goal
-// (empty GoalCriteriaJSON, D3's forcing predicate's legal transient state)
-// is NEVER judged at idle — the keeper nudges up to goalZeroOutputPushMax
-// (N=2) times, then the engine's own fallback compile registers a record
-// itself, resetting the shared push counter for the recorded-goal ladder.
-func TestKeeper_NudgeLadderToFallback(t *testing.T) {
-	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
-	setGoalRoundsArmed(t, store, sid, "make the tests pass", 0, time.Now().Add(-1*time.Hour))
-
-	cp := unmetJudgeProvider("must never be called — nudging and the D13 push ladder never touch the Judge")
-	judgeInst.Provider = cp
-
-	al.goalQuietWindowSettle(time.Now()) // nudge 1
-	after1 := goalRecordForSession(t, sid)
-	if after1.ZeroOutputPushes != 1 {
-		t.Fatalf("after nudge 1: goal record ZeroOutputPushes = %d, want 1", after1.ZeroOutputPushes)
+// Founder R6 supersedes the old two-nudge/auto-compile test: a recordless
+// goal uses the same completed-outcome brake, with no compile fallback.
+func TestKeeper_RecordlessCompletedOutcomesUseUnifiedBrake(t *testing.T) {
+	h := grNewRecordlessBrake(t)
+	for dispatch := 1; dispatch <= 5; dispatch++ {
+		if dispatch > 1 {
+			h.age(t)
+		}
+		msg := h.reminder(t)
+		if got := goalRecordForSession(t, h.id).ZeroOutputPushes; got != dispatch-1 {
+			t.Errorf("R6 recordless dispatch %d assessed=%d want=%d", dispatch, got, dispatch-1)
+		}
+		grTextReminder(t, h, msg)
+		if len(goalRecordForSession(t, h.id).Criteria) != 0 {
+			t.Fatal("R6: no auto-compile/fallback may replace the recordless rule")
+		}
 	}
-	if goalRecordCompiledJSON(after1) != "" {
-		t.Fatal("after nudge 1: the goal must still be recordless")
-	}
-
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // nudge 2
-	after2 := goalRecordForSession(t, sid)
-	if after2.ZeroOutputPushes != 2 {
-		t.Fatalf("after nudge 2: goal record ZeroOutputPushes = %d, want 2", after2.ZeroOutputPushes)
-	}
-	if goalRecordCompiledJSON(after2) != "" {
-		t.Fatal("after nudge 2: the goal must still be recordless")
-	}
-	if got := cp.callCount(); got != 0 {
-		t.Fatalf("Judge-provider calls during the nudge phase = %d, want 0 — nudging never touches any model", got)
-	}
-
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // exhausted — engine fallback compile
-	after3 := goalRecordForSession(t, sid)
-	if goalRecordCompiledJSON(after3) == "" {
-		t.Fatal("FR-017: after N=2 nudges, the engine's fallback compile must register a record")
-	}
-	if after3.ZeroOutputPushes != 0 {
-		t.Fatalf("engine-authored fallback registration must reset the shared push counter; got %d, want 0", after3.ZeroOutputPushes)
-	}
-	// D7/FR-018 (wave-2 integration): the engine's fallback COMPILE runs on
-	// the Judge system agent's model, so the judge PROVIDER legitimately
-	// serves at most one call here — the compile, not an adjudication. Under
-	// D13 that compile call is now the ONLY way this provider is ever
-	// touched anywhere in this test — idle settlement itself never reaches
-	// the Judge, so this bound is now exact rather than a "<=1" allowance.
-	if got := cp.callCount(); got > 1 {
-		t.Fatalf("Judge-provider calls = %d, want <=1 (the single D7 fallback compile) — a recordless goal is never adjudicated", got)
-	}
-	if after3.Round != 0 {
-		t.Fatalf("GoalRoundsUsed = %d, want 0 — the fallback compile must not consume a verdict round", after3.Round)
-	}
-	callsAfterFallback := cp.callCount() // 0 or 1 (the compile, see the comment above) — baseline for the delta check below
-
-	// review-round-1 (keeper wedge): dispatchGoalFallbackCompile never hands
-	// off to a dispatched turn — it writes the record directly, engine-side
-	// — so nothing downstream (checkGoalLoopAfterTurn's
-	// bumpGoalActivityOnTurn) will ever clear the idleSettling marker
-	// markGoalIdleFired set before this cycle ran. The fix makes
-	// dispatchGoalFallbackCompile clear the marker itself, unconditionally,
-	// on every exit. Prove the REAL clearing here — deliberately using
-	// rewindGoalActivityTimeOnly (time-only, no manual marker clear) instead
-	// of rewindGoalActivity's crutch, so a regression that drops the fix
-	// wedges this assertion instead of being silently masked.
-	rewindGoalActivityTimeOnly(t, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // must still fire post-fallback, or the keeper is wedged
-	after4 := goalRecordForSession(t, sid)
-	// The goal is now RECORDED (goalRecordCompiledJSON(after3) != ""), so a firing
-	// cycle routes through the unified push ladder (JUDGE-FR-095/FR-097,
-	// D13, this wave) — it dispatches a bounded continue-push, NEVER the
-	// Judge. A wedged keeper would do NEITHER — it would leave the push
-	// counter untouched (the goalIsIdleSettling early-return in
-	// maybeSettleGoalIdle never reaches ANY of this code).
-	if got := cp.callCount(); got != callsAfterFallback {
-		t.Fatalf("post-fallback idle cycle invoked the Judge: calls = %d, want unchanged at %d (D13: idle never judges)",
-			got, callsAfterFallback)
-	}
-	if after4.ZeroOutputPushes != 1 {
-		t.Fatalf("post-fallback idle cycle did not fire (keeper wedged at goalIsIdleSettling): pushes = %d, want 1 "+
-			"(the fallback registration reset the shared counter to 0, so this is the RECORDED ladder's own first push)",
-			after4.ZeroOutputPushes)
+	h.age(t)
+	grAssertFifthPause(t, h)
+	if goalRecordForSession(t, h.id).Round != 0 {
+		t.Fatal("R6 idle reminders must never invoke a timer Judge")
 	}
 }
 
-// TestKeeper_NudgeLadderToFallback_ChannelOrigin_GetsOneFormattedEcho is
-// review-round-1 finding #11's test: a channel-routed RECORDLESS goal that
-// exhausts its nudge budget and falls through to the engine-authored D7
-// fallback compile must get exactly one formatted record echo (FR-020) —
-// the fallback compile is the path MOST likely to serve channel goals (an
-// agent on a channel origin that never called set_goal within two nudges),
-// and the raw emitGoalStatusFrameWithCriteriaAndDoD call this call site
-// used before the fix skipped the channel echo entirely.
-func TestKeeper_NudgeLadderToFallback_ChannelOrigin_GetsOneFormattedEcho(t *testing.T) {
-	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "", "telegram", "chat-fallback-1", "sk1", agentInst.ID)
-	setGoalRoundsArmed(t, store, sid, "make the tests pass", 0, time.Now().Add(-1*time.Hour))
-
-	cp := unmetJudgeProvider("fallback compile reason")
-	judgeInst.Provider = cp
-
-	al.goalQuietWindowSettle(time.Now()) // nudge 1
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // nudge 2
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // exhausted — engine fallback compile
-
-	after := goalRecordForSession(t, sid)
-	if goalRecordCompiledJSON(after) == "" {
-		t.Fatal("setup: the fallback compile must have registered a record")
-	}
-
-	select {
-	case msg := <-al.bus.OutboundChan():
-		if msg.Channel != "telegram" || msg.ChatID != "chat-fallback-1" {
-			t.Fatalf("echo routed to %s/%s, want telegram/chat-fallback-1", msg.Channel, msg.ChatID)
+// R6 retains actual non-web delivery: exactly one visible pause, never an
+// obsolete engine-authored compile echo after two notifications.
+func TestKeeper_RecordlessChannelOriginGetsOneVisiblePause(t *testing.T) {
+	h := grNewRecordlessBrake(t)
+	h.al.recordGoalRouting(h.id, h.goalID, "telegram", "r6-channel", "agent:"+testDefaultAgentID+":session:"+h.id, testDefaultAgentID)
+	for i := 0; i < 5; i++ {
+		if i > 0 {
+			h.age(t)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("finding #11: a channel-origin fallback registration must get exactly one formatted echo, got none")
+		grTextReminder(t, h, h.reminder(t))
 	}
-	select {
-	case msg := <-al.bus.OutboundChan():
-		t.Fatalf("expected exactly ONE echo, got a second: %+v", msg)
-	case <-time.After(200 * time.Millisecond):
+	h.age(t)
+	grAssertFifthPause(t, h)
+	pauses := 0
+	for {
+		select {
+		case msg := <-h.al.bus.OutboundChan():
+			if msg.Content == "No progress after 5 reminders — goal paused. Reply to continue." {
+				pauses++
+				if msg.Channel != "telegram" || msg.ChatID != "r6-channel" {
+					t.Fatalf("R6 pause routed to %s/%s, want telegram/r6-channel", msg.Channel, msg.ChatID)
+				}
+			}
+		default:
+			if pauses != 1 {
+				t.Fatalf("R6 channel visible pause count=%d, want exactly one", pauses)
+			}
+			return
+		}
 	}
 }
 
@@ -608,58 +530,47 @@ func TestKeeper_NudgeLadderToFallback_ChannelOrigin_GetsOneFormattedEcho(t *test
 // sessionHasTranscriptOutputSince) and the watermark-priming helper this
 // suite used to need are deleted outright, not merely unreferenced.
 
-// TestPushLadder_RecordedGoal_BoundedThenQuiet proves FR-097's core shape: a
-// RECORDED goal at idle dispatches a bounded continue-push — never a
-// verdict, never a round — up to goalZeroOutputPushMax (2) times, after
-// which the ladder goes quiet: NO further push, and (FR-095's own text)
-// NEVER a fall-through to an adjudication. Past the budget the goal's sole
-// remaining terminator is the multi-day idle-expiry sweep (D-A, owned by
-// E8) — this test proves the "leave it quiet" half of that contract, not
-// the sweep itself.
-func TestPushLadder_RecordedGoal_BoundedThenQuiet(t *testing.T) {
+// TestPushLadder_RecordedGoal_FiveUnproductiveThenVisiblePause replaces the
+// retired lifetime-two quota with founder R6: count real unproductive outcomes,
+// allow five reminders to execute, then pause visibly without judging or ending.
+func TestPushLadder_RecordedGoal_FiveUnproductiveThenVisiblePause(t *testing.T) {
 	resetGoalTriggerStateForTest()
 	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	grPrepareLegacyReminderRuntime(t, al)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
 	al.recordGoalRouting(sid, "", "webchat", "c1", "sk1", agentInst.ID)
-	setGoalRecordArmed(t, store, sid, "goal push ladder", 0, time.Now().Add(-1*time.Hour))
-
-	cp := unmetJudgeProvider("must never be called — FR-095 retires claimless adjudication")
+	setGoalRecordArmed(t, store, sid, "goal push ladder", 0, time.Now().Add(-time.Hour))
+	cp := unmetJudgeProvider("must never be called — idle reminders never judge")
 	judgeInst.Provider = cp
-
-	al.goalQuietWindowSettle(time.Now()) // push 1
-	after1 := goalRecordForSession(t, sid)
-	if after1.ZeroOutputPushes != 1 || after1.Round != 0 {
-		t.Fatalf("push 1: pushes=%d (want 1) rounds=%d (want 0)", after1.ZeroOutputPushes, after1.Round)
+	for dispatch := 1; dispatch <= 5; dispatch++ {
+		al.goalQuietWindowSettle(time.Now())
+		rec := goalRecordForSession(t, sid)
+		if rec.ZeroOutputPushes != dispatch-1 || rec.Round != 0 {
+			t.Fatalf("R6 dispatch %d: assessed outcomes=%d rounds=%d, want %d/0", dispatch, rec.ZeroOutputPushes, rec.Round, dispatch-1)
+		}
+		grDrivePublishedReminder(t, al, sid)
+		if cp.callCount() != 0 {
+			t.Fatalf("reminder %d invoked the Judge %d times, want 0", dispatch, cp.callCount())
+		}
+		rewindGoalActivityTimeOnly(t, store, sid)
+	}
+	al.goalQuietWindowSettle(time.Now())
+	grNoPublishedReminder(t, al)
+	rec := goalRecordForSession(t, sid)
+	if rec.ZeroOutputPushes != 5 || rec.Round != 0 || string(rec.State) != "active" {
+		t.Fatalf("R6 after fifth outcome: streak=%d rounds=%d state=%s, want 5/0/active", rec.ZeroOutputPushes, rec.Round, rec.State)
+	}
+	view, err := store.ReadTranscriptView(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := grHasSystemLine(view.Entries, "No progress after 5 reminders — goal paused. Reply to continue."); got != 1 {
+		t.Fatalf("R6 visible system pause lines=%d, want exactly 1", got)
 	}
 	if cp.callCount() != 0 {
-		t.Fatalf("push 1 must never call the Judge; got %d", cp.callCount())
-	}
-
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // push 2 (budget: goalZeroOutputPushMax == 2)
-	after2 := goalRecordForSession(t, sid)
-	if after2.ZeroOutputPushes != 2 {
-		t.Fatalf("push 2: pushes = %d, want 2", after2.ZeroOutputPushes)
-	}
-	if got := cp.callCount(); got != 0 {
-		t.Fatalf("push 2 must still never call the Judge; got %d", got)
-	}
-
-	// Budget now spent. FR-095/097: MUST NOT push a third time and MUST NOT
-	// fall through to an adjudication — the ladder goes quiet.
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now())
-	after3 := goalRecordForSession(t, sid)
-	if after3.ZeroOutputPushes != 2 {
-		t.Fatalf("after budget spent: pushes = %d, want unchanged at 2 (no third push)", after3.ZeroOutputPushes)
-	}
-	if after3.Round != 0 {
-		t.Fatalf("after budget spent: rounds = %d, want 0 (FR-095/097 forbid the claimless adjudication fall-through)", after3.Round)
-	}
-	if got := cp.callCount(); got != 0 {
-		t.Fatalf("after budget spent: Judge calls = %d, want 0 — the goal is left quiet, not judged", got)
+		t.Fatalf("the paused keeper invoked the Judge %d times, want 0", cp.callCount())
 	}
 }
 
