@@ -29,6 +29,7 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { resetTokenValidationCache } from '@/routes/authValidation'
 import { json, MAIN_ID, Network, NOW, resetRealStores, TestSocket, WS } from './harness'
 import { availableDetail, page } from '../chat-history-paging/fixtures'
+import { wireHistorySnapshot } from '../chat-history-paging/legacy-wire'
 
 export const MAIN_PATH = `/workspaces/${WS}/chat`
 export const SETTINGS_PATH = '/settings?tab=chat'
@@ -169,7 +170,11 @@ async function completeSetupAttaches(socket: TestSocket) {
   answeredAttachCount.set(socket, requests.length)
   await act(async () => {
     for (const request of unanswered) {
-      socket.receive({ type: 'session_snapshot', session_id: request.session_id, seq: 1, boot_id: 'stage1-fixture', reason: 'unknown_position' })
+      // Setup has no selected historical carriers. Session state/completion
+      // below are live controls, not archive rows or source groups (D3/D4).
+      socket.receive(wireHistorySnapshot(page([], { sessionId: request.session_id }), {
+        seq: 1, boot_id: 'stage1-fixture', reason: 'unknown_position',
+      }))
       socket.receive({ type: 'session_state', session_id: request.session_id, user_id: 'stage1-tester', emitted_at: NOW, pending_approvals: [] })
       socket.receive({ type: 'catch_up_complete', session_id: request.session_id, seq: 1, boot_id: 'stage1-fixture', mode: 'snapshot' })
     }

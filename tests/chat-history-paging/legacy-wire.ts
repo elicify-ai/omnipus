@@ -3,6 +3,7 @@
 // This is NOT the product position encoder, selector, projector or byte meter.
 import { createHash } from 'node:crypto'
 import type { SessionDetail, SessionHistoryResponse } from '@/lib/api/generated/openapi-types'
+import type { ServerFrame, SessionSnapshotFrame } from '@/lib/api/generated/asyncapi-types'
 
 // not-wire-format: deliberately malformed per-item test input can remain unknown;
 // the envelope/metadata still derive from the generated contract, not a clone.
@@ -109,4 +110,59 @@ export function wireHistoryPage(
     result.page_info.projected_bytes = Buffer.byteLength(JSON.stringify({ ...result, page_info: info }))
   }
   return result
+}
+
+// not-wire-format: test construction options derived from the generated frame.
+type SnapshotFixtureOptions = Pick<SessionSnapshotFrame, 'seq' | 'boot_id' | 'reason' | 'secret_requests'>
+
+/** D3/D4/D10: metadata describes the selected sources, never live/control frames. */
+export function wireHistorySnapshot(
+  history: FixtureHistoryPage,
+  options: SnapshotFixtureOptions,
+  sourceFrames: readonly ServerFrame[] = [],
+): SessionSnapshotFrame {
+  const { session_id, entries, ...metadata } = history
+  const positions = entries.map((source) => {
+    if (!object(source) || typeof source.history_position !== 'string') {
+      throw new Error('Invalid snapshot fixture: every selected source needs its recorded history_position')
+    }
+    return source.history_position
+  })
+  const framePositions = sourceFrames.map((frame) => {
+    if (!('history_origin' in frame) || !frame.history_origin) {
+      throw new Error('Invalid snapshot fixture: selected source frames require history_origin')
+    }
+    if (!('session_id' in frame) || frame.session_id !== session_id) {
+      throw new Error('Invalid snapshot fixture: source carrier belongs to a different session')
+    }
+    return frame.history_origin.position
+  })
+  const uniqueFrames = [...new Set(framePositions)]
+  if (new Set(positions).size !== positions.length || history.page_info.source_group_count !== positions.length
+    || uniqueFrames.length !== positions.length || positions.some((position, index) => uniqueFrames[index] !== position)) {
+    throw new Error('Invalid snapshot fixture: source groups and origin-bearing carriers must agree in occurrence order')
+  }
+  if (history.page_info.mode !== 'latest') throw new Error('Invalid snapshot fixture: snapshot must describe a latest page')
+  if (positions.length === 0 && (history.page_info.row_count !== 0 || history.has_earlier || history.has_later
+    || history.next_before !== undefined || history.next_after !== undefined
+    || history.page_info.first_position !== undefined || history.page_info.last_position !== undefined)) {
+    throw new Error('Invalid snapshot fixture: empty terminal selection has zero rows and no continuations or positions')
+  }
+  const frame: SessionSnapshotFrame = { type: 'session_snapshot', session_id, ...metadata, ...options }
+  // Independently meter compact public JSON payloads, excluding accounting
+  // fields themselves and control/live projection. WS frames are separate
+  // payloads: no invented JSON-array brackets or transport headers are charged.
+  const { projected_bytes, soft_byte_budget, byte_budget_exceeded, budget_override, ...info } = frame.page_info
+  void projected_bytes; void soft_byte_budget; void byte_budget_exceeded; void budget_override
+  const restBytes = Buffer.byteLength(JSON.stringify({ ...history, page_info: info }))
+  const { secret_requests, ...historicalFrame } = frame
+  void secret_requests // Separately governed current secret-request projection, not history.
+  const wsBytes = Buffer.byteLength(JSON.stringify({ ...historicalFrame, page_info: info }))
+    + sourceFrames.reduce((sum, carrier) => sum + Buffer.byteLength(JSON.stringify(carrier)), 0)
+  const bytes = Math.max(restBytes, wsBytes)
+  if ((bytes > frame.page_info.soft_byte_budget) !== frame.page_info.byte_budget_exceeded) {
+    throw new Error('Invalid snapshot fixture: actual public carriers contradict the declared budget override')
+  }
+  frame.page_info = { ...frame.page_info, projected_bytes: bytes }
+  return frame
 }
