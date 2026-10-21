@@ -144,6 +144,27 @@ func historyMeasurementCandidate(t *testing.T) string {
 	return sha
 }
 
+// Return whether a file was written; an unset output path is deliberately a
+// no-op for this writer, never a gate around the real measurements or checks.
+func historyMeasurementWriteReceipt(t *testing.T, records []historyPageMeasurement) bool {
+	t.Helper()
+	file := os.Getenv("OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT")
+	if file == "" {
+		return false
+	}
+	require.True(t, filepath.IsAbs(file), "Section O receipt location is absolute")
+	require.Len(t, records, 2)
+	var text strings.Builder
+	_, markerErr := fmt.Fprintf(&text, "HEAD: %s\n", historyMeasurementCandidate(t))
+	require.NoError(t, markerErr)
+	encoder := json.NewEncoder(&text)
+	for _, record := range records {
+		require.NoError(t, encoder.Encode(record))
+	}
+	require.NoError(t, os.WriteFile(file, []byte(text.String()), 0o600))
+	return true
+}
+
 func TestHistoryPageMeasurement_SectionHReceipt(t *testing.T) {
 	// Exact named remote-only heavy probe. No receipt-env gate: unset still
 	// constructs, measures and verifies both records in memory.
@@ -161,26 +182,50 @@ func TestHistoryPageMeasurement_SectionHReceipt(t *testing.T) {
 		records = append(records, record)
 		t.Logf("complete-page case=%s sample_count=%d allocated_bytes=%d", label, record.SampleCount, record.AllocatedBytes)
 	}
+	require.Len(t, records, 2)
+	// Preserve actual evidence even when the performance criterion fails below.
+	// The receipt is measurements, not a PASS; CI must still honor this test's exit.
+	originalPath := os.Getenv("OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT")
+	written := historyMeasurementWriteReceipt(t, records)
+	require.Equal(t, originalPath != "", written)
+	var originalReceipt []byte
+	if written {
+		var readErr error
+		originalReceipt, readErr = os.ReadFile(originalPath)
+		require.NoError(t, readErr)
+	}
+	shortWrong := historyMeasureCompletePage(t, fixtures[0], 1000, true)
+	longWrong := historyMeasureCompletePage(t, fixtures[1], 100000, true)
+	negativeDelta := longWrong.AllocedBytesPerOp() - shortWrong.AllocedBytesPerOp()
+	negativeDetected := float64(negativeDelta) > float64(shortWrong.AllocedBytesPerOp())*0.10
+	t.Logf("full-read-control short_allocated_bytes=%d long_allocated_bytes=%d", shortWrong.AllocedBytesPerOp(), longWrong.AllocedBytesPerOp())
+	if negativeDetected {
+		t.Log("T18_FULL_READ_NEGATIVE_CONTROL=PASS actual full-read composition violates the adopted allocation comparator")
+	}
+	// Exercise unset-output behavior with these SAME real measured records. It
+	// must neither bypass the earlier measurements nor alter their saved evidence.
+	measuredCopy := append([]historyPageMeasurement(nil), records...)
+	t.Run("unset_receipt", func(t *testing.T) {
+		t.Setenv("OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT", "")
+		require.False(t, historyMeasurementWriteReceipt(t, records))
+		require.Equal(t, measuredCopy, records)
+		if written {
+			after, readErr := os.ReadFile(originalPath)
+			require.NoError(t, readErr)
+			require.Equal(t, originalReceipt, after, "unset output cannot rewrite the existing actual receipt")
+		}
+		t.Log("T18_UNSET_RECEIPT_CONTROL=PASS same real measurements retained; no receipt write")
+	})
+	// Accumulate criterion failures at the END: never turn the unchanged10%
+	// bound into a warning/pass or prevent the later controls from executing.
 	delta := records[1].AllocatedBytes - records[0].AllocatedBytes
 	if delta < 0 {
 		delta = -delta
 	}
-	require.LessOrEqual(t, float64(delta), float64(records[0].AllocatedBytes)*0.10, "D-A1/H: complete gateway+carrier allocations vary at most10%% with equal suffixes")
-	shortWrong := historyMeasureCompletePage(t, fixtures[0], 1000, true)
-	longWrong := historyMeasureCompletePage(t, fixtures[1], 100000, true)
-	require.Greater(t, float64(longWrong.AllocedBytesPerOp()-shortWrong.AllocedBytesPerOp()), float64(shortWrong.AllocedBytesPerOp())*0.10, "instrument must reject the planted REAL full-read allocation regression")
-	t.Log("T18_FULL_READ_NEGATIVE_CONTROL=PASS actual full-read composition violates the adopted allocation comparator")
-	require.Len(t, records, 2)
-	file := os.Getenv("OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT")
-	if file != "" {
-		require.True(t, filepath.IsAbs(file), "Section O receipt location is absolute")
-		var text strings.Builder
-		_, markerErr := fmt.Fprintf(&text, "HEAD: %s\n", historyMeasurementCandidate(t))
-		require.NoError(t, markerErr)
-		encoder := json.NewEncoder(&text)
-		for _, record := range records {
-			require.NoError(t, encoder.Encode(record))
-		}
-		require.NoError(t, os.WriteFile(file, []byte(text.String()), 0o600))
+	if float64(delta) > float64(records[0].AllocatedBytes)*0.10 {
+		t.Errorf("D-A1/H: complete gateway+carrier allocations exceed unchanged10%% bound: delta=%d allowed=%g short=%d long=%d", delta, float64(records[0].AllocatedBytes)*0.10, records[0].AllocatedBytes, records[1].AllocatedBytes)
+	}
+	if !negativeDetected {
+		t.Errorf("instrument must reject the planted REAL full-read allocation regression: delta=%d allowed=%g", negativeDelta, float64(shortWrong.AllocedBytesPerOp())*0.10)
 	}
 }
