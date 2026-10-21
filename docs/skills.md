@@ -78,6 +78,28 @@ A skill is one folder, one file. These are the parts the app reads.
 
 The description is the part that decides whether the skill is ever used. The agent picks a skill by matching the description against the task, so write it as a trigger: "Use when the user asks to cut a release or publish release notes" fires; "Release process documentation" does not. Name the phrases a task would actually contain.
 
+### Keep the description predictable
+
+If you omit `description` from the frontmatter, Omnipus uses the first parsed paragraph with non-empty extracted text as the skill's advertised description. Paragraphs inside `<div>` and `<details>` wrappers can now count too, when the tags are on their own lines with blank lines around the inner Markdown, as in the example below. An introductory banner inside such a wrapper can therefore become the description instead of the useful task-trigger paragraph after it.
+
+Do not rely on an HTML wrapper to hide text from this fallback. Set an explicit frontmatter `description` to keep the task trigger stable:
+
+```markdown
+---
+description: Use when the user asks for release notes.
+---
+
+<div>
+
+Introductory banner text.
+
+</div>
+
+Write the release notes using the steps below.
+```
+
+The explicit description wins over body text. If you rely on the fallback instead, put the intended task-trigger paragraph before banners or wrappers.
+
 ## Limits and things to watch
 
 - Installing is not granting. A new skill sits unused until you grant it to an agent, and a new agent starts with no skills at all.
