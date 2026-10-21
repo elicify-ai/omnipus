@@ -62,14 +62,14 @@ func TestGoalReminderR6PauseIsPublicThroughRESTAndLiveHub(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "actual session REST view must remain readable")
 	var detail generated.SessionDetail
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
-	var rows []generated.Message
+	var rows []map[string]json.RawMessage
 	for _, row := range detail.Messages {
 		if row.Content != nil && *row.Content == r6GatewayPause {
-			rows = append(rows, row)
+			rows = append(rows, r6MessageFields(t, row))
 		}
 	}
 	require.Len(t, rows, 1, "R6: exact pause must be one PUBLIC REST system row, not a hidden bookmark/user bubble")
-	row := r6MessageFields(t, rows[0])
+	row := rows[0]
 	assert.JSONEq(t, `"system"`, string(row["role"]))
 	assert.JSONEq(t, `"system"`, string(row["type"]))
 	assert.JSONEq(t, `"`+f.goalID+`"`, string(row["goal_id"]))
@@ -101,7 +101,7 @@ func TestGoalReminderR6PauseIsPublicThroughRESTAndLiveHub(t *testing.T) {
 	assert.Equal(t, 0, persisted.Round, "idle pause is not a timer adjudication")
 }
 
-func r6MessageFields(t *testing.T, message generated.Message) map[string]json.RawMessage {
+func r6MessageFields(t *testing.T, message any) map[string]json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(message)
 	require.NoError(t, err)

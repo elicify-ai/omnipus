@@ -844,12 +844,9 @@ func TestGoalLoop_ReInjectedFollowUp_AdvancesGoal(t *testing.T) {
 
 // --- ADR-088 D3 AMENDMENT item 3: immediate post-turn correction --------
 //
-// checkGoalLoopAfterTurn's maybeNudgeUnregisteredGoal replaces provider
-// tool-choice forcing as the enforcement point: a completed goal turn that
-// left the compiled record empty gets nudged RIGHT THEN, not at the next
-// idle quiet window (contrast TestKeeper_NudgeLadderToFallback in
-// goal_keeper_repairs_test.go, which needs al.goalQuietWindowSettle to
-// advance the SAME GoalZeroOutputPushes counter via the idle path).
+// The immediate record-registration reminder remains, but founder R6 counts
+// completed reminder outcomes, never publication itself. The ordinary human
+// turn here is NOT a completed reminder and must leave the outcome streak zero.
 
 // TestGoalLoop_PostTurnCorrection_NudgesImmediatelyWhenUnregistered proves
 // the core case: an ordinary turn (no GOAL_STATUS marker, no set_goal call)
@@ -882,9 +879,8 @@ func TestGoalLoop_PostTurnCorrection_NudgesImmediatelyWhenUnregistered(t *testin
 	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, result)
 
 	after := goalRecordForSession(t, sid)
-	if after.ZeroOutputPushes != 1 {
-		t.Fatalf("goal record ZeroOutputPushes = %d, want 1 immediately after the turn — the correction must "+
-			"not wait for the idle quiet window", after.ZeroOutputPushes)
+	if after.ZeroOutputPushes != 0 {
+		t.Fatalf("R6: initial registration reminder publication assesses zero completed reminder outcomes, got %d", after.ZeroOutputPushes)
 	}
 
 	mu.Lock()

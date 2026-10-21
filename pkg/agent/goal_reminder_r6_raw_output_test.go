@@ -120,7 +120,7 @@ func TestGoalReminderRawBackgroundOutputContract(t *testing.T) {
 	ctx = tools.WithWorkspaceID(ctx, testHarnessWorkspaceMembershipID)
 	ctx = tools.WithTurnWorkspaceDir(ctx, workDir)
 	finished := make(chan *tools.ToolResult, 1)
-	result := execTool.ExecuteAsync(ctx, map[string]any{"action": "run", "command": command, "cwd": workDir, "run_in_background": true}, func(_ context.Context, r *tools.ToolResult) { finished <- r })
+	result := execTool.ExecuteAsync(ctx, map[string]any{"action": "run", "command": command, "cwd": ".", "run_in_background": true}, func(_ context.Context, r *tools.ToolResult) { finished <- r })
 	require.False(t, result.IsError, "real background process must start: %s", result.ForLLM)
 	var response tools.ExecResponse
 	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &response))

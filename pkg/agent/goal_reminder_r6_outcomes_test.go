@@ -95,7 +95,15 @@ func TestGoalReminderSuppressionDoesNotAssess(t *testing.T) {
 			h := grNewRecordedBrake(t)
 			switch state {
 			case "Stop":
+				run := h.human(t, "Keep working until I press the real Stop.")
+				call := grAwaitCall(t, h.root, run)
 				grStop(t, h)
+				h.root.release(call)
+				grJoin(t, run)
+				grAwaitOwner(t, call)
+				stopped := h.load(t)
+				require.Equal(t, session.LifecycleStopped, stopped.State, "the control must land a real Stop, not target an already terminal root")
+				require.NotNil(t, stopped.StopNote)
 			case "PendingQuestion":
 				reg := askuser.NewRegistry(h.al.GetSessionStore(), nil, askuser.Options{})
 				t.Cleanup(reg.Quiesce)

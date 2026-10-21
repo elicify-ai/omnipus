@@ -92,6 +92,13 @@ func grAttemptTool(t *testing.T, h *grHarness, name string, args map[string]any,
 			}
 		}
 	}
+	if name == "r6_no_registered_operation" {
+		// This call is refused by the real policy/offered gate BEFORE registry
+		// dispatch. Do not invent an archived tool row or call it a registry miss.
+		require.Empty(t, actual, "guarded unknown call must never acquire a dispatched tool row")
+		require.Contains(t, p.toolText, "permission_denied", "positively observe the real refusal delivered to the provider")
+		return
+	}
 	require.Len(t, actual, 1)
 	assert.Equal(t, wantArchivedName, actual[0].Tool, "positively observe the actual hook/registry result, not just hook invocation")
 	assert.Equal(t, wantStatus, actual[0].Status)
@@ -104,7 +111,7 @@ func TestGoalReminderToolInvocationTruth(t *testing.T) {
 		replace, progress                bool
 		operations                       int64
 	}{
-		{name: "RegistryLookupFailureDoesNotReset", tool: "r6_no_registered_operation", args: map[string]any{}, status: "error"},
+		{name: "GuardedUnknownCallDoesNotReset", tool: "r6_no_registered_operation", args: map[string]any{}, status: "error"},
 		{name: "RegistryValidationFailureDoesNotReset", mode: "success", args: map[string]any{}, status: "error"},
 		{name: "DeferredExternalOperationWasNotInvoked", mode: "deferred", args: map[string]any{"payload": "work"}, status: "success"},
 		{name: "DeferredCannotBecomeProgressThroughAfterToolSuccess", mode: "deferred", args: map[string]any{"payload": "work"}, replace: true, status: "success"},

@@ -100,14 +100,34 @@ func r6NewPublicFixture(t *testing.T) *r6PublicFixture {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, provider)
 	al.SetGoalRouteSessionStore()
-	// This public input exercises the actual ordinary entry and real registered
-	// set_goal activation. No running/lifecycle/execution/route stamp is seeded.
-	_, err := al.ProcessDirectWithChannelAs(context.Background(), "mia", "Register the goal for this work.", "r6-public-root", "webchat", "r6-public-chat")
+	// Real metadata/input producer + normal Run receiver. ProcessDirect does
+	// not bind a concrete ordinary root and is not an admission fixture.
+	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err)
-	records, err := al.GetSessionLifecycleStore().List(session.LifecycleFilter{})
+	owner, ws := "r6-public-owner", testHarnessWorkspaceMembershipID
+	require.NoError(t, al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{Owner: &owner, WorkspaceID: &ws}))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- al.Run(ctx) }()
+	t.Cleanup(func() {
+		provider.releaseAll()
+		cancel()
+		select {
+		case err := <-done:
+			require.True(t, err == nil || errors.Is(err, context.Canceled), "real runtime shutdown failed: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Error("real gateway test runtime did not join")
+		}
+	})
+	const input = "Register the goal for this work."
+	require.NoError(t, al.GetSessionStore().AppendTranscriptStrict(meta.ID, session.TranscriptEntry{ID: "r6-public-human-input", Role: "user", AgentID: "mia", Content: input, Timestamp: time.Now().UTC()}))
+	require.NoError(t, msgBus.PublishInbound(ctx, bus.InboundMessage{Channel: "webchat", ChatID: "r6-public-chat", SessionID: meta.ID, SessionKey: "agent:mia:session:" + meta.ID, GatewayUserID: owner, UserInitiated: true, Sender: bus.SenderInfo{CanonicalID: "human:" + owner}, Content: input}))
+	require.Eventually(t, func() bool {
+		rec, readErr := al.GetSessionLifecycleStore().Load(meta.ID)
+		return readErr == nil && rec.State == session.LifecycleCompleted && rec.ExecutionID != nil
+	}, 10*time.Second, 10*time.Millisecond, "SETUP: actual human ordinary receiver must finish its own durable root")
+	root, err := al.GetSessionLifecycleStore().Load(meta.ID)
 	require.NoError(t, err)
-	require.Len(t, records, 1, "SETUP: actual public root must mint its own durable record")
-	root := records[0]
 	require.Equal(t, session.LifecycleCompleted, root.State)
 	require.NotNil(t, root.ExecutionID)
 	require.NotEmpty(t, root.ExecutionID.RunID)
@@ -153,19 +173,6 @@ func r6NewPublicFixture(t *testing.T) *r6PublicFixture {
 		h.hubSyncTap(event)
 	})
 	t.Cleanup(func() { al.SetEventSyncTap(nil) })
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- al.Run(ctx) }()
-	t.Cleanup(func() {
-		provider.releaseAll()
-		cancel()
-		select {
-		case err := <-done:
-			require.True(t, err == nil || errors.Is(err, context.Canceled), "real runtime shutdown failed: %v", err)
-		case <-time.After(10 * time.Second):
-			t.Error("real gateway test runtime did not join")
-		}
-	})
 	return f
 }
 func (f *r6PublicFixture) age(t *testing.T) {
