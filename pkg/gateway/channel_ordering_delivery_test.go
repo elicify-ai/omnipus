@@ -25,9 +25,7 @@ func TestPairingDelivery_CheckAndEnqueueOrdersWithReplay(t *testing.T) {
 	t.Run("held replay cannot resurrect terminal unowned QR", t3HeldReplayAfterTerminal)
 	t.Run("late subscribers see B even after a late A emission", t3LateSubscribeControl)
 	t.Run("A then B is a legal final-enqueue ordering", t3LegalEnqueueOrder)
-	t.Run("final-guard contention needs acquisition acknowledgement", func(t *testing.T) {
-		t.Fatal("BLOCKED: final ordering guard and contended-acquisition acknowledgement are not implemented on this baseline — required by DESIGN §5 T3; never await B completion while A may hold that guard")
-	})
+	t.Run("final guarded delivery forces B to contend", t3ContendedEnqueueOrder)
 }
 
 type t3Delivery struct {
@@ -71,6 +69,7 @@ func (s *t3Delivery) finish() {
 		for _, done := range s.joins {
 			t3Await(s.t, done, "participant completion")
 		}
+		s.store.SetOrderContendedHookForTest(nil)
 		s.f.al.SetEventSyncTap(nil)
 		pairingDeliveryStageHookMu.Lock()
 		pairingDeliveryAfterCheckHook = nil
@@ -356,4 +355,105 @@ func t3LegalEnqueueOrder(t *testing.T) {
 	require.Equal(t, t3Code("QR-B", &s.owner), second)
 	s.finish()
 	require.Empty(t, t3Drain(t, s.frames), "one actual live output per accepted code in this schedule")
+}
+
+// A completion without acknowledgement is an immediate observable failure,
+// not a wait deadline. In the guarded implementation B reports contention
+// before it can finish; the controller releases A BEFORE joining B.
+func t3ContendedOrFinished(t *testing.T, contended <-chan string, done <-chan struct{}) string {
+	t.Helper()
+	select {
+	case instance := <-contended:
+		require.Equal(t, "whatsapp", instance, "the actual contended channel is acknowledged")
+		return "contended"
+	case <-done:
+		return "completed"
+	case <-time.After(3 * time.Second):
+		t.Fatal("HARNESS: neither real contention nor participant completion was acknowledged; not assertion-level RED")
+		return ""
+	}
+}
+
+// Positive instrument control: a real failed TryLock must reach the observer.
+// This is not a fake guard around delivery; it runs before A/B delivery begins.
+func t3VerifyContentionObserver(s *t3Delivery, contended <-chan string) {
+	s.t.Helper()
+	order := s.store.LockChannel("whatsapp")
+	var once sync.Once
+	release := func() { once.Do(order.Unlock) }
+	s.releases = append(s.releases, release)
+	done := s.goWork(func() {
+		contender := s.store.LockChannel("whatsapp")
+		contender.Unlock()
+	})
+	signal := t3ContendedOrFinished(s.t, contended, done)
+	release()
+	t3Await(s.t, done, "contention observer control completion")
+	require.Equal(s.t, "contended", signal, "instrument: observer sees a genuinely held store guard")
+	require.Empty(s.t, contended, "instrument control leaves no stale acknowledgement")
+}
+
+func t3ContendedEnqueueOrder(t *testing.T) {
+	s := newT3Delivery(t)
+	a := s.start(channels.PairingAdmissionConnect)
+	holdA, releaseA, enteredA := s.gate()
+	s.hooks(nil, func(wc *wsConn, raw []byte) {
+		if wc != s.wc {
+			return
+		}
+		frame := t3Decode(t, raw)
+		// B's replay must not wait on the TEST gate. Only A is held at the
+		// intended final guarded validation/enqueue boundary.
+		if frame.Qr != nil && *frame.Qr == "QR-A" {
+			holdA()
+		}
+	})
+	contended := make(chan string, 8) // observer signals only, never queue contents
+	s.store.SetOrderContendedHookForTest(func(instance string) { contended <- instance })
+	t3VerifyContentionObserver(s, contended)
+	s.h.subscribePairingInterest(s.wc, "whatsapp", true)
+	s.forward()
+	s.code(a, "QR-A")
+	t3Await(t, enteredA, "A at final before-enqueue stage")
+
+	acceptedB := make(chan channels.PairingAttempt, 1)
+	bDone := s.goWork(func() {
+		b := s.successor(a) // Complete/Retry actually acquire the shared guard
+		acceptedB <- b
+		s.code(b, "QR-B")
+		s.h.subscribePairingInterest(s.wc, "whatsapp", true)
+	})
+	signal := t3ContendedOrFinished(t, contended, bDone)
+	assert.Equal(t, "contended", signal, "B must encounter A's held final guard before completing; delivery cannot leave final enqueue unguarded")
+	if signal == "contended" {
+		select {
+		case <-bDone:
+			assert.Fail(t, "B completed despite A still being held inside final delivery")
+		default:
+		}
+	}
+	releaseA()
+	t3Await(t, bDone, "B completion after A is released")
+	s.finish() // joins forwarder/control/B before either hook registry is reset
+	b := <-acceptedB
+	latest, ok := s.store.Latest("whatsapp")
+	require.True(t, ok)
+	require.Equal(t, b, latest, "old delivery never changes B's exact attempt/owner/generation")
+
+	frames := t3Drain(t, s.frames)
+	wantA, wantB := t3Code("QR-A", &s.owner), t3Code("QR-B", &s.owner)
+	require.NotEmpty(t, frames, "actual queue output is required")
+	require.Contains(t, frames, wantB, "B must actually reach the real queue")
+	assert.Equal(t, wantA, frames[0], "A admitted inside final delivery must queue before B can overtake it")
+	seenB := false
+	for i, frame := range frames {
+		if frame.Qr != nil && *frame.Qr == "QR-B" {
+			seenB = true
+		}
+		if seenB {
+			assert.Equal(t, wantB, frame, "B→A regression at real queued frame %d", i)
+		} else {
+			assert.Equal(t, wantA, frame, "only A precedes the first B")
+		}
+	}
 }
