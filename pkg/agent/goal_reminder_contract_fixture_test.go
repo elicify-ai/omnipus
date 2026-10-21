@@ -162,7 +162,7 @@ func newGRHarness(t *testing.T) *grHarness {
 		Defaults: config.AgentDefaults{Home: t.TempDir(), DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096, MaxToolIterations: 10},
 		List:     []config.AgentConfig{{ID: testDefaultAgentID, Home: t.TempDir()}, {ID: grReviewerID, Home: t.TempDir()}},
 	}}
-	cfg.Sandbox.ToolPolicies = map[string]string{tools.SetGoalToolName: "allow", "message_parent": "allow"}
+	cfg.Sandbox.ToolPolicies = map[string]string{tools.SetGoalToolName: "allow", "message_parent": "allow", "read_file": "allow", "set_todos": "allow", "goal_claim": "allow"}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	t.Cleanup(al.Close)
 	installTestSessionLauncher(t, al)
