@@ -80,6 +80,7 @@ func (o *PairingOrder) progressLocked(attempt PairingAttempt, status PairingStat
 			panic("pairing progress sequence exhausted")
 		}
 		p.Sequence = c.sequence
+		c.progressAttempt, c.progressStatus = attempt.AttemptID, status
 	}
 	return p
 }
@@ -90,8 +91,14 @@ func (o *PairingOrder) AcceptsProgress(generation, sequence uint64, attemptID st
 	o.store.mu.Lock()
 	defer o.store.mu.Unlock()
 	c := o.connector
-	if generation != c.generation || sequence == 0 || sequence != c.sequence {
+	if generation != c.generation || sequence == 0 || sequence != c.sequence || attemptID != c.progressAttempt || status != c.progressStatus {
 		return false
+	}
+	if (c.retired || c.deleting) && c.latest == nil {
+		// EndDelete may prune history before its accepted notification emits.
+		// Only that exact current terminal envelope remains deliverable; a
+		// recreation advances generation and invalidates this metadata too.
+		return status == PairingStatusError && attemptID != ""
 	}
 	if (c.retired || c.deleting) && !c.isDeletionProgress(generation, attemptID, status) {
 		return false

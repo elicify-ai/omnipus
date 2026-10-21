@@ -74,6 +74,15 @@ func (a *restAPI) enableChannel(w http.ResponseWriter, r *http.Request, channelI
 		a.enableChannelOrdinary(w, channelID)
 		return
 	}
+	if !pairingCapable(channelID) {
+		baseType, _ := config.ParseInstanceKey(channelID)
+		if !validChannelIDs[baseType] {
+			jsonErr(w, http.StatusNotFound, "channel not found")
+		} else {
+			jsonErr(w, http.StatusBadRequest, "pairing_retry applies only to WhatsApp QR pairing")
+		}
+		return
+	}
 	requestID, sessionID := req.PairingRetry.RequestId, req.PairingRetry.SessionId
 	var attemptID string
 	outcome := a.applyChannelEnabled(w, channelID, true, channelEnableOptions{

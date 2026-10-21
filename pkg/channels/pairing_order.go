@@ -80,6 +80,7 @@ func (s *PairingAttempts) nextGenerationLocked() uint64 {
 func (o *PairingOrder) advanceLocked() uint64 {
 	o.connector.generation = o.store.nextGenerationLocked()
 	o.connector.sequence = 0
+	o.connector.progressAttempt, o.connector.progressStatus = "", ""
 	return o.connector.generation
 }
 

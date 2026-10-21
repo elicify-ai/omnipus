@@ -121,12 +121,15 @@ type pairingAttemptRecord struct {
 	// settings. A later write cannot remove an unfinished stopping barrier.
 	disposal        pairingDisposal
 	disposalRunning bool
+	retryRetired    bool // deletion keeps historical ownership, never Retry authority
 }
 
 type pairingConnector struct {
 	guard             sync.Mutex // outer ordering guard; never the short state mutex
 	generation        uint64
 	sequence          uint64
+	progressAttempt   string // last accepted envelope survives bounded history pruning
+	progressStatus    PairingStatus
 	revision          string
 	configGeneration  uint64 // the exact accepted config write, distinct from Stop
 	configFingerprint string // exact saved entry, including disabled settings
@@ -266,7 +269,7 @@ func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context,
 }
 
 func retryEligible(latest *pairingAttemptRecord, owner PairingOwner) bool {
-	if latest == nil || latest.Phase != PairingPhaseTerminal {
+	if latest == nil || latest.retryRetired || latest.Phase != PairingPhaseTerminal {
 		return false
 	}
 	if latest.RestartInterrupted {
@@ -696,6 +699,9 @@ func (s *PairingAttempts) EndDelete(instance string, removed bool) {
 	c.deleting = false
 	if removed {
 		c.retired = true
+		for _, rec := range c.attempts {
+			rec.retryRetired = true
+		}
 		if !c.hasStopping() {
 			c.latest, c.order = nil, nil
 			c.attempts = make(map[string]*pairingAttemptRecord)

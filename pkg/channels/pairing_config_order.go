@@ -67,10 +67,16 @@ func (o *PairingOrder) CommitConfig(intent PairingConfigIntent, applied bool) ([
 	}
 	if intent.Generation != c.generation {
 		c.generation, c.sequence = intent.Generation, 0
+		c.progressAttempt, c.progressStatus = "", ""
 	}
 	c.revision, c.configGeneration, c.configFingerprint = intent.revision, intent.Generation, intent.fingerprint
 	c.retired = !intent.exists
 	c.deleting = !intent.exists && intent.exclusiveDelete
+	if !intent.exists {
+		for _, rec := range c.attempts {
+			rec.retryRetired = true
+		}
+	}
 	if intent.attemptID != "" {
 		rec := c.attempts[intent.attemptID]
 		if rec == nil || rec != c.latest || rec.Generation != intent.Generation || rec.Phase != PairingPhasePending {
