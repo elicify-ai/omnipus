@@ -35,7 +35,10 @@ type wsHandlerHandleAttachSession struct {
 	failed   bool // the catch-up failed; nothing else of this attach runs
 	// ack is the attach frame's acknowledgement of what was shown (U11); nil
 	// for every attach that does not carry one.
-	ack *attachAck
+	ack              *attachAck
+	historyOptions   session.ChatHistoryPageOptions
+	historyRequested *int
+	liveOnly         bool
 }
 
 // attachAck is the acknowledging half of an attach_session frame (FR-047,
@@ -103,9 +106,13 @@ func (h *WSHandler) handleAttachSessionWithAck(
 	cursor *attachCursor,
 	ack *attachAck,
 	wc *wsConn,
+	rawFrame ...[]byte,
 ) {
 	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, cursor: cursor, wc: wc, ack: ack}
 	if !wh.resolveSession() {
+		return
+	}
+	if !wh.validateHistoryAttach(rawFrame) {
 		return
 	}
 	wh.bindHub()
@@ -122,7 +129,9 @@ func (h *WSHandler) handleAttachSessionWithAck(
 	}
 	wh.wc.releaseHold()
 	wh.resumeLiveSession()
-	wh.ackAttention()
+	if !wh.liveOnly {
+		wh.ackAttention()
+	}
 }
 
 // resolveSession is A1: validate the session id and resolve its store.
@@ -177,63 +186,26 @@ func (wh *wsHandlerHandleAttachSession) sendIncremental() {
 		"event", "catch_up", "mode", "incremental",
 		"session_id", wh.attachID, "chat_id", wh.chatID,
 		"frames", len(wh.res.Tail), "head", wh.res.Head)
-	wh.direct(wh.h.sessionStateBytes(wh.wc, wh.attachID))
+	state := wh.incrementalHistoryState()
+	wh.liveOnly = state.Status == "unavailable"
+	if !wh.sendHistoryState(state) {
+		return
+	}
 	for _, frame := range wh.res.Tail {
 		if err := wh.wc.directWait(wh.ctx, frame); err != nil {
-			wh.abortCatchUp(err)
+			wh.historyDeliveryFailed(err)
 			return
 		}
 	}
 	wh.sendCatchUpComplete("incremental")
+	if !wh.failed {
+		wh.wc.rememberHistoryState(wh.attachID, state)
+	}
 }
 
 // sendSnapshot is A6's snapshot branch.
 func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
-	logsafeInfo("ws: catch_up",
-		"event", "catch_up", "mode", "snapshot", "reason", wh.res.Reason,
-		"session_id", wh.attachID, "chat_id", wh.chatID, "head", wh.res.Head)
-	// Read the transcript AFTER the bind (§4.2): everything persisted up to
-	// now is in it; whatever was published at or before W but not yet
-	// persisted is in the projection; whatever is published after W is held.
-	// And read it BEFORE session_snapshot (final-review N4): that frame
-	// tells the client to wipe its history for this session, so a read
-	// failure must be answered while the client's current view is intact.
-	view, err := attachReadTranscript(wh.store, wh.attachID)
-	entries := view.Entries
-	if err != nil {
-		logsafeWarn("ws: attach_session: could not read transcript", "session_id", wh.attachID, "error", err)
-		wh.failCatchUp("could not read session transcript")
-		return
-	}
-	bootID := wh.h.hubs.bootID
-	reason := wh.res.Reason
-	snapshot := generated.SessionSnapshotFrame{
-		Type:      string(generated.WsFrameTypeSessionSnapshot),
-		SessionId: wh.attachID,
-		Seq:       int64(wh.res.Head),
-		BootId:    &bootID,
-		Reason:    &reason,
-	}
-	if view.HasEarlier {
-		snapshot.HasEarlier = view.HasEarlier
-	}
-	wh.directFrame(snapshot)
-	// AFTER the snapshot frame (which wipes the client's history for this
-	// session), so the wipe can never erase pending approvals, the active
-	// turn or goal state (§4.6, review finding 2).
-	wh.direct(wh.h.sessionStateBytes(wh.wc, wh.attachID))
-
-	emitted, ok := wh.replayTranscript(entries)
-	if !ok {
-		return
-	}
-	for _, frame := range projectionFrames(wh.attachID, wh.res.Proj, emitted) {
-		if err := wh.wc.directWait(wh.ctx, frame); err != nil {
-			wh.abortCatchUp(err)
-			return
-		}
-	}
-	wh.sendCatchUpComplete("snapshot")
+	wh.sendPreparedHistorySnapshot()
 }
 
 // replayTranscript streams the persisted transcript to the connection
@@ -375,7 +347,7 @@ func (wh *wsHandlerHandleAttachSession) failCatchUp(message string) {
 // session becomes W, and the held live frames (seq > W) follow.
 func (wh *wsHandlerHandleAttachSession) sendCatchUpComplete(mode string) {
 	bootID := wh.h.hubs.bootID
-	wh.directFrame(generated.CatchUpCompleteFrame{
+	wh.sendHistoryFrame(generated.CatchUpCompleteFrame{
 		Type:      string(generated.WsFrameTypeCatchUpComplete),
 		SessionId: wh.attachID,
 		Seq:       int64(wh.res.Head),

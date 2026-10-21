@@ -290,12 +290,9 @@ func historySelect(t *chatHistoryIndexTree, dir string, cp historyCheckpoint, o 
 	if o.WindowStart != "" {
 		p.PageInfo.StopReason = "range_end"
 	}
-	p.PageInfo.ProjectedBytes, err = historyWeigh(t.ctx, o, p)
-	if err != nil {
-		return p, err
-	}
 	if hi < lo {
-		return p, nil
+		p.PageInfo.ProjectedBytes, err = historyWeigh(t.ctx, o, p)
+		return p, err
 	}
 	rank := hi
 	if forward {
@@ -303,6 +300,10 @@ func historySelect(t *chatHistoryIndexTree, dir string, cp historyCheckpoint, o 
 	}
 	rank, found, err := historyFindEligible(t, rank, forward, true)
 	if err != nil {
+		return p, err
+	}
+	if !found || rank < lo || rank > hi {
+		p.PageInfo.ProjectedBytes, err = historyWeigh(t.ctx, o, p)
 		return p, err
 	}
 	cache := map[uint64]ChatHistoryEntry{}

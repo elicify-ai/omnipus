@@ -17,6 +17,14 @@ type chatHistoryReconcileResult struct {
 	IndexGeneration, RetentionGeneration                                               string
 }
 
+// CheckChatHistoryReadiness validates the derived baseline and bounded suffix
+// without preparing or claiming that a public history page was loaded. The
+// gateway uses it for journal-only control catch-up.
+func (us *UnifiedStore) CheckChatHistoryReadiness(ctx context.Context, sessionID string) error {
+	_, err := us.reconcileChatHistoryIndex(ctx, sessionID)
+	return err
+}
+
 func (us *UnifiedStore) reconcileChatHistoryIndex(ctx context.Context, sessionID string) (chatHistoryReconcileResult, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return chatHistoryReconcileResult{}, err
