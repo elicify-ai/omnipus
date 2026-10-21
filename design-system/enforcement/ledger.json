@@ -5201,6 +5201,20 @@
       "syntax": "MessageItem#svg-attribute.color<-agent?.color",
       "reason": "Identity ink on the standalone/embed reply mark (founder UI feedback 2026-10-11: MessageItem joins the shared AgentStatusIndicator). MessageItem reads the responding agent's own color field and passes it unmodified into AgentStatusIndicator, which validates it against its published palette before AgentIcon paints it as currentColor — the same boundary already registered for ChatScreen.tsx's ResolvedAgentMark#svg-attribute.color<-agent?.color and VirtualAssistantMessageRow#svg-attribute.color<-agent?.color. Governed identity data (ADR-20261007, design-system rule 6), not a design-system chrome colour; the component does not choose a colour.",
       "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.active-form.test.tsx",
+      "syntax": "Fixture#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Governed identity data, not chrome: the named Fixture passes the literal final generated AgentColor option unchanged to the real AgentStatusIndicator and AgentIcon. This exact palette source and sink exercise the published identity mark alongside status-copy and motion assertions; no raw colour or arbitrary fixture flow is allowed.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.stories.tsx",
+      "syntax": "StatusMotionFixture#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Governed identity data, not chrome: the named StatusMotionFixture passes the literal final generated AgentColor option unchanged to the real AgentStatusIndicator and AgentIcon. This exact app-story palette source and sink allow actual icon/text timing verification without introducing a second colour palette or a raw colour.",
+      "owner": "user-authored colours exception registry"
     }
   ],
   "reviewedBoundaries": [

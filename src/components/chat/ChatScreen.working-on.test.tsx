@@ -5,7 +5,6 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import type { ReactNode } from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import type { ServerFrame, ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
-import type { Todo } from '@/lib/api/generated/openapi-types'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
 import { emptySessionState } from '@/store/chat/session'
 import { useSessionStore } from '@/store/session'
@@ -44,7 +43,7 @@ function feed(frame: ServerFrame) {
   act(() => useChatStore.getState().handleFrame(frame))
 }
 
-function startList(todos: Todo[], sessionId = SID, tool = 'set_todos') {
+function startList(todos: ToolCallStartFrame['params']['todos'], sessionId = SID, tool = 'set_todos') {
   const callId = `todo-call-${++callNumber}`
   const frame: ToolCallStartFrame = {
     type: 'tool_call_start', session_id: sessionId, agent_id: 'mia',
@@ -63,15 +62,15 @@ function finishList(callId: string, sessionId = SID, status: ToolCallResultFrame
   expect(useChatStore.getState().sessionsById[sessionId].toolCalls[callId].status).toBe(status)
 }
 
-function setList(todos: Todo[], sessionId = SID) {
+function setList(todos: ToolCallStartFrame['params']['todos'], sessionId = SID) {
   const callId = startList(todos, sessionId)
   finishList(callId, sessionId)
   expect(useChatStore.getState().sessionsById[sessionId].toolCalls[callId].params.todos).toEqual(todos)
   return callId
 }
 
-function activeItem(text: string): Todo[] {
-  return [{ text, status: 'in_progress' }]
+function activeItem(activeForm: string): ToolCallStartFrame['params']['todos'] {
+  return [{ text: 'Prepare the report', status: 'in_progress', active_form: activeForm }]
 }
 
 async function renderChat() {
@@ -83,7 +82,7 @@ async function renderChat() {
 
 function expectLine(text: string) {
   const line = screen.getByTestId('reply-current-todo')
-  expect(line.textContent).toBe(`Working on: ${text}`)
+  expect(line.textContent).toBe(text)
   expect(screen.getAllByTestId('reply-current-todo')).toHaveLength(1)
   expect(line.closest('[data-testid="reply-status-indicator"]')).not.toBeNull()
   expect(line).toHaveAttribute('aria-hidden', 'true')
@@ -92,6 +91,7 @@ function expectLine(text: string) {
 
 beforeEach(() => {
   callNumber = 0
+  vi.spyOn(Math, 'random').mockReturnValue(0.2)
   __resetFinishedTurnIdsForTests()
   queryClient.clear()
   vi.mocked(fetchSessionMessages).mockReset().mockResolvedValue([])
@@ -125,7 +125,7 @@ describe('chat current todo in the existing status indicator', () => {
     await renderChat()
     setList([
       { text: 'Read the brief', status: 'completed' },
-      { text: 'Review the sources', status: 'in_progress' },
+      { text: 'Review the sources', status: 'in_progress', active_form: 'Review the sources' },
       { text: 'Write the report', status: 'pending' },
     ])
     expectLine('Review the sources')
@@ -137,7 +137,7 @@ describe('chat current todo in the existing status indicator', () => {
     await renderChat()
     setList(activeItem('Review the sources'))
     expectLine('Review the sources')
-    setList([{ text: 'Review the sources', status: 'completed' }, { text: 'Write the report', status: 'in_progress' }])
+    setList([{ text: 'Review the sources', status: 'completed' }, { text: 'Write the report', status: 'in_progress', active_form: 'Write the report' }])
     expectLine('Write the report')
   })
 
@@ -145,7 +145,7 @@ describe('chat current todo in the existing status indicator', () => {
     ['pending', [{ text: 'Write the report', status: 'pending' }]],
     ['completed', [{ text: 'Write the report', status: 'completed' }]],
     ['cleared', []],
-  ] satisfies [string, Todo[]][])('hides a previously visible item when the replacement is %s', async (_name, todos) => {
+  ] satisfies [string, ToolCallStartFrame['params']['todos']][])('hides a previously visible item when the replacement is %s', async (_name, todos) => {
     await renderChat()
     setList(activeItem('Review the sources'))
     expectLine('Review the sources')
@@ -412,12 +412,13 @@ describe('current item recovery and indicator design — round 1', () => {
     expect(screen.queryByTestId('reply-current-todo')).not.toBeInTheDocument()
   })
 
-  it('stops phrase rotation while an item is shown and restarts at Thinking when it is cleared', async () => {
+  it('keeps one chosen fallback through former ticks, item updates and clearing', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     let alternate = false
     const random = vi.spyOn(Math, 'random').mockImplementation(() => { alternate = !alternate; return alternate ? 0.2 : 0.6 })
     await renderChat()
-    expect(within(screen.getByTestId('reply-status-indicator')).getByText('Thinking…')).toBeInTheDocument()
+    const phrase = screen.getByTestId('reply-status-fallback').textContent
+    expect(phrase).toBeTruthy()
     setList(activeItem('Hold this item steady'))
     expectLine('Hold this item steady')
     random.mockClear()
@@ -425,17 +426,18 @@ describe('current item recovery and indicator design — round 1', () => {
     expectLine('Hold this item steady')
     expect(random).not.toHaveBeenCalled()
     setList([])
-    expect(within(screen.getByTestId('reply-status-indicator')).getByText('Thinking…')).toBeInTheDocument()
-    act(() => vi.advanceTimersByTime(2000))
-    expect(within(screen.getByTestId('reply-status-indicator')).getByText('Processing your request…')).toBeInTheDocument()
+    expect(screen.getByTestId('reply-status-fallback').textContent).toBe(phrase)
+    act(() => vi.advanceTimersByTime(8000))
+    expect(screen.getByTestId('reply-status-fallback').textContent).toBe(phrase)
+    expect(random).not.toHaveBeenCalled()
   })
 
   it('keeps full long text in the title, truncates the visual item, and keeps accessible copy stable across updates', async () => {
     await renderChat()
-    const text = 'Review a long list of sources '.repeat(15)
+    const text = 'Review a long list of sources '.repeat(15).trim()
     setList(activeItem(text))
     const first = expectLine(text)
-    expect(first.querySelector('[title]')).toHaveAttribute('title', `Working on: ${text}`)
+    expect(first.querySelector('[title]')).toHaveAttribute('title', text)
     expect(first.querySelector('[title]')).toHaveClass('truncate')
     const indicator = screen.getByTestId('reply-status-indicator')
     expect(within(indicator).getByText('Working on a checklist item')).toHaveClass('sr-only')
@@ -450,7 +452,7 @@ describe('current item recovery and indicator design — round 1', () => {
     await renderChat()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const text = '𝑥'.repeat(length)
-    const callId = setList(activeItem(text))
+    const callId = setList([{ text, status: 'in_progress', active_form: text }])
     expectLine(text)
     expect(warn).toHaveBeenCalledExactlyOnceWith('chat.current_todo_validation_failed', {
       sessionId: SID, callId, issues: [{ code: 'too_big', path: '0.text' }],
@@ -469,12 +471,13 @@ describe('current item recovery and indicator design — round 1', () => {
     expectLine('Previously accepted item')
   })
 
-  it('shows an unavailable status and logs a structurally unreadable backend-accepted list instead of hiding it', async () => {
+  it('shows the normal fallback and logs a structurally unreadable accepted list', async () => {
     await renderChat()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     feed({ type: 'tool_call_start', session_id: SID, call_id: 'unreadable-call', tool: 'set_todos', params: { todos: [null] } })
     finishList('unreadable-call')
-    expect(within(screen.getByTestId('reply-status-indicator')).getByText('Current checklist unavailable')).toBeInTheDocument()
+    expect(screen.getByTestId('reply-status-fallback')).toHaveTextContent('Processing your request…')
+    expect(screen.getByTestId('reply-status-indicator').textContent).not.toMatch(/Current checklist\s+unavailable/)
     expect(warn).toHaveBeenCalledExactlyOnceWith('chat.current_todo_validation_failed', {
       sessionId: SID, callId: 'unreadable-call', issues: [{ code: 'invalid_type', path: '0' }],
     })
@@ -497,7 +500,27 @@ describe('checklist recovery error isolation — round 2', () => {
     completeCatchUp('incremental')
     await waitForHistoryFailure(failure)
     expectLoadedChatUsable()
-    expect(within(screen.getByTestId('reply-status-indicator')).getByText('Current checklist unavailable')).toBeInTheDocument()
+    expect(screen.getByTestId('reply-status-fallback')).toHaveTextContent('Processing your request…')
+    expect(screen.getByTestId('reply-status-indicator').textContent).not.toMatch(/Current checklist\s+unavailable/)
+    expect(screen.queryByTestId('reply-current-todo')).not.toBeInTheDocument()
+  })
+
+  it('uses fallback after a recovery refetch fails even when that optional cache retains an older item', async () => {
+    await loadUsableChat()
+    const history = [savedList('turn-one', 'Previously recovered form', 'previous-recovery')]
+    vi.mocked(fetchSessionMessages).mockResolvedValue(history)
+    announceTurn('turn-one')
+    await waitFor(() => expectLine('Previously recovered form'))
+    expect(useChatStore.getState().sessionsById[SID].toolCallOrder).toEqual([])
+    const key = ['current-todo-history', SID, 'turn-one']
+    const failure = new Error('Optional recovery refetch failed')
+    vi.mocked(fetchSessionMessages).mockRejectedValue(failure)
+    await act(async () => { await queryClient.refetchQueries({ queryKey: key, exact: true }) })
+    await waitForHistoryFailure(failure)
+    expect(queryClient.getQueryData(key)).toEqual(history)
+    expect(queryClient.getQueryState(key)?.error).toBe(failure)
+    expectLoadedChatUsable()
+    expect(screen.getByTestId('reply-status-fallback')).toHaveTextContent('Processing your request…')
     expect(screen.queryByTestId('reply-current-todo')).not.toBeInTheDocument()
   })
 
@@ -512,7 +535,7 @@ describe('checklist recovery error isolation — round 2', () => {
     expectLoadedChatUsable()
     expectLine('Keep this accepted live item')
     expect(useChatStore.getState().sessionsById[SID].toolCalls[callId].status).toBe('success')
-    expect(screen.queryByText('Current checklist unavailable')).not.toBeInTheDocument()
+    expect(screen.getByTestId('reply-status-indicator').textContent).not.toMatch(/Current checklist\s+unavailable/)
   })
 
   it('still presents a genuine initial main-history failure instead of swallowing it as an optional read', async () => {

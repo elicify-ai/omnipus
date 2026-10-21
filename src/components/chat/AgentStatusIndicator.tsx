@@ -1,9 +1,9 @@
-// Inline reply status for the chat feed (W1-7). Replaces the bouncing-dots
-// thinking indicator. The mark is the published AgentIcon; phrases are the
-// ones the dots used to rotate. The icon does not fetch an agent.
+// Inline reply status for the chat feed. The mark is the published AgentIcon;
+// work copy is an active form or one fixed fallback. The icon fetches nothing.
 import { useEffect, useState } from 'react'
 
 import '@/styles/agent-icon-motion.css'
+import '@/styles/agent-status-motion.css'
 
 import { AgentIcon } from '@/components/ui/agent-icon'
 import { WordBoundaryText } from '@/components/ui/word-boundary-text'
@@ -16,7 +16,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useToolApprovalStore } from '@/store/toolApproval'
 
-/** Existing thinking phrases. The first beat is always "Thinking…". */
+/** One randomly selected fallback per status appearance, never a phrase clock. */
 export const THINKING_PHRASES = [
   'Thinking…',
   'Working on it…',
@@ -76,14 +76,8 @@ export function feedMarkLabel(phase: ReplyPhase): string | null {
   return null
 }
 
-/** Next phrase, never the one just shown. Same rule the dots used. */
-export function pickNextThinkingPhrase(current: string): string {
-  if (THINKING_PHRASES.length <= 1) return THINKING_PHRASES[0]
-  let next: string = current
-  while (next === current) {
-    next = THINKING_PHRASES[Math.floor(Math.random() * THINKING_PHRASES.length)]
-  }
-  return next
+export function pickThinkingPhrase(): string {
+  return THINKING_PHRASES[Math.floor(Math.random() * THINKING_PHRASES.length)]
 }
 
 function readReducedMotion(): boolean {
@@ -126,8 +120,8 @@ function waitingCopy(approvalTool: string | null, questionPending: boolean): str
  * Precedence follows the spec indicator table, limited to inputs that exist
  * today: disconnect, a pending approval, a pending question card, a correlated
  * running tool, a model turn — a settled, connected row paints nothing
- * ('none'). Goal/tool labels only choose the copy. Queued work has no
- * accepted input on this screen and is not invented here.
+ * ('none'). Work motion is independent of the active-form-or-fixed-fallback
+ * copy selected below. Queued work has no accepted input on this screen.
  */
 export function useReplySlotPhase(input: {
   streaming: boolean
@@ -163,8 +157,8 @@ export function useReplySlotPhase(input: {
     return { kind: 'waiting', text: waitingCopy(approvalTool, questionPending) }
   }
 
-  // Execution chooses the phase; goal copy still wins over the hidden-tool
-  // label. Without specific copy, keep the existing working phrase stable.
+  // Execution chooses motion; AgentStatusIndicator selects work copy from
+  // the accepted active form or its one fixed fallback, not these labels.
   if (input.streaming && input.hasRunningTool) {
     return { kind: 'working', text: input.goalLabel ?? input.toolLabel ?? 'Working on it…' }
   }
@@ -182,25 +176,7 @@ function motionFor(phase: MarkPhase, reduced: boolean): 'none' | 'thinking' | 'w
   return 'thinking'
 }
 
-function ThinkingPhrase({ rotating }: { rotating: boolean }) {
-  const [phrase, setPhrase] = useState<string>(THINKING_PHRASES[0])
-  useEffect(() => {
-    if (!rotating) return
-    const interval = setInterval(() => setPhrase((previous) => pickNextThinkingPhrase(previous)), 2000)
-    return () => clearInterval(interval)
-  }, [rotating])
-  return (
-    <>
-      {rotating && <span className="sr-only">Thinking</span>}
-      <span aria-hidden={rotating ? true : undefined} className="text-[length:var(--type-utility-xs-size)]">{phrase}</span>
-    </>
-  )
-}
-
-/**
- * Figure, role badge, and the status phrase, inline in the feed. Changing
- * checklist/rotating copy is visual only; assistive text stays calm and stable.
- */
+/** Figure, role badge and visual work copy; assistive copy stays stable. */
 export function AgentStatusIndicator({
   phase,
   label,
@@ -208,6 +184,7 @@ export function AgentStatusIndicator({
   role,
   color,
   name,
+  fallbackPhrase,
 }: {
   phase: MarkPhase
   label: string | null
@@ -216,11 +193,15 @@ export function AgentStatusIndicator({
   color?: string
   /** The agent's display name. Monogram draws its initial from this. */
   name?: string
+  /** Shared across the live identity-loading Suspense boundary. */
+  fallbackPhrase?: string
 }) {
   const reduced = usePrefersReducedMotion()
   // Connection/approval/question copy keeps its existing priority over work copy.
-  const todo = useCurrentTodo(phase === 'thinking' || phase === 'working')
-  const itemLabel = todo.unavailable ? 'Current checklist unavailable' : todo.text ? `Working on: ${todo.text}` : null
+  const workPhase = phase === 'thinking' || phase === 'working'
+  const todo = useCurrentTodo(workPhase)
+  const activeForm = workPhase ? todo.activeForm : null
+  const [fallback] = useState(() => fallbackPhrase ?? pickThinkingPhrase())
   const drawnFigure = isFigure(figure) ? figure : null
   const drawnRole = isRole(role) ? role : null
   const drawnColor = isPaletteColor(color) ? color : null
@@ -229,14 +210,20 @@ export function AgentStatusIndicator({
   // (the existing incomplete-identity pattern — the phrase still renders). A
   // placeholder name is never substituted: it would draw a wrong initial.
   const nameAvailable = drawnFigure !== 'Monogram' || (name ?? '').trim().length > 0
+  const identity = drawnFigure && drawnRole && drawnColor && nameAvailable
+    ? [drawnFigure, drawnRole, drawnColor, name ?? ''].join(':') : 'no-identity'
+  // Both loops start in the same paint when motion/identity changes. Copy
+  // updates preserve this epoch and therefore cannot restart either clock.
+  const epoch = `${motion}:${identity}`
 
   return (
     <span
       data-testid="reply-status-indicator"
+      data-agent-status-motion={motion}
       className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-2)] py-[var(--space-1)] text-[var(--color-muted)] italic"
     >
       {drawnFigure && drawnRole && drawnColor && nameAvailable && (
-        <span className="shrink-0" data-art={FIGURE_ART[drawnFigure].art}>
+        <span key={`icon-${epoch}`} className="shrink-0" data-art={FIGURE_ART[drawnFigure].art}>
           <AgentIcon
             figure={drawnFigure}
             role={drawnRole}
@@ -249,16 +236,18 @@ export function AgentStatusIndicator({
           />
         </span>
       )}
-      {todo.text && <span className="sr-only">Working on a checklist item</span>}
-      {itemLabel ? (
-        <span data-testid={todo.text ? 'reply-current-todo' : 'reply-current-todo-error'} aria-hidden={todo.text ? true : undefined} className="min-w-0 flex-1">
-          <WordBoundaryText text={itemLabel} title={itemLabel} className="truncate text-[length:var(--type-utility-xs-size)]" />
-        </span>
-      ) : label != null ? (
-        <span className="text-[length:var(--type-utility-xs-size)]">{label}</span>
-      ) : (
-        <ThinkingPhrase rotating={phase === 'thinking' && !reduced} />
-      )}
+      {workPhase && <span className="sr-only">{activeForm ? 'Working on a checklist item' : 'Thinking'}</span>}
+      <span key={`text-${epoch}`} data-testid="agent-status-text" className="agent-status-text min-w-0 flex-1">
+        {workPhase ? activeForm ? (
+          <span data-testid="reply-current-todo" aria-hidden="true">
+            <WordBoundaryText text={activeForm} title={activeForm} className="truncate text-[length:var(--type-utility-xs-size)]" />
+          </span>
+        ) : (
+          <span data-testid="reply-status-fallback" aria-hidden="true" className="text-[length:var(--type-utility-xs-size)]">{fallback}</span>
+        ) : (
+          <span className="text-[length:var(--type-utility-xs-size)]">{label}</span>
+        )}
+      </span>
     </span>
   )
 }

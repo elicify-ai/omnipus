@@ -92,6 +92,7 @@ import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
   feedMarkLabel,
+  pickThinkingPhrase,
   showsFeedMark,
   useReplySlotPhase,
 } from './AgentStatusIndicator'
@@ -520,6 +521,9 @@ function AssistantTextPart() {
 // that row draws Idle itself. The mark suspends until the agent record
 // arrives so the figure is in the same paint as the phrase.
 function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
+  // The identity lookup may suspend. Choose outside that boundary so the
+  // already-visible fallback does not change when the figure first arrives.
+  const [fallbackPhrase] = React.useState(pickThinkingPhrase)
   const message = useMessage()
   const isRunning = message.status?.type === 'running'
   const storeToolCalls = useChatStore((s) => s.toolCalls)
@@ -552,9 +556,9 @@ function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
   const label = feedMarkLabel(phase)
   return (
     <React.Suspense
-      fallback={<AgentStatusIndicator phase={phase.kind} label={label} />}
+      fallback={<AgentStatusIndicator phase={phase.kind} label={label} fallbackPhrase={fallbackPhrase} />}
     >
-      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} />
+      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} fallbackPhrase={fallbackPhrase} />
     </React.Suspense>
   )
 }
@@ -563,10 +567,12 @@ function ResolvedAgentMark({
   agentId,
   phase,
   label,
+  fallbackPhrase,
 }: {
   agentId: string | null
   phase: 'thinking' | 'working' | 'waiting' | 'unavailable'
   label: string | null
+  fallbackPhrase: string
 }) {
   const agents = useChatAgents()
   const agent = agents.find((item) => item.id === agentId)
@@ -574,6 +580,7 @@ function ResolvedAgentMark({
     <AgentStatusIndicator
       phase={phase}
       label={label}
+      fallbackPhrase={fallbackPhrase}
       figure={agent?.figure}
       role={agent?.role}
       color={agent?.color}
@@ -1769,16 +1776,7 @@ function AssistantMessage() {
           <AgentReplyLabel agent={agent} name={agentDisplayName} header={null} />
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-          {showEmptyPlaceholder ? (
-            // Nothing has streamed in yet — show only the status mark,
-            // not an empty text bubble + Copy affordance (D-fix).
-            <InlineThinkingIndicator agentId={messageAgentId ?? null} />
-          ) : isTerminalEmpty ? (
-            // Terminal-empty variant (D-fix): the turn is over and there is
-            // still nothing to show. Render nothing rather than an empty
-            // Copy-only bubble — see isTerminalEmpty's doc comment above.
-            null
-          ) : (
+          {!showEmptyPlaceholder && !isTerminalEmpty && (
             <>
               {/* Media (screenshots, files) renders BEFORE the parts so the image
                   shows directly under the tool-call pill that produced it, with
@@ -1799,14 +1797,12 @@ function AssistantMessage() {
                   },
                 }}
               />
-              {/* Trailing status mark — sits at the bottom of the bubble
-                  while the turn is running so the user always sees a "still
-                  working" cue at the position where the next text/tool will
-                  appear. Once a token streams in, the streamed text renders
-                  above the indicator and pushes it further down. */}
-              <InlineThinkingIndicator agentId={messageAgentId ?? null} />
             </>
           )}
+          {/* One mount point before and after the first visible token/tool.
+              Text can appear above it without reselecting the fixed phrase
+              or restarting the synchronized icon/text animation clocks. */}
+          {!isTerminalEmpty && <InlineThinkingIndicator agentId={messageAgentId ?? null} />}
         </div>
 
         {/* Action bar — Copy + Retry buttons, always visible at reduced opacity.

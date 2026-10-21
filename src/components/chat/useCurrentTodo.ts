@@ -49,14 +49,26 @@ function readableAcceptedTodo(item: unknown): Todo | null {
 }
 
 function checklistDisplay(call: ToolCall | null) {
-  if (!call) return { text: null, unavailable: false, issues: [] }
-  const parsed = TodoListSchema.safeParse(call.params.todos)
+  if (!call) return { activeForm: null, issues: [] }
+  // Live arguments are recorded before backend normalization. Normalize a copy,
+  // never the store's raw arguments; blank strings are intentionally absent.
+  const normalized = Array.isArray(call.params.todos) ? call.params.todos.map((item: unknown) => {
+    if (item && typeof item === 'object' && 'active_form' in item && typeof item.active_form === 'string') {
+      return { ...item, active_form: item.active_form.trim() || undefined }
+    }
+    return item
+  }) : call.params.todos
+  const parsed = TodoListSchema.safeParse(normalized)
   const issues = parsed.success ? [] : parsed.error.issues.map((issue) => ({ code: issue.code, path: issue.path.join('.') || 'todos' }))
-  // Generated maxLength counts UTF-16 units; the backend counts Unicode code
-  // points. A diagnostic must not erase a readable backend-accepted item.
-  const todos = parsed.success ? parsed.data : Array.isArray(call.params.todos) ? call.params.todos.map(readableAcceptedTodo) : null
-  if (!todos || todos.some((todo) => todo == null)) return { text: null, unavailable: true, issues }
-  return { text: todos.find((todo) => todo?.status === 'in_progress')?.text ?? null, unavailable: false, issues }
+  // A diagnostic about another field must not erase readable accepted work.
+  // The canonical generated validator alone owns optional-form validity.
+  const todos = parsed.success ? parsed.data : Array.isArray(normalized) ? normalized.map(readableAcceptedTodo) : null
+  if (!todos || todos.some((todo) => todo == null)) return { activeForm: null, issues }
+  const index = todos.findIndex((todo) => todo?.status === 'in_progress')
+  const raw = Array.isArray(normalized) ? normalized[index] : null
+  const activeForm = raw && typeof raw === 'object' && 'active_form' in raw && typeof raw.active_form === 'string' ? raw.active_form : null
+  const invalidForm = issues.some((issue) => issue.path === `${index}.active_form` || issue.path.startsWith(`${index}.active_form.`))
+  return { activeForm: invalidForm ? null : activeForm, issues }
 }
 
 /** Current conversation/turn only, independent of the transient tool-card cache. */
@@ -82,7 +94,7 @@ export function useCurrentTodo(enabled: boolean) {
   // not by borrowing an uncorrelated preceding replay bubble. New live writes
   // win over a history snapshot that was read earlier in the same turn.
   const live = active && bucket ? latestLiveChecklist(bucket) : null
-  const recovered = turnId ? latestTurnChecklist(history.data ?? [], turnId) : null
+  const recovered = turnId && !history.isError ? latestTurnChecklist(history.data ?? [], turnId) : null
   const call = active ? live ?? recovered : null
   const display = useMemo(() => checklistDisplay(call), [call])
   const reported = useRef(new Set<string>())
@@ -108,5 +120,5 @@ export function useCurrentTodo(enabled: boolean) {
     logDiagnostic('chatCurrentTodoHistoryFailed', fields)
   }, [sessionId, turnId, history.isError, history.error])
 
-  return { text: display.text, unavailable: display.unavailable || (active && !!turnId && history.isError && !call) }
+  return { activeForm: display.activeForm }
 }
