@@ -51,7 +51,7 @@ func historyMeasurementSmallControl(t *testing.T) {
 	require.NoError(t, readErr, "actual full gateway preparation must work before heavy fixture setup or allocation claims")
 	require.Len(t, prepared.Response.Entries, 1)
 	require.Equal(t, "measurement-instrument", prepared.Response.Entries[0].Id)
-	require.NotEmpty(t, prepared.encodedResponse)
+	historyMeasurementValidateCarrier(t, prepared)
 	require.Equal(t, 40, prepared.Response.PageInfo.Limit)
 	require.Equal(t, 20, prepared.Response.PageInfo.MinRows)
 }
@@ -74,8 +74,20 @@ func historyMeasurementPositivePage(t *testing.T, fixture historyMeasurementFixt
 	require.Equal(t, 40, prepared.Response.PageInfo.RowCount)
 	require.Equal(t, 40, prepared.Response.PageInfo.Limit)
 	require.Equal(t, 20, prepared.Response.PageInfo.MinRows)
-	require.NotEmpty(t, prepared.encodedResponse)
-	message, serverError := validateBodyAgainstSchema("SessionHistoryResponse", prepared.encodedResponse)
+	historyMeasurementValidateCarrier(t, prepared)
+}
+
+// Validate the actual generated response independently, outside the interval.
+// Do not depend on a GREEN-only private encoded buffer: the agreed preparation
+// declaration exposes Response/ReplayFrames and must compile on the RED base.
+// The timed real Read still performs its production carrier validation/encoding.
+func historyMeasurementValidateCarrier(t *testing.T, prepared preparedHistoryPage) {
+	t.Helper()
+	encoded, encodeErr := json.Marshal(prepared.Response)
+	require.NoError(t, encodeErr)
+	require.NotEmpty(t, encoded)
+	require.NotEmpty(t, prepared.ReplayFrames)
+	message, serverError := validateBodyAgainstSchema("SessionHistoryResponse", encoded)
 	require.False(t, serverError)
 	require.Empty(t, message)
 }
@@ -101,8 +113,8 @@ func historyMeasureCompletePage(t *testing.T, fixture historyMeasurementFixture,
 				benchmarkErr = fmt.Errorf("real complete gateway page operation: %w", readErr)
 				b.Fatal(benchmarkErr)
 			}
-			if len(prepared.Response.Entries) != 40 || len(prepared.encodedResponse) == 0 || prepared.Response.PageInfo.Limit != 40 || prepared.Response.PageInfo.MinRows != 20 {
-				benchmarkErr = fmt.Errorf("measurement did not execute the validated40/20 complete encoded page: groups=%d bytes=%d", len(prepared.Response.Entries), len(prepared.encodedResponse))
+			if len(prepared.Response.Entries) != 40 || len(prepared.ReplayFrames) == 0 || prepared.Response.PageInfo.Limit != 40 || prepared.Response.PageInfo.MinRows != 20 {
+				benchmarkErr = fmt.Errorf("measurement did not execute the validated40/20 complete prepared page: groups=%d frames=%d", len(prepared.Response.Entries), len(prepared.ReplayFrames))
 				b.Fatal(benchmarkErr)
 			}
 			runtime.KeepAlive(prepared)

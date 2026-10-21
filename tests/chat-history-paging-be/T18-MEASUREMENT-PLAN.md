@@ -20,4 +20,6 @@ All owned stores call public Close before timing: UnifiedStore.Close stops/joins
 
 Heavy1k/100k execution is Fly-only under the assigned080d lock, one active test operation at a time. Local checks are compile-only. The native driver is used only for serial fixture construction, not measured work or a concurrent suite. Preserve child stdout, named result/exit and real rolled-file postconditions.
 
+Source-compatibility correction: the initial producer used the GREEN-only private encodedResponse field, absent from the agreed historical preparation declaration. The probe now independently encodes and schema-validates the actual generated Response outside the interval and checks actual prepared replay frames; the timed factory/Read still executes its unchanged complete production carrier preparation/validation/encoding. The allocation/sample/≤10% oracles are unchanged, and the exact same test source can compile on the historical RED base.
+
 Known gates: this producer does not certify the real E2E I/O summaries, genuine long-session acceptance, native Windows or UAT. Fresh independent CHECK owns production full-read mutations, GREEN re-verification/restored GREEN and Proof-of-failability. Do not claim any of those from this source or an allocation receipt.
