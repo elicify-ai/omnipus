@@ -26,7 +26,7 @@ async function openPlain() {
 }
 
 function earlierControl() {
-  return screen.getByRole('button', { name: 'Show earlier messages', exact: true })
+  return screen.getByRole('button', { name: /^Show earlier messages$/ })
 }
 
 function interceptEarlier(current: NonNullable<typeof app>) {
@@ -86,13 +86,13 @@ describe('T15/T20 actual history actions — B10/B28/B29/B34', () => {
     await act(async () => barrier.response.resolve(json({ error: 'storage unavailable' }, 500)))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('Could not load earlier messages.')
-    const retry = within(alert).getByRole('button', { name: 'Retry', exact: true })
+    const retry = within(alert).getByRole('button', { name: /^Retry$/ })
     retry.focus()
     barrier = interceptEarlier(current)
     await user.keyboard('{Enter}')
     expect(Object.fromEntries(await barrier.request.promise)).toStrictEqual({ before: pos(81), limit: '20', min_rows: '20' })
     expect(retry).toHaveFocus()
-    expect(within(alert).getByRole('button', { name: 'Retry', exact: true })).toBe(retry)
+    expect(within(alert).getByRole('button', { name: /^Retry$/ })).toBe(retry)
     await act(async () => barrier.response.resolve(json({ error: 'storage unavailable' }, 500)))
     await waitFor(() => expect(alert).toHaveTextContent('Could not load earlier messages. Retry 2 failed.'))
     expect(screen.getAllByRole('alert')).toStrictEqual([alert])
@@ -113,7 +113,7 @@ describe('T15/T20 actual history actions — B10/B28/B29/B34', () => {
     const input = screen.getByTestId('chat-input')
     await user.type(input, 'Keep this unsent draft')
     barrier = interceptEarlier(current)
-    const latest = screen.getByRole('button', { name: 'Return to latest', exact: true })
+    const latest = screen.getByRole('button', { name: /^Return to latest$/ })
     await user.click(latest)
     expect((await barrier.request.promise).has('before'), 'D9 fresh latest read, not older retry').toBe(false)
     expect(screen.getByText('Saved row 79', { exact: true })).toBeInTheDocument()
@@ -123,7 +123,7 @@ describe('T15/T20 actual history actions — B10/B28/B29/B34', () => {
     expect(failure).toHaveTextContent('Could not load latest messages.')
     expect(input).toHaveValue('Keep this unsent draft')
     barrier = interceptEarlier(current)
-    await user.click(within(failure).getByRole('button', { name: 'Retry', exact: true }))
+    await user.click(within(failure).getByRole('button', { name: /^Retry$/ }))
     expect((await barrier.request.promise).has('before')).toBe(false)
     const latestSources = Array.from({ length: 40 }, (_, i) => entry(121 + i))
     await act(async () => barrier.response.resolve(json(wirePage(latestSources, true, 'latest'))))
@@ -190,7 +190,7 @@ describe('T15 unavailable history keeps current controls — B31/B43', () => {
     ])
     const failure = await screen.findByRole('alert')
     expect(failure).toHaveTextContent(UNAVAILABLE)
-    expect(within(failure).getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()
+    expect(within(failure).getByRole('button', { name: /^Retry$/ })).toBeEnabled()
     expect(screen.getByTestId('chat-input'), 'D7a history failure must not replace the whole thread/composer shell').toBeEnabled()
     expect(screen.getByRole('button', { name: /^Stop/ })).toBeEnabled()
     expect(screen.queryByText(/preparing history/i)).not.toBeInTheDocument()

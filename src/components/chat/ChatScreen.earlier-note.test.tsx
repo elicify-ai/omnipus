@@ -23,7 +23,7 @@ describe('ChatScreen — actionable retained history above the clear divider', (
     expectValidPage(initial, [pos(100)], 1)
     app = await openHistory(initial)
     const current = app
-    const earlier = screen.getByRole('button', { name: 'Show earlier messages', exact: true })
+    const earlier = screen.getByRole('button', { name: /^Show earlier messages$/ })
     const divider = screen.getByTestId('clear-context-divider')
     expect(earlier.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     const response = deferred<Response>()
@@ -53,7 +53,7 @@ describe('ChatScreen — actionable retained history above the clear divider', (
     expectValidPage(initial, [pos(100)], 1)
     app = await openHistory(initial)
     expect(screen.getByTestId('clear-context-divider')).toHaveTextContent('Conversation context cleared')
-    expect(screen.queryByRole('button', { name: 'Show earlier messages', exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Show earlier messages$/ })).not.toBeInTheDocument()
     expect(historyRequests(app.network).filter((read) => new URLSearchParams(read.query).has('before'))).toStrictEqual([])
   })
 
@@ -63,6 +63,6 @@ describe('ChatScreen — actionable retained history above the clear divider', (
     app = await openHistory(initial)
     expect(screen.getByText('Saved row 1', { exact: true })).toBeInTheDocument()
     expect(screen.queryByTestId('clear-context-divider')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Show earlier messages', exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Show earlier messages$/ })).not.toBeInTheDocument()
   })
 })

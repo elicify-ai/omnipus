@@ -103,7 +103,10 @@ describe('T08 replay completion composes with render-once base — B06/B26', () 
 })
 
 describe('T08 snapshot semantic accounting — B23 / earlier CHECK survivor', () => {
-  it.each(['source_group_count', 'row_count'] as const)('rejects a wrong snapshot %s rather than certifying history', (field) => {
+  it.each([
+    ['source_group_count', 0], ['source_group_count', 1], ['source_group_count', 3],
+    ['row_count', 0], ['row_count', 1], ['row_count', 3],
+  ] as const)('rejects a wrong snapshot %s=%i rather than certifying history', (field, wrongCount) => {
     const sources = [entry(1), entry(2, { type: 'message', role: 'assistant', content: 'Saved answer' })]
     const valid = page(sources)
     expectPageAccounting(valid, [pos(1), pos(2)], 2)
@@ -113,7 +116,7 @@ describe('T08 snapshot semantic accounting — B23 / earlier CHECK survivor', ()
     expect(useChatStore.getState().messages.map((m) => m.id), 'positive control: consumer accepted the valid two-source snapshot')
       .toStrictEqual(['history-1', 'history-2'])
     const malformed = snapshot(page([entry(3), entry(4)]))
-    malformed.page_info[field] = 0 // structurally valid; semantically false.
+    malformed.page_info[field] = wrongCount // structurally valid zero/under/over count; semantically false.
     transport.attach()
     transport.deliver(malformed, state(), replay(entry(3)), replay(entry(4)), { type: 'done', session_id: SID }, complete())
     expect(useChatStore.getState().messages.map((m) => m.id), `D10 wrong ${field} must reject the whole staged page`)

@@ -1,7 +1,7 @@
 // REAL full application route tree, ChatScreen, AssistantUI runtime, generated
 // adapter and stores. HTTP/WebSocket are the ONLY application doubles.
 import { act, screen, waitFor } from '@testing-library/react'
-import { vi } from 'vitest'
+import { expect, vi } from 'vitest'
 import type { Message, SessionHistoryResponse } from '@/lib/api/generated/openapi-types'
 import type { ServerFrame } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore } from '@/store/chat'

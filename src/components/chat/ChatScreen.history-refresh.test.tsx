@@ -31,7 +31,7 @@ async function oldReader() {
       latest_clear: { entry_id: 'history-3001', history_position: pos(3001) },
     } }))
   })
-  await userEvent.setup().click(screen.getByRole('button', { name: 'Show earlier messages', exact: true }))
+  await userEvent.setup().click(screen.getByRole('button', { name: /^Show earlier messages$/ }))
   await requested.promise
   await screen.findByText('Saved row 3000', { exact: true })
   expect(useChatStore.getState().messages.map((m) => m.id)).toStrictEqual(['history-2999', 'history-3000', 'history-3001', 'history-3002'])
@@ -49,7 +49,7 @@ function rangeBarrier(current: NonNullable<typeof app>) {
 }
 async function freshTail(current: NonNullable<typeof app>) {
   // Real sent attach owns the incoming staged batch; no second replay buffer.
-  expect(useConnectionStore.getState().connection?.send({ type: 'attach_session', session_id: MAIN_ID })).toBe(true)
+  expect(useConnectionStore.getState().connection?.send({ type: 'attach_session', session_id: MAIN_ID, since_seq: 100, boot_id: 'history-boot' })).toBe(true)
   const latest = Array.from({ length: 40 }, (_, i) => entry(6001 + i))
   await sendSnapshot(current.socket, page(latest, { sessionId: MAIN_ID, earlier: true }), 'retention_exceeded', 200)
 }
@@ -87,7 +87,7 @@ describe('T34 retained range refresh and expiry — B26/B47/B48', () => {
     expect(useChatStore.getState().sessionsById[MAIN_ID].cursor, 'revalidation failure does not undo completed live catch-up')
       .toStrictEqual({ bootId: 'history-boot', seq: 200 })
     barrier = rangeBarrier(current)
-    await userEvent.setup().click(within(alert).getByRole('button', { name: 'Retry', exact: true }))
+    await userEvent.setup().click(within(alert).getByRole('button', { name: /^Retry$/ }))
     expectHeldRange(await barrier.request.promise)
     const reconciled = wirePage([heldEntry(2999), heldEntry(3000), heldEntry(3001), heldEntry(3002)], false, 'window_refresh')
     reconciled.page_info.stop_reason = 'range_end'
@@ -119,7 +119,7 @@ describe('T34 retained range refresh and expiry — B26/B47/B48', () => {
     expect(useChatStore.getState().messages.map((m) => m.id)).toStrictEqual(ranks.map((rank) => `history-${rank}`))
     expect(composer, 'D8 unrelated composer focus stays').toHaveFocus()
     expect(screen.queryByText('Saved row 6002', { exact: true }), 'D7 expiration does not jump to staged latest tail').not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Return to latest', exact: true })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /^Return to latest$/ })).toBeEnabled()
     expect(screen.queryByTestId('welcome-state')).not.toBeInTheDocument()
     expect(sentMessages(current.socket)).toStrictEqual([])
   })
@@ -130,11 +130,11 @@ describe('T34 retained range refresh and expiry — B26/B47/B48', () => {
 // tool output: each independently encoded 20-row page sets its advertised soft
 // budget to exactly its metered bytes. A 21st same-width group exceeds it.
 // Server DEFAULT=4194304 and huge-output selection are backend/T27 + browser/T28.
-function budgetRangePage(first: number, last: number, earlier: boolean) {
+function budgetRangePage(first: number, last: number, earlier: boolean, limit: number) {
   const sources = Array.from({ length: last - first + 1 }, (_, i) => entry(first + i))
   const result = page(sources, { sessionId: MAIN_ID, earlier, later: last < 5500, info: {
-    mode: 'window_refresh', limit: 100, min_rows: 20,
-    stop_reason: earlier ? 'byte_budget' : 'range_end', retention_generation: 'fixture-retained-2',
+    mode: 'window_refresh', limit, min_rows: 20,
+    stop_reason: earlier ? (limit === 20 ? 'row_target' : 'byte_budget') : 'range_end', retention_generation: 'fixture-retained-2',
   } })
   result.page_info.soft_byte_budget = result.page_info.projected_bytes
   expectValidPage(result, sources.map((source) => source.history_position!), sources.length)
@@ -152,7 +152,7 @@ describe('T34 bounded range continuation — B26/B47', () => {
     for (let upper = 5460; upper >= 5020; upper -= 20) {
       const sources = Array.from({ length: 20 }, (_, i) => entry(upper - 19 + i))
       current.network.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json(wirePage(sources, true)))
-      await user.click(screen.getByRole('button', { name: 'Show earlier messages', exact: true }))
+      await user.click(screen.getByRole('button', { name: /^Show earlier messages$/ }))
       await screen.findByText(`Saved row ${upper - 19}`, { exact: true })
     }
     const held = Array.from({ length: 500 }, (_, i) => `history-${5001 + i}`)
@@ -168,7 +168,7 @@ describe('T34 bounded range continuation — B26/B47', () => {
       expect(query.get('before'), 'closed interval is newest-to-oldest, exclusive continuation')
         .toBe(reads.length === 1 ? null : pos(upper + 1))
       expect(reads.length, 'no unchanged-cursor loop').toBeLessThanOrEqual(25)
-      return json(budgetRangePage(upper - 19, upper, reads.length < 25))
+      return json(budgetRangePage(upper - 19, upper, reads.length < 25, Number(query.get('limit') ?? 40)))
     })
     await freshTail(current)
     await waitFor(() => expect(reads).toHaveLength(25))
