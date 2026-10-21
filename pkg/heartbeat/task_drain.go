@@ -34,6 +34,9 @@ type TaskDrainService struct {
 	interval time.Duration
 	mu       sync.Mutex
 	stopChan chan struct{}
+	// done closes when the loop goroutine has exited; Stop waits on it (see
+	// pollerStopJoinBudget).
+	done chan struct{}
 }
 
 // NewTaskDrainService creates a drain service polling checker every interval.
@@ -60,22 +63,36 @@ func (ds *TaskDrainService) Start() {
 	}
 
 	ds.stopChan = make(chan struct{})
-	go ds.runLoop(ds.stopChan)
+	ds.done = make(chan struct{})
+	go ds.runLoop(ds.stopChan, ds.done)
 
 	logger.InfoCF("heartbeat", "Task-drain service started (owns queued-task draining)", map[string]any{
 		"interval_seconds": ds.interval.Seconds(),
 	})
 }
 
-// Stop halts the drain loop. Idempotent.
-func (ds *TaskDrainService) Stop() {
+// Stop halts the drain loop. Idempotent. It returns
+// ErrPollerCycleStillRunning (wrapped) when a cycle in flight outlives the
+// bounded wait; nil otherwise.
+func (ds *TaskDrainService) Stop() error {
 	ds.mu.Lock()
-	defer ds.mu.Unlock()
 	if ds.stopChan == nil {
-		return
+		ds.mu.Unlock()
+		return nil
 	}
 	close(ds.stopChan)
 	ds.stopChan = nil
+	done := ds.done
+	ds.done = nil
+	ds.mu.Unlock()
+
+	// Wait for a check already in flight to finish, so it cannot claim or
+	// dispatch a task after Stop returns (failed-boot teardown and shutdown
+	// both call Stop before draining the task executor). Deliberately not
+	// cancelled: the check passes its context to ExecuteTask, and a cancel
+	// between claiming and dispatching would fail a queued task - Stop also
+	// runs on every config reload. The check itself is local and short.
+	return joinPollerLoop(done, "task-drain", "its queued-task check may still claim or start a task")
 }
 
 // IsRunning reports whether the drain loop is active.
@@ -98,25 +115,22 @@ func (ds *TaskDrainService) FireOnce(ctx context.Context) {
 	ds.checker.CheckQueuedTasks(ctx)
 }
 
-func (ds *TaskDrainService) runLoop(stopChan chan struct{}) {
+func (ds *TaskDrainService) runLoop(stopChan, done chan struct{}) {
+	defer close(done)
 	ticker := time.NewTicker(ds.interval)
 	defer ticker.Stop()
-
 	// Drain once shortly after start so a task queued before boot dispatches
-	// without waiting a full interval.
-	time.AfterFunc(time.Second, func() {
-		select {
-		case <-stopChan:
-			return
-		default:
-			ds.checker.CheckQueuedTasks(context.Background())
-		}
-	})
+	// without waiting a full interval. It runs on this goroutine, so Stop
+	// joins it like every later pass.
+	first := time.NewTimer(time.Second)
+	defer first.Stop()
 
 	for {
 		select {
 		case <-stopChan:
 			return
+		case <-first.C:
+			ds.checker.CheckQueuedTasks(context.Background())
 		case <-ticker.C:
 			ds.checker.CheckQueuedTasks(context.Background())
 		}

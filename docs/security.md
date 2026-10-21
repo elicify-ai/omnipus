@@ -504,28 +504,22 @@ Rotation re-encrypts the whole vault with the new passphrase. Back up the new pa
 
 Each stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open.
 
-Installations from an earlier release are upgraded automatically, once. The first time the upgraded gateway (or any `omnipus` command) opens the vault, it re-encrypts every entry with its name, using the same master key, and saves the whole file in one step. You do not re-enter anything. The upgrade is recorded in the audit log as `credentials.store_migrated`, with the number of entries and no names or values. After it, the vault never reads the old format again.
+Normal credential reads use the name-bound version-2 format. Unlock can convert a version-1 vault before use: it authenticates every entry, binds each value to its name and replaces the complete file atomically. Key-file mode keeps the master key; passphrase mode derives a key with fresh random salt. After replacing the credential file, Omnipus attempts to save `credentials.json.migrated`. If writing that marker fails, it logs a warning; the conversion still succeeds. It then emits `credentials.store_migrated`, with counts but no entry names or values. Without the marker, a restored version-1 file can be converted again. When the marker is present, a version-1 file is refused rather than converted again.
 
-What the upgrade cannot protect against. The old format did not record which name a value belonged to, so a swap made to an old-format vault file cannot be detected. For example, someone who can write to your Omnipus home folder swaps your model provider key with another key; the upgrade cannot tell, and keeps the swap.
+**Conversion cannot authenticate the names in an unbound version-1 file.** A swap inside that file is indistinguishable from its genuine layout and is carried into the name-bound format. Someone who can write to your Omnipus home folder and still holds a version-1 copy encrypted with the current master key or passphrase can:
 
-This risk does not end at the first start. It lasts as long as your vault is still opened by the same master key or passphrase it had before the upgrade. Anyone who can write to your Omnipus home folder and still holds a copy of the pre-upgrade vault file can, at any later time:
+1. swap values inside that copy,
+2. delete `credentials.json.migrated` (it sits in the same folder, so the same person can delete it), and
+3. restore the substituted copy.
 
-1. swap values inside that old copy,
-2. delete the upgrade record `credentials.json.migrated` (it sits in the same folder, so the same person can delete it), and
-3. put the old copy back.
+The next unlock can then convert it and retain the swap. When present, the marker stops accidental or careless restores; it is not a defence against someone who can replace both the credential file and its marker. This risk lasts for the lifetime of the secret that opens the version-1 copy, not just one unlock.
 
-The next start then upgrades it again and keeps the swap. The upgrade record only stops accidental or careless restores.
-
-What closes it:
-
-| How your vault is opened | What to do after upgrading |
+| How your vault is opened | How to close the version-1 restore risk |
 |---|---|
-| Passphrase typed at start-up | Run `omnipus credentials rotate` and choose a new passphrase. The upgrade already re-keys the vault under fresh random data, so an old copy cannot be mixed with anything saved after the upgrade. Only changing the passphrase stops a whole old copy from opening. |
-| Key file (`master.key`, `OMNIPUS_KEY_FILE`) or `OMNIPUS_MASTER_KEY` | Change the master key. There is no command yet that does this while keeping your stored values. The supported way is to stop the gateway, back up and remove the old key, create a new one, remove `credentials.json`, start again, and re-enter each credential. Until then, protect old copies of `credentials.json` (backups, sync folders) as carefully as the key itself. `omnipus credentials rotate` also works, but it switches the installation to a passphrase you must type at every start, which does not suit an unattended server. |
+| Passphrase typed at start-up | Run `omnipus credentials rotate` and choose a new passphrase. Fresh salt prevents mixing entries from before and after conversion, but only changing the passphrase prevents a whole version-1 copy from opening. |
+| Key file (`master.key`, `OMNIPUS_KEY_FILE`) or `OMNIPUS_MASTER_KEY` | Change the master key. No command performs that change while retaining key-file mode and all stored values. Stop the gateway, make a trusted backup, replace the key, remove `credentials.json`, start again, and re-enter each credential. Until then, protect version-1 copies of `credentials.json` in backups and sync folders as carefully as the key itself. `omnipus credentials rotate` also works, but it switches the installation to a passphrase that must be entered at every start, which does not suit an unattended server. |
 
-A later release will remove the upgrade step entirely. From then on an old-format vault is refused outright, and this risk ends for everyone.
-
-If any entry cannot be opened during the upgrade, nothing is changed and the gateway does not start. The error names each entry at fault. See [troubleshooting](troubleshooting.md#credentials-stop-working-after-an-upgrade).
+If any entry cannot be authenticated during credential-file format conversion, the source file is left unchanged and the gateway does not start. The error names each entry at fault. See [troubleshooting](troubleshooting.md#credential-file-format-or-authentication-errors).
 
 ## How to review security activity
 

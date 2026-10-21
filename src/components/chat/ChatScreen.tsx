@@ -1449,29 +1449,64 @@ function VirtualizerAutoFollow({
   contentRef: React.RefObject<HTMLDivElement | null>
 }) {
   const viewportStore = useThreadViewportStore()
+  const isReplaying = useChatStore((s) => s.isReplaying)
+  const pin = useRef<number | null>(null)
+  const userScrolledUp = useRef(false)
   useEffect(() => {
     const el = scrollRef.current
     const content = contentRef.current
     if (!el || !content) return undefined
     let raf = 0
-    const ro = new ResizeObserver(() => {
-      // Only follow if the engine still considers us at the bottom — this reuses
-      // its scrollTop-direction "did the user scroll up" detection, so we never
-      // fight a user reading history. isAtBottom is unchanged by a content-growth
-      // resize (the engine updates it on scroll events, not on resize), so it
-      // still reflects the pre-growth position here.
-      if (!viewportStore.getState().isAtBottom) return
+    let pointerActive = false
+    const observeScroll = () => {
+      if (pointerActive && pin.current !== null && el.scrollTop < pin.current) userScrolledUp.current = true
+      if (el.scrollHeight - el.clientHeight - el.scrollTop <= 1) userScrolledUp.current = false
+    }
+    const onWheel = (event: WheelEvent) => { if (isReplaying && event.deltaY < 0) userScrolledUp.current = true }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isReplaying && (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey))) userScrolledUp.current = true
+    }
+    const onPointerDown = () => { pointerActive = isReplaying }
+    const onPointerUp = () => { pointerActive = false }
+    const canFollow = () => !userScrolledUp.current && (viewportStore.getState().isAtBottom || el.scrollTop === pin.current)
+    // Keep explicit upward intent across the replay-completion effect. Row
+    // measurement can move scrollTop too, so position changes alone are not
+    // evidence of a user scroll. Never prevent any native input here.
+    el.addEventListener('scroll', observeScroll, { passive: true })
+    el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener('keydown', onKeyDown)
+    el.addEventListener('pointerdown', onPointerDown, { passive: true })
+    window.addEventListener('pointerup', onPointerUp, { passive: true })
+    const follow = () => {
+      // A measurement can grow the spacer after a successful pin and dispatch
+      // a scroll event before ResizeObserver: the engine then reports "not at
+      // bottom" even though scrollTop never moved. Preserve that known pin,
+      // not an old offset after the user has actually scrolled away from it.
+      if (!canFollow()) return
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
+        // Recheck after scheduling: an upward scroll must win over this resize.
+        if (!canFollow()) return
         el.scrollTop = el.scrollHeight
+        pin.current = el.scrollTop
       })
-    })
+    }
+    const ro = new ResizeObserver(follow)
     ro.observe(content)
+    // A buffered attach replaces the whole transcript at once. Recheck its
+    // measured bottom on completion, even if the virtualizer reused a spacer
+    // of the same size. Keep the existing viewport's user-follow preference.
+    if (!isReplaying) follow()
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
+      el.removeEventListener('scroll', observeScroll)
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('keydown', onKeyDown)
+      el.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointerup', onPointerUp)
     }
-  }, [viewportStore, scrollRef, contentRef])
+  }, [viewportStore, scrollRef, contentRef, isReplaying])
   return null
 }
 

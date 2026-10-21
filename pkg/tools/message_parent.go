@@ -475,7 +475,8 @@ func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 		if strings.TrimSpace(ToolRunningTaskID(mt.ctx)) != "" {
 			return ErrorResult("message_parent: this task run has no parent session to message — " +
 				"it was dispatched directly, not delegated. Report progress in your reasoning, and report " +
-				"your outcome with goal_claim (status \"met\" when verified done, \"blocked\" when something " +
+				"your outcome with goal_claim (status \"met\" when verified done — with one-line evidence of what " +
+				"you verified, \"blocked\" when something " +
 				"stops you, \"waiting_on_user\" when only the operator can proceed)."), true
 		}
 		return ErrorResult("message_parent: no session context available for this call"), true
@@ -520,6 +521,7 @@ func (mt *messageParentToolExecute) prepareMessage() (*ToolResult, bool) {
 
 // encodeMessage validates kind-specific arguments and encodes the typed session message.
 func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
+	generation := mt.rec.Generation
 	switch mt.kind {
 	case "progress":
 		text, ok := stringArg(mt.args, "text")
@@ -527,6 +529,7 @@ func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
 			return ErrorResult("text is required and must be a non-empty string for kind=progress"), true
 		}
 		v := generated.SessionMessageProgress{
+			Generation:      &generation,
 			MessageId:       mt.messageID,
 			SessionId:       mt.childSessionID,
 			ParentSessionId: mt.parentSessionID,
@@ -553,6 +556,7 @@ func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
 			return ErrorResult("summary is required and must be a non-empty string for kind=checkpoint"), true
 		}
 		v := generated.SessionMessageCheckpoint{
+			Generation:      &generation,
 			MessageId:       mt.messageID,
 			SessionId:       mt.childSessionID,
 			ParentSessionId: mt.parentSessionID,
@@ -586,6 +590,7 @@ func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
 			return ErrorResult("paths is required and must be a non-empty array of strings for kind=artifact"), true
 		}
 		v := generated.SessionMessageArtifact{
+			Generation:      &generation,
 			MessageId:       mt.messageID,
 			SessionId:       mt.childSessionID,
 			ParentSessionId: mt.parentSessionID,
@@ -824,7 +829,7 @@ func (mt *messageParentToolExecute) markFinalHandback() string {
 // (and for why this only ever logs). Silent for every other outcome and for
 // the kinds whose contract IS stored-not-woken.
 func (mt *messageParentToolExecute) reportUndeliveredWake() {
-	if mt.delivery.Outcome != steer.DeliveryStoredNotWoken {
+	if mt.delivery.Outcome != steer.DeliveryStoredNotWoken || mt.delivery.ExpectedNoWake() {
 		return
 	}
 	if class, err := session.ClassifySessionMessage(mt.sm); err == nil && !class.WakeEligible {

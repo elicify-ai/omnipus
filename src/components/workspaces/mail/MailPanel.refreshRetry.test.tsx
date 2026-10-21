@@ -6,11 +6,12 @@
 // The panel runs REAL against the mocked API edge; the MC-W3-9 request-
 // builder leg drives the REAL mail client (vi.importActual) over a stubbed
 // global fetch so the wire shape itself is asserted, not a mock's memory.
-import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ApiError } from '@/lib/api-error'
+// Load the real panel during collection, outside the request scenarios' budgets.
+import { MailPanel } from './MailPanel'
 
 const {
   fetchAgents,
@@ -67,25 +68,11 @@ const PAGE = {
   truncated: false, next_before_uid: null, metadata: FRESH_META,
 }
 
-async function loadPanel(): Promise<React.ComponentType<{ workspaceId: string }>> {
-  const specifier = './MailPanel'
-  try {
-    const mod = await import(/* @vite-ignore */ specifier) as { MailPanel?: React.ComponentType<{ workspaceId: string }> }
-    if (typeof mod.MailPanel !== 'function') throw new Error('MailPanel is not a function export')
-    return mod.MailPanel
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err)
-    if (detail.startsWith('BLOCKED:')) throw err
-    throw new Error('BLOCKED: MailPanel not implemented — required by W3 spec §8.4 C7. ' + detail, { cause: err })
-  }
-}
-
 // Real timers throughout this file: findBy*/waitFor drive their own polling
 // and every promise settles naturally (fake timers left a rejected query
 // unsettled inside act).
 
 async function renderOpenPanel(): Promise<void> {
-  const MailPanel = await loadPanel()
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <MailPanel workspaceId="ws-1" />
@@ -134,7 +121,6 @@ describe('MailPanel Refresh and Retry (C7: scenarios 10.1–10.3, MC-W3-9)', () 
 
   it('scenario 10.2 — Retry is human-only: the failed surface’s next fetch carries retry=true; automatic paths never do (MC-W3-9)', async () => {
     fetchMailFolders.mockRejectedValueOnce(new Error('connect refused'))
-    const MailPanel = await loadPanel()
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <MailPanel workspaceId="ws-1" />
@@ -161,7 +147,6 @@ describe('MailPanel Refresh and Retry (C7: scenarios 10.1–10.3, MC-W3-9)', () 
     fetchMailFolders.mockRejectedValue(new ApiError(503, 'Mail is busy', {
       body: JSON.stringify({ code: 'busy', reason: 'server_connection_limit' }),
     }))
-    const MailPanel = await loadPanel()
     const { unmount } = render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <MailPanel workspaceId="ws-1" />
