@@ -45,7 +45,8 @@ type chatHistoryIndexTree struct {
 	knownRanks map[HistoryPosition]uint64
 	// overlay validates a bounded saved delta against an immutable old root.
 	// Unlike pending tree nodes, these values can never flush to the journal.
-	overlay map[string]json.RawMessage
+	overlay      map[string]json.RawMessage
+	dependencies map[historyDependencyKey]struct{}
 }
 
 func historyEncodeFrame(v historyFrame) ([]byte, error) {

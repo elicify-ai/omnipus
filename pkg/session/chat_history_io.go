@@ -24,6 +24,28 @@ type ChatHistoryReadMetrics struct {
 	DependencyCount, RecoveryItems, RecoveryAnchorRecords, RecoveryOverflowRecords, RetentionRetries int64
 }
 type historyMetricsKey struct{}
+type historyDependencyKey struct {
+	stream string
+	item   uint64
+}
+
+// One resolved fact counts once at this immutable cut, even when cumulative
+// candidates reuse it. Physical rereads remain separate actual I/O counters.
+func (t *chatHistoryIndexTree) resolvedDependency(stream string, item uint64) {
+	m := historyMetrics(t.ctx)
+	if m == nil {
+		return
+	}
+	key := historyDependencyKey{stream: stream, item: item}
+	if _, exists := t.dependencies[key]; exists {
+		return
+	}
+	if t.dependencies == nil {
+		t.dependencies = make(map[historyDependencyKey]struct{})
+	}
+	t.dependencies[key] = struct{}{}
+	m.DependencyCount++
+}
 
 func WithChatHistoryReadMetrics(ctx context.Context, m *ChatHistoryReadMetrics) context.Context {
 	return context.WithValue(ctx, historyMetricsKey{}, m)

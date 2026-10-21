@@ -27,7 +27,7 @@ func historyReduceArchive(t *chatHistoryIndexTree, cp *historyCheckpoint, a Arch
 		return errors.New("history position binding collision")
 	}
 	r := historyRecord{Position: pos, Rank: rank, Address: a, Length: int64(len(b)), Digest: historyDigest(b), Role: rec.Role, Turn: rec.TurnID}
-	r.Eligible = rec.ViewMembership != ViewMembershipModel && rec.Type != EntryTypeModelRef && rec.Type != EntryTypeToolCallEffect
+	r.Eligible = rec.ViewMembership != ViewMembershipModel && rec.Type != EntryTypeModelRef && rec.Type != EntryTypeToolCallEffect && !isSavedChatInput(rec.TranscriptEntry)
 	r.Clear = IsClearMarker(rec.TranscriptEntry)
 	for _, call := range rec.ToolCalls {
 		if call.ID != "" {
@@ -293,9 +293,7 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 			}
 		}
 		effects = append(effects, pendingEffect{addr: meta.Address, effect: &filtered})
-		if m := historyMetrics(t.ctx); m != nil {
-			m.DependencyCount++
-		}
+		t.resolvedDependency("archive", rank)
 	}
 	entries := []TranscriptEntry{entry}
 	if err = applyToolCallEffects(entries, map[ArchiveAddress]int{r.Address: 0}, effects, parts); err != nil {
@@ -315,9 +313,7 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 				return ChatHistoryEntry{}, e
 			}
 			entries = deriveCancelTruncation(append(entries, cancel.TranscriptEntry))
-			if m := historyMetrics(t.ctx); m != nil {
-				m.DependencyCount++
-			}
+			t.resolvedDependency("archive", cancelRank)
 		}
 	}
 	entry = entries[0]
@@ -340,6 +336,7 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 			d.ClientMessageID = entry.ClientMessageID
 		}
 		entry.InputDisposition = &d
+		t.resolvedDependency("disposition", uint64(disposition.Offset))
 	}
 	rows := len(entry.ToolCalls)
 	if entry.Content != "" || rows == 0 {
