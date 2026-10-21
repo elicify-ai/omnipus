@@ -13,6 +13,7 @@ import {
   emitFromGateway, mountStage1App, resetStage1App, SETTINGS_PATH,
   Stage1Network, stopStage1App,
 } from '../../../tests/l1-room-ui/stage1-harness'
+import { fixtureHistoryPosition, wireHistoryPage, wireHistorySnapshot } from '../../../tests/chat-history-paging/legacy-wire'
 
 const NOTICE = 'Saved history is large. Showing messages as they load.'
 let network: Stage1Network
@@ -42,14 +43,29 @@ function completion(): ServerFrame {
 }
 
 async function startLargeReplay(socket: TestSocket) {
+  const questionPosition = fixtureHistoryPosition(MAIN_ID, 'saved-question')
+  // Explicit fixture archive identity for this tool-only assistant source;
+  // the call ID itself is not claimed to be a recorded entry ID.
+  const toolId = 'large-read-source'
+  const toolPosition = fixtureHistoryPosition(MAIN_ID, toolId)
+  // Product's default 8 MiB UTF-16 retention limit, not a mocked threshold.
+  const result = { output: 'x'.repeat(4 * 1024 * 1024) }
+  const frames: ServerFrame[] = [
+    { type: 'replay_message', session_id: MAIN_ID, id: 'saved-question', role: 'user', content: 'Saved question', history_origin: { position: questionPosition, entry_id: 'saved-question' } },
+    { type: 'tool_call_start', session_id: MAIN_ID, call_id: 'large-read', tool: 'read_file', params: { path: 'large.txt' }, history_origin: { position: toolPosition, entry_id: toolId } },
+    { type: 'tool_call_result', session_id: MAIN_ID, call_id: 'large-read', tool: 'read_file', status: 'success', result, history_origin: { position: toolPosition, entry_id: toolId } },
+  ]
+  const stamp = '2026-10-22T08:00:00Z'
+  const history = wireHistoryPage(MAIN_ID, [
+    { id: 'saved-question', type: 'message', role: 'user', agent_id: 'mia', content: 'Saved question', timestamp: stamp, history_position: questionPosition },
+    { id: toolId, type: 'tool_call', role: 'assistant', agent_id: 'mia', content: '', timestamp: stamp, history_position: toolPosition,
+      tool_calls: [{ id: 'large-read', tool: 'read_file', parameters: { path: 'large.txt' }, status: 'success', result, content_state: 'full' }] },
+  ], 2, { info: { byte_budget_exceeded: true, budget_override: 'atomic_group' } })
   act(() => {
     expect(useSessionStore.getState().attachToSession(MAIN_ID, 'main', 'Mia main chat', 'mia')).toBe(true)
   })
-  await emitFromGateway(socket, { type: 'session_snapshot', session_id: MAIN_ID, seq: 10, boot_id: 'fallback-test', reason: 'unknown_position' })
-  await emitFromGateway(socket, { type: 'replay_message', session_id: MAIN_ID, id: 'saved-question', role: 'user', content: 'Saved question' })
-  await emitFromGateway(socket, { type: 'tool_call_start', session_id: MAIN_ID, call_id: 'large-read', tool: 'read_file', params: { path: 'large.txt' } })
-  // Product's default 8 MiB UTF-16 retention limit, not a mocked threshold.
-  await emitFromGateway(socket, { type: 'tool_call_result', session_id: MAIN_ID, call_id: 'large-read', tool: 'read_file', status: 'success', result: { output: 'x'.repeat(4 * 1024 * 1024) } })
+  await emitFromGateway(socket, wireHistorySnapshot(history, { seq: 10, boot_id: 'fallback-test', reason: 'unknown_position' }, frames))
+  for (const frame of frames) await emitFromGateway(socket, frame)
 }
 
 describe('SF-2 — informational history fallback through the real shell', () => {
@@ -123,8 +139,11 @@ describe('SF-2 — explicit reconnect retires the healthy old socket', () => {
     expect([socket.onopen, socket.onmessage, socket.onerror, socket.onclose]).toEqual([null, null, null, null])
     await act(async () => replacement.open())
     expect(TestSocket.instances.filter(candidate => candidate.readyState === TestSocket.OPEN)).toEqual([replacement])
-    await emitFromGateway(replacement, { type: 'session_snapshot', session_id: MAIN_ID, seq: 10, boot_id: 'fallback-test', reason: 'unknown_position' })
-    await emitFromGateway(replacement, { type: 'replay_message', session_id: MAIN_ID, id: 'replacement-row', role: 'assistant', content: 'Fresh socket history' })
+    const replacementPosition = fixtureHistoryPosition(MAIN_ID, 'replacement-row')
+    const replacementReplay: ServerFrame = { type: 'replay_message', session_id: MAIN_ID, id: 'replacement-row', role: 'assistant', content: 'Fresh socket history', history_origin: { position: replacementPosition, entry_id: 'replacement-row' } }
+    const replacementHistory = wireHistoryPage(MAIN_ID, [{ id: 'replacement-row', type: 'message', role: 'assistant', agent_id: 'mia', content: 'Fresh socket history', timestamp: '2026-10-22T08:00:00Z', history_position: replacementPosition }], 1)
+    await emitFromGateway(replacement, wireHistorySnapshot(replacementHistory, { seq: 10, boot_id: 'fallback-test', reason: 'unknown_position' }, [replacementReplay]))
+    await emitFromGateway(replacement, replacementReplay)
     await emitFromGateway(replacement, completion())
     await waitFor(() => expect(useChatStore.getState().messages.map(message => message.content)).toEqual(['Fresh socket history']))
 
