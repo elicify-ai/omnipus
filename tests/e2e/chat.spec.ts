@@ -3,8 +3,57 @@ import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, assistantMessages, userMessages, selectAgent, tokenCounter, waitForConnected } from './fixtures/selectors';
 import { freshChat, originOf } from './fixtures/session-setup';
+import type { ClientFrame, ServerFrame } from '../../src/lib/api/generated/asyncapi-types';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
+
+// R2/R3: real app/runtime/virtualizer and browser layout; only the WS peer is
+// deterministic here. R1/R9 separately use product-seeded real-gateway history.
+test('attach replay paints history once at the bottom without intermediate rows', async ({ page, consoleErrors }) => {
+  test.setTimeout(90_000);
+  await expect(chatInput(page)).toBeVisible();
+  const { sessionId } = await freshChat(page, /Mia/i);
+  const observations: Array<{ rows: number; running: number }> = [];
+  let completed = false;
+  await page.routeWebSocket(/\/api\/v1\/chat\/ws/, socket => {
+    socket.onMessage(async raw => {
+      const request = JSON.parse(String(raw)) as ClientFrame;
+      if (request.type === 'ping') { socket.send(JSON.stringify({ type: 'pong' })); return; }
+      if (request.type !== 'attach_session' || request.session_id !== sessionId) return;
+      const frames: ServerFrame[] = [{ type: 'session_snapshot', session_id: sessionId, seq: 100, boot_id: 'replay-browser', reason: 'unknown_position' }];
+      for (let i = 0; i < 30; i++) {
+        frames.push(
+          { type: 'replay_message', session_id: sessionId, id: `question-${i}`, role: 'user', content: `Saved question ${i}` },
+          { type: 'tool_call_start', session_id: sessionId, call_id: `call-${i}`, tool: 'read_file', params: { path: 'note.txt' } },
+          { type: 'tool_call_result', session_id: sessionId, call_id: `call-${i}`, tool: 'read_file', status: 'success', result: { content: 'Saved result' } },
+          { type: 'replay_message', session_id: sessionId, id: `answer-${i}`, role: 'assistant', content: i === 29 ? 'REPLAY_LAST_ROW' : `Saved answer ${i}\n\n${'Historical paragraph. '.repeat(i % 3 === 0 ? 80 : 8)}` },
+        );
+      }
+      frames.push({ type: 'done', session_id: sessionId, stats: { frames_emitted: frames.length } });
+      for (const frame of frames) {
+        socket.send(JSON.stringify(frame));
+        await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        observations.push(await page.evaluate(() => ({
+          rows: document.querySelectorAll('[data-testid="virtualized-message-list"] [data-message-role]').length,
+          running: document.querySelectorAll('[data-testid="reply-status-indicator"]').length,
+        })));
+      }
+      socket.send(JSON.stringify({ type: 'catch_up_complete', session_id: sessionId, seq: 100, boot_id: 'replay-browser', mode: 'snapshot' } satisfies ServerFrame));
+      completed = true;
+    });
+  });
+  await page.reload();
+  await expect.poll(() => completed).toBe(true);
+  // Positive control: the peer sent every frame and the final history really
+  // rendered. Zero partial rows alone could otherwise mean the test was blind.
+  expect(observations).toHaveLength(122);
+  expect(observations.filter(sample => sample.rows > 0 || sample.running > 0)).toEqual([]);
+  const viewport = page.getByTestId('virtualized-message-list');
+  await expect(viewport.getByText('REPLAY_LAST_ROW', { exact: true })).toBeVisible();
+  await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(1);
+  expect(await viewport.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  expect(consoleErrors).toEqual([]);
+});
 
 /**
  * Wait for any follow-up LLM call that Jim may start after a tool call completes.

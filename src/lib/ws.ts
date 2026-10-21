@@ -4,6 +4,7 @@
 import { maybeDevToast } from '@/lib/dev-toast'
 import { forceLogout } from '@/lib/authLogout'
 import { logError } from '@/lib/telemetry'
+import { AttachReplayBuffer } from '@/lib/attach-replay'
 
 // ── Generated type imports ────────────────────────────────────────────────────
 // All wire-format frame types are sourced from the generated AsyncAPI types.
@@ -374,6 +375,8 @@ export interface WsConnectionCallbacks { // not-wire-format: SPA-only callback i
   onConnected: () => void
   onDisconnected: () => void
   onError: (error: string) => void
+  /** Informational history fallback, not a transport failure or reconnect action. */
+  onReplayNotice?: (sessionId: string, message: string) => void
   /** Reconnect progress. phase=null when connected; gave_up when all retries exhausted. */
   onReconnectStateChange?: (phase: 'reconnecting' | 'slow' | 'gave_up' | null, attempt: number) => void
 }
@@ -389,6 +392,8 @@ const SLOW_RETRY_DELAY_MS = 60_000
 
 export class WsConnection {
   private ws: WebSocket | null = null
+  /** A close that threw must be retried, not forgotten before replacement. */
+  private _retiringSocket: WebSocket | null = null
   private _socketGeneration = 0
   /**
    * Counts the sockets this connection has opened. A new socket (first connect
@@ -426,6 +431,9 @@ export class WsConnection {
 
   /** Validated frames waiting for the next rAF/microtask flush. */
   private _inboundBatch: ServerFrame[] = []
+  private readonly _attachReplay = new AttachReplayBuffer({
+    onLimit: (sessionId) => this.callbacks.onReplayNotice?.(sessionId, 'Saved history is large. Showing messages as they load.'),
+  })
   /** True when a rAF/setTimeout flush is already scheduled for this batch. */
   private _rafPending = false
 
@@ -455,11 +463,18 @@ export class WsConnection {
   }
 
   connect(): void {
+    // Explicit Retry is legal even while OPEN. Retire that transport, timers
+    // and parser before resetting ids or creating its replacement.
+    const replacing = this.ws !== null || this._retiringSocket !== null
+    this.disconnect()
+    if (replacing) this.callbacks.onDisconnected()
+    if (this._retiringSocket) return
     this.intentionalClose = false
     this.reconnectAttempts = 0
     this.slowRetryAttempts = 0
     this.inSlowPhase = false
     this._inboundBatch = []
+    this._attachReplay.clear()
     this._rafPending = false
     this._nextWorkerId = 0
     this._workerNextExpected = 0
@@ -475,21 +490,31 @@ export class WsConnection {
     this._stopHeartbeat()
     this._detachWindowListeners()
     this._stopWorker()
+    this._attachReplay.clear()
     // Flush any pending batch before tearing down so callers don't lose frames
     // queued just before disconnect() was called.
     this._flushBatch()
-    try {
-      this.ws?.close(1000, 'User disconnected')
-    } catch (err) {
-      // Same failure shape as the ping-timeout force-close (see
-      // _startHeartbeat): a throwing close() must not escape — it would abort
-      // the caller's teardown AND skip the ws-null below, leaving the class
-      // pointing at a half-dead socket it believes it released. intentionalClose
-      // is already true, so no synthetic _handleClose is needed here — the
-      // nulling below is the entire remaining cleanup for an intentional close.
-      console.warn('[ws] close() threw during disconnect — continuing teardown', err)
+    const socket = this.ws ?? this._retiringSocket
+    this._removeSocketFromRegistry()
+    if (socket) {
+      socket.onopen = null
+      socket.onmessage = null
+      socket.onerror = null
+      socket.onclose = null
     }
     this.ws = null
+    this._retiringSocket = socket
+    try {
+      socket?.close(1000, 'User disconnected')
+      this._retiringSocket = null
+    } catch (err) {
+      // Keep the detached socket for a later retirement attempt. Creating a
+      // replacement after a failed close would leave two live transports.
+      console.warn('[ws] close() threw during disconnect — replacement blocked', err)
+      this.callbacks.onError('Could not close the previous connection. Please reload the page.')
+    }
+    // Intentional effect teardown is not a current transport drop. Explicit
+    // replacement reports disconnection in connect(); real drops use _handleClose.
   }
 
   // ── Worker lifecycle ──────────────────────────────────────────────────────
@@ -545,6 +570,8 @@ export class WsConnection {
 
   private _stopWorker(): void {
     if (this._worker) {
+      this._worker.onmessage = null
+      this._worker.onerror = null
       this._worker.terminate()
       this._worker = null
     }
@@ -623,7 +650,11 @@ export class WsConnection {
     // in chatStore.handleFrame.
     if (frame.type === 'pong') return
 
-    this._inboundBatch.push(frame)
+    const ready = this._attachReplay.accept(frame)
+    if (ready.length === 0) return
+    // Avoid spreading a large history into push(): long transcripts can exceed
+    // the engine's argument limit. One batch still means one React update.
+    for (const readyFrame of ready) this._inboundBatch.push(readyFrame)
     this._scheduleFlush()
   }
 
@@ -658,6 +689,7 @@ export class WsConnection {
     if (this.ws?.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify(frame))
+        if (frame.type === 'attach_session') this._attachReplay.begin(frame.session_id, this._inboundBatch)
         return true
       } catch (err) {
         // An OPEN socket can still throw on send (broken pipe, send-buffer full,
@@ -686,8 +718,10 @@ export class WsConnection {
   }
 
   private _createSocket(): void {
+    let socket: WebSocket
     try {
-      this.ws = new WebSocket(getWsUrl())
+      socket = new WebSocket(getWsUrl())
+      this.ws = socket
       this._socketGeneration++
     } catch (err) {
       this.callbacks.onError(`Failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`)
@@ -705,7 +739,8 @@ export class WsConnection {
       w.__ws_instances.push(this.ws)
     }
 
-    this.ws.onopen = () => {
+    socket.onopen = () => {
+      if (this.ws !== socket) return
       this.reconnectAttempts = 0
       this.slowRetryAttempts = 0
       this.inSlowPhase = false
@@ -723,7 +758,8 @@ export class WsConnection {
       this.callbacks.onConnected()
     }
 
-    this.ws.onmessage = (event: MessageEvent) => {
+    socket.onmessage = (event: MessageEvent) => {
+      if (this.ws !== socket) return
       const raw = event.data as string
 
       // ── Synchronous liveness sniff ────────────────────────────────────────────
@@ -755,7 +791,8 @@ export class WsConnection {
       }
     }
 
-    this.ws.onerror = () => {
+    socket.onerror = () => {
+      if (this.ws !== socket) return
       // onerror fires before onclose on every transport-level drop (network
       // cut, server unreachable, …) and carries no diagnostic payload of its
       // own — onclose (via _handleClose) is what decides what happens next.
@@ -766,7 +803,19 @@ export class WsConnection {
       console.warn(`[ws] transport error reaching ${getWsUrl()}`)
     }
 
-    this.ws.onclose = (event: CloseEvent) => this._handleClose(event)
+    socket.onclose = (event: CloseEvent) => {
+      if (this.ws === socket) this._handleClose(event)
+    }
+  }
+
+  private _removeSocketFromRegistry(): void {
+    if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver))) {
+      const w = window as unknown as { __ws_instances?: WebSocket[] }
+      if (w.__ws_instances && this.ws) {
+        const idx = w.__ws_instances.indexOf(this.ws)
+        if (idx >= 0) w.__ws_instances.splice(idx, 1)
+      }
+    }
   }
 
   // _handleClose is the entire close path, extracted from the onclose handler
@@ -777,14 +826,12 @@ export class WsConnection {
   // {code, reason} literal is a legal argument.
   private _handleClose(event: Pick<CloseEvent, 'code' | 'reason'>): void {
     // Drop this socket from the test-visible registry before nulling.
-    if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver))) {
-      const w = window as unknown as { __ws_instances?: WebSocket[] }
-      if (w.__ws_instances && this.ws) {
-        const idx = w.__ws_instances.indexOf(this.ws)
-        if (idx >= 0) w.__ws_instances.splice(idx, 1)
-      }
-    }
+    this._removeSocketFromRegistry()
 
+    // An incomplete attach must not survive into the next socket generation.
+    // Existing disconnect/reconnect reducers expose reachability and release
+    // the loading state; completed batches and ordinary live frames still flush.
+    this._attachReplay.clear()
     // Flush frames already queued before the drop so callers don't lose them.
     // Chat reducers are idempotent on replay, so flushing on unintentional
     // close is safe. Also clear any in-flight worker entries whose responses

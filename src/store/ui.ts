@@ -8,7 +8,10 @@ export interface Toast {
   id: string
   message: string
   variant: 'default' | 'error' | 'success' | 'warning'
+  /** Zero keeps the notice until explicitly dismissed. Omitted defaults to 4s. */
   duration?: number
+  /** Omitted for global toasts; history information belongs to its own chat. */
+  sessionId?: string
   testId?: string
   /** Optional primary action rendered inside the toast. */
   action?: {
@@ -265,6 +268,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
     const id = generateId()
     set((state) => ({ toasts: [...state.toasts, { ...toast, id }] }))
     const duration = toast.duration ?? 4000
+    if (duration === 0) return
     const timer = setTimeout(() => {
       get().removeToast(id)
       toastTimers.delete(id)
