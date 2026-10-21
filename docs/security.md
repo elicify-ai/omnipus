@@ -504,7 +504,7 @@ Rotation re-encrypts the whole vault with the new passphrase. Back up the new pa
 
 Each stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open.
 
-Normal credential reads use the name-bound version-2 format. Unlock can convert a version-1 vault before use: it authenticates every entry, binds each value to its name and replaces the complete file atomically. Key-file mode keeps the master key; passphrase mode derives a key with fresh random salt. A completed conversion is recorded by `credentials.json.migrated` and by the audit event `credentials.store_migrated`, which carries counts but no entry names or values. A version-1 file with that marker present is refused rather than converted again.
+Normal credential reads use the name-bound version-2 format. Unlock can convert a version-1 vault before use: it authenticates every entry, binds each value to its name and replaces the complete file atomically. Key-file mode keeps the master key; passphrase mode derives a key with fresh random salt. After replacing the credential file, Omnipus attempts to save `credentials.json.migrated`. If writing that marker fails, it logs a warning; the conversion still succeeds. It then emits `credentials.store_migrated`, with counts but no entry names or values. Without the marker, a restored version-1 file can be converted again. When the marker is present, a version-1 file is refused rather than converted again.
 
 **Conversion cannot authenticate the names in an unbound version-1 file.** A swap inside that file is indistinguishable from its genuine layout and is carried into the name-bound format. Someone who can write to your Omnipus home folder and still holds a version-1 copy encrypted with the current master key or passphrase can:
 
@@ -512,7 +512,7 @@ Normal credential reads use the name-bound version-2 format. Unlock can convert 
 2. delete `credentials.json.migrated` (it sits in the same folder, so the same person can delete it), and
 3. restore the substituted copy.
 
-The next unlock can then convert it and retain the swap. The marker stops accidental or careless restores; it is not a defence against someone who can replace both the credential file and its marker. This risk lasts for the lifetime of the secret that opens the version-1 copy, not just one unlock.
+The next unlock can then convert it and retain the swap. When present, the marker stops accidental or careless restores; it is not a defence against someone who can replace both the credential file and its marker. This risk lasts for the lifetime of the secret that opens the version-1 copy, not just one unlock.
 
 | How your vault is opened | How to close the version-1 restore risk |
 |---|---|

@@ -216,7 +216,7 @@ A fresh install warns you to back up `master.key`. Heed it: losing that file mak
 
 ## Credential-file format or authentication errors
 
-Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. Normal credential reads require the name-bound, version-2 file format. Unlock can convert a version-1 file before use, but refuses it when `credentials.json.migrated` already records a completed conversion. The conversion authenticates every entry and replaces the whole file atomically. A crash leaves either the original file or a complete converted file, not a mixture.
+Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. Normal credential reads require the name-bound, version-2 file format. Unlock can convert a version-1 file before use, but refuses it when `credentials.json.migrated` already records a completed conversion. The conversion authenticates every entry and replaces the whole file atomically. A crash leaves either the original file or a complete converted file, not a mixture. Saving `credentials.json.migrated` is a separate, best-effort step after that replacement. If its write fails, a warning is logged, but conversion and unlocking can still succeed; the success event `credentials.store_migrated` is emitted even when the marker could not be saved. Without the marker, a restored version-1 file can be converted again.
 
 During that format conversion, the gateway refuses to start and leaves the credential file unchanged in these cases:
 

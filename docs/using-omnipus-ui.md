@@ -110,9 +110,9 @@ When an agent asks you questions, a card docks above the message box with one ta
 
 ### Who is replying
 
-Replies in the web app's chat show the agent's name above the text with a small portrait of that agent beside it — the same mark the sidebar and the @-mention menu use — including streaming replies, saved history, and another agent's replies in the same chat. The name and portrait are the whole label: no status word is printed next to them. When the reply records its author, the name follows that author rather than the current agent selection. Older replies without a recorded author fall back to the chat's current agent. If an agent's details cannot be found, its stored ID can appear instead of a name, and the portrait falls back to the general Omnipus mark.
+Replies in the web app's chat show the agent's name above the text with a small portrait of that agent beside it — the same mark the sidebar and the @-mention menu use — including streaming replies, saved history, and another agent's replies in the same chat. The name and portrait are the whole label: no status word is printed next to them. When the reply records its author, the name follows that author rather than the current agent selection. Replies without a recorded author fall back to the chat's current agent. If an agent's details cannot be found, its stored ID can appear instead of a name, and the portrait falls back to the general Omnipus mark.
 
-During a live reply, an inline mark replaces the old bouncing-dot indicator. It combines the agent's figure and role badge with a short status phrase, inside the conversation, not on the message box. The name remains above the reply. The mark stays on screen, with its animation, for the whole time the reply is working — pinned at the bottom of the conversation, after the text and tool cards already streamed — and it does not disappear between steps or once text has appeared. While agent details are loading or unavailable, the phrase can appear without the figure. The same running-tool rule applies when the chat uses its simpler message-list fallback: a tool belonging to this reply selects Working until its call finishes; a tool in another reply does not.
+During a live reply, an inline mark combines the agent's figure and role badge with a short status phrase, inside the conversation, not on the message box. The name remains above the reply. The mark stays on screen, with its animation, for the whole time the reply is working — pinned at the bottom of the conversation, after the text and tool cards already streamed — and it does not disappear between steps or once text has appeared. While agent details are loading or unavailable, the phrase can appear without the figure. The same running-tool rule applies when the chat uses its simpler message-list fallback: a tool belonging to this reply selects Working until its call finishes; a tool in another reply does not.
 
 | What is happening | What you see |
 |---|---|
@@ -258,7 +258,7 @@ A main chat's title is always **<Agent name> - Main Session** — for example **
 | **Queued** | It is queued, not executing. |
 | **Done** | Its lifecycle record says it finished. If no lifecycle status is available, an archived chat also shows Done. |
 | **Failed** | It failed. |
-| **Stopped** | It was stopped. The cause is included when known, for example **Stopped · cascade** when a Stop all above it reached it. Work has no time limit, so current versions never stop a session on a timer; a session that an older version stopped for its time limit still shows **Stopped · timeout**. |
+| **Stopped** | It was stopped. The cause is included when known, for example **Stopped · cascade** when a Stop all above it reached it. Work has no time limit. A saved stop cause of `timeout` is shown as **Stopped · timeout**. |
 | **Interrupted** | A server restart cut the turn off. This takes priority over an old queued or running record. |
 | **Unavailable** | No usable lifecycle or queued status is available, and the chat is not archived. An active chat without that information is not labelled Working. |
 
