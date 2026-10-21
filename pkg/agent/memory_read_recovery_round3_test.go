@@ -16,6 +16,8 @@ import (
 // incomplete-read warning; repaired storage is retryable without another write.
 func TestMemoryRound3Storage(t *testing.T) {
 	t.Run("PartialReads", round3PartialReads)
+	t.Run("InitiallyCorrupt", round3InitiallyCorrupt)
+	t.Run("AllNotesUnreadable", round3AllNotesUnreadable)
 	t.Run("ConfirmedDeletion", round3ConfirmedDeletion)
 	t.Run("InitialIndexBuild", round3InitialIndexBuild)
 	t.Run("InitialStoreRetry", round3InitialStoreRetry)
@@ -84,6 +86,38 @@ func round3PartialReads(t *testing.T) {
 			require.True(t, gateHasWarning(t, log, ""), "partial prompt must log a warning")
 		})
 	}
+}
+
+func round3InitiallyCorrupt(t *testing.T) {
+	ms, _ := newTestMemoryStore(t)
+	t.Cleanup(ms.Close)
+	dir := ms.PrivateRoom().MemoriesDir
+	round3WriteNote(t, dir, "round3-good", "HEALTHY_NOTE")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "round3-bad.md"), []byte("malformed note without frontmatter"), 0o600))
+	entries, err := ms.SearchEntries("roomnote", 20)
+	require.Error(t, err, "initial index build must not silently omit a malformed source")
+	require.Equal(t, []string{"round3-good"}, round3EntryIDs(entries))
+	require.NotContains(t, ms.indexCache, ms.PrivateRoom().Root, "partial index cannot be cached as ready")
+	result := tools.NewRecallMemoryTool(NewMemoryStoreAdapter(ms)).Execute(t.Context(), map[string]any{"query": "roomnote", "room": "private"})
+	require.True(t, result.IsError)
+	require.Contains(t, strings.ToLower(result.ForLLM), "partial")
+	require.Contains(t, result.ForLLM, "roomnote HEALTHY_NOTE")
+}
+
+func round3AllNotesUnreadable(t *testing.T) {
+	ms, _ := newTestMemoryStore(t)
+	t.Cleanup(ms.Close)
+	dir := ms.PrivateRoom().MemoriesDir
+	round3WriteNote(t, dir, "round3-only", "ONLY_NOTE")
+	before, err := ms.SearchEntries("roomnote", 20)
+	require.NoError(t, err)
+	require.Equal(t, []string{"round3-only"}, round3EntryIDs(before))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "round3-only.md"), []byte("malformed note without frontmatter"), 0o600))
+	result := tools.NewRecallMemoryTool(NewMemoryStoreAdapter(ms)).Execute(t.Context(), map[string]any{"query": "roomnote", "room": "private"})
+	require.True(t, result.IsError, "zero readable matches is still a failed read, not evidence of absence")
+	require.Contains(t, strings.ToLower(result.ForLLM), "warning")
+	require.Contains(t, strings.ToLower(result.ForLLM), "partial")
+	require.NotContains(t, result.ForLLM, "no matching entries")
 }
 
 func round3EntryIDs(entries []LongTermEntry) []string {
