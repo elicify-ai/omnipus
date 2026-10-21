@@ -22,6 +22,7 @@ func TestMemoryRound3Storage(t *testing.T) {
 	t.Run("InitialIndexBuild", round3InitialIndexBuild)
 	t.Run("InitialStoreRetry", round3InitialStoreRetry)
 	t.Run("RefreshRetry", round3RefreshRetry)
+	t.Run("SharedHandleRetry", round3SharedHandleRetry)
 	t.Run("CitationAppendRetry", round3CitationAppendRetry)
 }
 

@@ -256,7 +256,7 @@ func memoriesDirMtime(memoriesDir string) time.Time {
 //     because that fallback only fires when the cached index is nil), and
 //   - drops this room's sigCache so the next dedup check rescans the .md sources.
 //
-// It then records the observed directory mtime as the new sync baseline.
+// Only a successful rebuild records the observed directory mtime as the sync baseline.
 //
 // Crucially, when nothing changed (mtime equals the recorded baseline) it is a
 // no-op and does NOT touch the sigCache — so the append path, which records the
@@ -267,22 +267,23 @@ func memoriesDirMtime(memoriesDir string) time.Time {
 //
 // MUST be called with ms.indexMu held. ri may be nil (index unavailable); the
 // sigCache drop still happens so dedup stays correct.
-func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.RoomIndex) {
+func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.RoomIndex) error {
 	current := memoriesDirMtime(room.MemoriesDir)
 	baseline, seen := ms.indexedDirMtime[room.MemoriesDir]
 	if seen && current.Equal(baseline) {
-		return // in sync; nothing to do
+		return nil // in sync; nothing to do
 	}
 
 	// Directory changed (or first sync). Rebuild the bleve index from the .md
 	// sources so externally written memories become searchable.
 	if ri != nil {
 		if err := ri.Rebuild(); err != nil {
-			logger.WarnCF(
-				"agent.memory",
-				"syncRoomToDisk: bleve rebuild failed; recall may miss new files until next open",
-				map[string]any{"room_root": room.Root, "error": err.Error()},
-			)
+			delete(ms.indexedDirMtime, room.MemoriesDir)
+			delete(ms.sigCache, room.Root)
+			delete(ms.sigIDs, room.Root)
+			logger.WarnCF("agent.memory", "saved-note index rebuild failed; retry will rebuild; using scan for this read",
+				map[string]any{"room_root": room.Root, "error": err.Error()})
+			return fmt.Errorf("memory: rebuild saved-note index in %q: %w", room.Root, err)
 		}
 	}
 
@@ -292,6 +293,7 @@ func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.Roo
 	delete(ms.sigIDs, room.Root)
 
 	ms.indexedDirMtime[room.MemoriesDir] = current
+	return nil
 }
 
 // roomIndex returns the bleve RoomIndex for room, lazily opening it.
@@ -304,12 +306,24 @@ func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.Roo
 func (ms *MemoryStore) roomIndexLocked(room memrooms.Room) *memindex.RoomIndex {
 	ri, ok := ms.indexCache[room.Root]
 	if ok {
-		ms.syncRoomToDiskLocked(room, ri)
+		if err := ms.syncRoomToDiskLocked(room, ri); err != nil {
+			return nil
+		}
 		return ri
 	}
+	current := memoriesDirMtime(room.MemoriesDir)
 	var openErr error
 	ri, openErr = memindex.OpenOrCreate(room)
+	if openErr == nil {
+		// OpenOrCreate may reuse a process-shared handle whose refresh failed
+		// in another store. Validate sources once on this store's acquisition
+		// before calling the current directory timestamp synchronized.
+		if rebuildErr := ri.Rebuild(); rebuildErr != nil {
+			openErr = errors.Join(rebuildErr, ri.Close())
+		}
+	}
 	if openErr != nil {
+		delete(ms.indexedDirMtime, room.MemoriesDir)
 		// Say what the operator loses, not which algorithm stops. Until ADR-068
 		// D21.1 this line read "BM25 disabled for room", which was untrue twice
 		// over: bleve was scoring TF-IDF, and "disabled" implied a ranked search
@@ -321,10 +335,9 @@ func (ms *MemoryStore) roomIndexLocked(room memrooms.Room) *memindex.RoomIndex {
 		return nil
 	}
 	ms.indexCache[room.Root] = ri
-	// OpenOrCreate already built the index from the current .md sources, so seed
-	// the sync baseline to the current directory mtime to avoid an immediate
-	// redundant rebuild on the very next access.
-	ms.indexedDirMtime[room.MemoriesDir] = memoriesDirMtime(room.MemoriesDir)
+	// Record only the source timestamp observed before successful validation.
+	// A peer write during rebuilding must still trigger the next refresh.
+	ms.indexedDirMtime[room.MemoriesDir] = current
 	return ri
 }
 
@@ -337,7 +350,12 @@ func (ms *MemoryStore) ensureSigCacheLocked(room memrooms.Room) {
 	// Reconcile with disk first: if the memories dir changed since the last
 	// sync, this drops a stale sigCache so we rescan below. Pass the cached
 	// bleve index (if any) so it is rebuilt in the same pass. nil is fine.
-	ms.syncRoomToDiskLocked(room, ms.indexCache[room.Root])
+	if err := ms.syncRoomToDiskLocked(room, ms.indexCache[room.Root]); err != nil {
+		// A failed derived-index refresh stays dirty, but dedup can still
+		// recover its own signatures from the source files below.
+		delete(ms.sigCache, room.Root)
+		delete(ms.sigIDs, room.Root)
+	}
 	if _, ok := ms.sigCache[room.Root]; ok {
 		return
 	}
@@ -645,23 +663,29 @@ func (ms *MemoryStore) SearchEntriesInScope(
 		shared = ms.SharedRoom(identity)
 	}
 
-	ms.indexMu.Lock()
 	switch scope {
 	case memrooms.RoomScopePrivate:
-		targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
+		targets = []roomAndIndex{{room: ms.privateRoom}}
 	case memrooms.RoomScopeShared:
 		if shared != nil {
-			targets = []roomAndIndex{{room: *shared, ri: ms.roomIndexLocked(*shared)}}
+			targets = []roomAndIndex{{room: *shared}}
 		} else {
-			targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
+			targets = []roomAndIndex{{room: ms.privateRoom}}
 		}
 	default: // RoomScopeBoth
-		targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
+		targets = []roomAndIndex{{room: ms.privateRoom}}
 		if shared != nil {
-			targets = append(targets, roomAndIndex{room: *shared, ri: ms.roomIndexLocked(*shared)})
+			targets = append(targets, roomAndIndex{room: *shared})
 		}
 	}
-	ms.indexMu.Unlock()
+	for i := range targets {
+		if _, readErr := os.ReadDir(targets[i].room.MemoriesDir); readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("memory: could not read saved notes in %q; check storage access and retry: %w", targets[i].room.Root, readErr)
+		}
+		ms.indexMu.Lock()
+		targets[i].ri = ms.roomIndexLocked(targets[i].room)
+		ms.indexMu.Unlock()
+	}
 
 	// Collect results: bleve hits when index available, else substring scan.
 	type scoredMemory struct {
@@ -670,11 +694,9 @@ func (ms *MemoryStore) SearchEntriesInScope(
 	}
 	var scored []scoredMemory
 	seenIDs := make(map[string]bool)
+	var readFailures []error
 
 	for _, t := range targets {
-		if _, readErr := os.ReadDir(t.room.MemoriesDir); readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-			return nil, fmt.Errorf("memory: could not read saved notes in %q; check storage access and retry: %w", t.room.Root, readErr)
-		}
 		if t.ri != nil {
 			// Ranked-index path (FR-7.4; BM25 per the mapping — ADR-068 D21.1).
 			// Hold indexMu across the Search() call to guard
@@ -697,9 +719,12 @@ func (ms *MemoryStore) SearchEntriesInScope(
 					}
 					mf, readErr := readMemoryByID(t.room.MemoriesDir, hit.ID)
 					if readErr != nil {
-						// File may have been deleted externally; skip.
+						if errors.Is(readErr, memrooms.MemoryNotFoundError("")) {
+							continue
+						}
 						logger.WarnCF("agent.memory", "SearchEntriesInScope: read memory file failed",
 							map[string]any{"id": hit.ID, "error": readErr.Error()})
+						readFailures = append(readFailures, fmt.Errorf("read saved note %q in %q: %w", hit.ID, t.room.Root, readErr))
 						continue
 					}
 					seenIDs[hit.ID] = true
@@ -725,7 +750,11 @@ func (ms *MemoryStore) SearchEntriesInScope(
 		// Substring-scan fallback (when bleve index is nil or errored).
 		found, scanErr := memrooms.SearchMemories(t.room.MemoriesDir, query)
 		if scanErr != nil {
-			return nil, fmt.Errorf("memory: could not read saved notes in %q; check storage access and retry: %w", t.room.Root, scanErr)
+			var partial *memrooms.PartialReadError
+			if !errors.As(scanErr, &partial) {
+				return nil, fmt.Errorf("memory: could not read saved notes in %q; check storage access and retry: %w", t.room.Root, scanErr)
+			}
+			readFailures = append(readFailures, scanErr)
 		}
 		agentIDScan := ms.resolveAuthor()
 		for _, mf := range found {
@@ -800,6 +829,9 @@ func (ms *MemoryStore) SearchEntriesInScope(
 		}
 		results = append(results, memoryFileToEntry(s.mf, ts))
 	}
+	if len(readFailures) > 0 {
+		return results, &memrooms.PartialReadError{Err: errors.Join(readFailures...)}
+	}
 	return results, nil
 }
 
@@ -816,16 +848,19 @@ func readMemoryByID(memoriesDir, id string) (memrooms.MemoryFile, error) {
 	if err == nil {
 		return mf, nil
 	}
-	// Filename ≠ frontmatter ID: locate by scanning. ScanMemories tolerates
-	// individual unreadable files, so one bad .md does not abort the lookup.
-	memories, scanErr := memrooms.ScanMemories(memoriesDir)
-	if scanErr != nil {
-		return memrooms.MemoryFile{}, err // surface the original read error
+	if !errors.Is(err, memrooms.MemoryNotFoundError("")) {
+		return memrooms.MemoryFile{}, err
 	}
+	// Only confirmed canonical absence permits alternate-name lookup. Keep
+	// scan failures distinct from proof that the requested note was deleted.
+	memories, scanErr := memrooms.ScanMemoriesWithErrors(memoriesDir)
 	for _, candidate := range memories {
 		if candidate.Frontmatter.ID == id {
 			return candidate, nil
 		}
+	}
+	if scanErr != nil {
+		return memrooms.MemoryFile{}, scanErr
 	}
 	return memrooms.MemoryFile{}, err
 }
@@ -1015,7 +1050,11 @@ func (ms *MemoryStore) GetMemoryContextForScope(identity MemoryScope) string {
 	if err != nil {
 		logger.WarnCF("agent.memory", "memory context could not be loaded",
 			map[string]any{"agent_id": identity.AgentID, "workspace_id": identity.WorkspaceID, "error": err.Error()})
-		return fmt.Sprintf("## Long-term memory\n\nError: %v", err)
+		var partial *memrooms.PartialReadError
+		if !errors.As(err, &partial) {
+			return fmt.Sprintf("## Long-term memory\n\nError: %v", err)
+		}
+		fmt.Fprintf(&sb, "Warning: partial saved-note results. Check file access or format and retry: %v\n\n", err)
 	}
 	if len(entries) > 0 {
 		if sb.Len() > 0 {

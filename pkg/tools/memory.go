@@ -8,6 +8,7 @@ package tools
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -437,7 +438,13 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 		// Fallback for plain MemorySearcher (test doubles etc.).
 		entries, err = t.store.SearchEntries(query, limit)
 	}
-	if err != nil {
+	// Structural internal error contract avoids a storage-package dependency.
+	var partial interface {
+		error
+		Partial() bool
+	}
+	partialRead := err != nil && errors.As(err, &partial) && partial.Partial()
+	if err != nil && !partialRead {
 		return ErrorResult(fmt.Sprintf("recall_memory: %v", err))
 	}
 
@@ -464,6 +471,14 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 
 	result := formatRecallResult(entries)
+	if partialRead {
+		if len(entries) == 0 {
+			result.ForLLM = "No readable matches could be returned; this does not establish that no saved notes match."
+		}
+		result.ForLLM = fmt.Sprintf("Warning: partial saved-note results; check file access or format and retry: %v\n\n%s", err, result.ForLLM)
+		result.IsError = true
+		result.Err = err
+	}
 	if retroSearchFailed {
 		// A swallowed retro-search failure must be visible to the caller,
 		// not just the server log — otherwise the LLM reads a normal-looking

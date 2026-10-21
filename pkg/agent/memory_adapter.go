@@ -85,9 +85,6 @@ func (a *MemoryStoreAdapter) AppendLongTermToRoom(content, category, scope, work
 // scope is "private" | "shared" | "both".
 func (a *MemoryStoreAdapter) SearchEntriesInRoom(query string, limit int, scope, workspaceID string) ([]tools.MemoryEntry, error) {
 	agentEntries, err := a.ms.SearchEntriesInScope(query, limit, stringToRoomScope(scope), a.ms.scopeForWorkspace(workspaceID))
-	if err != nil {
-		return nil, err
-	}
 	result := make([]tools.MemoryEntry, len(agentEntries))
 	for i, e := range agentEntries {
 		result[i] = tools.MemoryEntry{
@@ -98,7 +95,7 @@ func (a *MemoryStoreAdapter) SearchEntriesInRoom(query string, limit int, scope,
 			Title:     e.Title,
 		}
 	}
-	return result, nil
+	return result, err
 }
 
 // --- tools.RetroSearcher implementation -------------------------------------

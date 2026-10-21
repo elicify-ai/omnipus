@@ -2,9 +2,11 @@ package agent
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 	memindex "github.com/elicify-ai/omnipus/pkg/memrooms/index"
 	"github.com/stretchr/testify/require"
 )
@@ -67,12 +69,39 @@ func round3InitialStoreRetry(t *testing.T) {
 	require.Error(t, err)
 	require.Empty(t, entries)
 	require.NotContains(t, ms.indexCache, room.Root, "preflight must reject an unreadable directory before opening an index")
+	_, indexErr := os.Stat(filepath.Join(room.Root, memindex.IndexSubdir))
+	require.ErrorIs(t, indexErr, os.ErrNotExist, "unreadable source preflight must precede derived-index creation")
 	_, synced := ms.indexedDirMtime[room.MemoriesDir]
 	require.False(t, synced, "failed population cannot be recorded as synchronized")
 	repair()
 	entries, err = ms.SearchEntries("roomnote", 20)
 	require.NoError(t, err)
 	require.Equal(t, []string{"round3-existing"}, round3EntryIDs(entries), "repair + retry must find the original note without another write")
+}
+
+// A new teammate's store must not bless a process-shared handle whose last
+// rebuild failed in another store. The same room has one registry handle.
+func round3SharedHandleRetry(t *testing.T) {
+	ms, home := newTestMemoryStore(t)
+	t.Cleanup(ms.Close)
+	room := ms.SharedRoom(ms.scopeForWorkspace("alpha"))
+	require.NotNil(t, room)
+	round3WriteNote(t, room.MemoriesDir, "round3-first", "FIRST_NOTE")
+	entries, err := ms.SearchEntriesInScope("roomnote", 20, memrooms.RoomScopeShared, ms.scopeForWorkspace("alpha"))
+	require.NoError(t, err)
+	require.Equal(t, []string{"round3-first"}, round3EntryIDs(entries))
+	round3WriteNote(t, room.MemoriesDir, "round3-added", "addedtoken")
+	repair, _ := round3BlockDirectory(t, room.MemoriesDir)
+	ms.indexMu.Lock()
+	failed := ms.roomIndexLocked(*room)
+	ms.indexMu.Unlock()
+	require.Nil(t, failed)
+	repair()
+	teammate := NewMemoryStore(filepath.Join(home, "agents", "teammate"), home)
+	t.Cleanup(teammate.Close)
+	entries, err = teammate.SearchEntriesInScope("addedtoken", 20, memrooms.RoomScopeShared, teammate.scopeForWorkspace("alpha"))
+	require.NoError(t, err)
+	require.Equal(t, []string{"round3-added"}, round3EntryIDs(entries), "a new store must rebuild before recording the shared handle as synchronized")
 }
 
 func round3RefreshRetry(t *testing.T) {
