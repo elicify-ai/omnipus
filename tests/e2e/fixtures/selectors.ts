@@ -241,18 +241,18 @@ export const selectAgent = async (
   // fails here, named, in seconds — the unbounded default burned whole test
   // timeouts on CI (llm-agents, run 38112714098).
   await mainButton.click({ timeout: 15_000 });
-  // Row selection closes an unpinned sidebar and unmounts the very button we
-  // need to verify. Settle that close, then reopen through the real UI before
-  // checking BOTH selection surfaces. Playwright assertion errors are not
-  // errors.TimeoutError, so catching that class never recovered the lost row.
+  // Row selection closes an unpinned sidebar and unmounts the button. Settle
+  // that close, then reopen/re-expand the TARGET workspace before asserting.
+  // Keep release's workspace-scoped guard: a same-named selected agent in a
+  // different workspace must never confirm a failed switch (PR #1366 F1).
   await closeSidebar(page);
-  await agentRowGroup(page, name, workspace);
-  const stillSelected = selectedAgentRow(page);
+  const targetRow = await agentRowGroup(page, name, workspace);
   await expect(
-    stillSelected,
+    targetRow,
     `selectAgent: clicked ${String(name)}'s row but neither its aria-current nor the ` +
       'selected row confirmed the switch — the active chat did not move',
-  ).toHaveAttribute('aria-label', name, { timeout: 10_000 });
+  ).toHaveAttribute('data-selected', 'true', { timeout: 10_000 });
+  await expect(targetRow).toHaveAttribute('aria-label', name, { timeout: 10_000 });
   await expect(mainButton).toHaveAttribute('aria-current', 'true', { timeout: 5_000 });
   // Leave the sidebar the way a row click normally does: closed (see closeSidebar).
   await closeSidebar(page);
