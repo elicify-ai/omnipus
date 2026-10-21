@@ -1,0 +1,118 @@
+// T08 + semantic-fixture pack. B06/B08/B11/B23/B26/B31/B43.
+// REAL: store/reducers, WsConnection/parser and attach batching. Network +
+// browser frame delivery only are controlled. No second replay buffer.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useChatStore } from './chat'
+import { useSessionStore } from './session'
+import { useConnectionStore } from './connection'
+import { queryClient } from '@/lib/queryClient'
+import type { SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
+import { resetRealStores } from '../../tests/l1-room-ui/harness'
+import {
+  SID, STAMP, UNAVAILABLE, entry, expectPageAccounting, page, pos, replay, snapshot,
+} from '../../tests/chat-history-paging/fixtures'
+import { historyTransport } from '../../tests/chat-history-paging/transport'
+
+let transport: ReturnType<typeof historyTransport> | undefined
+beforeEach(() => {
+  resetRealStores()
+  useSessionStore.getState().setActiveSession(SID, 'mia')
+})
+afterEach(() => {
+  transport?.connection.disconnect()
+  transport = undefined
+  queryClient.clear()
+  useChatStore.setState(useChatStore.getInitialState(), true)
+  useConnectionStore.setState(useConnectionStore.getInitialState(), true)
+  vi.unstubAllGlobals()
+})
+
+function state(available = true): SessionStateFrame {
+  return {
+    type: 'session_state', session_id: SID, user_id: 'history-reader',
+    pending_approvals: [], emitted_at: STAMP,
+    history_state: available ? { status: 'available' } : { status: 'unavailable', reason: 'index_missing', message: UNAVAILABLE },
+  }
+}
+function seedCached() {
+  useChatStore.getState().setMessages([{ id: 'cached-reader', role: 'user', content: 'Keep this cached row', timestamp: STAMP }])
+  useChatStore.setState((s) => ({ sessionsById: {
+    ...s.sessionsById, [SID]: { ...s.sessionsById[SID], cursor: { bootId: 'prior-boot', seq: 5 }, replayCompletedForSession: null, hasEarlierMessages: true },
+  } }))
+}
+
+function complete() {
+  return { type: 'catch_up_complete', session_id: SID, seq: 100, boot_id: 'history-boot', mode: 'snapshot' } as const
+}
+
+describe('T08 replay completion composes with render-once base — B06/B26', () => {
+  it('commits historical rows once only after complete, including projection delivered after replay done', () => {
+    seedCached()
+    const one = entry(1)
+    const two = entry(2, { role: 'assistant', type: 'assistant', content: 'Final saved answer' })
+    const history = page([one, two])
+    expectPageAccounting(history, [pos(1), pos(2)], 2)
+    transport = historyTransport()
+    transport.attach()
+      transport.deliver(snapshot(history), state(), replay(one), replay(two), { type: 'done', session_id: SID })
+      expect(useChatStore.getState().messages.map((m) => m.id), 'D7 interim releases at COMPLETE, not done').toStrictEqual(['cached-reader'])
+      expect(transport.batches, 'no partial snapshot dispatch').toStrictEqual([])
+      transport.deliver({ ...state(), active_turn: { turn_id: 'active-now', agent_id: 'mia', started_at: STAMP } })
+      expect(useChatStore.getState().sessionsById[SID].cursor).toStrictEqual({ bootId: 'prior-boot', seq: 5 })
+      transport.deliver(complete())
+      expect(useChatStore.getState().messages.map(({ id, content }) => ({ id, content }))).toStrictEqual([
+        { id: 'history-1', content: 'Saved row 1' }, { id: 'history-2', content: 'Final saved answer' },
+      ])
+      expect(transport.batches, 'one bounded transport batch; no partial replay dispatch').toHaveLength(1)
+      expect(useChatStore.getState().sessionsById[SID].activeTurnId, 'projection after done was applied').toBe('active-now')
+      expect(useChatStore.getState().sessionsById[SID].cursor).toStrictEqual({ bootId: 'history-boot', seq: 100 })
+  })
+
+  it('live_only completion advances only the live cursor, not reconstructed-history readiness', () => {
+    seedCached()
+    transport = historyTransport()
+    transport.attach()
+    transport.deliver(state(false), { type: 'catch_up_complete', session_id: SID, seq: 100, boot_id: 'history-boot', mode: 'live_only' })
+    const bucket = useChatStore.getState().sessionsById[SID]
+    expect(bucket.cursor, 'D7a completed controls have a valid live cursor').toStrictEqual({ bootId: 'history-boot', seq: 100 })
+    expect(bucket.awaitingCatchUp, 'live controls are unlocked').toBe(false)
+    expect(bucket.isReplaying).toBe(false)
+    expect(bucket.replayCompletedForSession, 'D7a live_only is NOT successful reconstructed history').toBeNull()
+    expect(bucket.messageOrder, 'no history wipe or fabricated partial page').toStrictEqual(['cached-reader'])
+    expect(bucket.hasEarlierMessages, 'unavailability is not false terminal continuation').toBe(true)
+    expect(bucket.unansweredLastUserMessageId, 'no history-derived unanswered sweep').toBeNull()
+  })
+
+  it('incomplete socket catch-up discards staged history and keeps the prior cursor and reader', () => {
+    seedCached()
+    const history = page([entry(1)])
+    expectPageAccounting(history, [pos(1)], 1)
+    transport = historyTransport()
+    transport.attach()
+    transport.deliver(snapshot(history), state(), replay(entry(1)))
+    transport.socket.close(1006, 'transport test disconnect')
+    transport.flush()
+    expect(useChatStore.getState().messages.map((m) => m.id), 'D7 no partial successful snapshot').toStrictEqual(['cached-reader'])
+    expect(useChatStore.getState().sessionsById[SID].cursor).toStrictEqual({ bootId: 'prior-boot', seq: 5 })
+    expect(useChatStore.getState().sessionsById[SID].replayCompletedForSession).toBeNull()
+  })
+})
+
+describe('T08 snapshot semantic accounting — B23 / earlier CHECK survivor', () => {
+  it.each(['source_group_count', 'row_count'] as const)('rejects a wrong snapshot %s rather than certifying history', (field) => {
+    const sources = [entry(1), entry(2, { type: 'assistant', role: 'assistant', content: 'Saved answer' })]
+    const valid = page(sources)
+    expectPageAccounting(valid, [pos(1), pos(2)], 2)
+    transport = historyTransport()
+    transport.attach()
+    transport.deliver(snapshot(valid), state(), ...sources.map((source) => replay(source)), { type: 'done', session_id: SID }, complete())
+    expect(useChatStore.getState().messages.map((m) => m.id), 'positive control: consumer accepted the valid two-source snapshot')
+      .toStrictEqual(['history-1', 'history-2'])
+    const malformed = snapshot(page([entry(3), entry(4)]))
+    malformed.page_info[field] = 0 // structurally valid; semantically false.
+    transport.attach()
+    transport.deliver(malformed, state(), replay(entry(3)), replay(entry(4)), { type: 'done', session_id: SID }, complete())
+    expect(useChatStore.getState().messages.map((m) => m.id), `D10 wrong ${field} must reject the whole staged page`)
+      .toStrictEqual(['history-1', 'history-2'])
+  })
+})
