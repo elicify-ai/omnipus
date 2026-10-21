@@ -30,15 +30,16 @@ type historyFrame struct { // not-wire-format: private checksummed journal frame
 	Commit *historyCheckpoint `json:"commit,omitempty"`
 }
 type chatHistoryIndexTree struct {
-	ctx       context.Context
-	file      *os.File
-	end       int64
-	root      int64
-	pending   map[int64]historyNode
-	readCache map[int64]historyNode
-	order     []int64
-	buffer    []byte
-	sid       string
+	ctx        context.Context
+	file       *os.File
+	end        int64
+	root       int64
+	pending    map[int64]historyNode
+	readCache  map[int64]historyNode
+	readBuffer []byte
+	order      []int64
+	buffer     []byte
+	sid        string
 	// planning exists only in the explicitly offline, no-write constructor.
 	planning   map[string]json.RawMessage
 	knownRanks map[HistoryPosition]uint64
@@ -72,8 +73,8 @@ func (t *chatHistoryIndexTree) readFrame(off, end int64) (historyFrame, int64, e
 	if off < 0 || end-off < historyFrameHeader {
 		return v, off, io.ErrUnexpectedEOF
 	}
-	header := make([]byte, historyFrameHeader)
-	n, err := t.file.ReadAt(header, off)
+	var header [historyFrameHeader]byte
+	n, err := t.file.ReadAt(header[:], off)
 	historyIndexBytes(t.ctx, int64(n))
 	if err != nil {
 		return v, off, err
@@ -88,7 +89,14 @@ func (t *chatHistoryIndexTree) readFrame(off, end int64) (historyFrame, int64, e
 	if size > end-off-historyFrameHeader {
 		return v, off, io.ErrUnexpectedEOF
 	}
-	b := make([]byte, size)
+	// Reuse one bounded frame scratch buffer per immutable read cut. A deeper
+	// metadata tree must not allocate another encoded frame for every visited
+	// node. JSON decoding owns its strings and RawMessage values, so cached
+	// nodes do not alias this buffer when the next frame overwrites it.
+	if int64(cap(t.readBuffer)) < size {
+		t.readBuffer = make([]byte, size)
+	}
+	b := t.readBuffer[:size]
 	n, err = t.file.ReadAt(b, off+historyFrameHeader)
 	historyIndexBytes(t.ctx, int64(n))
 	if err != nil {
