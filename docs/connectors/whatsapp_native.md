@@ -57,7 +57,11 @@ The pairing QR renders live inside the SPA — no log scraping required.
 2. Under **Routing**, choose a **Workspace** and a **Main agent** (a chat agent from that workspace), then select **Save & Enable**. WhatsApp uses the built-in native connection. The QR appears in the panel and refreshes automatically as whatsmeow rotates it.
 3. On your phone, open WhatsApp → **Linked Devices** → **Link a Device** and scan the QR.
 
-The QR reaches the Configure panel over a live connection and refreshes on its own, so you never need to reload to get a fresh code.
+The QR reaches the Configure panel over a live connection and refreshes as new codes arrive. After **Save & Enable** saves the configuration, the panel begins listening while enabling is still pending. It reads the current saved state again on success or error. If that read confirms the connection is enabled, the open viewer keeps a current code that arrived before the error and shows later progress without reopening the panel or pressing Retry again. The error notification is preserved: a saved enabled setting does not prove that the restart finished, a code is ready, the phone is linked, or messages can be delivered.
+
+If the saved state reads back disabled, the panel shows the enable prompt. If it cannot read the state, it says "Could not confirm whether WhatsApp is enabled." **Retry** beside that message only reads the state again; it does not start a pairing. A failed configuration save does not send the enable request. Missing-connection (404) and competing-pairing (409) responses stay errors.
+
+**Enable** on the connection's row is separate: it refreshes the row's saved state and reports any error, but does not open a pairing panel. Select **Configure** to view pairing after using the row action. For recovery from **Retry** in an already-open pairing view, including which chat's progress can replace a temporary restart error, see [Connecting from chat](../connectors.md#connecting-from-chat).
 
 If the gateway restarts before pairing finishes, the panel shows "A server restart interrupted this pairing. Press Retry to get a new code." Select **Retry** to request a fresh QR code. The same message and action are available in the live chat card when pairing was started there.
 
