@@ -463,11 +463,11 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	}
 	// The launcher-backed delegate call is asynchronous and has no inline-wait
 	// form.
-	if !strings.Contains(got, `delegate(agent_id="jim", task="…")`) {
+	if !compactHasMode(t, got, "jim", "direct") {
 		t.Errorf("parity: delegate for jim must appear; got:\n%s", got)
 	}
 	// task must NOT appear for jim.
-	if strings.Contains(got, `create_task(agent_id="jim"`) {
+	if compactHasMode(t, got, "jim", "task") {
 		t.Errorf("parity: create_task for jim must NOT appear (task mode not in edge); got:\n%s", got)
 	}
 

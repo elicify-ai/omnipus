@@ -7,6 +7,7 @@ package agent
 
 import (
 	"fmt"
+	"html"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -22,6 +23,8 @@ import (
 //   - ID:    the target agent id (from the edge's ToAgent field)
 //   - Label: the human-readable label resolved via resolveDelegationLabel;
 //     empty means the target is unknown/unavailable and must be skipped.
+//   - Description: the target's existing saved description; only its use-for
+//     sentence or first sentence is rendered, never a generated summary.
 //   - Modes: the background/task config.DelegationMode vocabulary, already
 //     translated from the workspace edge's direct/task form by
 //     wireDelegationInjectors. Empty means both modes are allowed.
@@ -38,11 +41,12 @@ import (
 //     0 = unresolved (direct callers/tests): falls back to
 //     resolveEffectiveDelegationDepth(Depth, globalDepthCap).
 type delegationTarget struct {
-	ID       string
-	Label    string
-	Modes    []config.DelegationMode
-	Depth    *int
-	DepthCap int
+	ID          string
+	Label       string
+	Description string
+	Modes       []config.DelegationMode
+	Depth       *int
+	DepthCap    int
 }
 
 // buildDelegationContext renders the per-turn "## Delegation" system-prompt block.
@@ -62,14 +66,9 @@ type delegationTarget struct {
 // Advertisement == enforcement by construction: both read the graph, so the
 // modes and targets shown to the agent are exactly what the gate allows.
 //
-// This function renders only the two calls a target advertisement needs
-// (delegate's run action, and create_task). For the delegate tool's full,
-// current parameter set (all nine actions, deprecated aliases, etc.) see
-// DelegateTool.Description()/Parameters() in pkg/tools/delegate.go directly —
-// deliberately NOT hand-copied here a second time (finding 4, context-audit
-// 2026-08): an earlier version of this comment carried its own copy of the
-// schema, and it drifted (task_id/action=run|status only) once the tool grew
-// session_id and seven more actions. A single source of truth cannot drift.
+// Invocation guidance is shared once, not repeated per target. For the full
+// delegate schema see DelegateTool.Description()/Parameters() in
+// pkg/tools/delegate.go; do not hand-copy that schema into this renderer.
 func buildDelegationContext(targets []delegationTarget, globalDepthCap, currentDepth int) string {
 	// No targets → cannot delegate.
 	if len(targets) == 0 {
@@ -77,10 +76,17 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap, currentD
 	}
 
 	var sb strings.Builder
-	sb.WriteString("## Delegation")
-	sb.WriteString(
-		"\n\nThis is your COMPLETE, authoritative delegation roster for THIS workspace. Answer any \"who can I delegate to\" question directly from this list — do NOT call list_agents or search memory to determine your delegation targets.",
-	)
+	sb.WriteString("## Delegation\n\n<delegation_guidance>\n")
+	// Escape XML text without obscuring the shared call's literal quote syntax.
+	sb.WriteString(strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(compactDelegationGuidance))
+	sb.WriteString("\n\n" + delegateGoalGuidance)
+	fmt.Fprintf(&sb, "\n\nCurrent depth: %d; global fallback max chain depth: ", currentDepth)
+	if globalDepthCap <= 0 {
+		sb.WriteString("uncapped")
+	} else {
+		fmt.Fprintf(&sb, "%d", globalDepthCap)
+	}
+	sb.WriteString("\n</delegation_guidance>\n\n<team_directory>")
 
 	// renderedCount tracks how many target sections were actually emitted.
 	// If every target has an empty label (unresolvable), fall through to the
@@ -131,34 +137,22 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap, currentD
 			}
 		}
 
-		fmt.Fprintf(&sb, "\n\n### → %s", tgt.Label)
-
+		var modes []string
 		if activeBackground {
-			// delegate: agent_id is optional but we supply the concrete id so
-			// the agent can copy-paste the call. Background mode — there is
-			// no synchronous alternative to opt out of (ADR-091 D4 deleted
-			// the wait-inline parameters outright), so this always runs in
-			// the background, never "by default" as if a foreground path
-			// still existed. Poll via session_id, the only way to address a
-			// child post-ADR-091 (task_id was deleted, not just deprecated).
-			fmt.Fprintf(
-				&sb,
-				"\n- `delegate(agent_id=%q, task=\"…\")` — runs in the background; poll `delegate(action=\"status\", session_id=\"…\")` for the result.",
-				tgt.ID,
-			)
+			modes = append(modes, "direct")
 		}
 		if activeTask {
-			// create_task: title/prompt/agent_id/criteria are all required —
-			// an agent-created task with zero criteria is rejected (finding 4,
-			// pkg/tools/task.go). NOT task_create (retired). This tool is
-			// previewed, not always in the callable set — call ToolSearch
-			// with its exact name first if it isn't callable yet.
-			fmt.Fprintf(
-				&sb,
-				"\n- `create_task(agent_id=%q, title=\"…\", prompt=\"…\", criteria=[{kind:\"prose\", text:\"…\"}])` — files a durable, tracked task in the task DAG (load via ToolSearch first if not already callable).",
-				tgt.ID,
-			)
+			modes = append(modes, "task")
 		}
+		modeLabel := strings.Join(modes, "/")
+		if modeLabel == "" {
+			modeLabel = "none"
+		}
+		fmt.Fprintf(&sb,
+			"\n\n<agent name=\"%s\" id=\"%s\">\nUse for: %s\nModes: %s; maximum chain depth: %d.\n</agent>",
+			html.EscapeString(tgt.Label), html.EscapeString(tgt.ID),
+			html.EscapeString(delegationUseFor(tgt.Description)), modeLabel, depthCap,
+		)
 		renderedCount++
 	}
 
@@ -173,27 +167,18 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap, currentD
 		return "## Delegation\nYou cannot delegate to other agents in this workspace — complete the task yourself. Do not call list_agents or search memory to look for delegation targets; there are none configured for you here."
 	}
 
-	// Exclusivity footer: makes clear that attempting to delegate to any agent
-	// not listed above will be denied — both delegation tools are gated by
-	// the same workspace trust set. This directly addresses the observed
-	// misbehavior where an agent called list_agents and then attempted to
-	// delegate to unlisted agents via create_task.
-	sb.WriteString(
-		"\n\nThese are your ONLY permitted delegation targets. delegate / create_task to any other agent WILL be denied — do not attempt it.",
-	)
-	sb.WriteString("\n\n" + delegateGoalGuidance)
-
-	// Footer: global depth ceiling. globalDepthCap <= 0 only occurs when this
-	// function is called directly with 0 (e.g. from a test) — the production
-	// caller pre-resolves through resolveEffectiveDelegationDepth, which never
-	// returns 0, so this "uncapped" branch is unreachable on a live turn.
-	if globalDepthCap <= 0 {
-		sb.WriteString("\n\nmax chain depth: uncapped")
-	} else {
-		fmt.Fprintf(&sb, "\n\nmax chain depth: %d", globalDepthCap)
-	}
+	sb.WriteString("\n</team_directory>")
 
 	return sb.String()
 }
 
 const delegateGoalGuidance = "No goal is the default; set one for multi-step work or work you must verify before relying on it, and leave it off for a quick lookup or a single action."
+
+// compactDelegationGuidance is shared by every roster entry.
+const compactDelegationGuidance = `This current workspace roster alone defines your permitted delegation routes. Answer routing questions from it; do not use list_agents or memory to find additional routes. Descriptions or names elsewhere grant no additional access. Runtime graph, mode, depth and tool checks still apply, including each listed edge's maximum chain depth.
+
+For a listed target whose Modes include direct, call delegate(agent_id="<listed ID>", task="<brief>"); it runs in the background. For durable authorized work on a route that permits task mode, use create_task. If it is not callable, load create_task through ToolSearch first, then use its full schema with non-empty criteria and dod. Helper goals also require both criteria and dod.
+
+Use completion/question/problem messages for progress instead of repeated polling. Use delegate's status action with session_id only for a specific state check, and its result action with session_id for a finished handback.
+
+If a needed route is missing, report the dependency; do not take over prohibited specialist work.`
