@@ -33,7 +33,7 @@ import type { AgentCreateRequestMain, WorkspaceCreateRequest, SessionCreateReque
 test.use({ storageState: { cookies: [], origins: [] } });
 test.setTimeout(240_000);
 
-test('a woken parent reply streams to both browsers without a reload', async ({ page, browser }) => {
+test('a woken parent reply streams to both browsers without a reload', async ({ page, browser }, testInfo) => {
   const provider = await startParentWakeProvider();
   let gw: GatewayProcess | undefined;
   let second: BrowserContext | undefined;
@@ -42,6 +42,7 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
       apiBase: provider.url,
       model: E2E_MODEL,
       adminUsername: 'parent-wake-stream',
+      env: { OMNIPUS_LOG_LEVEL: 'info', OMNIPUS_LOG_FILE: testInfo.outputPath('gateway.log') },
     });
     const agentResult = await gw.apiFetch('POST', '/api/v1/agents', {
       type: 'Main',
@@ -125,6 +126,9 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
       await expect(outcome, 'one proper hand-back outcome row survives reload').toHaveCount(1);
       await expect(outcome).toContainText(wakeText);
       await expect(assistantMessages(viewer).filter({ hasText: `${PARENT_WAKE_PARTIAL} and the rest` }), 'one completed wake reply survives reload').toHaveCount(1);
+      await testInfo.attach(viewer === page ? 'browser-a-after-reload' : 'browser-b-after-reload', {
+        body: await viewer.screenshot(), contentType: 'image/png',
+      });
     }
     expect(provider.failures(), 'scripted provider sequence stays valid after both reloads').toEqual([]);
   } finally {
