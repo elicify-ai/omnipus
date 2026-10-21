@@ -93,13 +93,18 @@ export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.
 # pkg/tools/browser because the flake filter's isolated re-run hit the same
 # full disk, not a real defect. Note `df -h /` shows the small overlay, so
 # check `df -h /cache` when diagnosing space here.
+fail_tmpdir() {
+  printf 'GATE FAILURE: %s\n' "$*" >&2
+  printf 'GATE FAILURE(S) — TMPDIR preflight failed\n' >&2
+  exit 2
+}
+
 export TMPDIR=/cache/tmp
-# Shared by root e2e (including Chromium's sandboxed children) and ci-user gates.
+# Shared by root e2e and ci-user gates.
 # The volume persists: repair old 0755 directories on EVERY root prologue, not just creation.
 if [ -z "${RUNCI_AS_CI:-}" ]; then
   if ! mkdir -p "$TMPDIR" || ! chmod 1777 "$TMPDIR"; then
-    echo "GATE FAILURE: cannot prepare shared TMPDIR=$TMPDIR (mode 1777) for gate $GATE" >&2
-    exit 2
+    fail_tmpdir "cannot prepare shared TMPDIR=$TMPDIR (mode 1777) for gate $GATE"
   fi
 fi
 
@@ -202,8 +207,9 @@ ensure_python() {
 CI_USER=ci
 ci_prepare() {
   id -u "$CI_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$CI_USER" || return 1
-  mkdir -p "$TMPDIR" /cache/go /cache/go-build /cache/npm || return 1
-  chmod 1777 "$TMPDIR" || return 1
+  mkdir -p "$TMPDIR" /cache/go /cache/go-build /cache/npm \
+    || fail_tmpdir "cannot prepare shared TMPDIR=$TMPDIR and ci caches for gate $GATE"
+  chmod 1777 "$TMPDIR" || fail_tmpdir "cannot set shared TMPDIR=$TMPDIR to mode 1777 for gate $GATE"
   local d
   for d in "$REPO_DIR" /cache/go /cache/go-build /cache/npm /cache/tmp; do
     # Incremental: only entries not already ci's (the first run after the change
@@ -231,13 +237,12 @@ fi
 
 # Probe AFTER the re-exec so access is checked as the user actually running the gate.
 # Never fall back to the small root /tmp overlay when the cache temp is unusable.
-if [ ! -w "$TMPDIR" ] || [ ! -x "$TMPDIR" ] \
-    || ! _tmp_probe="$(mktemp "$TMPDIR/runci-write-check.XXXXXX")"; then
-  echo "GATE FAILURE: TMPDIR=$TMPDIR is not writable/searchable for gate $GATE as $(id -un) (uid $(id -u)); no /tmp fallback" >&2
-  exit 2
+if [ ! -w "$TMPDIR" ] || [ ! -x "$TMPDIR" ]; then
+  fail_tmpdir "TMPDIR=$TMPDIR is not writable/searchable for gate $GATE as $(id -un) (uid $(id -u)); no /tmp fallback"
 fi
-rm -f "$_tmp_probe" \
-  || { echo "GATE FAILURE: cannot remove TMPDIR probe $_tmp_probe as $(id -un)" >&2; exit 2; }
+_tmp_probe="$(mktemp "$TMPDIR/runci-write-check.XXXXXX")" \
+  || fail_tmpdir "cannot create TMPDIR probe in $TMPDIR for gate $GATE as $(id -un) (uid $(id -u)); no /tmp fallback"
+rm -f "$_tmp_probe" || fail_tmpdir "cannot remove TMPDIR probe $_tmp_probe as $(id -un)"
 unset _tmp_probe
 echo "temp check: TMPDIR=$TMPDIR writable/searchable for gate $GATE as $(id -un) (uid $(id -u))"
 
