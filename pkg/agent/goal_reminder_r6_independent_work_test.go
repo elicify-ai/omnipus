@@ -94,6 +94,8 @@ func grStartRelatedPlan(t *testing.T, related bool) *grIndependentWork {
 	h := grNewRecordedBrake(t)
 	grTextReminder(t, h, h.reminder(t))
 	ps := plan.New(filepath.Join(config.OmnipusHomeDir(), "plans"))
+	h.al.SetPlanStore(ps) // the real boot setter wires execute_plan's shared store and authorizer
+	GetTaskExecutor(h.al).SetPlanStore(ps)
 	pe := NewPlanEngine(h.al, ps, h.al.taskStore, GetTaskExecutor(h.al))
 	h.al.SetPlanEngine(pe)
 	p := &plan.Plan{Title: "R6 independently initiated plan", WorkspaceID: testHarnessWorkspaceMembershipID, OwnerAgentID: grReviewerID, State: plan.StateDraft, DoD: newFloorDoD()}
@@ -168,7 +170,8 @@ func TestGoalReminderIndependentCompletionBetweenPolls(t *testing.T) {
 					if kind == "Plan" {
 						require.NoError(t, work.planStore.Delete(work.planID))
 					} else {
-						require.NoError(t, h.al.taskStore.Delete(work.taskID))
+						_, err := h.al.taskStore.Delete(work.taskID)
+						require.NoError(t, err)
 					}
 				}
 				// No keeper poll ran while it was live: persisted actual completion,
