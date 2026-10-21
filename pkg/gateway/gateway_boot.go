@@ -760,6 +760,11 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// The adapter bridges agent.PolicyApprover → approvalRegistryV2 + WSHandler.
 	stg.agentLoop.SetToolApprover(newPolicyApproverAdapter(stg.approvalReg, stg.wsHandler))
 
+	// Group chats (omnipus-system-agent US-17): the room service, its live
+	// frames on the chat WS, and its runtime in the agent loop (room
+	// admission, dequeue fence, reply branch, cost).
+	stg.wsHandler.rooms = newRoomsHub(stg.wsHandler, stg.homePath)
+
 	// AskUserQuestion pending registry (askuserquestion-tool-spec v3, ADR-074
 	// D4b; W9b wiring): durable state lives in each owner session's
 	// UnifiedMeta (pending_ask), the in-process registry mirrors it with the
@@ -1265,6 +1270,7 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		taskLock:               task.TaskFileLock,                   // shared striped lock for board task RMW
 	}
 	stg.api.cronService.Store(stg.runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	stg.api.rooms.Store(stg.wsHandler.rooms)                   // group chats (rest_rooms.go)
 	// w5-integration (US-5.9/B-33): boot reconciliation — orphan Mail cache
 	// subtrees, watcher state files and identity records (state whose pair
 	// is absent from the live config) are never servable, their deletion is

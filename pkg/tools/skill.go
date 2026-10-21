@@ -184,7 +184,8 @@ func (t *SkillTool) Description() string {
 		"view (a context notice says older turns were trimmed). " +
 		"Pass 'name' with the skill's exact slug (as listed in the '# Skills' section of your " +
 		"context) to load it; pass 'query' instead to search your installed skills by what they " +
-		"do. This is not list_skills (which enumerates what you have, with no content) and not " +
+		"do. This is not list_skills (which lists assigned skills by default and can return a named " +
+		"skill's sanitized content in management scope for an authorized configuration caller) and not " +
 		"find_skills (which searches the marketplace for skills you do NOT have installed)."
 }
 

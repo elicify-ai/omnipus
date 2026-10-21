@@ -14160,7 +14160,7 @@ type AgentCreateRequestMain struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
@@ -14251,7 +14251,7 @@ type AgentCreateRequestSubagent struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
@@ -14342,7 +14342,7 @@ type AgentCreateRequestSubagent3p struct {
 	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
 	Model *string `json:"model,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
@@ -14765,7 +14765,7 @@ type AgentUpdateRequest struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name New display name. Rejected on locked agents.
+	// Name New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
 	Name *string `json:"name,omitempty"`
 
 	// Provider New explicit routing key for the primary model (O3 two-field model). When set, resolution uses it directly and never infers a provider. Allowed on all agents. Send an empty string to clear it (fall back to default-provider resolution).
@@ -23455,6 +23455,19 @@ type RoomCreateRequest struct {
 // RoomCreateRequestKind defines model for RoomCreateRequest.Kind.
 type RoomCreateRequestKind string
 
+// RoomHistoryResponse One backward page of the complete retained room transcript (#1332). Select the newest entries eligible for the exclusive before_seq cursor and applied limit, then return them in strictly ascending entry seq order. An omitted cursor includes the newest entry. This page does not change the live room stream position or the forward attach subscription.
+// has_older is true exactly when another actual eligible entry precedes this page, not merely when the page is full or sequence numbers have gaps. next_before_seq is present if and only if has_older is true and equals the first returned entry's seq. Otherwise omit it, never send null or zero. An empty page is entries: [] with has_older: false and no next_before_seq. These conditional continuation rules are producer/consumer invariants; structural schema validation alone does not prove them.
+type RoomHistoryResponse struct {
+	// Entries The newest eligible entries, returned oldest to newest in strictly ascending seq order, with at most the applied limit. Always present and non-null, including an empty array at the beginning of history. Every entry belongs to the requested room and includes its existing delivery projection.
+	Entries []RoomEntry `json:"entries"`
+
+	// HasOlder True exactly when another actual eligible entry precedes the first returned entry. False for an empty page or when the beginning of history has been reached, even if the page is full.
+	HasOlder bool `json:"has_older"`
+
+	// NextBeforeSeq Present if and only if has_older is true; exactly the first returned entry's seq, to use as the next exclusive before_seq cursor. Omitted when has_older is false; never null or zero.
+	NextBeforeSeq *int64 `json:"next_before_seq,omitempty"`
+}
+
 // RoomMembersUpdateRequest Body of PATCH /api/v1/rooms/{id}/members (spec omnipus-system-agent K24; FR-204, FR-207). The team room accepts only mute and unmute; removing a member below two agents follows the two-agent rule (FR-204).
 type RoomMembersUpdateRequest struct {
 	Action   RoomMembersUpdateRequestAction `json:"action"`
@@ -28171,6 +28184,9 @@ type WorkspaceMemberConfig struct {
 	// HiddenFromSidebar Display-only: when true the sidebar omits this member's row in this workspace, but the member stays a full team member — messageable, delegable, @-addressable; main and work untouched. Merge rules inside an incoming member config: absent => the stored flag is preserved (a heartbeat save never un-hides). Present with heartbeat absent (a pure hide/show) => the stored heartbeat is preserved unchanged. An entry with neither field ({}) keeps the ordinary replace behaviour: the stored heartbeat is cleared and the flag is still preserved by the absent rule. A heartbeat that IS present is always replaced wholesale, never merged field-by-field. Off-team entries are garbage-collected, so removing a member clears the flag and re-adding the agent starts visible.
 	HiddenFromSidebar *bool `json:"hidden_from_sidebar,omitempty"`
 
+	// MainSessionError Safe, server-classified reason why this eligible member's main chat could not be prepared or resolved. Omitted when main_session_id is present or the member is ineligible. Contains no raw error text, filesystem paths, file names, session IDs or stored identity values.
+	MainSessionError *string `json:"main_session_error,omitempty"`
+
 	// MainSessionId The member's server-computed main session id (format decided later). Omitted for members who are not eligible for a main (workers, other system agents, and Admin, who is not a workspace member). Server-owned and read-only.
 	MainSessionId *string `json:"main_session_id,omitempty"`
 }
@@ -28453,6 +28469,15 @@ type GetProvidersCatalogParams struct {
 
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
+
+// GetRoomHistoryParams defines parameters for GetRoomHistory.
+type GetRoomHistoryParams struct {
+	// BeforeSeq Exclusive entry-sequence boundary, with no default. Omit for the newest page. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, signed int64 overflow and repeated occurrences (even identical ones) are rejected with the exact before_seq syntax 400 documented above. Must not exceed the newest actual entry seq, not the live stream high-water sequence; a cursor beyond that bound returns the distinct cursor-ahead 400 above. Positive values within the bound need not identify an existing entry, including values before the first entry.
+	BeforeSeq *int64 `form:"before_seq,omitempty" json:"before_seq,omitempty"`
+
+	// Limit Maximum number of entries to return. Omitted means 100; present empty does not mean default. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, overflow, values outside 1 to 1000 and repeated occurrences (even identical ones) return exactly 400 {"error":"limit must be an integer from 1 to 1000"}. Never clamp an invalid value.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
 
 // ListSessionsParams defines parameters for ListSessions.
 type ListSessionsParams struct {

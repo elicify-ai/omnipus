@@ -51,7 +51,9 @@ beforeEach(() => {
   useConnectionStore.setState({ connection: socket, isConnected: true, connectionError: null })
   useWorkspacesStore.setState({ activeWorkspaceId: 'sales' })
   useSessionStore.setState({ ...useSessionStore.getInitialState(), sessionByWorkspace: {} })
-  useUiStore.setState({ editAgentId: null, editAgentWorkspaceId: null, toasts: [], createAgentModalOpen: false })
+  // WU-11 GREEN: the create-modal store keys are removed (FR-108); the
+  // tests below assert their absence instead of seeding them.
+  useUiStore.setState({ editAgentId: null, editAgentWorkspaceId: null, toasts: [] })
 })
 afterEach(() => {
   clients.forEach((client) => client.clear())
@@ -98,7 +100,7 @@ function expectWorkflow(workflow: 'W1' | 'W18') {
   ])
   expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('sales')
   expect(useSessionStore.getState().sessionByWorkspace.sales).toBeUndefined()
-  expect(useUiStore.getState().createAgentModalOpen).toBe(false)
+  expect(Object.hasOwn(useUiStore.getState(), 'createAgentModalOpen')).toBe(false)
 }
 
 describe('WU-10 Team list, not the old graph-only surface', () => {
@@ -186,7 +188,7 @@ describe('WU-10 Team list, not the old graph-only surface', () => {
     await user.click(screen.getByRole('button', { name: /^add agent$/i }))
     expect(screen.getByRole('menuitem', { name: /^create with omnipus$/i })).toBeVisible()
     expect(screen.getByRole('menuitem', { name: /^add an existing agent$/i })).toBeVisible()
-    expect(useUiStore.getState().createAgentModalOpen).toBe(false)
+    expect(Object.hasOwn(useUiStore.getState(), 'createAgentModalOpen')).toBe(false)
     expect(updateWorkspace).not.toHaveBeenCalled()
   })
   it('BDD-4.1 starts W1 in the existing Omnipus main and keeps Sales active', async () => {

@@ -356,6 +356,8 @@ ample for a trigger sentence, and no schema change is needed.
 
 ### D3 — The check-the-menu habit is reinforced per task, and it is silent
 
+Superseded 2026-10-21 (founder): agent-folder AGENT.md/AGENTS.md/IDENTITY.md and the per-request skill reminder were removed; see PR #1400.
+
 Three parts, deliberately separated because they live in different places:
 
 1. **The menu itself stays in the cached static prompt** (`BuildSystemPrompt`) — it is stable

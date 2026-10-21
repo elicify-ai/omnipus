@@ -1,0 +1,199 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu15-spa/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu15-spa/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu15-spa/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu15-spa/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu15-spa
+
+ ❯ src/store/rooms.history.test.ts (10 tests | 10 failed) 42ms
+     × merges an accepted older page by seq: [5,9] + page [2] → [2,5,9], one of each, sorted 12ms
+     × reapplying a duplicate page or an overlapping retry still shows one row per seq, and the EXISTING representation wins collisions 3ms
+     × history never moves the live seq, members, mutes, cost, pause, generation, snapshotReceived — nor any chat session bucket 4ms
+     × a live entry and a newer member-state applied during the flight survive the page resolution; the page cannot rewind the cursor or deliveries 3ms
+     × an in-flight older page for window A is IGNORED on success after a truncated reconnect replaces the list with window B 3ms
+     × an in-flight older page for window A is IGNORED on FAILURE after the truncated reconnect, too 2ms
+     × navigating away and re-attaching another room invalidates the in-flight page for the previous room 3ms
+     × a cursor snapshot with absent/false has_older preserves an unresolved hasOlder and its boundary; forward entries merge 2ms
+     × when the old end was already reached, a reconnect retains false (never resurrects the hint) 3ms
+     × the gate opens on the first snapshot and a history load/success/failure leaves snapshotReceived untouched 3ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 10 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/store/rooms.history.test.ts > T18 — older merge, duplicate/overlap idempotence, live-state invariance (design D6) > merges an accepted older page by seq: [5,9] + page [2] → [2,5,9], one of each, sorted
+AssertionError: BLOCKED: src/store/rooms.ts::loadOlder not implemented — required by ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)
+ ❯ loadOlder src/store/rooms.history.test.ts:48:12
+     46|   }
+     47|   if (typeof store.loadOlder !== 'function') {
+     48|     expect.fail(
+       |            ^
+     49|       'BLOCKED: src/store/rooms.ts::loadOlder not implemented — requir…
+     50|         'ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)',
+ ❯ src/store/rooms.history.test.ts:112:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/10]⎯
+
+ FAIL  src/store/rooms.history.test.ts > T18 — older merge, duplicate/overlap idempotence, live-state invariance (design D6) > reapplying a duplicate page or an overlapping retry still shows one row per seq, and the EXISTING representation wins collisions
+AssertionError: BLOCKED: src/store/rooms.ts::loadOlder not implemented — required by ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)
+ ❯ loadOlder src/store/rooms.history.test.ts:48:12
+     46|   }
+     47|   if (typeof store.loadOlder !== 'function') {
+     48|     expect.fail(
+       |            ^
+     49|       'BLOCKED: src/store/rooms.ts::loadOlder not implemented — requir…
+     50|         'ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)',
+ ❯ src/store/rooms.history.test.ts:126:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/10]⎯
+
+ FAIL  src/store/rooms.history.test.ts > T18 — older merge, duplicate/overlap idempotence, live-state invariance (design D6) > history never moves the live seq, members, mutes, cost, pause, generation, snapshotReceived — nor any chat session bucket
+AssertionError: BLOCKED: src/store/rooms.ts::loadOlder not implemented — required by ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)
+ ❯ loadOlder src/store/rooms.history.test.ts:48:12
+     46|   }
+     47|   if (typeof store.loadOlder !== 'function') {
+     48|     expect.fail(
+       |            ^
+     49|       'BLOCKED: src/store/rooms.ts::loadOlder not implemented — requir…
+     50|         'ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)',
+ ❯ src/store/rooms.history.test.ts:141:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/10]⎯
+
+ FAIL  src/store/rooms.history.test.ts > T19 — live update race while an older page is in flight (design D6) > a live entry and a newer member-state applied during the flight survive the page resolution; the page cannot rewind the cursor or deliveries
+AssertionError: BLOCKED: src/store/rooms.ts::loadOlder not implemented — required by ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)
+ ❯ loadOlder src/store/rooms.history.test.ts:48:12
+     46|   }
+     47|   if (typeof store.loadOlder !== 'function') {
+     48|     expect.fail(
+       |            ^
+     49|       'BLOCKED: src/store/rooms.ts::loadOlder not implemented — requir…
+     50|         'ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)',
+ ❯ src/store/rooms.history.test.ts:164:25
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/10]⎯
+
+ FAIL  src/store/rooms.history.test.ts > T20 — truncated reconnect race and stale-result fence (design D6) > an in-flight older page for window A is IGNORED on success after a truncated reconnect replaces the list with window B
+AssertionError: BLOCKED: src/store/rooms.ts::loadOlder not implemented — required by ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)
+ ❯ loadOlder src/store/rooms.history.test.ts:48:12
+     46|   }
+     47|   if (typeof store.loadOlder !== 'function') {
+     48|     expect.fail(
+       |            ^
+     49|       'BLOCKED: src/store/rooms.ts::loadOlder not implemented — requir…
+     50|         'ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)',
+ ❯ src/store/rooms.history.test.ts:202:25
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/10]⎯
+
+ FAIL  src/store/rooms.history.test.ts > T20 — truncated reconnect race and stale-result fence (design D6) > an in-flight older page for window A is IGNORED on FAILURE after the truncated reconnect, too
+AssertionError: BLOCKED: src/store/rooms.ts::loadOlder not implemented — required by ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)
+ ❯ loadOlder src/store/rooms.history.test.ts:48:12
+     46|   }
+     47|   if (typeof store.loadOlder !== 'function') {
+     48|     expect.fail(
+       |            ^
+     49|       'BLOCKED: src/store/rooms.ts::loadOlder not implemented — requir…
+     50|         'ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)',
+ ❯ src/store/rooms.history.test.ts:222:25
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/10]⎯
+
+ FAIL  src/store/rooms.history.test.ts > T20 — truncated reconnect race and stale-result fence (design D6) > navigating away and re-attaching another room invalidates the in-flight page for the previous room
+AssertionError: BLOCKED: src/store/rooms.ts::loadOlder not implemented — required by ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)
+ ❯ loadOlder src/store/rooms.history.test.ts:48:12
+     46|   }
+     47|   if (typeof store.loadOlder !== 'function') {
+     48|     expect.fail(
+       |            ^
+     49|       'BLOCKED: src/store/rooms.ts::loadOlder not implemented — requir…
+     50|         'ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)',
+ ❯ src/store/rooms.history.test.ts:242:25
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/10]⎯
+
+ FAIL  src/store/rooms.history.test.ts > T21 — a non-truncated reconnect keeps the unresolved older state (design D6) > a cursor snapshot with absent/false has_older preserves an unresolved hasOlder and its boundary; forward entries merge
+AssertionError: BLOCKED: src/store/rooms.ts::loadOlder not implemented — required by ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)
+ ❯ loadOlder src/store/rooms.history.test.ts:48:12
+     46|   }
+     47|   if (typeof store.loadOlder !== 'function') {
+     48|     expect.fail(
+       |            ^
+     49|       'BLOCKED: src/store/rooms.ts::loadOlder not implemented — requir…
+     50|         'ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)',
+ ❯ src/store/rooms.history.test.ts:264:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/10]⎯
+
+ FAIL  src/store/rooms.history.test.ts > T21 — a non-truncated reconnect keeps the unresolved older state (design D6) > when the old end was already reached, a reconnect retains false (never resurrects the hint)
+AssertionError: BLOCKED: src/store/rooms.ts::loadOlder not implemented — required by ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)
+ ❯ loadOlder src/store/rooms.history.test.ts:48:12
+     46|   }
+     47|   if (typeof store.loadOlder !== 'function') {
+     48|     expect.fail(
+       |            ^
+     49|       'BLOCKED: src/store/rooms.ts::loadOlder not implemented — requir…
+     50|         'ROOM-HISTORY-PAGING-1332-20261018.md D6 (rows T18–T22)',
+ ❯ src/store/rooms.history.test.ts:280:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/10]⎯
+
+ FAIL  src/store/rooms.history.test.ts > T22 — history never satisfies or resets the first-snapshot send gate (design D6) > the gate opens on the first snapshot and a history load/success/failure leaves snapshotReceived untouched
+TypeError: Cannot read properties of undefined (reading 'snapshotReceived')
+ ❯ src/store/rooms.history.test.ts:293:47
+    291|       useRoomStore.getState().attachRoom(ROOM) // gate closed: snapsho…
+    292|     })
+    293|     expect(useRoomStore.getState().rooms[ROOM]!.snapshotReceived).toBe…
+       |                                               ^
+    294|
+    295|     // History traffic during the closed gate changes nothing about th…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/10]⎯
+
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 1 unhandled error during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+Error: stale request failed
+ ❯ src/store/rooms.history.test.ts:229:18
+    227|     })
+    228|
+    229|     stale.reject(new Error('stale request failed'))
+       |                  ^
+    230|     await loadPromise
+    231|
+ ❯ node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+ ❯ node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+ ❯ node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+ ❯ runWithCancel node_modules/@vitest/runner/dist/chunk-artifact.js:2323:10
+ ❯ node_modules/@vitest/runner/dist/chunk-artifact.js:2305:20
+ ❯ runWithTimeout node_modules/@vitest/runner/dist/chunk-artifact.js:2272:10
+ ❯ node_modules/@vitest/runner/dist/chunk-artifact.js:2956:64
+
+This error originated in "src/store/rooms.history.test.ts" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The latest test that might've caused the error is "an in-flight older page for window A is IGNORED on FAILURE after the truncated reconnect, too". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+
+ Test Files  1 failed (1)
+      Tests  10 failed (10)
+     Errors  1 error
+   Start at  19:24:26
+   Duration  4.63s (transform 1.67s, setup 401ms, import 2.21s, tests 42ms, environment 1.70s)
+

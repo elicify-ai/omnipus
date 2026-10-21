@@ -1718,9 +1718,12 @@ func buildPlanClaimText(tasks []task.Task, superseded map[string]bool) string {
 				"outcome is WITHHELD and must not count as evidence for or against any criterion. "+
 				"Replacement work carrying its acceptance criteria appears elsewhere in this list; "+
 				"judge the criterion on that work.\n", t.Title, t.ID, t.Status)
-			continue
+		} else {
+			fmt.Fprintf(&sb, "- %s [%s] (%s): %s\n", t.Title, t.ID, t.Status, truncateForClaim(t.Result))
 		}
-		fmt.Fprintf(&sb, "- %s [%s] (%s): %s\n", t.Title, t.ID, t.Status, truncateForClaim(t.Result))
+		if t.SessionID != "" {
+			fmt.Fprintf(&sb, "  session_id=%q\n", t.SessionID)
+		}
 	}
 	return sb.String()
 }

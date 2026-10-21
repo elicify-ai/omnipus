@@ -152,18 +152,22 @@ run_default() {
 }
 ran_gate() { grep -q -- "--machine $1 -C /cache/runci.sh $FULL $2\$" "$FAKE_DIR/calls.log"; } # machine gate
 
-# The shipped placement (founder ruling 2026-10-12, deploy/ci-worker/ci-cluster.sh::default_tier_map).
+# The shipped placement (founder decisions 2026-10-12 and 2026-10-21,
+# deploy/ci-worker/ci-cluster.sh::default_tier_map): SPA follows all Go gates on performance.
 GO_ID=080d74db170408; NODE_ID=d8d0d90a1e9648; XPLAT_ID=78113d4f329908
 
 # 6a. the default map: three tiers on their shipped machines with their shipped gates
 new_case c6a; for m in $GO_ID $NODE_ID $XPLAT_ID; do echo stopped > "$FAKE_DIR/state-$m"; done
 run_default
 [ "$RC" -eq 0 ] || fail "(6a) default map: expected exit 0, got $RC: $(grep -m1 'ERROR' "$OUT")"
-for g in gofmt go-build go-vet lint go-test go-race; do ran_gate $GO_ID $g || fail "(6a) go tier: gate $g did not run on $GO_ID"; done
-for g in contracts spa; do ran_gate $NODE_ID $g || fail "(6a) node tier: gate $g did not run on $NODE_ID"; done
+for g in gofmt go-build go-vet lint go-test go-race spa; do ran_gate $GO_ID $g || fail "(6a) go tier: gate $g did not run on $GO_ID"; done
+ran_gate $NODE_ID contracts || fail "(6a) node tier: contracts did not run on $NODE_ID"
+ran_gate $NODE_ID spa && fail "(6a) spa ran on the shared node machine"
+GO_GATES=$(grep -- "--machine $GO_ID -C /cache/runci.sh $FULL " "$FAKE_DIR/calls.log" | sed 's/.* //')
+[ "$GO_GATES" = $'gofmt\ngo-build\ngo-vet\nlint\ngo-test\ngo-race\nspa' ] || fail "(6a) performance gates out of order: $GO_GATES"
 for g in embed-build records-no-sqlite cli-verb-guard; do ran_gate $XPLAT_ID $g || fail "(6a) xplat tier: gate $g did not run on $XPLAT_ID"; done
 [ "$(grep -c 'machine start' "$FAKE_DIR/calls.log")" -eq 3 ] || fail "(6a) the default map did not start exactly its three machines"
-[ "$FAIL" -eq 0 ] && ok "(6a) default tier map: shipped ids and gates"
+[ "$FAIL" -eq 0 ] && ok "(6a) default tier map accepted: spa follows all Go gates on $GO_ID; contracts stays on $NODE_ID"
 
 # 6b. an explicitly EMPTY id skips its tier; the other two still run on their defaults
 new_case c6b; for m in $GO_ID $XPLAT_ID; do echo stopped > "$FAKE_DIR/state-$m"; done
@@ -172,6 +176,7 @@ run_default CI_CLUSTER_NODE_MACHINE=
 grep -q -- "$NODE_ID" "$FAKE_DIR/calls.log" && fail "(6b) the node machine was touched although its id was explicitly empty"
 grep -q -- 'contracts' "$FAKE_DIR/calls.log" && fail "(6b) the node tier ran although its id was explicitly empty"
 ran_gate $GO_ID go-race || fail "(6b) control: the go tier did not run on its default"
+ran_gate $GO_ID spa || fail "(6b) spa did not run although only the contracts tier was skipped"
 ran_gate $XPLAT_ID cli-verb-guard || fail "(6b) control: the xplat tier did not run on its default"
 [ "$FAIL" -eq 0 ] && ok "(6b) explicitly empty id skips only its tier"
 
@@ -180,9 +185,28 @@ new_case c6c; for m in mGo $NODE_ID $XPLAT_ID; do echo stopped > "$FAKE_DIR/stat
 run_default CI_CLUSTER_GO_MACHINE=mGo
 [ "$RC" -eq 0 ] || fail "(6c) go override: expected exit 0, got $RC: $(grep -m1 'ERROR' "$OUT")"
 ran_gate mGo go-race || fail "(6c) the go tier did not run on the overridden machine"
+ran_gate mGo spa || fail "(6c) spa did not follow the go tier's machine override"
 grep -q -- "$GO_ID" "$FAKE_DIR/calls.log" && fail "(6c) the go tier's default machine was touched despite an override"
-ran_gate $NODE_ID spa || fail "(6c) control: the node tier did not run on its default"
-[ "$FAIL" -eq 0 ] && ok "(6c) per-tier override"
+ran_gate $NODE_ID contracts || fail "(6c) control: the node tier did not run on its default"
+[ "$FAIL" -eq 0 ] && ok "(6c) go override moves Go and SPA gates together"
+
+# 6d. the other per-tier overrides still move only their own gates
+new_case c6d; for m in $GO_ID mNode mXplat; do echo stopped > "$FAKE_DIR/state-$m"; done
+run_default CI_CLUSTER_NODE_MACHINE=mNode CI_CLUSTER_XPLAT_MACHINE=mXplat
+[ "$RC" -eq 0 ] || fail "(6d) node/xplat overrides: expected exit 0, got $RC: $(grep -m1 'ERROR' "$OUT")"
+ran_gate mNode contracts || fail "(6d) contracts did not run on the overridden node machine"
+ran_gate mXplat cli-verb-guard || fail "(6d) xplat did not run on the overridden machine"
+ran_gate $GO_ID spa || fail "(6d) control: spa did not stay on the performance machine"
+grep -q -e "$NODE_ID" -e "$XPLAT_ID" "$FAKE_DIR/calls.log" && fail "(6d) a default machine was touched despite its override"
+[ "$FAIL" -eq 0 ] && ok "(6d) node and xplat overrides preserved"
+
+# 7. the one-tier-per-machine invariant still refuses an overlapping map before any Fly call
+new_case c7
+run_cluster $'go|mA|gofmt\nnode|mA|spa'
+[ "$RC" -eq 2 ] || fail "(7) shared machine: expected config refusal (exit 2), got $RC"
+grep -q "tiers 'go' and 'node' share machine mA — one tier per machine" "$OUT" || fail "(7) refusal did not name the conflicting tiers and machine"
+[ ! -s "$FAKE_DIR/calls.log" ] || fail "(7) Fly was called before rejecting the overlapping map"
+[ "$FAIL" -eq 0 ] && ok "(7) shared machine refused (exit 2), zero Fly calls"
 
 if [ "$FAIL" -ne 0 ]; then echo "selfcheck: ci-cluster.sh does not behave - see above" >&2; exit 1; fi
 echo "selfcheck: OK (ci-cluster.sh never stops a machine it did not start, refuses unreadable states, fails a tier whose machine dies)"

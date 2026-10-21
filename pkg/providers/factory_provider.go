@@ -105,6 +105,33 @@ func resolveRow(cfg *config.ModelConfig) (resolvedRow, error) {
 	}, nil
 }
 
+// EffectiveEndpoint is what a configured provider row resolves to at runtime:
+// the wire protocol it speaks, the base URL it calls and the catalog's
+// locality classification. It is the exported view of resolveRow, so a
+// caller that must check or describe the SAVED entry (the configure_provider
+// check, the shared-resource revision token — omnipus-system-agent FR-031,
+// FR-088) resolves it exactly as CreateProviderFromConfig does.
+type EffectiveEndpoint struct {
+	Protocol catalog.Protocol
+	API      string
+	Locality catalog.Locality
+}
+
+// ResolveEndpoint resolves a configured row's effective protocol, base URL
+// and locality with the same rules CreateProviderFromConfig uses (catalog
+// row, explicit protocol, api_base override, custom row). An unknown,
+// unsupported or mis-specified row returns resolveRow's error.
+func ResolveEndpoint(cfg *config.ModelConfig) (EffectiveEndpoint, error) {
+	if cfg == nil {
+		return EffectiveEndpoint{}, fmt.Errorf("config is nil")
+	}
+	row, err := resolveRow(cfg)
+	if err != nil {
+		return EffectiveEndpoint{}, err
+	}
+	return EffectiveEndpoint{Protocol: row.protocol, API: row.api, Locality: row.locality}, nil
+}
+
 // isCustomProtocol reports whether an operator-typed row may speak this
 // protocol: an OpenAI- or Anthropic-compatible URL and nothing else (FR-014,
 // E12). Written as a comparison rather than a switch so the file's only

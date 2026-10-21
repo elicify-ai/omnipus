@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -46,13 +48,18 @@ func TestL11274NativeMainAndSubagentAcceptAndPersistSoul(t *testing.T) {
 				t.Fatalf("native %s valid soul must be accepted: %s", agentType, result.ForLLM)
 			}
 			body := l11274ResultObject(t, result)
-			for key, want := range map[string]any{"id": "native-soul-boundary", "type": agentType,
+			// Founder decision 2026-10-14 (WU-3): the id is a generated UUID.
+			id, _ := body["id"].(string)
+			if _, err := uuid.Parse(id); err != nil {
+				t.Fatalf("native control id %q must be a generated UUID: %v", id, err)
+			}
+			for key, want := range map[string]any{"type": agentType,
 				"model": l11274Model, "status": "joined_workspace", "persistence_status": "complete", "activation_status": "active"} {
 				if body[key] != want {
 					t.Errorf("native control result[%s] = %v, want %v", key, body[key], want)
 				}
 			}
-			durable, err := agentstore.New(f.home).ReadState("native-soul-boundary")
+			durable, err := agentstore.New(f.home).ReadState(id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -66,10 +73,10 @@ func TestL11274NativeMainAndSubagentAcceptAndPersistSoul(t *testing.T) {
 				t.Errorf("native worker classification = %v for %s", got, agentType)
 			}
 			state, err := workspace.ReadState(f.home, l11274WorkspaceID)
-			if err != nil || !reflect.DeepEqual(state.Workspace.CoreTeam, []string{"omnipus", "native-soul-boundary"}) {
+			if err != nil || !reflect.DeepEqual(state.Workspace.CoreTeam, []string{"omnipus", id}) {
 				t.Errorf("native create membership readback = %v, err=%v", state.Workspace.CoreTeam, err)
 			}
-			if _, ok := f.al.GetRegistry().GetAgent("native-soul-boundary"); !ok {
+			if _, ok := f.al.GetRegistry().GetAgent(id); !ok {
 				t.Error("native control is durable but not live")
 			}
 		})

@@ -142,6 +142,17 @@ function renderedRowCount(): number {
   return document.querySelectorAll('[data-mail-message-row="true"]').length
 }
 
+/** Keep the accessible-role/name check, but scope each paging gesture to its
+ * footer. A whole-document role query computes names/styles for every message
+ * button on every step of the ladder, doing more work as the list grows. */
+function loadMoreButton(): HTMLElement {
+  const footer = screen.getByTestId('mail-load-more').parentElement
+  if (footer === null) throw new Error('Load more must be mounted in its footer')
+  const button = within(footer).getByRole('button', { name: 'Load more' })
+  expect(button).toBeEnabled()
+  return button
+}
+
 describe('MailPanel paging and search (C2: scenarios 3.1–3.6, MC-W3-1)', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -205,15 +216,18 @@ describe('MailPanel paging and search (C2: scenarios 3.1–3.6, MC-W3-1)', () =>
     expect(renderedRowCount()).toBe(25)
     // Six Load-more activations: 25 → 50 → 75 → 100 → 125 → 150 → 175.
     for (let i = 0; i < 6; i++) {
-      fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+      fireEvent.click(loadMoreButton())
       await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(renderedRowCount()).toBe((i + 2) * PAGE)
+      expect(fetchMailMessages).toHaveBeenCalledTimes(i + 2)
     }
     expect(renderedRowCount()).toBe(175)
-    expect(screen.getByRole('button', { name: 'Load more' })).toBeInTheDocument()
+    expect(loadMoreButton()).toBeInTheDocument()
     // The seventh load reaches the 200-row ceiling…
-    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    fireEvent.click(loadMoreButton())
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(renderedRowCount()).toBe(200)
+    expect(fetchMailMessages).toHaveBeenCalledTimes(8)
     // …and the 8th activation is impossible: the control is GONE (MC-W3-1).
     expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument()
     expect(screen.getByTestId('mail-ceiling-message')).toHaveTextContent(

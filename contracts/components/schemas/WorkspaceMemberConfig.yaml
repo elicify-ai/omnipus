@@ -12,6 +12,15 @@ properties:
       system agents, and Admin, who is not a workspace member). Server-owned
       and read-only.
     example: "550e8400-e29b-41d4-a716-446655440000"
+  main_session_error:
+    type: string
+    readOnly: true
+    minLength: 1
+    description: >
+      Safe, server-classified reason why this eligible member's main chat
+      could not be prepared or resolved. Omitted when main_session_id is
+      present or the member is ineligible. Contains no raw error text,
+      filesystem paths, file names, session IDs or stored identity values.
   heartbeat:
     $ref: ./WorkspaceMemberHeartbeat.yaml
   hidden_from_sidebar:

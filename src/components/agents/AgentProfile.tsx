@@ -166,8 +166,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const closeEditAgentSlideOver = useUiStore((s) => s.closeEditAgentSlideOver)
   const addToast = useUiStore((s) => s.addToast)
   // FR-018 / A5: workspace context for the conditional Heartbeat tab (US-5).
-  // Set when the slide-over is opened from a Team tab; null on the global
-  // Agents screen, which suppresses the Heartbeat tab (FR-016 / FR-025).
+  // Set when the slide-over is opened from a Team tab; null when opened
+  // without a workspace (Settings → System agents), which suppresses the
+  // Heartbeat tab (FR-016 / FR-025).
   const editAgentWorkspaceId = useUiStore((s) => s.editAgentWorkspaceId)
   const agentId = agentIdProp ?? editAgentId
   const isOpen = agentId !== null
@@ -211,7 +212,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // FR-016 / US-5: fetch the workspace when opened from a Team tab, so the
   // Heartbeat tab can read + write member_configs for this (workspace, agent).
-  // Disabled when there is no workspace context (global Agents screen) — in
+  // Disabled when there is no workspace context (Settings → System agents) — in
   // that case the Heartbeat tab is hidden and no fetch is needed.
   // M-5 / fix-1: use the canonical workspacesQueryKeys.detail key so the
   // onSuccess setQueryData in saveHeartbeatMutation lands on the same cache
@@ -360,11 +361,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // slide-over (typically the AgentCard button — also covers the
   // /agents/:id route mount) on close.
   //
-  // Wave 6 / B-fix: extracted to `useFocusRestore` hook so the same
-  // proven pattern (capture-in-onOpenAutoFocus + restore-via-RAF + try/
-  // catch) is shared with the modal in CreateAgentModal. Future Wave C
-  // consumers (ModelFooter slide-over) will adopt the hook instead of
-  // forking this block.
+  // Wave 6 / B-fix: extracted to the `useFocusRestore` hook (capture in
+  // onOpenAutoFocus + restore via RAF + try/catch) so other dialogs adopt
+  // the hook instead of forking this block.
   const { onOpenAutoFocus: handleOpenAutoFocus } = useFocusRestore(isOpen)
 
   const [name, setName] = useState('')
@@ -2447,7 +2446,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         </div>
       )}
 
-      {/* Scrollable body. Inner padding/width mirrors CreateAgentModal etc. */}
+      {/* Scrollable body. */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-[var(--space-5)] py-[var(--space-4)] space-y-[var(--space-3)]">
       {/* W6-B1 / I1: cap the visible-on-open section count at Miller's 7±2.
