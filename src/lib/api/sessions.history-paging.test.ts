@@ -69,25 +69,25 @@ describe('T33 paged history adapter — B02/B23/B51', () => {
 
 // The good control is independently valid. Each case changes ONE semantic fact;
 // schema shape is still valid for the count/continuation mutants from CHECK.
-const contradictions: { name: string; field: string; change: (value: SessionHistoryResponse) => void }[] = [
-  { name: 'zero source groups for one selected entry', field: 'source_group_count', change: (v) => { v.page_info.source_group_count = 0 } },
-  { name: 'two source groups for one selected entry', field: 'source_group_count', change: (v) => { v.page_info.source_group_count = 2 } },
-  { name: 'zero drawn rows for one narration entry', field: 'row_count', change: (v) => { v.page_info.row_count = 0 } },
-  { name: 'earlier flag without cursor', field: 'next_before', change: (v) => { v.has_earlier = true } },
-  { name: 'false earlier flag with cursor', field: 'next_before', change: (v) => { v.next_before = pos(1) } },
-  { name: 'later flag without cursor', field: 'next_after', change: (v) => { v.has_later = true } },
-  { name: 'false later flag with cursor', field: 'next_after', change: (v) => { v.next_after = pos(1) } },
-  { name: 'wrong first position', field: 'first_position', change: (v) => { v.page_info.first_position = pos(9) } },
-  { name: 'wrong last position', field: 'last_position', change: (v) => { v.page_info.last_position = pos(9) } },
-  { name: 'floor larger than limit', field: 'min_rows', change: (v) => { v.page_info.min_rows = 41 } },
-  { name: 'byte-budget stop before two-screen floor', field: 'stop_reason', change: (v) => { v.page_info.stop_reason = 'byte_budget' } },
-  { name: 'false exceeded bit despite large bytes', field: 'byte_budget_exceeded', change: (v) => { v.page_info.projected_bytes = 4194305 } },
-  { name: 'true exceeded bit despite small bytes', field: 'byte_budget_exceeded', change: (v) => { v.page_info.byte_budget_exceeded = true; v.page_info.budget_override = 'height_floor' } },
-  { name: 'unneeded override', field: 'budget_override', change: (v) => { v.page_info.budget_override = 'atomic_group' } },
+const contradictions: { name: string; path: string[]; change: (value: SessionHistoryResponse) => void }[] = [
+  { name: 'zero source groups for one selected entry', path: ['page_info', 'source_group_count'], change: (v) => { v.page_info.source_group_count = 0 } },
+  { name: 'two source groups for one selected entry', path: ['page_info', 'source_group_count'], change: (v) => { v.page_info.source_group_count = 2 } },
+  { name: 'zero drawn rows for one narration entry', path: ['page_info', 'row_count'], change: (v) => { v.page_info.row_count = 0 } },
+  { name: 'earlier flag without cursor', path: ['next_before'], change: (v) => { v.has_earlier = true } },
+  { name: 'false earlier flag with cursor', path: ['next_before'], change: (v) => { v.next_before = pos(1) } },
+  { name: 'later flag without cursor', path: ['next_after'], change: (v) => { v.has_later = true } },
+  { name: 'false later flag with cursor', path: ['next_after'], change: (v) => { v.next_after = pos(1) } },
+  { name: 'wrong first position', path: ['page_info', 'first_position'], change: (v) => { v.page_info.first_position = pos(9) } },
+  { name: 'wrong last position', path: ['page_info', 'last_position'], change: (v) => { v.page_info.last_position = pos(9) } },
+  { name: 'floor larger than limit', path: ['page_info', 'min_rows'], change: (v) => { v.page_info.min_rows = 41 } },
+  { name: 'byte-budget stop before two-screen floor', path: ['page_info', 'stop_reason'], change: (v) => { v.page_info.stop_reason = 'byte_budget' } },
+  { name: 'false exceeded bit despite large bytes', path: ['page_info', 'byte_budget_exceeded'], change: (v) => { v.page_info.projected_bytes = 4194305 } },
+  { name: 'true exceeded bit despite small bytes', path: ['page_info', 'byte_budget_exceeded'], change: (v) => { v.page_info.byte_budget_exceeded = true; v.page_info.budget_override = 'height_floor' } },
+  { name: 'unneeded override', path: ['page_info', 'budget_override'], change: (v) => { v.page_info.budget_override = 'atomic_group' } },
 ]
 
 describe('T15/T33 semantic metadata refusal — B23', () => {
-  it.each(contradictions)('rejects $name with a field-specific protocol error', async ({ field, change }) => {
+  it.each(contradictions)('rejects $name with a field-specific protocol error', async ({ path, change }) => {
     const good = page([entry(1)])
     expectValidPage(good, [pos(1)], 1)
     body = good
@@ -98,7 +98,7 @@ describe('T15/T33 semantic metadata refusal — B23', () => {
     change(bad)
     body = bad
     await expect(fetchSessionMessages(SID)).rejects.toMatchObject({
-      name: 'ApiSchemaError', zodIssues: expect.arrayContaining([expect.objectContaining({ path: ['page_info', field] })]),
+      name: 'ApiSchemaError', zodIssues: expect.arrayContaining([expect.objectContaining({ path })]),
     })
   })
 

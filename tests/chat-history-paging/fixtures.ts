@@ -3,11 +3,14 @@
 import { createHash } from 'node:crypto'
 import { expect } from 'vitest'
 import type {
-  Message, Session, SessionDetail, SessionHistoryPageInfo, SessionHistoryResponse,
+  Message, Session, SessionDetail, SessionHistoryResponse,
 } from '@/lib/api/generated/openapi-types'
 import type { ReplayMessageFrame, ServerFrame, SessionSnapshotFrame } from '@/lib/api/generated/asyncapi-types'
 import { SessionDetail as DetailSchema, SessionHistoryResponse as PageSchema } from '@/lib/api/generated/schemas'
 import { parseFrameSafe } from '@/lib/ws'
+
+// Generated component exists without a top-level named type export (seam J).
+type SessionHistoryPageInfo = SessionHistoryResponse['page_info']
 
 export const SID = 'history-paging-session'
 export const STAMP = '2026-10-21T10:00:00Z'
