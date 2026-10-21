@@ -106,20 +106,20 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	if dmScope == "" {
 		dmScope = DMScopeMain
 	}
-	sessionKey := strings.ToLower(BuildAgentPeerSessionKey(SessionKeyParams{
+	sessionKey := BuildAgentPeerSessionKey(SessionKeyParams{
 		AgentID:       agentID,
 		Channel:       channel,
 		AccountID:     accountID,
 		Peer:          input.Peer,
 		DMScope:       dmScope,
 		IdentityLinks: r.cfg.Session.IdentityLinks,
-	}))
+	})
 	return ResolvedRoute{
 		AgentID:        agentID,
 		Channel:        channel,
 		AccountID:      accountID,
 		SessionKey:     sessionKey,
-		MainSessionKey: strings.ToLower(BuildAgentMainSessionKey(agentID)),
+		MainSessionKey: BuildAgentMainSessionKey(agentID),
 		MatchedBy:      MatchedByMainAgent,
 	}
 }

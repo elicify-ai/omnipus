@@ -74,6 +74,9 @@ func (ts *turnState) accountProviderCall(providerID, model string, usage *provid
 		ts.AddTurnStats(int64(u.TotalTokens), price.Cost)
 		ts.AddTurnCacheStats(u.CacheReadTokens, u.CacheWriteTokens)
 		ts.AddTurnIOStats(u.PromptTokens, u.CompletionTokens)
+		// The group-chat allocation (§6.14) reads the same call through the
+		// one accounting path: the installed room pricer, else this price.
+		ts.opts.roomCost.addCall(ts.turnID, model, usage, price)
 	}
 	ts.mu.Lock()
 	ts.callAccounting.pending = append(ts.callAccounting.pending, entry)

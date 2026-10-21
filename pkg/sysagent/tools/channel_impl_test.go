@@ -70,7 +70,7 @@ func TestChannelEnable_MutatesConfigToEnabled(t *testing.T) {
 	}
 	tool := systools.NewChannelEnableTool(deps)
 
-	res := tool.Execute(context.Background(), map[string]any{"id": "telegram"})
+	res := tool.Execute(context.Background(), systools.WithCurrentRevisionForTest(tool, map[string]any{"id": "telegram"}))
 	if res.IsError {
 		t.Fatalf("enable returned error: %s", res.ForLLM)
 	}
@@ -98,7 +98,7 @@ func TestChannelDisable_MutatesConfigToDisabled(t *testing.T) {
 	}
 	tool := systools.NewChannelDisableTool(deps)
 
-	res := tool.Execute(context.Background(), map[string]any{"id": "telegram"})
+	res := tool.Execute(context.Background(), systools.WithCurrentRevisionForTest(tool, map[string]any{"id": "telegram"}))
 	if res.IsError {
 		t.Fatalf("disable returned error: %s", res.ForLLM)
 	}
@@ -118,7 +118,7 @@ func TestChannelDisable_RejectsUnconfigured(t *testing.T) {
 	tool := systools.NewChannelDisableTool(deps)
 
 	// telegram is a KNOWN channel but NOT configured → disable should error.
-	res := tool.Execute(context.Background(), map[string]any{"id": "telegram"})
+	res := tool.Execute(context.Background(), systools.WithCurrentRevisionForTest(tool, map[string]any{"id": "telegram"}))
 	if !res.IsError {
 		t.Errorf("disable of an unconfigured channel should error; got success: %s", res.ForLLM)
 	}
@@ -127,7 +127,7 @@ func TestChannelDisable_RejectsUnconfigured(t *testing.T) {
 func TestChannelEnable_RejectsUnknownChannel(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	tool := systools.NewChannelEnableTool(deps)
-	res := tool.Execute(context.Background(), map[string]any{"id": "nonexistent-channel"})
+	res := tool.Execute(context.Background(), systools.WithCurrentRevisionForTest(tool, map[string]any{"id": "nonexistent-channel"}))
 	if !res.IsError {
 		t.Errorf("enable of an unknown channel should error; got: %s", res.ForLLM)
 	}
@@ -139,7 +139,7 @@ func TestChannelEnable_RejectsUnknownChannel(t *testing.T) {
 func TestChannelEnable_RejectsMissingID(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	tool := systools.NewChannelEnableTool(deps)
-	res := tool.Execute(context.Background(), map[string]any{})
+	res := tool.Execute(context.Background(), systools.WithCurrentRevisionForTest(tool, map[string]any{}))
 	if !res.IsError {
 		t.Errorf("enable without id should error; got: %s", res.ForLLM)
 	}
@@ -226,7 +226,7 @@ func TestConfigure_SetsTokenRef(t *testing.T) {
 	// First enable the channel (configure_channel doesn't require it, but
 	// test_channel reports enabled status — keep the flow realistic).
 	enableRes := systools.NewChannelEnableTool(deps).Execute(
-		context.Background(), map[string]any{"id": "telegram"},
+		context.Background(), systools.WithCurrentRevisionForTest(systools.NewChannelEnableTool(deps), map[string]any{"id": "telegram"}),
 	)
 	if enableRes.IsError {
 		t.Fatalf("enable_channel: unexpected error: %s", enableRes.ForLLM)
@@ -234,10 +234,10 @@ func TestConfigure_SetsTokenRef(t *testing.T) {
 
 	// Call configure_channel with a token secret.
 	configureRes := systools.NewChannelConfigureTool(deps).Execute(
-		context.Background(), map[string]any{
+		context.Background(), systools.WithCurrentRevisionForTest(systools.NewChannelConfigureTool(deps), map[string]any{
 			"id":    "telegram",
 			"token": "bot123:AABBCCDD",
-		},
+		}),
 	)
 	if configureRes.IsError {
 		t.Fatalf("configure_channel: unexpected error: %s", configureRes.ForLLM)
@@ -277,10 +277,10 @@ func TestConfigure_AppSecretRef(t *testing.T) {
 	}
 	// feishu uses app_secret (→ AppSecretRef) not token.
 	res := systools.NewChannelConfigureTool(deps).Execute(
-		context.Background(), map[string]any{
+		context.Background(), systools.WithCurrentRevisionForTest(systools.NewChannelConfigureTool(deps), map[string]any{
 			"id":         "telegram", // tool accepts app_secret for any id
 			"app_secret": "supersecret",
-		},
+		}),
 	)
 	if res.IsError {
 		t.Fatalf("configure_channel: unexpected error: %s", res.ForLLM)
@@ -301,12 +301,12 @@ func TestConfigure_PlainFields(t *testing.T) {
 		cfg.Channels = map[string]config.ChannelInstanceConfig{}
 	}
 	res := systools.NewChannelConfigureTool(deps).Execute(
-		context.Background(), map[string]any{
+		context.Background(), systools.WithCurrentRevisionForTest(systools.NewChannelConfigureTool(deps), map[string]any{
 			"id":     "telegram",
 			"bot_id": "my-bot",
 			"app_id": "12345",
 			"mode":   "webhook",
-		},
+		}),
 	)
 	if res.IsError {
 		t.Fatalf("configure_channel: unexpected error: %s", res.ForLLM)
@@ -427,15 +427,15 @@ func TestChannelEnableDisableRoundTrip(t *testing.T) {
 	disable := systools.NewChannelDisableTool(deps)
 	ctx := context.Background()
 
-	enable.Execute(ctx, map[string]any{"id": "discord"})
+	enable.Execute(ctx, systools.WithCurrentRevisionForTest(enable, map[string]any{"id": "discord"}))
 	if !cfg.Channels["discord"].Enabled {
 		t.Fatalf("after enable: discord not enabled")
 	}
-	disable.Execute(ctx, map[string]any{"id": "discord"})
+	disable.Execute(ctx, systools.WithCurrentRevisionForTest(disable, map[string]any{"id": "discord"}))
 	if cfg.Channels["discord"].Enabled {
 		t.Fatalf("after disable: discord still enabled")
 	}
-	enable.Execute(ctx, map[string]any{"id": "discord"})
+	enable.Execute(ctx, systools.WithCurrentRevisionForTest(enable, map[string]any{"id": "discord"}))
 	if !cfg.Channels["discord"].Enabled {
 		t.Fatalf("after re-enable: discord not enabled")
 	}

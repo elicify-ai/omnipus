@@ -122,7 +122,8 @@ func (al *AgentLoop) continueSteeredTurn(
 	attempt.ts = ts
 
 	_, err = al.continuePendingSteeringWithAgent(ctx, sessionID, ts.agent,
-		func(_ *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
+		func(_ *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string, origin approvalOrigin) (string, error) {
+			ts.noteConsumedOrigin(origin) // spec §6.18
 			gate := al.steerAdmission()
 			gate.entryMu.Lock()
 			ts.opts.executionDisposition = al.executionDispositionFor(claim)

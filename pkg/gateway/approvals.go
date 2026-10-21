@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // ApprovalState is the lifecycle state of a single tool-approval request.
@@ -110,7 +112,7 @@ type approvalEntry struct {
 	// (child) session id, never the chat's. The chat the inline approval
 	// renders in is carried separately by the optional `root_session_id`
 	// (server-derived root of the ParentSessionID chain, omitted when equal
-	// to session_id), filled by WU-8.
+	// to session_id; ws_tool_approval.go::approvalSessionContext).
 	//
 	// What is load-bearing: this field is read in-process (never round-tripped through
 	// the wire frame) by cancelAllPendingForSessions and by the approve/deny
@@ -130,6 +132,21 @@ type approvalEntry struct {
 	CreatedAt time.Time
 	ExpiresAt time.Time
 
+	// RoomRef names the group chat of a room's pre-admission card
+	// (omnipus-system-agent FR-251, K7) or of a member's own approval inside
+	// a room-request turn (FR-169); both are raised in the member's main
+	// chat. OriginLabel is the server-derived turn origin (spec §6.18): "for group
+	// <name>" for both, "asked by <Agent>" for a turn that consumed a peer
+	// request; empty for a plain web turn. Immutable after creation.
+	RoomRef     *generated.RoomRef
+	OriginLabel string
+	// RoomPreAdmission marks a room's pre-admission card (FR-251): the
+	// request is not admitted yet, so /pause, member removal and room
+	// deletion cancel it and approving it awaits the admission. A member's
+	// own approval inside a room-request turn carries RoomRef too, but is
+	// the member's work (FR-169) and is not cancelled by those room events.
+	RoomPreAdmission bool
+
 	// Mutable — protected by the registry's mu.
 	state ApprovalState
 
@@ -139,6 +156,13 @@ type approvalEntry struct {
 
 	// timer fires after the configured timeout and transitions pending→denied_timeout.
 	timer *time.Timer
+}
+
+// approvalExtras are the optional origin fields of a new approval.
+type approvalExtras struct {
+	RoomRef          *generated.RoomRef
+	OriginLabel      string
+	RoomPreAdmission bool
 }
 
 // ApprovalOutcome is the result delivered to the blocked agent loop goroutine.
@@ -403,7 +427,12 @@ func (r *approvalRegistryV2) requestApproval(
 	toolCallID, toolName string,
 	args map[string]any,
 	agentID, actingSessionID, turnID string,
+	extras ...approvalExtras,
 ) (*approvalEntry, bool) {
+	var extra approvalExtras
+	if len(extras) > 0 {
+		extra = extras[0]
+	}
 	if turnID == "" {
 		// Defense in depth (D-03, ADR-092, 2026-09-24 UAT tester t5): fail
 		// CLOSED, unlike the actingSessionID=="" branch below, which still
@@ -441,8 +470,9 @@ func (r *approvalRegistryV2) requestApproval(
 			SessionID:  actingSessionID,
 			TurnID:     turnID,
 			CreatedAt:  time.Now(),
-			state:      ApprovalStateDeniedMissingTurnID,
-			resultCh:   make(chan ApprovalOutcome, 1),
+			RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel, RoomPreAdmission: extra.RoomPreAdmission,
+			state:    ApprovalStateDeniedMissingTurnID,
+			resultCh: make(chan ApprovalOutcome, 1),
 		}
 		synthetic.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonMissingTurnID}
 		return synthetic, false
@@ -480,8 +510,9 @@ func (r *approvalRegistryV2) requestApproval(
 			SessionID:  actingSessionID,
 			TurnID:     turnID,
 			CreatedAt:  time.Now(),
-			state:      ApprovalStateDeniedSaturated,
-			resultCh:   make(chan ApprovalOutcome, 1),
+			RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel, RoomPreAdmission: extra.RoomPreAdmission,
+			state:    ApprovalStateDeniedSaturated,
+			resultCh: make(chan ApprovalOutcome, 1),
 		}
 		// Pre-deliver the outcome so the caller can receive without blocking.
 		synthetic.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonSaturated}
@@ -500,8 +531,9 @@ func (r *approvalRegistryV2) requestApproval(
 		TurnID:     turnID,
 		CreatedAt:  now,
 		ExpiresAt:  expiresAt,
-		state:      ApprovalStatePending,
-		resultCh:   make(chan ApprovalOutcome, 1),
+		RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel, RoomPreAdmission: extra.RoomPreAdmission,
+		state:    ApprovalStatePending,
+		resultCh: make(chan ApprovalOutcome, 1),
 	}
 
 	// Arm the timeout timer (FR-016, SC-006: default gateway.go::defaultToolApprovalTimeout).

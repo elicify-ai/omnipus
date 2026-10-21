@@ -31,7 +31,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, act } from '@testing-library/react'
+import { render, act, fireEvent, within } from '@testing-library/react'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import * as React from 'react'
@@ -105,14 +105,9 @@ vi.mock('../historical-markdown', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('../RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-// Every OTHER tool UI is mocked down to the stable contract (see
-// ChatScreen.tool-order.test.tsx) — `set_goal` is deliberately NOT among
-// them; ChatScreen.tsx's parts loop routes it through the real
-// SetGoalCardBlock (`../tools/SetGoalToolUI`, unmocked below).
-vi.mock('../tools/GenericToolCall', () => ({
-  GenericToolCall: ({ toolName }: { toolName: string }) =>
-    React.createElement('div', { 'data-testid': 'tool-call-badge', 'data-tool': toolName }, toolName),
-}))
+// Keep SetGoalCardBlock, GoalEchoCard, and GenericToolCall real: Verbose
+// chat must retain the card and add the existing expandable raw details.
+// Unrelated browser/preview tool UIs use the stable test contract.
 vi.mock('../tools/BrowserTool', () => ({
   isReplayBrowserToolName: () => false,
   BrowserToolReplayBlock: ({ toolName }: { toolName: string }) =>
@@ -214,6 +209,7 @@ beforeEach(() => {
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
   act(() => {
     useChatStore.getState().resetSession()
+    useChatPreferencesStore.setState({ verboseChatEnabled: false })
   })
 })
 
@@ -274,16 +270,16 @@ describe('SetGoalToolUI — live path', () => {
     expect(capturedToolUIs['set_goal']).toBeDefined()
   })
 
-  it('a completed result renders GoalEchoCard with the registered record', () => {
+  it('verbose OFF: a completed result renders the registered goal card only', () => {
     const renderFn = capturedToolUIs['set_goal']!
     const { container } = render(
       <>{renderFn({ args: {}, result: goalResultJSON(), status: { type: 'complete' } })}</>,
     )
-    const card = container.querySelector('[data-testid="goal-echo-card"]')
-    expect(card).not.toBeNull()
+    expect(container.querySelectorAll('[data-testid="goal-echo-card"]')).toHaveLength(1)
     expect(container.querySelector('[data-testid="goal-echo-statement"]')?.textContent).toBe(
       'Ship a playable browser tetris game.',
     )
+    expect(container.querySelector('[data-testid="tool-call-badge"]')).toBeNull()
   })
 
   it('a still-running call (no result yet) renders nothing', () => {
@@ -352,23 +348,43 @@ describe('SetGoalToolUI — failed call (review S4)', () => {
       </>,
     )
     expect(container.querySelector('[data-testid="set-goal-failed"]')).toBeNull()
-    // GenericToolCall is mocked in this file to a badge div carrying data-tool.
-    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="set_goal"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="goal-echo-card"]')).toBeNull()
+    const raw = within(container).getByTestId('tool-call-badge')
+    expect(raw).toHaveAttribute('data-tool', 'set_goal')
+    expect(within(raw).getByText('Failed')).toBeInTheDocument()
+    fireEvent.click(within(raw).getByTestId('tool-call-toggle'))
+    expect(within(raw).getByText('set_goal rejected: definition is required')).toBeInTheDocument()
   })
 
-  it('verbose ON: a SUCCESSFUL call also falls through to GenericToolCall — no card pre-empts the raw view', () => {
+  it('verbose ON: a successful live call keeps the card first and adds expandable raw parameters and result', () => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: true })
     })
+    const args = { mode: 'register', definition: 'Ship a playable browser tetris game.' }
+    const result = goalResultJSON()
     const renderFn = capturedToolUIs['set_goal']!
     const { container } = render(
-      <>{renderFn({ args: {}, result: goalResultJSON(), status: { type: 'complete' } })}</>,
+      <>{renderFn({ args, result, status: { type: 'complete' } })}</>,
     )
-    expect(container.querySelector('[data-testid="goal-echo-card"]')).toBeNull()
-    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="set_goal"]')).not.toBeNull()
+    const blocks = Array.from(container.querySelectorAll('[data-testid="goal-echo-card"], [data-testid="tool-call-badge"]'))
+    expect(blocks.map((node) => node.getAttribute('data-testid'))).toEqual(['goal-echo-card', 'tool-call-badge'])
+    expect(container.querySelector('[data-testid="goal-echo-statement"]')?.textContent).toBe(
+      'Ship a playable browser tetris game.',
+    )
+    const raw = within(container).getByTestId('tool-call-badge')
+    expect(raw).toHaveAttribute('data-tool', 'set_goal')
+    expect(raw.querySelectorAll('pre')).toHaveLength(0)
+    fireEvent.click(within(raw).getByTestId('tool-call-toggle'))
+    expect(Array.from(raw.querySelectorAll('pre'), (node) => node.textContent)).toEqual([
+      JSON.stringify(args, null, 2),
+      result,
+    ])
   })
 
-  it('replay path (verbose OFF): a message whose ONLY part is a failed set_goal shows the trace, not an empty shell', async () => {
+  it.each([false, true])('replay path (verbose=%s): a failed set_goal keeps its existing failure display', async (verboseChatEnabled) => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled })
+    })
     const assistantMsg: ChatMessage = {
       id: 'msg_failed_set_goal',
       role: 'assistant',
@@ -393,11 +409,21 @@ describe('SetGoalToolUI — failed call (review S4)', () => {
       const result = render(<ChatScreen />)
       container = result.container
     })
-    const failed = container.querySelector('[data-testid="set-goal-failed"]')
-    expect(failed).not.toBeNull()
-    expect(container.querySelector('[data-testid="set-goal-failed-detail"]')?.textContent).toContain(
-      'criteria is required',
-    )
+    expect(container.querySelector('[data-testid="goal-echo-card"]')).toBeNull()
+    if (verboseChatEnabled) {
+      expect(container.querySelector('[data-testid="set-goal-failed"]')).toBeNull()
+      const raw = within(container).getByTestId('tool-call-badge')
+      expect(raw).toHaveAttribute('data-tool', 'set_goal')
+      expect(within(raw).getByText('Failed')).toBeInTheDocument()
+      fireEvent.click(within(raw).getByTestId('tool-call-toggle'))
+      expect(within(raw).getByText('set_goal rejected: criteria is required, at least one')).toBeInTheDocument()
+    } else {
+      expect(container.querySelector('[data-testid="set-goal-failed"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="set-goal-failed-detail"]')?.textContent).toBe(
+        'set_goal rejected: criteria is required, at least one',
+      )
+      expect(container.querySelector('[data-testid="tool-call-badge"]')).toBeNull()
+    }
   })
 
   it('classifySetGoalCall (the shared decision table wouldToolCallBeVisible consults) agrees with the renderer', () => {
@@ -407,6 +433,8 @@ describe('SetGoalToolUI — failed call (review S4)', () => {
     expect(classifySetGoalCall({ ...base, result: 'set_goal rejected: x', isError: true })).toBe('failed')
     expect(classifySetGoalCall({ ...base, result: goalResultJSON(), isError: false })).toBe('card')
     expect(classifySetGoalCall({ ...base, result: goalResultEnvelope(), isError: false })).toBe('card')
+    expect(classifySetGoalCall({ ...base, result: goalResultJSON(), isError: false, verboseChatEnabled: true })).toBe('card-and-raw')
+    expect(classifySetGoalCall({ ...base, result: goalResultEnvelope(), isError: false, verboseChatEnabled: true })).toBe('card-and-raw')
     expect(classifySetGoalCall({ ...base, result: 'goal record register: 1 criteria, 2 DoD items', isError: false })).toBe('chip')
     expect(classifySetGoalCall({ ...base, result: undefined, isError: false, verboseChatEnabled: true })).toBe('raw')
     expect(classifySetGoalCall({ ...base, result: 'set_goal rejected: x', isError: true, verboseChatEnabled: true })).toBe('raw')
@@ -526,10 +554,15 @@ describe('parseSetGoalResult — shapes and malformed input (review S9/S12)', ()
 // ── (b) replay path — interleaved position ──────────────────────────────────
 
 describe('SetGoalCardBlock — replay path (VirtualAssistantMessageRow parts loop)', () => {
-  it('renders the card between the text that precedes and follows the call, in true DOM order', async () => {
+  it.each([false, true])('verbose=%s: replay keeps the card at its call position and adds raw details only in verbose chat', async (verboseChatEnabled) => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled })
+    })
     const before = 'Registering the goal now. '
     const after = 'Let me know if you want to steer it.'
     const content = before + after
+    const params = { definition: 'Ship a playable browser tetris game.', criteria: [] }
+    const persistedResult = goalResultEnvelope()
     const assistantMsg: ChatMessage = {
       id: 'msg_set_goal_1',
       role: 'assistant',
@@ -540,10 +573,10 @@ describe('SetGoalCardBlock — replay path (VirtualAssistantMessageRow parts loo
         {
           id: 'tc_set_goal_1',
           tool: 'set_goal',
-          params: { definition: 'Ship a playable browser tetris game.', criteria: [] },
+          params,
           // The replay path hands the PERSISTED envelope shape (S12) — the
           // raw JSON string is the LIVE shape and never reaches replay.
-          result: goalResultEnvelope(),
+          result: persistedResult,
           status: 'success',
           textOffset: before.length,
         } as PositionedToolCall,
@@ -558,19 +591,28 @@ describe('SetGoalCardBlock — replay path (VirtualAssistantMessageRow parts loo
     })
 
     const nodes = Array.from(
-      container.querySelectorAll('[data-testid="historical-markdown"], [data-testid="goal-echo-card"]'),
+      container.querySelectorAll('[data-testid="historical-markdown"], [data-testid="goal-echo-card"], [data-testid="tool-call-badge"]'),
     )
-    expect(nodes).toHaveLength(3)
-    expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
-    expect(nodes[0].textContent).toContain('Registering the goal now.')
-    expect(nodes[1]).toHaveAttribute('data-testid', 'goal-echo-card')
-    expect(nodes[2]).toHaveAttribute('data-testid', 'historical-markdown')
-    expect(nodes[2].textContent).toContain('Let me know if you want to steer it.')
-
-    const position = nodes[0].compareDocumentPosition(nodes[1])
-    expect((position & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
-    const position2 = nodes[1].compareDocumentPosition(nodes[2])
-    expect((position2 & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    expect(nodes.map((node) => node.getAttribute('data-testid'))).toEqual(
+      verboseChatEnabled
+        ? ['historical-markdown', 'goal-echo-card', 'tool-call-badge', 'historical-markdown']
+        : ['historical-markdown', 'goal-echo-card', 'historical-markdown'],
+    )
+    expect(nodes[0].textContent).toBe(before)
+    expect(nodes[nodes.length - 1].textContent).toBe(after)
+    expect(container.querySelector('[data-testid="goal-echo-statement"]')?.textContent).toBe(
+      'Ship a playable browser tetris game.',
+    )
+    if (verboseChatEnabled) {
+      const raw = within(container).getByTestId('tool-call-badge')
+      expect(raw).toHaveAttribute('data-tool', 'set_goal')
+      expect(raw.querySelectorAll('pre')).toHaveLength(0)
+      fireEvent.click(within(raw).getByTestId('tool-call-toggle'))
+      expect(Array.from(raw.querySelectorAll('pre'), (node) => node.textContent)).toEqual([
+        JSON.stringify(params, null, 2),
+        JSON.stringify(persistedResult, null, 2),
+      ])
+    }
   })
 })
 

@@ -178,6 +178,8 @@ func liveSessionStore(deps *systools.Deps) *session.UnifiedStore {
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.create
 func TestAgentCreate_WithColor(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
@@ -303,6 +305,8 @@ func TestAgentUpdate_PartialFields(t *testing.T) {
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.create (persistence)
 func TestAgentCreate_PersistsToDisk(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, cfgPath := newTestDepsWithRealSave(t)
 
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
@@ -696,6 +700,8 @@ func TestConcurrentRESTAndSysagentConfigWrite(t *testing.T) {
 //
 // Traces to: issue #240 regression lock A.
 func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, home := newTestDepsWithHome(t)
 
 	soulContent := "You are a focused research assistant."
@@ -791,6 +797,9 @@ func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 	if err := os.MkdirAll(wsPath, 0o700); err != nil {
 		t.Fatalf("setup workspace: %v", err)
 	}
+	// #1032 F-3: read_agent_metadata answers only for an agent that exists, so
+	// the fixture agent has its entity record.
+	seedAgentEntityForTest(t, home, agentID)
 
 	readTool := systools.NewAgentReadMetadataTool(deps)
 
@@ -918,6 +927,8 @@ func TestAgentReadMetadataTool_DefinitionHasThreeKinds(t *testing.T) {
 // tool path (AgentCreateTool.Execute), with no explicit bash policy entry
 // supplied by the caller — resolves the tool to "deny" by default.
 func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
@@ -1133,6 +1144,8 @@ func (p *reloadTestProvider) GetDefaultModel() string { return "mock-model" }
 // NO other call, makes the agent disappear from BOTH the live registry
 // (GetAgent/ListAgentIDs) and the channel-binding routing cascade.
 func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 
 	cfg := &config.Config{

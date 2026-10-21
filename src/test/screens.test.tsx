@@ -141,22 +141,10 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={makeClient()}>{children}</QueryClientProvider>
 }
 
-describe('Agents screen — empty state', () => {
-  let AgentsScreen: () => JSX.Element
-
-  beforeAll(async () => {
-    // The agents/ index route now lazy-loads its screen; import the screen module
-    // directly so the test renders real content (not the Suspense fallback).
-    const mod = await import('@/components/screens/AgentListScreen')
-    AgentsScreen = mod.AgentListScreen as () => JSX.Element
-  }, 60_000)
-
-  it('renders "Agents" as h1 heading', async () => {
-    render(<AgentsScreen />, { wrapper })
-    const h1 = await screen.findByRole('heading', { level: 1 })
-    expect(h1).toHaveTextContent('Agents')
-  })
-})
+// The "Agents screen — empty state" describe was removed with the screen
+// itself — omnipus-system-agent FR-108 retires the Agents management screen
+// and routes (WU-11); the branded 404 that replaces it is pinned by
+// src/routes/_app/-wu11-retired-routes.test.tsx.
 
 describe('Skills screen — empty state', () => {
   let SkillsScreen: () => JSX.Element

@@ -142,9 +142,9 @@ export const RoomEntry = z
     client_message_id: z.string().min(1).max(128).optional(),
     author: RoomEntryAuthor,
     text: z.string().max(5242880),
-    addressees: z.array(z.string().min(1).max(128)).max(256),
+    addressees: z.array(z.string().min(1).max(128)),
     after_pause: z.boolean(),
-    deliveries: z.array(RoomDeliveryState).max(256),
+    deliveries: z.array(RoomDeliveryState),
     timestamp: z.string(),
   })
   .strict();
@@ -181,15 +181,16 @@ export const RoomSnapshotFrame = z
     room_id: z.string().min(1).max(128),
     seq: z.number().int().min(0),
     entries: z.array(RoomEntry).max(10000),
-    members: z.array(z.string().min(1).max(128)).max(256),
-    muted: z.array(z.string().min(1).max(128)).max(256),
-    member_states: z.array(RoomDeliveryState).max(10000),
+    members: z.array(z.string().min(1).max(128)),
+    muted: z.array(z.string().min(1).max(128)),
+    member_states: z.array(RoomDeliveryState),
     paused: z.boolean(),
     generation: z.number().int().min(0),
     read_only_reason: z.string().min(1).max(200).optional(),
     allocated_cost_micro_usd: z.number().int().min(0),
     allocated_cost_unpriced: z.boolean(),
     complete: z.boolean(),
+    has_older: z.boolean().optional(),
   })
   .strict();
 
@@ -198,8 +199,8 @@ export const RoomMetaFrame = z
     type: z.literal("room_meta"),
     room_id: z.string().min(1).max(128),
     seq: z.number().int().min(1),
-    members: z.array(z.string().min(1).max(128)).max(256),
-    muted: z.array(z.string().min(1).max(128)).max(256),
+    members: z.array(z.string().min(1).max(128)),
+    muted: z.array(z.string().min(1).max(128)),
     paused: z.boolean(),
     generation: z.number().int().min(0),
     read_only_reason: z.string().min(1).max(200).optional(),
@@ -908,9 +909,9 @@ export const AskUserAnswerFrame = z
 
 export const SessionStatePendingApproval = z
   .object({
-    tool_call_id: z.string().min(1).optional(),
-    turn_id: z.string().min(1).optional(),
-    args: z.record(z.unknown()).optional(),
+    tool_call_id: z.string().min(1),
+    turn_id: z.string().min(1),
+    args: z.record(z.unknown()),
     segments: z.array(CommandSegmentInfo).optional(),
     root_session_id: z.string().min(1).max(255).optional(),
     acting_agent_name: z.string().min(1).max(128).optional(),

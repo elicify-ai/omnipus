@@ -2,7 +2,7 @@
 
 Every action an Omnipus agent takes is visible. There are two complementary surfaces.
 
-The **session transcript** is the persistent, on-disk JSONL of everything that happened in a conversation. It survives restarts, replays at any time, and drives the SPA's chat history.
+The **session transcript** is the persistent, on-disk record of a conversation. The server builds chat history from a filtered view of it. Private continuation inputs remain in the archive for model delivery and recovery; they are not displayed as messages from you.
 
 The **event stream** is the live runtime feed of typed events emitted as the agent loop runs. It powers the SPA in real time, drives subprocess hooks, and feeds the audit log.
 
@@ -24,6 +24,7 @@ Each session has a folder at `$OMNIPUS_HOME/sessions/<session-id>/` (`~/.omnipus
 | `provider_fallback` | The note that a fallback model answered, with the models involved, written once per session and model pair |
 | `judge_verdict` | The Judge agent's verdict on a task's completion claim |
 | `context_window_notice` | A context-window diagnostic shown only in Verbose chat; never part of the model's history |
+| `saved_input` | A private, deferred continuation input. Retained for model delivery and recovery, but excluded from REST chat history and WebSocket snapshot replay. |
 | `model_ref`, `tool_call_effect` | Internal records that point at, or correct, an earlier entry. They are written into the same files and are not shown in chat |
 
 ### What's on every entry (`pkg/session/daypartition.go::TranscriptEntry`)
@@ -65,7 +66,9 @@ When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying
 
 ### Replay
 
-The saved transcript remains the content authority; the paged chat view uses derived, content-free lookup metadata rather than a second history database. The web app reads bounded public pages through the gateway. Explicit internal full-history uses can still call `UnifiedStore.ReadTranscript(sessionID)` to read day files in order; this is not the browser's page-loading path.
+The saved transcript remains the content authority; the paged chat view uses derived, content-free lookup metadata rather than a second history database. The web app reads bounded public pages through the gateway.
+
+For an explicit internal full-history read, `UnifiedStore.ReadTranscript(sessionID)` returns the complete merged transcript, including private continuation inputs. `UnifiedStore.ReadTranscriptView(sessionID)` returns the display-oriented `Entries`: it starts at the last `/clear` marker, applies input-disposition labels and excludes private continuation inputs. These readers are not interchangeable. The bounded public API below preserves that public/private distinction without using an internal full read as its paging implementation. The archive remains the single on-disk content record.
 
 ### Paged session API
 
@@ -295,8 +298,9 @@ the unpriced portion free. Native Anthropic's documented one-hour multiplier is
 
 Caching does not change who supplied a message. Current-sender, session and
 runtime metadata remain in the system context—the request's instruction prefix.
-Only the changing clock, tool-summary, scratchpad and goal-checklist notes, plus
-the per-turn skill reminder, follow the conversation in one user-role text block.
+Only the changing clock, tool-summary, scratchpad and goal-checklist notes follow
+the conversation in one user-role text block. Skill-use guidance remains in the
+stable instructions and Skills menu; no per-request skill reminder is added.
 When a turn is assembled, its current user message retains its caption and
 attachments immediately before that block. Tool-call follow-ups keep complete
 call/result groups ahead of the notes. Removing old history from the live window

@@ -242,6 +242,8 @@ func u5aCreateAgent(t *testing.T, deps *Deps, ctx context.Context, name string) 
 // join producer honours the operator exclusion: a newly created agent whose id
 // the operator excluded gets NO self-row, while one that is not excluded does.
 func TestCreateAgent_InContext_ExcludedAgentGetsNoSelfRow(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	UseNameKeyedAgentIDsForTest(t)
 	deps, _, home := u5aDeps(t, []string{"ctx-bot"}, "mia")
 	wsID := "ctx-ws"
 	u5aWriteWorkspace(t, home, wsID, nil)
@@ -330,6 +332,8 @@ func TestCreateAgent_JoinIsOneTransaction_NeverSeedsRemovedMember(t *testing.T) 
 // and requires the truthful partial-failure result: never the ordinary
 // "metadata_only" success, and never a claim that the agent joined nothing.
 func TestCreateAgent_SeedFailureReturnsPartialNotMetadataOnly(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	UseNameKeyedAgentIDsForTest(t)
 	deps, _, home := u5aDeps(t, nil, "mia")
 	wsID := "seedfail-ws"
 	u5aWriteWorkspace(t, home, wsID, nil)

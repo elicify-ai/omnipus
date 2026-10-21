@@ -133,6 +133,9 @@ func (pm *agentLoopProcessMessage) prepareTurn() {
 		// switch (FR-011). The map is copied by reference — the turn flow
 		// only reads from it.
 		Metadata: pm.msg.Metadata,
+		// Spec §6.18: a turn started by a channel person or a peer agent's
+		// request labels its approval cards with that origin.
+		approvalOrigin: pm.al.turnApprovalOrigin(pm.msg, pm.transcriptSessionID),
 	}
 
 	// ADR-085 BROWSER-FR-029: release a held browser wheel BEFORE this turn

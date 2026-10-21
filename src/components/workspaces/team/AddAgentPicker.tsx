@@ -105,14 +105,9 @@ export function AddAgentPicker({
     return agents
       .filter((a) => !memberIds.has(a.id))
       // FR-104: team-eligible only — never Omnipus, Judge, Plan Supervisor or
-      // any other system agent (lib/omnipus.ts::isTeamEligible).
+      // any other system agent, nor a retired built-in a stale agents cache
+      // still carries (lib/omnipus.ts::isTeamEligible, FR-008).
       .filter((a) => isTeamEligible(a))
-      // ADR-090 FR-001: Admin is the standalone operator — chat-able core
-      // (type 'core', so the system filter above doesn't catch it) with "no
-      // team membership". Every write path refuses an Admin membership; the
-      // picker must not offer the click that would only ever produce that
-      // refusal.
-      .filter((a) => a.id !== 'admin')
       .filter(
         (a) =>
           q === '' ||

@@ -38,6 +38,9 @@ const testBearerToken = "test-bearer-token-for-harness"
 // Signature: func(ctx, debug, homePath, configPath, allowEmpty) error
 var runContextFunc func(context.Context, bool, string, string, bool) error
 
+// stderrSaver is saveProcessStderr unless a test replaces it to inject a failure.
+var stderrSaver = saveProcessStderr
+
 // runContextMu guards the registration variables so that tests running in
 // parallel do not race on setup (registrations happen once, at test-init time).
 var runContextMu sync.RWMutex
@@ -448,6 +451,27 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	sg := &startTestGateway{t: t, opts: opts}
 
 	sg.t.Helper()
+
+	// logger.InitPanic dup2s fd 2 onto the panic log for the rest of the
+	// process. The cleanup RunContext defers does not put it back, so every
+	// later test and TestMain would lose stderr. Save the harness fd now —
+	// before boot — and restore it from cleanup. Registered before Close's
+	// cleanup, so LIFO runs Close first and this second: the gateway has
+	// already returned when fd 2 is put back. A boot failure before Close
+	// is registered still runs this cleanup.
+	// CI runs these packages with ordinary go test, not -json. JSON mode
+	// aliases os.Stderr to os.Stdout, so the panic redirect would replace
+	// fd 1 while the gateway is alive. Restoring after the gateway stops
+	// puts that fd back; it does not replay output lost during the boot.
+	saved, err := stderrSaver()
+	if err != nil {
+		sg.t.Fatalf("testutil.StartTestGateway: cannot preserve stderr; gateway was not started: %v", err)
+	}
+	sg.t.Cleanup(func() {
+		if restoreErr := restoreProcessStderr(saved); restoreErr != nil {
+			sg.t.Errorf("testutil.StartTestGateway: cannot restore stderr: %v", restoreErr)
+		}
+	})
 
 	sg.prepare()
 

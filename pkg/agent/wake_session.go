@@ -34,14 +34,13 @@ var errWakeRecipientUnavailable = errors.New("wake recipient unavailable")
 // wire format; the upward tool surface retains its existing Delivery contract.
 type WakeSessionResult struct {
 	steer.Delivery
-	Disposition string
-	RowPending  bool
+	RowPending bool
 }
 
 // WakeSession is the shared outcome/creator-notice entry. Saving is chat
 // membership; only an admitted consumer may place it into model history.
 func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason, outcomeID, body string) (result WakeSessionResult, retErr error) {
-	result = WakeSessionResult{Delivery: steer.Delivery{MessageID: outcomeID, Outcome: steer.DeliveryStoredNotWoken}, Disposition: "failed"}
+	result = WakeSessionResult{Delivery: steer.Delivery{MessageID: outcomeID, Outcome: steer.DeliveryStoredNotWoken, Disposition: "failed"}}
 	var rowErr error
 	defer func() {
 		result.RowPending = rowErr != nil

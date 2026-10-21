@@ -32,7 +32,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
@@ -79,6 +78,7 @@ func lowerDuringWrite(deps *systools.Deps, marker string, callStart, lowered int
 func TestSysagentCreateAgent_GlobalLoweredBeforeWrite_Refused(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	inside := lowerDuringWrite(deps, "persistAndJoin", 300, 100)
+	before := wu3DurableInventory(t, deps.Home)
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name":                "Lim Race",
 		"description":         "d",
@@ -94,9 +94,7 @@ func TestSysagentCreateAgent_GlobalLoweredBeforeWrite_Refused(t *testing.T) {
 		t.Fatalf("create_agent with 200 after the global was lowered to 100 before the write must be refused (D10); got success: %s", res.ForLLM)
 	}
 	assertInvalidInput(t, res.ForLLM, sysAboveGlobalMsg(200, 100))
-	if _, err := agentstore.New(deps.Home).Get("lim-race"); err == nil {
-		t.Error("a refused create must leave no agent record")
-	}
+	requireNoDurableChange(t, deps.Home, before, "a refused create must leave no agent record")
 }
 
 func TestSysagentUpdateAgent_GlobalLoweredBeforeWrite_Refused(t *testing.T) {
@@ -118,6 +116,8 @@ func TestSysagentUpdateAgent_GlobalLoweredBeforeWrite_Refused(t *testing.T) {
 // Control: with no lowering in flight, the same value is accepted — proves
 // the refusal above comes from the write-time read, not from the seam.
 func TestSysagentCreateUpdate_NoLoweringInFlight_Accepted(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	lowerDuringWrite(deps, "persistAndJoin", 300, 300)
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{

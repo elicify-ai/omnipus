@@ -393,13 +393,19 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		return true, "", false
 	}
 	approver := al.loadToolApprover()
+	var origin approvalOrigin
+	if ts := turnStateFromContext(ctx); ts != nil {
+		origin = ts.currentApprovalOrigin()
+	}
 	return approver.RequestApproval(ctx, PolicyApprovalReq{
-		ToolCallID: toolCallID,
-		ToolName:   toolName,
-		Args:       cloneStringAnyMap(args),
-		AgentID:    agentID,
-		SessionID:  sessionID,
-		TurnID:     turnID,
+		ToolCallID:  toolCallID,
+		ToolName:    toolName,
+		Args:        cloneStringAnyMap(args),
+		AgentID:     agentID,
+		SessionID:   sessionID,
+		TurnID:      turnID,
+		RoomRef:     origin.roomRefCopy(),
+		OriginLabel: origin.Label,
 	})
 }
 
@@ -541,6 +547,36 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 			},
 		)
 	}
+}
+
+// emitTaskRunAutoDenyAudit writes the tool.policy.ask.denied entry for an
+// Ask-policy call refused in a task or plan chain (#1263 R4). Like the
+// scheduled variant it names no approval and no approver — none was ever
+// requested — but its reason is AskDenyReasonTaskRun, and it never warns about
+// a missing schedule identity: a task run has none.
+//
+// The row names the ACTING session — the concrete transcript the call was
+// refused in — not the turn's history scope: a task run's scope is
+// agent:<agent>:task:<task>, shared by every run of that task (gate round 1,
+// security S1; adr-057 session-unification spec, regression row 6).
+func (al *AgentLoop) emitTaskRunAutoDenyAudit(ctx context.Context, ts *turnState, toolName string) {
+	sessionID := ts.transcriptSessionID
+	if sessionID == "" {
+		sessionID = ts.sessionKey
+	}
+	audit.EmitToolPolicyAskDenied(
+		ctx,
+		al.auditLogger,
+		"", // approvalID — no approval request was made
+		"", // approverUserID — no human actor
+		toolName,
+		ts.agentID,
+		sessionID,
+		ts.turnID,
+		audit.AskDenyReasonTaskRun,
+		"",  // argsHash — not available at this call site
+		nil, // cancelledToolCallIDs — not applicable
+	)
 }
 
 // ShellPermissionGate implements tools.ShellModeResolver and

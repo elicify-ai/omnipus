@@ -12,6 +12,7 @@ import type { StoreApi } from 'zustand'
 import { produce } from 'immer'
 import { queryClient } from '@/lib/queryClient'
 import { logDiagnostic } from '@/lib/telemetry'
+import { isSupersededAttachFrame } from '@/lib/attach-replay'
 import type {
   CatchUpCompleteFrame,
   SessionSnapshotFrame,
@@ -246,7 +247,7 @@ function handleCatchUpCompleteFrame({ frame, targetSid, get, set, withBucket }: 
   }))
   if (completeFrame.mode === 'live_only' || get().sessionsById[targetSid]?.history.serverState?.status === 'unavailable') return
   finishRecoveredFirstSend({ set, get, withBucket }, targetSid)
-  acknowledgeShownCatchUp(targetSid)
+  if (!isSupersededAttachFrame(frame)) acknowledgeShownCatchUp(targetSid)
   // D1/V2: catch-up completion is a replay→idle transition — a projection
   // the clear re-read held back during replay applies HERE, with no new
   // network read. (Round-3 review F2: the round-3 call sat in
