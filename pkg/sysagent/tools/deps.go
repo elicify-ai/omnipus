@@ -180,6 +180,8 @@ type Deps struct {
 	// writer ordering. Resolve it before taking a channel guard; a guard holder
 	// must never acquire the manager lock. Nil means no manager is wired.
 	PairingAttempts func() *channels.PairingAttempts
+	// PublishPairingProgress emits immutable envelopes after writer locks release.
+	PublishPairingProgress func([]channels.PairingProgress)
 	// AdmitPairing reserves the next QR pairing attempt of a channel for the
 	// approved connect call (request id) in its chat (session id), before
 	// anything is saved; an error refuses it (another attempt is in flight
@@ -484,7 +486,13 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 	if d.MutateConfig == nil {
 		return errors.New("config mutation is not wired (Deps.MutateConfig is nil); nothing was saved")
 	}
+	store := d.pairingStore()
 	return d.MutateConfig(func(cfg *config.Config) error {
+		if store != nil {
+			if err := store.CheckConfigSnapshot(cfg); err != nil {
+				return err
+			}
+		}
 		// Snapshot the JSON-serializable fields before mutation so any mutation
 		// can be rolled back without copying the sync.RWMutex field.
 		var snapshotBuf bytes.Buffer

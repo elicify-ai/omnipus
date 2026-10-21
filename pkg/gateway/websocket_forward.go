@@ -272,17 +272,21 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 		return
 	}
 	runPairingDeliveryAfterCheckHook("live", f.wc, p.ChannelID)
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
+	frame, err := json.Marshal(pairF)
+	if err != nil {
+		slog.Error("ws: marshal whatsapp_pairing failed", "channel_id", p.ChannelID, "error", err)
+		return
+	}
+	f.h.enqueuePairing(f.wc, p, frame)
 }
 
 // pairingEventSuperseded reports whether a newer pairing event of p's channel
 // was already published (the sync tap records every event's sequence at
 // emission).
 func (h *WSHandler) pairingEventSuperseded(p agent.WhatsAppPairingPayload) bool {
-	h.pairingCacheMu.Lock()
-	defer h.pairingCacheMu.Unlock()
-	last, seen := h.pairingCacheSeq[p.ChannelID]
-	return seen && p.Seq < last
+	order, unlock := h.lockPairingDelivery(p.ChannelID)
+	defer unlock()
+	return !h.pairingFreshLocked(order, p.ChannelID, pairingStamp(p))
 }
 
 // pairingFrameFromPayload builds the K10 whatsapp_pairing frame for p.
@@ -328,51 +332,7 @@ func (h *WSHandler) hubWhatsAppPairing(evt agent.Event) {
 // "code" (QR available) is cached; terminal states are evicted so stale QRs
 // are not re-emitted, except a chat-started pairing's final status.
 func (h *WSHandler) updatePairingCache(p agent.WhatsAppPairingPayload, pairF generated.WhatsAppPairingFrame) {
-	h.pairingCacheMu.Lock()
-	defer h.pairingCacheMu.Unlock()
-	if h.pairingCacheSeq == nil {
-		h.pairingCacheSeq = make(map[string]uint64)
-	}
-	if last, seen := h.pairingCacheSeq[p.ChannelID]; seen && p.Seq < last {
-		return
-	}
-	h.pairingCacheSeq[p.ChannelID] = p.Seq
-	switch p.Status {
-	case channels.PairingStatusCode:
-		if frameBytes, merr := json.Marshal(pairF); merr == nil {
-			h.lastPairingState.Store(p.ChannelID, frameBytes)
-		} else {
-			slog.Error("ws: failed to marshal whatsapp_pairing frame for cache",
-				"channel_id", p.ChannelID, "error", merr)
-		}
-	case channels.PairingStatusLinked, channels.PairingStatusTimeout, channels.PairingStatusError,
-		channels.PairingStatusStopped:
-		// A chat-started pairing (request_id set) keeps its LAST TERMINAL
-		// frame, status only, so a reconnecting chat sees the final state
-		// (BDD-8.8, chief ruling 2026-10-18); the channel's next code frame
-		// replaces it. A Settings-started pairing keeps #368: evict, so a
-		// late subscriber is never shown an outdated code. The unowned
-		// restart-interrupted result is kept, status only: every page
-		// reconnects after the restart that produced it, and must see it
-		// (founder ruling 2026-10-21).
-		if p.RequestID == "" && !p.RestartInterrupted {
-			h.lastPairingState.Delete(p.ChannelID)
-			break
-		}
-		terminal := pairF
-		terminal.Qr = nil // never cache a code with a terminal state
-		if frameBytes, merr := json.Marshal(terminal); merr == nil {
-			h.lastPairingState.Store(p.ChannelID, frameBytes)
-		} else {
-			slog.Error("ws: failed to marshal terminal whatsapp_pairing frame for cache",
-				"channel_id", p.ChannelID, "error", merr)
-			h.lastPairingState.Delete(p.ChannelID)
-		}
-	default:
-		// "waiting" and any status not yet in this switch: never leave a
-		// stale QR behind.
-		h.lastPairingState.Delete(p.ChannelID)
-	}
+	h.cachePairing(p, pairF)
 }
 
 // onNotification forwards agent.EventKindNotification to this connection.

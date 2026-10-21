@@ -74,10 +74,12 @@ type WhatsAppNativeChannel struct {
 	// attempts is the manager-owned pairing-attempt store and instance this
 	// channel's id in it (gate r3). attemptID is the pairing attempt the QR
 	// loop currently runs, guarded by mu; every event carries it (M8).
-	attempts        *channels.PairingAttempts
-	instance        string
-	attemptID       string
-	attemptObserver func(attemptID string, status channels.PairingStatus, qr, message string)
+	attempts           *channels.PairingAttempts
+	instance           string
+	attemptID          string
+	resourceGeneration uint64
+	originConfig       *config.Config // immutable snapshot used by this factory
+	attemptObserver    func(attemptID string, status channels.PairingStatus, qr, message string)
 	// unfinishedTeardowns holds, per attempt whose own Stop timed out, the
 	// signal that its tracked work finally joined (gate r5 R5-A02): a retry of
 	// that attempt's handle waits on it, never treating the already-cleared
@@ -231,7 +233,9 @@ func (c *WhatsAppNativeChannel) beginAttempt(token string) (string, error) {
 // is reserved or stopping, or while the connector is being deleted.
 func (c *WhatsAppNativeChannel) beginRepair() (string, error) {
 	return c.activate(func(store *channels.PairingAttempts, instance string, newCancel func(string) func(context.Context) error) (channels.PairingAttempt, error) {
-		return store.ActivateRepair(instance, newCancel)
+		return store.ActivateRepair(instance, newCancel, channels.PairingRepairOrigin{
+			Generation: c.resourceGeneration, Config: c.originConfig,
+		})
 	})
 }
 
@@ -252,7 +256,7 @@ func (c *WhatsAppNativeChannel) activate(
 	if err != nil {
 		return "", err
 	}
-	c.attemptID = rec.AttemptID
+	c.attemptID, c.resourceGeneration = rec.AttemptID, rec.Generation
 	return rec.AttemptID, nil
 }
 
@@ -331,6 +335,9 @@ func NewWhatsAppNativeChannel(
 }
 
 func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
+	if err := c.pinStart(); err != nil {
+		return err
+	}
 	logger.InfoCF("whatsapp", "Starting WhatsApp native channel (whatsmeow)", map[string]any{"store": c.storePath})
 
 	// Reset lifecycle state from any previous Stop() so a restarted channel
@@ -562,10 +569,12 @@ func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error 
 	attemptID, store, instance := c.attemptID, c.attempts, c.instance
 	c.attemptID = ""
 	c.mu.Unlock()
+	var replacement channels.PairingAttempt
 	if interrupt && store != nil && attemptID != "" {
-		// A disable, configuration change or reload cut the running pairing
-		// off: its chat (or Connectors) is told, never left on a dead code.
-		if _, applied := store.Complete(instance, attemptID, channels.PairingOutcomeInterrupted); applied {
+		// Capture this resource's existing cleanup barrier. A later config
+		// write cannot make it somebody else's teardown or release a Stop.
+		if captured, applied := store.BeginResourceTeardown(instance, attemptID); applied {
+			replacement = captured
 			c.emitAttempt(attemptID, channels.PairingStatusError, "", channels.PairingInterruptedMessage)
 		}
 	}
@@ -632,6 +641,18 @@ func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error 
 		_ = container.Close()
 	}
 	c.SetRunning(false)
+	if replacement.AttemptID != "" {
+		if teardownErr == nil {
+			store.FinishReplacement(instance, replacement.AttemptID, replacement.StopGeneration, nil)
+		} else {
+			// Release only this captured replacement barrier after its known
+			// native work joins. Late-client final disposal is the separate T6.
+			go func() {
+				<-done
+				store.FinishReplacement(instance, replacement.AttemptID, replacement.StopGeneration, nil)
+			}()
+		}
+	}
 	return teardownErr
 }
 
@@ -852,7 +873,15 @@ func (c *WhatsAppNativeChannel) handleLoggedOut() {
 	c.mu.Lock()
 	client := c.client
 	c.mu.Unlock()
-	if client == nil {
+	if client == nil || c.stopping.Load() {
+		return
+	}
+
+	// Validate this originating client and admit its unowned repair BEFORE
+	// destructive session/connection work. It never resolves a new client by id.
+	attemptID, err := c.beginRepair()
+	if err != nil {
+		logger.ErrorCF("whatsapp", "Re-pairing was not admitted; no pairing runs", map[string]any{"error": err.Error()})
 		return
 	}
 
@@ -865,20 +894,14 @@ func (c *WhatsAppNativeChannel) handleLoggedOut() {
 	// 10-second ceiling is generous; in practice the call completes in
 	// milliseconds but a disk stall should not be able to pin shutdown.
 	deleteCtx, cancel := context.WithTimeout(c.runCtx, 10*time.Second)
-	err := client.Store.Delete(deleteCtx)
+	err = client.Store.Delete(deleteCtx)
 	cancel()
 	if err != nil {
+		c.failAttempt(attemptID, err)
 		logger.ErrorCF("whatsapp", "Failed to clear session for re-pairing", map[string]any{"error": err.Error()})
 		return
 	}
 
-	// Automatic re-pairing is a new, unowned attempt admitted BEFORE any
-	// platform pairing effect (gate r3 M1, gate r4 M2).
-	attemptID, err := c.beginRepair()
-	if err != nil {
-		logger.ErrorCF("whatsapp", "Re-pairing was not admitted; no pairing runs", map[string]any{"error": err.Error()})
-		return
-	}
 	qrChan, err := client.GetQRChannel(c.runCtx)
 	if err != nil {
 		c.failAttempt(attemptID, err)

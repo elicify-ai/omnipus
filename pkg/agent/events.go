@@ -790,7 +790,9 @@ type WhatsAppPairingPayload struct {
 	// gateway's reconnect cache is written from two places — once per event
 	// by the sync tap, and by each connection's lagging forwarder — and keeps
 	// only the newest (gate r1 SFH T2-SF-06).
-	Seq uint64 `json:"-"`
+	Seq        uint64 `json:"-"`
+	Generation uint64 `json:"-"`
+	AttemptID  string `json:"-"`
 	// RestartInterrupted marks the unowned result a gateway start records
 	// for a pairing the restart cut off (never on the wire). The reconnect
 	// cache keeps it, because every page reconnects after the restart and

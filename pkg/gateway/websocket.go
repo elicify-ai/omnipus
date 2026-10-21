@@ -261,12 +261,10 @@ type WSHandler struct {
 	// have to wait up to ~60 s before seeing any code.  The cache delivers the
 	// last-seen code immediately on subscribe via subscribePairingInterest.
 	lastPairingState sync.Map
-	// pairingCacheMu guards pairingCacheSeq: the emit sequence of the event
-	// each lastPairingState entry was written from, so a lagging per-
-	// connection forwarder never overwrites a newer outcome the sync tap
-	// already cached (gate r1 SFH T2-SF-06).
-	pairingCacheMu  sync.Mutex
-	pairingCacheSeq map[string]uint64
+	// Cache metadata is protected inside the manager-owned channel order.
+	// Never hold this mutex while entering that order.
+	pairingCacheMu    sync.Mutex
+	pairingCacheStamp map[string]pairingDeliveryStamp
 
 	// streamOwners tracks, per sessionID, which turn currently "owns" live
 	// TokenFrame delivery to that session's bound connections. Keys are
@@ -440,24 +438,7 @@ func (c *wsConn) setPairingInterest(channelID string, active bool) {
 // between rotations would otherwise wait up to ~60 s before seeing a code.
 // The cache lets us deliver the last-seen code immediately on subscribe.
 func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, active bool) {
-	wc.setPairingInterest(channelID, active)
-	if !active {
-		return
-	}
-	// Re-emit the last-seen QR frame for this channel, if one is cached and the
-	// QR is still "live", or a chat-started pairing's final status (other
-	// terminal states are deleted from the map by the
-	// eventForwarder). Delivered through the connection's own ordered queue
-	// like every other frame (#823 ws_conn_queue.go).
-	if cached, ok := h.lastPairingState.Load(channelID); ok {
-		frameBytes, ok := cached.([]byte)
-		if ok && len(frameBytes) > 0 {
-			runPairingDeliveryAfterCheckHook("replay", wc, channelID)
-			sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frameBytes)
-		} else if !ok {
-			slog.Error("ws: lastPairingState held non-[]byte value, skipping re-emit", "channel_id", channelID)
-		}
-	}
+	h.replayPairing(wc, channelID, active)
 }
 
 // wantsPairing reports whether this connection has subscribed to channelID's

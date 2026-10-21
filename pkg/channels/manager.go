@@ -186,7 +186,7 @@ type Manager struct {
 	// unchanged configuration (RequestRestart), each with the pairing attempt
 	// it restarts for ("" for none): a restart for an attempt that is no
 	// longer ready is dropped (gate r4 R4-A01).
-	forcedRestarts map[string]string
+	forcedRestarts map[string]pairingRestartIntent
 	// startErrors keeps each channel's last Start failure (cleared when it
 	// starts), so an approved connect can name the cause (gate r2 T2-SF-10).
 	startErrors map[string]error
@@ -710,7 +710,13 @@ func (m *Manager) initChannel(name, instanceID, displayName string) error {
 	// because "whatsapp.eu" and "whatsapp.us" occupy distinct slots. For
 	// legacy single-instance the instanceID equals the type name, so the
 	// behavior is unchanged (e.g. "telegram" → m.channels["telegram"]).
+	order := m.PairingAttempts().LockChannel(instanceID)
+	if !order.MatchesConfig(m.config) {
+		order.Unlock()
+		return nil // construction lost to a newer exact config write; never publish it
+	}
 	m.channels[instanceID] = ch
+	order.Unlock()
 	logger.InfoCF("channels", "Channel enabled successfully", map[string]any{
 		"channel":    displayName,
 		"instanceID": instanceID,
@@ -1997,13 +2003,25 @@ func (m *Manager) notifyPairingLocked(name, attemptID string, status PairingStat
 // disable or delete revoked it before the reload ran, the restart is dropped,
 // so a revoked admission never restarts anything (gate r4 R4-A01). An empty
 // attemptID requests an unconditional restart (no pairing involved).
-func (m *Manager) RequestRestart(name, attemptID string) {
+func (m *Manager) RequestRestart(name, attemptID string, snapshots ...*config.Config) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.forcedRestarts == nil {
-		m.forcedRestarts = make(map[string]string)
+	cfg := m.config
+	if len(snapshots) > 0 {
+		cfg = snapshots[0]
 	}
-	m.forcedRestarts[name] = attemptID
+	order := m.PairingAttempts().LockChannel(name)
+	defer order.Unlock()
+	intent, accepted := order.restartIntent(attemptID, cfg)
+	if !accepted {
+		return
+	}
+	if m.forcedRestarts == nil {
+		m.forcedRestarts = make(map[string]pairingRestartIntent)
+	}
+	if previous, exists := m.forcedRestarts[name]; !exists || previous.generation <= intent.generation {
+		m.forcedRestarts[name] = intent
+	}
 }
 
 // LastStartError returns name's most recent Start failure, or nil once it
@@ -2125,6 +2143,9 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	mr.m.mu.Lock()
 	defer mr.m.mu.Unlock()
 
+	if err := m.PairingAttempts().CheckConfigSnapshot(cfg); err != nil {
+		return nil // obsolete continuation; the coalesced current reload owns the effect
+	}
 	mr.prepareDispatch()
 
 	mr.quiesceDispatch()
@@ -2176,16 +2197,15 @@ func (mr *managerReload) prepareDispatch() {
 	// connector whose configuration did not change. The same removed+added
 	// pair stops the current instance and starts a fresh one, consuming the
 	// admission's token on this serialized path (gate r3 M4, M10).
-	for id, attemptID := range mr.m.forcedRestarts {
+	for id, intent := range mr.m.forcedRestarts {
+		order := mr.m.PairingAttempts().LockChannel(id)
 		_, enabled := mr.list[id]
 		_, known := mr.m.channelHashes[id]
-		if attemptID != "" && !mr.m.PairingAttempts().IsReady(id, attemptID) {
-			continue // its admission was revoked or consumed: nothing to restart for
-		}
-		if enabled && known && !slices.Contains(mr.added, id) {
+		if order.acceptsRestart(intent, mr.cfg) && enabled && known && !slices.Contains(mr.added, id) {
 			mr.added = append(mr.added, id)
 			mr.removed = append(mr.removed, id)
 		}
+		order.Unlock()
 	}
 	mr.m.forcedRestarts = nil
 
@@ -2266,8 +2286,15 @@ func (mr *managerReload) removeChannels() {
 	mr.removedInstances = make(map[string]Channel, len(mr.removed))
 	for _, name := range mr.removed {
 		n := name // local copy — prevents closure from capturing the loop variable
-		// Stop all channels
+		// Select the exact resource at the guarded dispatch effect. Never look
+		// it up again after releasing this guard for native teardown.
+		order := mr.m.PairingAttempts().LockChannel(n)
+		if !order.MatchesConfig(mr.cfg) {
+			order.Unlock()
+			continue
+		}
 		channel := mr.m.channels[n]
+		order.Unlock()
 		// #1277: remember the stale instance pointer. The unregister is
 		// deferred to restartExisting, so until then m.channels[n] still
 		// holds it; startAdded must not mistake it for an instance THIS
@@ -2457,7 +2484,11 @@ func (mr *managerReload) startAdded() {
 		// consumed by this start only (gate r3 M2, M14).
 		// Only an attempt committed at this reload's own revision starts; any
 		// other is left to the reload built for it (gate r5 R5-A05).
-		token := mr.m.PairingAttempts().TakeReady(n, mr.list[n])
+		token, current := mr.m.PairingAttempts().ReadyForSnapshot(n, mr.cfg)
+		if !current {
+			delete(mr.list, n)
+			continue
+		}
 		if err := channel.Start(WithPairingStart(mr.ctx, token, false)); err != nil {
 			logger.ErrorCF("channels", "Failed to start channel", map[string]any{
 				"channel": n,

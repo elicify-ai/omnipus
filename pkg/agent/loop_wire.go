@@ -2145,6 +2145,9 @@ func (al *AgentLoop) WireSysagentDeps(deps *systools.Deps) {
 	if depsCopy.PairingAttempts == nil {
 		depsCopy.PairingAttempts = al.pairingAttempts
 	}
+	if depsCopy.PublishPairingProgress == nil {
+		depsCopy.PublishPairingProgress = al.PublishPairingProgress
+	}
 	if depsCopy.AdmitPairing == nil {
 		depsCopy.AdmitPairing = al.AdmitConnectPairing
 	}

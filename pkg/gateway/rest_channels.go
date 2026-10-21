@@ -918,15 +918,6 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		jsonErr(w, http.StatusNotFound, "unknown instance")
 		return
 	}
-	// Close pairing admission for the instance while it is deleted and revoke
-	// its attempts and Retry eligibility; a recreated instance starts new and
-	// unowned (gate r3 M12).
-	removed := false
-	if a.agentLoop != nil {
-		a.agentLoop.BeginPairingDelete(channelID)
-		defer func() { a.agentLoop.EndPairingDelete(channelID, removed) }()
-	}
-
 	// Snapshot credential ref names to delete AFTER the config write.
 	chBaseType, _ := config.ParseInstanceKey(channelID)
 	var credRefs []string
@@ -990,7 +981,9 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
-	removed = true
+	// The successful local commit already closed admission. Keep that barrier
+	// through captured resource/state cleanup; a failed save changed no pairing.
+	defer a.agentLoop.EndPairingDelete(channelID, true)
 
 	// Step 2b (FINAL-REVIEW Medium-High — leaked running channel): reload the
 	// manager NOW, after the config entry is removed but BEFORE the credential and
@@ -1085,8 +1078,8 @@ const (
 )
 
 // enableSavedHook is a test seam (gate r4 T2-SF-15): it runs after an
-// enable's configuration saved and before its pairing commit. Nil in
-// production.
+// enable/disable local transaction committed and released both locks. Nil in
+// production; deferred work must retain that transaction's exact identity.
 var enableSavedHook func(channelID string)
 
 // channelEnableOptions shapes applyChannelEnabled.
@@ -1094,10 +1087,10 @@ type channelEnableOptions struct {
 	// requireExisting refuses a missing instance with 404 instead of creating
 	// it (a disable, a chat Retry — gate r3 M12).
 	requireExisting bool
-	// afterCommit runs once the enabled flag is saved and before the reload
-	// that applies it (a pairing admission becomes startable there — M14). A
-	// false result skips the reload; the response is already written.
-	afterCommit func(w http.ResponseWriter) bool
+	retryRequest    *http.Request
+	requestID       string
+	sessionID       string
+	attemptID       *string
 }
 
 // applyChannelEnabled saves channelID's enabled flag and reloads so the
@@ -1108,46 +1101,15 @@ func (a *restAPI) applyChannelEnabled(w http.ResponseWriter, channelID string, e
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 		return enableFailed
 	}
-	if enabled {
-		// Stage 1 of the channel-Test redesign: enabling a channel with an
-		// incomplete config must be rejected, not silently persisted — an
-		// enabled-but-incomplete channel would fail to construct on the next
-		// reload/boot. Disabling never validates (turning a channel off is
-		// always safe). readChannelConfigRaw returns {} for a channel with no
-		// persisted section yet.
-		stored, err := a.readChannelConfigRaw(channelID)
-		if err != nil {
-			slog.Error("rest: read config for channel enable validation", "channel", channelID, "error", err)
-			jsonServerFailure(w, http.StatusInternalServerError, "could not read config", err)
+	if err := a.saveChannelEnabled(w, channelID, baseType, enabled, opts); err != nil {
+		if errors.Is(err, errChannelEnableRefused) {
 			return enableFailed
 		}
-		if msg := validateChannelConfigComplete(baseType, stored, nil, nil); msg != "" {
-			jsonErr(w, http.StatusBadRequest, msg)
-			return enableFailed
-		}
-	}
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		channels, _ := m["channels"].(map[string]any)
-		if channels == nil {
-			channels = map[string]any{}
-			m["channels"] = channels
-		}
-		ch, _ := channels[channelID].(map[string]any)
-		if ch == nil {
-			if opts.requireExisting {
-				return errChannelAbsent
-			}
-			ch = map[string]any{}
-			channels[channelID] = ch
-		}
-		// Persist the type discriminator. For bare type keys the base type equals
-		// the key; for namespaced instance keys ("whatsapp.eu") the type is the
-		// pre-dot segment (ADR-029 Gate 0 / FR-017).
-		ch["type"] = baseType
-		ch["enabled"] = enabled
-		return nil
-	}); err != nil {
 		if errors.Is(err, errChannelAbsent) {
+			if opts.retryRequest != nil {
+				jsonErr(w, http.StatusNotFound, "this WhatsApp connection no longer exists; nothing was enabled")
+				return enableFailed
+			}
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 			return enableFailed
 		}
@@ -1176,7 +1138,8 @@ func (a *restAPI) applyChannelEnabled(w http.ResponseWriter, channelID string, e
 	if enableSavedHook != nil {
 		enableSavedHook(channelID) // test seam: the window after the save
 	}
-	if opts.afterCommit != nil && !opts.afterCommit(w) {
+	if opts.attemptID != nil && *opts.attemptID != "" && !a.agentLoop.CommitPairing(channelID, *opts.attemptID) {
+		jsonErr(w, http.StatusInternalServerError, pairingCancelledText)
 		return enableFailed
 	}
 	outcome := enableConfirmed

@@ -40,17 +40,20 @@ const CurrentVersion = 1
 
 // Config is the current config structure with version support
 type Config struct {
-	Version   int                              `json:"version"             yaml:"-"` // schema version for migration
-	Agents    AgentsConfig                     `json:"agents"              yaml:"-"`
-	Bindings  []AgentBinding                   `json:"bindings,omitempty"  yaml:"-"`
-	Session   SessionConfig                    `json:"session,omitempty"   yaml:"-"`
-	Channels  map[string]ChannelInstanceConfig `json:"channels"            yaml:"channels"`
-	Providers []*ModelConfig                   `json:"providers"           yaml:"providers"` // Configured providers with credentials
-	Gateway   GatewayConfig                    `json:"gateway"             yaml:"-"`
-	Hooks     HooksConfig                      `json:"hooks,omitempty"     yaml:"-"`
-	Tools     ToolsConfig                      `json:"tools"               yaml:",inline"`
-	Schedules SchedulesConfig                  `json:"schedules,omitempty" yaml:"-"`
-	Voice     VoiceConfig                      `json:"voice"               yaml:"-"`
+	Version  int                              `json:"version"             yaml:"-"` // schema version for migration
+	Agents   AgentsConfig                     `json:"agents"              yaml:"-"`
+	Bindings []AgentBinding                   `json:"bindings,omitempty"  yaml:"-"`
+	Session  SessionConfig                    `json:"session,omitempty"   yaml:"-"`
+	Channels map[string]ChannelInstanceConfig `json:"channels"            yaml:"channels"`
+	// channelOrder belongs to this exact runtime snapshot, never to config.json.
+	// Populate only before publication; Clone preserves it without rebinding.
+	channelOrder map[string]uint64
+	Providers    []*ModelConfig  `json:"providers"           yaml:"providers"` // Configured providers with credentials
+	Gateway      GatewayConfig   `json:"gateway"             yaml:"-"`
+	Hooks        HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
+	Tools        ToolsConfig     `json:"tools"               yaml:",inline"`
+	Schedules    SchedulesConfig `json:"schedules,omitempty" yaml:"-"`
+	Voice        VoiceConfig     `json:"voice"               yaml:"-"`
 	// Mailboxes holds email mailbox accounts (M11), keyed agent ID → workspace
 	// ID → mailbox: every (agent, workspace) pair may hold its own mailbox — an
 	// agent plays different roles in different workspaces and can have a
@@ -300,6 +303,7 @@ func (c *Config) Clone() (*Config, error) {
 	if len(registered) > 0 {
 		clone.RegisterSensitiveValues(registered)
 	}
+	clone.CopyChannelOrderFrom(c)
 	return clone, nil
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
@@ -41,12 +42,6 @@ func (al *AgentLoop) admitPairing(channelID string, kind channels.PairingAdmissi
 	store := al.pairingAttempts()
 	if store == nil {
 		return "", ErrPairingUnavailable
-	}
-	// A ready attempt committed at a configuration since replaced can never
-	// start: close it visibly instead of letting it block this admission
-	// (gate r5 R5-A05; an older reload no longer decides for it).
-	if stale, ok := store.InterruptStaleReady(channelID, channels.ChannelRevision(al.GetConfig(), channelID)); ok {
-		al.publishInterrupted(stale)
 	}
 	rec, err := store.Admit(channelID, kind, owner)
 	if err != nil {
@@ -100,13 +95,29 @@ func (al *AgentLoop) CommitPairing(channelID, attemptID string) bool {
 	if mgr == nil {
 		return false
 	}
-	if !mgr.PairingAttempts().MarkReady(channelID, attemptID, channels.ChannelRevision(al.GetConfig(), channelID)) {
+	store := mgr.PairingAttempts()
+	order := store.LockChannel(channelID)
+	ready := store.IsReady(channelID, attemptID)
+	if !ready {
+		// Direct admissions (including the internal caller controls) commit the
+		// current exact snapshot. Ordered writers already committed readiness and
+		// never enter this branch or bind against a later GetConfig.
+		err := al.MutateConfig(func(candidate *config.Config) error {
+			if !order.MarkReady(attemptID, channels.ChannelRevision(candidate, channelID)) {
+				return channels.ErrPairingConflict
+			}
+			candidate.SetChannelOrderGeneration(channelID, order.Generation())
+			order.BindReadySnapshot(candidate)
+			return nil
+		})
+		ready = err == nil
+	}
+	order.Unlock()
+	if !ready {
 		return false
 	}
 	if _, registered := mgr.GetChannel(channelID); registered {
 		mgr.RequestRestart(channelID, attemptID)
-		// A reload that already ran for the saved configuration cannot have
-		// started this attempt: ask for one (coalesced with any pending).
 		if err := al.TriggerReload(); err != nil && !errors.Is(err, ErrReloadNotConfigured) &&
 			!errors.Is(err, ErrReloadAlreadyInProgress) {
 			logger.WarnCF("agent", "Could not request the reload that starts an admitted pairing; the next reload starts it",
@@ -145,11 +156,15 @@ func (al *AgentLoop) SettlePairing(channelID, attemptID string) {
 	if store == nil || attemptID == "" {
 		return
 	}
+	order := store.LockChannel(channelID)
+	var progress []channels.PairingProgress
 	if rec, ok := store.Attempt(channelID, attemptID); ok && rec.Phase == channels.PairingPhaseReady &&
-		store.Release(channelID, attemptID, channels.PairingOutcomeInterrupted) {
+		order.Release(attemptID, channels.PairingOutcomeInterrupted) {
 		rec.Phase, rec.Outcome = channels.PairingPhaseTerminal, channels.PairingOutcomeInterrupted
-		al.publishInterrupted(rec)
+		progress = append(progress, order.Transition(rec, channels.PairingStatusError, channels.PairingInterruptedMessage))
 	}
+	order.Unlock()
+	al.PublishPairingProgress(progress)
 }
 
 // RevokePairingForDisable ends a not-yet-started admission of a connector
@@ -165,10 +180,18 @@ func (al *AgentLoop) RevokePairingForDisable(channelID string) {
 // publishInterrupted tells an attempt's chat (or Connectors) that a disable or
 // delete cut it off, so no card waits on a code that cannot come (gate r4).
 func (al *AgentLoop) publishInterrupted(attempt channels.PairingAttempt) {
-	al.pairingEmitMu.Lock()
-	defer al.pairingEmitMu.Unlock()
-	al.publishPairingLocked(attempt.Instance, attempt.AttemptID, attempt.Owner,
-		channels.PairingStatusError, "", channels.PairingInterruptedMessage)
+	al.publishPairingTransition(attempt, channels.PairingStatusError, channels.PairingInterruptedMessage)
+}
+
+func (al *AgentLoop) publishPairingTransition(attempt channels.PairingAttempt, status channels.PairingStatus, message string) {
+	store := al.pairingAttempts()
+	if store == nil {
+		return
+	}
+	order := store.LockChannel(attempt.Instance)
+	progress := order.Transition(attempt, status, message)
+	order.Unlock()
+	al.PublishPairingProgress([]channels.PairingProgress{progress})
 }
 
 // BeginPairingDelete and EndPairingDelete bracket a connector's deletion (M12).
@@ -247,90 +270,43 @@ func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.Pairi
 // older attempt never reaches a successor's frames or cache. The frame and its
 // audit row carry that attempt's own immutable owner (M13).
 func (al *AgentLoop) EmitWhatsAppPairingAttempt(channelID, attemptID string, status channels.PairingStatus, qr, message string) {
-	al.pairingEmitMu.Lock()
-	defer al.pairingEmitMu.Unlock()
 	store := al.pairingAttempts()
 	if store == nil {
-		al.publishPairingLocked(channelID, "", nil, status, qr, message)
+		al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, WhatsAppPairingPayload{
+			ChannelID: channelID, Status: status, QR: qr, Message: message,
+		})
 		return
 	}
-	if attemptID == "" {
-		latest, ok := store.Latest(channelID)
-		if !ok {
-			// No attempt is known (a channel outside attempt tracking).
-			al.publishPairingLocked(channelID, "", nil, status, qr, message)
-			return
-		}
-		attemptID = latest.AttemptID
-	}
-	rec, ok := store.Attempt(channelID, attemptID)
-	latest, hasLatest := store.Latest(channelID)
-	if !ok || !hasLatest || latest.AttemptID != attemptID {
-		return // an older attempt: never published over its successor
-	}
-	switch status {
-	case channels.PairingStatusWaiting, channels.PairingStatusCode:
-		if rec.Phase != channels.PairingPhaseActive {
-			return
-		}
-	default:
-		if rec.Phase == channels.PairingPhaseActive {
-			// An event of a channel that does not complete its own attempts.
-			done, applied := store.Complete(channelID, attemptID, outcomeOfStatus(status))
-			if !applied {
-				return
-			}
-			rec = done
-		}
-		if rec.Phase != channels.PairingPhaseTerminal {
-			return // a stopping attempt's result is published by its Stop
-		}
-	}
-	al.publishPairingLocked(channelID, attemptID, rec.Owner, status, qr, message)
-}
-
-func outcomeOfStatus(status channels.PairingStatus) channels.PairingOutcome {
-	switch status {
-	case channels.PairingStatusLinked:
-		return channels.PairingOutcomeLinked
-	case channels.PairingStatusTimeout:
-		return channels.PairingOutcomeTimeout
-	case channels.PairingStatusStopped:
-		return channels.PairingOutcomeStopped
-	default:
-		return channels.PairingOutcomeError
+	order := store.LockChannel(channelID)
+	progress, accepted := order.Progress(attemptID, status, qr, message)
+	order.Unlock()
+	if accepted {
+		al.PublishPairingProgress([]channels.PairingProgress{progress})
 	}
 }
 
-// publishPairingLocked emits one pairing frame and, for a terminal status, its
-// audit row. Caller holds pairingEmitMu.
-func (al *AgentLoop) publishPairingLocked(channelID, attemptID string, owner *channels.PairingOwner, status channels.PairingStatus, qr, message string) {
+// PublishPairingProgress emits already-accepted immutable envelopes AFTER the
+// writer/order locks release. The synchronous cache tap and final enqueue each
+// return to the same channel guard; emission itself owns no ordering mutex.
+func (al *AgentLoop) PublishPairingProgress(progress []channels.PairingProgress) {
+	for _, p := range progress {
+		al.publishPairingProgress(p)
+	}
+}
+
+func (al *AgentLoop) publishPairingProgress(p channels.PairingProgress) {
+	attempt := p.Attempt
+	channelID, attemptID, owner := attempt.Instance, attempt.AttemptID, attempt.Owner
+	status, message, outcome := p.Status, p.Message, attempt.Outcome
 	payload := WhatsAppPairingPayload{
-		ChannelID: channelID,
-		Status:    status,
-		QR:        qr,
-		Message:   message,
-		Seq:       al.pairingSeq.Add(1),
+		ChannelID: channelID, Status: status, QR: p.QR, Message: message,
+		Generation: p.Generation, AttemptID: attemptID, Seq: p.Sequence,
+		RestartInterrupted: attempt.RestartInterrupted,
 	}
 	if owner != nil {
 		payload.RequestID, payload.SessionID = owner.RequestID, owner.SessionID
 	}
-	var outcome channels.PairingOutcome
-	current := true
-	if store := al.pairingAttempts(); store != nil && attemptID != "" {
-		if rec, ok := store.Attempt(channelID, attemptID); ok {
-			payload.RestartInterrupted = rec.RestartInterrupted
-			outcome = rec.Outcome
-		}
-		// The public frame (live view, reconnect cache) is only ever the
-		// connector's latest attempt: an older attempt's late result never
-		// overwrites a successor's code or progress, even with the same
-		// request and session ids (gate r4 R4-A03, M8). Its audit row below is
-		// still written — the historical outcome of that attempt (M13).
-		latest, ok := store.Latest(channelID)
-		current = ok && latest.AttemptID == attemptID
-	}
-	if current {
+	if p.Sequence != 0 {
 		al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, payload)
 	}
 	// #358, FR-081/K10: audit-log device-pairing lifecycle transitions so linking a
@@ -437,10 +413,7 @@ func (al *AgentLoop) stopSelectedPairings(selected []channels.PairingAttempt) {
 			if al.pairingRevokeHook != nil {
 				al.pairingRevokeHook() // test seam: the window after revocation
 			}
-			al.pairingEmitMu.Lock()
-			al.publishPairingLocked(sel.Attempt.Instance, sel.Attempt.AttemptID, sel.Attempt.Owner,
-				channels.PairingStatusStopped, "", "pairing stopped from the chat")
-			al.pairingEmitMu.Unlock()
+			al.publishPairingTransition(sel.Attempt, channels.PairingStatusStopped, "pairing stopped from the chat")
 			continue
 		}
 		if !al.finishPairingTeardown(store, sel, true) {
@@ -456,17 +429,13 @@ func (al *AgentLoop) finishPairingTeardown(store *channels.PairingAttempts, sel 
 	ctx, cancel := context.WithTimeout(context.Background(), pairingStopTimeout)
 	teardownErr := sel.Cancel(ctx)
 	cancel()
-	al.pairingEmitMu.Lock()
 	done, finished := store.FinishStop(sel.Attempt.Instance, sel.Attempt.AttemptID, teardownErr)
 	switch {
 	case finished:
-		al.publishPairingLocked(done.Instance, done.AttemptID, done.Owner,
-			channels.PairingStatusStopped, "", "pairing stopped from the chat")
+		al.publishPairingTransition(done, channels.PairingStatusStopped, "pairing stopped from the chat")
 	case first && teardownErr != nil:
-		al.publishPairingLocked(sel.Attempt.Instance, sel.Attempt.AttemptID, sel.Attempt.Owner,
-			channels.PairingStatusError, "", channels.PairingStopPendingMessage)
+		al.publishPairingTransition(sel.Attempt, channels.PairingStatusError, channels.PairingStopPendingMessage)
 	}
-	al.pairingEmitMu.Unlock()
 	fields := map[string]any{"channel_id": sel.Attempt.Instance, "attempt_id": sel.Attempt.AttemptID}
 	if !finished {
 		if teardownErr != nil {

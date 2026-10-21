@@ -75,22 +75,9 @@ func (a *restAPI) enableChannel(w http.ResponseWriter, r *http.Request, channelI
 		return
 	}
 	requestID, sessionID := req.PairingRetry.RequestId, req.PairingRetry.SessionId
-	attemptID, ok := a.admitPairingRetry(w, r, channelID, requestID, sessionID)
-	if !ok {
-		return
-	}
+	var attemptID string
 	outcome := a.applyChannelEnabled(w, channelID, true, channelEnableOptions{
-		requireExisting: true,
-		afterCommit: func(w http.ResponseWriter) bool {
-			if a.agentLoop.CommitPairing(channelID, attemptID) {
-				return true
-			}
-			// A Stop, disable or deletion revoked the reservation after the
-			// enable saved: say so truthfully — the setting is saved, the
-			// pairing did not start, and no fallback starts (gate r4 M14).
-			jsonErr(w, http.StatusInternalServerError, pairingCancelledText)
-			return false
-		},
+		requireExisting: true, retryRequest: r, requestID: requestID, sessionID: sessionID, attemptID: &attemptID,
 	})
 	switch outcome {
 	case enableFailed:
@@ -114,20 +101,8 @@ func (a *restAPI) enableChannel(w http.ResponseWriter, r *http.Request, channelI
 // deleted). An enable of a connector already on is idempotent and reserves
 // nothing.
 func (a *restAPI) enableChannelOrdinary(w http.ResponseWriter, channelID string) {
-	opts := channelEnableOptions{requireExisting: pairingCapable(channelID)}
-	attemptID, ok := a.admitOrdinaryPairing(w, channelID)
-	if !ok {
-		return
-	}
-	if attemptID != "" {
-		opts.afterCommit = func(w http.ResponseWriter) bool {
-			if a.agentLoop.CommitPairing(channelID, attemptID) {
-				return true
-			}
-			jsonErr(w, http.StatusInternalServerError, pairingCancelledText)
-			return false
-		}
-	}
+	var attemptID string
+	opts := channelEnableOptions{requireExisting: pairingCapable(channelID), attemptID: &attemptID}
 	outcome := a.applyChannelEnabled(w, channelID, true, opts)
 	switch {
 	case attemptID == "":
@@ -150,11 +125,18 @@ func (a *restAPI) enableChannelOrdinary(w http.ResponseWriter, channelID string)
 // an ordinary enable turns on. It writes the refusal and returns false before
 // any effect. With no channel manager wired nothing can start, so there is
 // nothing to reserve.
-func (a *restAPI) admitOrdinaryPairing(w http.ResponseWriter, channelID string) (string, bool) {
-	if a.agentLoop == nil || !pairingCapable(channelID) || a.channelEnabledNow(channelID) {
+func (a *restAPI) admitOrdinaryPairing(w http.ResponseWriter, channelID string, order *channels.PairingOrder, alreadyEnabled bool) (string, bool) {
+	if a.agentLoop == nil || !pairingCapable(channelID) || alreadyEnabled {
 		return "", true
 	}
-	attemptID, err := a.agentLoop.AdmitEnablePairing(channelID)
+	var attemptID string
+	var err error
+	if order != nil {
+		rec, admitErr := order.Admit(channels.PairingAdmissionEnable, nil)
+		attemptID, err = rec.AttemptID, admitErr
+	} else {
+		attemptID, err = a.agentLoop.AdmitEnablePairing(channelID)
+	}
 	switch {
 	case err == nil, errors.Is(err, agent.ErrPairingUnavailable):
 		return attemptID, true
@@ -174,14 +156,6 @@ func (a *restAPI) admitOrdinaryPairing(w http.ResponseWriter, channelID string) 
 // M2), and a missing connector is a 404, never created (M12).
 func (a *restAPI) disableChannel(w http.ResponseWriter, channelID string) {
 	opts := channelEnableOptions{requireExisting: true}
-	if a.agentLoop != nil {
-		// Only an accepted (saved) disable revokes an unstarted admission; a
-		// refused or failed one changes nothing (gate r5 R5-A03 sibling).
-		opts.afterCommit = func(http.ResponseWriter) bool {
-			a.agentLoop.RevokePairingForDisable(channelID)
-			return true
-		}
-	}
 	if a.applyChannelEnabled(w, channelID, false, opts) != enableFailed {
 		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: false})
 	}
@@ -243,7 +217,24 @@ func decodeChannelEnableRequest(w http.ResponseWriter, r *http.Request) (*gen.Ch
 // admitPairingRetry authenticates the Retry and reserves a new pairing attempt
 // for that chat. It writes the refusal and returns false on any failure,
 // before any configuration or ownership change.
-func (a *restAPI) admitPairingRetry(w http.ResponseWriter, r *http.Request, channelID, requestID, sessionID string) (string, bool) {
+func (a *restAPI) admitPairingRetry(w http.ResponseWriter, r *http.Request, channelID, requestID, sessionID string, orders ...*channels.PairingOrder) (string, bool) {
+	if len(orders) == 0 {
+		store := a.pairingOrderStore()
+		if store == nil {
+			jsonErr(w, http.StatusServiceUnavailable, "pairing ownership is unavailable; nothing was enabled")
+			return "", false
+		}
+		a.configMu.Lock()
+		defer a.configMu.Unlock()
+		order := store.LockChannel(channelID)
+		defer order.Unlock()
+		if cfg := a.agentLoop.GetConfig(); cfg == nil || !channelInstanceExists(cfg, channelID) {
+			jsonErr(w, http.StatusNotFound, "this WhatsApp connection no longer exists; nothing was enabled")
+			return "", false
+		}
+		return a.admitPairingRetry(w, r, channelID, requestID, sessionID, order)
+	}
+	order := orders[0]
 	baseType, _ := config.ParseInstanceKey(channelID)
 	if !validChannelIDs[baseType] {
 		jsonErr(w, http.StatusNotFound, "channel not found")
@@ -255,11 +246,6 @@ func (a *restAPI) admitPairingRetry(w http.ResponseWriter, r *http.Request, chan
 	}
 	if a.agentLoop == nil {
 		jsonErr(w, http.StatusServiceUnavailable, "pairing ownership is unavailable; nothing was enabled")
-		return "", false
-	}
-	if cfg := a.agentLoop.GetConfig(); cfg == nil || !channelInstanceExists(cfg, channelID) {
-		// A deleted connector is not recreated by a Retry (M12).
-		jsonErr(w, http.StatusNotFound, "this WhatsApp connection no longer exists; nothing was enabled")
 		return "", false
 	}
 	store := a.resolveSessionStore(sessionID)
@@ -277,7 +263,14 @@ func (a *restAPI) admitPairingRetry(w http.ResponseWriter, r *http.Request, chan
 		jsonErr(w, http.StatusForbidden, "this chat belongs to another user; nothing was enabled")
 		return "", false
 	}
-	attemptID, err := a.agentLoop.AdmitRetryPairing(channelID, requestID, sessionID)
+	var attemptID string
+	if order == nil {
+		err = agent.ErrPairingUnavailable
+	} else {
+		rec, admitErr := order.AdmitContext(r.Context(), channels.PairingAdmissionRetry,
+			&channels.PairingOwner{RequestID: requestID, SessionID: sessionID})
+		attemptID, err = rec.AttemptID, admitErr
+	}
 	switch {
 	case errors.Is(err, channels.ErrPairingDeleting):
 		// The connector is being deleted (M12): it is not recreated.

@@ -160,7 +160,7 @@ func (t *ChannelEnableTool) Parameters() map[string]any {
 	}
 }
 
-func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) (res *tools.ToolResult) {
+func (t *ChannelEnableTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
 	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	id, _ := args["id"].(string)
 	if id == "" {
@@ -173,20 +173,20 @@ func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) (res
 	if missing != nil {
 		return missing
 	}
-	// Turning a QR-paired connector on reserves its unowned pairing attempt
-	// before anything is saved, like every other start (gate r4 R4-A02, M2).
-	attemptID, refused := t.admitPairing(id)
-	if refused != nil {
-		return refused
-	}
+	var attemptID string
+	var refused *tools.ToolResult
 	committed := false
 	defer func() {
 		if attemptID != "" && !committed && t.deps.ReleasePairing != nil {
 			t.deps.ReleasePairing(id, attemptID)
 		}
 	}()
-	if err := t.deps.withSharedResourceWrite(sharedChannel, id, expected, func() error {
-		return t.deps.WithConfig(func(cfg *config.Config) error {
+	if err := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
+		attemptID, refused = t.admitPairing(ctx, write, id)
+		if refused != nil {
+			return channels.ErrPairingConflict
+		}
+		return write.withConfig(func(cfg *config.Config) error {
 			if cfg.Channels == nil {
 				cfg.Channels = map[string]config.ChannelInstanceConfig{}
 			}
@@ -200,6 +200,9 @@ func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) (res
 			return nil
 		})
 	}); err != nil {
+		if refused != nil {
+			return refused
+		}
 		if r, ok := revisionConflictResult(err, "list_channels"); ok {
 			return r
 		}
@@ -223,9 +226,9 @@ func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) (res
 // admitPairing reserves the unowned pairing attempt of a QR-paired connector
 // this enable turns on. An enable of a connector already on is idempotent and
 // reserves nothing (M1). A refusal saves nothing.
-func (t *ChannelEnableTool) admitPairing(id string) (string, *tools.ToolResult) {
+func (t *ChannelEnableTool) admitPairing(ctx context.Context, write *channelWrite, id string) (string, *tools.ToolResult) {
 	chType, _ := config.ParseInstanceKey(id)
-	if !whatsappChannel(chType) || t.deps.AdmitEnablePairing == nil {
+	if !whatsappChannel(chType) || write.store == nil && t.deps.AdmitEnablePairing == nil {
 		return "", nil
 	}
 	if cfg := t.deps.GetCfg(); cfg != nil {
@@ -233,7 +236,7 @@ func (t *ChannelEnableTool) admitPairing(id string) (string, *tools.ToolResult) 
 			return "", nil
 		}
 	}
-	attemptID, err := t.deps.AdmitEnablePairing(id)
+	attemptID, err := write.admit(ctx, id, channels.PairingAdmissionEnable, nil)
 	switch {
 	case errors.Is(err, channels.ErrPairingDeleting):
 		return "", tools.ErrorResult(errorJSON("CHANNEL_BEING_DELETED",
@@ -353,8 +356,8 @@ func (t *ChannelConfigureTool) Execute(ctx context.Context, args map[string]any)
 		return missing
 	}
 	var selected config.ChannelInstanceConfig
-	writeErr := t.deps.withSharedResourceWrite(sharedChannel, id, expected, func() error {
-		return t.deps.WithConfig(func(cfg *config.Config) error {
+	writeErr := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
+		return write.withConfig(func(cfg *config.Config) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -438,8 +441,8 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (re
 	if missing != nil {
 		return missing
 	}
-	if err := t.deps.withSharedResourceWrite(sharedChannel, id, expected, func() error {
-		return t.deps.WithConfig(func(cfg *config.Config) error {
+	if err := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
+		return write.withConfig(func(cfg *config.Config) error {
 			ch, ok := cfg.Channels[id]
 			if !ok {
 				return fmt.Errorf("channel %q is not configured", id)
@@ -453,12 +456,6 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (re
 			return r
 		}
 		return tools.ErrorResult(errorJSON("DISABLE_FAILED", err.Error(), ""))
-	}
-	// Only the accepted, saved disable revokes a not-yet-started pairing
-	// admission, so it can never start late (gate r4 R4-A02, M2); a refused
-	// or failed disable changes nothing (gate r5 R5-A03, T2-SF-18).
-	if t.deps.RevokePairingForDisable != nil {
-		t.deps.RevokePairingForDisable(id)
 	}
 	return channelWriteResult(t.deps.GetCfg(), id, map[string]any{
 		"enabled": false,

@@ -113,6 +113,11 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	// durable fence and asked the turns to stop (gate r2 CR-T2-R2-02, gate r3
 	// M7): deferred, so every return path still ends the selected pairings.
 	pairings := al.selectStopPairings(req)
+	if store := al.pairingAttempts(); store != nil {
+		// A short exact-operation fence cannot wait for a config writer. The
+		// durable session stop/cancel below still precedes guarded teardown.
+		store.FenceStarts(pairings)
+	}
 	defer func() { al.stopSelectedPairings(pairings) }()
 	// N6: once this Stop has ended the session's episode, release any retained
 	// external-CLI driver (its option/env snapshot). No-op while the run is still

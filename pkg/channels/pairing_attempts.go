@@ -123,15 +123,17 @@ type pairingAttemptRecord struct {
 }
 
 type pairingConnector struct {
-	guard      sync.Mutex // outer ordering guard; never the short state mutex
-	generation uint64
-	sequence   uint64
-	revision   string
-	latest     *pairingAttemptRecord
-	attempts   map[string]*pairingAttemptRecord // recent attempts by id, for late lookups
-	order      []string
-	deleting   bool
-	retired    bool
+	guard             sync.Mutex // outer ordering guard; never the short state mutex
+	generation        uint64
+	sequence          uint64
+	revision          string
+	configGeneration  uint64 // the exact accepted config write, distinct from Stop
+	configFingerprint string // exact saved entry, including disabled settings
+	latest            *pairingAttemptRecord
+	attempts          map[string]*pairingAttemptRecord // recent attempts by id, for late lookups
+	order             []string
+	deleting          bool
+	retired           bool
 }
 
 // pairingAttemptHistory bounds how many past attempts a connector keeps for
@@ -231,7 +233,7 @@ func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context,
 	switch {
 	case c.deleting:
 		err = ErrPairingDeleting
-	case c.retired, c.hasStopping(), c.latest != nil && inFlight(c.latest.Phase):
+	case c.hasStopping(), c.latest != nil && inFlight(c.latest.Phase):
 		err = ErrPairingConflict
 	case kind == PairingAdmissionRetry && !retryEligible(c.latest, *owner):
 		err = ErrPairingConflict
@@ -257,6 +259,7 @@ func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context,
 		o := *owner
 		rec.Owner = &o
 	}
+	c.retired = false // an accepted explicit create/connect may recreate an id
 	c.publish(rec)
 	return copyAttempt(rec), nil
 }
@@ -308,7 +311,7 @@ func (s *PairingAttempts) markReadyOrdered(order *PairingOrder, attemptID, revis
 		return false
 	}
 	c.latest.Phase, c.latest.Revision = PairingPhaseReady, revision
-	c.revision = revision
+	c.revision, c.configGeneration = revision, c.latest.Generation
 	return true
 }
 
@@ -327,7 +330,7 @@ func (s *PairingAttempts) releaseOrdered(order *PairingOrder, attemptID string, 
 	defer s.mu.Unlock()
 	c := order.connector
 	rec := c.attempts[attemptID]
-	if rec == nil || rec != c.latest || rec.Generation != c.generation || (rec.Phase != PairingPhasePending && rec.Phase != PairingPhaseReady) {
+	if rec == nil || rec != c.latest || rec.Generation != c.generation || rec.startFenced || (rec.Phase != PairingPhasePending && rec.Phase != PairingPhaseReady) {
 		return false
 	}
 	rec.Phase, rec.Outcome, rec.cancel = PairingPhaseTerminal, outcome, nil
@@ -457,11 +460,14 @@ func (s *PairingAttempts) Activate(instance, token string, newCancel func(attemp
 // attempt is pending, ready or stopping, and never replaces a reservation.
 // An active latest attempt (a loop that ended without a terminal event) is
 // interrupted first.
-func (s *PairingAttempts) ActivateRepair(instance string, newCancel func(attemptID string) func(context.Context) error) (PairingAttempt, error) {
+func (s *PairingAttempts) ActivateRepair(instance string, newCancel func(attemptID string) func(context.Context) error, origins ...PairingRepairOrigin) (PairingAttempt, error) {
 	id := newAttemptID()
 	cancel := newCancel(id)
 	order := s.LockChannel(instance)
 	defer order.Unlock()
+	if len(origins) > 0 && (!order.MatchesConfig(origins[0].Config) || order.Generation() != origins[0].Generation) {
+		return PairingAttempt{}, ErrPairingConflict
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := order.connector

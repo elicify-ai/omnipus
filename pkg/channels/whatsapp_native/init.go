@@ -25,7 +25,11 @@ func init() {
 				// migration or upgrade path exists), so this is not a breaking change.
 				storePath = filepath.Join(cfg.AgentHomeBasePath(), "whatsapp", instanceID)
 			}
-			return NewWhatsAppNativeChannel(waCfg, b, storePath)
+			ch, err := NewWhatsAppNativeChannel(waCfg, b, storePath)
+			if err == nil {
+				ch.originConfig = cfg
+			}
+			return ch, err
 		},
 	)
 }

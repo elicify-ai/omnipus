@@ -105,17 +105,10 @@ type AgentLoop struct {
 	// (FR-019): key sessionKey (string), value *RecallSpan. Never persisted;
 	// set by recall_conversation, read/dropped by windowTrim + assembly.
 	recallSpans sync.Map // key: sessionKey (string), value: *RecallSpan
-	// pairingEmitMu orders pairing publications against attempt transitions,
-	// so an old attempt's event never lands after its successor's (gate r3 M8;
-	// pairing_correlation.go).
-	pairingEmitMu sync.Mutex
 	// pairingRevokeHook is a test seam (gate r4 R4-A03): it runs in a Stop
 	// after a not-yet-started pairing was revoked and before its stopped
 	// frame is published. Nil in production.
 	pairingRevokeHook func()
-	// pairingSeq numbers WhatsApp pairing events in emit order
-	// (WhatsAppPairingPayload.Seq).
-	pairingSeq atomic.Uint64
 	// pendingRequests / remindedRequests back the unanswered-request reminder
 	// (request_reminder.go): request id -> receiver session id, and the ids that
 	// already got their one reminder.

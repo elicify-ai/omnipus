@@ -93,24 +93,8 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 		return refusal
 	}
 	chType, _ := config.ParseInstanceKey(id)
-	// A QR-paired channel reserves its next pairing attempt for this call
-	// before anything is saved (gate r3 M5): a refusal leaves the winner's
-	// attempt untouched and saves nothing.
 	var attemptID string
-	if whatsappChannel(chType) && t.deps.AdmitPairing != nil {
-		admitted, err := t.deps.AdmitPairing(id, tools.ToolCallID(ctx), tools.ToolTranscriptSessionID(ctx))
-		if errors.Is(err, channels.ErrPairingDeleting) {
-			return tools.ErrorResult(errorJSON("CHANNEL_BEING_DELETED",
-				"this WhatsApp connection is being deleted; nothing saved",
-				"Add the connection again once the deletion has finished"))
-		}
-		if err != nil {
-			return tools.ErrorResult(errorJSON("PAIRING_IN_PROGRESS",
-				"another WhatsApp pairing of this connection is starting, running or stopping; nothing saved",
-				"Wait for it to finish, or stop it from the chat that started it (or use its Retry there), then connect again"))
-		}
-		attemptID = admitted
-	}
+	var pairingErr error
 	committed := false
 	defer func() {
 		if attemptID != "" && !committed && t.deps.ReleasePairing != nil {
@@ -120,8 +104,15 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 	configure := &ChannelConfigureTool{deps: t.deps}
 	var saved config.ChannelInstanceConfig
 	var savedRevision string
-	writeErr := t.deps.withSharedResourceWrite(sharedChannel, id, expected, func() error {
-		return t.deps.WithConfig(func(cfg *config.Config) error {
+	writeErr := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
+		if whatsappChannel(chType) {
+			attemptID, pairingErr = write.admit(ctx, id, channels.PairingAdmissionConnect,
+				&channels.PairingOwner{SessionID: tools.ToolTranscriptSessionID(ctx), RequestID: tools.ToolCallID(ctx)})
+			if pairingErr != nil {
+				return pairingErr
+			}
+		}
+		return write.withConfig(func(cfg *config.Config) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -152,6 +143,19 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 	})
 	if r, ok := revisionConflictResult(writeErr, "list_channels"); ok {
 		return r
+	}
+	if pairingErr != nil {
+		err := pairingErr
+		if errors.Is(err, channels.ErrPairingDeleting) {
+			return tools.ErrorResult(errorJSON("CHANNEL_BEING_DELETED",
+				"this WhatsApp connection is being deleted; nothing saved",
+				"Add the connection again once the deletion has finished"))
+		}
+		if err != nil {
+			return tools.ErrorResult(errorJSON("PAIRING_IN_PROGRESS",
+				"another WhatsApp pairing of this connection is starting, running or stopping; nothing saved",
+				"Wait for it to finish, or stop it from the chat that started it (or use its Retry there), then connect again"))
+		}
 	}
 	if r, ok := referenceSelectionRefusal(writeErr); ok {
 		return r
