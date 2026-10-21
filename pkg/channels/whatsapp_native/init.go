@@ -27,7 +27,7 @@ func init() {
 			}
 			ch, err := NewWhatsAppNativeChannel(waCfg, b, storePath)
 			if err == nil {
-				ch.originConfig = cfg
+				ch.(*WhatsAppNativeChannel).originConfig = cfg
 			}
 			return ch, err
 		},
