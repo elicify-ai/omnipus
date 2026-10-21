@@ -11,6 +11,8 @@ Goals come from two places:
 - **Chat.** Type `/goal` and what you want. The goal activates and work starts in the same turn. No form, nothing to confirm.
 - **Tasks.** Every task on the Board carries a goal: the task form's required **Goal** field, criteria and Definition of Done become the record when the task runs. See [tasks](tasks.md).
 
+An agent can also start a goal itself with `set_goal`; it then appears like any goal.
+
 From there the two are one machine: same loop, same claim, same Judge. Only visibility differs.
 
 The working agent writes the goal record itself, as its opening move, and shows it in the chat as working assumptions. You do not approve them; if they are wrong you say so, and the agent updates the record and shows what changed. If the agent is unsure it understands you, it asks — one round of questions per goal. On the web app that is a question card; on a connector, a plain question in chat.
@@ -73,6 +75,10 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 | failed | Tries ran out with work unmet | Restate or raise the budget |
 | cleared | You stopped it | Restart if needed |
 | expired | Quiet for seven days with nothing running — a goal whose agent or helper is still working never expires | Restart it |
+
+### Automatic reminders
+
+When a quiet goal needs another work turn, chat shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line stays in saved history after you reload the chat.
 
 ## What controls a goal
 

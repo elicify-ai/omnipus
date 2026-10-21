@@ -59,6 +59,7 @@ func wireGoalToolsForAgent(al *AgentLoop, agent *AgentInstance) {
 	setGoalTool := tools.NewSetGoalTool(goalAccess)
 	setGoalTool.SetDiffFn(goalRecordDiffAdapter)
 	setGoalTool.SetFeasibilityFn(al.goalRecordFeasibilityFn)
+	setGoalTool.SetActivationFn(al.activateGoalFromTool)
 	agent.Tools.RegisterReplacing(setGoalTool)
 	agent.Tools.RegisterReplacing(tools.NewGoalClaimTool(goalAccess))
 }
@@ -596,16 +597,10 @@ func setGoalCriteriaArgs(items []task.AcceptanceCriterion, withProvenance bool) 
 // rule: a fresh registration/update is unambiguous forward progress, so a
 // prior "recordless-idle" streak no longer applies against it).
 //
-// This requires an ALREADY-ACTIVE goal record for sessionID.
-// set_goal.go's own Execute() already refuses before ever reaching this
-// call when ReadGoalState reported no active goal (goalCondition == ""),
-// so a missing active record here is a caller-contract violation, not a
-// normal-path branch — it is reported as an error rather than silently
-// creating one. The activation write itself (Store.Create + Goal.Activate)
-// belongs to the engine wave that wires /goal activation into
-// goal_loop.go — outside this wave's write-set (joint delivery plan §3:
-// this file's WriteRecord/ReadGoalState is wave E4; goal_loop.go's
-// activation path is E8/E12, later in the same chain).
+// This still requires an ALREADY-ACTIVE goal record for sessionID. When the
+// tool starts without one, its activation callback runs the existing /goal
+// activation engine before this normal registration write. This seam does not
+// create goals or hide a missing/unreadable active record.
 //
 // The D5 write-side effect (frame emission + channel echo,
 // afterGoalRecordWrite below — untouched by this wave, still reading
