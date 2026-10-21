@@ -48,6 +48,13 @@ Two limits to know:
 - A value restored from a saved setting or conversation rather than picked in this session carries no provider record (for example a recap model saved earlier, or the model a conversation was last answered with). When exactly one provider offers that model, its row is marked; when several providers offer it, no row is marked, because the UI cannot know which one served it.
 - In the chat composer the provider choice is currently display-only: the message is sent with the model name only, and the server decides which provider serves it. The agent profile, the **Default model** card, and fallback entries do save the chosen provider. There is no create form in the app: new agents are created by asking Omnipus or through the REST API (see [agents](agents.md)).
 
+## Model requirements
+
+- **Minimum:** a model with a context window of at least **16,384 tokens (16k)**. Omnipus's built-in instructions need this much room.
+- **Recommended:** **256,000 tokens or more** for long conversations, delegation and goals.
+
+Choose models that meet these requirements for both the main model and its fallbacks. A context-length override cannot enlarge a model's actual window.
+
 ## Models known to support tools
 
 Omnipus sends tool definitions with every model request. A model without tool use fails instead of continuing as a text-only model.

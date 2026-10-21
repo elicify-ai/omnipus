@@ -15,6 +15,10 @@
 
 ## 1. Overview
 
+Founder decision 2026-10-21: minimum supported context window raised from 8,192 to 16,384 tokens; the 2026-10-21 harness rules exceed 8,192.
+
+The minimum is a support requirement, not a new resolver refusal: a reported positive window below 16,384 is still resolved at its actual size, never inflated to the minimum. Existing unknown-window refusal and budget logic are unchanged. The 8,192 live-capability examples below test resolution only, not supported turn readiness.
+
 On 2026-08-21 a production turn died silently after two MCP tool results (1.18 MB and 0.82 MB) entered the context in one turn. Four defects were diagnosed (ADR §1): the window was resolved from `max_tokens × 4` (wrong by 8×); the MCP path admits results of any size; the sliding window is consulted only before the first LLM call and can only cut at user-message boundaries; and four turn exits emit no log, event or transcript entry.
 
 This spec covers the incident fix: resolve the window from a ladder — per-agent override → per-(provider, model) operator override → global default → on-demand live query → catalog → floor — with every override clamped to the model's capability and a loud floor for unknown cloud models, ask-or-refuse for local endpoints (D2–D3); admit every tool result through one choke point that caps it per surface **and clamps the cap to half the budget**, bound user messages where they become turns and tool-call arguments as a structured refusal (D4); when the window is over budget, empty the oldest eligible tool results in place with a recall mark that `recall_conversation` resolves by `(tool_call_id, archive line)` in pages (D5); run the one existing budget check after every tool result, never cutting mid-turn, with the whole last assistant step as a floor that is always satisfiable and a thrash guard that is unreachable by construction (D6); give every turn exit a typed code (D7); expose caps, trigger, ingest bound, the global default, model overrides and each agent's effective window with its source in Settings (D9); bound ingest at 8 MB on the transport read and bound the encoded archive line (D10).
@@ -266,7 +270,7 @@ As an operator, a hosted model the catalog does not know gets a 128,000 floor wi
 ### US-3 — Admit every tool result through one choke point, capped and clamped (D4) — **P0**
 As the harness, every tool result — success, `IsError`, denied, skipped, hydrated attachment, recall page, delegated report, MCP — becomes a context message through one function that caps it per surface, clamps the cap to half the budget, bounds the encoded archive line, and marks over-cap results.
 - **Why P0:** §1.2; and the clamp is what makes the floor satisfiable on small models (CRIT-002).
-- **Independent test:** a 2 MB result from each producer class enters capped with a mark; archive holds the full content; reload shows the capped form; on an 8,192 window the cap is half the budget.
+- **Independent test:** a 2 MB result from each producer class enters capped with a mark; archive holds the full content; reload shows the capped form; at the 16,384-token minimum window the cap is half the budget.
 - **Acceptance:**
   1. **Given** an MCP success result of 1,178,522 chars on a large window, **Then** ≤ 62,500 chars, head-and-tail 50/50, mark counted, not an error.
   2. **Given** a builtin success result of 200,000 chars, **Then** ≤ 64,000; **Given** a builtin or MCP `IsError`/`isError` result of 50,000, **Then** ≤ 10,000; **Given** a denied/skipped result, **Then** ≤ 10,000 (failure surface); **Given** a `delegate` report of 200,000, **Then** ≤ 64,000 (builtin success; no exemption); **Given** a hydrated attachment, **Then** builtin success.
@@ -464,7 +468,7 @@ guard      ⇔ after emptying, total > B OR share > absoluteShare still holds  �
 ```
 `isOverContextBudget`'s threshold is B (not `contextWindow`); the pre-turn, mid-turn, timeout-recovery and model-switch sites all use it. Exempt providers: `W = 0`, every check skipped.
 
-**`max_tokens` clamp (A-18):** if `max_tokens ≥ W − ceil(0.05 × W) − pinnedCoreOverhead` (B would be ≤ 0), `NewAgentInstance` sets `max_tokens = floor(W / 4)` and logs one WARN naming the model and both values, so B > 0 always. Boundary: `W = 8,192`, `max_tokens = 8,192` → effective `max_tokens = 2,048`.
+**`max_tokens` clamp (A-18):** if `max_tokens ≥ W − ceil(0.05 × W) − pinnedCoreOverhead` (B would be ≤ 0), `NewAgentInstance` sets `max_tokens = floor(W / 4)` and logs one WARN naming the model and both values, so B > 0 at the supported minimum. Boundary: `W = 16,384`, `max_tokens = 16,384` → effective `max_tokens = 4,096`.
 
 **Caps and clamp (chars = runes):**
 ```
@@ -539,7 +543,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 **B-04b (HP)** `ResolveWindow` without an agent — US-1.AC9. `(openrouter, z-ai/glm-5.2)` → 1,048,576 / `catalog`; with a per-agent override 100,000 and the agent id → 100,000; exempt provider → 0, no source.
 **B-04c (EC)** dead override pruned — US-1.AC10.
 **B-05 (AP)** exempt by driver — US-1.AC6. A row with subprocess `cli_driver` (`codex-cli`) → window 0; checks skipped; `openai-chatgpt` → cloud, floored.
-**B-05b (EC)** max_tokens clamp — US-1.AC7 / E18. `W = 8,192`, `max_tokens = 8,192` → effective `max_tokens = 2,048`, one WARN, B > 0.
+**B-05b (EC)** max_tokens clamp — US-1.AC7 / E18. At the supported minimum, `W = 16,384`, `max_tokens = 16,384` → effective `max_tokens = 4,096`, one WARN, B > 0. Keep the no-clamp positive control. Below-minimum characterization: a reported `W = 16,383` is preserved (not refused or inflated); `max_tokens = 16,383` still follows the existing `floor(W/4) = 4,095` clamp, without a supported-turn-readiness guarantee.
 **B-06 (HP, outline)** one B for all — US-1.AC7. Consumers: pre-turn / mid-turn / timeout recovery / model-switch → same B.
 **B-07 (AP)** cloud floor — US-2.AC1 → 128,000 / `floor`, WARN.
 **B-08 (HP)** Ollama live — US-2.AC2 → 8,192 / `live`.
@@ -660,7 +664,7 @@ head/tail 50/50; mark length counted toward the cap; no rune split
 
 These scenarios replace conflicting earlier expectations on the mapped points, not unaffected resolver/ingest/recall/hydration coverage. Source: ADR §18.4 and MAJ-CW-001–012.
 
-**B-54 (HP/EC, outline) — Relative bounds and tiny-window long-turn progress.** Given a tiny resolved W and many admitted results in one turn, force multiple legal mid-turn Skip advances; recorded next requests omit whole old steps, retain the original user/media anchor and newest structure, and continue. Cover total-only, share-only and both triggers, strict equality, target-unreachable-but-under-both and W changes through resolution. With default f=0.5, W=8,192 gives S=4,096 and W=32,768 gives S=16,384; changing output reserve/pinned overhead changes B, not S. Cover `max(1, floor(f × W))` for a positive fraction whose product is below one. **Reactive local-fit outline:** a recording provider sees total ≤ B and share ≤ S on request 1, rejects it as context-too-long, then receives a meaningfully smaller final serialized request 2 and succeeds. Assert actual source/step removal, not a notice/timestamp difference; expected relief is MAJ-CW-012's first progressing operation in whole-span → oldest complete step → older mark-only → newest floor(k/2) source-rune order. Cover each operation, odd/even/k=1 rune limits and unchanged W/f. With repeated provider rejection, every retried retained payload strictly shrinks and the original retry counter reaches its existing ceiling without reset; the last real provider error is surfaced even if further mutable text remains. Join these attempts to B-61's steering oracle. Sources: FR-029/030/032, MAJ-CW-004/005/007/012.
+**B-54 (HP/EC, outline) — Relative bounds and tiny-window long-turn progress.** Given a tiny resolved W and many admitted results in one turn, force multiple legal mid-turn Skip advances; recorded next requests omit whole old steps, retain the original user/media anchor and newest structure, and continue. Cover total-only, share-only and both triggers, strict equality, target-unreachable-but-under-both and W changes through resolution. With default f=0.5, W=16,384 gives S=8,192 and W=32,768 gives S=16,384; changing output reserve/pinned overhead changes B, not S. Cover `max(1, floor(f × W))` for a positive fraction whose product is below one. **Reactive local-fit outline:** a recording provider sees total ≤ B and share ≤ S on request 1, rejects it as context-too-long, then receives a meaningfully smaller final serialized request 2 and succeeds. Assert actual source/step removal, not a notice/timestamp difference; expected relief is MAJ-CW-012's first progressing operation in whole-span → oldest complete step → older mark-only → newest floor(k/2) source-rune order. Cover each operation, odd/even/k=1 rune limits and unchanged W/f. With repeated provider rejection, every retried retained payload strictly shrinks and the original retry counter reaches its existing ceiling without reset; the last real provider error is surfaced even if further mutable text remains. Join these attempts to B-61's steering oracle. Sources: FR-029/030/032, MAJ-CW-004/005/007/012.
 
 **B-55 (HP/EC) — Incomplete parallel group.** Given a two-call newest step, force pressure after the first result. Its text may shorten, but no cut crosses that assistant or removes its first result, and no request sends before the second result arrives. After completion, final serialization retains both ids, arguments, results and their order; only older completed steps may slide. Sources: FR-030/031, MAJ-CW-002/004/005.
 
@@ -697,7 +701,7 @@ These scenarios replace conflicting earlier expectations on the mapped points, n
 | 2 | `TestResolveContextWindow_ClampAllRungs` | Unit | B-03, B-03b | clamp + WARN; re-clamp |
 | 3 | `TestResolveContextWindow_ExemptByCliDriver` | Unit | B-05 | `codex-cli` row (subprocess driver) → 0; `openai-chatgpt` → cloud; no deleted-id literal |
 | 3c | `TestResolveWindow_NoAgent` | Unit | B-04b, B-04c | rungs 2–6; exempt → 0/no source; dead override ignored |
-| 3b | `TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive` | Unit | B-05b | 8,192/8,192 → 2,048 + WARN |
+| 3b | `TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive` | Unit | B-05b | minimum 16,384/16,384 → 4,096 + WARN; positive B; below-minimum non-inflation control |
 | 4 | `TestResolveContextWindow_ByLocality` | Unit | B-08, B-09, B-10b | drives S67's `locality` predicate (fixture rows: ollama, lmstudio, custom loopback, custom public); asserts `window_unknown` in the projection and gate order third |
 | 5 | `TestLiveLimits_OnDemandCacheKeyTTLCredential` | Unit | B-04 | key, TTL, no-credential skip, zero fetches at boot/idle |
 | 6 | `TestWindowAgreement_OneBudgetAllSites` | Unit | B-06 | `isOverContextBudget` threshold = B at all four sites; source grep: no `maxTokens * 4`, no `contextWindow = 128000`/`newContextWindow = 128000`, exactly one `cloudWindowFloor` |
@@ -734,7 +738,7 @@ These scenarios replace conflicting earlier expectations on the mapped points, n
 | 37 | `TestRunTurn_LocalEndpointRefusedUntilOverrideReload` | Integration | B-09, B-10 (§17.6) | reload asserted |
 | 38 | `TestProcessMessage_UserMessageBound_AllIntakes` | Integration | B-17, B-18 (§17.4) | WS, SSE, Slack fake channel |
 | 39 | `TestRunTurn_MidTurnNeverAdvancesSkip` | Integration | B-35 row 3 (§17.4c) | request bytes shrink by marks only |
-| 40 | `TestRunTurn_SmallWindowClamp` | Integration | B-11b, B-11c, B-36 (§17.4b) | 8,192 window |
+| 40 | `TestRunTurn_SmallWindowClamp` | Integration | B-11b, B-11c, B-36 (§17.4b) | minimum 16,384 window |
 | 41 | `TestGateway_ContextSettings_PartialUpdateCeilingReload` | Integration | B-14, B-44 | |
 | 42 | `TestGateway_AgentWindowFieldsAndOverrideReload` | Integration | B-45 | |
 | 43 | `TestGateway_ProjectionFrameAndContentState` | Integration | B-26 | frame emitted; transcript `content_state` |
@@ -819,7 +823,7 @@ These scenarios replace conflicting earlier expectations on the mapped points, n
 | 14 | — | — | — | — | — | `codex-cli` (subprocess driver) | window 0, exempt | B-05 |
 | 14b | — | — | — | — | catalog | `openai-chatgpt` (HTTP) | catalog value, cloud | B-05 |
 | 15 | 1,048,576 | — | — | — | lowered to 200,000 | cloud | 200,000 clamped | B-03b |
-| 16 | — | — | — | 8,192 (max_tokens 8,192) | — | ollama | W 8,192; max_tokens clamped to 2,048 + WARN | B-05b |
+| 16 | — | — | — | 16,384 (max_tokens 16,384) | — | ollama | W 16,384; max_tokens clamped to 4,096 + WARN; B > 0 | B-05b |
 
 #### DS-5: Mid-turn budget positions
 | # | Window (oldest → newest) | Fired | Expected | Traces |
@@ -832,7 +836,7 @@ These scenarios replace conflicting earlier expectations on the mapped points, n
 | 6 | 5 eligible, target needs 3 | share | 3 emptied in one pass; re-check no-op | B-25 |
 | 7 | system prompt 30 % of B, all results emptied, total ≤ B | — | continue, no error | B-36b |
 | 8 | injected oversized non-tool message | total | `context_unrecoverable` | B-37 |
-| 9 | 8,192 window, one 200,000-char result | — | capped to ≤ 0.5 B; completes | B-11b, B-36 |
+| 9 | minimum 16,384 window, one 200,000-char result | — | capped to ≤ 0.5 B; completes | B-11b, B-36 |
 
 #### DS-6: Recall paging (total 1,178,522; payload = 64,000 − framing F)
 | # | offset | length | Expected | Traces |
@@ -1009,7 +1013,7 @@ These scenarios replace conflicting earlier expectations on the mapped points, n
 - **SC-014**: After `recall_conversation(turn_range:"1-1")` of an evicted turn, the provider's second request contains the nonce and marker; with a too-small window it does not and the tool result states the non-fit (§17.8).
 - **SC-015**: Attaching a session twice leaves the archive byte-identical with `skip` unchanged; an empty archive hydrates once with tool results; `SetHistory` on a non-empty archive is refused (§17.9).
 - **SC-013**: `ResolveWindow(provider, model)` without an agent returns the rung-2–6 window + source; exempt → 0/no source (§17.7).
-- **SC-008** [2026-09-30]: On an 8,192-token model, retain initial half-B/parallel admission clamps but shorten newest text further if needed, down to mark-only; preserve every call/result slot and final adapter structure without a local size-only exit (B-11b/11c/55/56/57, FR-031/032).
+- **SC-008** [2026-09-30; minimum revised 2026-10-21]: On a model at the 16,384-token supported minimum, retain initial half-B/parallel admission clamps but shorten newest text further if needed, down to mark-only; preserve every call/result slot and final adapter structure without a local size-only exit (B-11b/11c/55/56/57, FR-031/032).
 - **SC-009**: `grep -rn 'maxTokens \* 4\|contextWindow = 128000\|newContextWindow = 128000\|SummarizeTokenPercent\|refreshRestorePointFromSession\|restorePointHistory' pkg/agent pkg/config` → empty; exactly one `cloudWindowFloor`.
 - **SC-010** [2026-09-30]: Live and reload have identical pressure-projected result bytes and user anchor; admission-cap changes cannot re-inflate an exact pressure cap (B-56/58, MAJ-CW-002/005).
 - **SC-011** [2026-09-30]: Mid-turn Skip advances only across legal completed steps, atomically coupled to persisted anchor/projection metadata and the live slice; newest/incomplete groups and unconsumed controls survive (B-54/55/57/58/61, FR-030).
