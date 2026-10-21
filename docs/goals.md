@@ -78,7 +78,7 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 
 ### Automatic reminders
 
-When a quiet goal needs another work turn, chat shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line stays in saved history after you reload the chat.
+When an automatic reminder starts another work turn for a goal in your own chat—not a helper or task run—the web app shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line is saved in that chat's history and remains after you reload it.
 
 ## What controls a goal
 
