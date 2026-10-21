@@ -1469,8 +1469,11 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	steeringMsgs []providers.Message,
 	steeringCorrelationIDs []string,
 ) (string, error) {
+	transcriptSessionID, transcriptStore := al.continuationTranscript(sessionKey)
 	resp, err := al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:                    sessionKey,
+		TranscriptSessionID:           transcriptSessionID,
+		TranscriptStore:               transcriptStore,
 		Channel:                       channel,
 		ChatID:                        chatID,
 		DefaultResponse:               defaultResponse,
@@ -1489,6 +1492,26 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	// continuation's outcome replaces the first turn's.
 	ordinaryDispositionFromContext(ctx).recordTurnOutcome(err)
 	return resp, err
+}
+
+// continuationTranscript binds a steering continuation to the concrete session
+// its session-scoped key "agent:<agent>:session:<id>" names, so the
+// continuation's transcript rows (its reply, tool rows and a refused Ask call's
+// visible refusal, amendment §1.2 R4) land in that conversation and its audit
+// rows name the acting session rather than the routing key (gate round 2,
+// code-reviewer F01 residual / security S1 remainder). A chat-scoped key names
+// no session, and a session that does not exist has no transcript: both stay
+// unbound, exactly as before.
+func (al *AgentLoop) continuationTranscript(sessionKey string) (string, *session.UnifiedStore) {
+	_, sessionID, ok := strings.Cut(sessionKey, ":session:")
+	if !ok || sessionID == "" {
+		return "", nil
+	}
+	store := al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return "", nil
+	}
+	return sessionID, store
 }
 
 // errContinuePostDequeueFailure marks a Continue failure that happened AFTER
