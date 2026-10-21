@@ -41,6 +41,7 @@ func orderingWriterFixture(t *testing.T) (*wu6Fixture, *channels.PairingAttempts
 		SaveConfigLocked: func(cfg *config.Config) error { return config.SaveConfig(f.f1277.configPath, cfg) },
 		LockConfigWrites: func() func() { return lockConfigWrites(f.svc) },
 		CredStore:        f.store,
+		PairingAttempts:  f.svc.ChannelManager.PairingAttempts,
 		AdmitPairing:     f.al.AdmitConnectPairing, CommitPairing: f.al.CommitPairing,
 		ReleasePairing: f.al.ReleasePairing, RevokePairingForDisable: f.al.RevokePairingForDisable,
 		PairingAttemptState: f.al.PairingAttemptState, SettlePairing: f.al.SettlePairing,
