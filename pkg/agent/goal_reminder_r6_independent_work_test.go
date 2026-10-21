@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/plan"
@@ -80,8 +81,24 @@ func (w *grIndependentWork) stop(t *testing.T) {
 		require.NoError(t, result.RootErr)
 	}
 	w.h.reviewer.release(w.call)
+	if w.engine != nil {
+		// StopPlan synchronously dispatches its REAL owner wake. It has its
+		// own provider request, distinct from the member being joined below.
+		// Release only the external provider edge, then join the actual plan
+		// wake owner before a keeper tick or TempDir/session-store disposal.
+		w.h.reviewer.openAll()
+	}
 	grAwaitOwner(t, w.call)
 	GetTaskExecutor(w.h.al).Drain(grWatchdog) // join the actual task completion writer, not a guessed sleep
+	if w.engine != nil {
+		w.engine.wakeWG.Wait()
+		busy, reason := w.engine.planWorkInFlight(w.planID)
+		require.False(t, busy, "actual plan owner wake must settle before returning: %s", reason)
+		p, err := w.planStore.Get(w.planID)
+		require.NoError(t, err)
+		busy, reason = w.h.al.sessionWorkInFlight(p.OwnerSessionID)
+		require.False(t, busy, "the real coordinator session must also be quiescent: %s", reason)
+	}
 	require.False(t, GetTaskExecutor(w.h.al).holdsRun(w.taskID))
 	runs, err := w.h.al.taskStore.ListRuns(w.taskID)
 	require.NoError(t, err)
@@ -127,6 +144,23 @@ func grStartRelatedPlan(t *testing.T, related bool) *grIndependentWork {
 	return work
 }
 
+// Busy prevents dispatch and spending an unproductive outcome, not a real
+// positive-progress reset. The actual initiating execute_plan call is work.
+// A second observation then proves the distinct NO-new-progress busy invariant.
+func grAssertOwnedPlanBusyProgressThenQuiet(t *testing.T, work *grIndependentWork) {
+	t.Helper()
+	h := work.h
+	grSetStreak(t, h, 1)
+	h.age(t)
+	h.al.goalQuietWindowSettle(time.Now())
+	grNoPublishedReminder(t, h.al)
+	assert.Equal(t, 0, goalRecordForSession(t, h.id).ZeroOutputPushes, "actual executed execute_plan may reset progress while its owned member remains busy")
+	grSetStreak(t, h, 1)
+	h.age(t)
+	h.assertNoKeeperWake(t, "same still-live owned plan with no new progress after the prior observation")
+	assert.Equal(t, 1, goalRecordForSession(t, h.id).ZeroOutputPushes, "no new work and no completed assessed reminder: durable busy streak must not change")
+}
+
 func TestGoalReminderIndependentWorkProvenance(t *testing.T) {
 	for _, kind := range []string{"Task", "Plan"} {
 		for _, related := range []bool{true, false} {
@@ -141,8 +175,12 @@ func TestGoalReminderIndependentWorkProvenance(t *testing.T) {
 				grSetStreak(t, h, 1)
 				h.age(t)
 				if related {
-					h.assertNoKeeperWake(t, "actual independent work initiated by this goal session")
-					assert.Equal(t, 1, goalRecordForSession(t, h.id).ZeroOutputPushes)
+					if kind == "Plan" {
+						grAssertOwnedPlanBusyProgressThenQuiet(t, work)
+					} else {
+						h.assertNoKeeperWake(t, "actual independent work initiated by this goal session")
+						assert.Equal(t, 1, goalRecordForSession(t, h.id).ZeroOutputPushes)
+					}
 				} else {
 					next := h.reminder(t)
 					assert.Equal(t, 2, goalRecordForSession(t, h.id).ZeroOutputPushes, "another same-agent session's work must neither suppress nor reset")

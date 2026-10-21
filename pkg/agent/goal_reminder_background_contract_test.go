@@ -137,7 +137,7 @@ func grBrakeRelatedPlan(t *testing.T) {
 			grSetStreak(t, h, 1)
 			h.age(t)
 			if related {
-				h.assertNoKeeperWake(t, "plan work with actual execute_plan initiating-session provenance")
+				grAssertOwnedPlanBusyProgressThenQuiet(t, work)
 			} else {
 				msg := h.reminder(t)
 				assert.Equal(t, 2, goalRecordForSession(t, h.id).ZeroOutputPushes, "other-session plan work is not this goal's progress")
