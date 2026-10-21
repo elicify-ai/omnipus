@@ -27,6 +27,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { resetTokenValidationCache } from '@/routes/authValidation'
 import { json, MAIN_ID, Network, NOW, resetRealStores, TestSocket, WS } from './harness'
+import { availableDetail, page } from '../chat-history-paging/fixtures'
 
 export const MAIN_PATH = `/workspaces/${WS}/chat`
 export const SETTINGS_PATH = '/settings?tab=chat'
@@ -72,7 +73,10 @@ export class Stage1Network extends Network {
       warmup_timeout_seconds: 30, frame_ancestors_fallback: false, device_pairing_enabled: false,
     }
     const sessions: SessionPage = { sessions: [mainSession] }
-    const detail: SessionDetail = { session: mainSession, history_state: { status: 'available' }, messages: [] }
+    // D10: available empty history is a complete terminal page, not a
+    // messages-only detail that a strict paging consumer must reject.
+    const history = page([], { sessionId: MAIN_ID })
+    const detail: SessionDetail = availableDetail(history, mainSession)
     const activity: ActivityEventsResponse = { events: [] }
     const performance: PerformanceSettings = { max_tool_iterations: 200 }
     const tasks: Task[] = []
@@ -84,7 +88,7 @@ export class Stage1Network extends Network {
     this.respond('GET', '/api/v1/gateway/god-mode', () => json({ enabled: false, available: true, supported: true, persisted: false }))
     this.respond('GET', '/api/v1/sessions', () => json(sessions))
     this.respond('GET', `/api/v1/sessions/${MAIN_ID}`, () => json(detail))
-    this.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json([]))
+    this.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json(history))
     this.respond('GET', '/api/v1/skills', () => json([]))
     this.respond('GET', '/api/v1/commands', () => json([]))
     this.respond('GET', '/api/v1/providers', () => json([]))

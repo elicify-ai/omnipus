@@ -3,6 +3,7 @@ import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, assistantMessages, userMessages, selectAgent, tokenCounter, waitForConnected } from './fixtures/selectors';
 import { freshChat, originOf } from './fixtures/session-setup';
+import { sessionMessages } from './fixtures/session-history';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -22,27 +23,6 @@ import { freshChat, originOf } from './fixtures/session-setup';
  * @param page      Playwright page object
  * @param gapMs     How long to watch for the stop button to reappear (default 8s)
  */
-/**
- * S5-08: read a session's transcript straight from the gateway, so a test can
- * pin SERVER-side state instead of trusting the SPA's rendered view. Returns
- * the entries; a non-2xx is an honest red (contract: GET
- * /api/v1/sessions/{id}/messages → 200 with the transcript entries).
- */
-async function sessionMessages(
-  page: Page,
-  origin: string,
-  sessionId: string,
-): Promise<Array<{ role?: string; content?: string }>> {
-  const resp = await page.request.get(`${origin}/api/v1/sessions/${sessionId}/messages`);
-  if (!resp.ok()) {
-    throw new Error(
-      `GET /api/v1/sessions/${sessionId}/messages failed: ${resp.status()} ${await resp.text()}`,
-    );
-  }
-  const body = (await resp.json()) as Array<{ role?: string; content?: string }>;
-  return Array.isArray(body) ? body : [];
-}
-
 async function waitForTurnFullyDone(page: Page, gapMs = 8_000): Promise<void> {
   const stopBtn = page.locator('[data-testid="stop-btn"]');
   try {

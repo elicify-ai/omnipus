@@ -1,78 +1,56 @@
-// has-earlier.test.ts — the chat-state half of has_earlier_messages
-// (founder ruling 2026-10-11): every carrier lands in ONE bucket field.
-//
-// Covered here: the SessionSnapshotFrame carrier (the attach replay's
-// session_snapshot frame — the generated field is optional; ABSENT means the
-// view is the whole transcript, i.e. false) and the recordSessionHasEarlier
-// writer the other carriers' consumers call. The REST carriers
-// (SessionDetail field, messages header) are covered at the adapter edge in
-// src/lib/api/sessions.has-earlier.test.ts; the render half (the quiet line)
-// in src/components/chat/ChatScreen.earlier-note.test.tsx.
-
-import { beforeEach, describe, expect, it } from 'vitest'
+// D15 migration: the same three chat-state scenarios now use complete,
+// generated, semantically valid bounded snapshots. Missing metadata is NOT false.
+import { beforeEach, afterEach, describe, expect, it } from 'vitest'
 import { useChatStore } from './store'
-import { makeBucketMessages } from './messages'
 import { recordSessionHasEarlier } from './has-earlier'
+import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
-import type { ChatMessage, SessionChatState } from './types'
+import { queryClient } from '@/lib/queryClient'
+import { entry, expectPageAccounting, expectValidFrame, page, pos, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 
 const SID = 'sess-has-earlier'
-
-function seedBucket(messages: ChatMessage[] = []): void {
-  useChatStore.setState((s) => ({
-    ...s,
-    sessionsById: {
-      ...s.sessionsById,
-      [SID]: {
-        ...((s.sessionsById ?? {})[SID] ?? {}),
-        ...makeBucketMessages(messages),
-        isStreaming: false,
-        isReplaying: false,
-        replayCompletedForSession: SID,
-        toolCalls: {},
-        toolCallOrder: [],
-        textAtToolCallStart: {},
-        sessionTokens: 0,
-        sessionCost: 0,
-      },
-    },
-    messages,
-    messagesById: {},
-    isStreaming: false,
-    isReplaying: false,
-    replayCompletedForSession: SID,
-  }))
+function bucket() {
+  const result = useChatStore.getState().sessionsById[SID]
+  if (!result) throw new Error('Fixture instrument: expected real session bucket')
+  return result
+}
+function seedBucket() {
+  useSessionStore.getState().setActiveSession(SID, 'mia')
+  useChatStore.getState().setMessages([])
+}
+function applySnapshot(earlier: boolean) {
+  const sources = earlier ? [entry(1, { type: 'system', role: 'system', content: 'Conversation context cleared' })] : []
+  const history = page(sources, { sessionId: SID, earlier, info: earlier ? {
+    stopped_at_clear: true, stop_reason: 'clear', latest_clear: { entry_id: 'history-1', history_position: pos(1) },
+  } : {} })
+  expectPageAccounting(history, earlier ? [pos(1)] : [], sources.length)
+  const frames = [snapshot(history), ...sources.map((source) => replay(source, SID)), {
+    type: 'catch_up_complete' as const, session_id: SID, seq: 100, boot_id: 'history-boot', mode: 'snapshot' as const,
+  }]
+  frames.forEach((frame) => { expectValidFrame(frame); useChatStore.getState().handleFrame(frame) })
 }
 
-function bucket(): SessionChatState {
-  const b = useChatStore.getState().sessionsById[SID]
-  expect(b, 'bucket exists').toBeTruthy()
-  return b!
-}
-
-describe('has_earlier_messages → chat state', () => {
+describe('canonical has_earlier → chat state', () => {
   beforeEach(() => {
-    useConnectionStore.setState({
-      connection: { send: () => true, close: () => {} } as never,
-      isConnected: true,
-    } as never)
-    useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)
+    queryClient.clear()
+    useConnectionStore.setState(useConnectionStore.getInitialState(), true)
+    useChatStore.setState(useChatStore.getInitialState(), true)
+    useSessionStore.setState(useSessionStore.getInitialState(), true)
   })
+  afterEach(() => queryClient.clear())
 
-  it('a session_snapshot frame with has_earlier_messages: true records true', () => {
+  it('a completed snapshot with canonical has_earlier true records true with its page', () => {
     seedBucket()
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 1, has_earlier_messages: true,
-    } as never)
+    applySnapshot(true)
     expect(bucket().hasEarlierMessages).toBe(true)
+    expect(bucket().messageOrder).toStrictEqual(['history-1'])
   })
 
-  it('a session_snapshot frame WITHOUT the field records false (the view is the whole transcript)', () => {
+  it('a completed terminal snapshot explicitly records false with its empty page', () => {
     seedBucket()
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 2,
-    } as never)
+    applySnapshot(false)
     expect(bucket().hasEarlierMessages).toBe(false)
+    expect(bucket().messageOrder).toStrictEqual([])
   })
 
   it('recordSessionHasEarlier writes the bucket flag; null and the __pending sentinel are no-ops', () => {
