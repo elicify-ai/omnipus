@@ -103,7 +103,7 @@ The chat is a conversation with the workspace's agents. When the open conversati
 
 ### When a fallback model answers
 
-When the configured model is unavailable and a fallback model answers, a quiet notice appears in the live chat without a refresh: **Answered by the Fallback model (X) because Y was unavailable.** It names the model that answered and the unavailable model.
+When the configured model is unavailable and a fallback model answers, a quiet notice appears in the live chat without a refresh: **Answered by the Fallback model (X) because Y was unavailable.** It names the model that answered and the unavailable model. A helper's fallback notice appears in the helper's own chat, not in the chat that started it.
 
 The notice stays in saved history, after the answer. Each unavailable/answering model pair is noted once per chat; repeated turns using the same pair do not add duplicate notices. If the unavailable model has been retired, the notice also says **Pick a new model in the agent's settings.**
 
