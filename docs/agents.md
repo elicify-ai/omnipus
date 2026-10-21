@@ -78,6 +78,14 @@ Every conversation names its agent — there is no global default agent any more
 
 To change an agent, open its card. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
 
+## Where an agent's instructions come from
+
+For a custom native agent, **Personality** edits its `SOUL.md`: the persona and standing instructions that follow that agent. The global `USER.md` profile remains shared by all agents. A custom agent with no non-empty `SOUL.md` uses Omnipus's default assistant identity.
+
+Project rules belong in **Workspace settings → Project Instructions**, stored in the workspace's `AGENT.md`, or in a mounted project's root `CLAUDE.md` or `AGENTS.md`. When both project files exist, `CLAUDE.md` takes priority. These workspace and project instructions still apply.
+
+An agent's own folder does not supply instructions from `AGENT.md`, `AGENTS.md` or `IDENTITY.md`. Their contents are not added to the system prompt, and changing those files does not refresh the prompt cache. `SOUL.md` and the global `USER.md` still load as before.
+
 ## How to delete an agent
 
 **Delete agent** asks you to confirm twice: the first step explains that the agent and its chats, memory and related data are removed permanently, the second is the final confirmation. Dismissing either step deletes nothing. A locked core agent, a System Agent, and an agent that owns an active plan cannot be deleted — stop or reassign the plan first.

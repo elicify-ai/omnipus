@@ -229,6 +229,8 @@ These file-tool reading allowances do not grant registry listing, instruction-fi
 
 Internal state — sessions and transcripts, tasks and plans, memory, agent definitions (`SOUL.md` and friends), skill instructions, audit logs, gateway state, credentials, the master key and `config.json` — stays protected from generic file tools and is hidden from their search results. Shell commands use the command-text check and, when enforcing, the kernel restrictions described below. Use Omnipus's dedicated tools to access managed state.
 
+Prompt sources are separate from these file protections. An agent's own folder contributes no instructions from `AGENT.md`, `AGENTS.md` or `IDENTITY.md`. Its `SOUL.md` and the global `USER.md` still load. Workspace **Project Instructions** (the workspace's `AGENT.md`) and mounted projects' root `CLAUDE.md` or `AGENTS.md` are unchanged; `CLAUDE.md` wins when both project files exist.
+
 A refusal carrying `protected_internal_file` is displayed as **Protected Omnipus file — refused**, explaining that approval cannot open it. Filesystem-policy denials and the shell's protected-operand guard can produce this marker. Other checks can return a different refusal first: agent-definition files can direct the agent to the metadata tools, and some shell pre-flights return an ordinary secret-set error. Read that refusal's reason; approval does not make the protected path accessible.
 
 **Two accepted risks and one boundary are worth knowing:**
