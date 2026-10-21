@@ -172,6 +172,7 @@ func pagingPositionOracle(sid string, a session.ArchiveAddress) string {
 }
 
 func TestChatHistoryPosition_StableOccurrenceAndSessionScope(t *testing.T) {
+	pagingVerifyPositionVectors(t)
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
 	store := api.agentLoop.GetSessionStore()
