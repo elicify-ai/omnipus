@@ -108,13 +108,13 @@ func TestChatHistoryPage_Atomic101RowsAndOversizedToolRemainWhole(t *testing.T) 
 }
 
 func TestChatHistoryPage_NearAdmission100FloorHasNoHardByteDefense(t *testing.T) {
-	t.Fatal("BLOCKED: shared exact prepared-size/admission observation seam not implemented — required by D4a/T27/D-B4b/B37/B39; must exercise100 admitted one-row records just below8-MiB each with limit=min_rows100, retain all100, meter actual larger-carrier bytes, height_floor override and row_target/source_cap; 48KiB advisory-floor integration fixture is NOT the near8-MiB case")
+	pagingNearAdmissionProbe(t)
 }
 
 func TestHistoryPageProjection_OnePreparedSideEffectFreeWeigher(t *testing.T) {
 	for _, mode := range []string{"tool_heavy_rest_ws_divergence", "special_heavy_rest_ws_divergence", "nil_weigher", "error_weigher", "negative_weight", "overflow_weight", "inconsistent_dependency", "cancel_unselected_lookahead"} {
 		t.Run(mode, func(t *testing.T) {
-			t.Fatalf("BLOCKED: D4b shared gateway request factory/prepared projector-weigher seam not implemented — required by T32/B18/B23/B37/B38/B46/D-W1: %s; independently encode generated REST/WS candidates, select same positions and max weight, assert one projection/group, prepared final reuse and zero send/hub/action/card/durable/lifecycle effects; bad dependency must fail without0/estimate/full-read fallback", mode)
+			pagingProjectionProbe(t, mode)
 		})
 	}
 }

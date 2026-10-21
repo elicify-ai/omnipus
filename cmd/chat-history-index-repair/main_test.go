@@ -225,13 +225,17 @@ func TestHistoryRepairCommand_PreflightManifestAndIdempotence(t *testing.T) {
 		require.Equal(t, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", byPath["uploads/zero.bin"]["sha256"], "frozen SHA-256 empty-file vector")
 	})
 	t.Run("repeat_and_interruption_require_real_publication_seam", func(t *testing.T) {
-		t.Fatal("BLOCKED: agreed derived-index generation paths and deterministic shared-engine publication interruption seam not implemented — required by D13/T22/B36/D-O3; valid stopped apply twice must keep matching index byte/mtime identical, preserve canonical+backup trees, and replace only incomplete staging after each publication stage")
+		repairSharedCoreRoundTrip(t, repairCanonicalFixture(t))
 	})
 }
 
 func TestHistoryRepairCommand_SharedConstructorAndRealReader(t *testing.T) {
-	_ = repairBinary(t) // A missing executable is a loud production blocker.
-	t.Fatal("BLOCKED: shared session chat-index constructor/real bounded-reader callable seam and stopped-receipt CLI input contract not implemented — required by D1a/D2/D13/T25/B30/B35/B36/B44/B45/D-GO1/GO2; apply then read independently frozen effect/disposition/cancel/duplicate/position vectors through actual product reader; no copied reducer/gateway constructor/mock backup validator")
+	binary := repairBinary(t)
+	source := repairCanonicalFixture(t)
+	before := repairTree(t, source)
+	repairRun(t, binary, 0, "dry-run", "--data-root", source)
+	require.Equal(t, before, repairTree(t, source), "initial real command preflight is read-only")
+	repairSharedCoreRoundTrip(t, source)
 }
 
 func TestHistoryRepairCommand_BuiltPhasesCutoverAndManifest(t *testing.T) {
@@ -298,6 +302,6 @@ func TestHistoryRepairCommand_BuiltPhasesCutoverAndManifest(t *testing.T) {
 		require.Equal(t, before, repairTree(t, source), "all-session preflight before any generation")
 	})
 	t.Run("schema_cutover_and_exact_aggregate_exit_matrix", func(t *testing.T) {
-		t.Fatal("BLOCKED: embedded private v1 manifest schema/decoder, stopped-receipt native inspection CLI contract and shared reader/publication seams not implemented — required by D13/T30/B35/B44/B45; cover unknown fields/version, traversal/case alias/symlink/kind/wrong root, actual running/unknown process, post-cutover stale backup/source_changed2, corrupt_archive/invalid_reference/I-O1, mixed precondition+integrity2, and zero preflight publications")
+		repairRefusalMatrix(t, binary)
 	})
 }

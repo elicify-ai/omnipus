@@ -213,5 +213,5 @@ func TestHistoryPageDiagnostics_ContentFreeOnEveryOutcome(t *testing.T) {
 }
 
 func TestHistoryPageDiagnostics_RawPositionStorageFailureAndPlantedLeak(t *testing.T) {
-	t.Fatal("BLOCKED: storage/protocol/projection gateway fault preparation depends on backend declarations — required by D1/D4b/T23/B33; actual success/query/index/abort requests now assert every exact spec34612f172 field and ID-free summary using the production logger/file sink; after agreed declaration merge, drive real failed-reference/read/projection paths, not a mock summary. Raw-query/content/ID mutation proof is deferred to independent CHECK")
+	pagingRequiredEffectStorageDiagnostic(t)
 }

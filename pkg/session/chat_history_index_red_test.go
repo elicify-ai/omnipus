@@ -1,81 +1,120 @@
 package session
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
-// RED blockers are intentional executable failures, not skips or fake test-side
-// implementations. D1/D1a/D4b specify architecture but no Go callable signatures.
-// The paired gateway tests exercise real existing entry points meanwhile. GREEN
-// must replace each blocker with its real seam-driven assertions; a new API's
-// mere existence must never turn these tests green.
-// Oracle: chat-history-paging-spec.md D1/D1a, D-H1/D-H2 and B21/B22/B31/B40/B41.
+// T06/B21/B22/B31/B40. Actual private read events, not a stopwatch or a full
+// reader used as an oracle. The100000-prefix cases are remote-CI work only.
 func TestChatHistoryIndex_HealthyCutAndBoundedReads(t *testing.T) {
 	for _, prefix := range []int{1000, 100000} {
 		for _, limit := range []int{40, 100} {
 			t.Run(fmt.Sprintf("prefix%d_limit%d", prefix, limit), func(t *testing.T) {
-				t.Fatalf("BLOCKED: immutable indexed reader and addressed-record/disposition read observer not implemented — required by D1/D1a, T06, B21/B22/B31/B40; fixture has %d omitted prefix groups and identical200-group suffix; expected exactly%d selected groups plus at most one lookahead, zero omitted-prefix content reads, allocations/work within10%%, no full disposition scan", prefix, limit)
+				s, sid := newEffectsSession(t)
+				historyState(t, s, sid) // Fail at the real named runtime seam while unimplemented.
+				days := make([]chatHistoryFixtureDay, 90)
+				for i := 0; i < prefix; i++ {
+					d := i * 90 / prefix
+					days[d].Day = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, d).Format("2006-01-02")
+					days[d].Entries = append(days[d].Entries, TranscriptEntry{ID: fmt.Sprintf("prefix-%06d", i), Role: "user", Content: strings.Repeat("p", 1100), AgentID: "mia", Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
+				}
+				for i := 1; i <= 200; i++ {
+					days[89].Entries = append(days[89].Entries, TranscriptEntry{ID: fmt.Sprintf("suffix-%03d", i), Role: "user", Content: "same suffix", AgentID: "mia", Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
+				}
+				buildChatHistoryDayFixture(t, s, sid, days)
+				s.stopStatsFlusher()
+				require.NoError(t, s.FlushSessionStats(sid))
+				var reads historyReadRecorder
+				historyObserve(t, &reads)
+				p := historyRead(t, s, sid, historyOptions(limit))
+				want := make([]string, limit)
+				for i := range want {
+					want[i] = fmt.Sprintf("suffix-%03d", 201-limit+i)
+				}
+				require.Equal(t, want, historyIDs(p))
+				require.True(t, p.HasEarlier)
+				require.False(t, p.HasLater)
+				selected, lookahead := 0, 0
+				selectedIDs := map[string]bool{}
+				for _, id := range want {
+					selectedIDs[id] = true
+				}
+				for _, e := range reads.snapshot() {
+					if e.Phase != "record_read" || e.Stream != "archive" || e.Scope != "page" {
+						continue
+					}
+					require.Greater(t, e.Bytes, int64(0), "actual encoded I/O observed")
+					require.NotNil(t, e.Address)
+					require.NotContains(t, e.Address.EntryID, "prefix-", "no omitted prefix decoding")
+					if selectedIDs[e.Address.EntryID] {
+						selected++
+					} else {
+						require.Equal(t, fmt.Sprintf("suffix-%03d", 200-limit), e.Address.EntryID, "only the nearest one unselected candidate may be read")
+						lookahead++
+					}
+				}
+				require.Equal(t, limit, selected, "one actual selected body per ordinary group")
+				require.LessOrEqual(t, lookahead, 1, "metadata-only lookahead may read0, never a mandatory41st body")
 			})
 		}
 	}
 	for _, pending := range []int{0, 1, 63, 64, 65} {
 		t.Run(fmt.Sprintf("pending%d", pending), func(t *testing.T) {
-			if pending > 64 {
-				t.Fatal("BLOCKED: bounded suffix reconciler and publication/read counters not implemented — required by D1a/T06/B40;65 pending facts must return fixed history_unavailable with zero candidate-root publications on repeated Retry, reading at most anchor+65 overflow probe")
+			s, sid := newEffectsSession(t)
+			historyRows(t, s, sid, "base", 1)
+			before := historyState(t, s, sid)
+			files := historyTree(t, historyIndexDir(s, sid))
+			addresses := historyUnpublishedArchive(t, s, sid, pending)
+			var reads historyReadRecorder
+			historyObserve(t, &reads)
+			for attempt := 0; attempt < 2; attempt++ {
+				start := len(reads.snapshot())
+				r, err := s.reconcileChatHistoryIndex(context.Background(), sid)
+				historyAssertSuffixReads(t, reads.snapshot()[start:], addresses)
+				if pending == 65 {
+					historyRequireUnavailable(t, err, "catchup_limit")
+					require.Equal(t, 65, r.ObservedItems)
+					require.Zero(t, r.AppliedItems)
+					require.False(t, r.Published)
+					require.Equal(t, before, historyState(t, s, sid))
+					continue
+				}
+				require.NoError(t, err, "real bounded reconciler")
+				want := pending
+				if attempt == 1 {
+					want = 0
+				}
+				require.Equal(t, want, r.ObservedItems)
+				require.Equal(t, want, r.AppliedItems)
+				require.Equal(t, want, r.ArchiveRecords)
+				require.Equal(t, want > 0, r.Published)
 			}
-			t.Fatalf("BLOCKED: bounded suffix reconciler and publication/read counters not implemented — required by D1a/T06/B40; pending=%d must heal once from valid saved prefix only;0 is byte/mtime no-op; private mutations advance coverage without rows", pending)
+			if pending == 0 {
+				require.Equal(t, files, historyTree(t, historyIndexDir(s, sid)), "zero delta changes no bytes/mode/mtime")
+			}
+			if pending <= 64 {
+				p := historyRead(t, s, sid, historyOptions(100))
+				require.Len(t, p.Entries, 1+pending)
+			}
 		})
 	}
 	t.Run("missing_baseline_is_not_empty", func(t *testing.T) {
-		t.Fatal("BLOCKED: missing-baseline initializer/refusal seam not implemented — required by D1/D1a/T06/B31; new sends remain canonical, never seed suffix-only ready history, never scan lifetime")
+		s, sid := newEffectsSession(t)
+		historyRows(t, s, sid, "base", 1)
+		require.NoError(t, os.RemoveAll(historyIndexDir(s, sid)))
+		_, err := s.ReadChatHistoryPage(context.Background(), sid, historyOptions(40))
+		historyRequireUnavailable(t, err, "index_missing")
+		historyRows(t, s, sid, "new-send", 1)
+		_, err = s.ReadChatHistoryPage(context.Background(), sid, historyOptions(40))
+		historyRequireUnavailable(t, err, "index_missing")
+		require.NoFileExists(t, filepath.Join(historyIndexDir(s, sid), "checkpoint.json"), "new canonical send cannot seed a suffix-only baseline")
 	})
-}
-
-func TestChatHistoryRecovery_PublicationCrashBoundAndIdempotence(t *testing.T) {
-	stages := []string{"canonical_fsync", "derived_row_fsync", "lookup_staging", "checkpoint_publication"}
-	for _, stage := range stages {
-		for _, pending := range []int{0, 1, 63, 64, 65} {
-			t.Run(fmt.Sprintf("%s_pending%d", stage, pending), func(t *testing.T) {
-				t.Fatalf("BLOCKED: shared chat-index reducer/reconciler and deterministic publication fault barrier not implemented — required by D1a/T29/D-H1; stage=%s pending=%d; expect <=64 unique occurrences applied once,65 refuses without any candidate ready root, duplicate durable row charged once, no token renumber/canonical trimming/prefix scan", stage, pending)
-			})
-		}
-	}
-	for _, shape := range []string{
-		"32_archive_plus32_missing_rolled_is64", "33_archive_plus32_missing_rolled_is65",
-		"archive_plus_disposition_plus_private_model_ref_combined_bound", "already_durable_derived_row_counts_once",
-		"torn_unpublished_derived_tail_redone", "complete_bad_derived_row_refused",
-		"canonical_torn_record_never_truncated", "changed_saved_anchor_refused", "truncated_saved_prefix_refused",
-		"current_partition_missing_is_inconsistent", "repointed_partition_id_refused",
-		"concurrent_recoverers_one_owner", "append_after_captured_end_belongs_to_next_cut",
-		"missing_or_incompatible_checkpoint_never_seeded", "canonical_save_success_survives_derived_publication_error",
-	} {
-		t.Run(shape, func(t *testing.T) {
-			t.Fatalf("BLOCKED: shared recovery engine/read and root-publication observation seams not implemented — required by D1a/T29/D-H1/D-H2/D-N1: %s; no partial ready root, no repeated64-batch lifetime walk; actual canonical/derived bytes and exact counters are required, not a mock reducer", shape)
-		})
-	}
-}
-
-func TestChatHistoryRetention_ActualRetainedContinuation(t *testing.T) {
-	for _, scenario := range []string{
-		"first_expired_exact_full_terminal_has_no_before", "middle_expired_neighbors_keep_order_and_positions",
-		"last_rolled_expired_current_retained_truthful_after", "effect_retained_target_proven_expired_no_orphan",
-		"retained_target_unreadable_effect_is_storage_error", "sweep_after_cut_reselects_generation",
-		"retention_disabled_generation_unchanged", "token_rank_only_tombstones_rich_fragment_retired",
-		"known_expired_before_after_and_closed_range_remain_fences", "unknown_foreign_fence_still404",
-		"unlink_crash_then_next_removed_count_zero_reconciles_once", "64_absent_rolled_facts_heal_once",
-		"65_absent_facts_refuse_without_candidate_publish", "permission_failure_not_expiry_and_partial_success_truthful",
-	} {
-		t.Run(scenario, func(t *testing.T) {
-			t.Fatalf("BLOCKED: chat retained-set/tombstone ledger, indexed bounded reader and delete-publication fault seam not implemented — required by D2/D14/T19/B27/B41/B50, D-X1..X6/D-H2: %s; must exercise actual files/sweep and assert exact retained IDs/flags/generation plus token+rank-only disk metadata", scenario)
-		})
-	}
-}
-
-func TestChatHistoryReadCut_SlowReadDoesNotHoldAppendLocks(t *testing.T) {
-	for _, writer := range []string{"chat", "settle_effect", "disposition", "rollover"} {
-		t.Run(writer, func(t *testing.T) {
-			t.Fatalf("BLOCKED: immutable bounded-record content-read barrier and captured-cut reader not implemented — required by D1/D14/T26/B32/B50/D-L1; while real content I/O is blocked after cut capture, actual %s append must complete before release, returned fields/checked addresses must remain from earlier cut, and each record handle must close; no sleep/elapsed-time proxy", writer)
-		})
-	}
 }

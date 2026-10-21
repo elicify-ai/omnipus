@@ -3,10 +3,13 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,65 +17,115 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// T36, D14/D-X6: actual native sharing semantics, not an injected permission
-// failure or a Linux cross-build. No native case skips. The held partition is
-// first in order so stopping the sweep on it cannot accidentally look green.
-func TestChatHistoryRetention_WindowsBusyContinueAndRetry(t *testing.T) {
-	s, err := NewArchiveDayStore(t.TempDir(), "windows-history")
-	require.NoError(t, err)
-	for i, day := range []string{"2026-01-01", "2026-01-02", "2026-01-03", "2026-10-21"} {
-		atDay(s, day)
-		_, err = s.Append(ArchiveRecord{TranscriptEntry: TranscriptEntry{
-			ID: fmt.Sprintf("private-entry-canary-%d", i), Role: "user", Content: "private-body-canary",
-			AgentID: "mia", ViewMembership: ViewMembershipChat, Timestamp: s.now(),
-		}})
-		require.NoError(t, err)
-	}
-	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	paths := []string{filepath.Join(s.dir(), "2026-01-01.jsonl"), filepath.Join(s.dir(), "2026-01-02.jsonl"), filepath.Join(s.dir(), "2026-01-03.jsonl")}
-	for _, p := range paths {
-		require.NoError(t, os.Chtimes(p, old, old))
-	}
-	held, err := os.Open(paths[0])
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if held != nil {
-			require.NoError(t, held.Close())
+func historyWindowsHeldRecord(t *testing.T, appendWhileHeld bool) {
+	t.Helper()
+	s, sid := newEffectsSession(t)
+	oldTime := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	days := []chatHistoryFixtureDay{historyDayRows("2026-01-01", "EXPIRED_WINDOWS_CANARY", 1, &oldTime), historyDayRows("2026-01-02", "second", 1, &oldTime), historyDayRows("2026-01-03", "third", 1, &oldTime), historyDayRows("2026-01-04", "current", 1, nil)}
+	a := buildChatHistoryDayFixture(t, s, sid, days)
+	before := historyState(t, s, sid)
+	opened, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once, unblock sync.Once
+	var closes atomic.Int64
+	old := chatHistoryReadHook
+	chatHistoryReadHook = func(ctx context.Context, e chatHistoryReadEvent) error {
+		if e.SessionID == sid && e.Scope == "page" && e.Stream == "archive" && e.Address != nil && e.Address.PartitionKey == "2026-01-01" {
+			if e.Phase == "record_opened" {
+				once.Do(func() {
+					close(opened)
+					select {
+					case <-release:
+					case <-ctx.Done():
+					}
+				})
+			}
+			if e.Phase == "record_closed" {
+				closes.Add(1)
+			}
 		}
-	})
-	// Instrument positive control: prove this real handle actually prevents
-	// unlink on this native runner before interpreting sweep behavior.
-	err = os.Remove(paths[0])
-	require.True(t, errors.Is(err, windows.ERROR_SHARING_VIOLATION), "native handle must produce sharing-busy, not an unrelated ACL error: %v", err)
-	notice, err := s.SweepExpired(90)
-	require.NoError(t, err, "D14 sharing-busy skips only this present file and continues")
-	require.Equal(t, 2, notice.RemovedPartitions, "later two eligible files must still be processed")
-	require.True(t, notice.Expired)
-	_, err = os.Stat(paths[0])
-	require.NoError(t, err, "busy-present body is not expired")
-	for _, p := range paths[1:] {
-		_, err = os.Stat(p)
-		require.ErrorIs(t, err, os.ErrNotExist, "only actually deleted partitions absent")
+		return nil
 	}
-	_, err = os.Stat(filepath.Join(s.dir(), archiveCurrentFile))
-	require.NoError(t, err, "current append target retained")
-	require.NoError(t, held.Close())
-	held = nil
-	notice, err = s.SweepExpired(90)
+	var page ChatHistoryPage
+	var readErr error
+	opts := historyOptions(20)
+	opts.WindowStart = historyExpectedPosition(sid, a[0])
+	opts.WindowEnd = opts.WindowStart
+	go func() { defer close(done); page, readErr = s.ReadChatHistoryPage(context.Background(), sid, opts) }()
+	t.Cleanup(func() {
+		unblock.Do(func() { close(release) })
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("Windows record reader did not join")
+		}
+		chatHistoryReadHook = old
+	})
+	select {
+	case <-opened:
+	case <-done:
+		require.NoError(t, readErr, "native actual record-open seam")
+		t.Fatal("reader returned without real record handle")
+	case <-time.After(10 * time.Second):
+		t.Fatal("Windows real record-open barrier not reached")
+	}
+	path := filepath.Join(s.BaseDir(), sid, "2026-01-01.jsonl")
+	err := os.Remove(path)
+	require.True(t, errors.Is(err, windows.ERROR_SHARING_VIOLATION), "actual production reader handle must be sharing-busy, not a fake hook: %v", err)
+	require.True(t, isArchiveSharingBusy(fmt.Errorf("wrapped: %w", err)))
+	require.False(t, isArchiveSharingBusy(os.ErrPermission), "genuine permission failure is not expiry/busy")
+	n, err := s.RetentionSweep(90)
 	require.NoError(t, err)
-	require.Equal(t, 1, notice.RemovedPartitions, "normal next sweep retries once after handle close")
-	_, err = os.Stat(paths[0])
-	require.ErrorIs(t, err, os.ErrNotExist)
-	notice, err = s.SweepExpired(90)
+	require.Equal(t, 2, n, "busy first file cannot stop later eligible deletions")
+	afterBusy := historyState(t, s, sid)
+	require.NotEqual(t, before.RetentionGeneration, afterBusy.RetentionGeneration)
+	require.Contains(t, afterBusy.RetainedPartitions, "2026-01-01")
+	require.NotContains(t, afterBusy.RetainedPartitions, "2026-01-02")
+	require.NotContains(t, afterBusy.RetainedPartitions, "2026-01-03")
+	_, found, err := s.lookupChatHistoryTombstone(context.Background(), sid, opts.WindowStart)
 	require.NoError(t, err)
-	require.Equal(t, 0, notice.RemovedPartitions, "no fake repeat deletion")
-	t.Fatal("BLOCKED: chat retained-set generation and token+rank-only persisted tombstone inspection seam not implemented — required by D2/D14/T36/B50; exact actual removals above must also retire rich lookup/dependency fragments and preserve only token/rank, never entry ID/time/size/body/address")
+	require.False(t, found, "busy-present record is not a tombstone")
+	if appendWhileHeld {
+		writeDone := make(chan error, 1)
+		go func() {
+			_, err := s.AppendTranscriptAddressed(sid, TranscriptEntry{ID: "live-append", Role: "user", Content: "live", AgentID: "mia"})
+			writeDone <- err
+		}()
+		select {
+		case err := <-writeDone:
+			require.NoError(t, err)
+		case <-time.After(10 * time.Second):
+			unblock.Do(func() { close(release) })
+			<-writeDone
+			t.Fatal("actual history read held append locks")
+		}
+	}
+	unblock.Do(func() { close(release) })
+	<-done
+	require.NoError(t, readErr)
+	require.Equal(t, []string{a[0].EntryID}, historyIDs(page))
+	require.Positive(t, closes.Load(), "each actual record handle closes before next ordinary sweep")
+	n, err = s.RetentionSweep(90)
+	require.NoError(t, err)
+	require.Equal(t, 1, n, "closed handle permits the next ordinary sweep")
+	afterClose := historyState(t, s, sid)
+	require.NotEqual(t, afterBusy.RetentionGeneration, afterClose.RetentionGeneration)
+	tomb, found, err := s.lookupChatHistoryTombstone(context.Background(), sid, opts.WindowStart)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, opts.WindowStart, tomb.Position)
+	historyAssertNoRichExpiredMetadata(t, s, sid, a[0].EntryID)
+	n, err = s.RetentionSweep(90)
+	require.NoError(t, err)
+	require.Zero(t, n)
+	require.Equal(t, afterClose.RetentionGeneration, historyState(t, s, sid).RetentionGeneration)
 }
 
+func TestChatHistoryRetention_WindowsBusyContinueAndRetry(t *testing.T) {
+	historyWindowsHeldRecord(t, false)
+}
 func TestChatHistoryRetention_ActualRetainedContinuation_NativeWindows(t *testing.T) {
-	t.Fatal("BLOCKED: native Windows page reader/retained-set generation/tombstone seam not implemented — required by D14/T19/B27/B41/B50; busy-present boundary remains eligible and generation unchanged for its failed removal, later actual deletions advance generation; real permission error remains failure")
+	historyWindowsHeldRecord(t, false)
 }
-
 func TestChatHistoryReadCut_SlowReadDoesNotHoldAppendLocks_NativeWindows(t *testing.T) {
-	t.Fatal("BLOCKED: native Windows bounded-record read barrier/handle-close seam not implemented — required by D1/D14/T26/B32/B50; hold a real record read, append before release, prove only its handle defers sweep and the next sweep succeeds after close, never pin all selected partitions for entire page")
+	historyWindowsHeldRecord(t, true)
 }

@@ -1,13 +1,49 @@
 package gateway
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"testing"
 
-// D-B5 pins a positive advertised budget range, not a one-value enum. This is
-// distinct from the real factory's4194304 default checked in behavioral tests.
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/require"
+)
+
+// D-B5: validate the actual embedded/generated contract with an otherwise-valid
+// empty terminal response. Positive controls stop an unrelated schema error
+// from masquerading as budget validation. This is not a handwritten validator.
 func TestChatHistoryPage_AdvertisedBudgetSemanticBoundaries(t *testing.T) {
-	for _, value := range []string{"2097152", "4194304", "8388608", "0", "-1", "null", "1.5"} {
-		t.Run(value, func(t *testing.T) {
-			t.Fatalf("BLOCKED: prepared page factory/semantic-validation seam not implemented — required by D4a/D4b/D10/T27/B23/B38/B46/D-B5; advertised soft_byte_budget=%s: consistent positive integers2097152/4194304/8388608 must be accepted,0/-1/null/fraction rejected, byte_budget below min_rows and override/flag/cursor contradictions rejected atomically; do not mistake Go JSON decoding alone for semantic validation", value)
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{{"2097152", true}, {"4194304", true}, {"8388608", true}, {"0", false}, {"-1", false}, {"null", false}, {"1.5", false}} {
+		t.Run(tc.value, func(t *testing.T) {
+			body := []byte(fmt.Sprintf(`{"session_id":"budget-contract","entries":[],"has_earlier":false,"has_later":false,"page_info":{"mode":"latest","limit":40,"min_rows":20,"row_count":0,"source_group_count":0,"soft_byte_budget":%s,"projected_bytes":0,"byte_budget_exceeded":false,"stop_reason":"end","retention_generation":"retained","context":{"spans":[],"duplicate_ids":[]}}}`, tc.value))
+			msg, serverErr := validateBodyAgainstSchema("SessionHistoryResponse", body)
+			require.False(t, serverErr, "real schema must compile; this is not an infrastructure refusal")
+			if tc.valid {
+				require.Empty(t, msg, "consistent positive advertised budgets are not a one-value enum")
+			} else {
+				require.NotEmpty(t, msg)
+				require.Contains(t, msg, "soft_byte_budget", "the intended field, not an invalid control envelope")
+			}
 		})
 	}
+	t.Run("server_default", func(t *testing.T) {
+		api, cleanup := newTestRestAPI(t)
+		defer cleanup()
+		sid := createTestSession(t, api)
+		r, err := newHistoryPageRequest(sid, session.ChatHistoryPageOptions{}, historyPageProjectionDeps{ToolStore: newToolResultStore(api.homePath)})
+		require.NoError(t, err, "real factory supplies its one weigher/defaults")
+		require.NotNil(t, r)
+		prepared, err := r.Read(context.Background(), api.agentLoop.GetSessionStore())
+		require.NoError(t, err)
+		require.EqualValues(t, 4194304, prepared.Response.PageInfo.SoftByteBudget)
+		encoded, err := json.Marshal(prepared.Response)
+		require.NoError(t, err)
+		msg, serverErr := validateBodyAgainstSchema("SessionHistoryResponse", encoded)
+		require.False(t, serverErr)
+		require.Empty(t, msg)
+	})
 }

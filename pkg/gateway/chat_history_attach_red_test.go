@@ -253,5 +253,5 @@ func TestUnavailableHistory_IncompleteControlsNeverComplete(t *testing.T) {
 }
 
 func TestUnavailableHistory_ActualCurrentInteractionsAndEngineStop(t *testing.T) {
-	t.Fatal("BLOCKED: unavailable-history running-engine fixture/current approval-question-secret/Stop observation seam not implemented — required by D7a/T31/B42/B43/B49/D-N2; real engine must observe Stop after live_only, saved-send receipt once, no attention seen/restart sweep/history success; REST/hub assertions alone are not engine/UAT reachability proof")
+	pagingLiveOnlyEngineStop(t)
 }
