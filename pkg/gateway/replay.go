@@ -303,7 +303,9 @@ func (sr *streamReplayState) emitToolCallFrames(
 	buildResult func(session.ToolCall, string, string) generated.ToolCallResultFrame,
 	emitFrame func(any) error,
 ) (streamReplayStateFlow, error) {
-	if sr.isSpawnParent {
+	// A launch awaiting approval has not started a child. Replay it through
+	// the same START-only path as any other pending call.
+	if sr.isSpawnParent && tc.Status != "pending" {
 		return sr.emitSpawnParentToolCall(tc, mediaStore, buildStart, buildResult, emitFrame)
 	}
 	return sr.emitFlatToolCall(tc, mediaStore, buildStart, buildResult, emitFrame)
@@ -396,7 +398,7 @@ func (sr *streamReplayState) emitSpawnParentToolCall(
 // emitFlatToolCall emits the tool_call_start / [tool_call_result] / [media]
 // sequence for a regular (non-spawn, or nested) ToolCall. Returns
 // streamReplayStateContinue when the result is deliberately withheld
-// (stillActive), matching the original inline `continue`, or
+// (pending or stillActive), matching the original inline `continue`, or
 // streamReplayStateNext to let the outer loop's iteration end normally.
 func (sr *streamReplayState) emitFlatToolCall(
 	tc session.ToolCall,
@@ -413,6 +415,11 @@ func (sr *streamReplayState) emitFlatToolCall(
 	}
 	if err2 := emitFrame(buildStart(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
 		return streamReplayStateReturn, err2
+	}
+	if tc.Status == "pending" {
+		// Approval has no outcome yet. A result frame would falsely settle the
+		// call (toolCallResultStatus maps non-success terminal states to error).
+		return streamReplayStateContinue, nil
 	}
 	if sr.stillActive {
 		// A spawn/delegate call whose real sub-turn is still running but

@@ -284,7 +284,9 @@ An error that carries both `session_id` and `client_message_id` (and no `first_m
 
 ### `tool_call_start`
 
-Signals that the agent has invoked a tool and execution is beginning. Renders an in-progress tool call badge.
+Signals a tool invocation. Renders an in-progress tool call badge.
+
+On transcript replay after a reload or reconnect, a call still awaiting approval emits `tool_call_start` without `tool_call_result`. Waiting for approval is not a terminal error or a completed execution. A completed sibling call still replays its own result normally. Live pending approvals are restored separately through `session_state.pending_approvals`.
 
 ```json
 {

@@ -290,7 +290,9 @@ When a tool needs your decision, Omnipus opens an approval pop-up over the app. 
 | **Deny** | Refuses the call. |
 | **Cancel** | Closes the request without running it. |
 
-Escape, the close control or clicking outside an unexpired pop-up dismisses it locally and sends Deny; it never approves the request. After reconnecting, a request whose original details are unavailable offers Deny only.
+Escape, the close control or clicking outside an unexpired pop-up dismisses it locally and sends Deny; it never approves the request.
+
+Reloading the page or reconnecting does not decide a live approval. While the request is still pending, its tool call stays in progress in the restored conversation — it is not shown as a failed call. The pending request is offered again and can still be answered until it is resolved or expires. If its original details are unavailable after reconnecting, it offers Deny only.
 
 What **Always Allow** remembers lasts only for that chat and ends with it. Agents that this chat hands work to inherit it. Nobody else's chats are affected, and there is no list of remembered approvals to review. For most tools it remembers the exact call, with the same arguments. For a shell command it offers a choice; see "Command rules compared with one-time approvals" below.
 
