@@ -230,6 +230,10 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 		"rd.ws = state.Workspace": true,
 		"return &workspace.State{Workspace: rw.ws, Delegation: edges, Revision: revision}": true,
 		"rw.ws = state.Workspace": true,
+		// Train 1 main-chat retry: ReadStateLocked returns workspace.State;
+		// these read its shared workspace record, not an agent's home.
+		"if len(state.Workspace.CoreTeam) > 0 {":                                  true,
+		"if mainsErr := a.ensureMainsForTeam(state.Workspace); mainsErr != nil {": true,
 	},
 	// Train 1 #1363: ReadState returns workspace.State; this is the default
 	// multi-agent workspace record, not an agent's home directory.
