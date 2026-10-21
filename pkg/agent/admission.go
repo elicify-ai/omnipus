@@ -582,7 +582,10 @@ func (al *AgentLoop) promoteSteeredExecution(next steerQueueEntry) {
 //
 // Add() happens on the CALLER's goroutine, before the new one starts, so a
 // Close racing a dispatch either sees the turn or happens strictly before
-// it was ever admitted. A turn calling drainSteerQueue from its own defer
+// it was ever admitted. That holds only because Close drains this front
+// LAST, after every caller that can dispatch here (active requests such as
+// delegate redirect's resume waiter, session workers, tasks, recaps) has
+// already been drained — see loop.go::Close. A turn calling drainSteerQueue from its own defer
 // adds the promotion's count while still holding its own, so the counter
 // cannot dip to zero between the two.
 func (al *AgentLoop) goSteeredTurn(run func()) {

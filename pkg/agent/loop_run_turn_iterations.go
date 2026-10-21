@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
@@ -276,6 +277,9 @@ turnLoop:
 	// rather than count as elapsed time against the horizon.
 	er.cn.rc.rx.rr.rq.ri.rf.rt.al.tickSearchPromotionHorizon(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.manifestBucket())
 
+	if hook := naturalExitSteeringPollTestHook; hook != nil {
+		hook()
+	}
 	if steerMsgs, steerCorrelationIDs := er.cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
 		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
 			map[string]any{
@@ -285,11 +289,20 @@ turnLoop:
 			})
 		er.cn.rc.rx.rr.rq.ri.pendingMessages = append(er.cn.rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
 		er.cn.rc.rx.rr.rq.ri.pendingSteeringReceipts = append(er.cn.rc.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
-		er.cn.rc.rx.finalContent = ""
 		// I2: guard against bypassing the hard iteration ceiling via goto.
 		// If the ceiling is exceeded, fall through to finalization rather than
-		// re-entering turnLoop, which would be invalid at this point anyway.
+		// re-entering turnLoop, which would be invalid at this point anyway;
+		// the completed answer then stays the turn's final content.
 		if er.cn.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() < 2*er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations {
+			// Keep the completed answer before continuing for the steering:
+			// clearing it unrecorded lost it from history and transcript. A
+			// synthetic stop notice is not an answer: the follow-up
+			// supersedes it, as in finishToolIteration.
+			if er.cn.rc.rx.finalIsModelAnswer && er.cn.keepAnswerBeforeSteering(er.cn.rc.rx.finalContent, false) {
+				return er.cn.ret0
+			}
+			er.cn.rc.rx.finalContent = ""
+			er.cn.rc.rx.finalIsModelAnswer = false
 			goto turnLoop
 		}
 	}
@@ -333,6 +346,7 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 			return agentLoopRunTurnConductorRunIterationsRetryResponseContinueL2
 		case truncationActionEnd:
 			er.cn.rc.rx.finalContent = verdict.finalContent
+			er.cn.rc.rx.finalIsModelAnswer = false
 			return agentLoopRunTurnConductorRunIterationsRetryResponseBreakL2
 		}
 	}
@@ -562,6 +576,11 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 			})
 		cn.rc.rx.rr.rq.ri.pendingMessages = append(cn.rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
 		cn.rc.rx.rr.rq.ri.pendingSteeringReceipts = append(cn.rc.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
+		// The response just completed is a real answer: keep it before the
+		// turn continues for the steering (UAT-A, bundle #1370 at 1380a6d66).
+		if cn.keepAnswerBeforeSteering(cn.rc.rx.rr.rq.ri.rf.response.Content, true) {
+			return agentLoopRunTurnConductorRunIterationsReturn
+		}
 		return agentLoopRunTurnConductorRunIterationsContinue
 	}
 	// ADR-087 D4/D6/D9: the one success-arm truncation handler,
@@ -583,6 +602,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 			return agentLoopRunTurnConductorRunIterationsContinueL1
 		case truncationActionEnd:
 			cn.rc.rx.finalContent = verdict.finalContent
+			cn.rc.rx.finalIsModelAnswer = false
 			return agentLoopRunTurnConductorRunIterationsBreakL1
 		}
 	}
@@ -644,7 +664,8 @@ func (cn *agentLoopRunTurnConductorRunIterations) surfaceEmptyRetryOutcome() age
 // finishTextResponse finishes a text response or releases a repaired tool call for dispatch.
 func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoopRunTurnConductorRunIterationsFlow {
 	if len(cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || cn.rc.rx.rr.rq.ri.gracefulTerminal {
-		if strings.TrimSpace(cn.responseContent) == "" {
+		answered := strings.TrimSpace(cn.responseContent) != ""
+		if !answered {
 			cn.responseContent = defaultResponse
 			cn.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
 			// H5: one line carrying what actually came back (shape only,
@@ -669,6 +690,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoop
 			cn.rc.rx.rr.rq.ri.rf.rt.ts.resolveContinuation()
 		}
 		cn.rc.rx.finalContent = cn.responseContent
+		cn.rc.rx.finalIsModelAnswer = answered
 		logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
 			map[string]any{
 				"agent_id":      cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -732,4 +754,70 @@ func (cn *agentLoopRunTurnConductorRunIterations) dispatchToolCalls() agentLoopR
 		return agentLoopRunTurnConductorRunIterationsBreakL1
 	}
 	return agentLoopRunTurnConductorRunIterationsNext
+}
+
+// naturalExitSteeringPollTestHook is a test-only seam fired at the turn's
+// natural exit, just before the steering queue is polled there - so a test
+// can queue a follow-up that reaches this poll and not the earlier
+// direct-response one. nil in production.
+var naturalExitSteeringPollTestHook func()
+
+// keepAnswerBeforeSteering records a direct (tool-free) answer the model
+// completed before steering continued the same turn, exactly as a tool-call
+// round records its narration (agentLoopRunTurnResponse.recordToolCalls):
+// into the model window and this turn's working messages, so the next call
+// builds on the answer instead of redrafting it, and as its own chat
+// transcript entry carrying the round's live message id and usage, so a
+// reload still shows it. Without this the continuation dropped the answer
+// (UAT-A on bundle #1370 at 1380a6d66: a follow-up sent into a running reply
+// left only the second reply after a reload, and the model redrafted the
+// first). Reports true when recording failed and the turn has been ended.
+//
+// An auto-continued answer (ADR-087 D6) is kept whole: at the direct-response
+// site the round's content is only the continuation, so the accumulated
+// prefix is folded in (fromDirectResponse); at the natural exit finalContent
+// already holds it. The continuation chain is taken out of the working
+// messages (the model sees the kept answer once) and the accumulator is
+// retired, so a later answer is not prefixed with this one.
+func (cn *agentLoopRunTurnConductorRunIterations) keepAnswerBeforeSteering(content string, fromDirectResponse bool) bool {
+	ri := cn.rc.rx.rr.rq.ri
+	ts := ri.rf.rt.ts
+	if fromDirectResponse && ts.continuationAccumulated() != "" {
+		content = ts.appendToAccumulator(content)
+	}
+	if chain := cn.rc.rx.rr.continuationChain; len(chain) > 0 {
+		ri.messages = stripContinuationChain(ri.messages, chain)
+		cn.rc.rx.rr.continuationChain = nil
+	}
+	err := func() error {
+		if content != "" {
+			msg := providers.Message{Role: "assistant", Content: content}
+			if resp := ri.rf.response; resp != nil && resp.Content == content {
+				msg.ReasoningContent = resp.ReasoningContent
+				msg.ThinkingBlocks = append([]string(nil), resp.ThinkingBlocks...)
+			}
+			if _, err := ts.appendWindowMessage(msg, windowProducerAssistant); err != nil {
+				return err
+			}
+			ri.messages = append(ri.messages, msg)
+		}
+		ts.appendIntermediateAssistantTranscript(content)
+		if err := ts.callAccountingError(); err != nil {
+			return err
+		}
+		if content != "" {
+			ts.markLastStreamerTranscriptPersisted()
+		}
+		ts.retireContinuationAccumulator()
+		return nil
+	}()
+	if err == nil {
+		return false
+	}
+	rt := ri.rf.rt
+	var status TurnEndStatus
+	cn.rc.ret0, status, cn.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
+	ri.turnStatus = status
+	cn.ret0 = agentLoopRunTurnConductorReturn
+	return true
 }
