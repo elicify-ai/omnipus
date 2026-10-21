@@ -19,7 +19,7 @@ func TestTodoActiveForm(t *testing.T) {
 			t.Fatalf("encode todo with active_form: %v", err)
 		}
 		var fields map[string]any
-		if err := json.Unmarshal(data, &fields); err != nil {
+		if err = json.Unmarshal(data, &fields); err != nil {
 			t.Fatalf("decode round-trip: %v", err)
 		}
 		if fields["text"] != "Draft the Q4 summary" || fields["status"] != "in_progress" || fields["active_form"] != "Drafting the Q4 summary" || len(fields) != 3 {
@@ -28,7 +28,7 @@ func TestTodoActiveForm(t *testing.T) {
 
 		// Reusing a decoder destination must not retain an earlier active form.
 		withoutForm := `{"text":"Publish the summary","status":"completed"}`
-		if err := json.Unmarshal([]byte(withoutForm), &td); err != nil {
+		if err = json.Unmarshal([]byte(withoutForm), &td); err != nil {
 			t.Fatalf("decode existing todo without active_form: %v", err)
 		}
 		data, err = json.Marshal(td)
@@ -52,8 +52,10 @@ func TestTodoActiveForm(t *testing.T) {
 			{name: "499", form: strings.Repeat("a", 499)},
 			{name: "500", form: strings.Repeat("a", 500)},
 			{name: "500_unicode", form: strings.Repeat("界", 500)},
+			{name: "500_supplementary", form: strings.Repeat("\U00020000", 500)},
 			{name: "501", form: strings.Repeat("a", 501), wantErr: "todo[0]: active_form must be 500 characters or fewer"},
 			{name: "501_unicode", form: strings.Repeat("界", 501), wantErr: "todo[0]: active_form must be 500 characters or fewer"},
+			{name: "501_supplementary", form: strings.Repeat("\U00020000", 501), wantErr: "todo[0]: active_form must be 500 characters or fewer"},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -62,7 +64,7 @@ func TestTodoActiveForm(t *testing.T) {
 					t.Fatalf("encode input: %v", err)
 				}
 				var td Todo
-				if err := json.Unmarshal(data, &td); err != nil {
+				if err = json.Unmarshal(data, &td); err != nil {
 					t.Fatalf("decode input: %v", err)
 				}
 				err = validateTodos([]Todo{td})
