@@ -246,6 +246,8 @@ func grReminderHistory(t *testing.T) {
 	call := grAwaitCall(t, h.root, run)
 	h.finish(t, run, call)
 	entries := h.visibleHistory(t)
+	assert.Equal(t, 1, grHasSystemLine(entries, "Goal reminder: continuing work toward the goal"),
+		"R2: the documented reminder line must survive in the reopened public history")
 	var events, users int
 	for _, entry := range entries {
 		if entry.Role == "user" {

@@ -105,8 +105,12 @@ func (h *grHarness) launchReviewer(t *testing.T, callID string) *session.Lifecyc
 	assert.Equal(t, launched.Generation, call.record.Generation)
 	require.NotNil(t, call.record.ExecutionID)
 	assert.NotEmpty(t, call.record.ExecutionID.RunID)
-	assert.Equal(t, h.al.executionClaimFor(call.record), call.claim, "reviewer must have its own legitimate bound identity")
+	assert.NotEqual(t, uint64(0), call.record.ExecutionID.BootSeq, "reviewer must use a genuine nonzero boot epoch")
+	want := executionClaim{SessionID: launched.SessionID, Generation: launched.Generation,
+		RunID: call.record.ExecutionID.RunID, BootSeq: call.record.ExecutionID.BootSeq}
+	assert.Equal(t, want, call.claim, "reviewer must have its own legitimate bound identity")
 	require.NotNil(t, call.owner, "reviewer completion needs the real execution owner")
+	assert.Equal(t, want, call.owner.claim, "the actual reviewer owner must match its own independently launched session and generation")
 	h.reviewer.release(call)
 	select {
 	case <-call.owner.done:

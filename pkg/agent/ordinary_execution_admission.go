@@ -156,8 +156,8 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: read saved session: %w", err)
 	}
 	if opts.goalWake != nil {
-		if err := al.checkOrdinaryGoalWake(rec, opts.goalWake); err != nil {
-			return ordinaryExecutionPreparation{}, err
+		if wakeErr := al.checkOrdinaryGoalWake(rec, opts.goalWake); wakeErr != nil {
+			return ordinaryExecutionPreparation{}, wakeErr
 		}
 	}
 	if fenceErr := al.inboundStopFenceInFlight(sessionID); fenceErr != nil {

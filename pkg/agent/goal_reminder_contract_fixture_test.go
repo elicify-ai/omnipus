@@ -316,7 +316,12 @@ func (h *grHarness) assertAdmission(t *testing.T, call *grCall, prior *session.L
 	require.NotNil(t, call.record.ExecutionID)
 	assert.NotEqual(t, prior.ExecutionID.RunID, call.record.ExecutionID.RunID, "R1: reminder needs a fresh execution ID")
 	assert.NotEmpty(t, call.record.ExecutionID.RunID)
+	assert.NotEqual(t, uint64(0), call.record.ExecutionID.BootSeq, "R1: the admitted execution must use a genuine nonzero boot epoch")
 	assert.Equal(t, h.al.bootEpochFor(), call.record.ExecutionID.BootSeq)
-	assert.Equal(t, h.al.executionClaimFor(call.record), call.claim, "R1: live reminder turn must be bound to its durable execution identity")
-	assert.NotNil(t, call.owner, "R1: reminder must have the ordinary execution owner, not a manual running stamp")
+	want := executionClaim{SessionID: h.id, Generation: prior.Generation + 1,
+		RunID: call.record.ExecutionID.RunID, BootSeq: call.record.ExecutionID.BootSeq}
+	assert.Equal(t, want, call.claim, "R1: live reminder turn must be bound to its durable execution identity")
+	if assert.NotNil(t, call.owner, "R1: reminder must have the ordinary execution owner, not a manual running stamp") {
+		assert.Equal(t, want, call.owner.claim, "R1: the actual ordinary owner must belong to the producing reminder, not another session or round")
+	}
 }
