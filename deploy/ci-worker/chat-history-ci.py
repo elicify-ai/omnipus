@@ -133,7 +133,7 @@ def validate_measurement_receipt(receipt, commit):
     if not receipt.is_file():
         raise RuntimeError("T18 producer missing: no measurement receipt was written")
     lines = receipt.read_text(encoding="utf-8").splitlines()
-    if len(lines) != 3 or lines[0] != "HEAD:" + commit:
+    if len(lines) != 3 or lines[0] != "HEAD: " + commit:
         raise RuntimeError("T18 receipt missing/short or candidate HEAD does not match Section O")
     records = [json.loads(line) for line in lines[1:]]
     if any(not isinstance(row, dict) for row in records):
