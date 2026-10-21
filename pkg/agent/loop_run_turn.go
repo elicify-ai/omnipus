@@ -128,6 +128,9 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	truncReason := rz.rc.rx.rr.rq.ri.rf.rt.ts.getTruncationReason()
 	if iterationLimitNotice {
 		if noticeErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.recordIterationLimitNotice(rz.rc.rx.finalContent, rz.rc.rx.rr.rq.ri.rf.rt.al.bus); noticeErr != nil {
+			// The strict chat-only write failed. Do not offer its synthetic
+			// prose to the deferred assistant finalizer; keep real narration.
+			rz.rc.rx.rr.rq.ri.rf.rt.ts.SetFinalContent("")
 			notSaved := &messageNotSavedError{role: "system", cause: noticeErr}
 			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
