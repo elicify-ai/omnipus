@@ -55,6 +55,7 @@ func TestOrdinaryEnableREST_AnUnconfirmedRestartIsReportedTruthfully(t *testing.
 			release()
 			code := f.await(channels.PairingStatusCode)
 			require.Empty(t, code.RequestID, "the late code is the unowned Connectors pairing")
+			reloadWaitTimeout = prev // the shortened wait only forced the unconfirmed reply; settle with the normal one
 			require.NoError(t, waitForReload(f.al, f.svc.reloadOutcome))
 		})
 	}

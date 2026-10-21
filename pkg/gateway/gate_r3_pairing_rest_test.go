@@ -413,6 +413,7 @@ func TestPairingRetryREST_SlowReloadKeepsTheReservation(t *testing.T) {
 	code := f.await(channels.PairingStatusCode)
 	require.Equal(t, "req-a", code.RequestID, "the late start still belongs to the chat that retried")
 	require.Equal(t, f.chatA, code.SessionID)
+	reloadWaitTimeout = prev // the shortened wait only forced the unconfirmed reply; settle with the normal one
 	require.NoError(t, waitForReload(f.al, f.svc.reloadOutcome))
 }
 

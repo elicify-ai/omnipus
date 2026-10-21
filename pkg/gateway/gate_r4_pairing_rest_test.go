@@ -209,6 +209,7 @@ func TestPairingRetryREST_StopDuringADelayedStartStartsNoPairing(t *testing.T) {
 	require.Equal(t, "req-a", f.await(channels.PairingStatusStopped).RequestID, "the Stop revoked the waiting attempt")
 
 	release()
+	reloadWaitTimeout = prev // the shortened wait only forced the unconfirmed reply; settle with the normal one
 	require.NoError(t, waitForReload(f.al, f.svc.reloadOutcome))
 	ch := f.factory.latest(t)
 	ch.mu.Lock()
