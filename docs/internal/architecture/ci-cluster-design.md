@@ -21,34 +21,42 @@ every exit path — success, gate failure, pre-flight refusal, and Ctrl-C.**
 
 ## The tier map
 
-Gates are grouped so the heaviest Go work gets the biggest machine and lighter work overlaps
-it. The map is data at the top of `ci-cluster.sh` (machine ids from `CI_CLUSTER_*_MACHINE`
-env vars, whole map from `CI_CLUSTER_TIERS`) — never flow — because tier machines are
-provisioned by the harness and their ids are not known when the script is written.
+Gates are grouped so CPU-sensitive Go and SPA work runs sequentially on performance while
+contracts and cross-platform checks overlap it on shared machines. The map is data at the
+top of `ci-cluster.sh` (machine ids from `CI_CLUSTER_*_MACHINE` env vars, whole map from
+`CI_CLUSTER_TIERS`) — never dispatch logic. Placement follows the founder's 2026-10-21
+"ok a" decision; the 2026-10-12 no-resize ruling stands.
 
-| Tier | Machine | Gates (verified against `runci.sh`'s `case` block) |
+| Tier | Default machine | Gates, in dispatch order (from `runci.sh`'s `case` block) |
 |---|---|---|
-| `go` | 1 (largest) | `gofmt go-build go-vet lint go-test go-race` |
-| `node` | 2 | `contracts spa` |
-| `xplat` | 3 | `embed-build records-no-sqlite cli-verb-guard` |
+| `go` | `080d74db170408` (performance) | `gofmt go-build go-vet lint go-test go-race spa` |
+| `node` | `d8d0d90a1e9648` (shared) | `contracts` |
+| `xplat` | `78113d4f329908` (shared) | `embed-build records-no-sqlite cli-verb-guard` |
+
+The new placement has not been timed as a whole: the former Go-only tier was ~43 min
+(`go-race` alone ~25), contracts + SPA together ~12 min, and xplat ~8 min. The `go` tier
+now adds SPA time; contracts-only time has not been measured separately.
 
 Why these groups:
 
-- **`go` gets the big box** because `go-test` (~19 min for `pkg/agent` alone, measured
-  uncontended) and `go-race` dominate wall-clock; everything else rides along on a machine
-  that is CPU-saturated anyway. `gofmt` is seconds.
-- **`node` runs the npm side**: `contracts` (npm ci + verify-contracts) and `spa` (npm ci +
-  typecheck + vitest). The original proposal listed "typecheck, vitest, contracts" — but
-  `typecheck` and `vitest` are *steps inside the `spa` gate*, not dispatchable gates; `spa`
-  is the dispatchable unit that contains them.
+- **`go` uses performance** because `go-test` and `go-race` dominate CPU-bound work;
+  `spa` follows all of them in the same sequential tier, so it cannot compete with them.
+  `spa` runs npm ci + typecheck + vitest; `typecheck` and `vitest` are steps inside that
+  gate, not separately dispatchable gates.
+- **`node` keeps contracts only** (npm ci + verify-contracts). Both `contracts` and `spa`
+  call `runci.sh::run_npm`, which unconditionally runs `npm ci` and replaces `node_modules`.
+  A combined tier would not reuse an installed dependency tree. Keeping contracts on its
+  existing shared machine is the smallest change and preserves all per-tier overrides.
 - **`xplat` runs the cross-platform path**: `embed-build` (SPA build + embed sync + Go build,
   whose `run_gobuild` includes the mipsle/lite cross-compile link checks), plus the two small
   gates the proposal didn't place — `records-no-sqlite` (branch-scoped, usually skips) and
   `cli-verb-guard` (a grep).
-- **`e2e` is deliberately NOT in the default map**: it runs ~20–30 min, needs the
-  OpenRouter secrets, and would pin one machine for the length of a full cluster run. Run it
-  per-machine by hand (`fly ssh console --app ci-omnipus-1 --machine <id> -C
-  "/cache/runci.sh <ref> e2e"`) or add it to a custom `CI_CLUSTER_TIERS` line.
+- **`e2e` is deliberately NOT in the default map**: it runs ~20–30 min and needs the
+  OpenRouter secrets. Run it on performance `080d74db170408` after the entire `go` tier
+  (including SPA), never in parallel: by hand (`fly ssh console --app ci-omnipus-1
+  --machine 080d74db170408 -C "/cache/runci.sh <ref> e2e"`) or append `e2e` after `spa`
+  on the same `go` line in a custom `CI_CLUSTER_TIERS` map. Do not add a second tier on
+  that machine.
 - **`all` is refused outright** (exit 2): it would run every gate serially on one machine —
   exactly what the cluster exists to avoid.
 - **One tier per machine, enforced**: two tiers on one machine would serialize on that
@@ -117,10 +125,10 @@ there is no plan to resize; the work is placed to fit the machine.
 
 | Work | Where | Why |
 |---|---|---|
-| `go` tier (`go-test`, `go-race`) | the performance machine | sustained, CPU-bound compiles; `runci.sh`'s contention tuning (`-p 2` + `GOMAXPROCS=4`) assumes 8 real cores |
-| full `e2e` gate | the performance machine, **after** the go tier, never in parallel with it | 24 shards of Chromium rendering; starves under shared vCPU throttling |
-| `node` tier (`contracts`, `spa`) | a shared machine (default `d8d0d90a1e9648`) | short and light enough |
-| `xplat` tier (`embed-build`, `records-no-sqlite`, `cli-verb-guard`) | a shared machine (default `78113d4f329908`) | same |
+| `go` tier (Go gates, then `spa`) | the performance machine | CPU-bound Go work and timing-sensitive SPA tests run sequentially, without competing for cores |
+| full `e2e` gate | the performance machine, **after** the entire go tier including SPA, never in parallel with it | 24 shards of Chromium rendering; starves under shared vCPU throttling |
+| `node` tier (`contracts` only) | a shared machine (default `d8d0d90a1e9648`) | contract verification stays separate; no installed node_modules reuse between gates |
+| `xplat` tier (`embed-build`, `records-no-sqlite`, `cli-verb-guard`) | a shared machine (default `78113d4f329908`) | unchanged placement |
 | targeted few-spec e2e rerun (`E2E_SPECS=...`) | may use a shared machine | a handful of specs, no matrix |
 
 **Measured, not assumed.** Shared vCPUs throttle under sustained load. On 2026-10-11 the full
@@ -129,6 +137,10 @@ failed nearly everything). `embed-build` on a shared machine took ~46 min agains
 performance one. Both were a **placement error** - heavy sustained work put on a shared machine -
 not undersizing. A false RED from a starved machine trains people to ignore a gate (see the e2e
 trap history in `deploy/ci-worker/CLAUDE.md`), which is why the placement rule above is a rule.
+The 2026-10-21 founder decision moves SPA for the same placement reason: three shared-machine
+runs each failed a different timing test, the performance run passed all 13,599 tests, and a
+shared spare showed ~62% CPU steal (time taken by other virtual machines). These are the
+decision's supplied measurements, not a new cluster run for this dispatcher change.
 
 ## Configuration surface
 

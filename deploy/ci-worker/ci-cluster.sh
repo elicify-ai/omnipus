@@ -75,15 +75,17 @@ PROBE_INTERVAL=5
 
 # CI_CLUSTER_TIERS overrides the whole map. One tier per line:
 #   <name>|<machine-id>|<gate> <gate> ...
-# The default map takes machine ids from per-tier env vars; the defaults are the
-# CURRENT placement (founder ruling 2026-10-12): `go` on the one PERFORMANCE machine, `node`
-# and `xplat` on SHARED machines (the full e2e gate also belongs on the performance machine,
-# after the go tier, never in parallel). Override any id with the env var; an explicitly EMPTY
-# id (CI_CLUSTER_NODE_MACHINE=) means "tier not provisioned" and the tier is skipped.
+# The default map takes machine ids from per-tier env vars. Founder decision 2026-10-21:
+# `spa` follows all Go gates in the `go` tier on the PERFORMANCE machine; full e2e runs
+# there afterwards, never in parallel. The 2026-10-12 no-resize ruling stands. `node`
+# keeps contracts only, and `xplat` stays on SHARED: contracts and spa each reinstall
+# node_modules, so keeping contracts separate preserves every per-tier override.
+# Override any id with the env var; an explicitly EMPTY id (CI_CLUSTER_NODE_MACHINE=)
+# means "tier not provisioned" and the tier is skipped.
 default_tier_map() {
   printf '%s\n' \
-    "go|${CI_CLUSTER_GO_MACHINE-080d74db170408}|gofmt go-build go-vet lint go-test go-race" \
-    "node|${CI_CLUSTER_NODE_MACHINE-d8d0d90a1e9648}|contracts spa" \
+    "go|${CI_CLUSTER_GO_MACHINE-080d74db170408}|gofmt go-build go-vet lint go-test go-race spa" \
+    "node|${CI_CLUSTER_NODE_MACHINE-d8d0d90a1e9648}|contracts" \
     "xplat|${CI_CLUSTER_XPLAT_MACHINE-78113d4f329908}|embed-build records-no-sqlite cli-verb-guard"
 }
 
@@ -113,10 +115,16 @@ ci-cluster.sh — fan CI gates across the Fly worker cluster, scale to zero.
 
 Usage: deploy/ci-worker/ci-cluster.sh <git-ref> [tier ...]
 
+Default tiers (concurrent across machines; gates sequential within each tier):
+  go     gofmt go-build go-vet lint go-test go-race spa  (performance)
+  node   contracts                                     (shared)
+  xplat  embed-build records-no-sqlite cli-verb-guard    (shared)
+Full e2e runs separately on performance after the entire go tier, including spa.
+
 Env:
   CI_CLUSTER_APP            Fly app name (default ci-omnipus-1)
-  CI_CLUSTER_GO_MACHINE     machine id of the `go` tier   (default 080d74db170408, the performance machine)
-  CI_CLUSTER_NODE_MACHINE   machine id of the `node` tier (default d8d0d90a1e9648, shared)
+  CI_CLUSTER_GO_MACHINE     machine id for Go + SPA       (default 080d74db170408, performance)
+  CI_CLUSTER_NODE_MACHINE   machine id for contracts      (default d8d0d90a1e9648, shared)
   CI_CLUSTER_XPLAT_MACHINE  machine id of the `xplat` tier (default 78113d4f329908, shared)
   CI_CLUSTER_TIERS          full map override, one "<name>|<machine-id>|<gates>" per line
   CI_CLUSTER_START_TIMEOUT  seconds to wait for a started machine to become reachable
