@@ -226,8 +226,8 @@ func historyPublish(dir string, t *chatHistoryIndexTree, cp *historyCheckpoint, 
 	if cp.MutationEnd != t.end+int64(len(b)) {
 		return errors.New("unstable history transaction footer")
 	}
-	if n, err := t.file.WriteAt(b, t.end); err != nil {
-		return err
+	if n, writeErr := t.file.WriteAt(b, t.end); writeErr != nil {
+		return writeErr
 	} else if n != len(b) {
 		return io.ErrShortWrite
 	}
@@ -270,13 +270,16 @@ func historyPublishRoot(dir string, t *chatHistoryIndexTree, cp historyCheckpoin
 func historyDecodeArchive(b []byte) (ArchiveRecord, error) {
 	var r ArchiveRecord
 	if len(b) == 0 || b[len(b)-1] != '\n' {
-		return r, errors.New("unframed canonical history record")
+		return r, historyBuildFailure("corrupt_archive", errors.New("unframed canonical history record"))
 	}
 	if err := json.Unmarshal(b[:len(b)-1], &r); err != nil {
-		return r, err
+		return r, historyBuildFailure("corrupt_archive", err)
 	}
-	if r.ViewMembership == "" {
-		return r, errors.New("unconverted archive")
+	if r.ViewMembership != ViewMembershipChat && r.ViewMembership != ViewMembershipModel && r.ViewMembership != ViewMembershipBoth {
+		return r, historyBuildFailure("unconverted", errors.New("unsupported archive membership"))
+	}
+	if err := r.validateToolCallEffect(); err != nil {
+		return r, historyBuildFailure("invalid_reference", err)
 	}
 	return r, nil
 }
@@ -332,47 +335,49 @@ func (o *chatHistoryOwner) retire(dir, keep string) error {
 
 // validateIndexTail never trims framed damage or any canonical bytes. Only the
 // incomplete unpublished final transaction can be redone from the known root.
-func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint) (*historyCheckpoint, error) {
+func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint) (historyCheckpoint, bool, error) {
 	info, err := t.file.Stat()
 	if err != nil {
-		return nil, err
+		return historyCheckpoint{}, false, err
 	}
 	off := cp.MutationEnd
-	var saved *historyCheckpoint
+	var saved historyCheckpoint
+	found := false
 	for off < info.Size() {
-		frame, next, e := t.readFrame(off, info.Size())
-		if errors.Is(e, io.ErrUnexpectedEOF) {
+		frame, next, readErr := t.readFrame(off, info.Size())
+		if errors.Is(readErr, io.ErrUnexpectedEOF) {
 			ev := chatHistoryPublicationEvent{SessionID: cp.SessionID, Operation: "reconcile", Point: "before_torn_tail_trim"}
 			if err = historyPublication(ev); err != nil {
-				return nil, err
+				return historyCheckpoint{}, false, err
 			}
 			if err = t.file.Truncate(cp.MutationEnd); err != nil {
-				return nil, err
+				return historyCheckpoint{}, false, err
 			}
 			if err = t.file.Sync(); err != nil {
-				return nil, err
+				return historyCheckpoint{}, false, err
 			}
 			ev.Point = "torn_tail_trimmed"
 			if err = historyPublication(ev); err != nil {
-				return nil, err
+				return historyCheckpoint{}, false, err
 			}
-			return nil, nil
+			return historyCheckpoint{}, false, nil
 		}
-		if e != nil {
-			return nil, e
+		if readErr != nil {
+			return historyCheckpoint{}, false, readErr
 		}
 		if frame.Commit != nil {
-			saved = frame.Commit
+			saved = *frame.Commit
+			found = true
 			if saved.MutationEnd != next || saved.SessionID != cp.SessionID || saved.File != cp.File {
-				return nil, errors.New("invalid unpublished history checkpoint")
+				return historyCheckpoint{}, false, errors.New("invalid unpublished history checkpoint")
 			}
 		}
 		off = next
 	}
-	if info.Size() > cp.MutationEnd && saved == nil {
-		return nil, errors.New("unpublished history transaction has no footer")
+	if info.Size() > cp.MutationEnd && !found {
+		return historyCheckpoint{}, false, errors.New("unpublished history transaction has no footer")
 	}
-	return saved, nil
+	return saved, found, nil
 }
 func historyCloneCheckpoint(cp historyCheckpoint) historyCheckpoint {
 	out := cp

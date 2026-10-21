@@ -38,7 +38,6 @@ type chatHistoryIndexTree struct {
 	readCache map[int64]historyNode
 	order     []int64
 	buffer    []byte
-	scope     string
 	sid       string
 	// planning exists only in the explicitly offline, no-write constructor.
 	planning   map[string]json.RawMessage

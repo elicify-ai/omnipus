@@ -41,16 +41,16 @@ func historyCaptureStreams(dir string, cp historyCheckpoint) ([]historyCapturedS
 		if e.IsDir() || (!transcriptDayPattern.MatchString(name) && name != archiveCurrentFile) {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil {
-			return nil, 0, nil, "", err
+		info, statErr := e.Info()
+		if statErr != nil {
+			return nil, 0, nil, "", statErr
 		}
 		key := strings.TrimSuffix(name, ".jsonl")
 		if name == archiveCurrentFile {
 			key = current
 			if key == "" {
 				if info.Size() != 0 {
-					return nil, 0, nil, "", errors.New("unmarked nonempty archive")
+					return nil, 0, nil, "", historyBuildFailure("unconverted", errors.New("unmarked nonempty archive"))
 				}
 				continue
 			}
@@ -158,7 +158,7 @@ func historyReadSuffix(ctx context.Context, s historyCapturedStream, offset int6
 		return b, readErr
 	}
 	if len(b) == 0 || b[len(b)-1] != '\n' || len(b) > archiveRecordBound+1 {
-		return b, errors.New("invalid canonical suffix framing")
+		return b, historyBuildFailure("corrupt_archive", errors.New("invalid canonical suffix framing"))
 	}
 	return b, nil
 }
@@ -187,14 +187,14 @@ func historyValidateAnchor(ctx context.Context, dir string, cp historyCheckpoint
 }
 func historyCollectMutations(ctx context.Context, dir string, cp historyCheckpoint, streams []historyCapturedStream, dispEnd int64, expired []string) ([]historyMutation, chatHistoryReconcileResult, error) {
 	var result chatHistoryReconcileResult
-	items := make([]historyMutation, 0, 65)
+	items := make([]historyMutation, 0, chatHistoryRecoveryMaxItems+1)
 	add := func(m historyMutation) bool {
 		items = append(items, m)
 		result.ObservedItems = len(items)
 		if metric := historyMetrics(ctx); metric != nil {
 			metric.RecoveryItems++
 		}
-		return len(items) > 64
+		return len(items) > chatHistoryRecoveryMaxItems
 	}
 	for _, key := range expired {
 		if add(historyMutation{expired: key}) {
@@ -205,7 +205,7 @@ func historyCollectMutations(ctx context.Context, dir string, cp historyCheckpoi
 		off := cp.ArchiveEnds[s.key]
 		for off < s.end {
 			purpose := "suffix"
-			if len(items) == 64 {
+			if len(items) == chatHistoryRecoveryMaxItems {
 				purpose = "overflow"
 			}
 			b, err := historyReadSuffix(ctx, s, off, cp.SessionID, "archive", purpose)
@@ -226,7 +226,7 @@ func historyCollectMutations(ctx context.Context, dir string, cp historyCheckpoi
 	stream := historyCapturedStream{path: filepathJoinDisposition(dir), end: dispEnd}
 	for off := cp.DispositionEnd; off < dispEnd; {
 		purpose := "suffix"
-		if len(items) == 64 {
+		if len(items) == chatHistoryRecoveryMaxItems {
 			purpose = "overflow"
 		}
 		b, err := historyReadSuffix(ctx, stream, off, cp.SessionID, "disposition", purpose)
@@ -305,7 +305,7 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 		return result, historyUnavailable("index_inconsistent", err)
 	}
 	defer t.file.Close()
-	saved, err := historyValidateIndexTail(t, cp)
+	saved, hasSaved, err := historyValidateIndexTail(t, cp)
 	if err != nil {
 		return result, historyUnavailable("index_inconsistent", err)
 	}
@@ -332,15 +332,15 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 		}
 		defer t.file.Close()
 	}
-	if saved != nil && len(expired) == 0 {
+	if hasSaved && len(expired) == 0 {
 		expected := historyCloneCheckpoint(cp)
 		if err = historyApplyMutations(t, &expected, items); err != nil {
 			return result, historyUnavailable("index_inconsistent", err)
 		}
-		if !historySameCoverage(expected, *saved) {
+		if !historySameCoverage(expected, saved) {
 			return result, historyUnavailable("index_inconsistent", errors.New("saved history transaction does not match canonical suffix"))
 		}
-		candidate = *saved
+		candidate = saved
 		t.buffer = nil
 		t.pending = nil
 		t.root = saved.Root
@@ -363,7 +363,7 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 	if len(expired) > 0 {
 		operation = "retention"
 	}
-	if saved != nil && len(expired) == 0 {
+	if hasSaved && len(expired) == 0 {
 		if err = t.file.Sync(); err == nil {
 			err = historyPublishRoot(dir, t, candidate, chatHistoryPublicationEvent{SessionID: sid, Operation: operation, IndexGeneration: candidate.Generation, Item: len(items)})
 		}

@@ -17,9 +17,9 @@ func (us *UnifiedStore) historyCompact(ctx context.Context, dir string, old *cha
 		gone[key] = true
 		delete(cp.ArchiveEnds, key)
 	}
-	fresh, next, err := historyCreateTree(ctx, dir, cp.SessionID)
-	if err != nil {
-		return nil, cp, err
+	fresh, next, createErr := historyCreateTree(ctx, dir, cp.SessionID)
+	if createErr != nil {
+		return nil, cp, createErr
 	}
 	next.Rank = cp.Rank
 	next.ArchiveEnds = cp.ArchiveEnds
@@ -36,7 +36,7 @@ func (us *UnifiedStore) historyCompact(ctx context.Context, dir string, old *cha
 		r, ok, err := historyReadRecordMeta(old, rank)
 		return ok && !gone[r.Address.PartitionKey], err
 	}
-	err = old.walk(func(n historyNode) error {
+	walkErr := old.walk(func(n historyNode) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -97,11 +97,11 @@ func (us *UnifiedStore) historyCompact(ctx context.Context, dir string, old *cha
 				}
 				keep := make([]uint64, 0, len(refs))
 				for _, r := range refs {
-					ok, err := retained(r)
-					if err != nil {
-						return err
+					kept, keepErr := retained(r)
+					if keepErr != nil {
+						return keepErr
 					}
-					if ok {
+					if kept {
 						keep = append(keep, r)
 					}
 				}
@@ -145,11 +145,11 @@ func (us *UnifiedStore) historyCompact(ctx context.Context, dir string, old *cha
 				}
 				present := false
 				for _, rank := range []uint64{refs.Start, refs.State, refs.Message, refs.End} {
-					ok, err := retained(rank)
-					if err != nil {
-						return err
+					exists, existsErr := retained(rank)
+					if existsErr != nil {
+						return existsErr
 					}
-					present = present || ok
+					present = present || exists
 				}
 				if present {
 					keep = append(keep, span)
@@ -162,15 +162,11 @@ func (us *UnifiedStore) historyCompact(ctx context.Context, dir string, old *cha
 		default:
 			return errors.New("unknown history metadata key")
 		}
-		var value any
-		if err := json.Unmarshal(n.Value, &value); err != nil {
-			return err
-		}
 		// RawMessage avoids rounding lossless rank/offset integers through float64.
 		return fresh.set(key, n.Value)
 	})
-	if err == nil {
-		err = old.walk(func(n historyNode) error {
+	if walkErr == nil {
+		walkErr = old.walk(func(n historyNode) error {
 			if !strings.HasPrefix(n.Key, "r/") {
 				return nil
 			}
@@ -211,9 +207,9 @@ func (us *UnifiedStore) historyCompact(ctx context.Context, dir string, old *cha
 			return nil
 		})
 	}
-	if err != nil {
+	if walkErr != nil {
 		fresh.file.Close()
-		return nil, cp, err
+		return nil, cp, walkErr
 	}
 	return fresh, next, nil
 }

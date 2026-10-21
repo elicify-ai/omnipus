@@ -63,14 +63,14 @@ func historyProjectionError(cause error) error {
 	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
 		return cause
 	}
-	return &historyProjectionFailure{cause: cause}
+	return &historyPageProjectionError{cause: cause}
 }
 
-type historyProjectionFailure struct{ cause error }
+type historyPageProjectionError struct{ cause error }
 
-func (e *historyProjectionFailure) Error() string { return session.ErrHistoryProjection.Error() }
-func (e *historyProjectionFailure) Unwrap() error { return e.cause }
-func (e *historyProjectionFailure) Is(target error) bool {
+func (e *historyPageProjectionError) Error() string { return session.ErrHistoryProjection.Error() }
+func (e *historyPageProjectionError) Unwrap() error { return e.cause }
+func (e *historyPageProjectionError) Is(target error) bool {
 	return target == session.ErrHistoryProjection
 }
 func (r *historyPageRequest) reset(cut string) {

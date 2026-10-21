@@ -124,14 +124,14 @@ func historyReduceEffect(t *chatHistoryIndexTree, r *historyRecord, e *ToolCallE
 			return err
 		}
 		if !ok {
-			return errors.New("invalid projection retraction reference")
+			return historyBuildFailure("invalid_reference", errors.New("invalid projection retraction reference"))
 		}
 		prior, ok, err := historyReadRecordMeta(t, rank)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return errors.New("missing projection effect metadata")
+			return historyBuildFailure("invalid_reference", errors.New("missing projection effect metadata"))
 		}
 		r.Targets = append(r.Targets, prior.Targets...)
 	}
@@ -142,7 +142,7 @@ func historyReduceEffect(t *chatHistoryIndexTree, r *historyRecord, e *ToolCallE
 			return err
 		}
 		if !ok {
-			return errors.New("invalid tool effect target")
+			return historyBuildFailure("invalid_reference", errors.New("invalid tool effect target"))
 		}
 		r.Targets = append(r.Targets, rank)
 	}
@@ -155,7 +155,7 @@ func historyReduceEffect(t *chatHistoryIndexTree, r *historyRecord, e *ToolCallE
 	}
 	r.Targets = unique
 	for _, rank := range r.Targets {
-		var refs []uint64
+		refs := make([]uint64, 0, 1)
 		key := historyRankKey("d/", rank)
 		_, err := t.get(key, &refs)
 		if err != nil {

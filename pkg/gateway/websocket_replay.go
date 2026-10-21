@@ -9,10 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -208,76 +206,6 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 	wh.sendPreparedHistorySnapshot()
 }
 
-// replayTranscript streams the persisted transcript to the connection
-// (unsequenced), recording every message id, tool call id and span id it
-// emitted so the projection filter can skip items the replay already
-// covers. Returns false when the attach was aborted.
-func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.TranscriptEntry) (map[string]bool, bool) {
-	rs := computeReplayStats(entries)
-	logsafeInfo("ws: replay_start",
-		"event", "replay_start",
-		"session_id", wh.attachID,
-		"entry_count_loaded", len(entries),
-		"tool_call_count_loaded", rs.toolCallCount,
-		"span_count_detected", rs.spanCount,
-		"orphan_count", rs.orphanCount,
-		"duplicate_tool_call_id_count", rs.duplicateToolCallIDCount,
-		"truncated_result_count", rs.truncatedResultCount,
-	)
-	started := time.Now()
-	emitted := make(map[string]bool)
-	send := wsEmitFunc(wh.ctx, wh.wc)
-	emit := func(f any) error {
-		recordEmittedIDs(emitted, f)
-		return send(f)
-	}
-	var mediaStore media.MediaStore
-	if wh.h.agentLoop != nil {
-		mediaStore = wh.h.agentLoop.GetMediaStore()
-	}
-	// ADR-091 Finding 1 fix: real sub-turn liveness for a delegate call whose
-	// placeholder ack has not yet been corrected no longer needs wiring in
-	// from here — streamReplay derives it from the transcript's own persisted
-	// subagent_start/subagent_end entries (buildPersistedSubagentSpanIndexes
-	// in replay.go). agent.AgentLoop.IsSubTurnActiveForSpawnCall was deleted.
-	//
-	// askuserquestion-tool-spec v3 §0.6: the session's terminal
-	// AskUserQuestion record, so the collapsed card is reconstructed.
-	terminalAsk := loadTerminalAskRecord(wh.store, wh.attachID)
-	// A nil pointer stored in an interface is not a nil interface, and
-	// LifecycleStore.Load panics on a nil receiver. Leave the interface
-	// nil when there is no store.
-	var lifecycle lifecycleRecordLoader
-	if wh.h.agentLoop != nil {
-		if store := wh.h.agentLoop.GetSessionLifecycleStore(); store != nil {
-			lifecycle = store
-		}
-	}
-	framesEmitted, err := streamReplay(wh.ctx, wh.attachID, entries, rs, emit, mediaStore, wh.h.toolStore, terminalAsk, lifecycle)
-	durationMS := time.Since(started).Milliseconds()
-	if err != nil {
-		logsafeWarn("ws: replay_aborted",
-			"event", "replay_aborted",
-			"session_id", wh.attachID,
-			"frames_emitted", framesEmitted,
-			"duration_ms", durationMS,
-			"error", err,
-		)
-		wh.abortCatchUp(err)
-		return nil, false
-	}
-	logsafeInfo("ws: replay_end",
-		"event", "replay_end",
-		"session_id", wh.attachID,
-		"frames_emitted", framesEmitted,
-		"duration_ms", durationMS,
-		"orphan_count", rs.orphanCount,
-		"duplicate_tool_call_id_count", rs.duplicateToolCallIDCount,
-		"truncated_result_count", rs.truncatedResultCount,
-	)
-	return emitted, true
-}
-
 // recordEmittedIDs adds the ids a replayed frame carries to emitted.
 func recordEmittedIDs(emitted map[string]bool, f any) {
 	switch v := f.(type) {
@@ -354,16 +282,6 @@ func (wh *wsHandlerHandleAttachSession) sendCatchUpComplete(mode string) {
 		BootId:    &bootID,
 		Mode:      mode,
 	})
-}
-
-func (wh *wsHandlerHandleAttachSession) direct(frame []byte) {
-	if frame != nil {
-		wh.wc.direct(frame)
-	}
-}
-
-func (wh *wsHandlerHandleAttachSession) directFrame(frame any) {
-	sendConnGenFrameDirect(wh.wc, frame)
 }
 
 // sendConnGenFrameDirect marshals frame and queues it on wc bypassing hold

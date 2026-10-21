@@ -100,12 +100,12 @@ func historyPageBounds(t *chatHistoryIndexTree, cp historyCheckpoint, o ChatHist
 			return 0, 0, false, ErrInvalidHistoryPageRange
 		}
 	} else if o.Before == "" && o.After == "" {
-		var clear uint64
-		if _, err := t.get("last/clear", &clear); err != nil {
+		var clearRank uint64
+		if _, err := t.get("last/clear", &clearRank); err != nil {
 			return 0, 0, false, err
 		}
-		if clear > lo {
-			lo = clear
+		if clearRank > lo {
+			lo = clearRank
 		}
 	}
 	if o.Before != "" {
@@ -430,17 +430,17 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 		if ctx.Err() != nil {
 			return ChatHistoryPage{}, ctx.Err()
 		}
-		h = us.lockSession(sid)
-		current, validationErr := historyLoadCheckpoint(ctx, dir, sid)
+		retentionGeneration, validationErr := us.chatHistoryRetentionGeneration(ctx, sid)
 		var expired []string
 		if validationErr == nil {
-			_, _, expired, _, validationErr = historyCaptureStreams(dir, current)
+			h = us.lockSession(sid)
+			_, _, expired, _, validationErr = historyCaptureStreams(dir, cp)
+			h.Unlock()
 		}
-		h.Unlock()
 		if validationErr != nil {
 			return ChatHistoryPage{}, historyUnavailable("storage_error", validationErr)
 		}
-		if current.RetentionGeneration != cp.RetentionGeneration || len(expired) > 0 {
+		if retentionGeneration != cp.RetentionGeneration || len(expired) > 0 {
 			if m := historyMetrics(ctx); m != nil {
 				records := m.SelectedArchiveRecords - start.SelectedArchiveRecords + m.LookaheadArchiveRecords - start.LookaheadArchiveRecords + m.DependencyArchiveRecords - start.DependencyArchiveRecords
 				count := m.SelectedArchiveBytes - start.SelectedArchiveBytes + m.LookaheadArchiveBytes - start.LookaheadArchiveBytes + m.DependencyArchiveBytes - start.DependencyArchiveBytes

@@ -92,7 +92,8 @@ func historySourceInventory(ctx context.Context, dir string) (map[string]history
 	})
 	return out, err
 }
-func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHistoryIndexBuildOptions) (*ChatHistoryIndexBuild, error) {
+func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHistoryIndexBuildOptions) (build *ChatHistoryIndexBuild, buildErr error) {
+	defer func() { buildErr = historyBuildFailure("storage_error", buildErr) }()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -126,13 +127,13 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 		Type string `json:"type"`
 	}
 	if err = json.Unmarshal(metaBytes, &meta); err != nil {
-		return nil, err
+		return nil, historyBuildFailure("corrupt_archive", err)
 	}
-	if meta.Type == "" {
-		return nil, errors.New("unconverted session")
+	if !IsValidSessionType(UnifiedSessionType(meta.Type)) {
+		return nil, historyBuildFailure("unconverted", errors.New("unsupported canonical session format"))
 	}
 	if meta.ID != sid {
-		return nil, errors.New("session identity mismatch")
+		return nil, historyBuildFailure("corrupt_archive", errors.New("session identity mismatch"))
 	}
 	source, err := historySourceInventory(ctx, dir)
 	if err != nil {
@@ -147,8 +148,8 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 			e = t.walk(func(n historyNode) error {
 				if strings.HasPrefix(n.Key, "p/") {
 					var rank uint64
-					if e := json.Unmarshal(n.Value, &rank); e != nil {
-						return e
+					if decodeErr := json.Unmarshal(n.Value, &rank); decodeErr != nil {
+						return decodeErr
 					}
 					planning.knownRanks[HistoryPosition(n.Key[2:])] = rank
 				}
@@ -245,7 +246,7 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 		return nil, err
 	}
 	if !reflect.DeepEqual(source, final) {
-		return nil, errors.New("source_changed")
+		return nil, historyBuildFailure("source_changed", errors.New("canonical source changed during offline operation"))
 	}
 	return &ChatHistoryIndexBuild{summary: ChatHistoryIndexBuildSummary{SessionID: sid, Action: action, SourceGroupCount: groups, PartitionCount: len(streams)}, dir: dir, source: source, tree: planning, checkpoint: cp}, nil
 }
@@ -266,7 +267,8 @@ func (b *ChatHistoryIndexBuild) Summary() ChatHistoryIndexBuildSummary {
 	}
 	return b.summary
 }
-func (b *ChatHistoryIndexBuild) Publish(ctx context.Context) error {
+func (b *ChatHistoryIndexBuild) Publish(ctx context.Context) (buildErr error) {
+	defer func() { buildErr = historyBuildFailure("storage_error", buildErr) }()
 	if b == nil || b.closed {
 		return errors.New("history build is closed")
 	}
@@ -278,7 +280,7 @@ func (b *ChatHistoryIndexBuild) Publish(ctx context.Context) error {
 		return err
 	}
 	if !reflect.DeepEqual(source, b.source) {
-		return errors.New("source_changed")
+		return historyBuildFailure("source_changed", errors.New("canonical source changed during offline operation"))
 	}
 	if b.summary.Action == "unchanged" {
 		return nil
@@ -321,14 +323,15 @@ func (b *ChatHistoryIndexBuild) Close() error {
 	}
 	return nil
 }
-func VerifyChatHistoryIndex(ctx context.Context, sessionDir string) error {
+func VerifyChatHistoryIndex(ctx context.Context, sessionDir string) (buildErr error) {
+	defer func() { buildErr = historyBuildFailure("storage_error", buildErr) }()
 	b, err := PrepareChatHistoryIndex(ctx, sessionDir, ChatHistoryIndexBuildOptions{})
 	if err != nil {
 		return err
 	}
 	defer b.Close()
 	if b.summary.Action != "unchanged" {
-		return errors.New("history index does not match canonical data")
+		return historyBuildFailure("corrupt_archive", errors.New("history index does not match canonical data"))
 	}
 	return nil
 }

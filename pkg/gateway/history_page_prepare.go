@@ -161,9 +161,9 @@ func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHis
 	}
 	sr.historyOrigin = &origin
 	for _, tc := range e.Entry.ToolCalls {
-		result, err := r.prepareResult(ctx, tc)
-		if err != nil {
-			return out, err
+		result, resultErr := r.prepareResult(ctx, tc)
+		if resultErr != nil {
+			return out, resultErr
 		}
 		sr.preparedResults[tc.ID] = result
 	}
@@ -172,12 +172,12 @@ func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHis
 		mediaStore = r.media
 	}
 	err = sr.replayEntry(ctx, 0, e.Entry, mediaStore, func(frame any) error {
-		raw, err := json.Marshal(frame)
-		if err != nil {
-			return err
+		raw, frameErr := json.Marshal(frame)
+		if frameErr != nil {
+			return frameErr
 		}
-		if err = validateHistorySourceFrame(raw); err != nil {
-			return err
+		if frameErr = validateHistorySourceFrame(raw); frameErr != nil {
+			return frameErr
 		}
 		recordEmittedIDs(out.emitted, frame)
 		out.frames = append(out.frames, raw)
