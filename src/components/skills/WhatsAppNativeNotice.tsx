@@ -4,7 +4,8 @@ import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import type { WhatsAppPairingState } from '@/store/whatsappPairing'
 import { disableChannel, enableChannel } from '@/lib/api'
 import type { ChannelEnableRequest } from '@/lib/api/generated/openapi-types'
-import { getErrorMessage, isApiError, parseServerErrorField } from '@/lib/api-error'
+import { isApiError, parseServerErrorField } from '@/lib/api-error'
+import { getWhatsAppEnableErrorMessage, WHATSAPP_ENABLE_CANCELLED_MESSAGE, WHATSAPP_PAIRING_DELETED_MESSAGE } from '@/lib/whatsappEnableError'
 import { logError } from '@/lib/telemetry'
 import { WhatsAppPairingBody } from './WhatsAppPairingBody'
 import { useWhatsAppPairingInterest } from './useWhatsAppPairingInterest'
@@ -25,7 +26,6 @@ const RETRY_TIMEOUT_MS = 90_000
 const QR_INITIAL_TIMEOUT_MS = 15_000
 
 const PAIRING_RETRY_CONFLICT_MESSAGE = 'This chat can no longer retry this pairing. Open the WhatsApp connector to start a new pairing.'
-const PAIRING_DELETED_MESSAGE = 'This WhatsApp connection was deleted. Add it again from Connectors.'
 
 // TIMEOUT_STATE: synthetic pairing state surfaced when the 15s initial-load timer
 // fires with no QR frame. Avoids an inline object literal at the effectivePairing site.
@@ -69,7 +69,22 @@ export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { chan
   // clicks land in the same synchronous batch before any render happens.
   const retryInFlightRef = useRef(false)
   const [retryPending, setRetryPending] = useState(false)
-  const [retryError, setRetryError] = useState<{ message: string; canRetry: boolean } | null>(null)
+  const [retryError, setRetryError] = useState<{
+    message: string
+    canRetry: boolean
+    recovery?: { requestId?: string; sessionId?: string; frameAtFailure?: WhatsAppPairingState }
+  } | null>(null)
+
+  // A later frame can resolve an uncertain enable 500, but only for the
+  // original request AND session. Refusals (404/409) never recover this way,
+  // and a frame received before the HTTP failure cannot confirm a restart.
+  useEffect(() => {
+    const recovery = retryError?.recovery
+    if (recovery && pairing && pairing !== recovery.frameAtFailure
+      && pairing.requestId === recovery.requestId && pairing.sessionId === recovery.sessionId) {
+      setRetryError(null)
+    }
+  }, [pairing, retryError])
 
   // timedOut: true when the 15s initial window expires with no QR frame arriving.
   const [timedOut, setTimedOut] = useState(false)
@@ -101,17 +116,17 @@ export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { chan
     }
   }, [pairing])
 
-  // A code frame is usable only AFTER REST has confirmed ownership admission
-  // and enable acceptance; an early frame cannot confirm the Retry itself.
+  // A QR or terminal status is usable only AFTER REST confirms admission and
+  // enable acceptance. Errors and an already-linked device must end QR wait too.
   useEffect(() => {
-    if (pairing?.status === 'code' && retryFallbackState !== null && !retryPending) {
+    if (pairing && pairing.status !== 'waiting' && retryFallbackState !== null && !retryPending) {
       if (retryTimerRef.current !== null) {
         clearTimeout(retryTimerRef.current)
         retryTimerRef.current = null
       }
       setRetryFallbackState(null)
     }
-  }, [pairing?.status, retryFallbackState, retryPending])
+  }, [pairing, retryFallbackState, retryPending])
 
   // #283 (Option B): tell the gateway this connection is viewing WhatsApp
   // pairing so the QR is delivered only here, not broadcast to every admin tab.
@@ -202,30 +217,49 @@ export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { chan
       })
       const deleted = isApiError(err) && err.status === 404
       const conflict = isApiError(err) && err.status === 409 && err.code === 'pairing_retry_conflict'
+      const inProgress = isApiError(err) && err.status === 409 && err.code === 'pairing_in_progress'
       const enableRefused = isApiError(err) && ((err.status >= 400 && err.status < 500) || err.status === 503)
       const reason = conflict
         ? parseServerErrorField(err.body) ?? PAIRING_RETRY_CONFLICT_MESSAGE
-        : getErrorMessage(isApiError(err) ? err : undefined, 'Could not restart pairing. Open the WhatsApp connector and try again.', {
+        : getWhatsAppEnableErrorMessage(isApiError(err) ? err : undefined, 'Could not restart pairing. Open the WhatsApp connector and try again.', {
           statusOverrides: {
             0: 'Network unavailable. Check your connection and try again.',
             503: 'Pairing ownership service unavailable. Try again.',
           },
         })
-      // A refusal does not undo disable. A lost response or config/reload
-      // failure is different: only the prior disable is confirmed.
+      // Cancellation explicitly confirms enabled config; an ordinary competing
+      // pairing leaves config unchanged. Neither may inherit a disabled claim.
+      const enableCancelled = disableSucceeded && isApiError(err) && err.status === 500
+        && reason === WHATSAPP_ENABLE_CANCELLED_MESSAGE
       const message = deleted
-        ? PAIRING_DELETED_MESSAGE
-        : disableSucceeded
-          ? enableRefused
-            ? `The channel is now disabled. ${reason}`
-            : `The channel was disabled before the enable request, but its current state could not be confirmed. ${reason}`
-          : reason
-      setRetryError({ message, canRetry: !conflict && !deleted })
+        ? WHATSAPP_PAIRING_DELETED_MESSAGE
+        : enableCancelled || inProgress
+          ? reason
+          : disableSucceeded
+            ? enableRefused
+              ? `The channel is now disabled. ${reason}`
+              : `The channel was disabled before the enable request, but its current state could not be confirmed. ${reason}`
+            : reason
+      const originalRequest = requestId ?? pairing?.requestId
+      const originalSession = sessionId ?? pairing?.sessionId
       useWhatsAppPairingStore.getState().apply({
         type: 'whatsapp_pairing',
         channel_id: channelId,
         status: 'error',
         message,
+        request_id: originalRequest,
+        session_id: originalSession,
+      })
+      setRetryError({
+        message,
+        canRetry: !conflict && !deleted,
+        ...(disableSucceeded && isApiError(err) && err.status === 500 ? {
+          recovery: {
+            requestId: originalRequest,
+            sessionId: originalSession,
+            frameAtFailure: useWhatsAppPairingStore.getState().byChannel[channelId],
+          },
+        } : {}),
       })
       setRetryFallbackState(null)
       return

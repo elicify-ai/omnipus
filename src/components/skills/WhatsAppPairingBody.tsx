@@ -96,12 +96,16 @@ export function WhatsAppPairingBody({
     )
   }
 
+  // The generated frame has no teardown flag. This exact server message
+  // means Stop is still running; only a later stopped frame permits Retry.
+  const stopPending = pairing.status === 'error' && pairing.message === 'Stopping this pairing has not finished yet. Omnipus keeps trying; a new pairing can start once it has stopped.'
+
   switch (pairing.status) {
     case 'linked':
       return (
         <div className="flex items-center gap-[var(--space-2)] text-[var(--color-success)]">
           <CheckCircle size={16} weight="fill" />
-          <p className="text-[length:var(--type-utility-xs-size)] font-medium">Linked successfully.</p>
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium">{pairing.message || 'Linked successfully.'}</p>
         </div>
       )
     case 'timeout':
@@ -119,9 +123,9 @@ export function WhatsAppPairingBody({
         <RetryableState
           icon={Warning}
           iconProps={{ weight: 'fill', className: 'text-[var(--color-error)]' }}
-          message="Pairing failed — select to retry."
-          detail={pairing.message}
-          onRetry={onRetry}
+          message={stopPending ? pairing.message : 'Pairing failed — select to retry.'}
+          detail={stopPending ? undefined : pairing.message}
+          onRetry={stopPending ? undefined : onRetry}
         />
       )
     case 'stopped':
