@@ -144,10 +144,20 @@ func (s *ArchiveDayStore) sweepRolledPartitionsLocked(cutoff time.Time) (int, er
 		if !info.ModTime().Before(cutoff) {
 			continue
 		}
-		if err := removePartitionFn(filepath.Join(s.dir(), name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		err = removePartitionFn(filepath.Join(s.dir(), name))
+		if isArchiveSharingBusy(err) {
+			continue
+		}
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
 			return removed, fmt.Errorf("archive: sweep: remove %s: %w", name, err)
 		}
 		removed++
+		if err := historyPublication(chatHistoryPublicationEvent{SessionID: s.sessionID, Operation: "retention", Point: "partition_unlinked", Item: removed, PartitionKey: name[:len(name)-len(".jsonl")]}); err != nil {
+			return removed, err
+		}
 	}
 	return removed, nil
 }

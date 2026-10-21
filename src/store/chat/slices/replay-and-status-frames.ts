@@ -711,7 +711,10 @@ function replayAlreadyApplied(
       (draft.mergedReplayMessageIds?.[messageId] ?? false) ||
       (tailAssistantId != null &&
         (draft.messagesById[tailAssistantId].mergedReplayIds?.includes(messageId) ?? false))
-    if (draft.messageOrder.includes(messageId) || alreadyMerged) {
+    // A source bucket may reserve its recorded ID for tools before its
+    // narration arrives. That one synthetic owner is not prose coverage.
+    const pendingNarration = role === 'assistant' && draft.historyPendingNarrationId === messageId
+    if ((draft.messageOrder.includes(messageId) && !pendingNarration) || alreadyMerged) {
       console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: alreadyMerged ? 'merged-id-match' : 'id-match' })
       logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: alreadyMerged ? 'merged-id-match' : 'id-match', sessionId: targetSid })
       return true

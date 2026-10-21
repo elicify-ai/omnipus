@@ -53,6 +53,7 @@ func (us *UnifiedStore) RecordInputDiscarded(sessionID, messageID, clientMessage
 	if messageID == "" {
 		return errors.New("session: record discarded input: empty message id")
 	}
+	us.prepareHistoryAppend(sessionID)
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
 	existing, err := readInputDispositions(us.inputDispositionPath(sessionID))
@@ -69,6 +70,7 @@ func (us *UnifiedStore) RecordInputDiscarded(sessionID, messageID, clientMessage
 	if err := fileutil.AppendJSONLSync(us.inputDispositionPath(sessionID), rec); err != nil {
 		return fmt.Errorf("session: record discarded input %q: %w", messageID, err)
 	}
+	us.historyDispositionAccepted(sessionID, rec)
 	return nil
 }
 

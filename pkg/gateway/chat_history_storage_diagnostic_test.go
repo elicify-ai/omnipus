@@ -41,7 +41,8 @@ func pagingRequiredEffectStorageDiagnostic(t *testing.T) {
 	// A consistency guard may detect the changed saved prefix first; either
 	// route must be a truthful history failure, never a stale successful tool.
 	require.Contains(t, []string{"storage", "index_unavailable"}, row["outcome"])
-	outcome := row["outcome"].(string)
+	outcome, outcomeOK := row["outcome"].(string)
+	require.True(t, outcomeOK, "real diagnostic outcome must be a string")
 	pagingAssertSummary(t, row, outcome, "latest", false, true, []string{sid, path, "PRIVATE_REQUIRED_EFFECT_CANARY"})
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 	require.NotContains(t, w.Body.String(), "PRIVATE_REQUIRED_EFFECT_CANARY")

@@ -60,8 +60,8 @@ func buildChatHistoryDayFixture(t testing.TB, store *UnifiedStore, sessionID str
 	partitions, err := store.transcriptPartitionPaths(sessionID)
 	require.NoError(t, err)
 	for _, path := range partitions {
-		info, err := os.Stat(path)
-		require.NoError(t, err)
+		info, statErr := os.Stat(path)
+		require.NoError(t, statErr)
 		require.Zero(t, info.Size(), "seed_days requires an empty canonical session")
 	}
 	archive, err := store.archiveStore(sessionID)
@@ -163,8 +163,8 @@ func TestChatHistoryFixtureDriver(t *testing.T) {
 	require.Contains(t, []string{"seed_days", "sweep"}, plan.Action)
 	if plan.Action == "seed_days" {
 		require.True(t, plan.SessionID != "" && plan.SessionID != "." && plan.SessionID != ".." && !strings.ContainsAny(plan.SessionID, "/\\\x00"), "session identity is exactly one native path component")
-		info, err := os.Lstat(filepath.Join(root, "sessions", plan.SessionID))
-		require.NoError(t, err)
+		info, statErr := os.Lstat(filepath.Join(root, "sessions", plan.SessionID))
+		require.NoError(t, statErr)
 		require.True(t, info.IsDir())
 		require.Zero(t, info.Mode()&os.ModeSymlink)
 	} else {
@@ -182,8 +182,8 @@ func TestChatHistoryFixtureDriver(t *testing.T) {
 	if plan.Action == "seed_days" {
 		addresses := buildChatHistoryDayFixture(t, store, plan.SessionID, plan.Days)
 		result.WrittenRecords = len(addresses)
-		paths, err := store.transcriptPartitionPaths(plan.SessionID)
-		require.NoError(t, err)
+		paths, pathsErr := store.transcriptPartitionPaths(plan.SessionID)
+		require.NoError(t, pathsErr)
 		for _, path := range paths {
 			if filepath.Base(path) != "transcript.jsonl" {
 				result.RolledPartitions++

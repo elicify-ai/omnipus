@@ -2,6 +2,8 @@
 
 This supersedes the earlier missing-symbol/placeholder sections of the plan and handoff. It does not claim GREEN, full-suite execution, mutation proof, native Windows certification or user acceptance.
 
+The later guarded-apply/T23 extension is recorded at `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/tests/chat-history-paging-be/GUARDED-APPLY-HANDOFF.md`: founder F1=A resolves the check-only scope; L/M pin the native capture/receipt and void prepared-value hook. Its9 selected runtime REDs and3 passing controls were collected on `7493ae1ef9449015de302a85a9555a692c90ce0b`. Successful apply/receipt and actual diagnostic fault branches remain unproved until GREEN; do not confuse source completion with executed coverage.
+
 ## Authoritative revisions and ownership
 
 The requested normal merge consumed `origin/feature/1266-chat-history-paging` at `a884e7d83ecb38e84b02bee6a526ceacc34b9c9e`, including backend declaration commit `80475ac5b76bc935c962f419bf7b1a2efe89abf1` and the release merge. The RED branch merge commit is `0ba31ce3fe35400e5f9edbb7dd91f7540a48bdea`. No history rewrite, force push or integration landing occurred.
@@ -38,16 +40,16 @@ A named `chat history: not implemented` runtime failure proves the operational d
 
 The original pending-call case is the existing release defect tracked by dispatch as #1397: it fabricates a terminal error for a different pending call, not a second finished-call result. Never change the expected terminal count to2. The independent finished-only origin probe prevents that existing defect from hiding ownership coverage.
 
-Broader/full Go gates are deferred to GREEN by team-lead. Do not dispatch the default performance machine080d74db170408; Fly execution requires an explicit assigned-spare pin. No native Windows PASS, full-CI result, genuine long-session UAT or isolated full-carrier T18 allocation receipt is claimed by this pack.
+Broader/full Go gates are deferred to GREEN by team-lead. **Routing update:** the earlier spare-only instruction is superseded by the founder's later ruling: full node/go/e2e gates use performance machine080d74db170408, serialized, no resizing; spares are targeted few-spec reruns only. Verify lock/run ownership before starting and collect logs before the starter stops the machine. No Fly run was needed in the guarded-apply extension. No native Windows PASS, full-CI result, genuine long-session UAT or isolated full-carrier T18 allocation receipt is claimed by this pack.
 
-## Open coverage decisions already routed to squad lead/architect
+## Former design gaps — resolved interfaces, runtime proof still pending
 
-| Question | Current honest boundary |
+| Former question | Current honest boundary |
 |---|---|
-| Native stopped-receipt producer inputs | D13 fixes receipt fields and phase names but not the producer's complete CLI argument/native instance-PID fixture contract. Current tests genuinely exercise read-only phases, malformed/missing evidence refusals and the shared real repair publisher; they do NOT substitute those for a successful guarded CLI apply/repeat/batch-interruption campaign. A valid positive apply path needs the agreed producer inputs or implementation-help handoff. |
-| T23 protocol/projection-error endpoint trigger | Those outcomes are required, but the declaration inventory does not expose a gateway carrier read/error injection seam. Private session hooks cannot be imported by gateway tests. Current real HTTP tests cover success/query/index/abort and required-effect damage. They do not fabricate a record or mock the page reader to pretend the remaining two endpoint outcomes ran. |
+| Native stopped-receipt producer inputs | L and D13/G now pin actual PID/native capture, strict v1 evidence and exact apply flags; F1=A accepts check-only scope, not exclusion. New tests use the real built child/command and add successful-path/read/repeat/refusal assertions. Native clean/crash fixture controls passed on macOS. Selected command tests still fail at not-implemented capture/dry-run, so actual successful receipt/apply/repeat and CLI interruption remain unverified. |
+| T23 protocol/projection-error endpoint trigger | M pins `historyPageFaultHook`, supplied by backend declaration688a86613 and normally merged. New typed tests mutate only the real weight/carrier and require real validators, sanitized500 and exactly one measured failed summary. Both runtime probes currently fail at the mandatory no-fault endpoint control's old array; the fault hook/validator/outcome assertions are not reached. |
 
-These are warnings/gaps for the dispatcher, not silent PASS or permission to omit the requirements. Backend owns command/CI production wiring and user docs; independent CHECK owns mutation probes and the acceptance verdict.
+The full extension source, exact tested SHA/logs, assumptions and proof boundaries are in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/tests/chat-history-paging-be/GUARDED-APPLY-HANDOFF.md`. These runtime gaps are not a silent PASS or permission to omit requirements. Backend owns command/probe/schema/CI production wiring and user docs; independent fresh CHECK owns mutation probes and the acceptance verdict.
 
 skills: omnipus-shared-rules, elicify-test-writing, test-integrity-audit (failure-mode prevention only), gitnexus-impact-analysis, github-cli.
 

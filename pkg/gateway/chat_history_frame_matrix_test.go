@@ -64,7 +64,7 @@ func pagingPersistedOriginMatrix(t *testing.T) {
 		{"system", "replay_message", `{"type":"system","role":"system","content":"notice"}`},
 		{"finished_tool_only", "tool_call_result", `{"type":"tool_call","tool_calls":[{"id":"call","tool":"read_file","status":"success","parameters":{},"result":{"text":"real"}}]}`},
 		{"error", "replay_error", `{"role":"assistant","status":"error","content":"saved provider error","error_code":"provider_error","provider_message":true,"model":"recorded-model"}`},
-		{"fallback", "replay_provider_fallback", `{"type":"provider_fallback","unavailable_model":"unavailable","model":"used","unavailable_code":"rate_limit"}`},
+		{"fallback", "replay_provider_fallback", `{"type":"provider_fallback","role":"system","content":"Answered by the Fallback model (used) because unavailable was unavailable.","unavailable_model":"unavailable","model":"used","unavailable_code":"rate_limited"}`},
 		{"diagnostic", "context_window_notice", `{"type":"context_window_notice","context_window_notice":{"kind":"mid_turn","message":"bounded context notice"}}`},
 		{"verdict", "judge_verdict", `{"type":"judge_verdict","role":"system","content":"{\"id\":\"00000000-0000-4000-8000-000000000001\",\"scope\":\"goal\",\"goal_session_id\":\"goal-session\",\"round\":1,\"met\":true,\"per_criterion\":[],\"model\":\"test-model\",\"judged_at\":\"2026-10-21T12:00:00Z\"}"}`},
 		{"handover", "browser_handover_notice", `{"type":"system","role":"system","system_subtype":"browser_handover_notice","content":"Operator took control"}`},

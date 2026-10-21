@@ -44,8 +44,8 @@ func historyCrashChild(t *testing.T) {
 		return nil
 	}
 	if os.Getenv("OMNIPUS_HISTORY_TEST_OPERATION") == "repair" {
-		build, err := PrepareChatHistoryIndex(context.Background(), filepath.Join(root, sid), ChatHistoryIndexBuildOptions{})
-		require.NoError(t, err, "real offline constructor before publication crash")
+		build, buildErr := PrepareChatHistoryIndex(context.Background(), filepath.Join(root, sid), ChatHistoryIndexBuildOptions{})
+		require.NoError(t, buildErr, "real offline constructor before publication crash")
 		require.NotNil(t, build)
 		require.NoError(t, build.Publish(context.Background()))
 		require.NoError(t, build.Close())
@@ -316,8 +316,8 @@ func TestChatHistoryRecovery_CorruptSavedPrefixNeverTrimsCanonical(t *testing.T)
 			case "truncated_anchor":
 				require.NoError(t, os.Truncate(current, int64(len(b)/2)))
 			case "torn_canonical":
-				f, err := os.OpenFile(current, os.O_APPEND|os.O_WRONLY, 0)
-				require.NoError(t, err)
+				f, openErr := os.OpenFile(current, os.O_APPEND|os.O_WRONLY, 0)
+				require.NoError(t, openErr)
 				_, err = f.WriteString(`{"id":"torn`)
 				require.NoError(t, err)
 				require.NoError(t, f.Close())

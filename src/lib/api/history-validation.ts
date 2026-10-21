@@ -17,6 +17,9 @@ export function historyPosition(raw: unknown, endpoint: string, path: (string | 
 
 /** Public logical rows, not transport frames or an outer wrapper plus children. */
 export function historyRowWeight(entry: Pick<WireMessage, 'type' | 'role' | 'content' | 'summary' | 'tool_calls'>): number {
+  // The replay reducer applies this marker to its existing turn; it never
+  // draws an extra bubble for the cancellation metadata source itself.
+  if (entry.type === 'turn_canceled') return 0
   const tools = new Set(entry.tool_calls?.map(call => call.id) ?? []).size
   const narration = !!(entry.content || entry.summary) || tools === 0
   return Number(narration) + tools

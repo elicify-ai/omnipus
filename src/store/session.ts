@@ -536,7 +536,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const entryWasBlocked = workspaceEntryBlocksSend(get(), useWorkspacesStore.getState().activeWorkspaceId)
 
     if (connection) {
-      // #823 §6.1: send the bucket's cursor; only session_snapshot wipes now (Q3).
+      // Send the live cursor and sizing already committed for this session.
+      // Snapshot history is staged separately; it does not wipe a detached reader.
       const alreadyInFlight = attachAlreadyInFlight(sessionId, connection)
       const sent = alreadyInFlight || connection.send({ type: 'attach_session', session_id: sessionId, ...attachSessionCursorFields(sessionId) })
       if (!sent) {

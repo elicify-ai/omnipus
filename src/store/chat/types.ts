@@ -448,6 +448,8 @@ export interface SessionChatState {
   /** Body-free source/display aliases and hidden current-tail order, released on leave. */
   historySourceAliases?: Record<string, string>
   historyLiveOrder?: string[]
+  /** Private source hydration only: a synthetic tool owner is not yet narration coverage. */
+  historyPendingNarrationId?: string
   // Map-indexed ring buffer. Use getMessages(bucket) to get the ordered array.
   messagesById: Record<string, ChatMessage>
   messageOrder: string[]
