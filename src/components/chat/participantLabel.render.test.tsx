@@ -48,7 +48,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       const head = opts.queryKey[0]
       if (head === 'agents') return { data: AGENTS, isError: false, refetch: vi.fn() }
       if (head === 'workspaces') return { data: WORKSPACES, isError: false, refetch: vi.fn() }
-      return { data: [], isError: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -114,13 +114,15 @@ vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock
   }),
 }))
 
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue(AGENTS),
     fetchWorkspaces: vi.fn().mockResolvedValue(WORKSPACES),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchAboutInfo: vi.fn().mockResolvedValue({}),
     createSession: vi.fn(),
     uploadFiles: vi.fn(),

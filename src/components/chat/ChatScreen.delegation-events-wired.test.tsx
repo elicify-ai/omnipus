@@ -46,12 +46,14 @@ vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock
   useAttachment: vi.fn(() => ({ id: 'att', name: 'file.txt', contentType: 'text/plain', status: { type: 'complete' }, content: [] })),
 }))
 
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active' }]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }),
     createSession: vi.fn(),
     uploadFiles: vi.fn(),

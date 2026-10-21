@@ -13,9 +13,11 @@ import { ChatThread } from '@/components/chat/ChatThread'
 // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
 //             wave5a-wire-ui-spec.md — Scenario: Cancel during streaming preserves partial response
 
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchSessionMessages: vi.fn().mockResolvedValue([]) }
+  return { ...actual, fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)) }
 })
 
 function makeClient() {

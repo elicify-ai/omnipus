@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getMessageStatusSuffix } from './truncation'
+import { wireHistoryPage } from '../../tests/chat-history-paging/legacy-wire'
+import { expectHistoryPage } from '../../tests/chat-history-paging/legacy-fixtures'
 
 // Founder ruling 2026-10-07: cold-load (REST) history of a redirected turn
 // shows its partial text with NO "(interrupted)" marker; a plain-stopped turn
@@ -28,11 +30,18 @@ const toolCall = (id: string) => ({
 const ordinaryUser = userEntry('u-second')
 
 async function load(wire: unknown[]) {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(wire), {
+  // Each narration or tool-only source draws one row in this fixed fixture.
+  // The role-less turn_canceled source is retained context, not a second row
+  // alongside the partial assistant's own interruption suffix (D4).
+  const drawnRows = wire.filter((source) => typeof source === 'object' && source !== null && Reflect.get(source, 'type') !== 'turn_canceled').length
+  const response = wireHistoryPage('sid-s7', wire, drawnRows)
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(response), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   })))
   const { fetchSessionMessages } = await import('./api')
-  return fetchSessionMessages('sid-s7')
+  const decoded: unknown = await fetchSessionMessages('sid-s7')
+  expectHistoryPage(decoded)
+  return decoded.entries
 }
 
 const suffix = (m: unknown) => getMessageStatusSuffix(m as never)
