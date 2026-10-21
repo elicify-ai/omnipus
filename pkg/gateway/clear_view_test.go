@@ -6,7 +6,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,12 +14,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // Founder ruling: /clear clears what is on screen and moves the context
 // forward. Every chat-view read starts at the last clear marker and says whether
-// earlier entries exist; the archive is untouched.
+// earlier entries exist; the archive is untouched. Paging D10 replaces only the
+// carrier/continuation authority, not these exact content/identity assertions.
 
 func seedClearedSession(t *testing.T, store *session.UnifiedStore, sid string) {
 	t.Helper()
@@ -38,10 +39,10 @@ func seedClearedSession(t *testing.T, store *session.UnifiedStore, sid string) {
 	}
 }
 
-func messageIDs(entries []session.TranscriptEntry) []string {
+func messageIDs(entries []generated.Message) []string {
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, e.ID)
+		out = append(out, e.Id)
 	}
 	return out
 }
@@ -56,10 +57,11 @@ func TestGetSessionMessages_StartsAtTheLastClearMarker(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sid+"/messages", nil)
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var entries []session.TranscriptEntry
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
-	require.Equal(t, []string{"marker", "new-q"}, messageIDs(entries))
-	require.Equal(t, "true", w.Header().Get("X-Has-Earlier-Messages"))
+	page := historyMigrationPage(t, sid, w.Body.Bytes(), "latest", true, false)
+	require.Equal(t, []string{"marker", "new-q"}, messageIDs(page.Entries))
+	require.True(t, page.HasEarlier, "the old true header's meaning now belongs to the generated page")
+	require.NotNil(t, page.NextBefore, "earlier history has a real exclusive boundary")
+	require.Equal(t, page.Entries[0].HistoryPosition, page.NextBefore)
 }
 
 func TestGetSessionMessages_NoMarkerIsWholeAndFlagFalse(t *testing.T) {
@@ -73,10 +75,10 @@ func TestGetSessionMessages_NoMarkerIsWholeAndFlagFalse(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sid+"/messages", nil)
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var entries []session.TranscriptEntry
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
-	require.Equal(t, []string{"q"}, messageIDs(entries))
-	require.Equal(t, "false", w.Header().Get("X-Has-Earlier-Messages"))
+	page := historyMigrationPage(t, sid, w.Body.Bytes(), "latest", false, false)
+	require.Equal(t, []string{"q"}, messageIDs(page.Entries))
+	require.False(t, page.HasEarlier, "the old false header's meaning is retained")
+	require.Nil(t, page.NextBefore)
 }
 
 func TestGetSession_DetailStartsAtTheLastClearMarker(t *testing.T) {
@@ -89,14 +91,11 @@ func TestGetSession_DetailStartsAtTheLastClearMarker(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sid, nil)
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var detail struct {
-		Messages   []session.TranscriptEntry `json:"messages"`
-		HasEarlier *bool                     `json:"has_earlier_messages"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
-	require.Equal(t, []string{"marker", "new-q"}, messageIDs(detail.Messages))
+	detail := historyMigrationDetail(t, sid, w.Body.Bytes(), true)
+	require.Equal(t, []string{"marker", "new-q"}, messageIDs(*detail.Messages))
 	require.NotNil(t, detail.HasEarlier)
 	require.True(t, *detail.HasEarlier)
+	require.NotNil(t, detail.NextBefore)
 }
 
 func TestGetSession_DetailOmitsTheFlagWhenNothingIsEarlier(t *testing.T) {
@@ -108,7 +107,11 @@ func TestGetSession_DetailOmitsTheFlagWhenNothingIsEarlier(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sid, nil)
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	require.NotContains(t, w.Body.String(), "has_earlier_messages", "additive: absent when false")
+	require.NotContains(t, w.Body.String(), "has_earlier_messages", "the retired flag remains absent")
+	detail := historyMigrationDetail(t, sid, w.Body.Bytes(), false)
+	require.Empty(t, *detail.Messages)
+	require.False(t, *detail.HasEarlier)
+	require.Nil(t, detail.NextBefore)
 }
 
 func TestAttach_SnapshotReplaysSinceTheLastClearMarker(t *testing.T) {
@@ -121,12 +124,9 @@ func TestAttach_SnapshotReplaysSinceTheLastClearMarker(t *testing.T) {
 
 	snap := indexOfType(frames, "session_snapshot")
 	require.GreaterOrEqual(t, snap, 0, "a first load is a snapshot")
-	var parsed struct {
-		HasEarlier *bool `json:"has_earlier_messages"`
-	}
-	require.NoError(t, json.Unmarshal(frames[snap].raw, &parsed))
-	require.NotNil(t, parsed.HasEarlier, "the snapshot says earlier messages exist")
-	require.True(t, *parsed.HasEarlier)
+	parsed := historyMigrationSnapshot(t, f.sid, frames[snap].raw, true, 2, 1)
+	require.NotNil(t, parsed.NextBefore, "the snapshot says earlier messages exist with a real boundary")
+	require.True(t, parsed.HasEarlier)
 
 	var replayed strings.Builder
 	for _, fr := range frames {
@@ -149,9 +149,32 @@ func TestAttach_SnapshotWithoutAMarkerCarriesNoFlag(t *testing.T) {
 	snap := indexOfType(frames, "session_snapshot")
 	require.GreaterOrEqual(t, snap, 0)
 	require.NotContains(t, string(frames[snap].raw), "has_earlier_messages")
+	parsed := historyMigrationSnapshot(t, f.sid, frames[snap].raw, false, 1, 1)
+	require.False(t, parsed.HasEarlier)
+	require.Nil(t, parsed.NextBefore)
 	var replayed strings.Builder
 	for _, fr := range frames {
 		replayed.Write(fr.raw)
 	}
 	require.Contains(t, replayed.String(), "plain question", "instrument check: the replay carries the transcript")
+}
+
+// D3/D10 and the explicit clear-view regression requirement: the closed clear
+// remains the default boundary, but an explicit exclusive before crosses it.
+func TestGetSessionMessages_ExplicitBeforeCrossesTheLastClearMarker(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+	sid := createTestSession(t, api)
+	seedClearedSession(t, api.agentLoop.GetSessionStore(), sid)
+	latest := historyMigrationPage(t, sid, pagingRequest(api, sid, "").Body.Bytes(), "latest", true, false)
+	require.Equal(t, []string{"marker", "new-q"}, messageIDs(latest.Entries))
+	require.NotNil(t, latest.NextBefore)
+	response := pagingRequest(api, sid, "before="+*latest.NextBefore)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	older := historyMigrationPage(t, sid, response.Body.Bytes(), "older", false, true)
+	require.Equal(t, []string{"old-q", "old-a", "clear-row"}, messageIDs(older.Entries), "archive content still exists and is explicitly reachable")
+	require.NotContains(t, messageIDs(older.Entries), "marker", "before is exclusive")
+	require.NotContains(t, messageIDs(older.Entries), "new-q")
+	require.Nil(t, older.NextBefore)
+	require.Equal(t, older.Entries[len(older.Entries)-1].HistoryPosition, older.NextAfter)
 }
