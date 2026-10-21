@@ -101,6 +101,17 @@ func TestHistoryRepairCommand_GuardedApplyEvidenceRefusalClasses(t *testing.T) {
 					field, value = "pid_file", repairEvidencePath(t, "not-gateway.pid")
 				}
 				repairChangeEvidence(t, path, func(fields map[string]any) { fields[field] = value })
+				if path == f.binding {
+					// Isolate semantic binding faults from receipt byte-hash refusal.
+					// These are corruptions of genuinely produced stopped evidence,
+					// not fabricated native state. The dedicated hash-change case
+					// above deliberately leaves its receipt hash mismatched.
+					bindingBytes, err := os.ReadFile(f.binding)
+					require.NoError(t, err)
+					repairChangeEvidence(t, f.receipt, func(fields map[string]any) {
+						fields["instance_binding_sha256"] = repairDigest(bindingBytes)
+					})
+				}
 			}
 			before, backup := repairTree(t, f.source), repairTree(t, f.backup)
 			out := repairRun(t, tool, 2, args...)
