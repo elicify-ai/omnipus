@@ -1,10 +1,10 @@
-// has-earlier.test.ts — the chat-state half of has_earlier_messages
-// (founder ruling 2026-10-11): every carrier lands in ONE bucket field.
+// has-earlier.test.ts — earlier-history carriers land in ONE bucket field
+// (founder ruling 2026-10-11; paged snapshot contract).
 //
-// Covered here: the SessionSnapshotFrame carrier (the attach replay's
-// session_snapshot frame — the generated field is optional; ABSENT means the
-// view is the whole transcript, i.e. false) and the recordSessionHasEarlier
-// writer the other carriers' consumers call. The REST carriers
+// Covered here: the SessionSnapshotFrame carrier's required has_earlier
+// marker and paging metadata, the store's defensive missing-marker fallback
+// for deliberately malformed input, and the recordSessionHasEarlier writer.
+// The REST carriers
 // (SessionDetail field, messages header) are covered at the adapter edge in
 // src/lib/api/sessions.has-earlier.test.ts; the render half (the quiet line)
 // in src/components/chat/ChatScreen.earlier-note.test.tsx.
@@ -15,6 +15,9 @@ import { makeBucketMessages } from './messages'
 import { recordSessionHasEarlier } from './has-earlier'
 import { useConnectionStore } from '@/store/connection'
 import type { ChatMessage, SessionChatState } from './types'
+import type { SessionSnapshotFrame } from '@/lib/api/generated/asyncapi-types'
+import { SessionSnapshotFrame as snapshotSchema } from '@/lib/api/generated/ws-schemas'
+import { makeSnapshotHistory } from '@/test/factories'
 
 const SID = 'sess-has-earlier'
 
@@ -50,7 +53,7 @@ function bucket(): SessionChatState {
   return b!
 }
 
-describe('has_earlier_messages → chat state', () => {
+describe('earlier-history carriers → chat state', () => {
   beforeEach(() => {
     useConnectionStore.setState({
       connection: { send: () => true, close: () => {} } as never,
@@ -59,19 +62,41 @@ describe('has_earlier_messages → chat state', () => {
     useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)
   })
 
-  it('a session_snapshot frame with has_earlier_messages: true records true', () => {
+  it('a session_snapshot frame with has_earlier: true records true', () => {
     seedBucket()
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 1, has_earlier_messages: true,
-    } as never)
+    const history = makeSnapshotHistory(2)
+    const firstPosition = history.page_info.first_position
+    if (!firstPosition) throw new Error('Nonempty snapshot fixture needs a first position')
+    // A full latest-page target can retain earlier groups. The continuation
+    // must equal its first position (SessionSnapshotFrame's shared contract).
+    const snapshot: SessionSnapshotFrame = {
+      ...history,
+      type: 'session_snapshot', session_id: SID, seq: 1,
+      has_earlier: true,
+      next_before: firstPosition,
+      page_info: {
+        ...history.page_info,
+        row_count: history.page_info.limit,
+        source_group_count: history.page_info.limit,
+        projected_bytes: 10_240,
+        stop_reason: 'row_target',
+      },
+    }
+    useChatStore.getState().handleFrame(snapshotSchema.parse(snapshot))
     expect(bucket().hasEarlierMessages).toBe(true)
   })
 
-  it('a session_snapshot frame WITHOUT the field records false (the view is the whole transcript)', () => {
+  it('a malformed snapshot missing required has_earlier defensively records false', () => {
     seedBucket()
-    useChatStore.getState().handleFrame({
+    const snapshot: SessionSnapshotFrame = {
+      ...makeSnapshotHistory(0),
       type: 'session_snapshot', session_id: SID, seq: 2,
-    } as never)
+    }
+    const missingMarker: Partial<SessionSnapshotFrame> = snapshotSchema.parse(snapshot)
+    delete missingMarker.has_earlier
+    expect(snapshotSchema.safeParse(missingMarker).success).toBe(false)
+    // Deliberate invalid-input coverage of the store, not a valid gateway frame.
+    useChatStore.getState().handleFrame(missingMarker as never)
     expect(bucket().hasEarlierMessages).toBe(false)
   })
 
