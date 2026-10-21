@@ -597,7 +597,7 @@ func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf, w
 	// different on-disk state between the two reads.
 	agentDef := cb.LoadAgentDefinition()
 
-	// Bootstrap files (SOUL.md, AGENT.md, USER.md) — pass the already-loaded
+	// Bootstrap files (SOUL.md, USER.md) — pass the already-loaded
 	// definition to avoid a second LoadAgentDefinition call inside.
 	bootstrapContent := cb.loadBootstrapFilesWithDef(agentDef)
 
@@ -1036,8 +1036,10 @@ func (cb *ContextBuilder) variantCarryForwardPath(workspaceID string) string {
 // variant tracks its own carry-forward pair path instead — see
 // variantCarryForwardPath / buildCacheBaseline / workspaceVariantStaleLocked.
 func (cb *ContextBuilder) sourcePaths() []string {
-	agentDefinition := cb.LoadAgentDefinition()
-	paths := agentDefinition.trackedPaths(cb.workspace)
+	paths := []string{
+		filepath.Join(cb.workspace, "SOUL.md"),
+		config.UserProfilePath(),
+	}
 	// Track the private room's memories directory for cache invalidation.
 	// The memories dir mtime changes on any new .md write (directory mtime update).
 	privateRoomRoot := filepath.Join(cb.workspace, memrooms.OmnipusRoomDir)
@@ -1260,13 +1262,6 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 func (cb *ContextBuilder) loadBootstrapFilesWithDef(agentDefinition AgentContextDefinition) string {
 	var sb strings.Builder
 
-	if agentDefinition.Agent != nil {
-		label := string(agentDefinition.Source)
-		if label == "" {
-			label = relativeWorkspacePath(cb.workspace, agentDefinition.Agent.Path)
-		}
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", label, agentDefinition.Agent.Body)
-	}
 	// M6: only emit the Soul section when content is non-whitespace.
 	if agentDefinition.Soul != nil && strings.TrimSpace(agentDefinition.Soul.Content) != "" {
 		fmt.Fprintf(
@@ -1278,16 +1273,6 @@ func (cb *ContextBuilder) loadBootstrapFilesWithDef(agentDefinition AgentContext
 	}
 	if agentDefinition.User != nil {
 		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
-	}
-
-	if agentDefinition.Source != AgentDefinitionSourceAgent {
-		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
-		if data, err := os.ReadFile(filePath); err == nil {
-			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "IDENTITY.md", data)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			logger.WarnCF("agent", "Could not read IDENTITY.md",
-				map[string]any{"path": filePath, "error": err.Error()})
-		}
 	}
 
 	return sb.String()
