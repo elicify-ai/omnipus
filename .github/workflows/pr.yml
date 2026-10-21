@@ -1856,6 +1856,10 @@ jobs:
       - name: Check Go test shard coverage
         run: python3 scripts/go-test-shards.py test check
 
+      - name: Prepare native history fixture tools (gateway tests)
+        if: matrix.shard == 'gateway'
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
+
       - name: Run go test (selected non-gateway packages)
         if: matrix.shard != 'gateway'
         env:
@@ -2317,6 +2321,10 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: python3 scripts/go-test-shards.py race check
+
+      - name: Prepare native history fixture tools (gateway race tests)
+        if: matrix.shard == 'gateway'
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
 
       - name: Run go test -race (concurrency-sensitive packages)
         if: matrix.shard != 'gateway'
