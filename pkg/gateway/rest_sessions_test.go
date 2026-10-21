@@ -126,6 +126,7 @@ func TestGetSessionMessages_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) 
 	require.NotNil(t, store, "shared session store must be available")
 
 	seedParentAndChildTranscript(t, store, sessionID)
+	canonicalBefore := historyMigrationInternalSpawn(t, store, sessionID)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sessionID+"/messages", nil)
@@ -134,9 +135,8 @@ func TestGetSessionMessages_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) 
 	require.Equal(t, http.StatusOK, w.Code,
 		"GET /sessions/{id}/messages must return 200; got %d body=%s", w.Code, w.Body.String())
 
-	var entries []session.TranscriptEntry
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
-		"response must unmarshal into a list of transcript entries")
+	page := historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := page.Entries
 
 	// Positive lower bound (binding rule 4) before asserting anything about
 	// which entries survived: both seeded entries must actually be present.
@@ -146,19 +146,22 @@ func TestGetSessionMessages_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) 
 
 	var sawParent, sawChild bool
 	for _, e := range entries {
-		switch e.ID {
+		switch e.Id {
 		case "parent-msg-1":
 			sawParent = true
 		case "child-msg-1":
 			sawChild = true
-			assert.Equal(t, "delegate-call-1", e.ParentSpawnCallID,
-				"ParentSpawnCallID is retained as provenance (FR-036), not stripped")
-			assert.Contains(t, e.Content, "external-cli permission",
+			// PSC=C retains the exact provenance equality in the separate
+			// internal control above, never as an uncontracted wire property.
+			require.NotNil(t, e.Content)
+			assert.Contains(t, *e.Content, "external-cli permission",
 				"the tagged entry's content must reach the wire unfiltered")
 		}
 	}
 	assert.True(t, sawParent, "the parent entry must still be present")
 	assert.True(t, sawChild, "the ParentSpawnCallID-tagged entry must no longer be withheld")
+	historyMigrationSpawnWire(t, entries, w.Body.Bytes(), "entries")
+	historyMigrationSpawnUnchanged(t, store, sessionID, canonicalBefore)
 }
 
 // TestGetSession_ReturnsDelegateChildEntriesUnfiltered is the inverted REST
@@ -174,6 +177,7 @@ func TestGetSession_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) {
 	require.NotNil(t, store, "shared session store must be available")
 
 	seedParentAndChildTranscript(t, store, sessionID)
+	canonicalBefore := historyMigrationInternalSpawn(t, store, sessionID)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sessionID, nil)
@@ -204,6 +208,8 @@ func TestGetSession_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) {
 	}
 	assert.True(t, sawParent, "the parent entry must still be present")
 	assert.True(t, sawChild, "the ParentSpawnCallID-tagged entry must no longer be withheld")
+	historyMigrationSpawnWire(t, entries, w.Body.Bytes(), "messages")
+	historyMigrationSpawnUnchanged(t, store, sessionID, canonicalBefore)
 }
 
 // TestGetSessionMessages_JudgeVerdictEntry_PopulatesWireVerdict proves the
