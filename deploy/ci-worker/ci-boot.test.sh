@@ -19,15 +19,22 @@
 #   OK  marker + free lock + no run process → exit 0 (the real stop path)
 #   E2E the real idle-watchdog.sh with a 2 s threshold drives ci-boot.sh to exit 0
 #       (ci-boot waits 15 s for the lock: the watchdog holds it 5 s after its hook)
+#   CTL a broken mutant setup (no interpreter / a mutation anchor gone) must stop this
+#       harness with a SETUP ERROR, exit 2 and no PASS rows — never count as a killed
+#       mutant (PR #1396 review I3). Each control re-runs this file in a child.
 #
-# Usage: bash deploy/ci-worker/ci-boot.test.sh      exit 0 = all PASS, 1 = a FAIL, 2 = cannot run
+# Usage: bash deploy/ci-worker/ci-boot.test.sh      exit 0 = all PASS, 1 = a FAIL,
+#        2 = cannot run or SETUP ERROR (a mutant could not be built — nothing was proven)
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BOOT="$HERE/ci-boot.sh"
+SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
+# CI_BOOT_TEST_BOOT / CI_BOOT_TEST_PYTHON exist only for the CTL controls below.
+BOOT="${CI_BOOT_TEST_BOOT:-$HERE/ci-boot.sh}"
+PYTHON="${CI_BOOT_TEST_PYTHON:-python3}"
 HALT_HOOK="$HERE/ci-machine-halt"
 WATCHDOG_REAL="$HERE/idle-watchdog.sh"
-for t in flock pgrep ps; do
+for t in flock pgrep ps cmp "$PYTHON"; do
   command -v "$t" >/dev/null 2>&1 || { echo "cannot run: '$t' missing (Linux only)"; exit 2; }
 done
 
@@ -64,6 +71,9 @@ PASS=0
 FAIL=0
 pass() { echo "  PASS [$1]"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL [$1]: $2"; FAIL=$((FAIL + 1)); [ -f "$3" ] && sed 's/^/    | /' "$3" | tail -15; }
+# setup_error: a mutant (or other fixture) could not be built. Stop at once with exit 2:
+# a missing mutant makes its case "red" for the wrong reason, which would read as killed.
+setup_error() { echo "SETUP ERROR: $*"; exit 2; }
 
 # --- sandbox helpers -----------------------------------------------------------------------
 
@@ -136,14 +146,19 @@ wait_exit() {
 }
 
 # --- mutants ---------------------------------------------------------------------------------
-mutate() { # <name> <python-replace-old> <new>
-  python3 - "$BOOT" "$SB/mut-$1.sh" "$2" "$3" <<'EOF'
+mutate() { # <name> <python-replace-old> <new> — any failure is a SETUP ERROR (exit 2)
+  local dst="$SB/mut-$1.sh"
+  "$PYTHON" - "$BOOT" "$dst" "$2" "$3" <<'EOF' || setup_error "mutant $1: could not be generated (interpreter failed or mutation anchor missing in $BOOT)"
 import sys
 src, dst, old, new = sys.argv[1:5]
 s = open(src).read()
-assert old in s, "mutation anchor missing: " + old
+if s.count(old) != 1:
+    sys.exit("mutation anchor found %d times, want exactly 1: %r" % (s.count(old), old))
 open(dst, "w").write(s.replace(old, new, 1))
 EOF
+  [ -s "$dst" ] || setup_error "mutant $1: $dst missing or empty"
+  if cmp -s "$BOOT" "$dst"; then setup_error "mutant $1: identical to $BOOT"; fi
+  bash -n "$dst" || setup_error "mutant $1: not valid bash"
 }
 mutate no-restart '    start_watchdog
   fi
@@ -218,6 +233,7 @@ case_e2e() { # the real idle-watchdog drives the stop
 }
 
 expect() { # <label> <want: green|red> <case-fn> <boot-file>
+  [ -s "$4" ] || setup_error "$1: boot file $4 missing"
   if "$3" "$4"; then got=green; else got=red; fi
   if [ "$got" = "$2" ]; then pass "$1 ($got)"; else fail "$1" "got $got, want $2" "$CI_BOOT_LOG"; fi
 }
@@ -231,5 +247,27 @@ expect "I2b queued run process aborts the halt"         green case_i2b "$BOOT"
 expect "I2b mutant without the re-check is caught"      red   case_i2b "$SB/mut-no-recheck.sh"
 expect "OK idle + free lock exits 0"                    green case_ok  "$BOOT"
 expect "E2E real watchdog stops via ci-boot"            green case_e2e "$BOOT"
+
+# control <label> <VAR=value...>: re-run this harness with a broken mutant setup; it must
+# end in a SETUP ERROR, exit 2, with no PASS rows. Skipped inside the child itself.
+control() {
+  local label="$1" out rc; shift
+  out="$(env CI_BOOT_TEST_NESTED=1 "$@" bash "$SELF" 2>&1)"; rc=$?
+  printf '%s\n' "$out" >"$SB/control.out"
+  if [ "$rc" -eq 2 ] && grep -q 'SETUP ERROR\|cannot run' "$SB/control.out" \
+      && ! grep -q 'PASS \[' "$SB/control.out"; then
+    pass "$label (exit 2, no PASS rows)"
+  else
+    fail "$label" "harness exit $rc, want 2 with a setup error and no PASS rows" "$SB/control.out"
+  fi
+}
+if [ -z "${CI_BOOT_TEST_NESTED:-}" ]; then
+  # an edit that keeps behaviour but removes the no-lock mutation anchor
+  sed 's/flock -w "\$LOCK_WAIT_SECONDS" 7/flock --wait "$LOCK_WAIT_SECONDS" 7/' "$BOOT" >"$SB/boot-no-anchor.sh"
+  cmp -s "$BOOT" "$SB/boot-no-anchor.sh" && setup_error "control fixture: anchor edit did not apply"
+  control "CTL missing mutation anchor is a setup error"  CI_BOOT_TEST_BOOT="$SB/boot-no-anchor.sh"
+  control "CTL missing interpreter is a setup error"      CI_BOOT_TEST_PYTHON="$SB/no-such-python3"
+  control "CTL failing interpreter is a setup error"      CI_BOOT_TEST_PYTHON=false
+fi
 echo "=== $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
