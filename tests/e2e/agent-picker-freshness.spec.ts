@@ -54,6 +54,7 @@
 import { expect } from "@playwright/test";
 import { test } from "./fixtures/console-errors";
 import {
+  assistantMessages,
   selectAgent,
   agentRowGroup,
   DEFAULT_WORKSPACE_NAME,
@@ -119,5 +120,137 @@ test.describe("agent roster freshness after a raw-REST agent creation (row 55 bu
     await page.goto("/");
 
     await selectAgent(page, probeAgentName, DEFAULT_WORKSPACE_NAME);
+  });
+});
+
+// Harness-only regression for selectors.ts::selectAgent (static DOM, no
+// gateway). A real row click closes the unpinned sidebar, so the row can
+// unmount before its aria-current is read; selectAgent then reopens the
+// sidebar and reads the selected row instead. CI run 39143775263 (job
+// 117725852235) failed THIS spec's acceptance test exactly there: the chat
+// had switched ("Browser Probe 41894 - Main Session" in the header, sidebar
+// closed), but the fallback never ran, because an expect() matcher that runs
+// out of time throws a plain matcher error, not errors.TimeoutError.
+test.describe("selectAgent when the row click closes the sidebar (static harness)", () => {
+  test("confirms the switch through the reopened sidebar's selected row", async ({ page }) => {
+    await page.setContent(`
+      <button id="show" aria-label="Show sidebar" style="display:none">menu</button>
+      <div id="host"></div>
+      <script>
+        const nav = (selected) => \`
+          <nav aria-label="Main navigation">
+            <button aria-label="Hide My Workspace agents" aria-expanded="true">My Workspace</button>
+            <div role="group" aria-label="My Workspace">
+              <div role="group" aria-label="Probe Agent" data-selected="\${selected}">
+                <div class="sidebar-agent-row"><button id="main">Probe Agent</button></div>
+              </div>
+            </div>
+          </nav>\`;
+        const host = document.getElementById('host');
+        const show = document.getElementById('show');
+        host.innerHTML = nav('false');
+        // The row click selects the agent and closes the sidebar at once: the
+        // row (and its aria-current) is gone before anyone can read it.
+        host.addEventListener('click', (e) => {
+          if (e.target.id !== 'main') return;
+          host.innerHTML = '';
+          show.style.display = '';
+        });
+        show.addEventListener('click', () => {
+          host.innerHTML = nav('true');
+          show.style.display = 'none';
+        });
+      </script>`);
+    await selectAgent(page, "Probe Agent", "My Workspace");
+  });
+
+  test("still fails when the click did not move the selection", async ({ page }) => {
+    await page.setContent(`
+      <nav aria-label="Main navigation">
+        <button aria-label="Hide My Workspace agents" aria-expanded="true">My Workspace</button>
+        <div role="group" aria-label="My Workspace">
+          <div role="group" aria-label="Probe Agent" data-selected="false">
+            <div class="sidebar-agent-row"><button>Probe Agent</button></div>
+          </div>
+        </div>
+      </nav>`);
+    await expect(selectAgent(page, "Probe Agent", "My Workspace")).rejects.toThrow(
+      /neither its aria-current nor the selected row confirmed the switch/,
+    );
+  });
+
+  // F1 (code-reviewer, PR #1366): the fallback's completion check used the
+  // GLOBAL selected row, so a same-named agent still selected in ANOTHER
+  // workspace satisfied it after a failed attach rolled the app back —
+  // selectAgent blessed a switch that never happened. The completion check
+  // must be the TARGET workspace's own row. This harness pins the exact
+  // supported failure state useSelectSession produces: Jim exists in two
+  // EXPANDED workspaces, My Workspace's Jim is selected, clicking Other
+  // Workspace's Jim fails to attach (the sidebar closes as a real row click
+  // does; the app stays on My Workspace), and the reopened sidebar shows the
+  // stale selection. selectAgent must REJECT — never accept the other
+  // workspace's selected same-named row as proof.
+  test("does not accept another workspace's selected same-named agent when the target row's click does nothing", async ({
+    page,
+  }) => {
+    await page.setContent(`
+      <button id="show" aria-label="Show sidebar" style="display:none">menu</button>
+      <div id="host"></div>
+      <script>
+        const nav = () => \`
+          <nav aria-label="Main navigation">
+            <button aria-label="Hide My Workspace agents" aria-expanded="true">My Workspace</button>
+            <div role="group" aria-label="My Workspace">
+              <div role="group" aria-label="Jim" data-selected="true">
+                <div class="sidebar-agent-row"><button>Jim</button></div>
+              </div>
+            </div>
+            <button aria-label="Hide Other Workspace agents" aria-expanded="true">Other Workspace</button>
+            <div role="group" aria-label="Other Workspace">
+              <div role="group" aria-label="Jim" data-selected="false">
+                <div class="sidebar-agent-row"><button id="target">Jim</button></div>
+              </div>
+            </div>
+          </nav>\`;
+        const host = document.getElementById('host');
+        const show = document.getElementById('show');
+        host.innerHTML = nav();
+        host.addEventListener('click', (e) => {
+          if (e.target.id !== 'target') return;
+          host.innerHTML = '';
+          show.style.display = '';
+        });
+        show.addEventListener('click', () => {
+          host.innerHTML = nav();
+          show.style.display = 'none';
+        });
+      </script>`);
+    await expect(selectAgent(page, "Jim", "Other Workspace")).rejects.toThrow(
+      /neither its aria-current nor the selected row confirmed the switch/,
+    );
+  });
+});
+
+// Harness-only regression for selectors.ts::assistantMessages (static DOM, no
+// gateway). Since the parent-wake landing a helper's hand-back renders in the
+// parent chat as a system row that carries data-message-id
+// (SystemMessageRows.tsx::VirtualSystemMessageRow, data-message-role="system").
+// Before ea78b8704 the selector counted it as an assistant reply:
+// subagent.spec.ts (d) saw 2 replies where the parent gave 1 (release run
+// 39427198408). This pins ea78b8704's exclusion. System rows
+// - helper hand-backs, goal outcomes, the clear-context divider - are never
+// assistant replies.
+test.describe("assistantMessages counts assistant replies only (static harness)", () => {
+  test("a system row with data-message-id is not an assistant reply", async ({ page }) => {
+    await page.setContent(`
+      <div data-message-role="user" data-message-id="u1" class="flex-row-reverse">delegate this</div>
+      <div data-testid="assistant-message" data-message-role="assistant" data-message-id="a1" data-status="complete">summary</div>
+      <div data-message-role="system" data-message-id="helper-event-finished-s1-s2:1:final">A delegated session handed back (final): done</div>
+      <div data-message-role="system" data-message-id="clear-1">Context cleared</div>
+      <div data-message-id="a2">a reply rendered without a role attribute</div>
+      <div data-message-id="a3" data-status="running">still streaming</div>`);
+    await expect(assistantMessages(page)).toHaveCount(2);
+    expect(await assistantMessages(page).evaluateAll((els) => els.map((el) => el.getAttribute("data-message-id"))))
+      .toEqual(["a1", "a2"]);
   });
 });
