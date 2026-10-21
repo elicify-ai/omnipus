@@ -7,7 +7,7 @@ import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { MAIN_ID, json } from '../../../tests/l1-room-ui/harness'
 import { deferred, entry, expectValidPage, page, pos } from '../../../tests/chat-history-paging/fixtures'
-import { historyRequests, openHistory, sendSnapshot, sentMessages, stopHistory, wirePage } from '../../../tests/chat-history-paging/application'
+import { historyRequests, openHistory, sendSnapshot, sentMessages, stopHistory, wirePage, WELCOME_HEADING } from '../../../tests/chat-history-paging/application'
 
 let app: Awaited<ReturnType<typeof openHistory>> | undefined
 afterEach(async () => { await stopHistory(app); app = undefined })
@@ -120,7 +120,7 @@ describe('T34 retained range refresh and expiry — B26/B47/B48', () => {
     expect(composer, 'D8 unrelated composer focus stays').toHaveFocus()
     expect(screen.queryByText('Saved row 6002', { exact: true }), 'D7 expiration does not jump to staged latest tail').not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^Return to latest$/ })).toBeEnabled()
-    expect(screen.queryByTestId('welcome-state')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', WELCOME_HEADING)).not.toBeInTheDocument()
     expect(sentMessages(current.socket)).toStrictEqual([])
   })
 })

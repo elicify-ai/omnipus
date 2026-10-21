@@ -8,7 +8,7 @@ import { useSessionStore } from '@/store/session'
 import { MAIN_ID, json } from '../../../tests/l1-room-ui/harness'
 import { availableDetail, deferred, entry, page, pos, session, STAMP, UNAVAILABLE } from '../../../tests/chat-history-paging/fixtures'
 import {
-  historyRequests, openHistory, sendFrames, sendSnapshot, sentMessages, stopHistory, wirePage,
+  historyRequests, openHistory, sendFrames, sendSnapshot, sentMessages, stopHistory, wirePage, WELCOME_HEADING,
 } from '../../../tests/chat-history-paging/application'
 
 let app: Awaited<ReturnType<typeof openHistory>> | undefined
@@ -40,6 +40,12 @@ function interceptEarlier(current: NonNullable<typeof app>) {
 }
 
 describe('T15/T20 actual history actions — B10/B28/B29/B34', () => {
+  it('a valid available empty page renders the real welcome heading as a negative-oracle control — B02', async () => {
+    app = await openHistory(page([], { sessionId: MAIN_ID }))
+    expect(await screen.findByRole('heading', WELCOME_HEADING), 'the unavailable/expired-range tests must be able to detect a real empty-chat welcome').toBeVisible()
+    expect(useChatStore.getState().messages).toStrictEqual([])
+  })
+
   it('plain fallback exposes earlier paging with one exact boundary request and no user resend', async () => {
     const current = await openPlain()
     const barrier = interceptEarlier(current)

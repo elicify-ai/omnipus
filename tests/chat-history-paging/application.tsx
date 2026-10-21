@@ -13,6 +13,10 @@ import {
 } from '../l1-room-ui/stage1-harness'
 import { deferred, expectPageAccounting, expectValidFrame, page, replay, snapshot, STAMP } from './fixtures'
 
+// Read from the real ChatScreen::WelcomeState heading, not a nonexistent test id.
+// The valid-empty control below the UI tests must keep this negative oracle live.
+export const WELCOME_HEADING = { level: 1, name: /^Welcome to\b/ } as const
+
 const originalClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
 const originalRect = HTMLElement.prototype.getBoundingClientRect
 
