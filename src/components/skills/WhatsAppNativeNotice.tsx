@@ -75,9 +75,9 @@ export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { chan
     recovery?: { requestId?: string; sessionId?: string; frameAtFailure?: WhatsAppPairingState }
   } | null>(null)
 
-  // A later frame can resolve an uncertain enable 500, but only for the
-  // original request AND session. Refusals (404/409) never recover this way,
-  // and a frame received before the HTTP failure cannot confirm a restart.
+  // A later frame can resolve an uncertain enable 500 only for the NEW Retry
+  // intent: its explicit chat request/session, or no owner for Connectors.
+  // Refusals (404/409) and frames predating the HTTP failure never recover this way.
   useEffect(() => {
     const recovery = retryError?.recovery
     if (recovery && pairing && pairing !== recovery.frameAtFailure
@@ -240,8 +240,10 @@ export function WhatsAppNativeNotice({ channelId, requestId, sessionId }: { chan
               ? `The channel is now disabled. ${reason}`
               : `The channel was disabled before the enable request, but its current state could not be confirmed. ${reason}`
             : reason
-      const originalRequest = requestId ?? pairing?.requestId
-      const originalSession = sessionId ?? pairing?.sessionId
+      // Recovery follows the NEW enable intent. A bodyless Connectors Retry
+      // starts unowned; never inherit the ended pairing's chat ownership.
+      const originalRequest = retryRequest?.pairing_retry?.request_id
+      const originalSession = retryRequest?.pairing_retry?.session_id
       useWhatsAppPairingStore.getState().apply({
         type: 'whatsapp_pairing',
         channel_id: channelId,

@@ -39,7 +39,7 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 }
 
-function apply(status: WhatsAppPairingFrame['status'], message = '', identity = { request_id: REQUEST, session_id: SESSION }) {
+function apply(status: WhatsAppPairingFrame['status'], message = '', identity: Pick<WhatsAppPairingFrame, 'request_id' | 'session_id'> = { request_id: REQUEST, session_id: SESSION }) {
   const frame: WhatsAppPairingFrame = {
     type: 'whatsapp_pairing', channel_id: CHANNEL, status, message,
     ...(status === 'code' ? { qr: 'fresh-round4-code' } : {}), ...identity,
@@ -101,6 +101,13 @@ afterEach(() => {
 })
 
 describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
+  // Round-6 chief-approved fixture correction: the NEW Connectors Retry is
+  // unowned even when its displayed ended frame belonged to a chat. Chat
+  // fixtures retain exactly the original REQUEST and SESSION bytes.
+  const retryIdentity: Pick<WhatsAppPairingFrame, 'request_id' | 'session_id'> = surface === 'chat'
+    ? { request_id: REQUEST, session_id: SESSION }
+    : {}
+
   it.each([INTERRUPTED, LOCAL_DATA, NETWORK, START_FAILED])('shows the exact actionable server detail, with Retry: %s', (message) => {
     mount(surface)
     apply('error', message)
@@ -150,7 +157,7 @@ describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
     mount(surface)
     await retry()
     exactMessage('Generating your QR code…')
-    apply(status, message)
+    apply(status, message, retryIdentity)
     exactMessage(message)
     expect(screen.queryByText('Generating your QR code…')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Retry' }) !== null).toBe(retryable)
@@ -196,7 +203,7 @@ describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
     mount(surface)
     await retry()
     exactMessage(expected)
-    apply('code')
+    apply('code', '', retryIdentity)
     exactMessage(expected)
     expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Retry' }) !== null).toBe(retryable)
@@ -208,7 +215,7 @@ describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
     mount(surface)
     await retry()
     expect(screen.getByRole('alert')).toBeInTheDocument()
-    apply(status, status === 'error' ? NETWORK : status === 'linked' ? LINKED : '')
+    apply(status, status === 'error' ? NETWORK : status === 'linked' ? LINKED : '', retryIdentity)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.queryByText(/current state could not be confirmed/)).not.toBeInTheDocument()
     if (status === 'code') expect(screen.getByTestId('whatsapp-qr')).toBeInTheDocument()
@@ -222,7 +229,7 @@ describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
   it.each([
     { request_id: 'another-request', session_id: SESSION },
     { request_id: REQUEST, session_id: 'another-session' },
-    { request_id: '', session_id: '' },
+    { request_id: surface === 'chat' ? '' : REQUEST, session_id: '' },
   ])('another or missing request/session cannot clear the 500: %j', async (identity) => {
     failEnable(500, 'config reload failed')
     apply('timeout')
@@ -242,12 +249,12 @@ describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
     apply('timeout')
     mount(surface)
     await retry()
-    apply('code')
+    apply('code', '', retryIdentity)
     expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
     await act(async () => respond(json({ error: 'config reload failed' } satisfies ErrorResponse, 500)))
     expect(screen.getByRole('alert')).toBeInTheDocument()
     expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
-    apply('code')
+    apply('code', '', retryIdentity)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.getByTestId('whatsapp-qr')).toBeInTheDocument()
   })
