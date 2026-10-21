@@ -45,6 +45,7 @@ func repairStartNative(t *testing.T, binary, root string) *repairNativeInstance 
 	t.Helper()
 	stderr, err := os.CreateTemp(t.TempDir(), "native-stderr-*")
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, stderr.Close()) })
 	cmd := exec.Command(binary, "--data-root", root)
 	cmd.Stderr = stderr // An actual file avoids reading a buffer while exec writes it.
 	input, err := cmd.StdinPipe()
@@ -57,19 +58,18 @@ func repairStartNative(t *testing.T, binary, root string) *repairNativeInstance 
 		if !child.waited {
 			// Cleanup is not a stopped oracle. Kill only our owned child after a
 			// failing assertion, then always Wait so a failed capture cannot leak it.
-			err := cmd.Process.Kill()
-			require.True(t, err == nil || errors.Is(err, os.ErrProcessDone), "owned-child cleanup kill: %v", err)
+			killErr := cmd.Process.Kill()
 			closeErr := input.Close()
-			require.True(t, closeErr == nil || errors.Is(closeErr, os.ErrClosed), "owned-child input close: %v", closeErr)
-			err = cmd.Wait()
+			waitErr := cmd.Wait() // Join before any cleanup assertion can abort.
 			child.waited = true
-			if err != nil {
+			require.True(t, killErr == nil || errors.Is(killErr, os.ErrProcessDone), "owned-child cleanup kill: %v", killErr)
+			require.True(t, closeErr == nil || errors.Is(closeErr, os.ErrClosed), "owned-child input close: %v", closeErr)
+			if waitErr != nil {
 				var exit *exec.ExitError
-				require.ErrorAs(t, err, &exit, "cleanup must actually reap the child")
+				require.ErrorAs(t, waitErr, &exit, "cleanup must actually reap the child")
 			}
 			t.Logf("cleanup reaped owned native child pid=%d", cmd.Process.Pid)
 		}
-		require.NoError(t, stderr.Close())
 	})
 	ready, err := bufio.NewReader(output).ReadString('\n')
 	require.NoError(t, err, "actual native PID registration/readiness, not a sleep")
