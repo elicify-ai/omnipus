@@ -179,7 +179,7 @@ func parseGoalCompileResponse(raw string) (*goalCompileResponse, error) {
 		DoD        []map[string]json.RawMessage `json:"dod"`
 		// ClarifyingQuestions unmarshals directly into askuser.Question — its
 		// JSON tags (header/question/options/multi_select/recommended/
-		// default_safe/context) are exactly the shape the compile prompt asks
+		// context) are exactly the shape the compile prompt asks
 		// the model to produce (ADR-079 D3).
 		ClarifyingQuestions []askuser.Question `json:"clarifying_questions"`
 	}
@@ -531,8 +531,8 @@ func buildGoalRubricNote(forTool bool) string {
 					"Every clarifying question needs a short unique header (max %d chars) and %d-%d concrete "+
 						"answer options — real, specific candidate answers, never filler — even when the true "+
 						"answer is open-ended: the user can always answer in free text instead, so the options are "+
-						"a helpful starting menu, not an exhaustive list. Never set a \"default_safe\" field on a "+
-						"clarifying question — these must always wait for the user's own answer.\n\n",
+						"a helpful starting menu, not an exhaustive list. Clarifying questions must always wait for the "+
+						"user's own answer.\n\n",
 					askuser.MaxHeaderChars, askuser.MinOptions, askuser.MaxOptions,
 				))
 	}
@@ -774,9 +774,8 @@ type llmGoalCompileOutcome struct {
 	// ClarifyingQuestions is the same clarifying-question set, UNjoined and
 	// structured (ADR-079 D3): one askuser.Question (header, text, 2-6
 	// options, optional recommended/multi_select) per question, ready to
-	// become the web AskUserQuestion card's PendingSet.Questions verbatim
-	// (default_safe is stripped at the card-build site, never here). Empty
-	// exactly when ClarifyingQuestion is empty.
+	// become the web AskUserQuestion card's PendingSet.Questions verbatim.
+	// Empty exactly when ClarifyingQuestion is empty.
 	ClarifyingQuestions []askuser.Question
 	// UsedFallback reports the deterministic parser produced Result (LLM
 	// failure/timeout/schema miss/second veto/question overflow) — the echo
