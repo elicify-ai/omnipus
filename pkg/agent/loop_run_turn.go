@@ -68,16 +68,15 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseFinalizing)
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setFinalContent(rz.rc.rx.finalContent)
-	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory {
+	// Harness notices are chat-only. A hidden system-role model slot would be
+	// sanitized away and break later archive-address mapping and context relief.
+	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && !iterationLimitNotice {
 		finalMsg := providers.Message{Role: "assistant", Content: rz.rc.rx.finalContent}
-		if iterationLimitNotice {
-			finalMsg.Role = "system"
-		}
 		// #1178 (amendment §4.2): a failed final write is a failed turn,
 		// never a false success. Wrap with the existing assistant
 		// save-error wrapper, run the session_save error path below and
 		// markTurnFailed — DoneStats.TurnFailed must be true.
-		if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.appendFinalResponse(finalMsg.Content, rz.rc.rx.rr.rq.ri.rf.response, iterationLimitNotice); addErr != nil {
+		if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.appendFinalModelResponse(finalMsg.Content, rz.rc.rx.rr.rq.ri.rf.response); addErr != nil {
 			notSaved := &messageNotSavedError{role: finalMsg.Role, cause: addErr}
 			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
@@ -115,6 +114,14 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	// empty and Finalize would skip the write. We hand finalContent to the
 	// streamer via SetFinalContent so it can fall back to that text.
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.SetFinalContent(rz.rc.rx.finalContent)
+	if !iterationLimitNotice {
+		if streamErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.ensureFinalWebchatStreamer(rz.rc.rx.rr.rq.ri.rf.rt.al.bus); streamErr != nil {
+			notSaved := &messageNotSavedError{role: "assistant", cause: streamErr}
+			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			return turnResult{}, notSaved
+		}
+	}
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.mu.RLock()
 	hasActiveStreamer := rz.rc.rx.rr.rq.ri.rf.rt.ts.lastStreamer != nil
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.mu.RUnlock()

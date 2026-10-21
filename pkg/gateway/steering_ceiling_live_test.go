@@ -139,7 +139,8 @@ func ceilingLiveAssertDelivery(t *testing.T, h *ceilingLiveHarness, frames []col
 	require.Len(t, answers, 1)
 	var liveNotices []generated.ReplayMessageFrame
 	var answerText strings.Builder
-	for _, frame := range frames {
+	firstAnswerToken, firstAnswerDone := -1, -1
+	for index, frame := range frames {
 		switch frame.Type {
 		case "replay_message":
 			var notice generated.ReplayMessageFrame
@@ -156,14 +157,26 @@ func ceilingLiveAssertDelivery(t *testing.T, h *ceilingLiveHarness, frames []col
 			require.NoError(t, json.Unmarshal(frame.Raw, &token))
 			assert.NotContains(t, token.Content, terminalAcceptanceCapNotice, "a system notice never returns as model tokens")
 			if strings.Contains(token.Content, ceilingLiveAnswer) {
+				if firstAnswerToken == -1 {
+					firstAnswerToken = index
+				}
 				answerText.WriteString(token.Content)
 				require.NotNil(t, token.MessageId, "live answer identifies its durable output")
 				require.NotNil(t, token.TurnId)
 				assert.Equal(t, answers[0].ID, *token.MessageId)
 				assert.Equal(t, answerTurn, *token.TurnId)
 			}
+		case "done":
+			var done generated.DoneFrame
+			require.NoError(t, json.Unmarshal(frame.Raw, &done))
+			if done.TurnId != nil && *done.TurnId == answerTurn && firstAnswerDone == -1 {
+				firstAnswerDone = index
+			}
 		}
 	}
+	require.NotEqual(t, -1, firstAnswerToken, "the answer must arrive, not only a terminal frame")
+	require.NotEqual(t, -1, firstAnswerDone)
+	assert.Less(t, firstAnswerToken, firstAnswerDone, "the client must receive keyed content before done finalizes its bubble")
 	assert.Len(t, liveNotices, 1, "exactly one unattributed system notice is visible")
 	assert.Equal(t, ceilingLiveAnswer, answerText.String(), "the drained answer arrives live exactly once; frames=%v", collectedFrameTypes(frames))
 }

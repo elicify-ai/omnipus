@@ -9,16 +9,8 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
-
-func (ts *turnState) appendFinalResponse(content string, response *providers.LLMResponse, systemNotice bool) error {
-	if systemNotice {
-		return ts.agent.Sessions.AddMessage(ts.sessionKey, "system", content)
-	}
-	return ts.appendFinalModelResponse(content, response)
-}
 
 // recordIterationLimitNotice uses the existing chat-only system entry and
 // replay-message frame. It has its own identity and no model or model usage:
