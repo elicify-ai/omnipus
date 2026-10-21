@@ -318,7 +318,14 @@ func (a *restAPI) credentialRefResolves(refName string) (bool, error) {
 // scrubbing is re-armed with the new credentials (A1+A2 fix). If the in-memory
 // refresh fails the error is returned to the caller so the HTTP handler can surface
 // a 500 rather than silently serving stale state.
-func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error, exclusiveDeletes ...string) error {
+func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) error {
+	return a.safeUpdateConfigWithDeletedChannels(mutate)
+}
+
+// safeUpdateConfigWithDeletedChannels also pins explicit DELETE's exclusion
+// through its later credential/state cleanup. The ordinary updater keeps its
+// fixed callback type for the existing authenticated session-cookie writers.
+func (a *restAPI) safeUpdateConfigWithDeletedChannels(mutate func(m map[string]any) error, exclusiveDeletes ...string) error {
 	// configMu serializes concurrent REST config writes (read-modify-write cycles).
 	// Sysagent mutations go through MutateConfig (al.mu) with SaveConfigLocked,
 	// which does not acquire configMu — so there is no lock ordering conflict.

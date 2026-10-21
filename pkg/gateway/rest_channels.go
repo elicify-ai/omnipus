@@ -938,7 +938,7 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 	}
 
 	// Step 2: remove config entry and stale wildcard binding atomically.
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	if err := a.safeUpdateConfigWithDeletedChannels(func(m map[string]any) error {
 		channels, _ := m["channels"].(map[string]any)
 		if channels != nil {
 			delete(channels, channelID)
