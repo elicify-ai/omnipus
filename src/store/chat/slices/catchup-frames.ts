@@ -87,7 +87,7 @@ function handleSessionSnapshotFrame({ frame, targetSid, withBucket }: {
     return {
       ...wiped,
       snapshotWasBootMismatch: snapshotFrame.reason === 'boot_mismatch',
-      hasEarlierMessages: snapshotFrame.has_earlier_messages === true,
+      hasEarlierMessages: snapshotFrame.has_earlier === true,
     }
   })
 }

@@ -11,6 +11,7 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { makeSnapshotHistory } from '@/test/factories'
 
 // Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // D7/D8, as retained by the founder's "middle way" ruling.
@@ -176,6 +177,7 @@ function replayOriginal() {
     // Zero is a valid fixture cursor. D7 explicitly distinguishes this
     // recovered unknown_position snapshot from a boot-mismatch snapshot.
     useChatStore.getState().handleFrame({
+      ...makeSnapshotHistory(1),
       type: 'session_snapshot', session_id: OLD_SESSION, reason: 'unknown_position', seq: 0, boot_id: '1090-red5-boot',
     })
     useChatStore.getState().handleFrame({
@@ -553,6 +555,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     render(createElement(GapRows))
     act(() => {
       useChatStore.getState().handleFrame({
+        ...makeSnapshotHistory(1),
         type: 'session_snapshot', session_id: OLD_SESSION, reason: 'unknown_position', seq: 0, boot_id: '1090-red5-boot',
       })
       useChatStore.getState().handleFrame({

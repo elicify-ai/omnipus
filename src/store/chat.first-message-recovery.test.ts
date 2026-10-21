@@ -14,6 +14,7 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { makeSnapshotHistory } from '@/test/factories'
 
 // Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // D7, FOUNDER DECISION "middle way", and Team-lead ruling (frontend scope).
@@ -257,6 +258,7 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
       // Zero is a valid fixture cursor; unknown_position is deliberately NOT
       // boot_mismatch. D7 carries an explicit recovered-first-send flag.
       useChatStore.getState().handleFrame({
+        ...makeSnapshotHistory(1),
         type: 'session_snapshot', session_id: SESSION_ID, reason: 'unknown_position', seq: 0, boot_id: '1090-boot',
       })
       useChatStore.getState().handleFrame({
@@ -378,6 +380,7 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
     act(() => {
       useChatStore.getState().handleFrame(ack)
       useChatStore.getState().handleFrame({
+        ...makeSnapshotHistory(1),
         type: 'session_snapshot', session_id: SESSION_ID, reason: 'unknown_position', seq: 0, boot_id: '1090-boot',
       })
       useChatStore.getState().handleFrame({

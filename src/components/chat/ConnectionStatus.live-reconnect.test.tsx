@@ -10,6 +10,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { OmnipusRuntimeProvider } from './OmnipusRuntimeProvider'
 import { ChatConnectionNotice } from './ConnectionStatus'
+import { makeSnapshotHistory } from '@/test/factories'
 
 // Founder decision 2026-10-06 (keeps issue #823): connection drops shorter
 // than 15 s stay quiet - no status line; the earlier U4 requirement of an
@@ -104,7 +105,7 @@ describe('U4 — reconnect behaviour through real runtime/socket callbacks', () 
     act(() => latest().open())
     expect(screen.queryByTestId('connection-status-line')).not.toBeInTheDocument()
     act(() => {
-      latest().frame({ type: 'session_snapshot', session_id: SID, seq: 1, boot_id: 'uat-after', reason: 'boot_mismatch' })
+      latest().frame({ ...makeSnapshotHistory(1), type: 'session_snapshot', session_id: SID, seq: 1, boot_id: 'uat-after', reason: 'boot_mismatch' })
       latest().frame({ type: 'session_state', session_id: SID, user_id: 'uat-user', pending_approvals: [], emitted_at: '2026-10-06T00:00:01Z', boot_id: 'uat-after', active_turn: { turn_id: 'uat-active-turn', agent_id: 'jim', started_at: '2026-10-06T00:00:00Z' } })
       latest().frame({ type: 'replay_message', session_id: SID, id: 'replayed-active-reply', role: 'assistant', turn_id: 'uat-active-turn', content: 'Partial reply' })
     })
