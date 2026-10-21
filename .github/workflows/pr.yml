@@ -1369,6 +1369,7 @@ jobs:
       # carry no !cgo build tags (see the cgo-gate job, which builds the module
       # under both CGO_ENABLED=0 and =1).
       CGO_ENABLED: "0"
+      GOLANGCI_LINT_VERSION: v2.10.1
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1399,11 +1400,32 @@ jobs:
       - name: Run go generate
         run: go generate ./...
 
+      # 2026-10-21 SA5011 incident: the old analyzer cache made unchanged
+      # release tests fail. Isolate toolchain, linter, OS, config and modules;
+      # never fall back across those boundaries or delete the old caches.
+      # Investigation and earlier triage:
+      # /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/l1/ci-tooling-cache-experiment-20261021/REPORT.md
+      # /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/l1/ci-tooling-lint-triage-20261021/REPORT.md
+      # The v9 action cannot accept this key, so its cache is disabled below.
+      - name: Determine linter cache Go version
+        id: lint-cache
+        run: |
+          go_version=$(go env GOVERSION)
+          printf 'go-version=%s\n' "$go_version" >> "$GITHUB_OUTPUT"
+          printf 'GOLANGCI_LINT_CACHE=%s/golangci-lint\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Cache golangci-lint analyzers
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.GOLANGCI_LINT_CACHE }}
+          key: golangci-lint-analyzers-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.lint-cache.outputs.go-version }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('.golangci.yaml') }}-${{ hashFiles('go.mod') }}-${{ hashFiles('go.sum') }}
+
       - name: Golangci Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.10.1
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --build-tags=goolm,stdjson
+          skip-cache: true
 
   fast-tier:
     name: Fast tier checks passed
