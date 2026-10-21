@@ -2691,40 +2691,8 @@ func TestContract_Session_TooManyPartitions(t *testing.T) {
 		"3651 partitions must fail — maxItems:3650")
 }
 
-// ── SessionDetail messages maxItems:100000 ────────────────────────────────────
-// Traces to: contracts/components/schemas/SessionDetail.yaml (messages: maxItems:100000)
-
-func TestContract_SessionDetail_TooManyMessages(t *testing.T) {
-	// Traces to: SessionDetail.yaml — messages: maxItems: 100000
-	// 100001 messages must fail.
-	messages := make([]any, 100001)
-	for i := range messages {
-		messages[i] = map[string]any{
-			"id": fmt.Sprintf("msg-%d", i), "role": "user",
-			"content": "x", "type": "text", "status": "complete",
-		}
-	}
-	doc := map[string]any{
-		"id":         "session-1",
-		"agent_id":   "jim",
-		"title":      "Test session",
-		"status":     "active",
-		"created_at": "2026-05-17T10:00:00Z",
-		"updated_at": "2026-05-17T10:00:00Z",
-		"channel":    "webchat",
-		"partitions": []string{},
-		"stats": map[string]any{
-			"cost": 0.0, "message_count": 0,
-			"tokens_in": 0, "tokens_out": 0,
-			"tokens_total": 0, "tool_calls": 0,
-		},
-		"messages": messages,
-	}
-	raw, err := json.Marshal(doc)
-	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SessionDetail", raw),
-		"100001 messages must fail — maxItems:100000")
-}
+// SessionDetail message-cap coverage is isolated in
+// session_detail_history_cap_test.go; the test name and100001 regression remain.
 
 // ── MediaFrame parts maxItems:32 ─────────────────────────────────────────────
 // Traces to: contracts/components/schemas/MediaFrame.yaml (parts: maxItems:32)
