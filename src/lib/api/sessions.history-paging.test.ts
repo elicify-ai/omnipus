@@ -30,7 +30,7 @@ describe('T33 paged history adapter — B02/B23/B51', () => {
     body = fixture
     const actual: unknown = await fetchSessionMessages(SID)
     expect(actual, 'D15 adapter must return bounded entries AND atomic page metadata, never the retired bare array').toMatchObject({
-      entries: entries.map(({ id, content }) => ({ id, content })),
+      entries: entries.map(({ id, content, history_position }) => ({ id, content, historyPosition: history_position })),
       has_earlier: count > 40, has_later: false, page_info: fixture.page_info,
       ...(count > 40 ? { next_before: pos(first) } : {}),
     })
@@ -42,7 +42,7 @@ describe('T33 paged history adapter — B02/B23/B51', () => {
     expectValidPage(fixture, [pos(1)], 1)
     body = fixture
     expect(await fetchSessionMessages(SID), 'D-B5 budget is a positive integer, not a one-value enum')
-      .toMatchObject({ page_info: { soft_byte_budget: budget, byte_budget_exceeded: false }, entries: [{ id: 'history-1' }] })
+      .toMatchObject({ page_info: { soft_byte_budget: budget, byte_budget_exceeded: false }, entries: [{ id: 'history-1', historyPosition: pos(1) }] })
   })
 
   it('retains a visible position-stable placeholder for one malformed item without rejecting its valid neighbors', async () => {
@@ -54,11 +54,40 @@ describe('T33 paged history adapter — B02/B23/B51', () => {
     const first = await fetchSessionMessages(SID)
     const second = await fetchSessionMessages(SID)
     expect(first).toMatchObject({ entries: [
-      { id: 'history-1', content: 'Saved row 1' },
-      { role: 'system', content: 'This message could not be displayed.' },
-      { id: 'history-3', content: 'Saved row 3' },
+      { id: 'history-1', content: 'Saved row 1', historyPosition: pos(1) },
+      { id: 'history-2', role: 'system', content: 'This message could not be displayed.', historyPosition: pos(2) },
+      { id: 'history-3', content: 'Saved row 3', historyPosition: pos(3) },
     ] })
     expect(second, 'same occurrence produces the same placeholder identity').toStrictEqual(first)
+  })
+
+  it('malformed sources without recorded IDs keep distinct position-derived placeholders when retention changes array indexes', async () => {
+    const good = page([entry(1), entry(2), entry(3)])
+    expectValidPage(good, [pos(1), pos(2), pos(3)], 3)
+    const bad2 = { ...entry(2), id: undefined, role: 'not-a-role' }
+    const bad3 = { ...entry(3), id: undefined, role: 'not-a-role' }
+    body = { ...good, entries: [entry(1), bad2, bad3] }
+    const first: unknown = await fetchSessionMessages(SID)
+    expect(first).toMatchObject({ entries: [
+      { id: 'history-1', historyPosition: pos(1) },
+      { role: 'system', content: 'This message could not be displayed.', historyPosition: pos(2) },
+      { role: 'system', content: 'This message could not be displayed.', historyPosition: pos(3) },
+    ] })
+    const next = page([entry(2), entry(3)], { info: { retention_generation: 'fixture-retained-2' } })
+    expectValidPage(next, [pos(2), pos(3)], 2)
+    body = { ...next, entries: [bad2, bad3] }
+    const second: unknown = await fetchSessionMessages(SID)
+    expect(second).toMatchObject({ entries: [
+      { role: 'system', content: 'This message could not be displayed.', historyPosition: pos(2) },
+      { role: 'system', content: 'This message could not be displayed.', historyPosition: pos(3) },
+    ] })
+    // not-wire-format: observation of normalized placeholder keys, not a wire declaration.
+    const firstRows = Reflect.get(first as object, 'entries') as { id: string }[]
+    const nextRows = Reflect.get(second as object, 'entries') as { id: string }[]
+    expect(firstRows[1].id).toBeTypeOf('string'); expect(firstRows[1].id).not.toBe('')
+    expect(firstRows[2].id).toBeTypeOf('string'); expect(firstRows[2].id).not.toBe('')
+    expect(firstRows[1].id, 'different source positions cannot share one placeholder key').not.toBe(firstRows[2].id)
+    expect(nextRows.map((row) => row.id), 'position identity survives index1→0 and2→1').toStrictEqual([firstRows[1].id, firstRows[2].id])
   })
 
   it('rejects a retired raw-array response rather than silently accepting full history', async () => {
@@ -139,7 +168,7 @@ describe('T33 explicit detail availability — B31/B51', () => {
     expect(await fetchSessionDetail(SID)).toMatchObject({
       history_state: { status: 'available' }, has_earlier: true, has_later: false,
       next_before: pos(1), page_info: history.page_info,
-      messages: [{ id: 'history-1' }, { id: 'history-2' }],
+      messages: [{ id: 'history-1', historyPosition: pos(1) }, { id: 'history-2', historyPosition: pos(2) }],
     })
   })
 

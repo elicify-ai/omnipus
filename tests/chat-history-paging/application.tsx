@@ -81,4 +81,5 @@ export async function stopHistory(app: Awaited<ReturnType<typeof openHistory>> |
   else Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight')
   HTMLElement.prototype.getBoundingClientRect = originalRect
   queryClient.clear()
+  if (app) expect(app.network.unexpected, 'all application HTTP is captured at declared process edges').toStrictEqual([])
 }

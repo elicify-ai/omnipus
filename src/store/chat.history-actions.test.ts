@@ -69,13 +69,18 @@ describe('T08/T09 agreed history-slice ownership — B08/B11/B12/B34', () => {
   it('the empty history owner means unknown, not successful empty history', async () => {
     const createEmpty = await historyExport('emptyHistoryState')
     const idle = { status: 'idle', error: null, attempt: 0 }
-    expect(Reflect.apply(createEmpty, undefined, [])).toStrictEqual({
+    const expected = {
       viewGeneration: 0, viewMode: 'latest', serverState: null,
       historyLoaded: false, liveControlsReady: false, pageMetadata: null,
       readerRange: null, readerPositions: [], tailEntries: [], openedClearPositions: [],
       hasEarlier: null, hasLater: null, olderBoundary: null, newerBoundary: null,
       requests: { older: idle, newer: idle, latest: idle, refresh: idle },
-    })
+    }
+    expect(Reflect.apply(createEmpty, undefined, [])).toStrictEqual(expected)
+    const select = await historyExport('selectSessionHistory')
+    const first = Reflect.apply(select, undefined, [useChatStore.getState(), 'missing-history-bucket'])
+    expect(first, 'a missing bucket is unknown, never a successful empty page').toStrictEqual(expected)
+    expect(Reflect.apply(select, undefined, [useChatStore.getState(), 'missing-history-bucket']), 'missing-bucket selector reference is stable').toBe(first)
   })
 
   it('duplicate older triggers join one exact boundary read and commit ascending source order', async () => {
@@ -92,6 +97,7 @@ describe('T08/T09 agreed history-slice ownership — B08/B11/B12/B34', () => {
     await seen.promise
     expect(reads.map((query) => Object.fromEntries(query))).toStrictEqual([{ before: pos(101), limit: '20', min_rows: '20' }])
     expect(requestState('older')).toMatchObject({ status: 'loading', error: null, attempt: 1 })
+    expect(requestState('latest'), 'one loading action must not mutate another action record').toMatchObject({ status: 'idle', error: null })
     const older = Array.from({ length: 20 }, (_, i) => entry(81 + i))
     const fixture = page(older, { earlier: true, later: true, info: { mode: 'older', limit: 20, min_rows: 20 } })
     expectValidPage(fixture, Array.from({ length: 20 }, (_, i) => pos(81 + i)), 20)
@@ -103,19 +109,37 @@ describe('T08/T09 agreed history-slice ownership — B08/B11/B12/B34', () => {
     expect(useChatStore.getState().sessionsById[SID].cursor, 'REST history never advances the live cursor').toBeNull()
   })
 
+  it('a contradictory older page becomes a persistent action error without partial rows or flags', async () => {
+    await open()
+    const olderRanks = Array.from({ length: 20 }, (_, i) => 81 + i)
+    const good = page(olderRanks.map((rank) => entry(rank)), { earlier: true, later: true, info: { mode: 'older', limit: 20, min_rows: 20 } })
+    expectValidPage(good, olderRanks.map(pos), 20)
+    const bad = structuredClone(good)
+    bad.page_info.source_group_count = 0
+    vi.stubGlobal('fetch', async () => response(bad))
+    await action('loadOlderHistory', SID)
+    expect(history().readerPositions).toStrictEqual(initialRanks.map(pos))
+    expect(useChatStore.getState().messages.map((message) => message.id)).toStrictEqual(initialRanks.map((rank) => `history-${rank}`))
+    expect(requestState('older')).toMatchObject({ status: 'error', attempt: 1 })
+    expect(requestState('older').error, 'protocol failures cannot be demoted to a log or empty success').toBeTypeOf('string')
+    expect(requestState('older').error).not.toBe('')
+    expect(requestState('latest')).toMatchObject({ status: 'idle', error: null })
+    expect(useChatStore.getState().sessionsById[SID].cursor).toBeNull()
+  })
+
   it.each(['success', 'failure'] as const)('release/new A generation fences old older-page %s, including an abort-ignoring transport', async (outcome) => {
     await open()
     const oldGeneration = history().viewGeneration
     const returned = deferred<Response>()
     const seen = deferred<void>()
-    let signal: AbortSignal | null | undefined
+    const transportOptions: Pick<RequestInit, 'signal'> = {}
     vi.stubGlobal('fetch', (_url: RequestInfo | URL, init?: RequestInit) => {
-      signal = init?.signal; seen.resolve(); return returned.promise
+      transportOptions.signal = init?.signal; seen.resolve(); return returned.promise
     })
     const oldRead = action('loadOlderHistory', SID)
     await seen.promise
     await action('releaseSessionHistory', SID)
-    expect(signal?.aborted, 'D6 abort the HTTP read when possible').toBe(true)
+    expect(transportOptions.signal?.aborted, 'D6 abort the HTTP read when possible').toBe(true)
     useSessionStore.getState().setActiveSession('history-other-generation', 'mia')
     useSessionStore.getState().setActiveSession(SID, 'mia')
     const freshRanks = Array.from({ length: 40 }, (_, i) => 501 + i)

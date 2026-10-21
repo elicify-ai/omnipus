@@ -23,7 +23,7 @@ afterEach(() => {
 describe('T09 inactive reader payload release — B12', () => {
   it.each([499, 500])('leaving a %i-group reader releases old rows, results, aliases and query payload', (count) => {
     const messages = Array.from({ length: count }, (_, i) => ({
-      id: `held-${i}`, role: 'assistant' as const, content: `Held ${i}`, timestamp: STAMP,
+      id: `held-${i}`, role: 'assistant' as const, status: 'done' as const, content: `Held ${i}`, timestamp: STAMP,
       tool_calls: [{ id: `call-${i}`, tool: 'read_file', params: { path: 'held.txt' }, status: 'success' as const, result: `PRIVATE-CACHED-RESULT-${i}` }],
       mergedReplayIds: [`alias-${i}`],
     }))
@@ -51,7 +51,7 @@ describe('T09 inactive reader payload release — B12', () => {
     const visited = Array.from({ length: 50 }, (_, i) => `history-visit-${i}`)
     for (const sid of visited) {
       useSessionStore.getState().setActiveSession(sid, 'mia')
-      useChatStore.getState().setMessages([{ id: `row-${sid}`, role: 'user', content: `Cached ${sid}`, timestamp: STAMP }])
+      useChatStore.getState().setMessages([{ id: `row-${sid}`, role: 'user', status: 'done', content: `Cached ${sid}`, timestamp: STAMP }])
     }
     useSessionStore.getState().setActiveSession('last-destination', 'mia')
     expect(visited.map((sid) => ({ sid, rows: useChatStore.getState().sessionsById[sid]?.messageOrder ?? [] })), 'D-M1 no retained feature lifetime per visited session')

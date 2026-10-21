@@ -85,6 +85,10 @@ describe('T08 replay completion composes with render-once base — B06/B26', () 
     expect(bucket.messageOrder, 'no history wipe or fabricated partial page').toStrictEqual(['cached-reader'])
     expect(bucket.hasEarlierMessages, 'unavailability is not false terminal continuation').toBe(true)
     expect(bucket.unansweredLastUserMessageId, 'no history-derived unanswered sweep').toBeNull()
+    expect(Reflect.get(bucket, 'history'), 'agreed owner separates history readiness from current-control readiness').toMatchObject({
+      historyLoaded: false, liveControlsReady: true,
+      serverState: { status: 'unavailable', reason: 'index_missing', message: UNAVAILABLE },
+    })
   })
 
   it('incomplete socket catch-up discards staged history and keeps the prior cursor and reader', () => {
