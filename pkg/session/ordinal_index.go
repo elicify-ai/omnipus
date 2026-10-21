@@ -334,6 +334,12 @@ func (s *ArchiveDayStore) readOrdinalRowLocked(o int) (ordinalRow, error) {
 func (s *ArchiveDayStore) readOrdinalRows(from, to int) ([]ordinalRow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.readOrdinalRowsRepairedLocked(from, to)
+}
+
+// readOrdinalRowsRepairedLocked shares the canonical derived-offset recovery
+// with callers that already hold the archive mutex.
+func (s *ArchiveDayStore) readOrdinalRowsRepairedLocked(from, to int) ([]ordinalRow, error) {
 	rows, err := s.readOrdinalRowsLocked(from, to)
 	if errors.Is(err, errOrdinalTable) {
 		// The offsets table is derived data that was not fsynced: rebuild it from
@@ -398,6 +404,7 @@ func (s *ArchiveDayStore) appendOrdinalRowLocked(row ordinalRow) (ordinalRow, er
 	if err != nil {
 		return ordinalRow{}, err
 	}
+	s.observeWriteStep("ordinal.previous_read")
 	row.Ordinal = n
 	row.UserTurn = 0
 	if ok {
@@ -416,31 +423,44 @@ func (s *ArchiveDayStore) appendOrdinalRowLocked(row ordinalRow) (ordinalRow, er
 	if mkErr := os.MkdirAll(s.dir(), 0o700); mkErr != nil {
 		return ordinalRow{}, fmt.Errorf("ordinal index: create dir: %w", mkErr)
 	}
+	s.observeWriteStep("ordinal.directory_ready")
 	rows, err := os.OpenFile(s.ordinalRowsPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return ordinalRow{}, fmt.Errorf("ordinal index: open rows: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+		s.observeWriteStep("ordinal.rows_closed")
+	}()
+	s.observeWriteStep("ordinal.rows_opened")
 	off, err := rows.Seek(0, io.SeekEnd)
 	if err != nil {
 		return ordinalRow{}, fmt.Errorf("ordinal index: seek rows: %w", err)
 	}
+	s.observeWriteStep("ordinal.end_located")
 	if _, wErr := rows.Write(append(line, '\n')); wErr != nil {
 		return ordinalRow{}, fmt.Errorf("ordinal index: write row %d: %w", n, wErr)
 	}
+	s.observeWriteStep("ordinal.row_written")
 	if sErr := rows.Sync(); sErr != nil {
 		return ordinalRow{}, fmt.Errorf("ordinal index: fsync rows: %w", sErr)
 	}
+	s.observeWriteStep("ordinal.rows_synced")
 	offs, err := os.OpenFile(s.ordinalOffsetsPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return ordinalRow{}, fmt.Errorf("ordinal index: open offsets: %w", err)
 	}
-	defer offs.Close()
+	defer func() {
+		_ = offs.Close()
+		s.observeWriteStep("ordinal.offsets_closed")
+	}()
+	s.observeWriteStep("ordinal.offsets_opened")
 	var buf [ordinalOffsetSize]byte
 	binary.BigEndian.PutUint64(buf[:], uint64(off))
 	if _, err := offs.Write(buf[:]); err != nil {
 		return ordinalRow{}, fmt.Errorf("ordinal index: write offset %d: %w", n, err)
 	}
+	s.observeWriteStep("ordinal.offset_written")
 	return row, nil
 }
 
@@ -513,5 +533,6 @@ func (s *ArchiveDayStore) AppendIndexed(rec ArchiveRecord) (ArchiveAddress, *ord
 	if err != nil {
 		return addr, nil, err
 	}
+	s.observeWriteStep("indexed.returning")
 	return addr, &published, nil
 }

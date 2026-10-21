@@ -657,6 +657,9 @@ func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
 	if err != nil {
 		return WindowView{}, err
 	}
+	if _, err := b.advancePastExpiredLocked(key, store); err != nil {
+		return WindowView{}, err
+	}
 	meta, err := b.loadMetaLocked(key)
 	if err != nil {
 		return WindowView{}, err
@@ -744,9 +747,16 @@ func (b *archiveBackend) leadLocked(store *ArchiveDayStore, skip int) ([]ModelSl
 		}
 	}
 	rows = rows[start:]
+	state, err := loadSavedInputLifecycle(store.dir(), store.sessionID)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]ModelSlot, 0, len(rows))
 	present := make(map[string]bool)
 	for _, row := range rows {
+		if state.rowRetired(row) {
+			continue // A replacement current file does not resurrect its old rows.
+		}
 		// Lead rows are context before the window; one whose partition was expired
 		// by retention is gone for good and is left out rather than failing the read.
 		ok, err := store.rowResolvable(row, present)
@@ -840,7 +850,14 @@ func (b *archiveBackend) loadMetaLocked(key string) (archiveBackendMeta, error) 
 	if err != nil {
 		return archiveBackendMeta{}, err
 	}
-	data, err := os.ReadFile(filepath.Join(store.dir(), archiveBackendMetaFile))
+	return loadArchiveBackendMeta(store.dir())
+}
+
+// loadArchiveBackendMeta is the canonical persisted-window decoder. Archive
+// integrity checks reuse it without acquiring the backend mutex from inside
+// the archive mutex (the lock order is backend before archive, never reverse).
+func loadArchiveBackendMeta(dir string) (archiveBackendMeta, error) {
+	data, err := os.ReadFile(filepath.Join(dir, archiveBackendMetaFile))
 	if errors.Is(err, fs.ErrNotExist) {
 		return archiveBackendMeta{}, nil
 	}
@@ -1185,7 +1202,11 @@ func sortRows(rows []archiveProjectionRow) {
 // savedSourceAlreadyPlaced reports whether a model_ref for source exists. With
 // fromOrdinal >= 0 only the ordinal rows written since the save are read.
 func savedSourceAlreadyPlaced(store *ArchiveDayStore, source ArchiveAddress, fromOrdinal int) (bool, error) {
-	if fromOrdinal >= 0 {
+	// Negative starts additionally retain the legacy archive fallback, but never
+	// discard positive ordinal evidence whose old placement bytes expired.
+	legacyFallback := fromOrdinal < 0
+	fromOrdinal = max(0, fromOrdinal)
+	{
 		count, err := store.OrdinalCount()
 		if err != nil {
 			return false, err
@@ -1202,7 +1223,9 @@ func savedSourceAlreadyPlaced(store *ArchiveDayStore, source ArchiveAddress, fro
 				return true, nil
 			}
 		}
-		return false, nil
+		if !legacyFallback {
+			return false, nil
+		}
 	}
 	alreadyPlaced := false
 	err := store.ScanAll(func(_ ArchiveAddress, rec ArchiveRecord) bool {

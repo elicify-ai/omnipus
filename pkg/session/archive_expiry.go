@@ -69,26 +69,42 @@ type ExpiryNotice struct {
 // pkg/session/retention_sweep.go::RetentionSweep exactly, so a disabled install
 // deletes nothing and manufactures no repair.
 func (s *ArchiveDayStore) SweepExpired(retentionDays int) (ExpiryNotice, error) {
-	if retentionDays <= 0 {
-		return ExpiryNotice{}, nil
-	}
+	return s.sweepExpiredWithCurrent(retentionDays, nil)
+}
+
+// Only unified retention supplies a current-file cutoff, after applying its
+// existing protected-main policy. Standalone SweepExpired remains rolled-only.
+func (s *ArchiveDayStore) sweepExpiredWithCurrent(retentionDays int, currentCutoff *time.Time) (ExpiryNotice, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cutoff := s.now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
-	removed, err := s.sweepRolledPartitionsLocked(cutoff)
+	var removed int
+	var err error
+	if currentCutoff == nil {
+		removed, err = s.sweepRolledPartitionsLocked(retentionDays)
+	} else {
+		removed, err = s.runInputExpiryLocked(retentionDays, currentCutoff)
+	}
 	if err != nil {
 		// What WAS removed is still gone: report it so the caller can move the
 		// window past it, alongside the failure.
 		return ExpiryNotice{RemovedPartitions: removed}, err
 	}
 
+	notice := ExpiryNotice{RemovedPartitions: removed}
+	if retentionDays <= 0 {
+		state, err := loadSavedInputLifecycle(s.dir(), s.sessionID)
+		if err != nil {
+			return notice, err
+		}
+		if len(state.Deletions) == 0 {
+			return notice, nil // Disabled stops new decisions, not committed replay.
+		}
+	}
 	w, found, err := s.loadWindowLocked()
 	if err != nil {
-		return ExpiryNotice{}, err
+		return notice, err
 	}
-
-	notice := ExpiryNotice{RemovedPartitions: removed}
 	if !found {
 		// No window yet: partitions may still have been removed, but there is no
 		// mark to repair and no retained content to report.
@@ -122,34 +138,8 @@ func (s *ArchiveDayStore) SweepExpired(retentionDays int) (ExpiryNotice, error) 
 // sweepRolledPartitionsLocked deletes every rolled "<key>.jsonl" partition whose
 // mtime is strictly older than cutoff and returns the count. The current
 // partition (current.jsonl) and the day mark are never touched.
-func (s *ArchiveDayStore) sweepRolledPartitionsLocked(cutoff time.Time) (int, error) {
-	entries, err := os.ReadDir(s.dir())
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("archive: sweep: read dir: %w", err)
-	}
-	removed := 0
-	byName := make(map[string]os.DirEntry, len(entries))
-	for _, e := range entries {
-		byName[e.Name()] = e
-	}
-	for _, name := range rolledPartitionNames(entries) {
-		info, err := byName[name].Info()
-		if err != nil {
-			return removed, fmt.Errorf("archive: sweep: stat %s: %w", name, err)
-		}
-		// STRICTLY older-than: equal mtime is retained (BDD-02.3 B05).
-		if !info.ModTime().Before(cutoff) {
-			continue
-		}
-		if err := removePartitionFn(filepath.Join(s.dir(), name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return removed, fmt.Errorf("archive: sweep: remove %s: %w", name, err)
-		}
-		removed++
-	}
-	return removed, nil
+func (s *ArchiveDayStore) sweepRolledPartitionsLocked(retentionDays int) (int, error) {
+	return s.runInputExpiryLocked(retentionDays, nil)
 }
 
 // removePartitionFn deletes one expired rolled partition. A var so a test can
@@ -313,9 +303,10 @@ func sourcesForSlotsLocked(s *ArchiveDayStore, slots []ArchiveAddress) ([]Archiv
 // UnifiedStore.RetentionSweep calls it for every session directory and no other
 // code deletes a rolled day partition. The caller holds the session shard.
 func (b *archiveBackend) expireSession(sessionID string, retentionDays int) (ExpiryNotice, error) {
-	if retentionDays <= 0 {
-		return ExpiryNotice{}, nil
-	}
+	return b.expireSessionWithCurrent(sessionID, retentionDays, nil)
+}
+
+func (b *archiveBackend) expireSessionWithCurrent(sessionID string, retentionDays int, currentCutoff *time.Time) (ExpiryNotice, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	store, err := b.store(sessionID)
@@ -325,7 +316,7 @@ func (b *archiveBackend) expireSession(sessionID string, retentionDays int) (Exp
 	// A failed removal must not stop the cursor following the partitions that
 	// WERE removed (delta review R1 #6): advance whatever the sweep did, and
 	// return both failures.
-	notice, sweepErr := store.SweepExpired(retentionDays)
+	notice, sweepErr := store.sweepExpiredWithCurrent(retentionDays, currentCutoff)
 	moved, advErr := b.advancePastExpiredLocked(sessionID, store)
 	if err := errors.Join(sweepErr, advErr); err != nil && !moved.moved {
 		return notice, err
@@ -363,91 +354,31 @@ func expiryNoteText(newSkip, n int) string {
 // record is gone. A slot is gone only when its partition is provably absent; any
 // other failure returns an error and changes nothing. b.mu must be held.
 func (b *archiveBackend) advancePastExpiredLocked(key string, store *ArchiveDayStore) (windowExpiry, error) {
+	state, err := loadSavedInputLifecycle(store.dir(), store.sessionID)
+	if err != nil {
+		return windowExpiry{}, err
+	}
+	if len(state.Deletions) == 0 {
+		return windowExpiry{}, nil
+	}
 	meta, err := b.loadMetaLocked(key)
 	if err != nil {
 		return windowExpiry{}, err
 	}
-	n, err := store.OrdinalCount()
-	if err != nil || n == 0 {
+	store.mu.Lock()
+	after, out, err := store.projectRetentionWindowLocked(meta, state)
+	store.mu.Unlock()
+	if err != nil {
 		return windowExpiry{}, err
 	}
-	present := make(map[string]bool)
-	skip := clampSkip(meta.Skip, n)
-	lastGone := -1
-	for from := skip; from < n; from += scanChunk {
-		rows, err := store.readOrdinalRows(from, min(n, from+scanChunk))
-		if err != nil {
-			return windowExpiry{}, err
-		}
-		for _, row := range rows {
-			if retractedOrdinal(meta.Retracted, row.Ordinal) {
-				continue
-			}
-			ok, err := store.rowResolvable(row, present)
-			if err != nil {
-				return windowExpiry{}, err
-			}
-			if !ok {
-				lastGone = row.Ordinal
-			}
-		}
+	if meta.Skip == after.Skip && meta.Count == after.Count && meta.ClearFloor == after.ClearFloor && intPtrEqual(meta.AnchorLine, after.AnchorLine) {
+		return out, nil
 	}
-	newSkip := skip
-	if lastGone >= 0 {
-		newSkip = lastGone + 1
-		// A tool result cannot begin a complete group: trim leading orphans.
-		for newSkip < n {
-			rows, err := store.readOrdinalRows(newSkip, newSkip+1)
-			if err != nil {
-				return windowExpiry{}, err
-			}
-			if len(rows) == 0 || rows[0].Role != "tool" {
-				break
-			}
-			newSkip++
-		}
+	if err := b.saveMetaLocked(key, after); err != nil {
+		return windowExpiry{}, err
 	}
-	anchorGone := false
-	if a := meta.AnchorLine; a != nil && *a >= 0 && *a < n {
-		rows, err := store.readOrdinalRows(*a, *a+1)
-		if err != nil {
-			return windowExpiry{}, err
-		}
-		if len(rows) == 1 {
-			ok, err := store.rowResolvable(rows[0], present)
-			if err != nil {
-				return windowExpiry{}, err
-			}
-			anchorGone = !ok
-		}
-	}
-	if newSkip == meta.Skip && meta.Count == n && !anchorGone {
-		return windowExpiry{}, nil
-	}
-	out := windowExpiry{}
-	if newSkip > meta.Skip {
-		// Expiry moved the cursor. What lies below it is gone for good, so it is
-		// also the clear floor (the breadcrumb must never try to quote it), and the
-		// agent is told once, here, why its window starts later.
-		out = windowExpiry{moved: true, emptied: newSkip >= n, note: expiryNoteText(newSkip, n)}
-		if newSkip < n {
-			rows, err := store.readOrdinalRows(newSkip, newSkip+1)
-			if err != nil {
-				return windowExpiry{}, err
-			}
-			if len(rows) == 1 {
-				first := rows[0].Slot
-				out.first = &first
-			}
-		}
-		meta.ClearFloor = max(meta.ClearFloor, newSkip)
-		meta.ExpiryNote = out.note
-	}
-	meta.Skip, meta.Count = newSkip, n
-	if anchorGone {
-		meta.AnchorLine = nil
-	}
-	return out, b.saveMetaLocked(key, meta)
+	store.observeWriteStep("expiry.window_projected")
+	return out, nil
 }
 
 // rowResolvable reports whether the partitions a model slot reads from (the slot

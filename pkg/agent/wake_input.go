@@ -122,6 +122,9 @@ func (al *AgentLoop) placeSavedWakeInput(ctx context.Context, sessionID, outcome
 	store := al.GetSessionStore()
 	addr, placed, err := store.SavedChatInput(sessionID, "saved-input-"+outcomeID)
 	if err != nil {
+		if expired, finishErr := al.finishExpiredSavedWake(ctx, sessionID, outcomeID, err); expired {
+			return false, finishErr
+		}
 		return false, err
 	}
 	if addr.EntryID == "" {
@@ -154,6 +157,9 @@ func (al *AgentLoop) placeSavedWakeInput(ctx context.Context, sessionID, outcome
 		}
 		consumed, err := al.wakeInputConsumed(sessionID, outcomeID)
 		if err != nil {
+			if expired, finishErr := al.finishExpiredSavedWake(ctx, sessionID, outcomeID, err); expired {
+				return false, finishErr
+			}
 			return false, err
 		}
 		if consumed {
@@ -166,6 +172,9 @@ func (al *AgentLoop) placeSavedWakeInput(ctx context.Context, sessionID, outcome
 			return false, nil
 		}
 		if _, _, err := store.PlaceSavedInput(ctx, sessionID, addr); err != nil {
+			if expired, finishErr := al.finishExpiredSavedWake(ctx, sessionID, outcomeID, err); expired {
+				return false, finishErr
+			}
 			if !errors.Is(err, session.ErrAlreadyConsumed) {
 				return false, fmt.Errorf("place saved wake %q: %w", outcomeID, err)
 			}
@@ -191,15 +200,16 @@ func (al *AgentLoop) placePendingSavedWakeInputs(ctx context.Context, ts *turnSt
 	if ts.opts.NoHistory || ts.transcriptSessionID == "" || al.GetSessionStore() == nil {
 		return nil
 	}
+	// Replay receipt-backed notices before consulting pending membership. A
+	// control copy that itself expired is regenerated model-only at this fence.
+	notices, err := al.GetSessionStore().PendingRetentionNotices(ctx, ts.transcriptSessionID)
+	if err != nil {
+		return err
+	}
 	// The content-free pending directory answers "none" without reading the
 	// archive; only pending records' own addresses are read otherwise.
 	inputs, err := al.GetSessionStore().PendingChatInputs(ctx, ts.transcriptSessionID)
-	if errors.Is(err, fs.ErrNotExist) {
-		// SaveChatInput refuses a recipient without metadata, so a session
-		// with no metadata cannot hold a saved wake input: nothing to place.
-		return nil
-	}
-	if err != nil || len(inputs) == 0 {
+	if err != nil || (len(inputs) == 0 && len(notices) == 0) {
 		return err
 	}
 	open, err := al.openQuestionCard(ts.transcriptSessionID)
@@ -209,6 +219,14 @@ func (al *AgentLoop) placePendingSavedWakeInputs(ctx context.Context, ts *turnSt
 	if open {
 		// PW-D15: retained until the correlated answer continues the session.
 		return nil
+	}
+	for _, notice := range notices {
+		if notice.ChatPresent || al.wakePublicationInFlight(ts.transcriptSessionID, notice.OutcomeID) {
+			continue // An indexed/live wake already owns its ordinary admission.
+		}
+		if _, err := al.placeSavedWakeInput(ctx, ts.transcriptSessionID, notice.OutcomeID, ts.agent.ID); err != nil {
+			return err
+		}
 	}
 	for _, input := range inputs {
 		id := strings.TrimPrefix(input.ID, "saved-input-")
@@ -254,6 +272,10 @@ func (al *AgentLoop) admitSteeringInput(ts *turnState, msg providers.Message, co
 }
 
 func (al *AgentLoop) prepareSavedSystemWake(ctx context.Context, sessionID, messageID, agentID string) (saved, consumed bool, err error) {
+	done, dispositionErr := al.finishKnownSavedWake(ctx, steeringWake{messageID: messageID, transcriptSessionID: sessionID, agentID: agentID})
+	if done || dispositionErr != nil {
+		return done, done, dispositionErr
+	}
 	addr, placed, err := al.GetSessionStore().SavedChatInput(sessionID, "saved-input-"+messageID)
 	if err != nil {
 		return false, false, err

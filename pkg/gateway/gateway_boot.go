@@ -985,6 +985,12 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, bool, error) {
 			slog.Error("gateway: ADR-091 boot recovery failed", "error", err)
 		}
 	}
+	if err := stg.wsHandler.dispatchRetentionNotices(stg.ctx); err != nil {
+		// The addressed chat notice is already durable; the model outbox stays
+		// owed and is retried by the common sweep/ordinary-fence paths. Boot
+		// does not falsely acknowledge it or revive an ineligible recipient.
+		slog.Error("gateway: retention notice delivery remains pending", "error", err)
+	}
 	fmt.Println("✓ Session-messaging plane wired (delegate + message_parent stores injected)")
 	return nil, false, nil
 }

@@ -44,7 +44,21 @@ func (us *UnifiedStore) savedInputIndexPath(sessionID string) string {
 // lock. A missing file is an empty index; a corrupt one is an error, never a
 // silently empty set (that would strand saved inputs).
 func (us *UnifiedStore) loadSavedInputIndexLocked(sessionID string) (savedInputIndex, error) {
-	data, err := os.ReadFile(us.savedInputIndexPath(sessionID))
+	idx, err := loadSavedInputIndexFile(us.savedInputIndexPath(sessionID), sessionID)
+	if err != nil || len(idx) == 0 {
+		return idx, err
+	}
+	state, err := loadSavedInputLifecycle(filepath.Join(us.baseDir, sessionID), sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return state.pendingProjection(idx)
+}
+
+// loadSavedInputIndexFile is the shared strict RAW decoder. Retention must
+// classify original ownership before applying any terminal receipt projection.
+func loadSavedInputIndexFile(path, sessionID string) (savedInputIndex, error) {
+	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return savedInputIndex{}, nil
 	}
@@ -52,11 +66,17 @@ func (us *UnifiedStore) loadSavedInputIndexLocked(sessionID string) (savedInputI
 		return nil, fmt.Errorf("saved input index %q: read: %w", sessionID, err)
 	}
 	idx := savedInputIndex{}
-	if len(data) == 0 {
-		return idx, nil
-	}
 	if err := json.Unmarshal(data, &idx); err != nil {
 		return nil, fmt.Errorf("saved input index %q: parse: %w", sessionID, err)
+	}
+	if idx == nil {
+		return nil, fmt.Errorf("saved input index %q: expected a JSON object, got null", sessionID)
+	}
+	for id, entry := range idx {
+		if id == "" || entry.Address.EntryID != id || entry.Address.PartitionKey == "" ||
+			entry.Address.ByteOffset < 0 || entry.FromOrdinal < 0 {
+			return nil, fmt.Errorf("saved input index %q: invalid entry %q", sessionID, id)
+		}
 	}
 	return idx, nil
 }
@@ -77,12 +97,15 @@ func SetSavedInputIndexWriteFaultForTest(fn func(sessionID string) error) {
 }
 
 func (us *UnifiedStore) saveSavedInputIndexLocked(sessionID string, idx savedInputIndex) error {
+	return saveSavedInputIndexFile(us.savedInputIndexPath(sessionID), sessionID, idx)
+}
+
+func saveSavedInputIndexFile(path, sessionID string, idx savedInputIndex) error {
 	if fault := savedInputIndexWriteFault.Load(); fault != nil {
 		if err := (*fault)(sessionID); err != nil {
 			return fmt.Errorf("saved input index %q: write: %w", sessionID, err)
 		}
 	}
-	path := us.savedInputIndexPath(sessionID)
 	if len(idx) == 0 {
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("saved input index %q: clear: %w", sessionID, err)
@@ -93,7 +116,7 @@ func (us *UnifiedStore) saveSavedInputIndexLocked(sessionID string, idx savedInp
 	if err != nil {
 		return fmt.Errorf("saved input index %q: encode: %w", sessionID, err)
 	}
-	if err := fileutil.WriteFileAtomic(path, data, 0o600); err != nil {
+	if err := fileutil.WriteFileAtomicSyncDir(path, data, 0o600); err != nil {
 		return fmt.Errorf("saved input index %q: write: %w", sessionID, err)
 	}
 	return nil

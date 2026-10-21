@@ -24,6 +24,16 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 	}
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
+	if err := us.recoverSavedInputLifecycleLocked(sessionID); err != nil {
+		return ArchiveAddress{}, err
+	}
+	return us.saveChatInputLocked(sessionID, id, agentID, body, nil)
+}
+
+// saveChatInputLocked is also the server-owned notice writer. Its optional
+// presentation changes chat chrome only; the model payload remains user-role
+// operational context, and the normal idempotent/index protocol is unchanged.
+func (us *UnifiedStore) saveChatInputLocked(sessionID, id, agentID, body string, presentation *TranscriptEntry) (ArchiveAddress, error) {
 	meta, err := us.readMetaLocked(sessionID)
 	if err != nil {
 		return ArchiveAddress{}, fmt.Errorf("saved input: recipient metadata: %w", err)
@@ -36,6 +46,30 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 	if err != nil {
 		return ArchiveAddress{}, err
 	}
+	state, err := loadSavedInputLifecycle(archive.dir(), sessionID)
+	if err != nil {
+		return ArchiveAddress{}, err
+	}
+	if err := state.expiry(id); err != nil {
+		return ArchiveAddress{}, err
+	}
+	for receiptID, notice := range state.Notices {
+		e, _ := state.ExpiredReportsByReceipt(receiptID)
+		if e.NoticeID != id {
+			continue
+		}
+		if body != savedInputExpiryCopy(sessionID, e) {
+			return ArchiveAddress{}, fmt.Errorf("retention notice %q conflicts with its fixed operational copy", id)
+		}
+		if notice.ChatSaved && notice.Source != nil && (notice.ModelAdmitted || state.retiredNoticeSource(*notice.Source)) {
+			return *notice.Source, nil // Never reannounce an aged-out control copy.
+		}
+	}
+	if _, consumed := state.PollConsumed[id]; consumed {
+		// The final-read claim can precede the payload save. Never create or
+		// restore an event whose recipient already received it through a poll.
+		return ArchiveAddress{}, ErrAlreadyConsumed
+	}
 	var existing ArchiveAddress
 	var conflict, indexed, consumed bool
 	if entry, ok := idx[id]; ok {
@@ -45,7 +79,7 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 		}
 		existing, indexed = entry.Address, true
 		conflict = rec.ID != id || rec.ViewMembership != ViewMembershipChat || rec.ModelMessage == nil || rec.Content != body
-	} else if err = archive.ScanAll(func(addr ArchiveAddress, rec ArchiveRecord) bool {
+	} else if err = archive.scanSavedInputIntegrity(idx, func(addr ArchiveAddress, rec ArchiveRecord) bool {
 		// Wake path only (once per outcome): a retried save of an input that
 		// was already placed and left the pending directory must not append a
 		// second copy. The scan also learns whether it was consumed — placed
@@ -64,8 +98,23 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 		return ArchiveAddress{}, err
 	}
 	if existing.EntryID != "" {
+		if presentation != nil {
+			rec, readErr := archive.ReadAt(existing)
+			if readErr != nil {
+				return ArchiveAddress{}, readErr
+			}
+			conflict = conflict || rec.Type != presentation.Type || rec.Role != presentation.Role || rec.SystemSubtype != presentation.SystemSubtype
+		}
 		if conflict {
 			return ArchiveAddress{}, fmt.Errorf("saved input %q already exists with different content or membership", id)
+		}
+		if !indexed && !consumed {
+			// A retained ordinal Source still proves consumption when retention
+			// legitimately removed the physical placement below the live window.
+			consumed, err = savedSourceAlreadyPlaced(archive, existing, 0)
+			if err != nil {
+				return ArchiveAddress{}, err
+			}
 		}
 		if !indexed && !consumed {
 			// R2-1: the archive append landed but the pending entry did not
@@ -94,13 +143,23 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 	}
 	entry := TranscriptEntry{ID: id, Role: "user", Content: body, AgentID: agentID,
 		Timestamp: time.Now().UTC(), ViewMembership: ViewMembershipChat}
+	if presentation != nil {
+		entry.Type, entry.Role, entry.SystemSubtype = presentation.Type, presentation.Role, presentation.SystemSubtype
+		entry.Timestamp = presentation.Timestamp
+	}
+	sourceKind := "agent"
+	if presentation != nil {
+		sourceKind = "system"
+	}
 	addr, err := archive.Append(ArchiveRecord{TranscriptEntry: entry, ModelMessage: &payload,
-		Source: &EntrySource{Kind: "agent"}})
+		Source: &EntrySource{Kind: sourceKind}})
 	if err != nil {
 		return ArchiveAddress{}, err
 	}
 	accumulateEntryStats(&meta.Stats, entry)
-	meta.UpdatedAt = entry.Timestamp
+	if presentation == nil || entry.Timestamp.After(meta.UpdatedAt) {
+		meta.UpdatedAt = entry.Timestamp
+	}
 	us.u6MarkStatsDirtyLocked(sessionID, meta)
 	idx[id] = savedInputIndexEntry{Address: addr, FromOrdinal: fromOrdinal, Seq: time.Now().UnixNano()}
 	if err := us.saveSavedInputIndexLocked(sessionID, idx); err != nil {
@@ -131,6 +190,26 @@ func (us *UnifiedStore) SavedChatInput(sessionID, id string) (ArchiveAddress, bo
 	if err != nil {
 		return ArchiveAddress{}, false, err
 	}
+	state, err := loadSavedInputLifecycle(archive.dir(), sessionID)
+	if err != nil {
+		return ArchiveAddress{}, false, err
+	}
+	if err := state.expiry(id); err != nil {
+		return state.ExpiredReports[id].Source, false, err
+	}
+	if poll, ok := state.PollConsumed[id]; ok {
+		if poll.Source != nil {
+			return *poll.Source, false, nil // Poll receipt is not a model placement.
+		}
+		return ArchiveAddress{}, false, nil
+	}
+	for _, notice := range state.Notices {
+		if notice.Source != nil && notice.Source.EntryID == id && (notice.ModelAdmitted || state.retiredNoticeSource(*notice.Source)) {
+			// Exact control evidence, not generic absence, keeps the original
+			// notice identity reachable for its allowed model-only continuation.
+			return *notice.Source, notice.ModelAdmitted, nil
+		}
+	}
 	if entry, ok := idx[id]; ok {
 		// The pending entry is a hint, the archive is the authority: a placement
 		// whose index retirement failed (crash or disk error after the model
@@ -147,7 +226,7 @@ func (us *UnifiedStore) SavedChatInput(sessionID, id string) (ArchiveAddress, bo
 	}
 	var addr ArchiveAddress
 	placed := false
-	err = archive.ScanAll(func(a ArchiveAddress, rec ArchiveRecord) bool {
+	err = archive.scanSavedInputIntegrity(idx, func(a ArchiveAddress, rec ArchiveRecord) bool {
 		if rec.ID == id && rec.ViewMembership == ViewMembershipChat && rec.ModelMessage != nil {
 			addr = a
 		}
@@ -156,6 +235,9 @@ func (us *UnifiedStore) SavedChatInput(sessionID, id string) (ArchiveAddress, bo
 		}
 		return true
 	})
+	if err == nil && addr.EntryID != "" && !placed {
+		placed, err = savedSourceAlreadyPlaced(archive, addr, 0)
+	}
 	return addr, placed, err
 }
 

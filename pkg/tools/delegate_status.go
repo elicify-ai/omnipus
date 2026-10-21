@@ -5,6 +5,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -148,6 +149,9 @@ func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID strin
 		return NewToolResult(fmt.Sprintf("%s, no message yet, started %s ago", state, formatDelegateStatusAge(t.now().Sub(rec.CreatedAt))) + extra)
 	}
 
+	if err := t.checkFinalDispositions(rec, []generated.SessionMessage{*latest}); err != nil {
+		return delegateDispositionResult(state, err)
+	}
 	raw, err := json.Marshal(latest)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: status: encode latest inbox entry: %v", err))
@@ -158,6 +162,9 @@ func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID strin
 	}
 	line := firstNonBlank(envelope.Text, envelope.Summary, envelope.ResultSoFar, envelope.Condition, envelope.Note, strings.Join(envelope.Paths, ", "), envelope.Kind)
 	already, note := t.recordFinalsRead(ctx, rec, []generated.SessionMessage{*latest})
+	if err := t.checkFinalDispositions(rec, []generated.SessionMessage{*latest}); err != nil {
+		return delegateDispositionResult(state, err)
+	}
 	if already {
 		// A5: the final already reached this parent (its hand-back wake or
 		// an earlier poll); status does not hand the same result over again.
@@ -184,6 +191,7 @@ func (t *DelegateTool) recordFinalsRead(ctx context.Context, rec *session.Lifecy
 	// consumed the same way, so its own wake starts no second parent turn.
 	noticePrefix := "stopped-notice:" + parentID + ":" + rec.SessionID + ":"
 	var failures []string
+	var expired []string
 	for _, msg := range msgs {
 		raw, err := json.Marshal(msg)
 		if err != nil {
@@ -202,16 +210,21 @@ func (t *DelegateTool) recordFinalsRead(ctx context.Context, rec *session.Lifecy
 			continue
 		}
 		received, err := t.finalRead(parentID, ToolAgentID(ctx), id.MessageID)
+		if errors.Is(err, session.ErrSavedInputExpired) {
+			expired = append(expired, delegateExpiryText(err))
+			continue
+		}
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", id.MessageID, err))
 			continue
 		}
 		already = already || (isFinal && received)
 	}
+	terminalNote := strings.Join(expired, " ")
 	if len(failures) == 0 {
-		return already, ""
+		return already, terminalNote
 	}
-	return already, fmt.Sprintf(" (could not record that this result was received, so it may be handed over again: %s)", strings.Join(failures, "; "))
+	return already, terminalNote + fmt.Sprintf(" (could not record that this result was received, so it may be handed over again: %s)", strings.Join(failures, "; "))
 }
 
 func firstNonBlank(values ...string) string {
@@ -525,7 +538,23 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", derr)).WithError(derr)
 	}
 
-	resp := generated.DelegateInboxResponse{Messages: msgs, HasMore: hasMore, NotDelivered: rec.NotDelivered}
+	// Check all members before consuming any: an expired member must not make
+	// a still-readable sibling disappear behind an early operational result.
+	readable, expiryNote, readErr := t.readableDelegateMessages(rec, msgs)
+	if readErr != nil {
+		return delegateDispositionResult(delegateStateName(rec), readErr)
+	}
+	note := ""
+	if expiryNote == "" {
+		_, note = t.recordFinalsRead(ctx, rec, readable)
+		// A sweep can commit between preflight and the consuming final-read
+		// hook. Claimed valid siblings are still returned; expired bodies are not.
+		readable, expiryNote, readErr = t.readableDelegateMessages(rec, readable)
+		if readErr != nil {
+			return delegateDispositionResult(delegateStateName(rec), readErr)
+		}
+	}
+	resp := generated.DelegateInboxResponse{Messages: readable, HasMore: hasMore, NotDelivered: rec.NotDelivered}
 	if nextCursor != "" {
 		resp.NextCursor = &nextCursor
 	}
@@ -533,7 +562,9 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	if merr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: encode response: %v", merr))
 	}
-	_, note := t.recordFinalsRead(ctx, rec, msgs)
+	if expiryNote != "" && !strings.Contains(note, expiryNote) {
+		note += " " + expiryNote
+	}
 	return NewToolResult(string(payload) + note)
 }
 

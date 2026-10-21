@@ -857,8 +857,17 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	}
 
 	saved, consumed, savedErr := al.prepareSavedSystemWake(ctx, sessionID, messageID, rec.AgentID)
-	if savedErr != nil || consumed {
+	if savedErr != nil {
+		if expired, finishErr := al.finishExpiredSavedWake(ctx, sessionID, messageID, savedErr); expired {
+			return "", finishErr
+		}
+		logger.ErrorCF("agent", "saved helper input unreadable; wake not started",
+			map[string]any{"session_id": sessionID, "outcome_id": messageID, "error": savedErr.Error()})
+		al.publishSavedWakeReadPending(sessionID, messageID)
 		return "", savedErr
+	}
+	if consumed {
+		return "", nil
 	}
 	if held, holdErr := al.savedWakeHeldForQuestion(sessionID, messageID, saved); held || holdErr != nil {
 		return "", holdErr

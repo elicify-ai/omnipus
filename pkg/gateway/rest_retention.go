@@ -183,11 +183,19 @@ func (a *restAPI) postRetentionSweep(w http.ResponseWriter, r *http.Request) {
 	ret := cfg.Storage.Retention
 
 	if ret.IsDisabled() {
+		// No new expiry is selected, but an explicitly requested retry must
+		// still finish already-committed cleanup and its owed notice dispatch.
+		removed := 0
+		if store := a.agentLoop.GetSessionStore(); store != nil {
+			var replayErr error
+			removed, replayErr = store.RetentionSweep(0)
+			if replayErr != nil {
+				jsonServerFailure(w, http.StatusInternalServerError, "committed expiry recovery failed", replayErr)
+				return
+			}
+		}
 		skippedReason := "disabled"
-		jsonOK(w, gen.RetentionSweepResult{
-			Removed:       0,
-			SkippedReason: &skippedReason,
-		})
+		jsonOK(w, gen.RetentionSweepResult{Removed: removed, SkippedReason: &skippedReason})
 		return
 	}
 

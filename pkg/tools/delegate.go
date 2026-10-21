@@ -268,6 +268,9 @@ type DelegateTool struct {
 	// It reports whether the final had already been received before (by
 	// its hand-back wake or an earlier poll).
 	finalRead func(parentSessionID, agentID, messageID string) (alreadyReceived bool, err error)
+	// finalDisposition checks terminal retention loss without consuming a valid
+	// message, including when an authorized ancestor reads the parent's inbox.
+	finalDisposition func(parentSessionID, messageID string) error
 
 	// sessionMessagingEnabled, when set via SetSessionMessagingEnabled, is the
 	// live-read FR-196 kill switch (session_messaging.enabled) for the SYNC

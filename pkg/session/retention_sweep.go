@@ -97,11 +97,23 @@ func SetGoalRetentionSweepFn(fn func(retentionDays int) (removed int, err error)
 // on every return path — nothing inside the lockAllSessionShards hold may
 // call into a goal store, in either direction.
 func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
-	if retentionDays <= 0 {
-		return 0, nil
+	removed, err := us.retentionSweep(retentionDays)
+	if dispatcher := us.retentionNoticeDispatch.Load(); dispatcher != nil {
+		err = errors.Join(err, (*dispatcher)())
 	}
+	return removed, err
+}
 
-	unlock := us.lockAllSessionShards()
+func (us *UnifiedStore) retentionSweep(retentionDays int) (int, error) {
+	release := us.lockAllSessionShards()
+	locked := true
+	unlock := func() {
+		if locked {
+			locked = false
+			release()
+		}
+	}
+	defer unlock() // Observation-only crash tests must unwind the ownership hold.
 
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
 	removed := 0
@@ -112,13 +124,17 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// moves each session's window past the expired content. The generic walk
 	// below never deletes them.
 	var notices []expiryNotice
-	expiryErr := us.expireArchiveSessions(retentionDays, &removed, touchedSessionDirs, &notices)
+	blocked := make(map[string]bool)
+	expiryErr := us.expireArchiveSessions(retentionDays, cutoff, &removed, touchedSessionDirs, &notices, blocked)
 
 	// A main chat is deleted only with its agent (founder rule). Retention still
 	// expires a main chat's old rolled content above (FR-007), but never deletes
 	// its live partition, its identity (meta.json) or its directory.
 	protectedMain := make(map[string]bool)
 	isProtected := func(sessionID string) bool {
+		if blocked[sessionID] {
+			return true // Never follow a failed classification with destructive fallback.
+		}
 		if p, ok := protectedMain[sessionID]; ok {
 			return p
 		}
@@ -127,77 +143,80 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		return p
 	}
 
-	err := filepath.WalkDir(us.baseDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			if path == us.baseDir {
-				return walkErr
-			}
-			slog.Warn("session: retention_sweep: walk error", "path", path, "error", walkErr)
-			return nil
-		}
-
-		if d.IsDir() {
-			if path == us.baseDir {
+	var err error
+	if retentionDays > 0 {
+		err = filepath.WalkDir(us.baseDir, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				if path == us.baseDir {
+					return walkErr
+				}
+				slog.Warn("session: retention_sweep: walk error", "path", path, "error", walkErr)
 				return nil
 			}
-			return nil
-		}
 
-		if !strings.HasSuffix(d.Name(), ".jsonl") {
-			return nil
-		}
+			if d.IsDir() {
+				if path == us.baseDir {
+					return nil
+				}
+				return nil
+			}
 
-		rel, err := filepath.Rel(us.baseDir, path)
-		if err != nil {
-			return err
-		}
-		parts := strings.SplitN(rel, string(filepath.Separator), 3)
-		if len(parts) < 2 {
-			return nil
-		}
-		if parts[0] != ".context" && transcriptDayPattern.MatchString(d.Name()) {
-			return nil // a rolled day partition: owned by expireArchiveSessions
-		}
-		if parts[0] != ".context" && isProtected(parts[0]) {
-			return nil
-		}
+			if !strings.HasSuffix(d.Name(), ".jsonl") {
+				return nil
+			}
 
-		info, err := d.Info()
-		if err != nil {
-			slog.Warn("session: retention_sweep: stat failed", "file", path, "error", err)
-			return nil
-		}
+			rel, err := filepath.Rel(us.baseDir, path)
+			if err != nil {
+				return err
+			}
+			parts := strings.SplitN(rel, string(filepath.Separator), 3)
+			if len(parts) < 2 {
+				return nil
+			}
+			if parts[0] != ".context" && transcriptDayPattern.MatchString(d.Name()) {
+				return nil // a rolled day partition: owned by expireArchiveSessions
+			}
+			if parts[0] != ".context" && isProtected(parts[0]) {
+				return nil
+			}
 
-		if info.ModTime().Before(cutoff) {
-			if delErr := os.Remove(path); delErr != nil {
-				slog.Warn("session: retention_sweep: delete failed", "file", path, "error", delErr)
-			} else {
-				removed++
-				// Only track session dirs for empty-dir cleanup; .context/ is a
-				// shared archive container — do not queue it for removal.
-				if parts[0] != ".context" {
-					touchedSessionDirs[filepath.Join(us.baseDir, parts[0])] = struct{}{}
+			info, err := d.Info()
+			if err != nil {
+				slog.Warn("session: retention_sweep: stat failed", "file", path, "error", err)
+				return nil
+			}
+
+			if info.ModTime().Before(cutoff) {
+				if delErr := os.Remove(path); delErr != nil {
+					slog.Warn("session: retention_sweep: delete failed", "file", path, "error", delErr)
 				} else {
-					// The .context/ entry is a memory.JSONLStore file:
-					// each <key>.jsonl has a sibling <key>.meta.json holding
-					// the Skip/Count offset. Remove the meta file alongside
-					// the archive so that a recycled session key never reads a
-					// stale Skip/Count against a now-empty .jsonl (phantom
-					// offset bug). Failure to remove the meta is logged at
-					// Warn but does NOT revert the removed count — the .jsonl
-					// is already gone and the meta file on its own is harmless
-					// (readMeta returns defaults when the .jsonl is absent).
-					metaPath := strings.TrimSuffix(path, ".jsonl") + ".meta.json"
-					if metaDelErr := os.Remove(metaPath); metaDelErr != nil && !errors.Is(metaDelErr, os.ErrNotExist) {
-						slog.Warn("session: retention_sweep: delete context meta failed",
-							"file", metaPath, "error", metaDelErr)
+					removed++
+					// Only track session dirs for empty-dir cleanup; .context/ is a
+					// shared archive container — do not queue it for removal.
+					if parts[0] != ".context" {
+						touchedSessionDirs[filepath.Join(us.baseDir, parts[0])] = struct{}{}
+					} else {
+						// The .context/ entry is a memory.JSONLStore file:
+						// each <key>.jsonl has a sibling <key>.meta.json holding
+						// the Skip/Count offset. Remove the meta file alongside
+						// the archive so that a recycled session key never reads a
+						// stale Skip/Count against a now-empty .jsonl (phantom
+						// offset bug). Failure to remove the meta is logged at
+						// Warn but does NOT revert the removed count — the .jsonl
+						// is already gone and the meta file on its own is harmless
+						// (readMeta returns defaults when the .jsonl is absent).
+						metaPath := strings.TrimSuffix(path, ".jsonl") + ".meta.json"
+						if metaDelErr := os.Remove(metaPath); metaDelErr != nil && !errors.Is(metaDelErr, os.ErrNotExist) {
+							slog.Warn("session: retention_sweep: delete context meta failed",
+								"file", metaPath, "error", metaDelErr)
+						}
 					}
 				}
 			}
-		}
 
-		return nil
-	})
+			return nil
+		})
+	}
 	if err != nil {
 		unlock()
 		return removed, errors.Join(err, expiryErr)
@@ -227,6 +246,20 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 			}
 		}
 		if hasTranscript {
+			continue
+		}
+		state, controlErr := loadSavedInputLifecycle(sessDir, filepath.Base(sessDir))
+		if controlErr != nil {
+			expiryErr = errors.Join(expiryErr, controlErr)
+			continue
+		}
+		owed := false
+		for _, notice := range state.Notices {
+			owed = owed || !notice.ModelAdmitted
+		}
+		if owed {
+			// Keep only identity/control while an operational notice is owed.
+			// Its aged payload was still deleted; this is not a report pin.
 			continue
 		}
 		// Removing sessDir also removes its meta.json — with metaCache in
@@ -269,7 +302,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// are released (the append takes its own shard).
 	expiryErr = errors.Join(expiryErr, us.recordExpiryNotices(notices))
 
-	if goalRetentionSweepFn != nil {
+	if retentionDays > 0 && goalRetentionSweepFn != nil {
 		goalRemoved, goalErr := goalRetentionSweepFn(retentionDays)
 		if goalErr != nil {
 			slog.Warn("session: retention_sweep: goal sweep failed",
@@ -287,7 +320,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 // directory, adding the removed partition count to *removed and marking each
 // touched directory for the empty-directory pass. A session whose expiry fails
 // is skipped and its error joined into the result; the others still run.
-func (us *UnifiedStore) expireArchiveSessions(retentionDays int, removed *int, touched map[string]struct{}, notices *[]expiryNotice) error {
+func (us *UnifiedStore) expireArchiveSessions(retentionDays int, cutoff time.Time, removed *int, touched map[string]struct{}, notices *[]expiryNotice, blocked map[string]bool) error {
 	entries, err := os.ReadDir(us.baseDir)
 	if err != nil {
 		return fmt.Errorf("session: retention_sweep: list sessions: %w", err)
@@ -297,7 +330,16 @@ func (us *UnifiedStore) expireArchiveSessions(retentionDays int, removed *int, t
 		if !ent.IsDir() || strings.HasPrefix(ent.Name(), ".") {
 			continue
 		}
-		notice, expErr := us.backend.expireSession(ent.Name(), retentionDays)
+		var notice ExpiryNotice
+		var expErr error
+		if us.retentionProtected(ent.Name()) {
+			notice, expErr = us.backend.expireSession(ent.Name(), retentionDays)
+		} else {
+			notice, expErr = us.backend.expireSessionWithCurrent(ent.Name(), retentionDays, &cutoff)
+		}
+		// Save the deterministic chat/prepared-model notice before empty-directory
+		// cleanup can erase the addressed identity or its retryable control file.
+		expErr = errors.Join(expErr, us.prepareRetentionNoticeInputsLocked(ent.Name()))
 		// Account for what happened even when part of the expiry failed: the
 		// partitions that were removed are gone and the window moved past them.
 		if notice.Note != "" {
@@ -308,6 +350,7 @@ func (us *UnifiedStore) expireArchiveSessions(retentionDays int, removed *int, t
 			touched[filepath.Join(us.baseDir, ent.Name())] = struct{}{}
 		}
 		if expErr != nil {
+			blocked[ent.Name()] = true
 			slog.Warn("session: retention_sweep: archive expiry failed", "session_id", ent.Name(), "error", expErr)
 			errs = errors.Join(errs, fmt.Errorf("session %s: %w", ent.Name(), expErr))
 		}

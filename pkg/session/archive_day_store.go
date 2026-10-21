@@ -8,7 +8,8 @@
 //
 //	transcript.jsonl   the live partition (the day mark holds its key)
 //	transcript.day     the day mark: the UTC day transcript.jsonl currently holds
-//	<key>.jsonl        every rolled-over partition, frozen once rolled
+//	<key>.jsonl        rolled partitions; a pre-marker rename still belongs to
+//	                  the retained marker and can accept a same-key recovery append
 //
 // Rollover is by the SERVER's append UTC day (never an entry's own timestamp)
 // and is crash-safe by ordering: the rename happens BEFORE the day mark
@@ -64,6 +65,8 @@ type ArchiveDayStore struct {
 	// for one addressed read, "scan" for a whole-archive walk. It is how a test
 	// proves a hot path stays proportional to the window (FR-005).
 	onRead func(kind string, addr ArchiveAddress)
+	// onWriteStep is nil outside tests; observation only, never an I/O substitute.
+	onWriteStep func(step string)
 }
 
 // NewArchiveDayStore binds a store to one session directory. The session id must
@@ -127,19 +130,29 @@ func encodeArchiveLine(rec ArchiveRecord) ([]byte, error) {
 // published are not left behind (they are not retained bytes: no address was
 // returned for them).
 func (s *ArchiveDayStore) appendLineLocked(id string, line []byte) (ArchiveAddress, error) {
+	s.observeWriteStep("append.prepared")
+	if err := s.resumeInputDeletionsLocked(); err != nil {
+		return ArchiveAddress{}, err
+	}
 	key, path, err := s.partitionForAppendLocked(s.now().UTC().Format(transcriptDayLayout))
 	if err != nil {
 		return ArchiveAddress{}, err
 	}
+	s.observeWriteStep("append.partition_selected")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return ArchiveAddress{}, fmt.Errorf("archive: open %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+		s.observeWriteStep("append.current_closed")
+	}()
+	s.observeWriteStep("append.current_opened")
 	pre, err := f.Seek(0, io.SeekEnd)
 	if err != nil {
 		return ArchiveAddress{}, fmt.Errorf("archive: seek end %s: %w", path, err)
 	}
+	s.observeWriteStep("append.end_located")
 	offset := pre
 	payload := make([]byte, 0, len(line)+2)
 	if pre > 0 {
@@ -152,15 +165,18 @@ func (s *ArchiveDayStore) appendLineLocked(id string, line []byte) (ArchiveAddre
 			payload = append(payload, '\n')
 			offset++
 		}
+		s.observeWriteStep("append.tail_read")
 	}
 	payload = append(payload, line...)
 	payload = append(payload, '\n')
 	if _, werr := f.Write(payload); werr != nil {
 		return ArchiveAddress{}, errors.Join(fmt.Errorf("archive: write %s: %w", path, werr), truncateBack(f, pre))
 	}
+	s.observeWriteStep("append.payload_written")
 	if serr := f.Sync(); serr != nil {
 		return ArchiveAddress{}, errors.Join(fmt.Errorf("archive: fsync %s: %w", path, serr), truncateBack(f, pre))
 	}
+	s.observeWriteStep("append.payload_synced")
 	return ArchiveAddress{PartitionKey: key, ByteOffset: offset, EntryID: id}, nil
 }
 
@@ -177,11 +193,16 @@ func (s *ArchiveDayStore) ReadAt(addr ArchiveAddress) (ArchiveRecord, error) {
 // ReadAtRaw is ReadAt plus the record's exact stored line (without the framing
 // newline), so a caller can quote a stored value literally without re-encoding.
 func (s *ArchiveDayStore) ReadAtRaw(addr ArchiveAddress) ([]byte, ArchiveRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readAtRawLocked(addr)
+}
+
+// readAtRawLocked is the shared bounded address reader. The caller holds mu.
+func (s *ArchiveDayStore) readAtRawLocked(addr ArchiveAddress) ([]byte, ArchiveRecord, error) {
 	if addr.EntryID == "" || addr.PartitionKey == "" || addr.ByteOffset < 0 {
 		return nil, ArchiveRecord{}, fmt.Errorf("archive: incomplete address %+v", addr)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.onRead != nil {
 		s.onRead("record", addr)
 	}
@@ -231,11 +252,13 @@ func (s *ArchiveDayStore) partitionForAppendLocked(day string) (key, path string
 	if err = os.MkdirAll(dir, 0o700); err != nil {
 		return "", "", fmt.Errorf("archive: create dir %s: %w", dir, err)
 	}
+	s.observeWriteStep("rollover.directory_ready")
 	current := filepath.Join(dir, archiveCurrentFile)
 	mark, err := s.readDayMarkLocked()
 	if err != nil {
 		return "", "", err
 	}
+	s.observeWriteStep("rollover.marker_read")
 	if mark == "" {
 		if err = s.writeDayMarkLocked(day); err != nil {
 			return "", "", err
@@ -243,9 +266,25 @@ func (s *ArchiveDayStore) partitionForAppendLocked(day string) (key, path string
 		return day, current, nil
 	}
 	if day <= mark {
-		return mark, current, nil
+		// An interrupted rename may already have moved the marked partition.
+		// Continue at its actual location instead of creating a second file
+		// for the same key when the clock has not advanced beyond the mark.
+		path, resolveErr := s.partitionPathForKeyLocked(mark)
+		if resolveErr != nil {
+			return "", "", resolveErr
+		}
+		if _, statErr := os.Stat(path); statErr != nil {
+			if !errors.Is(statErr, fs.ErrNotExist) {
+				return "", "", fmt.Errorf("archive: stat append partition %s: %w", mark, statErr)
+			}
+			if err := s.checkMissingCurrentPublicationLocked(nil); err != nil {
+				return "", "", err
+			}
+		}
+		return mark, path, nil
 	}
 	if _, statErr := os.Stat(current); statErr == nil {
+		s.observeWriteStep("rollover.current_stated")
 		rolled := filepath.Join(dir, mark+".jsonl")
 		// A record is addressed by its partition key, and the rolled file is
 		// named by that same key. A colliding name would silently re-point every
@@ -256,9 +295,11 @@ func (s *ArchiveDayStore) partitionForAppendLocked(day string) (key, path string
 		} else if !errors.Is(collideErr, os.ErrNotExist) {
 			return "", "", fmt.Errorf("archive: stat rolled partition name: %w", collideErr)
 		}
+		s.observeWriteStep("rollover.destination_checked")
 		if err = os.Rename(current, rolled); err != nil {
 			return "", "", fmt.Errorf("archive: roll day %s: %w", mark, err)
 		}
+		s.observeWriteStep("rollover.renamed")
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return "", "", fmt.Errorf("archive: stat current before rollover: %w", statErr)
 	}
@@ -268,23 +309,41 @@ func (s *ArchiveDayStore) partitionForAppendLocked(day string) (key, path string
 	return day, current, nil
 }
 
-// partitionPathForKeyLocked maps a partition key to the file that holds it. The
-// current partition's key equals the day mark; a rolled partition's key is its
-// date-prefixed file name.
+// partitionPathForKeyLocked resolves a stable key against both physical names.
+// The marked key normally lives in current, but a rename may already have moved
+// it to its dated file before marker publication. Two claimants are ambiguous.
 func (s *ArchiveDayStore) partitionPathForKeyLocked(key string) (string, error) {
 	dir := s.dir()
 	mark, err := s.readDayMarkLocked()
 	if err != nil {
 		return "", err
 	}
-	if key == mark {
-		return filepath.Join(dir, archiveCurrentFile), nil
-	}
 	cand := filepath.Join(dir, key+".jsonl")
-	if _, err := os.Stat(cand); err == nil {
+	_, datedErr := os.Stat(cand)
+	if datedErr != nil && !errors.Is(datedErr, fs.ErrNotExist) {
+		return "", fmt.Errorf("archive: stat partition %s: %w", key, datedErr)
+	}
+	if key == mark {
+		current := filepath.Join(dir, archiveCurrentFile)
+		_, currentErr := os.Stat(current)
+		if currentErr != nil && !errors.Is(currentErr, fs.ErrNotExist) {
+			return "", fmt.Errorf("archive: stat current partition %s: %w", key, currentErr)
+		}
+		if datedErr == nil {
+			if currentErr == nil {
+				return "", fmt.Errorf("archive: partition %q is ambiguous: current and dated files both exist", key)
+			}
+			// Rename completed but marker publication did not. The same stable
+			// key still resolves to its intact dated file; reads do not repair
+			// the marker or manufacture an empty replacement current file.
+			return cand, nil
+		}
+		// Preserve the addressed open's missing-file cause for an actually
+		// absent current partition (including the existing SFH-3 path).
+		return current, nil
+	}
+	if datedErr == nil {
 		return cand, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("archive: stat partition %s: %w", key, err)
 	}
 	return "", fmt.Errorf("archive: no partition for key %q: %w", key, errNoPartition)
 }
@@ -315,9 +374,11 @@ func (s *ArchiveDayStore) writeDayMarkLocked(day string) error {
 	if err := os.MkdirAll(s.dir(), 0o700); err != nil {
 		return fmt.Errorf("archive: create dir: %w", err)
 	}
+	s.observeWriteStep("marker.directory_ready")
 	if err := fileutil.WriteFileAtomic(filepath.Join(s.dir(), archiveDayMarkFile), []byte(day+"\n"), 0o600); err != nil {
 		return fmt.Errorf("archive: write day mark: %w", err)
 	}
+	s.observeWriteStep("marker.write_complete")
 	return nil
 }
 

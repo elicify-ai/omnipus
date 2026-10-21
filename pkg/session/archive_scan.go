@@ -28,7 +28,7 @@ import (
 func (s *ArchiveDayStore) ScanAll(fn func(ArchiveAddress, ArchiveRecord) bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.scanAllLocked(fn)
+	return s.scanAllLocked(fn, false)
 }
 
 // ScanAllLines is ScanAll plus each record's EXACT raw line bytes (trimmed of
@@ -77,7 +77,7 @@ func (s *ArchiveDayStore) ScanAllLines(fn func(ArchiveAddress, []byte, ArchiveRe
 	return nil
 }
 
-func (s *ArchiveDayStore) scanAllLocked(fn func(ArchiveAddress, ArchiveRecord) bool) error {
+func (s *ArchiveDayStore) scanAllLocked(fn func(ArchiveAddress, ArchiveRecord) bool, strict bool) error {
 	if s.onRead != nil {
 		s.onRead("scan", ArchiveAddress{})
 	}
@@ -92,7 +92,7 @@ func (s *ArchiveDayStore) scanAllLocked(fn func(ArchiveAddress, ArchiveRecord) b
 	rolled := rolledPartitionNames(entries)
 	for _, name := range rolled {
 		key := strings.TrimSuffix(name, ".jsonl")
-		cont, scanErr := s.scanPartitionLocked(filepath.Join(dir, name), key, fn)
+		cont, scanErr := s.scanPartitionLocked(filepath.Join(dir, name), key, fn, strict)
 		if scanErr != nil {
 			return scanErr
 		}
@@ -109,18 +109,23 @@ func (s *ArchiveDayStore) scanAllLocked(fn func(ArchiveAddress, ArchiveRecord) b
 	}
 	cur := filepath.Join(dir, archiveCurrentFile)
 	if _, statErr := os.Stat(cur); statErr == nil {
-		_, err = s.scanPartitionLocked(cur, mark, fn)
+		_, err = s.scanPartitionLocked(cur, mark, fn, strict)
 		return err
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		return fmt.Errorf("archive: scan: stat current: %w", statErr)
 	}
+	// Rollover publishes the day mark before appendLineLocked creates the new
+	// current file. Its absence alone is not lost data; a known record's ReadAt
+	// still refuses a missing addressed partition, and strict decoding above
+	// still refuses corrupt records in every existing partition.
 	return nil
 }
 
 // scanPartitionLocked walks one partition file in byte order, computing each
 // record's byte offset. It returns false when the caller asked to stop. Empty
-// lines are skipped; a corrupt line is skipped without yielding an address.
-func (s *ArchiveDayStore) scanPartitionLocked(path, key string, fn func(ArchiveAddress, ArchiveRecord) bool) (bool, error) {
+// lines are skipped. Recall skips corrupt records without yielding an address;
+// strict saved-input integrity checks return the corruption instead.
+func (s *ArchiveDayStore) scanPartitionLocked(path, key string, fn func(ArchiveAddress, ArchiveRecord) bool, strict bool) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false, fmt.Errorf("archive: scan: read %s: %w", path, err)
@@ -145,10 +150,18 @@ func (s *ArchiveDayStore) scanPartitionLocked(path, key string, fn func(ArchiveA
 		}
 		var rec ArchiveRecord
 		if err := json.Unmarshal(trimmed, &rec); err != nil {
+			if strict {
+				return false, fmt.Errorf("saved input integrity: decode %s@%d: %w", key, off, err)
+			}
 			// Corrupt record: skip it WITHOUT consuming an ordinal, matching the
 			// existing JSONL reader's recovery so addresses never shift.
 			off += advance
 			continue
+		}
+		if strict {
+			if err := rec.Validate(); err != nil {
+				return false, fmt.Errorf("saved input integrity: validate %s@%d: %w", key, off, err)
+			}
 		}
 		if !fn(ArchiveAddress{PartitionKey: key, ByteOffset: off, EntryID: rec.ID}, rec) {
 			return false, nil
