@@ -31,6 +31,7 @@ import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
 import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
+import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
 
 // CONFIGURED_SENTINEL is the backend's redaction placeholder for stored secrets
 // (pkg/gateway/rest.go redactChannelConfig). GET responses carry it instead of
@@ -693,8 +694,11 @@ export function ChannelConfigPanel({
     },
     onError: (err: unknown) => {
       if (err instanceof Error && err.message === 'Please fill in the required fields') return
-      const rawMsg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to enable channel'
-      addToast({ message: mapErrorsToHumanLabels(fields, rawMsg), variant: 'error' })
+      // Do not remap the server's WhatsApp pairing instructions as form fields.
+      const rawMsg = baseType === WHATSAPP_CHANNEL_ID
+        ? getWhatsAppEnableErrorMessage(err, 'Failed to enable channel')
+        : mapErrorsToHumanLabels(fields, isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to enable channel')
+      addToast({ message: rawMsg, variant: 'error' })
     },
   })
 

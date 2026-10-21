@@ -80,7 +80,7 @@ function failEnable(status: number, error: string, code?: string) {
 }
 
 async function retry() {
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry', exact: true })))
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })))
 }
 
 function exactMessage(message: string) {
@@ -101,12 +101,13 @@ afterEach(() => {
 })
 
 describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
-  it.each([INTERRUPTED, LOCAL_DATA, NETWORK, START_FAILED])('shows the actionable error alone, with Retry: %s', (message) => {
+  it.each([INTERRUPTED, LOCAL_DATA, NETWORK, START_FAILED])('shows the exact actionable server detail, with Retry: %s', (message) => {
     mount(surface)
     apply('error', message)
     exactMessage(message)
-    expect(screen.queryByText('Pairing failed — select to retry.')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()
+    // Chief ruling: ordinary error frames retain the existing generic heading.
+    exactMessage('Pairing failed — select to retry.')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
     expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
     expect(screen.queryByText('Generating your QR code…')).not.toBeInTheDocument()
   })
@@ -115,12 +116,13 @@ describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
     mount(surface)
     apply('error', STOP_PENDING)
     exactMessage(STOP_PENDING)
-    expect(screen.queryByRole('button', { name: 'Retry', exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByText('Pairing failed — select to retry.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
     expect(screen.queryByText('Generating your QR code…')).not.toBeInTheDocument()
     apply('stopped', 'Pairing stopped.')
     exactMessage('Pairing stopped.')
     expect(screen.queryByText(STOP_PENDING)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
   })
 
   it('shows the already-linked server text in linked state without Retry or QR wait', () => {
@@ -128,9 +130,30 @@ describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
     apply('linked', LINKED)
     exactMessage(LINKED)
     expect(screen.queryByText('Linked successfully.')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Retry', exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
     expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
     expect(screen.queryByText('Generating your QR code…')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    { status: 'error', message: INTERRUPTED, retryable: true },
+    { status: 'error', message: LOCAL_DATA, retryable: true },
+    { status: 'error', message: NETWORK, retryable: true },
+    { status: 'error', message: START_FAILED, retryable: true },
+    { status: 'error', message: STOP_PENDING, retryable: false },
+    { status: 'linked', message: LINKED, retryable: false },
+  ] satisfies { status: WhatsAppPairingFrame['status']; message: string; retryable: boolean }[])('after an accepted Retry, $status replaces QR wait: $message', async ({ status, message, retryable }) => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(json({ id: CHANNEL, enabled: false }))
+      .mockResolvedValueOnce(json({ id: CHANNEL, enabled: true }))
+    apply('timeout')
+    mount(surface)
+    await retry()
+    exactMessage('Generating your QR code…')
+    apply(status, message)
+    exactMessage(message)
+    expect(screen.queryByText('Generating your QR code…')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' }) !== null).toBe(retryable)
   })
 
   it('shows the enable-cancelled 500 verbatim, never says disabled, and offers Retry', async () => {
@@ -140,7 +163,7 @@ describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
     await retry()
     exactMessage(CANCELLED)
     expect(screen.queryByText(/The channel is now disabled|current state could not be confirmed/)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
     expect(fetchSpy).toHaveBeenCalledTimes(2)
   })
 
@@ -159,7 +182,7 @@ describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
     mount(surface)
     await retry()
     exactMessage(IN_PROGRESS)
-    expect(screen.getByRole('button', { name: 'Retry', exact: true })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
     expect(screen.queryByText(CONFLICT)).not.toBeInTheDocument()
   })
 
@@ -176,7 +199,7 @@ describe.each(SURFACES)('%s — exact server pairing states', (surface) => {
     apply('code')
     exactMessage(expected)
     expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Retry', exact: true }) !== null).toBe(retryable)
+    expect(screen.queryByRole('button', { name: 'Retry' }) !== null).toBe(retryable)
   })
 
   it.each(['code', 'waiting', 'linked', 'error', 'stopped', 'timeout'] as const)('a later matching %s frame clears the recoverable 500', async (status) => {
@@ -242,7 +265,7 @@ describe.each(['row Enable', 'Save & Enable'] as const)('Connectors — ordinary
       enabled: false, description: 'WhatsApp native', native_available: true,
     }
     const body: ErrorResponse = { error, ...(code ? { code } : {}) }
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
       if (String(url).endsWith('/enable')) return json(body, status)
       if (String(url).endsWith('/configure')) return json({})
       if (String(url).endsWith('/channels')) return json([channel])
@@ -259,7 +282,7 @@ describe.each(['row Enable', 'Save & Enable'] as const)('Connectors — ordinary
       </QueryClientProvider>,
     )
     await act(async () => fireEvent.click(screen.getByRole('button', {
-      name: entry === 'row Enable' ? `Enable ${CHANNEL}` : 'Save & Enable', exact: true,
+      name: entry === 'row Enable' ? `Enable ${CHANNEL}` : 'Save & Enable',
     })))
     // The modal sheet marks outside siblings aria-hidden, including the real
     // app-root toast. Check its rendered copy without claiming accessibility.
@@ -268,6 +291,6 @@ describe.each(['row Enable', 'Save & Enable'] as const)('Connectors — ordinary
     expect(screen.queryByText(/The channel is now disabled|The server is unavailable/)).not.toBeInTheDocument()
     expect(fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/enable'))).toHaveLength(1)
     expect(fetchSpy.mock.calls.find(([url]) => String(url).endsWith('/enable'))?.[1]?.body).toBeUndefined()
-    if (status === 404) expect(screen.queryByRole('button', { name: 'Retry', exact: true })).not.toBeInTheDocument()
+    if (status === 404) expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
   })
 })

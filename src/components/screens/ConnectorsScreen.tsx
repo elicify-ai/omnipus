@@ -51,6 +51,7 @@ import { SkeletonList, ErrorState } from '@/components/shared/ListStates'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { logError } from '@/lib/telemetry'
 import { formatDateTime } from '@/lib/dateFormat'
+import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
 
 const WEBCHAT_ID = 'webchat'
 
@@ -1025,8 +1026,13 @@ export function ConnectorsScreen() {
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       addToast({ message: enabled ? 'Channel disabled' : 'Channel enabled', variant: 'success' })
     },
-    onError: (err: Error) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' }),
+    onError: (err: Error, { id, enabled }) =>
+      addToast({
+        message: !enabled && id.split('.')[0] === 'whatsapp'
+          ? getWhatsAppEnableErrorMessage(err, 'Failed to enable channel')
+          : isApiError(err) ? err.userMessage : err.message,
+        variant: 'error',
+      }),
   })
 
   function openCreateFor(baseType?: string) {
