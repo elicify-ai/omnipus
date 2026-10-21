@@ -181,26 +181,19 @@ func TestPairingRetryREST_FailedSaveReleasesTheReservation(t *testing.T) {
 func TestPairingRetryREST_StopDuringADelayedStartStartsNoPairing(t *testing.T) {
 	f := newPairingRESTFixture(t)
 	f.endedOwnedAttempt()
+	f.reloadJoins.joinCurrent(t)
+	mark := f.reloadJoins.mark()
 	prev := reloadWaitTimeout
 	reloadWaitTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { reloadWaitTimeout = prev })
-	gate := make(chan struct{})
-	f.factory.mu.Lock()
-	f.factory.gate = gate
-	f.factory.mu.Unlock()
-	released := false
-	release := func() {
-		if !released {
-			released = true
-			f.factory.mu.Lock()
-			f.factory.gate = nil
-			f.factory.mu.Unlock()
-			close(gate)
-		}
-	}
-	t.Cleanup(release)
+	release := orderingHoldFactory(t, f)
+	t.Cleanup(func() {
+		release()
+		f.reloadJoins.joinCurrent(t)
+		reloadWaitTimeout = prev // restore only after actual owning-cycle completion
+	})
 
-	rec := f.put("enable", retryBody("req-a", f.chatA))
+	rec := orderingExpireRetry(t, f)
+	owner := f.reloadJoins.next(t, mark)
 	require.Equal(t, http.StatusInternalServerError, rec.Code, "instrument: the reload is held: %s", rec.Body.String())
 	retry, ok := f.store.Latest("whatsapp")
 	require.True(t, ok)
@@ -209,8 +202,9 @@ func TestPairingRetryREST_StopDuringADelayedStartStartsNoPairing(t *testing.T) {
 	require.Equal(t, "req-a", f.await(channels.PairingStatusStopped).RequestID, "the Stop revoked the waiting attempt")
 
 	release()
-	reloadWaitTimeout = prev // the shortened wait only forced the unconfirmed reply; settle with the normal one
-	require.NoError(t, waitForReload(f.al, f.svc.reloadOutcome))
+	orderingJoin(t, owner)
+	require.Equal(t, mark+1, f.reloadJoins.mark(), "a join must not request another reload")
+	require.False(t, f.svc.reloadOutcome.lastFailed())
 	ch := f.factory.latest(t)
 	ch.mu.Lock()
 	idle, attempt := ch.idleStarts, ch.attemptID

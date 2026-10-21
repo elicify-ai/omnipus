@@ -23,11 +23,13 @@ type wu7LiveFixture struct {
 	*wu6Fixture
 	saves       atomic.Int64
 	reloadWaits atomic.Int64
+	// Test-only completion receipts for the actual owning reload cycle.
+	reloadJoins *orderingReloadJoins
 }
 
 func newWU7LiveFixture(t *testing.T) *wu7LiveFixture {
 	t.Helper()
-	f := &wu7LiveFixture{wu6Fixture: newWU6Fixture(t)}
+	f := &wu7LiveFixture{wu6Fixture: newWU6Fixture(t), reloadJoins: newOrderingReloadJoins()}
 	w := f.wu6Fixture
 	load := newReloadConfigLoader(w.f1277.configPath, w.f1277.home, w.store, w.svc)
 	w.svc.loadConfigForSwap = load
@@ -47,6 +49,7 @@ func newWU7LiveFixture(t *testing.T) *wu7LiveFixture {
 			case <-ctx.Done():
 				return
 			case <-w.svc.manualReloadChan:
+				cycleDone := f.reloadJoins.begin()
 				runReloadCycle(w.al, w.svc, nil, 0, func(c *config.Config) error {
 					if err := executeReload(ctx, w.al, c, &provider, w.svc, w.bus, false); err != nil {
 						return err
@@ -57,6 +60,7 @@ func newWU7LiveFixture(t *testing.T) *wu7LiveFixture {
 					// next real turn cannot borrow the HTTP/default client.
 					return wireWU6ScriptedProviderPool(w.al, w.provider)
 				}, load)
+				close(cycleDone) // final coalesced completion, not a pending-value observation
 			}
 		}
 	}()

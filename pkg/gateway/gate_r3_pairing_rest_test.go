@@ -380,26 +380,19 @@ func TestPairingRetryREST_LinkedDeviceAdmissionDoesNotLeak(t *testing.T) {
 func TestPairingRetryREST_SlowReloadKeepsTheReservation(t *testing.T) {
 	f := newPairingRESTFixture(t)
 	f.endedOwnedAttempt()
+	f.reloadJoins.joinCurrent(t)
+	mark := f.reloadJoins.mark()
 	prev := reloadWaitTimeout
 	reloadWaitTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { reloadWaitTimeout = prev })
-	gate := make(chan struct{})
-	f.factory.mu.Lock()
-	f.factory.gate = gate
-	f.factory.mu.Unlock()
-	released := false
-	release := func() {
-		if !released {
-			released = true
-			f.factory.mu.Lock()
-			f.factory.gate = nil
-			f.factory.mu.Unlock()
-			close(gate)
-		}
-	}
-	t.Cleanup(release)
+	release := orderingHoldFactory(t, f)
+	t.Cleanup(func() {
+		release()
+		f.reloadJoins.joinCurrent(t)
+		reloadWaitTimeout = prev // restore only after actual owning-cycle completion
+	})
 
-	rec := f.put("enable", retryBody("req-a", f.chatA))
+	rec := orderingExpireRetry(t, f)
+	owner := f.reloadJoins.next(t, mark)
 	require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
 	var body generated.ErrorResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
@@ -410,11 +403,16 @@ func TestPairingRetryREST_SlowReloadKeepsTheReservation(t *testing.T) {
 	require.Equal(t, channels.PairingPhaseReady, latest.Phase, "the unconfirmed Retry keeps its reservation")
 
 	release()
+	orderingJoin(t, owner)
 	code := f.await(channels.PairingStatusCode)
 	require.Equal(t, "req-a", code.RequestID, "the late start still belongs to the chat that retried")
 	require.Equal(t, f.chatA, code.SessionID)
-	reloadWaitTimeout = prev // the shortened wait only forced the unconfirmed reply; settle with the normal one
-	require.NoError(t, waitForReload(f.al, f.svc.reloadOutcome))
+	current, ok := f.store.Latest("whatsapp")
+	require.True(t, ok)
+	require.Equal(t, latest.AttemptID, current.AttemptID, "the late start consumes only its reservation")
+	require.Equal(t, channels.PairingPhaseActive, current.Phase)
+	require.Equal(t, mark+1, f.reloadJoins.mark(), "a join must not request another reload")
+	require.False(t, f.svc.reloadOutcome.lastFailed())
 }
 
 // TestPairingRetryREST_RestartInterruptedPairingIsRetried is the founder's
