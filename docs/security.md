@@ -307,7 +307,9 @@ When a tool needs your decision, an approval card appears in the chat the reques
 | **Deny** | Refuses the call. |
 | **Cancel** | Closes the request without running it. |
 
-The card never takes focus, and pressing Enter in the message box or Escape never answers it: a request is answered only when you select one of its buttons. A request nobody answers in time expires; the card then says so (a timeout, not a denial by you) and offers **Dismiss**. After a page reload or a reconnect, a request that is still pending comes back as a complete card you can approve, deny or always allow.
+The card never takes focus. Typing in the message box or pressing Escape does not count as approving or denying a request. Selecting **Stop** in the owning chat cancels that chat's pending approvals, including requests from its helpers and their helpers. The cards resolve as cancelled, the waiting helper executions stop, and the unapproved actions do not run. Another chat's pending approvals stay pending. This does not turn an ordinary Stop into Stop all for helpers that are already working without a pending approval. Work already performed is not undone.
+
+A request nobody answers in time expires; the card then says so (a timeout, not a denial by you) and offers **Dismiss**. After a page reload or a reconnect, a request that is still pending comes back as a complete card you can approve, deny or always allow.
 
 **Where a request came from.** When the work being approved was triggered by someone other than you in the web app, the card names it: *"while answering <person> on <connection>"* for a channel message, *"for group <name>"* for a group-chat request, *"asked by <Agent>"* for another agent's request. A conversation that has taken in several such inputs shows the most significant one — a channel person first, then a group, then another agent — and keeps the first of each kind; it never drops back to a lesser one. A request that is already waiting keeps the label it was raised with.
 

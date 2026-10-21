@@ -61,13 +61,9 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 // stopHooks are the web transport hooks for one reached session.
 func (h *WSHandler) stopHooks(wc *wsConn, report *atomic.Pointer[steer.CancelReport]) agent.CancelHooks {
 	hooks := h.buildCancelHooks(wc)
-	// Each reached session receives its own RequestCancel. Do not let a
-	// transport hook silently expand a this-turn Stop back into a subtree.
-	hooks.CancelPendingApprovals = func(id, reason string) {
-		if h.approvalRegV2 != nil {
-			h.approvalRegV2.cancelAllPendingForSession(id, reason)
-		}
-	}
+	// Keep buildCancelHooks' descendant-aware approval cleanup: a helper's
+	// pending Ask belongs to the owning chat even on a plain Stop. This only
+	// withdraws pending requests; it does not Stop-all already-running work.
 	if report != nil {
 		hooks.SendStageFrame = func(id, stage string) {
 			if stage == "detached" {
