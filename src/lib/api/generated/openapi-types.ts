@@ -14109,6 +14109,11 @@ export interface components {
              */
             text: string;
             /**
+             * @description Optional phrasing for the item while it is in progress.
+             * @example Drafting the summary section
+             */
+            active_form?: string;
+            /**
              * @description Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
              * @example pending
              * @enum {string}

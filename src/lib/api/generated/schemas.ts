@@ -1940,6 +1940,7 @@ type Task = {
 };
 type Todo = {
   text: string;
+  active_form?: string | undefined;
   status: "pending" | "in_progress" | "completed";
 };
 type AcceptanceCriterion = {
@@ -5119,6 +5120,17 @@ export const DevicesResponse: z.ZodType<DevicesResponse> = z.object({
 });
 export const Todo: z.ZodType<Todo> = z.object({
   text: z.string().min(1).max(500),
+  active_form: z.string().superRefine((value, ctx) => {
+    if (Array.from(value).length > 500) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_big,
+        maximum: 500,
+        type: "string",
+        inclusive: true,
+        exact: false,
+      });
+    }
+  }).optional(),
   status: z.enum(["pending", "in_progress", "completed"]),
 });
 export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({

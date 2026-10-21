@@ -79,6 +79,12 @@ The fields on the New Task form, in order.
 
 Picking a plan reveals two more fields — the files the task may touch, and whether it assembles parallel work. Those belong to [plans](plans.md).
 
+### Agent checklists
+
+Agents use `set_todos` for a working checklist. Each item can optionally include `active_form`, a short phrase describing the work in progress: for example, `text: "Draft the Q4 summary"` and `active_form: "Drafting the Q4 summary"`. This phrase is stored separately; it does not replace the normal checklist text on the Board.
+
+`set_todos` trims the phrase and treats empty or whitespace-only strings as absent. A supplied value must be a string of at most 500 characters. The phrase survives saved-task reloads and is included when the checklist is read back. Each call still replaces the entire checklist, so include `active_form` again on later updates if you want to keep it.
+
 ## Task statuses
 
 The Board has one column per status; the List has a Status column.

@@ -641,6 +641,9 @@ func validateTodos(todos []Todo) error {
 		if n > 500 {
 			return verr("todo[%d]: text must be 500 characters or fewer", i)
 		}
+		if len([]rune(td.ActiveForm)) > 500 {
+			return verr("todo[%d]: active_form must be 500 characters or fewer", i)
+		}
 		if !IsValidTodoStatus(td.Status) {
 			return verr("todo[%d]: status %q is not valid (must be pending, in_progress, or completed)", i, td.Status)
 		}
