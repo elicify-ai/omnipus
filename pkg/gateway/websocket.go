@@ -452,6 +452,7 @@ func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, activ
 	if cached, ok := h.lastPairingState.Load(channelID); ok {
 		frameBytes, ok := cached.([]byte)
 		if ok && len(frameBytes) > 0 {
+			runPairingDeliveryAfterCheckHook("replay", wc, channelID)
 			sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frameBytes)
 		} else if !ok {
 			slog.Error("ws: lastPairingState held non-[]byte value, skipping re-emit", "channel_id", channelID)

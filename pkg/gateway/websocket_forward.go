@@ -271,6 +271,7 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 	if f.h.pairingEventSuperseded(p) {
 		return
 	}
+	runPairingDeliveryAfterCheckHook("live", f.wc, p.ChannelID)
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
 }
 
