@@ -8,7 +8,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/channels"
 )
 
 // ADR-091 UAT defect 2: the orphan watchdog (formerly orphanWatchdogTimeout /

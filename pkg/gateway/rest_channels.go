@@ -1091,6 +1091,10 @@ type channelEnableOptions struct {
 	requestID       string
 	sessionID       string
 	attemptID       *string
+	// reservedAttempt is an internal continuation's exact earlier admission.
+	reservedAttempt string
+	// afterCommit is a post-transaction notification, never readiness/revocation.
+	afterCommit func(http.ResponseWriter) bool
 }
 
 // applyChannelEnabled saves channelID's enabled flag and reloads so the
@@ -1140,6 +1144,9 @@ func (a *restAPI) applyChannelEnabled(w http.ResponseWriter, channelID string, e
 	}
 	if opts.attemptID != nil && *opts.attemptID != "" && !a.agentLoop.CommitPairing(channelID, *opts.attemptID) {
 		jsonErr(w, http.StatusInternalServerError, pairingCancelledText)
+		return enableFailed
+	}
+	if opts.afterCommit != nil && !opts.afterCommit(w) {
 		return enableFailed
 	}
 	outcome := enableConfirmed

@@ -46,7 +46,9 @@ func (a *restAPI) saveChannelEnabled(w http.ResponseWriter, channelID, baseType 
 			}
 			var attemptID string
 			var ok bool
-			if opts.retryRequest != nil {
+			if opts.reservedAttempt != "" {
+				attemptID, ok = opts.reservedAttempt, true
+			} else if opts.retryRequest != nil {
 				attemptID, ok = a.admitPairingRetry(w, opts.retryRequest, channelID, opts.requestID, opts.sessionID, order)
 			} else {
 				alreadyEnabled, _ := entry["enabled"].(bool)
