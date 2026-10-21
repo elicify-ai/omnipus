@@ -50,6 +50,3 @@ properties:
         free_text:
           type: string
           maxLength: 2000
-        auto_default:
-          type: boolean
-          description: Client marks answers that were server-auto-resolved (origin marker, US-3 S3).

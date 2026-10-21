@@ -823,8 +823,6 @@ export const AskUserQuestionCard = z
     agent_id: z.string(),
     status: z.enum(["pending", "answered", "cancelled"]),
     created_at: z.string(),
-    default_safe_at: z.string().optional(),
-    auto_resolved: z.array(z.string()).max(10).optional(),
     questions: z.array(z
     .object({
       header: z.string().min(1).max(16),
@@ -837,7 +835,6 @@ export const AskUserQuestionCard = z
       .strict()).min(2).max(6),
       multi_select: z.boolean().optional(),
       recommended: z.string().max(80).optional(),
-      default_safe: z.boolean().optional(),
       context: z.string().max(4000).optional(),
     })
     .strict()).min(1).max(10),
@@ -847,7 +844,6 @@ export const AskUserQuestionCard = z
       question: z.string().min(1).max(500),
       selected: z.array(z.string().max(80)).max(6).optional(),
       free_text: z.string().max(2000).optional(),
-      auto_default: z.boolean(),
     })
     .strict()).max(10).optional(),
   })
@@ -871,7 +867,6 @@ export const AskUserAnswerFrame = z
       header: z.string().min(1).max(16),
       selected: z.array(z.string().max(80)).max(6).optional(),
       free_text: z.string().max(2000).optional(),
-      auto_default: z.boolean().optional(),
     })
     .strict()).max(10).optional(),
   })

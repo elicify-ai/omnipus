@@ -1,8 +1,7 @@
 title: AskUserQuestionFrame
 description: >
   Server → client (askuserquestion-tool-spec v3 §3, ADR-074 D4b). Live push
-  of an AskUserQuestion card: emitted at park time (status pending), on a
-  default-safe auto-resolution (auto_resolved grows), and on terminal
+  of an AskUserQuestion card: emitted at park time (status pending) and on terminal
   transitions (answered/cancelled — the SPA collapses the card and unlocks
   the composer). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES;
   card.session_id is the routing key). Canonical copy lives inline in

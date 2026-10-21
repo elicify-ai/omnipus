@@ -24,10 +24,9 @@ type AgentCreatedFrame struct {
 // AskUserAnswerFrame — Client → server (askuserquestion-tool-spec v3 §3). The card's submission: either a full answer set (every question answered exactly once — server-validated by askuser.Registry.Submit, first-valid-wins) or cancel:true (the Cancel affordance — selections discarded, submission-free cancelled resume). Canonical copy — keep in sync by hand with components/schemas/AskUserAnswerFrame.yaml.
 type AskUserAnswerFrame struct {
 	Answers []struct {
-		AutoDefault *bool    `json:"auto_default,omitempty"`
-		FreeText    *string  `json:"free_text,omitempty"`
-		Header      string   `json:"header"`
-		Selected    []string `json:"selected,omitempty"`
+		FreeText *string  `json:"free_text,omitempty"`
+		Header   string   `json:"header"`
+		Selected []string `json:"selected,omitempty"`
 	} `json:"answers,omitempty"`
 	// true = cancel the set (answers ignored/absent).
 	Cancel    *bool  `json:"cancel,omitempty"`
@@ -42,21 +41,15 @@ type AskUserQuestionCard struct {
 	AgentId string `json:"agent_id"`
 	// Populated when status != pending — the collapsed record renders from THIS record (spec §0.6), never by parsing the resume message.
 	Answers []struct {
-		AutoDefault bool     `json:"auto_default"`
-		FreeText    *string  `json:"free_text,omitempty"`
-		Header      string   `json:"header"`
-		Question    string   `json:"question"`
-		Selected    []string `json:"selected,omitempty"`
+		FreeText *string  `json:"free_text,omitempty"`
+		Header   string   `json:"header"`
+		Question string   `json:"question"`
+		Selected []string `json:"selected,omitempty"`
 	} `json:"answers,omitempty"`
-	// Headers of default_safe questions the server has already resolved-pending-submit (US-3 S2) — reconnect hydration marks them selected + auto.
-	AutoResolved []string `json:"auto_resolved,omitempty"`
-	CardId       string   `json:"card_id"`
-	CreatedAt    string   `json:"created_at"`
-	// When the set carries at least one default_safe question: the instant those questions auto-resolve to their recommendation (created_at + the fixed 30 minutes). Drives the countdown line.
-	DefaultSafeAt *string `json:"default_safe_at,omitempty"`
-	Questions     []struct {
+	CardId    string `json:"card_id"`
+	CreatedAt string `json:"created_at"`
+	Questions []struct {
 		Context     *string `json:"context,omitempty"`
-		DefaultSafe *bool   `json:"default_safe,omitempty"`
 		Header      string  `json:"header"`
 		MultiSelect *bool   `json:"multi_select,omitempty"`
 		Options     []struct {
@@ -71,7 +64,7 @@ type AskUserQuestionCard struct {
 	Status    string `json:"status"`
 }
 
-// AskUserQuestionFrame — Server → client (askuserquestion-tool-spec v3 §3). Live push of an AskUserQuestion card: emitted at park time (status pending), on a default-safe auto-resolution (auto_resolved grows), and on terminal transitions (answered/cancelled — the SPA collapses the card and unlocks the composer). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES; card.session_id is the routing key). Canonical copy — keep in sync by hand with components/schemas/AskUserQuestionFrame.yaml.
+// AskUserQuestionFrame — Server → client (askuserquestion-tool-spec v3 §3). Live push of an AskUserQuestion card: emitted at park time (status pending) and on terminal transitions (answered/cancelled — the SPA collapses the card and unlocks the composer). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES; card.session_id is the routing key). Canonical copy — keep in sync by hand with components/schemas/AskUserQuestionFrame.yaml.
 type AskUserQuestionFrame struct {
 	Card AskUserQuestionCard `json:"card"`
 	Type string              `json:"type"`

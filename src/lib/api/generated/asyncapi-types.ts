@@ -755,8 +755,6 @@ export interface AskUserQuestionCard {
   agent_id: string;
   status: "pending" | "answered" | "cancelled";
   created_at: string;
-  default_safe_at?: string;
-  auto_resolved?: Array<string>;
   questions: Array<{
     header: string;
     question: string;
@@ -766,7 +764,6 @@ export interface AskUserQuestionCard {
     }>;
     multi_select?: boolean;
     recommended?: string;
-    default_safe?: boolean;
     context?: string;
   }>;
   answers?: Array<{
@@ -774,7 +771,6 @@ export interface AskUserQuestionCard {
     question: string;
     selected?: Array<string>;
     free_text?: string;
-    auto_default: boolean;
   }>;
 }
 
@@ -792,7 +788,6 @@ export interface AskUserAnswerFrame {
     header: string;
     selected?: Array<string>;
     free_text?: string;
-    auto_default?: boolean;
   }>;
 }
 

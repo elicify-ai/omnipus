@@ -39,22 +39,6 @@ properties:
   created_at:
     type: string
     format: date-time
-  default_safe_at:
-    type: string
-    format: date-time
-    description: >
-      When the set carries at least one default_safe question: the instant
-      those questions auto-resolve to their recommendation (created_at +
-      the fixed 30 minutes). Drives the countdown line.
-  auto_resolved:
-    type: array
-    items:
-      type: string
-    maxItems: 10
-    description: >
-      Headers of default_safe questions the server has already
-      resolved-pending-submit (US-3 S2) — reconnect hydration marks them
-      selected + auto.
   questions:
     type: array
     minItems: 1
@@ -98,8 +82,6 @@ properties:
           type: string
           maxLength: 80
           description: Label of the recommended option (badged, listed first, never pre-selected).
-        default_safe:
-          type: boolean
         context:
           type: string
           maxLength: 4000
@@ -118,7 +100,6 @@ properties:
       required:
         - header
         - question
-        - auto_default
       additionalProperties: false
       properties:
         header:
@@ -138,5 +119,3 @@ properties:
         free_text:
           type: string
           maxLength: 2000
-        auto_default:
-          type: boolean

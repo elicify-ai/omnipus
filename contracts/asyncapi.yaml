@@ -5644,22 +5644,6 @@ components:
         created_at:
           type: string
           format: date-time
-        default_safe_at:
-          type: string
-          format: date-time
-          description: >
-            When the set carries at least one default_safe question: the
-            instant those questions auto-resolve to their recommendation
-            (created_at + the fixed 30 minutes). Drives the countdown line.
-        auto_resolved:
-          type: array
-          items:
-            type: string
-          maxItems: 10
-          description: >
-            Headers of default_safe questions the server has already
-            resolved-pending-submit (US-3 S2) — reconnect hydration marks
-            them selected + auto.
         questions:
           type: array
           minItems: 1
@@ -5703,8 +5687,6 @@ components:
                 type: string
                 maxLength: 80
                 description: Label of the recommended option (badged, listed first, never pre-selected).
-              default_safe:
-                type: boolean
               context:
                 type: string
                 maxLength: 4000
@@ -5724,7 +5706,6 @@ components:
             required:
               - header
               - question
-              - auto_default
             additionalProperties: false
             properties:
               header:
@@ -5744,14 +5725,11 @@ components:
               free_text:
                 type: string
                 maxLength: 2000
-              auto_default:
-                type: boolean
     AskUserQuestionFrame:
       title: AskUserQuestionFrame
       description: >
         Server → client (askuserquestion-tool-spec v3 §3). Live push of an
-        AskUserQuestion card: emitted at park time (status pending), on a
-        default-safe auto-resolution (auto_resolved grows), and on terminal
+        AskUserQuestion card: emitted at park time (status pending) and on terminal
         transitions (answered/cancelled — the SPA collapses the card and
         unlocks the composer). Session-scoped (registered in
         SESSION_SCOPED_FRAME_TYPES; card.session_id is the routing key).
@@ -5819,9 +5797,6 @@ components:
               free_text:
                 type: string
                 maxLength: 2000
-              auto_default:
-                type: boolean
-                description: Client marks answers that were server-auto-resolved (origin marker, US-3 S3).
     SessionStatePendingApproval:
       title: SessionStatePendingApproval
       description: One pending approval entry in a SessionStateFrame.
