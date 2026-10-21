@@ -42,6 +42,9 @@ type chatHistoryIndexTree struct {
 	// planning exists only in the explicitly offline, no-write constructor.
 	planning   map[string]json.RawMessage
 	knownRanks map[HistoryPosition]uint64
+	// overlay validates a bounded saved delta against an immutable old root.
+	// Unlike pending tree nodes, these values can never flush to the journal.
+	overlay map[string]json.RawMessage
 }
 
 func historyEncodeFrame(v historyFrame) ([]byte, error) {
@@ -148,6 +151,12 @@ func (t *chatHistoryIndexTree) stage(n historyNode) (int64, error) {
 	return ref, nil
 }
 func (t *chatHistoryIndexTree) get(key string, out any) (bool, error) {
+	if b, ok := t.overlay[key]; ok {
+		if out == nil {
+			return true, nil
+		}
+		return true, json.Unmarshal(b, out)
+	}
 	if t.planning != nil {
 		b, ok := t.planning[key]
 		if !ok || out == nil {
@@ -182,6 +191,10 @@ func (t *chatHistoryIndexTree) set(key string, value any) error {
 	b, err := json.Marshal(value)
 	if err != nil {
 		return err
+	}
+	if t.overlay != nil {
+		t.overlay[key] = b
+		return nil
 	}
 	if t.planning != nil {
 		t.planning[key] = b
