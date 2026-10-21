@@ -1036,15 +1036,14 @@ func (cb *ContextBuilder) variantCarryForwardPath(workspaceID string) string {
 // variant tracks its own carry-forward pair path instead — see
 // variantCarryForwardPath / buildCacheBaseline / workspaceVariantStaleLocked.
 func (cb *ContextBuilder) sourcePaths() []string {
-	paths := []string{
-		filepath.Join(cb.workspace, "SOUL.md"),
-		config.UserProfilePath(),
-	}
 	// Track the private room's memories directory for cache invalidation.
 	// The memories dir mtime changes on any new .md write (directory mtime update).
 	privateRoomRoot := filepath.Join(cb.workspace, memrooms.OmnipusRoomDir)
-	paths = append(paths, filepath.Join(privateRoomRoot, memrooms.MemoriesSubdir))
-	return uniquePaths(paths)
+	return uniquePaths([]string{
+		filepath.Join(cb.workspace, "SOUL.md"),
+		config.UserProfilePath(),
+		filepath.Join(privateRoomRoot, memrooms.MemoriesSubdir),
+	})
 }
 
 // skillRoots returns all skill root directories that can affect
