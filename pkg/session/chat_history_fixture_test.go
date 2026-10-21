@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,6 +47,10 @@ func buildChatHistoryDayFixture(t testing.TB, store *UnifiedStore, sessionID str
 	_, err := store.GetMeta(sessionID)
 	require.NoError(t, err, "fixture uses an existing identity, never creates/adopts one")
 	dir := filepath.Join(store.BaseDir(), sessionID)
+	state, err := store.readChatHistoryIndexState(context.Background(), sessionID)
+	require.NoError(t, err, "real published baseline accessor must be operational before fixture seeding")
+	require.Equal(t, ChatHistoryIndexFormatVersion, state.FormatVersion)
+	require.NotEmpty(t, state.IndexGeneration)
 	// Fixed artifact bytes are an architect-owned storage contract, not guessed
 	// generation/log filenames. This positive control must fail on missing index.
 	format, err := os.ReadFile(filepath.Join(dir, ".chat-history", "FORMAT"))
