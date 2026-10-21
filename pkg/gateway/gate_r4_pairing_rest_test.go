@@ -68,6 +68,7 @@ func TestOrdinaryEnableREST_RefusedWhileAChatHoldsTheNextAttempt(t *testing.T) {
 	done := httptest.NewRecorder()
 	outcome := f.api.applyChannelEnabled(done, "whatsapp", true, channelEnableOptions{
 		requireExisting: true,
+		reservedAttempt: retry,
 		afterCommit:     func(http.ResponseWriter) bool { return f.al.CommitPairing("whatsapp", retry) },
 	})
 	require.Equal(t, enableConfirmed, outcome, done.Body.String())
