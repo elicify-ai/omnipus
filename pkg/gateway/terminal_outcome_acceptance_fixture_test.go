@@ -204,7 +204,7 @@ func terminalAcceptanceLiveText(t *testing.T, frames []collectedFrame, sessionID
 	for _, frame := range frames {
 		var content, sid string
 		var tid, mid *string
-		replace, system := false, false
+		var replace, system bool
 		switch frame.Type {
 		case "token":
 			var token generated.TokenFrame

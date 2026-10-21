@@ -80,8 +80,18 @@ func (f *iterationNoticeFault) restore() error {
 	return f.setupErr
 }
 
-func (f *iterationNoticeFault) snapshot() (bool, bool, error, error, int, string, string) {
+type iterationNoticeFaultSnapshot struct {
+	armed, restored      bool
+	probeErr, setupErr   error
+	saveErrors           int
+	errorTurn, errorText string
+}
+
+func (f *iterationNoticeFault) snapshot() iterationNoticeFaultSnapshot {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.armed, f.restored, f.probeErr, f.setupErr, f.saveErrors, f.errorTurn, f.errorText
+	return iterationNoticeFaultSnapshot{
+		armed: f.armed, restored: f.restored, probeErr: f.probeErr, setupErr: f.setupErr,
+		saveErrors: f.saveErrors, errorTurn: f.errorTurn, errorText: f.errorText,
+	}
 }

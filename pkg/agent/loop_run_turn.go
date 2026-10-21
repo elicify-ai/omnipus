@@ -115,7 +115,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	// streamer via SetFinalContent so it can fall back to that text.
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.SetFinalContent(rz.rc.rx.finalContent)
 	if !iterationLimitNotice {
-		if streamErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.ensureFinalWebchatStreamer(rz.rc.rx.rr.rq.ri.rf.rt.al.bus); streamErr != nil {
+		if streamErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.ensureFinalWebchatStreamer(rz.rc.rx.rr.rq.ri.rf.rt.al.bus, rz.rc.rx.rr.rq.ri.rf.rt.streamerLookupDeclined); streamErr != nil {
 			notSaved := &messageNotSavedError{role: "assistant", cause: streamErr}
 			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError

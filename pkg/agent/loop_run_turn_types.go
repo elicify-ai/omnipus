@@ -32,8 +32,11 @@ type agentLoopRunTurn struct {
 	iteration                int
 	llmOpts                  map[string]any
 	llmModel                 string
-	onToolCallProgress       protocoltypes.OnToolCallProgress
-	inspectionImages         map[string][]tools.InspectionImage
+	// A streaming-capable provider already tried this channel. Do not retry
+	// a declined factory merely to finalize the plain fallback response.
+	streamerLookupDeclined bool
+	onToolCallProgress     protocoltypes.OnToolCallProgress
+	inspectionImages       map[string][]tools.InspectionImage
 	// providerCallStreamedBytes is reset before each single-candidate retry
 	// attempt and counts callback-emitted bytes before streamer.Update. The
 	// successful-response tail flush is outside the error/retry path. This

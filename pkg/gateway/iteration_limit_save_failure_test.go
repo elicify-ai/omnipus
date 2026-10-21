@@ -63,16 +63,16 @@ func TestIterationLimitNoticeSaveFailure(t *testing.T) {
 			case <-time.After(busDeliveryTimeout):
 				t.Fatal("failure-path outbound Send did not finish")
 			}
-			armed, restored, probeErr, setupErr, saveErrors, failedTurn, errorText := fault.snapshot()
-			require.True(t, armed, "the real append was obstructed after tool 2 was stored")
-			require.Error(t, probeErr, "instrument: writing the obstructed file really fails")
+			state := fault.snapshot()
+			require.True(t, state.armed, "the real append was obstructed after tool 2 was stored")
+			require.Error(t, state.probeErr, "instrument: writing the obstructed file really fails")
 			var pathErr *os.PathError
-			require.ErrorAs(t, probeErr, &pathErr)
-			require.NoError(t, setupErr, "fault setup and recovery must not manufacture the failure")
-			require.True(t, restored, "later writes must be possible, exposing any unjustified assistant fallback")
-			assert.Equal(t, 1, saveErrors, "one save failure is surfaced, not swallowed or silently retried")
-			assert.Equal(t, agent.MessageNotSavedReply, errorText)
-			require.NotEmpty(t, failedTurn)
+			require.ErrorAs(t, state.probeErr, &pathErr)
+			require.NoError(t, state.setupErr, "fault setup and recovery must not manufacture the failure")
+			require.True(t, state.restored, "later writes must be possible, exposing any unjustified assistant fallback")
+			assert.Equal(t, 1, state.saveErrors, "one save failure is surfaced, not swallowed or silently retried")
+			assert.Equal(t, agent.MessageNotSavedReply, state.errorText)
+			require.NotEmpty(t, state.errorTurn)
 			entries, err := h.store.ReadTranscript(h.sid)
 			require.NoError(t, err)
 			var narration []string
@@ -109,7 +109,7 @@ func TestIterationLimitNoticeSaveFailure(t *testing.T) {
 				case "done":
 					var done generated.DoneFrame
 					require.NoError(t, json.Unmarshal(frame.Raw, &done))
-					if done.TurnId != nil && *done.TurnId == failedTurn && done.Stats != nil {
+					if done.TurnId != nil && *done.TurnId == state.errorTurn && done.Stats != nil {
 						require.NotNil(t, done.Stats.TurnFailed)
 						assert.True(t, *done.Stats.TurnFailed)
 						failedDone++

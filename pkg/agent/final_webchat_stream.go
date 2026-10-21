@@ -9,8 +9,8 @@ import (
 // ensureFinalWebchatStreamer gives a complete plain-provider answer the same
 // durable/live identity as streamed answers. It sends that already-available
 // text once before done; no provider request or tool operation is repeated.
-func (ts *turnState) ensureFinalWebchatStreamer(messageBus *bus.MessageBus) error {
-	if ts.opts.Channel != "webchat" || ts.transcriptSessionID == "" || messageBus == nil {
+func (ts *turnState) ensureFinalWebchatStreamer(messageBus *bus.MessageBus, lookupDeclined bool) error {
+	if lookupDeclined || ts.opts.Channel != "webchat" || ts.transcriptSessionID == "" || messageBus == nil {
 		return nil
 	}
 	ts.mu.RLock()
