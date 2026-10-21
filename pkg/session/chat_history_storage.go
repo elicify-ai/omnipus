@@ -65,8 +65,12 @@ type historyDuplicateRef struct { // not-wire-format: canonical duplicate lookup
 	Count int    `json:"count"`
 }
 type historySpanRef struct { // not-wire-format: actual persisted span fact references.
-	Start, State, Message, End uint64
-	HasRun                     *bool
+	// Preserve the v1 codec's original field names explicitly.
+	Start   uint64 `json:"Start"`
+	State   uint64 `json:"State"`
+	Message uint64 `json:"Message"`
+	End     uint64 `json:"End"`
+	HasRun  *bool  `json:"HasRun"`
 }
 type chatHistoryOwner struct {
 	mu      sync.Mutex
