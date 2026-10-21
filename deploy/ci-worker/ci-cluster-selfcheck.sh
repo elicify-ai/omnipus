@@ -77,7 +77,14 @@ case "$1 $2" in
 esac
 echo "fake fly: unhandled: $*" >&2; exit 1
 FAKE
-chmod +x "$TMP/bin/fly"
+# The owner token embeds hostname. Pin it as fixture input too, so a real
+# Fly hostname equal to a default machine id cannot contaminate the call-log
+# absence assertions. A genuinely wrong target id must still fail those checks.
+cat >"$TMP/bin/hostname" <<'HOST'
+#!/usr/bin/env bash
+printf '%s\n' 'selfcheck-host'
+HOST
+chmod +x "$TMP/bin/fly" "$TMP/bin/hostname"
 export FAKE_MD5="$MD5" FAKE_SHORT="$SHORT"
 
 FAIL=0
