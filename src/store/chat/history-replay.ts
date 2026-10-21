@@ -4,7 +4,7 @@ import type { ServerFrame, SessionSnapshotFrame } from '@/lib/api/generated/asyn
 import type { HistorySliceContext } from './types'
 import type { SessionHistoryEntry, SessionHistoryPage } from '@/lib/api/history-types'
 import type { ChatMessage, PositionedToolCall, SessionChatState } from './types'
-import { isSupersededAttachFrame } from '@/lib/attach-replay'
+import { isProgressiveAttachFrame, isSupersededAttachFrame } from '@/lib/attach-replay'
 import { detachedLivePatch, liveProjectionBucket, withLiveHistoryBucket } from './history-live'
 import { bakeToolCallsByOwner, emptySessionState } from './session'
 import { clampToolResult, getMessages } from './messages'
@@ -12,19 +12,68 @@ import { applyToolCallResultFrame } from './slices/frames'
 import { refreshRosterAfterAgentMutation } from './agentMutationRefresh'
 import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
 import { useSessionStore } from '@/store/session'
-import { cursorFromTerminalFrame } from './cursor'
+import { cursorFromTerminalFrame, isPendingTailMessage } from './cursor'
 import { abortHistoryReads, registerHistoryRelease } from './history'
 import { applyHistoryPageToBucket } from './history-merge'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
 import { SessionHistoryResponse as PageSchema } from '@/lib/api/generated/schemas'
 
+type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage> } // not-wire-format: transient projection ownership
+
+function sourceProjection(groups: Stage['groups']) {
+  const positions = [...groups.keys()]
+  const entries: SessionHistoryEntry[] = []
+  let rowCount = 0
+  for (const [position, group] of groups) {
+    for (const row of getMessages(group)) {
+      const tools = new Map<string, PositionedToolCall>(row.tool_calls?.map(call => [call.id, call]) ?? [])
+      for (const call of Object.values(group.toolCalls)) tools.set(call.id, { ...call, textOffset: group.textAtToolCallStart[call.id]?.length })
+      entries.push({ ...row, historyPosition: position, ...(tools.size ? { tool_calls: [...tools.values()] } : {}) } as SessionHistoryEntry)
+      rowCount += Number(!!row.content || (tools.size === 0 && row.role === 'system')) + tools.size
+    }
+  }
+  return { positions, entries, rowCount }
+}
+
+function restorePublishedProjection(context: HistorySliceContext, sid: string, stage: Stage): void {
+  if (!stage.published) return
+  context.withBucket(sid, b => {
+    if (b.history.viewGeneration !== stage.generation || b.history.historyLoaded) return {}
+    const rows = stage.priorOrder.flatMap(id => {
+      const old = stage.baseline[id]
+      const current = b.messagesById[id]
+      return old ? [current && !current.historyPosition ? current : old] : []
+    })
+    for (const pending of retainedPending(b)) if (!pending.historyPosition && !rows.some(row => row.id === pending.id)) rows.push(pending)
+    const patch = historyRowsPatch(b, rows, stage.priorHistory.readerPositions)
+    return { ...patch, history: { ...stage.priorHistory, viewGeneration: b.history.viewGeneration, serverState: b.history.serverState, liveControlsReady: b.history.liveControlsReady, requests: b.history.requests } }
+  })
+}
+
+function publishProgressiveProjection(context: HistorySliceContext, sid: string, stage: Stage): void {
+  if (!stage.progressive || stage.invalid) return
+  const hadReader = stage.priorOrder.some(id => { const row = stage.baseline[id]; return row && !isPendingTailMessage(row) && !row.isStreaming })
+  if (hadReader) return // A real cached/detached reader never becomes a partial latest page.
+  context.withBucket(sid, b => {
+    if (b.history.viewGeneration !== stage.generation || b.history.viewMode !== 'latest' || (stage.published && b.history.historyLoaded)) return {}
+    const { entries, positions } = sourceProjection(stage.groups)
+    const ids = new Set(entries.map(row => row.id))
+    const pending = retainedPending(b).filter(row => !row.historyPosition && !ids.has(row.id))
+    const rows = [...entries, ...pending]
+    stage.published = true
+    stage.publishedRows = Object.fromEntries(rows.map(row => [row.id, row]))
+    const patch = historyRowsPatch(b, rows, positions)
+    return { ...patch, history: { ...patch.history!, historyLoaded: false, pageMetadata: null, hasEarlier: null, hasLater: null, olderBoundary: null, newerBoundary: null } }
+  })
+}
+
 export function createHistoryFrameOwner(context: HistorySliceContext) {
-  type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean }
   const stages = new Map<string, Stage>()
   const discardedSnapshots = new Set<string>()
   registerHistoryRelease(sid => {
-    if (!sid) { stages.clear(); discardedSnapshots.clear(); return }
-    if (stages.has(sid)) discardedSnapshots.add(sid)
+    if (!sid) { for (const [id, stage] of stages) restorePublishedProjection(context, id, stage); stages.clear(); discardedSnapshots.clear(); return }
+    const stage = stages.get(sid)
+    if (stage) { restorePublishedProjection(context, sid, stage); discardedSnapshots.add(sid) }
     stages.delete(sid)
   })
   let active: { sid: string; bucket: SessionChatState } | null = null
@@ -50,7 +99,8 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
           : b.history.requests.latest,
         older: { status: 'idle', error: null, attempt: 0 }, newer: { status: 'idle', error: null, attempt: 0 }, refresh: { status: 'idle', error: null, attempt: 0 } } } }))
     const bucket = context.get().sessionsById[frame.session_id]
-    stages.set(frame.session_id, { frame, groups: new Map(), generation: bucket.history.viewGeneration, baseline: { ...bucket.messagesById }, invalid: false })
+    stages.set(frame.session_id, { frame, groups: new Map(), generation: bucket.history.viewGeneration, baseline: { ...bucket.messagesById }, invalid: false,
+      progressive: isProgressiveAttachFrame(frame), published: false, priorOrder: bucket.messageOrder.slice(), priorHistory: bucket.history, publishedRows: {} })
   }
   function collect(frame: ServerFrame, sid: string, stage: Stage, reduce: (frame: ServerFrame) => void): void {
     const origin = 'history_origin' in frame ? frame.history_origin : undefined
@@ -64,16 +114,18 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     if ((frame.type === 'tool_call_start' || frame.type === 'tool_call_result') && !active.bucket.messageOrder.length) {
       const id = origin.entry_id ?? `history-${position}`
       const message: ChatMessage = { id, role: 'assistant', content: '', timestamp: '1970-01-01T00:00:00Z', status: 'done', historyPosition: position }
-      active.bucket = { ...active.bucket, messagesById: { [id]: message }, messageOrder: [id] }
+      active.bucket = { ...active.bucket, messagesById: { [id]: message }, messageOrder: [id], historyPendingNarrationId: id }
     }
     try {
       reduce(frame)
+      if (frame.type === 'replay_message' && (frame.role ?? 'assistant') === 'assistant') active.bucket = { ...active.bucket, historyPendingNarrationId: undefined }
       if (!active.bucket.messageOrder.length) {
         const id = origin.entry_id ?? `history-${position}`
         const message: ChatMessage = { id, role: 'assistant', content: '', timestamp: '1970-01-01T00:00:00Z', status: 'done', historyPosition: position }
         active.bucket = { ...active.bucket, messagesById: { [id]: message }, messageOrder: [id] }
       }
       stage.groups.set(position, active.bucket)
+      publishProgressiveProjection(context, sid, stage)
     } finally { active = null }
   }
   function mergeProjectionResult(frame: Extract<ServerFrame, { type: 'tool_call_result' }>, sid: string, stage: Stage): boolean {
@@ -91,21 +143,10 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
   }
   function finish(sid: string, stage: Stage): boolean {
     const bucket = context.get().sessionsById[sid]
-    if (!bucket || bucket.history.viewGeneration !== stage.generation) return false
+    if (!bucket || bucket.history.viewGeneration !== stage.generation || (stage.published && bucket.history.historyLoaded)) return false
     try {
-      const positions = [...stage.groups.keys()]
-      const entries: SessionHistoryEntry[] = []
-      let rowCount = 0
-      for (const [position, group] of stage.groups) {
-        const rows = getMessages(group)
-        for (const row of rows) {
-          const tools = new Map<string, PositionedToolCall>(row.tool_calls?.map(call => [call.id, call]) ?? [])
-          for (const call of Object.values(group.toolCalls)) tools.set(call.id, { ...call, textOffset: group.textAtToolCallStart[call.id]?.length })
-          const value = { ...row, historyPosition: position, ...(tools.size ? { tool_calls: [...tools.values()] } : {}) } as SessionHistoryEntry
-          entries.push(value)
-          rowCount += Number(!!row.content || (tools.size === 0 && row.role === 'system')) + tools.size
-        }
-      }
+      const { positions, entries, rowCount } = sourceProjection(stage.groups)
+      const baseline = { ...stage.baseline, ...stage.publishedRows }
       const { frame } = stage
       const parsed = PageSchema.safeParse({ ...frame, entries: [] })
       if (!parsed.success || stage.invalid) throw new Error('Invalid history snapshot.')
@@ -121,7 +162,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
           const rows = [...new Set([...b.messageOrder, ...liveOrder])].flatMap(id => {
             const current = b.messagesById[id]
             const fresh = incoming.get(id)
-            return current ? [liveIds.has(id) && fresh ? mergeHistoryEntry(fresh, current, stage.baseline[id]) : current] : []
+            return current ? [fresh && (liveIds.has(id) || (stage.publishedRows[id] && current.historyPosition === fresh.historyPosition)) ? mergeHistoryEntry(fresh, current, baseline[id]) : current] : []
           })
           const patch = historyRowsPatch(b, rows, b.history.readerPositions)
           const capacity = Math.max(0, 100 - liveOrder.length)
@@ -129,10 +170,11 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
           return { ...patch, messageOrder: b.messageOrder, historyLiveOrder: liveOrder, historyNeedsSnapshot: false,
             history: { ...patch.history!, tailEntries: capacity ? tail.slice(-capacity) : [], pageMetadata: historyMetadata(page), historyLoaded: true } }
         }
-        return applyHistoryPageToBucket(b, page, 'latest', stage.baseline)
+        return applyHistoryPageToBucket(b, page, 'latest', baseline)
       })
       return true
     } catch {
+      restorePublishedProjection(context, sid, stage)
       reject(sid)
       return false
     }
@@ -185,13 +227,14 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     // Replay done bakes historical tool state only. It cannot close a current
     // turn or commit the source page; active projection may follow it.
     if (sid && stage && frame.type === 'done' && !frame.seq && !frame.turn_id) {
-      if (frame.stats?.replay_error) { stages.delete(sid); reject(sid); return }
+      if (frame.stats?.replay_error) { restorePublishedProjection(context, sid, stage); stages.delete(sid); reject(sid); return }
       for (const [position, bucket] of stage.groups) {
         const messagesById = { ...bucket.messagesById }
         const fallback = [...bucket.messageOrder].reverse().find(id => messagesById[id]?.role === 'assistant') ?? null
         bakeToolCallsByOwner(messagesById, bucket.toolCallOrder, bucket.toolCalls, bucket.toolCallOwnerMessageId ?? {}, fallback, bucket.textAtToolCallStart)
         stage.groups.set(position, { ...bucket, messagesById, isStreaming: false, toolCalls: {}, toolCallOrder: [], toolCallOwnerMessageId: {}, textAtToolCallStart: {} })
       }
+      publishProgressiveProjection(context, sid, stage)
       return
     }
     if (sid && stage && frame.type === 'catch_up_complete') {
