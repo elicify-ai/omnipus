@@ -380,7 +380,8 @@ async function startGrepProvider() {
 async function runGrepContextFlow(
   page: Page, info: TestInfo, baseURL: string, home: string,
 ): Promise<GrepResult> {
-    const traffic = recordGrepTraffic(page);
+  const traffic = recordGrepTraffic(page);
+  try {
     // The caller retains the original 180s test budget, including gateway setup.
 
     // ── Arrange ──────────────────────────────────────────────────────────────
@@ -434,7 +435,13 @@ async function runGrepContextFlow(
     const calls = () => traffic.starts.filter((frame) => frame.session_id === sessionId);
     await expect.poll(() => calls().length, {
       timeout: 120_000, message: 'expected a real grep invocation in the fresh chat session',
-    }).toBeGreaterThan(0);
+    }).toBeGreaterThan(0).catch((error: unknown) => {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}\n` +
+        `Grep observer decode errors:\n${traffic.errors.join('\n') || '(none recorded)'}`,
+        { cause: error },
+      );
+    });
     const start = calls()[0];
     await info.attach('executed-grep-call', {
       body: JSON.stringify(start, null, 2), contentType: 'application/json',
@@ -446,7 +453,13 @@ async function runGrepContextFlow(
     );
     await expect.poll(() => results().length, {
       timeout: 15_000, message: 'expected the result of the SAME grep call in the SAME session',
-    }).toBe(1);
+    }).toBe(1).catch((error: unknown) => {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}\n` +
+        `Grep observer decode errors:\n${traffic.errors.join('\n') || '(none recorded)'}`,
+        { cause: error },
+      );
+    });
     await info.attach('executed-grep-result', {
       body: JSON.stringify(results()[0], null, 2), contentType: 'application/json',
     });
@@ -517,6 +530,11 @@ async function runGrepContextFlow(
         'honor context_lines or the model did not echo any context back',
     ).toBe(true);
     return results()[0];
+  } finally {
+    await info.attach('grep-wire-evidence', {
+      body: JSON.stringify(traffic, null, 2), contentType: 'application/json',
+    });
+  }
 }
 
 test('agent grep tool finds a seeded match with context lines', async ({ browser }, info) => {
@@ -557,35 +575,41 @@ test('agent grep tool finds a seeded match with context lines', async ({ browser
 test('real-model grep smoke executes on the seed and renders the matched line', async ({ page }, info) => {
   test.setTimeout(180_000);
   const traffic = recordGrepTraffic(page);
-  await page.goto('/');
-  await expect(page.getByRole('banner')).toBeVisible({ timeout: 20_000 });
-  const agentId = await resolveDefaultAgentId(page);
-  if (!agentId) throw new Error('BLOCKED: could not resolve the agent for the real-model grep smoke');
-  seedHaystack(agentId, await resolveWorkspaceId(page));
-  const { sessionId } = await freshChat(page);
-  await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
-  await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 });
-  await waitForConnected(page, { timeout: 15_000 });
-  await chatInput(page).fill(
-    `Call the grep tool exactly once with pattern "${NEEDLE_LINE}". ` +
-    `Then copy the matched line from the actual tool result into your reply.`,
-  );
-  await chatInput(page).press('Enter');
-  await expect(assistantMessages(page)).toHaveCount(1, { timeout: 120_000 });
-  await waitForTurnFullyDone(page, 10_000);
-  const calls = traffic.starts.filter((frame) => frame.session_id === sessionId);
-  expect(traffic.errors, 'real-model wire evidence must decode').toEqual([]);
-  expect(calls, 'the real model must invoke grep exactly once').toHaveLength(1);
-  expect(calls[0].params.pattern, 'the real model must search the seeded needle').toBe(NEEDLE_LINE);
-  const results = traffic.results.filter((frame) =>
-    frame.session_id === sessionId && frame.call_id === calls[0].call_id);
-  expect(results, 'observe the same real-model grep execution result').toHaveLength(1);
-  expect(results[0].status, 'real-model grep execution succeeds').toBe('success');
-  expect(String(results[0].result).split('\n').some((line) => line.endsWith(NEEDLE_LINE)),
-    'the actual tool result contains the seeded data line, not just its quoted search pattern').toBe(true);
-  await expect(page.locator('[data-testid="tool-call-badge"][data-tool="grep"]').first()).toBeVisible();
-  await expect(assistantMessages(page).filter({ hasText: NEEDLE_LINE })).toHaveCount(1);
-  await info.attach('real-model-grep-evidence', {
-    body: JSON.stringify({ calls, results }, null, 2), contentType: 'application/json',
-  });
+  try {
+    await page.goto('/');
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 20_000 });
+    const agentId = await resolveDefaultAgentId(page);
+    if (!agentId) throw new Error('BLOCKED: could not resolve the agent for the real-model grep smoke');
+    seedHaystack(agentId, await resolveWorkspaceId(page));
+    const { sessionId } = await freshChat(page);
+    await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
+    await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 });
+    await waitForConnected(page, { timeout: 15_000 });
+    await chatInput(page).fill(
+      `Call the grep tool exactly once with pattern "${NEEDLE_LINE}". ` +
+      `Then copy the matched line from the actual tool result into your reply.`,
+    );
+    await chatInput(page).press('Enter');
+    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 120_000 });
+    await waitForTurnFullyDone(page, 10_000);
+    const calls = traffic.starts.filter((frame) => frame.session_id === sessionId);
+    expect(traffic.errors, 'real-model wire evidence must decode').toEqual([]);
+    expect(calls, 'the real model must invoke grep exactly once').toHaveLength(1);
+    expect(calls[0].params.pattern, 'the real model must search the seeded needle').toBe(NEEDLE_LINE);
+    const results = traffic.results.filter((frame) =>
+      frame.session_id === sessionId && frame.call_id === calls[0].call_id);
+    expect(results, 'observe the same real-model grep execution result').toHaveLength(1);
+    expect(results[0].status, 'real-model grep execution succeeds').toBe('success');
+    expect(String(results[0].result).split('\n').some((line) => line.endsWith(NEEDLE_LINE)),
+      'the actual tool result contains the seeded data line, not just its quoted search pattern').toBe(true);
+    await expect(page.locator('[data-testid="tool-call-badge"][data-tool="grep"]').first()).toBeVisible();
+    await expect(assistantMessages(page).filter({ hasText: NEEDLE_LINE })).toHaveCount(1);
+    await info.attach('real-model-grep-evidence', {
+      body: JSON.stringify({ calls, results }, null, 2), contentType: 'application/json',
+    });
+  } finally {
+    await info.attach('grep-wire-evidence', {
+      body: JSON.stringify(traffic, null, 2), contentType: 'application/json',
+    });
+  }
 });
