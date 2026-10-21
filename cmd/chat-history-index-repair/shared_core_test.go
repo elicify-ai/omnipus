@@ -119,7 +119,8 @@ func repairRefusalMatrix(t *testing.T, binary string) {
 				entries, ok := m["entries"].([]any)
 				require.True(t, ok)
 				require.NotEmpty(t, entries)
-				entry := entries[0].(map[string]any)
+				entry, entryOK := entries[0].(map[string]any)
+				require.True(t, entryOK, "manifest entry must be an object before testing its strict fields")
 				if fault == "traversal" {
 					entry["path"] = "../outside"
 				} else {

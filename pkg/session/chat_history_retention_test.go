@@ -69,8 +69,8 @@ func TestChatHistoryRetention_ActualRetainedContinuation(t *testing.T) {
 			require.Equal(t, addresses[(which+1)*20].EntryID, forward.Entries[0].Entry.ID)
 			for i := which * 20; i < (which+1)*20; i++ {
 				pos := historyExpectedPosition(sid, addresses[i])
-				tomb, found, err := s.lookupChatHistoryTombstone(context.Background(), sid, pos)
-				require.NoError(t, err)
+				tomb, found, tombErr := s.lookupChatHistoryTombstone(context.Background(), sid, pos)
+				require.NoError(t, tombErr)
 				require.True(t, found)
 				require.Equal(t, pos, tomb.Position)
 				typ := reflect.TypeOf(tomb)
