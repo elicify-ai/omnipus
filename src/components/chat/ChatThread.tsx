@@ -23,7 +23,7 @@ export function ChatThread({ sessionId }: ChatThreadProps) {
   })
 
   useEffect(() => {
-    if (historyData) setMessages(historyData)
+    if (historyData) setMessages(historyData.entries)
   }, [historyData, setMessages])
 
   if (isError) {

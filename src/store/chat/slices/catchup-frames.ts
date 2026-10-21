@@ -17,7 +17,7 @@ import type {
   SessionSnapshotFrame,
   UserMessageFrame,
 } from '@/lib/api/generated/asyncapi-types'
-import { applySnapshotHistoryWipe, cursorFromTerminalFrame } from '../cursor'
+import { cursorFromTerminalFrame } from '../cursor'
 import { replayErrorRetryAttempts, replayErrorRetryTimers } from '../runtime-state'
 import { flushHeldClearProjection } from '../clear-refetch'
 import type { ChatMessage, ChatStore, SessionChatState } from '../types'
@@ -44,50 +44,19 @@ function handleSessionSnapshotFrame({ frame, targetSid, withBucket }: {
   withBucket: CatchUpFrameContext['withBucket']
 }): void {
   if (frame.type === 'session_snapshot') reconcileSecretRequests(frame) // omnipus-system-agent K4
-  // BE-DESIGN.md §4.5/§4.6/§6.2 — the server decided this connection's
-  // cursor is not servable (first load, a stale/mismatched boot id, or a
-  // gap the SPA itself reported — §6.2's "gap" row re-attaches, which can
-  // also land here). Wipes HISTORY only — the pending tail and every
-  // out-of-band field survive (applySnapshotHistoryWipe's own doc
-  // comment). `session_state` always follows this frame in the real
-  // attach sequence (§4.1 A6), so nothing here needs to preserve
-  // pendingAsk/activeTurn itself beyond what the wipe already carries
-  // forward defensively.
-  // Opus review round 3 item N4 (LOW-MEDIUM): the cursor is NOT set
-  // here anymore. It used to be minted from this frame's own seq/boot_id
-  // — i.e. BEFORE the transcript this snapshot promises has actually
-  // been read and applied. On a failed rebuild (the gateway now sends
-  // `error` + `done{stats.replay_error:true}` and unbinds instead of
-  // ever reaching catch_up_complete — see the 'done' case's own
-  // replay_error branch below) that left the cursor advanced to a
-  // position this client never actually reconstructed anything for,
-  // and the tab stuck blank with nothing to retry from. `catch_up_complete`
-  // is the ONLY frame that ever fires once the rebuild has genuinely
-  // succeeded (this file's own doc comment on that case), so it is now
-  // the sole cursor-setter — applySnapshotHistoryWipe's own
-  // `cursor: bucket.cursor` default (unchanged, preserved-as-is) applies
-  // here instead, meaning a failed rebuild simply leaves the cursor
-  // wherever it already was (null on a first-ever attach).
-  // #823 review round 9 — carried through the wipe below (as a plain
-  // field write after it, same pattern as wipedOpenTurnIds) so
-  // catch_up_complete's sweep can tell, once the replay finishes,
-  // whether THIS rebuild was answering a restarted gateway
-  // specifically. Deliberately narrower than "any reason" —
-  // retention_exceeded means old history was trimmed, not that a turn
-  // was interrupted, so an orphaned last user message there must NOT
-  // be treated as unanswered.
+  // A snapshot announces a bounded historical projection, not a wipe or a
+  // cursor acknowledgement. history-replay stages source groups until
+  // catch_up_complete and preserves a detached reader throughout. Authorized
+  // history failure instead sends session_state.history_state=unavailable and
+  // complete{mode:live_only}: current controls can complete without history,
+  // replay done, attention acknowledgement or a reconstructed-history claim.
   const snapshotFrame = frame as SessionSnapshotFrame
   noteServerAttentionFrame(targetSid, snapshotFrame)
-  // Founder ruling 2026-10-11: the attach replay serves the chat view
-  // from the session's last /clear marker; has_earlier_messages says
-  // whether entries exist before it. Recorded so the quiet
-  // "Earlier messages are saved." line above the clear divider can show.
   withBucket(targetSid, (b) => {
-    const wiped = applySnapshotHistoryWipe(b)
     return {
-      ...wiped,
+      awaitingCatchUp: true,
       snapshotWasBootMismatch: snapshotFrame.reason === 'boot_mismatch',
-      hasEarlierMessages: snapshotFrame.has_earlier === true,
+      history: { ...b.history },
     }
   })
 }
@@ -223,6 +192,15 @@ function handleCatchUpCompleteFrame({ frame, targetSid, get, set, withBucket }: 
     draft.cursor = cursorFromTerminalFrame(completeFrame, draft.cursor?.bootId)
     draft.awaitingCatchUp = false
     draft.isReplaying = false
+    draft.history.liveControlsReady = true
+    if (draft.history.requests.latest.status === 'loading') draft.history.requests.latest.status = 'idle'
+    if (completeFrame.mode === 'live_only' || draft.history.serverState?.status === 'unavailable') {
+      draft.history.historyLoaded = false
+      // Control-only completion never certifies rows, confirms a first send,
+      // acknowledges attention or runs a history-derived restart sweep.
+      return
+    }
+    draft.history.requests.latest.error = null
     // Real-browser regression (orchestrator round 4, scenarios c/e/f):
     // `replayCompletedForSession` (ChatScreen.tsx's own REST-fallback
     // "was replay finished for this session" flag — see its doc comment
@@ -266,6 +244,7 @@ function handleCatchUpCompleteFrame({ frame, targetSid, get, set, withBucket }: 
     decideRestartInterruptedSignal(draft, completeFrame, bootChanged, wasWipedOpen)
     draft.snapshotWasBootMismatch = undefined
   }))
+  if (completeFrame.mode === 'live_only' || get().sessionsById[targetSid]?.history.serverState?.status === 'unavailable') return
   finishRecoveredFirstSend({ set, get, withBucket }, targetSid)
   acknowledgeShownCatchUp(targetSid)
   // D1/V2: catch-up completion is a replay→idle transition — a projection

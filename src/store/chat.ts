@@ -20,7 +20,13 @@ registerChatSetReplaying((value) => useChatStore.getState().setReplaying(value))
 
 registerChatResetForReplay((sessionId) => useChatStore.getState().resetSessionForReplay(sessionId))
 
-registerSyncChatForeground(syncChatForeground)
+let previousHistorySession = useSessionStore.getState().activeSessionId
+registerSyncChatForeground(() => {
+  const current = useSessionStore.getState().activeSessionId
+  if (previousHistorySession && previousHistorySession !== '__pending' && previousHistorySession !== current) useChatStore.getState().releaseSessionHistory(previousHistorySession)
+  previousHistorySession = current
+  syncChatForeground()
+})
 
 // omnipus-system-agent K8: the Omnipus entry's workflow-start message goes
 // out through the ordinary send (src/store/omnipusChat.ts).
@@ -69,6 +75,8 @@ registerReadPendingFirstSend(() => {
 export * from './chat/frames'
 export * from './chat/messages'
 export * from './chat/store'
+export { selectSessionHistory, emptyHistoryState } from './chat/history'
+export type { SessionHistoryState, HistoryActionKind, HistoryPageSizing, HistoryRequestState, SessionHistoryRange, HistorySlice } from './chat/types'
 export type { ChatMessage, ClientTruncatedResult, MediaAttachment, OutboundQueueItem, PositionedToolCall, QueuedOutboundMessage, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from './chat/types'
 
 // F-S8: removed flat→bucket bidirectional sync subscriber.

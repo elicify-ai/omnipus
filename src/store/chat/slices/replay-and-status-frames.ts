@@ -164,6 +164,9 @@ function handleSessionStateFrame(
   // ADR-082 review fix opens/marks the bubble first and this done
   // becomes a no-op for placeholder purposes.
   if (!targetSid) return
+  if (frame.session_id && frame.history_state) {
+    withBucket(targetSid, b => ({ history: { ...b.history, serverState: frame.history_state!, ...(frame.history_state!.status === 'unavailable' ? { historyLoaded: false } : {}) } }))
+  }
   // FR-047 (C-ATTENTION): the attach response's attention_bound lives on THIS
   // SessionStateFrame — per the contract it is "part of both the incremental
   // catch-up and the full snapshot, so either attach answer can carry the
