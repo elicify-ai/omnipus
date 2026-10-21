@@ -261,9 +261,9 @@ func TestPairingAttempts_APairingStartsOnlyWithItsOwnToken(t *testing.T) {
 	_, ok := s.Latest(testInstance)
 	require.False(t, ok, "and nothing was minted")
 
-	pending, err := s.Admit(testInstance, PairingAdmissionRetry, ownerA)
+	_, err = s.Admit(testInstance, PairingAdmissionRetry, ownerA)
 	require.ErrorIs(t, err, ErrPairingConflict, "instrument: nothing to retry")
-	pending, err = s.Admit(testInstance, PairingAdmissionConnect, ownerA)
+	pending, err := s.Admit(testInstance, PairingAdmissionConnect, ownerA)
 	require.NoError(t, err)
 	_, err = s.ActivateRepair(testInstance, noCancel)
 	require.ErrorIs(t, err, ErrPairingConflict, "re-pairing never replaces a pending reservation")

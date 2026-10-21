@@ -32,7 +32,7 @@ func TestEnableChannel_WhatsAppGoesThroughPairingAdmission(t *testing.T) {
 		wantSaved bool
 		wantText  string
 	}{
-		"refused while another pairing is in flight": {admitErr: channels.ErrPairingConflict, wantCode: "PAIRING_IN_PROGRESS"},
+		"refused while another pairing is in flight":   {admitErr: channels.ErrPairingConflict, wantCode: "PAIRING_IN_PROGRESS"},
 		"refused while the connector is being deleted": {admitErr: channels.ErrPairingDeleting, wantCode: "CHANNEL_BEING_DELETED"},
 		"admitted and committed":                       {commitOK: true, wantSaved: true, wantText: "will connect on the next config reload"},
 		"admitted, cancelled before its commit":        {commitOK: false, wantSaved: true, wantText: "pairing was cancelled before it started"},

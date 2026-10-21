@@ -344,9 +344,9 @@ func TestManager_RevokedAdmissionNeverRestarts(t *testing.T) {
 	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
 	store := m.PairingAttempts()
 	owner := &PairingOwner{SessionID: "chat-a", RequestID: "req-a"}
-	admitted, err := store.Admit("gate-r4-revoked", PairingAdmissionRetry, owner)
+	_, err = store.Admit("gate-r4-revoked", PairingAdmissionRetry, owner)
 	require.ErrorIs(t, err, ErrPairingConflict, "instrument: nothing to retry yet")
-	admitted, err = store.Admit("gate-r4-revoked", PairingAdmissionConnect, owner)
+	admitted, err := store.Admit("gate-r4-revoked", PairingAdmissionConnect, owner)
 	require.NoError(t, err)
 	require.True(t, store.MarkReady("gate-r4-revoked", admitted.AttemptID, ChannelRevision(cfg, "gate-r4-revoked")))
 	m.RequestRestart("gate-r4-revoked", admitted.AttemptID)

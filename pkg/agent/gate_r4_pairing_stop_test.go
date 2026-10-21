@@ -175,11 +175,11 @@ func TestStopPairing_RevokedResultNeverOverwritesASuccessor(t *testing.T) {
 	events := al.SubscribeEvents(64)
 	var b string
 	al.pairingRevokeHook = func() {
-		retry, err := store.Admit("whatsapp", channels.PairingAdmissionRetry, owner)
-		require.NoError(t, err)
+		retry, admitErr := store.Admit("whatsapp", channels.PairingAdmissionRetry, owner)
+		require.NoError(t, admitErr)
 		require.True(t, store.MarkReady("whatsapp", retry.AttemptID, "rev"))
-		_, err = store.Activate("whatsapp", retry.AttemptID, func(string) func(context.Context) error { return nil })
-		require.NoError(t, err)
+		_, activateErr := store.Activate("whatsapp", retry.AttemptID, func(string) func(context.Context) error { return nil })
+		require.NoError(t, activateErr)
 		b = retry.AttemptID
 		al.EmitWhatsAppPairingAttempt("whatsapp", b, channels.PairingStatusCode, "QR-B", "")
 	}
