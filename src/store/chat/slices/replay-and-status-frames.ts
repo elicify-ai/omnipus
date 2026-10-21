@@ -743,7 +743,7 @@ function replayAlreadyApplied(
 // sub-paths bake-then-`return`; the T1.10 fallback
 // immediately above bakes-then-falls-through), so a
 // `role === 'assistant'` frame always leaves toolCallOrder
-// empty by the time it reaches here. A user/system
+// empty by the time it reaches here. A user
 // replay_message skips that whole `if` block, so without
 // this, a tool call whose owner is a PRIOR assistant bubble —
 // e.g. `set_goal` as the LAST thing in a turn, immediately
@@ -845,8 +845,9 @@ function handleReplayMessageFrame({
   withBucket: ReplayAndStatusFrameContext['withBucket']
 }): void {
   if (!targetSid) return
-  sawReplayMessageThisTurn[targetSid] = true
   const replayFrame = frame as ReplayMessageFrame
+  // System entries can arrive live as passive notices, not replay/turn progress.
+  if (replayFrame.role !== 'system') sawReplayMessageThisTurn[targetSid] = true
   // FR-16 / Fix 5c: turn_canceled entries are metadata-only and must
   // never render as their own chat bubble. ReplayMessageFrame carries
   // no status/truncated field, so — unlike a fresh REST cold-load,
@@ -871,7 +872,7 @@ function handleReplayMessageFrame({
       // no per-case advance needed here.
       const msgs = getMessages(b)
       // #823 Opus review round 2 item 2 — see reconcileOwnOptimisticBubble above.
-      if (reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, fields.messageId, fields.role, fields.replayInputDiscarded, targetSid)) return
+      if (fields.role !== 'system' && reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, fields.messageId, fields.role, fields.replayInputDiscarded, targetSid)) return
       if (replayAlreadyApplied(draft, fields, targetSid)) return
       // Coalesce assistant text into the trailing empty assistant bubble
       // that tool_call_start frames already created.
@@ -890,10 +891,9 @@ function handleReplayMessageFrame({
       ) {
         return
       }
-      // FX-E (ADR-082 D9): bake any STILL-pending tool calls before
-      // opening a message of a NON-assistant role (user/system) — see
-      // bakePendingNonAssistantToolCalls above for the full reasoning.
-      if (fields.role !== 'assistant' && draft.toolCallOrder.length > 0) {
+      // FX-E (ADR-082 D9): a stored user entry is a tool-bake boundary.
+      // Passive system entries must leave the live turn and its tools intact.
+      if (fields.role === 'user' && draft.toolCallOrder.length > 0) {
         bakePendingNonAssistantToolCalls(draft)
       }
       // Founder ruling 2026-10-07 (S7): the stored user entry of a
