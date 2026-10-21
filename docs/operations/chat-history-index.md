@@ -72,6 +72,9 @@ or special-file inventories are refused rather than silently skipped.
 The examples below use isolated workspace locations. Set the variables to the
 verified instance, its actual native executable and separate evidence locations;
 these examples are not instructions to select a live home automatically.
+The command resolves native path aliases before containment checks (including
+macOS's `/var` to `/private/var` alias). Evidence binds the resulting canonical
+location; an alias resolving into the source or backup is still refused.
 
 ```sh
 TOOL=/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2/build/tools/chat-history-index-repair

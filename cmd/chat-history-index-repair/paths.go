@@ -13,9 +13,9 @@ func canonicalLocation(path string) (string, error) {
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err == nil {
-		if !samePath(path, resolved) {
-			return "", refusal("unsafe_path")
-		}
+		// Resolve native aliases before containment checks. In particular,
+		// macOS supplies absolute temporary paths through /var -> /private/var.
+		// The resolved location, not its input spelling, is bound in evidence.
 		return resolved, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
