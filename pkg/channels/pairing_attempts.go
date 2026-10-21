@@ -705,14 +705,26 @@ func (s *PairingAttempts) EndDelete(instance string, removed bool) {
 type pairingTokenKey struct{}
 
 type pairingStartIntent struct {
-	token string
-	boot  bool
+	token    string
+	boot     bool
+	stamp    PairingStartStamp
+	hasStamp bool
 }
 
 // WithPairingStart carries a start's admitted pairing token (empty: none) and
 // whether it is the gateway's boot start into Channel.Start.
-func WithPairingStart(ctx context.Context, token string, boot bool) context.Context {
-	return context.WithValue(ctx, pairingTokenKey{}, pairingStartIntent{token: token, boot: boot})
+func WithPairingStart(ctx context.Context, token string, boot bool, stamps ...PairingStartStamp) context.Context {
+	intent := pairingStartIntent{token: token, boot: boot}
+	if len(stamps) > 0 {
+		intent.stamp, intent.hasStamp = stamps[0], true
+	}
+	return context.WithValue(ctx, pairingTokenKey{}, intent)
+}
+
+// PairingStartStampFrom returns the fixed private dispatch identity, if present.
+func PairingStartStampFrom(ctx context.Context) (PairingStartStamp, bool) {
+	intent, _ := ctx.Value(pairingTokenKey{}).(pairingStartIntent)
+	return intent.stamp, intent.hasStamp
 }
 
 // PairingStartFrom reads WithPairingStart's values.

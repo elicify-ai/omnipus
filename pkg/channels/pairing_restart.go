@@ -75,22 +75,58 @@ func (o *PairingOrder) acceptsRestart(intent pairingRestartIntent, cfg *config.C
 
 // ReadyForSnapshot pins a token only for the snapshot which made it ready.
 // Activate revalidates this exact immutable token at the native effect.
-func (s *PairingAttempts) ReadyForSnapshot(instance string, cfg *config.Config) (string, bool) {
+func (s *PairingAttempts) ReadyForSnapshot(instance string, cfg *config.Config) (string, PairingStartStamp, bool) {
 	revision := ChannelRevision(cfg, instance)
 	order := s.LockChannel(instance)
 	defer order.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := order.connector
+	stamp := PairingStartStamp{Generation: c.configGeneration, Revision: revision}
 	if !order.matchesConfigLocked(cfg) || c.retired || c.deleting || c.hasStopping() {
-		return "", false
-	}
-	if c.configGeneration != 0 && c.generation != c.configGeneration {
-		return "", false // explicit Stop or an as-yet-uncommitted later admission
+		return "", stamp, false
 	}
 	rec := c.latest
-	if rec != nil && !c.hasStopping() && rec.Generation == c.generation && rec.Phase == PairingPhaseReady && !rec.startFenced && rec.Revision == revision {
-		return rec.AttemptID, true
+	if c.configGeneration != 0 && c.generation != c.configGeneration {
+		if rec != nil && rec.Generation == c.configGeneration && rec.Phase == PairingPhaseTerminal && rec.Outcome == PairingOutcomeStopped {
+			stamp.Cancelled, stamp.AttemptID = true, rec.AttemptID // idle only, never a late connection/pairing
+			return "", stamp, true
+		}
+		return "", stamp, false // an uncommitted later admission or another resource
 	}
-	return "", true // legitimate linked-device/idle start, not a fallback admission
+	if rec != nil && rec.Generation == c.generation && rec.Phase == PairingPhaseReady && !rec.startFenced && rec.Revision == revision {
+		stamp.AttemptID = rec.AttemptID
+		return rec.AttemptID, stamp, true
+	}
+	return "", stamp, true // legitimate linked-device/idle start, not a fallback admission
+}
+
+// PairingStartStamp carries one dispatch's original accepted identity. A Stop
+// can leave an enabled connector idle without turning its old start into a new
+// connection or a fresh unowned pairing.
+// not-wire-format: private Go lifecycle context metadata.
+type PairingStartStamp struct {
+	Generation uint64 `json:"-"`
+	Revision   string `json:"-"`
+	AttemptID  string `json:"-"`
+	Cancelled  bool   `json:"-"`
+}
+
+// AcceptsStartStamp is a guarded effect check. A cancelled dispatch may build
+// idle state only; the native adapter must not connect that dispatch's client.
+func (o *PairingOrder) AcceptsStartStamp(token string, stamp PairingStartStamp) bool {
+	o.store.mu.Lock()
+	defer o.store.mu.Unlock()
+	c := o.connector
+	if c.retired || c.deleting || c.hasStopping() || stamp.Generation != c.configGeneration {
+		return false
+	}
+	rec := c.attempts[stamp.AttemptID]
+	if stamp.Cancelled {
+		return token == "" && rec != nil && rec == c.latest && rec.Generation == stamp.Generation && rec.Phase == PairingPhaseTerminal && rec.Outcome == PairingOutcomeStopped && effectivePairingGeneration(rec) == c.generation
+	}
+	if token != "" {
+		return token == stamp.AttemptID && rec != nil && rec == c.latest && rec.Generation == c.generation && rec.Phase == PairingPhaseReady && !rec.startFenced && rec.Revision == stamp.Revision
+	}
+	return stamp.AttemptID == "" && (c.generation == stamp.Generation || c.configGeneration == 0 && (c.latest == nil || !inFlight(c.latest.Phase)))
 }

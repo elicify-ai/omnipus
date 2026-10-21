@@ -2481,12 +2481,12 @@ func (mr *managerReload) startAdded() {
 		// consumed by this start only (gate r3 M2, M14).
 		// Only an attempt committed at this reload's own revision starts; any
 		// other is left to the reload built for it (gate r5 R5-A05).
-		token, current := mr.m.PairingAttempts().ReadyForSnapshot(n, mr.cfg)
+		token, stamp, current := mr.m.PairingAttempts().ReadyForSnapshot(n, mr.cfg)
 		if !current {
 			delete(mr.list, n)
 			continue
 		}
-		if err := channel.Start(WithPairingStart(mr.ctx, token, false)); err != nil {
+		if err := channel.Start(WithPairingStart(mr.ctx, token, false, stamp)); err != nil {
 			logger.ErrorCF("channels", "Failed to start channel", map[string]any{
 				"channel": n,
 				"error":   err.Error(),

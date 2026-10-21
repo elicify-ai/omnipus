@@ -338,7 +338,7 @@ func NewWhatsAppNativeChannel(
 }
 
 func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
-	if err := c.pinStart(); err != nil {
+	if err := c.pinStart(ctx); err != nil {
 		return err
 	}
 	logger.InfoCF("whatsapp", "Starting WhatsApp native channel (whatsmeow)", map[string]any{"store": c.storePath})
@@ -423,6 +423,8 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 		if err != nil || !started {
 			return err
 		}
+	} else if stamp, _ := channels.PairingStartStampFrom(ctx); stamp.Cancelled {
+		return nil // enabled but idle: Stop revoked this dispatch, even if linked
 	} else if err := c.connectLinked(client, token); err != nil {
 		return err
 	}
