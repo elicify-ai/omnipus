@@ -55,8 +55,8 @@ func TestHistoryRepairCommand_SharedProjectionEffectAndIdentityParity(t *testing
 	for _, e := range []session.TranscriptEntry{{ID: "discarded", Role: "user", Content: "not delivered", ClientMessageID: "client-u"}, {ID: "answer", Role: "assistant", Content: "partial", TurnID: "T2"}, {ID: "cancel", Type: session.EntryTypeTurnCancelled, TurnID: "T2", CancelMethod: "graceful"}, {ID: "duplicate", Role: "user", Content: "older"}, {ID: "duplicate", Role: "user", Content: "canonical newest"}} {
 		e.AgentID = "mia"
 		e.Timestamp = at
-		a, err := s.AppendTranscriptAddressed(sid, e)
-		require.NoError(t, err)
+		a, appendErr := s.AppendTranscriptAddressed(sid, e)
+		require.NoError(t, appendErr)
 		if e.ID == "duplicate" {
 			duplicate = a
 		}

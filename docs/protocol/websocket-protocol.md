@@ -44,6 +44,23 @@ A person reading older history keeps that reader window, opened clear boundaries
 
 These frames are sent by the frontend to the backend over the WebSocket connection.
 
+### `attach_session` — bounded history and live catch-up
+
+Attach names the authorized session. Optional `since_seq` / `boot_id` request journal catch-up from a previously completed live cursor. Optional `history_limit` targets 20–100 drawn-row units for a snapshot (default 40); `history_min_rows` is its advisory 1–limit two-screen floor (default 20). Null, wrong types, fractional/exponent and out-of-range values are rejected. Session syntax and addressed-session access are checked before these history values; invalid values never bind, wipe history or send successful completion. Inbound-validation on/off uses the same precedence.
+
+| Branch | Ordered output | What completion proves |
+|---|---|---|
+| Servable incremental cursor | Current `session_state`, the complete journal tail, `catch_up_complete(mode=incremental)`, then held live frames. | Live/control catch-up to the announced sequence. History limits never cut the journal tail. |
+| Latest-page snapshot | Prepare the bounded page first; then `session_snapshot`, current `session_state`, selected source-derived historical frames, one replay `done`, uncovered active projection, `catch_up_complete(mode=snapshot)`, then held live frames. | The selected historical page and current live/control catch-up completed. It does not claim lifetime replay. |
+| Authorized history unavailable, controls deliverable | No snapshot/wipe. Send typed unavailable `history_state` in current `session_state`, current active projection, `catch_up_complete(mode=live_only)`, then held live frames. | Current live/control catch-up only. It does not reconstruct history, clear the history error or acknowledge attention as seen. |
+| Control, socket or cancellation failure | Existing failed-attach recovery; no successful completion over an incomplete catch-up. | No new completed cursor or history proof. |
+
+A missing/inconsistent index or suffix above 64 records is not a reason to stop a turn or to silently build partial history. The unavailable history area can show Retry while the composer, Stop, approvals, questions and other current controls remain independently usable. Explicit history Retry attaches **without** `since_seq`, attempts bounded recovery once, and never resends user input. A later journal-only catch-up is still not proof that history loaded.
+
+`session_snapshot` carries canonical `page_info`, `has_earlier` / `has_later`, optional `next_before` / `next_after`, and the actual selected source range/context. It has no second messages array or ordinal ownership manifest. A historical reader keeps its loaded window, anchor and focus, stages the recent page into its separate tail cache, and revalidates only its already loaded closed interval through REST. A snapshot reason such as `boot_mismatch` or `retention_exceeded` does not authorize a passive jump to latest.
+
+Replay `done` and `catch_up_complete` are different boundaries: active projection can follow replay done. Replay done's `stats.frames_emitted` counts the actual prepared content frames, excluding the done terminator; it is not a lifetime-history count. Matching clients stage historical replay through successful catch-up completion and commit the batch once, not once per content frame. The completion mode must be handled explicitly; `live_only` releases live/control attach locks but never sets history-loaded or replay-completed state. Deploy the matching server and client together and reload old tabs.
+
 ### `auth`
 
 First-frame bearer authentication for programmatic clients that do not carry the `omnipus-session` cookie. The web app does not send this frame.
@@ -226,6 +243,16 @@ These frames are sent by the backend to the frontend over the WebSocket connecti
 When history is unavailable but access and current control delivery succeed, the connection remains bound. The web app shows a persistent history-only ErrorState/Retry while Stop, current approvals/questions and the normal composer remain in their independent owners. Existing question/read-only/connection locks still apply. New output is distinguished as **Live output — earlier history unavailable**, not concatenated into a falsely gap-free history. New sends follow ordinary durable-save rules and are not automatically resent.
 
 History Retry sends `attach_session` **without** `since_seq`/`boot_id`, preserving already-ready current controls and pending input. A repeated history refusal can complete controls as `live_only` again; it does not start a repair poll or lifetime rebuild. An incremental live reconnect while history remains unavailable does not clear that error. Only validated history success clears the matching history error. See [paged REST history](../operations/observability.md#paged-session-api) and the [operator runbook](../operations/chat-history-index.md).
+
+### Prepared historical media and readiness
+
+Each entry-derived historical frame has generated `history_origin={position, entry_id?}`. The opaque 47-character position names its actual persisted source occurrence; the optional entry ID is that occurrence's recorded nonempty ID. It is not an ordering number, transport sequence, model position or permission grant. A tool-only entry can own tool frames without a preceding prose bubble. Finished start/result frames share their owning source; relevant span dependencies are bounded public facts, not a child's full history. For a legacy delegation with no saved task or label, its span uses the recorded tool name as a display label rather than inventing task text.
+
+Tool-derived media is deduplicated across the selected page by its resolved underlying file, not merely by reference string or source group. If two distinct references name the same file, the earliest selected occurrence keeps the media frame and its original `history_origin`; a genuinely different file still appears. Tool rows and their saved results remain intact. Selection reuses prepared media and resolved references rather than resolving or replaying each cumulative candidate again.
+
+Ownership applies to replay messages, tool starts/results, replay errors, provider-fallback and context-window notices, judge verdicts, handover/helper/goal events, persisted subagent lifecycle frames, tool-derived media and source-positioned historical question cards. Session-only replay warnings, replay done and terminal-card rehydration have no chronological source origin. Current session state, active projection and held live output retain their separate current/live authority.
+
+Attach's session-scoped `session_state` includes generated `history_state`. `status=available` omits reason/message. `status=unavailable` requires both: reason is `index_missing`, `index_inconsistent`, `catchup_limit`, `storage_error` or `projection_error`, and message is fixed sanitized copy, never the storage cause. The unscoped connection-open state does not claim history readiness. Readiness is not proof that this client has loaded a page; only actual successful history application clears that client-side error.
 
 ### `session_mode_updated`
 

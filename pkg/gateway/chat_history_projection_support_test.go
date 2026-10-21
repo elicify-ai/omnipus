@@ -170,8 +170,8 @@ func pagingNearAdmissionProbe(t *testing.T) {
 	payload := strings.Repeat("x", 8*1024*1024-4096)
 	for i := 0; i < 100; i++ {
 		e := session.TranscriptEntry{ID: fmt.Sprintf("near-%03d", i), Type: session.EntryTypeToolCall, AgentID: "mia", Timestamp: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC), ViewMembership: session.ViewMembershipChat, ToolCalls: []session.ToolCall{{ID: session.ToolCallID(fmt.Sprintf("call-%03d", i)), Tool: "read_file", Status: "success", Parameters: map[string]any{}, Result: map[string]any{"text": payload}}}}
-		encoded, err := json.Marshal(session.ArchiveRecord{TranscriptEntry: e})
-		require.NoError(t, err)
+		encoded, encodeErr := json.Marshal(session.ArchiveRecord{TranscriptEntry: e})
+		require.NoError(t, encodeErr)
 		require.Less(t, len(encoded), 8*1024*1024)
 		require.Greater(t, len(encoded), 8*1024*1024-4096)
 		require.NoError(t, s.AppendTranscriptStrict(sid, e), "actual8-MiB canonical admission, not guessed payload multiplication")
