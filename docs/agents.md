@@ -80,11 +80,11 @@ To change an agent, open its card. The edit slide-over saves as you type. Its ta
 
 ## Where an agent's instructions come from
 
-For a custom native agent, **Personality** edits its `SOUL.md`: the persona and standing instructions that follow that agent. The global `USER.md` profile remains shared by all agents. A custom agent with no non-empty `SOUL.md` uses Omnipus's default assistant identity.
+For a custom native agent, **Personality** edits its `SOUL.md`: the persona and standing instructions that follow that agent. All native agents read the same global `USER.md` profile. Omnipus does not automatically add that profile to external command-line workers' input. A custom native agent with no non-empty `SOUL.md` uses Omnipus's default assistant identity.
 
-Project rules belong in **Workspace settings → Project Instructions**, stored in the workspace's `AGENT.md`, or in a mounted project's root `CLAUDE.md` or `AGENTS.md`. When both project files exist, `CLAUDE.md` takes priority. These workspace and project instructions still apply.
+Project rules belong in **Workspace settings → Project Instructions**, stored in the workspace's `AGENT.md`, or in a mounted project's root `CLAUDE.md` or `AGENTS.md`. When both project files exist, `CLAUDE.md` takes priority. These workspace and project instructions still apply to native turns.
 
-An agent's own folder does not supply instructions from `AGENT.md`, `AGENTS.md` or `IDENTITY.md`. Their contents are not added to the system prompt, and changing those files does not refresh the prompt cache. `SOUL.md` and the global `USER.md` still load as before.
+In native turns, an agent's own folder does not supply instructions from `AGENT.md`, `AGENTS.md` or `IDENTITY.md`. Their contents are not added to the system prompt, and changing those files does not refresh the prompt cache. `SOUL.md` and the global `USER.md` still load for native agents.
 
 ## How to delete an agent
 

@@ -72,6 +72,12 @@ func TestRequestTailOmitsSkillReminder(t *testing.T) {
 		assert.Contains(t, static.Text, "# Skills", "the existing Skills menu is not removed")
 		assert.Contains(t, static.Text, "release-notes", "the granted skill stays in the menu")
 		assert.NotContains(t, tail.Content, "release-notes", "the menu is not repeated in the fact tail")
+		for messageIndex, message := range messages {
+			assert.NotContains(t, message.Content, retiredReminder, "request message %d must omit the retired directive", messageIndex)
+			for blockIndex, part := range message.SystemParts {
+				assert.NotContains(t, part.Text, retiredReminder, "structured system block %d in request message %d must omit the retired directive", blockIndex, messageIndex)
+			}
+		}
 		for _, message := range messages[:len(messages)-1] {
 			assert.NotContains(t, message.Content, "## Current Time")
 			assert.NotContains(t, message.Content, scratchFact)
