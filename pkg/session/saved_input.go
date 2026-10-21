@@ -9,9 +9,16 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
-// SaveChatInput saves an addressed, chat-only payload, without assigning a
-// model ordinal. PlaceSavedInput is the separate consumption-fence operation.
-// Retrying an id returns its original address; changing its bytes is refused.
+// entryTypeSavedInput marks a private, deferred model input, not a message
+// from the person. Its chat membership stages the payload without a model
+// ordinal; ReadTranscriptView excludes it from REST history and attach replay.
+const entryTypeSavedInput EntryType = "saved_input"
+
+// SaveChatInput saves an addressed, deferred input with chat membership, without
+// assigning a model ordinal. PlaceSavedInput is the separate consumption-fence
+// operation. The private input is not a displayed chat row; the caller saves
+// that event separately. Retrying an id returns its original address; changing
+// its bytes is refused.
 // The saved input is also entered in the session's content-free pending
 // directory (saved_input_index.go), so ordinary turns can find it without
 // reading the archive.
@@ -92,7 +99,7 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 	if err != nil {
 		return ArchiveAddress{}, err
 	}
-	entry := TranscriptEntry{ID: id, Role: "user", Content: body, AgentID: agentID,
+	entry := TranscriptEntry{ID: id, Type: entryTypeSavedInput, Role: "user", Content: body, AgentID: agentID,
 		Timestamp: time.Now().UTC(), ViewMembership: ViewMembershipChat}
 	addr, err := archive.Append(ArchiveRecord{TranscriptEntry: entry, ModelMessage: &payload,
 		Source: &EntrySource{Kind: "agent"}})
@@ -107,6 +114,19 @@ func (us *UnifiedStore) SaveChatInput(sessionID, id, agentID, body string) (Arch
 		return ArchiveAddress{}, err
 	}
 	return addr, nil
+}
+
+// isSavedChatInput recognizes the private type and the exact old writer's
+// user/chat shape with its server-minted id. Never classify by the wake prose:
+// a person's message containing the same words must remain visible.
+func isSavedChatInput(entry TranscriptEntry) bool {
+	if entry.Type == entryTypeSavedInput {
+		return true
+	}
+	const legacyPrefix = "saved-input-"
+	return (entry.Type == "" || entry.Type == EntryTypeMessage) &&
+		entry.Role == "user" && entry.ViewMembership == ViewMembershipChat &&
+		strings.HasPrefix(entry.ID, legacyPrefix) && len(entry.ID) > len(legacyPrefix)
 }
 
 // SavedChatInput resolves the durable address and whether it has already been

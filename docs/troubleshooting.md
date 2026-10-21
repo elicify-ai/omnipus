@@ -101,7 +101,11 @@ If the agent reaches its tool-call limit before a final answer, chat keeps the n
 
 ## A helper finished but the open parent chat is blank
 
-Check the parent's current state first. Progress, checkpoints and shared artifacts do not start a parent reply. An intentionally stopped parent retains a helper's result until a legitimate continuation; a parent with an unanswered question card handles the report with your answer rather than starting a separate reply. A helper's finished result, question, blocker or failure is also saved as an event line in the parent chat, independently of whether the parent repeats it. If an expected event or reply is missing, inspect the helper's current state and the gateway's delivery or storage errors before assuming the report was lost. A storage failure can leave an event pending repair, and a failed wake publication remains retryable. Report the parent and helper session IDs and whether reloading reveals the missing event or reply. Do not restart the gateway as a workaround.
+Check the parent's current state first. Progress, checkpoints and shared artifacts do not start a parent reply. An intentionally stopped parent retains a helper's result until a legitimate continuation; a parent with an unanswered question card handles the report with your answer rather than starting a separate reply.
+
+A helper's finished result, question, blocker or failure is saved as an event line in the parent chat, independently of whether the parent repeats it. The parent's new reply appears in the open chat as it is written, without a reload. A Judge ending also appears in the parent chat. Saved event lines and the parent's replies remain after reload; the internal continuation input is not displayed as a message from you.
+
+If an expected event or reply is missing, inspect the helper's current state and the gateway's delivery or storage errors before assuming the report was lost. A storage failure can leave an event pending repair, and a failed wake publication remains retryable. Report the parent and helper session IDs and whether reloading reveals the missing event or reply. Do not restart the gateway as a workaround.
 
 ## A task is refused before work starts
 
