@@ -19,6 +19,7 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
 import { SystemMessage, VirtualSystemMessageRow } from '@/components/chat/SystemMessageRows'
+import { UserMessage, AssistantMessage } from '@/components/chat/ChatScreen'
 import { entry, page, pos, replay, STAMP } from '../../tests/chat-history-paging/fixtures'
 
 // Independent literal oracle: provider-messages section 6, not the product helper.
@@ -99,7 +100,10 @@ function deliver(...frames: ServerFrame[]) {
     const parsed = parseFrameSafe(frame)
     expect(parsed, 'fixture: genuine generated-valid live/replay carrier').not.toBeNull()
     if (!parsed) throw new Error('Fixture instrument: generated frame validation failed')
-    act(() => { useChatStore.getState().handleFrame(parsed) })
+    // WsFrame is a wider TS union; prove the genuine ServerFrame round-trips,
+    // then hand the SAME typed fixture to the reducer, without a narrowing cast.
+    expect(parsed, 'fixture: generated server carrier round-trips without mutation').toStrictEqual(frame)
+    act(() => { useChatStore.getState().handleFrame(frame) })
   }
 }
 
@@ -114,7 +118,7 @@ function HistoricalRows() {
 
 function LiveRows() {
   const runtime = useOmnipusRuntime()
-  return <AssistantRuntimeProvider runtime={runtime}><ThreadPrimitive.Root><ThreadPrimitive.Messages components={{ SystemMessage }} /></ThreadPrimitive.Root></AssistantRuntimeProvider>
+  return <AssistantRuntimeProvider runtime={runtime}><ThreadPrimitive.Root><ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage, SystemMessage }} /></ThreadPrimitive.Root></AssistantRuntimeProvider>
 }
 
 function show(view: View) { return render(view === 'live' ? <LiveRows /> : <HistoricalRows />) }
@@ -159,7 +163,7 @@ beforeEach(() => {
   number += 1; sid = `pf-history-${number}`; requests = []; body = undefined
   sessionStorage.clear(); resetApiSchemaErrorCount(); queryClient.clear()
   act(() => {
-    useChatStore.setState({ ...initialChat, sessionsById: {}, messages: [], messagesById: {}, messageOrder: [], toolCalls: {}, toolCallOrder: [], textAtToolCallStart: {} }, true)
+    useChatStore.setState({ ...initialChat, sessionsById: {}, messages: [], messagesById: {}, toolCalls: {}, toolCallOrder: [], textAtToolCallStart: {} }, true)
     useSessionStore.setState({ ...initialSession, activeSessionId: sid, activeAgentId: 'mia' }, true)
     useConnectionStore.setState({ ...initialConnection, connection: null, isConnected: false }, true)
   })
