@@ -169,6 +169,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		turnFailed:   rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed,
 		stopped:      rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load(),
 		turnID:       rz.rc.rx.rr.rq.ri.rf.rt.ts.turnID,
+		goalID:       rz.rc.rx.rr.rq.ri.rf.rt.ts.goalID,
 	}, nil
 }
 

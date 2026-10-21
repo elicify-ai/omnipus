@@ -652,7 +652,9 @@ func (a agentLoopGoalRecordAccess) WriteRecord(sessionID, recordJSON string) err
 			})
 		}
 		cur.SupersededCriteria = superseded
-		cur.ZeroOutputPushes = 0
+		if !goalReminderBrakePaused(cur) {
+			cur.ZeroOutputPushes = 0
+		}
 		return nil
 	}); uerr != nil {
 		return fmt.Errorf("goal record access: writing goal record: %w", uerr)
@@ -750,9 +752,13 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 		criteria = g.Criteria
 		dod = g.DoD
 	}
+	state := goalPillActive
+	if goalReminderBrakePaused(rec) {
+		state = goalPillWaitingOnUser
+	}
 	al.emitGoalStatusFrameWithCriteriaAndDoD(
 		sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
-		rec.LatestReason, goalPillActive, definition, criteria, dod,
+		rec.LatestReason, state, definition, criteria, dod,
 	)
 
 	if route.channel != "" && route.channel != goalForcingWebChannel {
@@ -828,6 +834,10 @@ func (al *AgentLoop) EmitGoalStatusRehydrate(sessionID string) bool {
 	if rec == nil {
 		return false
 	}
+	state := goalPillActive
+	if goalReminderBrakePaused(rec) {
+		state = goalPillWaitingOnUser
+	}
 	g := compiledGoalFromRecord(rec)
 	if g == nil {
 		// D1 legal-transient empty-record state: activated, but the working
@@ -837,13 +847,13 @@ func (al *AgentLoop) EmitGoalStatusRehydrate(sessionID string) bool {
 		// indicator) survive a reload that lands inside this window.
 		al.emitGoalStatusFrame(
 			sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
-			rec.LatestReason, goalPillActive,
+			rec.LatestReason, state,
 		)
 		return true
 	}
 	al.emitGoalStatusFrameWithCriteriaAndDoD(
 		sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
-		rec.LatestReason, goalPillActive, g.Definition, g.Criteria, g.DoD,
+		rec.LatestReason, state, g.Definition, g.Criteria, g.DoD,
 	)
 	return true
 }

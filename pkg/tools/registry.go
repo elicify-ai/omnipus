@@ -589,6 +589,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// If tool implements AsyncExecutor and callback is provided, use ExecuteAsync.
 	// The callback is a call parameter, not mutable state on the tool instance.
 	var result *ToolResult
+	invoked := false
 	start := time.Now()
 
 	// Use recover to catch any panics during tool execution
@@ -616,8 +617,10 @@ func (r *ToolRegistry) ExecuteWithContext(
 				map[string]any{
 					"tool": name,
 				})
+			invoked = true
 			result = asyncExec.ExecuteAsync(ctx, args, asyncCallback)
 		} else {
+			invoked = true
 			result = tool.Execute(ctx, args)
 		}
 	}()
@@ -631,6 +634,11 @@ func (r *ToolRegistry) ExecuteWithContext(
 			Err:     fmt.Errorf("nil result from tool"),
 		}
 	}
+
+	// Own the per-call live fact rather than mutating a tool's reusable result.
+	ownedResult := *result
+	ownedResult.invoked = invoked
+	result = &ownedResult
 
 	// mediaStore is the snapshot taken at entry, not a fresh r.mediaStore
 	// read — see the capture block above.

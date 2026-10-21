@@ -427,7 +427,7 @@ func TestKeeperPromptsInstructTheAgentToClaim(t *testing.T) {
 	})
 
 	t.Run("goalNudgePrompt names the claim tool", func(t *testing.T) {
-		got := goalNudgePrompt(parityGoalText, 1)
+		got := goalNudgePrompt(parityGoalText)
 		if !strings.Contains(got, claimToolName) {
 			t.Fatalf("D-A: the recordless nudge must ALSO tell the agent to mark the work complete by calling %s — "+
 				"a recordless goal can already be finished; nothing about the missing record implies the work is not; got %q",

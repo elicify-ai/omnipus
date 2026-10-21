@@ -155,6 +155,8 @@ type processOptions struct {
 	executionDisposition *executionDisposition
 	// goalWake is an ordinary system input's expected pre-admission identity.
 	goalWake *ordinaryGoalWake
+	// goalReminderGoalID identifies only keeper reminders, not claim steers.
+	goalReminderGoalID string
 	// goalReminderFrame is the durable chat row carried by this turn's start.
 	goalReminderFrame *generated.ReplayMessageFrame
 }

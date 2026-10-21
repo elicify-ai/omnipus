@@ -80,6 +80,20 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 
 When an automatic reminder starts another work turn for a goal in your own chat—not a helper or task run—the web app shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line is saved in that chat's history and remains after you reload it.
 
+There is no lifetime limit on reminders. Instead, Omnipus counts consecutive reminder turns that **finish without progress**. Sending a reminder does not itself use up one of these outcomes, and a turn that is still running is not counted as finished. Progress resets the count to zero.
+
+| Counts as progress | Does not count by itself |
+|---|---|
+| New goal evidence; a goal-scoped file change; an executed tool call other than `set_todos` or a claim-only `goal_claim` call; activity in a delegated helper; output or completion from background work owned by the goal session | A text-only answer, a prose completion claim, a claim-only message, or a turn that only updates `set_todos` |
+
+After **five consecutive completed reminders without progress**, automatic reminders pause. The chat shows this system line:
+
+> No progress after 5 reminders — goal paused. Reply to continue.
+
+Send a normal reply to resume the goal and reset that count. This is a pause, not a failed or ended goal. The same rule applies before and after the agent writes its working goal record; there is no separate two-nudge fallback.
+
+Omnipus does not send another reminder or advance this count while the goal session's background commands, dispatched tasks or plans, or delegated helpers are still working. Their output or completion counts as progress. A Stop, an unanswered question or a blocked claim also holds automatic reminders; an ended goal receives none.
+
 ## What controls a goal
 
 These numbers shape a goal's life:
@@ -89,6 +103,7 @@ These numbers shape a goal's life:
 | Tries per goal | 20 by default | Settings, Performance, "Goal completion budget" |
 | Task attempts | 3 by default | On the task |
 | Question rounds | 1 per goal | Fixed |
+| Automatic-reminder pause | 5 consecutive completed reminders without progress; no lifetime reminder limit | Fixed |
 | Idle expiry | 7 days, never while work is running | Server setting |
 | Active chat goals | 16 at a time | Server setting; tasks count separately |
 

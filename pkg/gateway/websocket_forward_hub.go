@@ -545,6 +545,9 @@ func (h *WSHandler) hubGoalStatusChanged(evt agent.Event) {
 	if !ok {
 		return
 	}
+	if p.ChatNotice != nil {
+		h.hubPublishFrame(p.ChatNotice.SessionId, string(generated.WsFrameTypeReplayMessage), *p.ChatNotice, nil)
+	}
 	goalF := generated.GoalStatusFrame{
 		Type:         string(generated.WsFrameTypeGoalStatus),
 		SessionId:    p.SessionID,

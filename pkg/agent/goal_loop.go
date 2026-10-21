@@ -683,6 +683,15 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	opts processOptions,
 	result *turnResult,
 ) {
+	if reminderGoal := goalReminderForTurn(opts, result); reminderGoal != "" {
+		opts.goalReminderGoalID = reminderGoal
+		opts.UserInitiated = false
+		opts.SenderID = goalLoopFollowUpSenderID
+	}
+	if opts.SteeredSessionID != "" {
+		al.resumeGoalRemindersForHuman(opts)
+	}
+	defer al.finishGoalReminderOutcome(opts, result)
 	gl := &agentLoopCheckGoalLoopAfterTurn{al: al, ctx: ctx, agentInst: agentInst, opts: opts, result: result}
 
 	if gl.checkEligibility() {
@@ -994,7 +1003,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// the working agent skipped its first-move door entirely. Nudge it
 		// right now rather than waiting for the idle keeper's quiet window
 		// (D6c) to notice.
-		gl.al.maybeNudgeUnregisteredGoal(gl.store, gl.sessionID, gl.rec, gl.agentInst, gl.opts)
+		gl.al.maybeNudgeUnregisteredGoal(gl.sessionID, gl.rec, gl.opts)
 	}
 }
 
@@ -1023,10 +1032,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 //     the D7 engine fallback takes over, so the guarantee holds either way;
 //     only the FIRST registration attempt is sped up by this function, not
 //     every subsequent retry.
-func (al *AgentLoop) maybeNudgeUnregisteredGoal(
-	store *session.UnifiedStore, sessionID string, rec *goal.Goal,
-	agentInst *AgentInstance, opts processOptions,
-) {
+func (al *AgentLoop) maybeNudgeUnregisteredGoal(sessionID string, rec *goal.Goal, opts processOptions) {
 	// ADR-086: "still recordless" is the goal record's own criteria list
 	// being empty (GOAL-FR-003's typed lists), not the retired session-meta
 	// GoalCriteriaJSON string. This is also what keeps the nudge ladder
@@ -1042,15 +1048,9 @@ func (al *AgentLoop) maybeNudgeUnregisteredGoal(
 	if opts.SenderID == goalLoopFollowUpSenderID {
 		return // a goal-loop follow-up that itself failed — let the idle ladder pick it up
 	}
-	meta, merr := store.GetMeta(sessionID)
-	if merr != nil || meta == nil {
-		logger.WarnCF("agent", "goal: could not read session meta for the immediate registration nudge; leaving it to the idle ladder",
-			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": errString(merr)})
-		return
-	}
 	logger.InfoCF("agent", "goal: record not registered on the turn; nudging immediately",
 		map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID})
-	al.settleRecordlessGoal(store, meta, rec, agentInst)
+	al.settleRecordlessGoal(sessionID, rec)
 }
 
 // goalVerdictReasonText builds a human-readable summary of the judge's unmet

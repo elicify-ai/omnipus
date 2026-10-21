@@ -144,16 +144,7 @@ func (t *ExecTool) runBackground(
 		for {
 			n, readErr := r.Read(buf)
 			if n > 0 {
-				session.mu.Lock()
-				if session.outputBuffer.Len() >= maxOutputBufferSize {
-					if !session.outputTruncated {
-						session.outputBuffer.WriteString(outputTruncateMarker)
-						session.outputTruncated = true
-					}
-				} else {
-					session.outputBuffer.Write(buf[:n])
-				}
-				session.mu.Unlock()
+				session.appendOutput(buf[:n])
 			}
 			if readErr != nil {
 				return
@@ -249,6 +240,8 @@ func (t *ExecTool) runBackground(
 			}
 			session.Status = StatusDone
 		}
+		// cmd.Wait has completed even if a kill/timeout already chose the label.
+		session.recordActivityLocked()
 		finalStatus := session.Status
 		finalExitCode := session.ExitCode
 		// Peek (non-destructive) at whatever output has accumulated so the

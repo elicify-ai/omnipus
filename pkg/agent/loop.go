@@ -1846,7 +1846,7 @@ func (al *AgentLoop) runAgentLoop(
 	// its turn STARTS, so the client is told the goal is active again while the
 	// turn runs (not only once it ends). Cheap no-op unless a pause is held.
 	if (opts.UserInitiated || opts.IsTaskRun) && opts.TranscriptStore != nil && opts.TranscriptSessionID != "" {
-		al.liftGoalKeeperStopPauseIfNewTurn(opts.TranscriptStore, opts.TranscriptSessionID)
+		al.prepareGoalKeeperForTurn(opts)
 	}
 
 	ts, admissionErr := al.newTurnStateForAdmission(agent, opts)

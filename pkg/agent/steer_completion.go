@@ -637,6 +637,7 @@ func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, rec *session.Lifecycle
 	if al == nil || ts == nil || rec == nil || result == nil {
 		return
 	}
+	defer al.rearmAbnormalGoalReminder(ts, result, runErr)
 	// A dead turn has no claim to adjudicate. Route the three failing
 	// outcomes of I-5's table (failed / timed_out / cancelled) through the
 	// ONE completion path instead of returning silently: completeSteeredTurn

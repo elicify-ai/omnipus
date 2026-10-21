@@ -23,6 +23,7 @@ type ordinaryGoalWake struct {
 	generation int
 	runID      string
 	bootSeq    uint64
+	reminder   bool
 }
 
 var errOrdinaryGoalWakeIgnored = errors.New("goal reminder is obsolete or held")
@@ -76,12 +77,19 @@ func (al *AgentLoop) runOrdinaryGoalFollowUp(ctx context.Context, agent *AgentIn
 	opts.goalWake = &ordinaryGoalWake{
 		messageID: inboundMetadata(msg, "steer_message_id"), goalID: inboundMetadata(msg, "goal_id"), generation: generation,
 		runID: inboundMetadata(msg, "goal_parent_run_id"), bootSeq: bootSeq,
+		reminder: inboundMetadata(msg, "goal_reminder") == "true",
+	}
+	if inboundMetadata(msg, "goal_reminder") == "true" {
+		opts.goalReminderGoalID = opts.goalWake.goalID
 	}
 	msg.SessionID, msg.SessionKey = opts.TranscriptSessionID, opts.SessionKey
 	response, _, runErr := al.runInboundTurnWithRevival(ctx, agent, msg, opts)
 	if errors.Is(runErr, errOrdinaryGoalWakeIgnored) {
 		al.goalMarkIdleSettling(opts.goalWake.goalID, false)
 		return "", nil
+	}
+	if runErr != nil {
+		al.goalMarkIdleSettling(opts.goalWake.goalID, false)
 	}
 	return response, runErr
 }
@@ -111,7 +119,7 @@ func (al *AgentLoop) checkOrdinaryGoalWake(rec *session.LifecycleRecord, wake *o
 	if err != nil {
 		return err
 	}
-	if g == nil || g.GoalID != wake.goalID || al.goalKeeperPausedByStop(rec.SessionID) ||
+	if g == nil || g.GoalID != wake.goalID || goalReminderBrakePaused(g) || al.goalKeeperPausedByStop(rec.SessionID) ||
 		al.goalIsWaitingOnUser(wake.goalID) || al.goalIsBlocked(wake.goalID) {
 		return errOrdinaryGoalWakeIgnored
 	}
@@ -125,6 +133,15 @@ func (al *AgentLoop) checkOrdinaryGoalWake(rec *session.LifecycleRecord, wake *o
 	}
 	if blocked || open || rec.State == session.LifecycleNeedsInput {
 		return errOrdinaryGoalWakeIgnored
+	}
+	if wake.reminder {
+		held, err := al.primeGoalReminderObservation(rec.SessionID, g)
+		if err != nil {
+			return err
+		}
+		if held {
+			return errOrdinaryGoalWakeIgnored
+		}
 	}
 	return nil
 }

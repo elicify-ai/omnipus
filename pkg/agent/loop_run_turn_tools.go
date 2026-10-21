@@ -1377,6 +1377,7 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		ex.asyncCallback,
 	)
 	ex.toolDuration = time.Since(toolStart)
+	noteGoalExecutedTool(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.toolResult)
 
 	if ex.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 		ex.releaseAsyncCallback()
