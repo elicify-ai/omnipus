@@ -1,6 +1,8 @@
 package generated
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -34,22 +36,39 @@ func TestContract_SessionDetail_TooManyMessages(t *testing.T) {
 	}
 }
 
-// not-wire-format: structural contract-test data, never a gateway/SPA DTO.
-// This initial shape is the existing stale fixture retained for the first RED
-// instrument run. It is corrected only after that failure is saved.
+// not-wire-format: structural component-schema data, not a real producer or
+// performance receipt. The former generic-error fixture was shown RED first.
 func sessionDetailCapFixture(count int) map[string]any {
 	messages := make([]any, count)
+	positions := make([]string, count)
 	for i := range messages {
+		digest := sha256.Sum256([]byte(fmt.Sprintf("schema-only-occurrence-%d", i)))
+		positions[i] = "hp1_" + base64.RawURLEncoding.EncodeToString(digest[:])
 		messages[i] = map[string]any{
-			"id": fmt.Sprintf("msg-%d", i), "role": "user",
-			"content": "x", "type": "text", "status": "complete",
+			"id": fmt.Sprintf("msg-%d", i), "role": "user", "agent_id": "jim",
+			"timestamp": "2026-05-17T10:00:00Z", "history_position": positions[i],
+			"content": "x", "type": "message", "status": "ok",
 		}
 	}
+	// This test isolates JSON-Schema messages.maxItems. The separate structural
+	// source-count cap stays100 even for invalid101/100001-message documents;
+	// the no-cap control is not a claim of a semantically coherent real page.
+	groups := min(count, 100)
 	return map[string]any{
-		"id": "session-1", "agent_id": "jim", "title": "Test session", "status": "active",
-		"created_at": "2026-05-17T10:00:00Z", "updated_at": "2026-05-17T10:00:00Z", "channel": "webchat", "partitions": []string{},
-		"stats":    map[string]any{"cost": 0.0, "message_count": 0, "tokens_in": 0, "tokens_out": 0, "tokens_total": 0, "tool_calls": 0},
-		"messages": messages,
+		"session": map[string]any{
+			"id": "session-1", "type": "chat", "agent_id": "jim", "title": "Test session", "status": "active",
+			"created_at": "2026-05-17T10:00:00Z", "updated_at": "2026-05-17T10:00:00Z", "channel": "webchat", "partitions": []string{},
+			"stats": map[string]any{"cost": 0.0, "message_count": count, "tokens_in": 0, "tokens_out": 0, "tokens_total": 0, "tool_calls": 0},
+		},
+		"history_state": map[string]any{"status": "available"},
+		"messages":      messages, "has_earlier": false, "has_later": false,
+		"page_info": map[string]any{
+			"mode": "latest", "limit": 100, "min_rows": 20, "row_count": count, "source_group_count": groups,
+			"soft_byte_budget": 4194304, "projected_bytes": 0, "byte_budget_exceeded": false,
+			"stop_reason": "end", "retention_generation": "schema-only-retained",
+			"first_position": positions[0], "last_position": positions[len(positions)-1],
+			"context": map[string]any{"spans": []any{}, "duplicate_ids": []any{}},
+		},
 	}
 }
 
