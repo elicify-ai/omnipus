@@ -12,7 +12,7 @@ export function fixtureMessage(label: string, ordinal: number, agentId: string, 
     timestamp: '2026-07-01T12:00:00Z', content: id + 'x'.repeat(Math.max(0, bodyBytes - id.length)) };
   if (tool) {
     value.content = '';
-    value.tool_calls = [{ id: `call-${id}`, tool: 'read_file', status: 'success',
+    value.tool_calls = [{ id: `call-${id}`, tool: 'read_file', status: 'success', content_state: 'full',
       parameters: { path: `${id}.txt` }, result: { content: id + 'x'.repeat(bodyBytes) } }];
   }
   return value;

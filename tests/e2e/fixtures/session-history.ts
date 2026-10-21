@@ -1,5 +1,5 @@
 import { SessionHistoryResponse } from '../../../src/lib/api/generated/schemas';
-import type { Message } from '../../../src/lib/api/generated/openapi-types';
+export type RetainedHistoryMessage = ReturnType<typeof SessionHistoryResponse.parse>['entries'][number];
 
 // not-wire-format: injected HTTP reader shape for tests. No Playwright runtime
 // import/test registration: Vitest imports THIS real helper, not a copy.
@@ -12,8 +12,8 @@ export type HistoryHTTPReader = { request: { get(url: string): Promise<{
  * latest, deliberately crosses each clear with exclusive before, and stops
  * only on truthful terminal metadata. It cannot prove absence of FUTURE sends.
  */
-export async function sessionMessages(page: HistoryHTTPReader, origin: string, sessionId: string): Promise<Message[]> {
-  const messages: Message[] = [];
+export async function sessionMessages(page: HistoryHTTPReader, origin: string, sessionId: string): Promise<RetainedHistoryMessage[]> {
+  const messages: RetainedHistoryMessage[] = [];
   const positions = new Set<string>();
   const boundaries = new Set<string>();
   let before: string | undefined;
@@ -55,7 +55,7 @@ export async function sessionMessages(page: HistoryHTTPReader, origin: string, s
 
 /** Parent-wake isolation oracle: absence must mean ALL retained pages, including
  * old clear segments, not just the newest suffix or an unvalidated wrapper. */
-export async function assertSessionHistoryExcludes(page: HistoryHTTPReader, origin: string, sessionId: string, forbidden: string): Promise<Message[]> {
+export async function assertSessionHistoryExcludes(page: HistoryHTTPReader, origin: string, sessionId: string, forbidden: string): Promise<RetainedHistoryMessage[]> {
   const messages = await sessionMessages(page, origin, sessionId);
   if (JSON.stringify(messages).includes(forbidden)) throw new Error('another session retained forbidden parent-wake output');
   return messages;
