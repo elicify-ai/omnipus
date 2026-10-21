@@ -257,10 +257,6 @@ var validEventNames = map[EventName]struct{}{
 	// from pkg/audit would invert this codebase's dependency direction).
 	EventSkillCall: {},
 	"skill.write":  {},
-	// AskUserQuestion default-safe auto-resolution (askuserquestion-tool-
-	// spec v3 US-3 S2/§4; emitted by the gateway's askuser.AuditSink
-	// adapter for every 30-minute timer fire).
-	EventAskUserAutoDefault: {},
 	// Misc event names emitted by other packages with stable wire
 	// contracts — keep the predicate aligned with them so they don't
 	// trip the unknown-event warn-once.

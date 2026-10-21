@@ -202,7 +202,7 @@ func TestLoadTerminalAskRecord(t *testing.T) {
 	setMetaAsk(`{"card_id":"ask_p","transcript_session_id":"` + sid + `","status":"pending"}`)
 	assert.Nil(t, loadTerminalAskRecord(store, sid), "pending record belongs to the live registry")
 
-	setMetaAsk(`{"card_id":"ask_t","transcript_session_id":"` + sid + `","status":"answered","answers":[{"header":"Scope","question":"Which scope?","selected":["Backend"],"auto_default":false}]}`)
+	setMetaAsk(`{"card_id":"ask_t","transcript_session_id":"` + sid + `","status":"answered","answers":[{"header":"Scope","question":"Which scope?","selected":["Backend"]}]}`)
 	got := loadTerminalAskRecord(store, sid)
 	require.NotNil(t, got)
 	assert.Equal(t, "ask_t", got.CardID)

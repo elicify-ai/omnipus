@@ -763,7 +763,7 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// AskUserQuestion pending registry (askuserquestion-tool-spec v3, ADR-074
 	// D4b; W9b wiring): durable state lives in each owner session's
 	// UnifiedMeta (pending_ask), the in-process registry mirrors it with the
-	// global cap + default-safe timers, the card sink broadcasts
+	// global cap, the card sink broadcasts
 	// ask_user_question WS frames, and the resume dispatcher publishes the
 	// §0.2 answers message back into the owner session's turn machinery.
 	if sharedStore := stg.agentLoop.GetSessionStore(); sharedStore != nil {
@@ -771,12 +771,8 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 		askReg := askuser.NewRegistry(
 			sharedStore,
 			&askUserResumeDispatcher{msgBus: stg.msgBus},
-			askuser.Options{
-				Sink:  askSink,
-				Audit: &askUserAuditSink{al: stg.agentLoop},
-			},
+			askuser.Options{Sink: askSink},
 		)
-		askSink.delayFn = askReg.EffectiveDefaultSafeDelay
 		stg.wsHandler.askUserReg = askReg
 		stg.agentLoop.SetAskUserRegistry(askReg)
 		// ADR-088 FR-031: wire the goal-routing store resolver at boot so a
@@ -787,11 +783,9 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 		// the same lasting outcome line in the task's run session as a chat
 		// goal does (pkg/agent/goal_outcome.go).
 		stg.agentLoop.InstallTaskGoalOutcomeRecorder()
-		// Boot rearm sweep (US-6 S1/FR-9): re-hydrate every persisted pending
-		// set so its default-safe timers re-arm from the durable CreatedAt
-		// (already-elapsed timers fire near-immediately) and the reconnect
-		// snapshot sees it. Runs in a goroutine — meta reads only, and a
-		// pending set is inert until a client answers or a timer fires.
+		// Boot restoration (US-6 S1/FR-9): re-hydrate every persisted pending
+		// set so the reconnect snapshot sees it. A pending set stays inert
+		// until a client answers or it is explicitly cancelled.
 		go func() {
 			metas, listErr := sharedStore.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
 				return m.PendingAskJSON != ""
@@ -806,14 +800,6 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 						"session_id", m.ID, "error", rearmErr)
 				}
 			}
-		}()
-		// Wait out in-flight timer callbacks on shutdown so a persist never
-		// races the process teardown (the Quiesce contract). Bound to the
-		// gateway's shutdown-aware ctx — a defer here would fire when
-		// setupAndStartServices RETURNS (still at boot), not at shutdown.
-		go func() {
-			<-stg.ctx.Done()
-			askReg.Quiesce()
 		}()
 	} else {
 		slog.Warn("gateway: askuser registry NOT wired — no shared session store; AskUserQuestion will fail closed")

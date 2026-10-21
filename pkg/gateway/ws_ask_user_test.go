@@ -4,8 +4,7 @@
 
 // ws_ask_user_test.go — askuserquestion-tool-spec v3 test 8 (gateway wire
 // half): toAskUserCard maps pkg/askuser.PendingSet onto the generated card
-// shape (default_safe_at materialization, auto_resolved marks, answer echo
-// incl. auto_default origin), and the resume dispatcher's origin heuristic.
+// shape, preserves the answer echo, and resumes on explicit human input.
 package gateway
 
 import (
@@ -62,7 +61,6 @@ func askSetFixture() *askuser.PendingSet {
 					{Label: "All"},
 				},
 				Recommended: "Only unanswered",
-				DefaultSafe: true,
 				Context:     "- every question answered",
 			},
 			{
@@ -77,27 +75,19 @@ func askSetFixture() *askuser.PendingSet {
 
 func TestToAskUserCard_PendingMapsFaithfully(t *testing.T) {
 	set := askSetFixture()
-	set.AutoResolved = map[string]time.Time{"Scope": set.CreatedAt.Add(30 * time.Minute)}
 
-	card := toAskUserCard(set, 30*time.Minute)
+	card := toAskUserCard(set)
 	assert.Equal(t, "ask_1", card.CardId)
 	assert.Equal(t, "session_owner_1", card.SessionId)
 	assert.Equal(t, "mia", card.AgentId)
 	assert.Equal(t, "pending", card.Status)
 	assert.Equal(t, "2026-09-06T12:00:00Z", card.CreatedAt)
 
-	// default_safe_at = created_at + delay, present because a default-safe
-	// question exists.
-	require.NotNil(t, card.DefaultSafeAt)
-	assert.Equal(t, "2026-09-06T12:30:00Z", *card.DefaultSafeAt)
-	assert.Equal(t, []string{"Scope"}, card.AutoResolved)
-
 	require.Len(t, card.Questions, 2)
 	q0 := card.Questions[0]
 	assert.Equal(t, "Scope", q0.Header)
 	require.NotNil(t, q0.Recommended)
 	assert.Equal(t, "Only unanswered", *q0.Recommended)
-	require.NotNil(t, q0.DefaultSafe)
 	require.NotNil(t, q0.Context)
 	require.Len(t, q0.Options, 2)
 	require.NotNil(t, q0.Options[0].Description)
@@ -106,15 +96,7 @@ func TestToAskUserCard_PendingMapsFaithfully(t *testing.T) {
 	q1 := card.Questions[1]
 	require.NotNil(t, q1.MultiSelect)
 	assert.Nil(t, q1.Recommended)
-	assert.Nil(t, q1.DefaultSafe)
 	assert.Nil(t, q1.Context)
-}
-
-func TestToAskUserCard_NoDefaultSafeNoDeadline(t *testing.T) {
-	set := askSetFixture()
-	set.Questions[0].DefaultSafe = false
-	card := toAskUserCard(set, 30*time.Minute)
-	assert.Nil(t, card.DefaultSafeAt, "no default-safe question -> no deadline on the wire")
 }
 
 func TestToAskUserCard_TerminalCarriesAnswers(t *testing.T) {
@@ -122,14 +104,12 @@ func TestToAskUserCard_TerminalCarriesAnswers(t *testing.T) {
 	set.Status = askuser.StatusAnswered
 	ft := "something else"
 	set.Answers = []askuser.Answer{
-		{Header: "Scope", QuestionText: "Which emails?", Selected: []string{"Only unanswered"}, AutoDefault: true},
+		{Header: "Scope", QuestionText: "Which emails?", Selected: []string{"Only unanswered"}},
 		{Header: "Deploy", QuestionText: "Deploy where?", FreeText: &ft},
 	}
-	card := toAskUserCard(set, 30*time.Minute)
+	card := toAskUserCard(set)
 	assert.Equal(t, "answered", card.Status)
-	assert.Nil(t, card.DefaultSafeAt, "terminal card carries no countdown deadline")
 	require.Len(t, card.Answers, 2)
-	assert.True(t, card.Answers[0].AutoDefault, "auto-default origin marker crosses the wire")
 	assert.Equal(t, []string{"Only unanswered"}, card.Answers[0].Selected)
 	require.NotNil(t, card.Answers[1].FreeText)
 	assert.Equal(t, "something else", *card.Answers[1].FreeText)
@@ -151,7 +131,7 @@ func TestBroadcastAskUserCard_FanOutAndDropCounter(t *testing.T) {
 	wcClosed.close()
 	h := &WSHandler{sessions: map[string]*wsConn{"ok": wcOK, "full": wcFull, "closed": wcClosed}}
 
-	h.broadcastAskUserCard(toAskUserCard(askSetFixture(), 30*time.Minute))
+	h.broadcastAskUserCard(toAskUserCard(askSetFixture()))
 
 	select {
 	case raw := <-wcOK.sendCh:
@@ -182,38 +162,13 @@ func TestBroadcastAskUserCard_NoDropsLogsInfo(t *testing.T) {
 	wcB := &wsConn{sendCh: make(chan []byte, 1)}
 	h := &WSHandler{sessions: map[string]*wsConn{"a": wcA, "b": wcB}}
 
-	h.broadcastAskUserCard(toAskUserCard(askSetFixture(), 30*time.Minute))
+	h.broadcastAskUserCard(toAskUserCard(askSetFixture()))
 
 	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user_question broadcast")
 	assert.Equal(t, "INFO", record["level"])
 	assert.Equal(t, float64(2), record["fanout_count"])
 	assert.Equal(t, float64(2), record["enqueued_count"])
 	assert.Equal(t, float64(0), record["drop_count"])
-}
-
-// The resume origin heuristic: a human submission/cancel is user-initiated;
-// the server's all-default auto-submit is not.
-func TestAskUserResumeDispatcher_OriginHeuristic(t *testing.T) {
-	d := &askUserResumeDispatcher{} // no bus — only the heuristic matters here
-	_ = d
-
-	humanSet := askSetFixture()
-	humanSet.Status = askuser.StatusAnswered
-	humanSet.Answers = []askuser.Answer{
-		{Header: "Scope", Selected: []string{"Only unanswered"}, AutoDefault: true},
-		{Header: "Deploy", Selected: []string{"Staging"}}, // one human answer
-	}
-	autoSet := askSetFixture()
-	autoSet.Status = askuser.StatusAnswered
-	autoSet.Answers = []askuser.Answer{
-		{Header: "Scope", Selected: []string{"Only unanswered"}, AutoDefault: true},
-	}
-	cancelledSet := askSetFixture()
-	cancelledSet.Status = askuser.StatusCancelled
-
-	assert.True(t, resumeIsUserInitiated(humanSet))
-	assert.False(t, resumeIsUserInitiated(autoSet))
-	assert.True(t, resumeIsUserInitiated(cancelledSet))
 }
 
 // TestAskUserResumeDispatcher_PublishesToBus is the SQUAD-R reproduction at
@@ -231,8 +186,7 @@ func TestAskUserResumeDispatcher_PublishesToBus(t *testing.T) {
 	t.Cleanup(mb.Close)
 	disp := &askUserResumeDispatcher{msgBus: mb}
 
-	// Park a set, then submit a human answer — the answer carries one
-	// non-auto answer so resumeIsUserInitiated returns true.
+	// Publish a human answer as a user-initiated resume.
 	set := askSetFixture()
 	set.Owner = "daniel"
 	set.Status = askuser.StatusAnswered
@@ -343,7 +297,6 @@ func TestHandleAskUserAnswer_RejectionLogDoesNotExposeSubmittedContent(t *testin
 	logBuf := captureSlogJSON(t)
 	reg := askuser.NewRegistry(nil, nil, askuser.Options{})
 	require.NoError(t, reg.CreatePending(askSetFixture()))
-	t.Cleanup(reg.Quiesce)
 
 	const secret = "SECRET-INVALID-OPTION-DO-NOT-LOG"
 	var frame generated.AskUserAnswerFrame
@@ -378,7 +331,6 @@ func TestHandleAskUserAnswer_AcceptedAnswerWithResumeFailureIsNotRejected(t *tes
 	set.Questions[0].Recommended = secretAccepted
 	reg := askuser.NewRegistry(nil, &askUserResumeDispatcher{msgBus: mb}, askuser.Options{})
 	require.NoError(t, reg.CreatePending(set))
-	t.Cleanup(reg.Quiesce)
 
 	var frame generated.AskUserAnswerFrame
 	require.NoError(t, json.Unmarshal([]byte(`{

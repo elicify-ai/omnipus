@@ -8,14 +8,11 @@
 //
 //   - askUserCardSink (askuser.CardSink) → broadcasts an ask_user_question
 //     frame (generated.AskUserQuestionFrame) to every connected WS client at
-//     park time, on default-safe auto-resolutions, and on terminal
-//     transitions.
+//     park time and on answered/cancelled transitions.
 //   - askUserResumeDispatcher (askuser.ResumeDispatcher) → publishes the
 //     §0.2 correlated user-role answers message into the owner session's
 //     turn machinery via the message bus (the same PublishInbound path the
 //     WS chat handler uses).
-//   - askUserAuditSink (askuser.AuditSink) → audit.EventAskUserAutoDefault
-//     per 30-minute auto-resolution.
 //   - handleAskUserAnswer → the inbound ask_user_answer frame handler:
 //     Registry.Submit (server-validated, first-valid-wins) or CancelByUser.
 //   - session_state's pending_asks snapshot is built in ws_tool_approval.go's
@@ -31,18 +28,13 @@ import (
 	"slices"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
-	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 )
 
 // toAskUserCard converts a pkg/askuser.PendingSet into the wire card shape.
-// defaultSafeDelay is the registry's effective timer (30 minutes in
-// production) — default_safe_at is materialized here so the SPA countdown
-// needs no knowledge of the server constant.
-func toAskUserCard(set *askuser.PendingSet, defaultSafeDelay time.Duration) generated.AskUserQuestionCard {
+func toAskUserCard(set *askuser.PendingSet) generated.AskUserQuestionCard {
 	card := generated.AskUserQuestionCard{
 		CardId:    set.CardID,
 		SessionId: set.TranscriptSessionID,
@@ -55,13 +47,9 @@ func toAskUserCard(set *askuser.PendingSet, defaultSafeDelay time.Duration) gene
 	// pointers into the generated slices (the setGoalStatusCriteria pattern)
 	// — no locally-declared struct types, so the generated shapes stay the
 	// only wire types in play (check-no-handwritten-wire-types).
-	hasDefaultSafe := false
 	card.Questions = slices.Grow(card.Questions, len(set.Questions))[:len(set.Questions)]
 	for i := range set.Questions {
 		q := &set.Questions[i]
-		if q.DefaultSafe {
-			hasDefaultSafe = true
-		}
 		dst := &card.Questions[i]
 		dst.Header = q.Header
 		dst.Question = q.Question
@@ -79,10 +67,6 @@ func toAskUserCard(set *askuser.PendingSet, defaultSafeDelay time.Duration) gene
 			v := true
 			dst.MultiSelect = &v
 		}
-		if q.DefaultSafe {
-			v := true
-			dst.DefaultSafe = &v
-		}
 		if q.Recommended != "" {
 			rec := q.Recommended
 			dst.Recommended = &rec
@@ -93,19 +77,11 @@ func toAskUserCard(set *askuser.PendingSet, defaultSafeDelay time.Duration) gene
 		}
 	}
 
-	if hasDefaultSafe && set.Status == askuser.StatusPending {
-		at := set.CreatedAt.Add(defaultSafeDelay).UTC().Format(time.RFC3339)
-		card.DefaultSafeAt = &at
-	}
-	for header := range set.AutoResolved {
-		card.AutoResolved = append(card.AutoResolved, header)
-	}
 	if len(set.Answers) > 0 {
 		card.Answers = slices.Grow(card.Answers, len(set.Answers))[:len(set.Answers)]
 		for i := range set.Answers {
 			a := &set.Answers[i]
 			wa := &card.Answers[i]
-			wa.AutoDefault = a.AutoDefault
 			wa.Header = a.Header
 			wa.Question = a.QuestionText
 			if a.FreeText != nil {
@@ -154,23 +130,15 @@ func (h *WSHandler) broadcastAskUserCard(card generated.AskUserQuestionCard) {
 }
 
 // askUserCardSink adapts the registry's CardSink seam onto the WS broadcast.
-// delayFn is bound to the live registry's EffectiveDefaultSafeDelay after
-// construction (the registry needs the sink at construction time — the two
-// are wired in setupAndStartServices).
 type askUserCardSink struct {
-	h       *WSHandler
-	delayFn func() time.Duration
+	h *WSHandler
 }
 
 func (s *askUserCardSink) EmitCard(set *askuser.PendingSet) {
 	if s.h == nil || set == nil {
 		return
 	}
-	delay := askuser.DefaultSafeDelay
-	if s.delayFn != nil {
-		delay = s.delayFn()
-	}
-	s.h.broadcastAskUserCard(toAskUserCard(set, delay))
+	s.h.broadcastAskUserCard(toAskUserCard(set))
 }
 
 // askUserResumeDispatcher publishes the §0.2 resume message as a
@@ -178,25 +146,6 @@ func (s *askUserCardSink) EmitCard(set *askuser.PendingSet) {
 // PublishInbound path the WS chat handler drives ordinary turns through.
 type askUserResumeDispatcher struct {
 	msgBus *bus.MessageBus
-}
-
-// resumeIsUserInitiated is the origin heuristic for the resume turn: a
-// resume driven by a human submission/cancel is user-initiated; the server's
-// all-default auto-submit (US-3 S3 — nobody was there) is not. Every
-// auto-submitted answer carries AutoDefault, so "any non-auto answer" ⇔ a
-// human acted; a cancelled set (no answers) reaches the dispatcher only via
-// the card's Cancel button (session Stop skips the resume entirely), which
-// is likewise a human action.
-func resumeIsUserInitiated(set *askuser.PendingSet) bool {
-	if set.Status == askuser.StatusCancelled {
-		return true
-	}
-	for i := range set.Answers {
-		if !set.Answers[i].AutoDefault {
-			return true
-		}
-	}
-	return false
 }
 
 func (d *askUserResumeDispatcher) DispatchResume(set *askuser.PendingSet, resumeText string) error {
@@ -209,13 +158,12 @@ func (d *askUserResumeDispatcher) DispatchResume(set *askuser.PendingSet, resume
 			"reason", "no_message_bus")
 		return err
 	}
-	userInitiated := resumeIsUserInitiated(set)
 	msg := bus.InboundMessage{
 		Channel:       set.Channel,
 		ChatID:        set.ChatID,
 		SessionID:     set.TranscriptSessionID,
 		Content:       resumeText,
-		UserInitiated: userInitiated,
+		UserInitiated: true,
 		Sender: bus.SenderInfo{
 			CanonicalID: "webchat_user",
 		},
@@ -285,25 +233,6 @@ func askUserResumeFailureOutcome(err error) (outcome, reason string) {
 	}
 }
 
-// askUserAuditSink records one audit entry per default-safe auto-resolution
-// (spec §4 / US-3 S2).
-type askUserAuditSink struct {
-	al *agent.AgentLoop
-}
-
-func (s *askUserAuditSink) RecordAutoDefault(cardID, sessionID, header, label string) {
-	if s.al == nil {
-		return
-	}
-	audit.Emit(context.Background(), s.al.AuditLogger(), audit.EventAskUserAutoDefault,
-		audit.SeverityInfo, map[string]any{
-			"card_id":    cardID,
-			"session_id": sessionID,
-			"header":     header,
-			"label":      label,
-		})
-}
-
 // handleAskUserAnswer bridges an inbound ask_user_answer frame to the
 // registry: cancel:true → CancelByUser; otherwise Submit (server-validated,
 // first-valid-wins). A validation rejection is surfaced back to the submitting
@@ -334,9 +263,6 @@ func (h *WSHandler) handleAskUserAnswer(wc *wsConn, f generated.AskUserAnswerFra
 			}
 			if len(a.Selected) > 0 {
 				sa.Selected = append([]string(nil), a.Selected...)
-			}
-			if a.AutoDefault != nil {
-				sa.AutoDefault = *a.AutoDefault
 			}
 			answers = append(answers, sa)
 		}

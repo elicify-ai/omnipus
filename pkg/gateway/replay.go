@@ -1159,13 +1159,11 @@ func (sr *streamReplayState) buildSubagentEnd(tc session.ToolCall) {
 // buildAskUserQuestionFrame wraps a terminal AskUserQuestion record in the
 // same ask_user_question frame shape the live terminal emission broadcast
 // (askUserCardSink → broadcastAskUserCard), so replay parity with a live
-// collapse is exact. The delay argument to toAskUserCard is irrelevant for a
-// terminal card — default_safe_at is only materialized while Status is
-// pending — so the production constant is passed unconditionally.
+// collapse is exact.
 func buildAskUserQuestionFrame(set *askuser.PendingSet) generated.AskUserQuestionFrame {
 	return generated.AskUserQuestionFrame{
 		Type: string(generated.WsFrameTypeAskUserQuestion),
-		Card: toAskUserCard(set, askuser.DefaultSafeDelay),
+		Card: toAskUserCard(set),
 	}
 }
 

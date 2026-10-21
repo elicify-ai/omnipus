@@ -223,23 +223,11 @@ func (d *e2eResumeDispatcher) DispatchResume(set *askuser.PendingSet, resumeText
 	d.calls++
 	d.mu.Unlock()
 
-	// resumeIsUserInitiated's exact heuristic (pkg/gateway/ws_ask_user.go):
-	// a cancelled set, or any non-auto-default answer, is a human action.
-	// FR-007 forbids the forcing predicate from consulting this at all — it
-	// is captured here purely for realism/observability, not correctness.
-	userInitiated := set.Status == askuser.StatusCancelled
-	if !userInitiated {
-		for i := range set.Answers {
-			if !set.Answers[i].AutoDefault {
-				userInitiated = true
-				break
-			}
-		}
-	}
+	// Only an explicit human answer or card Cancel resumes a question.
 	opts := processOptions{
 		TranscriptStore: d.store, TranscriptSessionID: d.sid,
 		Channel: d.channel, ChatID: d.chatID, SessionKey: d.sessionKey,
-		UserMessage: resumeText, UserInitiated: userInitiated,
+		UserMessage: resumeText, UserInitiated: true,
 		DefaultResponse: "done",
 	}
 	_, err := d.runSerialized(opts)
@@ -408,91 +396,6 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 		}
 		if last.Definition != "Build a single-player tetris clone" {
 			t.Fatalf("frame definition = %q, want the registered definition", last.Definition)
-		}
-	})
-
-	t.Run("auto_submit_resume_behaves_identically", func(t *testing.T) {
-		resetGoalTriggerStateForTest()
-		provider := &e2eScriptedProvider{
-			scripted: []*providers.LLMResponse{
-				e2eToolCallResponse("call_ask", tools.AskUserQuestionToolName,
-					`{"questions":[{"header":"Scope","question":"Single or multiplayer?","default_safe":true,"recommended":"Single",`+
-						`"options":[{"label":"Single","description":"one player"},{"label":"Multi","description":"two players"}]}]}`),
-				e2eToolCallResponse("call_reg", tools.SetGoalToolName,
-					`{"definition":"Build a single-player tetris clone (default assumptions)","criteria":[`+
-						`{"text":"the game renders and accepts keyboard input","judgment":"boolean"}],`+
-						`"assessment":{"clarity":"ambiguous","assumptions":["nobody answered in time — defaulting to single-player"]}}`),
-				e2eTextResponse("starting work now"),
-			},
-			fallback: "unexpected extra call",
-		}
-		al, _ := newGoalLoopTestLoop(t, provider, nil)
-		agentInst, ok := al.GetRegistry().GetAgent("native-agent")
-		if !ok {
-			t.Fatal("native-agent not registered")
-		}
-		allowGoalToolsPolicy(agentInst)
-		agentInst.Sessions = newSlowFirstCommitSessions(t, agentInst.Sessions, 200*time.Millisecond)
-		store, sid := newGoalTestSession(t, al, agentInst.ID)
-
-		dispatcher := &e2eResumeDispatcher{
-			al: al, agentInst: agentInst, store: store, sid: sid,
-			channel: "webchat", chatID: "c1", sessionKey: "sk-clarify-auto",
-		}
-		reg := askuser.NewRegistry(store, dispatcher, askuser.Options{DefaultSafeDelay: 20 * time.Millisecond})
-		al.SetAskUserRegistry(reg)
-
-		opts := processOptions{
-			TranscriptStore: store, TranscriptSessionID: sid,
-			Channel: "webchat", ChatID: "c1", SessionKey: "sk-clarify-auto", UserInitiated: true,
-			DefaultResponse: "done",
-		}
-		matched, handled, reply := al.applyGoalCommandPrompt(context.Background(),
-			bus.InboundMessage{Content: "/goal organize my week", UserInitiated: true}, agentInst, &opts)
-		if !matched || handled || reply != "" {
-			t.Fatalf("activation: matched=%v handled=%v reply=%q, want matched=true handled=false reply=\"\"", matched, handled, reply)
-		}
-
-		result, err := dispatcher.runSerialized(opts)
-		if err != nil {
-			t.Fatalf("runTurn: %v", err)
-		}
-		if result.status != TurnEndStatusParked {
-			t.Fatalf("the AskUserQuestion door must park the turn, got status=%v", result.status)
-		}
-
-		// Block until the default-safe timer's server auto-submit fires AND
-		// its (synchronous, inside the callback) resume dispatch fully
-		// completes — reg.Quiesce blocks on exactly that WaitGroup.
-		reg.Quiesce()
-
-		if got := dispatcher.callCount(); got != 1 {
-			t.Fatalf("DispatchResume calls = %d, want exactly 1 (the server auto-submit)", got)
-		}
-		if resumeErr := dispatcher.errResult(); resumeErr != nil {
-			t.Fatalf("the auto-submit resume turn itself failed: %v", resumeErr)
-		}
-
-		afterMeta := mustActiveGoalRecord(t, sid)
-		if afterMeta.QuestionRoundsUsed != 1 {
-			t.Fatalf("goal record QuestionRoundsUsed = %d, want 1 — the auto-submit resume must consume the budget exactly like a human answer (S-12)", afterMeta.QuestionRoundsUsed)
-		}
-		// wave R7C (Group 1): the dual write to session meta is retired
-		// (DD-6) — WriteRecord lands on pkg/goal.Store only.
-		rec := mustActiveGoalRecord(t, sid)
-		if len(rec.Criteria) == 0 {
-			t.Fatal("the auto-submit resume's set_goal call must have registered the record")
-		}
-		if rec.Definition != "Build a single-player tetris clone (default assumptions)" {
-			t.Fatalf("the registered record must reflect the agent's post-resume definition, got %+v", rec)
-		}
-
-		second, ok := provider.callAt(1)
-		if !ok {
-			t.Fatal("expected a second LLM call on the auto-submit resume turn")
-		}
-		if len(second.tools) != 1 || second.tools[0].Function.Name != tools.SetGoalToolName {
-			t.Fatalf("resume request must narrow to {set_goal} alone (budget spent), got %v", toolNamesOf(second.tools))
 		}
 	})
 

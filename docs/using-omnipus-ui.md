@@ -108,6 +108,8 @@ When an agent asks you questions, a card docks above the message box with one ta
 - Each question except the last shows **Next**; the last is confirmed with **Answer**, which sends every answer at once and is available only when every question is answered. **Cancel** sends nothing.
 - No option is chosen for you in advance — the recommended one is only listed first and marked.
 
+Question cards never answer or submit on your behalf. Leaving a card open does not choose the recommended option, and choosing options without pressing **Answer** does not send them after a delay. An unanswered question stays open until you answer it, choose **Cancel**, or stop the conversation with the existing Stop controls.
+
 ### Who is replying
 
 Replies in the web app's chat show the agent's name above the text with a small portrait of that agent beside it — the same mark the sidebar and the @-mention menu use — including streaming replies, saved history, and another agent's replies in the same chat. The name and portrait are the whole label: no status word is printed next to them. When the reply records its author, the name follows that author rather than the current agent selection. Older replies without a recorded author fall back to the chat's current agent. If an agent's details cannot be found, its stored ID can appear instead of a name, and the portrait falls back to the general Omnipus mark.

@@ -51,6 +51,7 @@ func TestQuestionWaitsForUserBeyondFormerDeadline(t *testing.T) {
 func TestQuestionRestartWaitsForUserBeyondFormerDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestStore(t)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
 		sid := newOwnerSession(t, store)
 		set := testSet(sid, noAutoAnswerQuestion(t))
 		set.Status = StatusPending

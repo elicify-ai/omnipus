@@ -55,8 +55,7 @@ func validAskArgs() map[string]any {
 					map[string]any{"label": "Backend only"},
 					map[string]any{"label": "Full stack", "description": "SPA + backend"},
 				},
-				"recommended":  "Backend only",
-				"default_safe": true,
+				"recommended": "Backend only",
 			},
 			map[string]any{
 				"header":       "Deploy",
@@ -118,7 +117,7 @@ func TestAskUserQuestion_ParksWithPendingStub(t *testing.T) {
 		set.Owner != "alice" || set.CardID != stub.CardID {
 		t.Fatalf("set fields wrong: %+v", set)
 	}
-	if len(set.Questions) != 2 || set.Questions[0].Recommended != "Backend only" || !set.Questions[0].DefaultSafe || !set.Questions[1].MultiSelect {
+	if len(set.Questions) != 2 || set.Questions[0].Recommended != "Backend only" || !set.Questions[1].MultiSelect {
 		t.Fatalf("questions not carried faithfully: %+v", set.Questions)
 	}
 }
@@ -276,8 +275,8 @@ func TestAskUserQuestion_CatalogMetadata(t *testing.T) {
 }
 
 // TestAskUserQuestion_RecommendedIsQuestionScoped guards the doc/schema
-// consistency the operator reported (2026-09-06): `recommended`/`default_safe`
-// are QUESTION-level properties, never option-level, and the Description must
+// consistency the operator reported (2026-09-06): `recommended` is a
+// QUESTION-level property, never option-level, and the Description must
 // say so rather than telling the model to "mark an option recommended" (which
 // led it to put the property inside an option, where additionalProperties
 // rejects it).
@@ -293,10 +292,10 @@ func TestAskUserQuestion_RecommendedIsQuestionScoped(t *testing.T) {
 		t.Errorf("Description must scope `recommended` to the question level; got: %q", desc)
 	}
 
-	// Schema: question properties carry recommended/default_safe; option
+	// Schema: question properties carry recommended; option
 	// properties carry only label/description.
 	qProps := askQuestionItemProps(t, tool.Parameters())
-	for _, k := range []string{"recommended", "default_safe"} {
+	for _, k := range []string{"recommended"} {
 		if _, ok := qProps[k]; !ok {
 			t.Errorf("question schema missing %q property", k)
 		}

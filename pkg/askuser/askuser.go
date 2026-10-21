@@ -8,8 +8,8 @@
 // the durable pending registry (§0.4 — UnifiedMeta session-meta persistence
 // plus an approvalRegistryV2-shaped in-process registry with a global cap),
 // the server-side submission path (§3 validation, first-valid-wins, resume
-// dispatch per §0.2), and the 30-minute default-safe timers (§US-3),
-// re-armed on boot from persisted timestamps.
+// dispatch per §0.2). Unanswered questions remain pending until a human
+// answers, cancels the card, or stops the session.
 //
 // The WS card frames and the SPA card are a later, serialized stream — this
 // package deliberately exposes narrow interfaces (CardSink, ResumeDispatcher,
@@ -36,7 +36,6 @@ const (
 	MaxOptionDesc    = 200
 	MaxContextChars  = 4000
 	MaxFreeTextChars = 2000
-	DefaultSafeDelay = 30 * time.Minute
 	DefaultGlobalCap = 64 // pending sets across ALL sessions (spec §4 DoS line item)
 )
 
@@ -55,9 +54,6 @@ type Question struct {
 	// Recommended names an option BY LABEL (spec §2 — dup labels within a
 	// question are therefore a validation error).
 	Recommended string `json:"recommended,omitempty"`
-	// DefaultSafe requires Recommended (validated): at CreatedAt+30:00 an
-	// unanswered such question becomes resolved-pending-submit (US-3 S2).
-	DefaultSafe bool `json:"default_safe,omitempty"`
 	// Context is raw markdown, display-only, SPA-sanitized at render (US-4).
 	Context string `json:"context,omitempty"`
 }
@@ -71,7 +67,6 @@ type Answer struct {
 	QuestionText string   `json:"question"`
 	Selected     []string `json:"selected,omitempty"`
 	FreeText     *string  `json:"free_text,omitempty"`
-	AutoDefault  bool     `json:"auto_default"`
 }
 
 // SubmittedAnswer is one question's answer as received by the server-side
@@ -80,10 +75,9 @@ type Answer struct {
 // non-nil pointer means "free text answer", even an empty-string one is
 // distinguishable — though empty free text is rejected by validation.
 type SubmittedAnswer struct {
-	Header      string   `json:"header"`
-	Selected    []string `json:"selected,omitempty"`
-	FreeText    *string  `json:"free_text,omitempty"`
-	AutoDefault bool     `json:"auto_default,omitempty"`
+	Header   string   `json:"header"`
+	Selected []string `json:"selected,omitempty"`
+	FreeText *string  `json:"free_text,omitempty"`
 }
 
 // SetStatus is the lifecycle status of a pending set.
@@ -115,11 +109,6 @@ type PendingSet struct {
 	CreatedAt           time.Time  `json:"created_at"`
 	Questions           []Question `json:"questions"`
 	Status              SetStatus  `json:"status"`
-	// AutoResolved records per-header server-side default-safe resolutions
-	// (US-3's "resolved-pending-submit" state), keyed by question header,
-	// valued by resolution time. Persisted so a restart re-derives which
-	// timers already fired.
-	AutoResolved map[string]time.Time `json:"auto_resolved,omitempty"`
 	// Answers is populated when Status == answered; the collapsed record
 	// (§0.6) renders from THIS record, not the tool result pair.
 	Answers []Answer `json:"answers,omitempty"`
@@ -137,12 +126,6 @@ func (s *PendingSet) Clone() *PendingSet {
 		opts := make([]Option, len(s.Questions[i].Options))
 		copy(opts, s.Questions[i].Options)
 		c.Questions[i].Options = opts
-	}
-	if s.AutoResolved != nil {
-		c.AutoResolved = make(map[string]time.Time, len(s.AutoResolved))
-		for k, v := range s.AutoResolved {
-			c.AutoResolved[k] = v
-		}
 	}
 	c.Answers = cloneAnswers(s.Answers)
 	return &c
@@ -231,9 +214,6 @@ func ValidateQuestions(qs []Question) error {
 		if q.Recommended != "" && !seenLabels[q.Recommended] {
 			return fmt.Errorf("questions[%d]: recommended %q names no option", i, q.Recommended)
 		}
-		if q.DefaultSafe && q.Recommended == "" {
-			return fmt.Errorf("questions[%d]: default_safe requires recommended", i)
-		}
 	}
 	return nil
 }
@@ -246,17 +226,4 @@ func questionByHeader(qs []Question, header string) *Question {
 		}
 	}
 	return nil
-}
-
-// allDefaultSafe reports whether EVERY question in the set is default-safe —
-// the precondition for the server ever auto-submitting on its own (US-3 S3:
-// the server submits only when every question is default-safe-resolved and
-// no client submission landed).
-func allDefaultSafe(qs []Question) bool {
-	for i := range qs {
-		if !qs[i].DefaultSafe {
-			return false
-		}
-	}
-	return len(qs) > 0
 }

@@ -1,8 +1,7 @@
 // Omnipus — AskUserQuestion registry tests (spec Tests 2,4,5,6,7,13 backend
 // halves): park-state persistence over the REAL session store (no live
-// gateway), submission validation + first-valid-wins, default-safe timers +
-// server all-default auto-submit + audit, cancel semantics, and restart
-// re-arm.
+// gateway), submission validation + first-valid-wins, cancel semantics, and
+// restart restoration.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -16,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
@@ -76,25 +74,6 @@ func (f *fakeSink) count() int {
 	return len(f.cards)
 }
 
-type auditRec struct{ CardID, SessionID, Header, Label string }
-
-type fakeAudit struct {
-	mu      sync.Mutex
-	entries []auditRec
-}
-
-func (f *fakeAudit) RecordAutoDefault(cardID, sessionID, header, label string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.entries = append(f.entries, auditRec{cardID, sessionID, header, label})
-}
-
-func (f *fakeAudit) count() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.entries)
-}
-
 // --- helpers ---
 
 func newTestStore(t *testing.T) *session.UnifiedStore {
@@ -132,18 +111,6 @@ func testSet(sessionID string, qs ...Question) *PendingSet {
 		ChatID:              "chat-1",
 		Questions:           qs,
 	}
-}
-
-func waitFor(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %s", what)
 }
 
 func strp(s string) *string { return &s }
@@ -184,7 +151,6 @@ func TestLifecycleLogging_SubmitDeliveredCountsOnly(t *testing.T) {
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{})
-	t.Cleanup(reg.Quiesce)
 
 	const secretSelected = "CONFIDENTIAL-SELECTED-DO-NOT-LOG"
 	set := testSet(sid,
@@ -202,7 +168,7 @@ func TestLifecycleLogging_SubmitDeliveredCountsOnly(t *testing.T) {
 
 	secretAnswer := "CONFIDENTIAL-ANSWER-DO-NOT-LOG"
 	require.NoError(t, reg.Submit(set.CardID, sid, "", []SubmittedAnswer{
-		{Header: "Scope", Selected: []string{secretSelected}, AutoDefault: true},
+		{Header: "Scope", Selected: []string{secretSelected}},
 		{Header: "Notes", FreeText: &secretAnswer},
 	}))
 
@@ -215,7 +181,6 @@ func TestLifecycleLogging_SubmitDeliveredCountsOnly(t *testing.T) {
 	assert.Equal(t, float64(2), submitted["answer_count"])
 	assert.Equal(t, float64(1), submitted["selected_option_count"])
 	assert.Equal(t, float64(1), submitted["free_text_count"])
-	assert.Equal(t, float64(1), submitted["auto_default_count"])
 
 	if strings.Contains(logBuf.String(), secretAnswer) || strings.Contains(logBuf.String(), secretSelected) {
 		t.Fatal("AskUserQuestion lifecycle logs exposed answer content")
@@ -230,7 +195,7 @@ func TestDispatchResume_LogsStrandedWithoutDispatcher(t *testing.T) {
 	stranded.Status = StatusAnswered
 	stranded.Answers = []Answer{{Header: "Scope", FreeText: strp("STRANDED-ANSWER-DO-NOT-LOG")}}
 	strandedReg := NewRegistry(nil, nil, Options{})
-	require.Error(t, strandedReg.dispatchResume(stranded, false))
+	require.Error(t, strandedReg.dispatchResume(stranded))
 	strandedLog := findAskUserRegistryLog(t, logBuf, "askuser: resume dispatch completed", stranded.CardID)
 	assert.Equal(t, "WARN", strandedLog["level"])
 	assert.Equal(t, "stranded", strandedLog["outcome"])
@@ -241,46 +206,11 @@ func TestDispatchResume_LogsStrandedWithoutDispatcher(t *testing.T) {
 	}
 }
 
-func TestDefaultSafeAutoSubmit_LogsFiring(t *testing.T) {
-	logBuf := captureAskUserSlog(t)
-	store := newTestStore(t)
-	sid := newOwnerSession(t, store)
-	resume := &fakeResume{}
-	reg := NewRegistry(store, resume, Options{DefaultSafeDelay: 10 * time.Millisecond})
-	t.Cleanup(reg.Quiesce)
-
-	const secretRecommended = "AUTO-DEFAULT-ANSWER-DO-NOT-LOG"
-	set := testSet(sid, Question{
-		Header: "Scope", Question: "Which scope?", Recommended: secretRecommended, DefaultSafe: true,
-		Options: []Option{{Label: secretRecommended}, {Label: "Full stack"}},
-	})
-	set.CardID = "ask_auto_submit_log"
-	require.NoError(t, reg.CreatePending(set))
-	waitFor(t, "server auto-submit", func() bool { return resume.count() == 1 })
-	reg.Quiesce()
-
-	record := findAskUserRegistryLog(t, logBuf, "askuser: default-safe auto-submit fired", set.CardID)
-	assert.Equal(t, "INFO", record["level"])
-	assert.Equal(t, float64(1), record["question_count"])
-	assert.Equal(t, float64(1), record["answer_count"])
-	if strings.Contains(logBuf.String(), secretRecommended) {
-		t.Fatal("default-safe auto-submit log exposed answer content")
-	}
-	entries, err := store.ReadTranscript(sid)
-	require.NoError(t, err)
-	for i := range entries {
-		if entries[i].Role == "user" {
-			t.Fatalf("server auto-submit must not impersonate a user transcript record: %+v", entries[i])
-		}
-	}
-}
-
 func TestSubmit_PersistsHumanFreeTextAsCorrelatedUserTranscript(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{})
-	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid)
 	set.CardID = "ask_human_free_text"
@@ -312,7 +242,6 @@ func TestSubmit_TranscriptPersistenceUnavailableDoesNotResume(t *testing.T) {
 	metaOnly := &countingMeta{inner: store}
 	resume := &fakeResume{}
 	reg := NewRegistry(metaOnly, resume, Options{})
-	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid)
 	require.NoError(t, reg.CreatePending(set))
@@ -325,32 +254,6 @@ func TestSubmit_TranscriptPersistenceUnavailableDoesNotResume(t *testing.T) {
 		"the agent must not act on a human answer that could not be written to the transcript")
 }
 
-func TestDefaultSafeAutoSubmit_ResumeFailureLogRedactsDispatcherError(t *testing.T) {
-	logBuf := captureAskUserSlog(t)
-	store := newTestStore(t)
-	sid := newOwnerSession(t, store)
-	const secretRecommended = "DISPATCHER-ECHOED-ANSWER-DO-NOT-LOG"
-	resume := &fakeResume{err: errors.New("dispatcher echoed " + secretRecommended)}
-	reg := NewRegistry(store, resume, Options{DefaultSafeDelay: 10 * time.Millisecond})
-	t.Cleanup(reg.Quiesce)
-
-	set := testSet(sid, Question{
-		Header: "Scope", Question: "Which scope?", Recommended: secretRecommended, DefaultSafe: true,
-		Options: []Option{{Label: secretRecommended}, {Label: "Full stack"}},
-	})
-	set.CardID = "ask_auto_submit_failure_log"
-	require.NoError(t, reg.CreatePending(set))
-	waitFor(t, "failed server auto-submit resume", func() bool { return resume.count() == 1 })
-	reg.Quiesce()
-
-	record := findAskUserRegistryLog(t, logBuf, "askuser: server auto-submit resume dispatch failed", set.CardID)
-	assert.Equal(t, "WARN", record["level"])
-	assert.Equal(t, "resume_dispatch_failed", record["reason"])
-	if strings.Contains(logBuf.String(), secretRecommended) {
-		t.Fatal("auto-submit resume-failure log exposed answer content through dispatcher error")
-	}
-}
-
 // --- Test 3/5 backend halves: create, persistence, one-per-session, cap,
 // delegated-child rejection ---
 
@@ -360,7 +263,6 @@ func TestCreatePending_PersistsAndEmits(t *testing.T) {
 	resume := &fakeResume{}
 	sink := &fakeSink{}
 	reg := NewRegistry(store, resume, Options{Sink: sink})
-	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid)
 	if err := reg.CreatePending(set); err != nil {
@@ -393,7 +295,6 @@ func TestCreatePending_OnePerRoutingSession(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
-	t.Cleanup(reg.Quiesce)
 
 	if err := reg.CreatePending(testSet(sid)); err != nil {
 		t.Fatalf("first CreatePending: %v", err)
@@ -409,7 +310,6 @@ func TestCreatePending_GlobalCapAcrossSessions(t *testing.T) {
 	sid1 := newOwnerSession(t, store)
 	sid2 := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{MaxPending: 1})
-	t.Cleanup(reg.Quiesce)
 
 	if err := reg.CreatePending(testSet(sid1)); err != nil {
 		t.Fatalf("first CreatePending: %v", err)
@@ -432,7 +332,6 @@ func TestCreatePending_DelegatedChildRejected(t *testing.T) {
 		t.Fatalf("SetMeta(ParentSessionID): %v", err)
 	}
 	reg := NewRegistry(store, &fakeResume{}, Options{})
-	t.Cleanup(reg.Quiesce)
 	// fix(askuser): relay child questions upward (8932d09ff) made the
 	// meta.ParentSessionID branch relay the question via
 	// steer.UpwardDeliverer BEFORE returning ErrDelegatedChild — an unwired
@@ -453,7 +352,6 @@ func TestCreatePending_InvalidQuestionsRejected(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
-	t.Cleanup(reg.Quiesce)
 	set := testSet(sid)
 	set.Questions[0].Options = set.Questions[0].Options[:1]
 	if err := reg.CreatePending(set); err == nil {
@@ -468,7 +366,6 @@ func TestSubmit_ValidatedAndResumes(t *testing.T) {
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{})
-	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid,
 		Question{Header: "Scope", Question: "Which scope?", Options: []Option{{Label: "Backend"}, {Label: "Full stack"}}},
@@ -511,9 +408,6 @@ func TestSubmit_ValidatedAndResumes(t *testing.T) {
 	if payload.Answers[2].FreeText == nil || *payload.Answers[2].FreeText != "call it sparrow" {
 		t.Fatalf("free text lost: %+v", payload.Answers[2])
 	}
-	if payload.Answers[0].AutoDefault || payload.Answers[1].AutoDefault {
-		t.Fatal("manual answers must not be marked auto_default")
-	}
 	// Terminal record persisted (§0.6 — collapsed card renders from it).
 	meta, _ := store.GetMeta(sid)
 	var terminal PendingSet
@@ -535,7 +429,6 @@ func TestSubmit_ValidationRejectsWithoutConsuming(t *testing.T) {
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{})
-	t.Cleanup(reg.Quiesce)
 
 	set := testSet(sid,
 		Question{Header: "Scope", Question: "Which scope?", Options: []Option{{Label: "Backend"}, {Label: "Full stack"}}},
@@ -583,7 +476,6 @@ func TestSubmit_OwnershipAndSessionChecks(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
-	t.Cleanup(reg.Quiesce)
 	set := testSet(sid)
 	set.Owner = "alice"
 	if err := reg.CreatePending(set); err != nil {
@@ -610,7 +502,6 @@ func TestCancelByUser_ResumesCancelledWithoutAnswers(t *testing.T) {
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{})
-	t.Cleanup(reg.Quiesce)
 	set := testSet(sid)
 	if err := reg.CreatePending(set); err != nil {
 		t.Fatalf("CreatePending: %v", err)
@@ -635,7 +526,6 @@ func TestCancelOnSessionStop_NoResumeDispatched(t *testing.T) {
 	sid := newOwnerSession(t, store)
 	resume := &fakeResume{}
 	reg := NewRegistry(store, resume, Options{})
-	t.Cleanup(reg.Quiesce)
 	set := testSet(sid)
 	if err := reg.CreatePending(set); err != nil {
 		t.Fatalf("CreatePending: %v", err)
@@ -669,7 +559,6 @@ func TestCancelOnSessionStop_MatchesRoutingKey(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
-	t.Cleanup(reg.Quiesce)
 	set := testSet(sid)
 	if err := reg.CreatePending(set); err != nil {
 		t.Fatalf("CreatePending: %v", err)
@@ -681,112 +570,6 @@ func TestCancelOnSessionStop_MatchesRoutingKey(t *testing.T) {
 
 // --- Test 4: timers, resolved-pending-submit, server all-default submit,
 // audit, closed-tab outcomes ---
-
-func TestTimer_AllDefaultSafe_ServerAutoSubmitsWithAudit(t *testing.T) {
-	store := newTestStore(t)
-	sid := newOwnerSession(t, store)
-	resume := &fakeResume{}
-	audit := &fakeAudit{}
-	reg := NewRegistry(store, resume, Options{DefaultSafeDelay: 20 * time.Millisecond, Audit: audit})
-	t.Cleanup(reg.Quiesce)
-
-	set := testSet(sid,
-		Question{Header: "Scope", Question: "Which scope?", Recommended: "Backend", DefaultSafe: true,
-			Options: []Option{{Label: "Backend"}, {Label: "Full stack"}}},
-		Question{Header: "Deploy", Question: "Deploy where?", MultiSelect: true, Recommended: "Staging", DefaultSafe: true,
-			Options: []Option{{Label: "Staging"}, {Label: "Prod"}}},
-	)
-	if err := reg.CreatePending(set); err != nil {
-		t.Fatalf("CreatePending: %v", err)
-	}
-	waitFor(t, "server auto-submit", func() bool { return resume.count() == 1 })
-	if audit.count() != 2 {
-		t.Fatalf("want 2 audit entries (one per auto-default), got %d", audit.count())
-	}
-	rec := resume.last(t)
-	var payload struct {
-		Status  string   `json:"status"`
-		Answers []Answer `json:"answers"`
-	}
-	idx := strings.Index(rec.Text, "{")
-	if err := json.Unmarshal([]byte(rec.Text[idx:]), &payload); err != nil {
-		t.Fatalf("payload parse: %v", err)
-	}
-	if payload.Status != "answered" || len(payload.Answers) != 2 {
-		t.Fatalf("unexpected payload: %+v", payload)
-	}
-	for _, a := range payload.Answers {
-		if !a.AutoDefault {
-			t.Fatalf("server auto-submit answers must be auto_default: %+v", a)
-		}
-	}
-	// multi_select auto-default resolves to a ONE-ELEMENT list (spec §2).
-	if len(payload.Answers[1].Selected) != 1 || payload.Answers[1].Selected[0] != "Staging" {
-		t.Fatalf("multi_select auto-default must be a one-element list: %+v", payload.Answers[1])
-	}
-	if _, ok := reg.PendingForSession(sid); ok {
-		t.Fatal("server auto-submit must consume the set")
-	}
-}
-
-func TestTimer_MixedSet_ResolvesPendingSubmitButNeverServerSubmits(t *testing.T) {
-	store := newTestStore(t)
-	sid := newOwnerSession(t, store)
-	resume := &fakeResume{}
-	audit := &fakeAudit{}
-	reg := NewRegistry(store, resume, Options{DefaultSafeDelay: 20 * time.Millisecond, Audit: audit})
-	t.Cleanup(reg.Quiesce)
-
-	set := testSet(sid,
-		Question{Header: "Scope", Question: "Which scope?", Recommended: "Backend", DefaultSafe: true,
-			Options: []Option{{Label: "Backend"}, {Label: "Full stack"}}},
-		Question{Header: "Name", Question: "Name it?",
-			Options: []Option{{Label: "A"}, {Label: "B"}}},
-	)
-	if err := reg.CreatePending(set); err != nil {
-		t.Fatalf("CreatePending: %v", err)
-	}
-	waitFor(t, "auto-default audit entry", func() bool { return audit.count() == 1 })
-	// Quiesce waits for the fired timer callback — including its persist —
-	// to fully finish. Without it this test raced the callback's SetMeta
-	// (a fixed sleep lost to a slow fsync) and flaked on the persistence
-	// assertion below.
-	reg.Quiesce()
-	// The non-default-safe question keeps the card pending indefinitely
-	// (US-3 S4 — the closed-tab outcome: it genuinely needs the human).
-	time.Sleep(60 * time.Millisecond)
-	if resume.count() != 0 {
-		t.Fatal("server must NEVER submit while a non-default-safe question is unanswered")
-	}
-	pending, ok := reg.PendingForSession(sid)
-	if !ok {
-		t.Fatal("set must remain pending")
-	}
-	if _, resolved := pending.AutoResolved["Scope"]; !resolved {
-		t.Fatal("default-safe question must be marked resolved-pending-submit")
-	}
-	// The resolved-pending-submit mark is persisted (restart-safe).
-	meta, _ := store.GetMeta(sid)
-	var persisted PendingSet
-	if err := json.Unmarshal([]byte(meta.PendingAskJSON), &persisted); err != nil {
-		t.Fatalf("persisted parse: %v", err)
-	}
-	if _, resolved := persisted.AutoResolved["Scope"]; !resolved {
-		t.Fatal("auto-resolution must be persisted")
-	}
-	// A late client submission (the grace-submit shape: manual + auto-marked
-	// answers) still wins and resumes.
-	err := reg.Submit(set.CardID, sid, "", []SubmittedAnswer{
-		{Header: "Scope", Selected: []string{"Backend"}, AutoDefault: true},
-		{Header: "Name", Selected: []string{"A"}},
-	})
-	if err != nil {
-		t.Fatalf("client submit after auto-resolution: %v", err)
-	}
-	if resume.count() != 1 {
-		t.Fatalf("want exactly 1 resume, got %d", resume.count())
-	}
-}
 
 // countingMeta wraps a MetaStore and counts SetMeta calls, so tests can
 // assert how many persists a code path performed.
@@ -811,138 +594,6 @@ func (c *countingMeta) sets() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.setCalls
-}
-
-// One timer per SET, not per question: all default-safe questions share the
-// set's single CreatedAt+delay deadline, so their auto-resolutions must land
-// as ONE batch — one persist and one card emission — never one round per
-// question. (The old per-question timers produced 2 persists + 2 emissions
-// for this fixture: this test fails against that behavior.)
-func TestTimer_BatchResolvesAllDueHeaders_SinglePersistAndEmit(t *testing.T) {
-	store := newTestStore(t)
-	sid := newOwnerSession(t, store)
-	meta := &countingMeta{inner: store}
-	resume := &fakeResume{}
-	sink := &fakeSink{}
-	audit := &fakeAudit{}
-	reg := NewRegistry(meta, resume, Options{DefaultSafeDelay: 20 * time.Millisecond, Sink: sink, Audit: audit})
-	t.Cleanup(reg.Quiesce)
-
-	set := testSet(sid,
-		Question{Header: "Scope", Question: "Which scope?", Recommended: "Backend", DefaultSafe: true,
-			Options: []Option{{Label: "Backend"}, {Label: "Full stack"}}},
-		Question{Header: "Deploy", Question: "Deploy where?", Recommended: "Staging", DefaultSafe: true,
-			Options: []Option{{Label: "Staging"}, {Label: "Prod"}}},
-		Question{Header: "Name", Question: "Name it?",
-			Options: []Option{{Label: "A"}, {Label: "B"}}},
-	)
-	if err := reg.CreatePending(set); err != nil {
-		t.Fatalf("CreatePending: %v", err)
-	}
-	// Both default-safe headers resolve (audit stays per question).
-	waitFor(t, "both auto-default audit entries", func() bool { return audit.count() == 2 })
-	reg.Quiesce() // let the callback's persist+emit fully finish
-
-	pending, ok := reg.PendingForSession(sid)
-	if !ok {
-		t.Fatal("mixed set must remain pending (Name needs the human)")
-	}
-	if len(pending.AutoResolved) != 2 {
-		t.Fatalf("want both default-safe headers auto-resolved, got %v", pending.AutoResolved)
-	}
-	if resume.count() != 0 {
-		t.Fatal("mixed set must never server-submit")
-	}
-	// ONE batch: park persist + park emission, then exactly one more of each
-	// for the whole auto-resolution batch.
-	if got := meta.sets(); got != 2 {
-		t.Fatalf("want 2 persists (park + one batch), got %d", got)
-	}
-	if got := sink.count(); got != 2 {
-		t.Fatalf("want 2 card emissions (park + one batch), got %d", got)
-	}
-}
-
-func TestTimer_RaceWithClientSubmit_ExactlyOneWins(t *testing.T) {
-	store := newTestStore(t)
-	sid := newOwnerSession(t, store)
-	resume := &fakeResume{}
-	reg := NewRegistry(store, resume, Options{DefaultSafeDelay: 10 * time.Millisecond})
-	t.Cleanup(reg.Quiesce)
-
-	set := testSet(sid,
-		Question{Header: "Scope", Question: "Which scope?", Recommended: "Backend", DefaultSafe: true,
-			Options: []Option{{Label: "Backend"}, {Label: "Full stack"}}},
-	)
-	if err := reg.CreatePending(set); err != nil {
-		t.Fatalf("CreatePending: %v", err)
-	}
-	// Race the client submission against the server auto-submit.
-	_ = reg.Submit(set.CardID, sid, "", []SubmittedAnswer{{Header: "Scope", Selected: []string{"Full stack"}}})
-	waitFor(t, "exactly one resume", func() bool { return resume.count() >= 1 })
-	time.Sleep(50 * time.Millisecond) // let any second (buggy) dispatch land
-	if resume.count() != 1 {
-		t.Fatalf("first-valid-wins violated: %d resumes dispatched", resume.count())
-	}
-}
-
-// --- Test 6 backend half: restart persistence + timer re-arm ---
-
-func TestRestart_RearmFromPersistedState(t *testing.T) {
-	baseDir := t.TempDir()
-	store, err := session.NewUnifiedStore(baseDir)
-	if err != nil {
-		t.Fatalf("NewUnifiedStore: %v", err)
-	}
-	sid := newOwnerSession(t, store)
-
-	// Registry A parks the set with a long delay (timers never fire in-test).
-	regA := NewRegistry(store, &fakeResume{}, Options{DefaultSafeDelay: time.Hour})
-	set := testSet(sid,
-		Question{Header: "Scope", Question: "Which scope?", Recommended: "Backend", DefaultSafe: true,
-			Options: []Option{{Label: "Backend"}, {Label: "Full stack"}}},
-	)
-	if cerr := regA.CreatePending(set); cerr != nil {
-		t.Fatalf("CreatePending: %v", cerr)
-	}
-
-	// "Restart": a NEW store over the same directory (a genuine disk
-	// re-read, not the first store's in-memory cache) and a NEW registry
-	// with a short delay. The persisted CreatedAt is already in the past
-	// relative to the new delay, so the re-armed timer fires
-	// (near-)immediately — continuity from the persisted timestamp, not a
-	// fresh 30-minute clock (§0.5).
-	storeB, err := session.NewUnifiedStore(baseDir)
-	if err != nil {
-		t.Fatalf("NewUnifiedStore (restart): %v", err)
-	}
-	resumeB := &fakeResume{}
-	auditB := &fakeAudit{}
-	regB := NewRegistry(storeB, resumeB, Options{DefaultSafeDelay: 20 * time.Millisecond, Audit: auditB})
-	if err := regB.RearmSession(sid); err != nil {
-		t.Fatalf("RearmSession: %v", err)
-	}
-	// The re-armed timer fires (near-)immediately BY DESIGN: the persisted
-	// CreatedAt is already older than the new 20ms delay. So by the time we
-	// look, the card may already have been auto-submitted and dropped from the
-	// pending map. Both states are legal, and asserting "still pending" races
-	// the very timer this test deliberately made fast — it failed in CI as
-	// `re-hydrated set mismatch: <nil> false`. Pin the card id on whichever
-	// path we observe, so re-hydration is proven rather than won.
-	if got, ok := regB.PendingForSession(sid); ok && got.CardID != set.CardID {
-		t.Fatalf("re-hydrated the wrong card while still pending: want %s, got %s", set.CardID, got.CardID)
-	}
-	waitFor(t, "re-armed timer to fire and server-submit", func() bool { return resumeB.count() == 1 })
-	if auditB.count() != 1 {
-		t.Fatalf("want 1 audit entry after re-armed fire, got %d", auditB.count())
-	}
-	// Whichever path ran above, the timer must have fired for the PERSISTED
-	// card. This is what actually proves RearmSession re-hydrated from disk,
-	// and unlike the pending-map read it holds even when the card has already
-	// gone — so the property survives the race instead of depending on it.
-	if fired := resumeB.last(t); fired.Set == nil || fired.Set.CardID != set.CardID {
-		t.Fatalf("the re-armed timer fired for the wrong card: want %s, got %+v", set.CardID, fired.Set)
-	}
 }
 
 // ParseResumeCardID must recognize exactly what ResumeMessage renders (the
@@ -1041,7 +692,6 @@ func TestRearmSession_NoopWithoutPersistedSet(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
-	t.Cleanup(reg.Quiesce)
 	if err := reg.RearmSession(sid); err != nil {
 		t.Fatalf("RearmSession on clean session: %v", err)
 	}

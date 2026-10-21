@@ -137,7 +137,6 @@ func TestR5_Sites_AskUserResumeFailureFrameIsFixedText(t *testing.T) {
 	reg := askuser.NewRegistry(nil, failingResumeDispatcher{
 		cause: errors.New("publish to /secret/home/bus.sock failed: permission denied")}, askuser.Options{})
 	require.NoError(t, reg.CreatePending(askSetFixture()))
-	t.Cleanup(reg.Quiesce)
 	var frame generated.AskUserAnswerFrame
 	require.NoError(t, json.Unmarshal([]byte(`{
 		"type":"ask_user_answer","card_id":"ask_1","session_id":"session_owner_1",

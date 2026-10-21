@@ -148,10 +148,6 @@ func (t *AskUserQuestionTool) Parameters() map[string]any {
 							"type":        "string",
 							"description": "Label of the recommended option (rendered first, badged; never pre-selected).",
 						},
-						"default_safe": map[string]any{
-							"type":        "boolean",
-							"description": "Requires `recommended`: after 30 minutes unanswered, this question auto-resolves to the recommendation.",
-						},
 						"context": map[string]any{
 							"type":        "string",
 							"maxLength":   askuser.MaxContextChars,
@@ -391,7 +387,6 @@ func parseAskQuestions(args map[string]any) ([]askuser.Question, error) {
 		q.Recommended, _ = m["recommended"].(string)
 		q.Context, _ = m["context"].(string)
 		q.MultiSelect, _ = m["multi_select"].(bool)
-		q.DefaultSafe, _ = m["default_safe"].(bool)
 		rawOpts, ok := m["options"].([]any)
 		if !ok {
 			return nil, fmt.Errorf("questions[%d].options must be an array", i)

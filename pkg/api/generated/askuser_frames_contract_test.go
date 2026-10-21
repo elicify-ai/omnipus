@@ -22,22 +22,17 @@ import (
 func fixtureAskUserCardPending() AskUserQuestionCard {
 	desc := "The 14 currently waiting."
 	rec := "Only unanswered"
-	defSafe := true
 	multi := true
 	ctxMd := "Proposed criteria:\n\n- every question answered\n- one concrete next step"
-	at := "2026-09-06T12:30:00Z"
 	card := AskUserQuestionCard{
-		CardId:        "ask_0123456789abcdef0123456789abcdef",
-		SessionId:     "session_owner_1",
-		AgentId:       "mia",
-		Status:        "pending",
-		CreatedAt:     "2026-09-06T12:00:00Z",
-		DefaultSafeAt: &at,
-		AutoResolved:  []string{"Sending"},
+		CardId:    "ask_0123456789abcdef0123456789abcdef",
+		SessionId: "session_owner_1",
+		AgentId:   "mia",
+		Status:    "pending",
+		CreatedAt: "2026-09-06T12:00:00Z",
 	}
 	card.Questions = []struct {
 		Context     *string `json:"context,omitempty"`
-		DefaultSafe *bool   `json:"default_safe,omitempty"`
 		Header      string  `json:"header"`
 		MultiSelect *bool   `json:"multi_select,omitempty"`
 		Options     []struct {
@@ -64,7 +59,6 @@ func fixtureAskUserCardPending() AskUserQuestionCard {
 			Header:      "Sending",
 			Question:    "Draft or send directly?",
 			MultiSelect: &multi,
-			DefaultSafe: &defSafe,
 			Recommended: &rec,
 			Options: []struct {
 				Description *string `json:"description,omitempty"`
@@ -81,17 +75,15 @@ func fixtureAskUserCardPending() AskUserQuestionCard {
 func fixtureAskUserCardAnswered() AskUserQuestionCard {
 	card := fixtureAskUserCardPending()
 	card.Status = "answered"
-	card.DefaultSafeAt = nil
 	ft := "something custom"
 	card.Answers = []struct {
-		AutoDefault bool     `json:"auto_default"`
-		FreeText    *string  `json:"free_text,omitempty"`
-		Header      string   `json:"header"`
-		Question    string   `json:"question"`
-		Selected    []string `json:"selected,omitempty"`
+		FreeText *string  `json:"free_text,omitempty"`
+		Header   string   `json:"header"`
+		Question string   `json:"question"`
+		Selected []string `json:"selected,omitempty"`
 	}{
 		{Header: "Scope", Question: "Which emails should this goal cover?", FreeText: &ft},
-		{Header: "Sending", Question: "Draft or send directly?", Selected: []string{"Only unanswered"}, AutoDefault: true},
+		{Header: "Sending", Question: "Draft or send directly?", Selected: []string{"Only unanswered"}},
 	}
 	return card
 }
@@ -127,20 +119,18 @@ func TestContract_AskUserQuestionCard_RejectsMalformed(t *testing.T) {
 
 func TestContract_AskUserAnswerFrame_SubmitAndCancel(t *testing.T) {
 	ft := "my own answer"
-	auto := true
 	submit := AskUserAnswerFrame{
 		Type:      "ask_user_answer",
 		CardId:    "ask_0123456789abcdef0123456789abcdef",
 		SessionId: "session_owner_1",
 	}
 	submit.Answers = []struct {
-		AutoDefault *bool    `json:"auto_default,omitempty"`
-		FreeText    *string  `json:"free_text,omitempty"`
-		Header      string   `json:"header"`
-		Selected    []string `json:"selected,omitempty"`
+		FreeText *string  `json:"free_text,omitempty"`
+		Header   string   `json:"header"`
+		Selected []string `json:"selected,omitempty"`
 	}{
 		{Header: "Scope", FreeText: &ft},
-		{Header: "Sending", Selected: []string{"Only unanswered"}, AutoDefault: &auto},
+		{Header: "Sending", Selected: []string{"Only unanswered"}},
 	}
 	mustPassBothCopies(t, "AskUserAnswerFrame", submit)
 

@@ -30,10 +30,9 @@ func TestValidateQuestions_Table(t *testing.T) {
 		wantErr string // substring; "" = valid
 	}{
 		{"valid minimal", func() []Question { return []Question{validQuestion()} }, ""},
-		{"valid with recommended and default_safe", func() []Question {
+		{"valid with recommended", func() []Question {
 			q := validQuestion()
 			q.Recommended = "Backend only"
-			q.DefaultSafe = true
 			return []Question{q}
 		}, ""},
 		{"zero questions", func() []Question { return nil }, "at least 1"},
@@ -118,16 +117,10 @@ func TestValidateQuestions_Table(t *testing.T) {
 			q.Recommended = "Nonexistent"
 			return []Question{q}
 		}, "names no option"},
-		{"default_safe without recommended", func() []Question {
-			q := validQuestion()
-			q.DefaultSafe = true
-			return []Question{q}
-		}, "default_safe requires recommended"},
-		{"multi_select with recommended is valid (one-element auto-default)", func() []Question {
+		{"multi_select with recommended is valid", func() []Question {
 			q := validQuestion()
 			q.MultiSelect = true
 			q.Recommended = "Full stack"
-			q.DefaultSafe = true
 			return []Question{q}
 		}, ""},
 	}

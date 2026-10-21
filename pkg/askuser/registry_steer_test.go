@@ -58,7 +58,6 @@ func TestCreatePending_SteeredSession_ObservedAndRejected(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
-	t.Cleanup(reg.Quiesce)
 
 	obs := &recordingObserver{}
 	deliverer := &recordingUpwardDeliverer{}
@@ -92,7 +91,6 @@ func TestCreatePending_OrdinaryRootSession_ObservedAndAllowed(t *testing.T) {
 	store := newTestStore(t)
 	sid := newOwnerSession(t, store)
 	reg := NewRegistry(store, &fakeResume{}, Options{})
-	t.Cleanup(reg.Quiesce)
 
 	obs := &recordingObserver{}
 	reg.SetSteerAudienceResolver(&fakeSteerAudience{audience: map[string]steer.Audience{}}, obs)

@@ -315,9 +315,8 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 	// when no registry is wired or nothing is pending.
 	if h.askUserReg != nil {
 		if pendingSets := h.askUserReg.PendingAll(); len(pendingSets) > 0 {
-			delay := h.askUserReg.EffectiveDefaultSafeDelay()
 			for _, set := range pendingSets {
-				frame.PendingAsks = append(frame.PendingAsks, toAskUserCard(set, delay))
+				frame.PendingAsks = append(frame.PendingAsks, toAskUserCard(set))
 			}
 		}
 	}
