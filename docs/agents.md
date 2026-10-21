@@ -175,7 +175,7 @@ Agent identity is the figure, role badge and palette colour. The legacy icon is 
 
 ## How to lower one agent's tool-call limit
 
-Every agent may make at most a set number of tool calls in one turn. The global limit lives in Settings, Performance; see [settings](settings.md#tool-calls-per-turn). One agent can have its own lower limit, for example a worker you want to keep on a short leash. An agent's own limit can equal or be lower than the global limit, never higher.
+Every agent has a per-turn work budget. For native agents, this counts working rounds, each of which can run several tool calls, rather than a strict number of individual calls; pending follow-ups or winding down can extend the normal budget within its hard safety bound. The global limit lives in Settings, Performance; see [settings](settings.md#tool-calls-per-turn). One agent can have its own lower limit, for example a worker you want to keep on a short leash. An agent's own limit can equal or be lower than the global limit, never higher.
 
 1. Open the agent's card and go to the **Advanced** tab.
 2. Under **Execution**, type a number into **Max tool calls per turn**. It saves by itself.

@@ -200,26 +200,48 @@ func terminalAcceptanceLiveText(t *testing.T, frames []collectedFrame, sessionID
 	t.Helper()
 	var ids []string
 	byID := make(map[string]string)
+	systemCount := make(map[string]int)
 	for _, frame := range frames {
-		if frame.Type != "token" {
+		var content, sid string
+		var tid, mid *string
+		replace, system := false, false
+		switch frame.Type {
+		case "token":
+			var token generated.TokenFrame
+			require.NoError(t, json.Unmarshal(frame.Raw, &token))
+			assert.NotContains(t, token.Content, terminalAcceptanceCapNotice, "harness prose must not be emitted as model tokens")
+			content, sid, tid, mid = token.Content, token.SessionId, token.TurnId, token.MessageId
+			replace = token.Replace != nil && *token.Replace
+		case "replay_message":
+			var notice generated.ReplayMessageFrame
+			require.NoError(t, json.Unmarshal(frame.Raw, &notice))
+			if notice.Role != "system" || notice.Content == "" {
+				continue
+			}
+			assert.Nil(t, notice.Model, "runtime system notice carries no model attribution")
+			content, sid, tid, mid = notice.Content, notice.SessionId, notice.TurnId, notice.Id
+			replace, system = true, true
+		default:
 			continue
 		}
-		var token generated.TokenFrame
-		require.NoError(t, json.Unmarshal(frame.Raw, &token))
-		if token.SessionId != sessionID {
+		if sid != sessionID {
 			continue
 		}
-		require.NotNil(t, token.TurnId, "live content must carry the observed turn identity")
-		assert.Equal(t, turnID, *token.TurnId)
-		require.NotNil(t, token.MessageId, "live content must carry a stable entry identity")
-		id := *token.MessageId
+		require.NotNil(t, tid, "live content must carry the observed turn identity")
+		assert.Equal(t, turnID, *tid)
+		require.NotNil(t, mid, "live content must carry a stable entry identity")
+		id := *mid
+		if system {
+			systemCount[id]++
+			assert.Equal(t, 1, systemCount[id], "one live system frame, not duplicate full-message frames")
+		}
 		if _, exists := byID[id]; !exists {
 			ids = append(ids, id)
 		}
-		if token.Replace != nil && *token.Replace {
-			byID[id] = token.Content
+		if replace {
+			byID[id] = content
 		} else {
-			byID[id] += token.Content
+			byID[id] += content
 		}
 	}
 	var text strings.Builder
