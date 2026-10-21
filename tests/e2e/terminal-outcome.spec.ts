@@ -129,6 +129,9 @@ test.describe('terminal outcome agrees across real surfaces', () => {
         }
         const detail = await terminalTranscript(page, gw.baseURL, session.id);
         expect.soft(detail.session.id, 'read the SAME durable session').toBe(session.id);
+        if (detail.messages === undefined) {
+          throw new Error('Terminal transcript messages are missing; cannot verify durable terminal outcome');
+        }
         const assistants = detail.messages.filter((entry) => entry.role === 'assistant' && entry.content);
         expect.soft(assistants.map((entry) => entry.content), 'prior narration cannot substitute for terminal outcome')
           .toEqual([TERMINAL_NARRATION, TERMINAL_CAP_NOTICE]);

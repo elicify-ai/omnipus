@@ -72,7 +72,7 @@ export class Stage1Network extends Network {
       warmup_timeout_seconds: 30, frame_ancestors_fallback: false, device_pairing_enabled: false,
     }
     const sessions: SessionPage = { sessions: [mainSession] }
-    const detail: SessionDetail = { session: mainSession, messages: [] }
+    const detail: SessionDetail = { session: mainSession, history_state: { status: 'available' }, messages: [] }
     const activity: ActivityEventsResponse = { events: [] }
     const performance: PerformanceSettings = { max_tool_iterations: 200 }
     const tasks: Task[] = []
