@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +27,33 @@ func TestChatHistoryPage_AdvertisedBudgetSemanticBoundaries(t *testing.T) {
 				require.Empty(t, msg, "consistent positive advertised budgets are not a one-value enum")
 			} else {
 				require.NotEmpty(t, msg)
-				require.Contains(t, msg, "soft_byte_budget", "the intended field, not an invalid control envelope")
+				// The existing user-facing formatter deliberately strips path
+				// prefixes. Assert the stronger structured path/keyword instead
+				// of inventing a contract for its presentation string.
+				schema, err := compileInboundSchema("SessionHistoryResponse")
+				require.NoError(t, err)
+				var document any
+				require.NoError(t, json.Unmarshal(body, &document))
+				var validation *jsonschema.ValidationError
+				require.ErrorAs(t, schema.Validate(document), &validation)
+				keyword := "minimum"
+				if tc.value == "null" || tc.value == "1.5" {
+					keyword = "type"
+				}
+				leaves := 0
+				var check func(*jsonschema.ValidationError)
+				check = func(issue *jsonschema.ValidationError) {
+					if len(issue.Causes) == 0 {
+						leaves++
+						require.Equal(t, []string{"page_info", "soft_byte_budget"}, issue.InstanceLocation)
+						require.Equal(t, []string{keyword}, issue.ErrorKind.KeywordPath())
+					}
+					for _, cause := range issue.Causes {
+						check(cause)
+					}
+				}
+				check(validation)
+				require.Equal(t, 1, leaves, "only the deliberately invalid budget field may fail")
 			}
 		})
 	}
