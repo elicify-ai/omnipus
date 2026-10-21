@@ -145,7 +145,10 @@ export function AgentIcon(props: AgentIconProps) {
         />
       </span>
       {animate && motion === 'working' && (
-        <span aria-hidden="true" data-agent-icon-sheen="" className={sheenClass} />
+        // Clip only the moving highlight; figure scaling and glow stay outside.
+        <span aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+          <span data-agent-icon-sheen="" className={sheenClass} />
+        </span>
       )}
     </span>
   )

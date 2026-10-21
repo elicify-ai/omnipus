@@ -128,7 +128,7 @@ During a live reply, an inline mark replaces the old bouncing-dot indicator. It 
 
 In the simpler message-list fallback, live tool activity appears against the reply that owns it, before the answer finishes. If a hidden tool finishes successfully and the reply still has nothing visible, the mark returns to Thinking while the agent continues. If a tool failure makes its **Failed** card visible, that otherwise-empty reply shows the card without an extra Thinking mark, even when the failure has no separate error text.
 
-The mark's figure and badge stay fully opaque. With normal motion they gently change size, and a separate glow animates behind them; Working also has a moving highlight. If your system requests reduced motion, these loops stop and the thinking phrase stops rotating. The name and current phrase remain visible.
+The mark's figure and badge stay fully opaque. With normal motion they gently change size, and a separate glow animates behind them; Working also has a moving highlight contained within the icon's square area, while the glow can extend beyond it. If your system requests reduced motion, these loops stop and the thinking phrase stops rotating. The name and current phrase remain visible.
 
 ### Who each message is from
 

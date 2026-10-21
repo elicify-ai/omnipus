@@ -244,6 +244,56 @@ describe('AgentIcon', () => {
     },
   )
 
+  // Chief's sheen-clipping regression: only the Working highlight is clipped
+  // to the icon box; figure scaling and the glow must remain outside that clip.
+  it.each(SIZES.flatMap((size) => [undefined, false].map((reducedMotion) => ({ size, reducedMotion }))))(
+    'clips only the Working sheen to the $size-pixel icon box with reducedMotion=$reducedMotion',
+    async ({ size, reducedMotion }) => {
+      const AgentIcon = await loadAgentIcon()
+      const { container } = render(
+        iconSteelBlue(AgentIcon, { figure: 'Robot', role: 'developer', size, motion: 'working', reducedMotion }),
+      )
+      const icon = screen.getByTestId('agent-icon')
+      const sheen = container.querySelector('[data-agent-icon-sheen]')
+      expect(sheen, 'Working retains its moving highlight').not.toBeNull()
+      const clip = sheen!.parentElement!
+      expect(clip, 'the root cannot clip the glow or figure').not.toBe(icon)
+      expect(clip.parentElement, 'the sheen clip is anchored to the icon box').toBe(icon)
+      expect(icon).toHaveClass('relative')
+      expect(clip).toHaveClass('absolute', 'inset-0', 'overflow-hidden')
+      expect(clip).toHaveAttribute('aria-hidden', 'true')
+
+      const glow = container.querySelector<HTMLElement>('[data-glow]')!
+      expect(glow, 'Working retains its separate glow').not.toBeNull()
+      for (const layer of [inkOf(container), glow]) {
+        expect(clip, 'ink and glow are outside the sheen-only clip').not.toContainElement(layer)
+        for (let ancestor: HTMLElement | null = layer; ancestor && ancestor !== container; ancestor = ancestor.parentElement) {
+          expect(ancestor, 'figure and glow ancestry must not clip').not.toHaveClass('overflow-hidden')
+          expect(ancestor, 'figure and glow ancestry must not clip').not.toHaveClass('overflow-clip')
+        }
+      }
+    },
+  )
+
+  it.each(['none', 'thinking', 'waiting'] as const)('does not draw a Working sheen for motion %s', async (motion) => {
+    const AgentIcon = await loadAgentIcon()
+    const { container } = render(
+      iconSteelBlue(AgentIcon, { figure: 'Robot', role: 'developer', size: 40, motion, reducedMotion: false }),
+    )
+    expect(container.querySelector('[data-agent-icon-sheen]')).toBeNull()
+  })
+
+  it('does not draw a sheen or glow when Working is forced to reduced motion', async () => {
+    const AgentIcon = await loadAgentIcon()
+    const { container } = render(
+      iconSteelBlue(AgentIcon, { figure: 'Robot', role: 'developer', size: 40, motion: 'working', reducedMotion: true }),
+    )
+    expect(container.querySelector('[data-agent-icon-sheen]')).toBeNull()
+    expect(container.querySelector('[data-glow]')).toBeNull()
+    expect(container.querySelector('[class*="animate-"]')).toBeNull()
+    expect(inkOf(container)).toHaveStyle({ opacity: '1' })
+  })
+
   it.each([undefined, false])('selects the same 2.6-second Thinking breath and glow with reducedMotion=%s', async (reducedMotion) => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(iconChampagne(AgentIcon, { figure: 'Robot', role: 'security', size: 48, motion: 'thinking', reducedMotion }))
