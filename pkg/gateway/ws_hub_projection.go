@@ -283,12 +283,12 @@ func projectionFrames(sessionID string, items []projSnapshotItem, emitted replay
 	for _, it := range items {
 		switch it.kind {
 		case hubKindToken:
-			if it.messageID != "" && emitted[replayCoverageKey{id: it.messageID}] {
+			if it.messageID != "" && emitted[replayCoverageKey{id: it.messageID}] == replayEmitted {
 				continue
 			}
 			out = append(out, projectionTokenFrames(sessionID, it)...)
 		case hubKindToolStart:
-			startCovered := emitted[replayCoverageKey{kind: hubKindToolStart, id: it.id}]
+			startCovered := emitted[replayCoverageKey{kind: hubKindToolStart, id: it.id}] == replayEmitted
 			// A result needs its START from either transcript replay or this
 			// projection. Without either, it remains an orphan (final-review N6).
 			if !startCovered && len(it.start) == 0 {
@@ -297,7 +297,9 @@ func projectionFrames(sessionID string, items []projSnapshotItem, emitted replay
 			if !startCovered {
 				out = appendNonEmpty(out, it.start)
 			}
-			if !emitted[replayCoverageKey{kind: hubKindToolResult, id: it.id}] {
+			// A launch acknowledgement deliberately withheld by replay must
+			// remain withheld, not reappear as an uncovered terminal result.
+			if emitted[replayCoverageKey{kind: hubKindToolResult, id: it.id}] == replayUncovered {
 				out = appendNonEmpty(out, it.end)
 			}
 		case hubKindItem:

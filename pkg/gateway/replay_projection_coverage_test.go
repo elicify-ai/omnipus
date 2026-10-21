@@ -140,6 +140,104 @@ func TestAttachProjectionCoverageReconnect(t *testing.T) {
 			assertProjectionIncremental1397(t, srv, h, sid)
 		})
 	}
+	for _, launchTool := range []string{"delegate", "create_task"} {
+		t.Run("active "+launchTool, func(t *testing.T) {
+			assertActiveLaunchProjection1397(t, h, srv, store, launchTool)
+		})
+	}
+}
+
+// A launch acknowledgement is not the child's completion. Keep its real open
+// span and retained acknowledgement in the same snapshot as an ordinary call
+// whose finished result is only in the projection. Neither result may be guessed
+// from START alone: the launch stays withheld, the ordinary result appears once.
+func assertActiveLaunchProjection1397(t *testing.T, h *WSHandler, srv *httptest.Server, store *session.UnifiedStore, tool string) {
+	t.Helper()
+	child, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+	ackBytes, err := json.Marshal(map[string]any{"session_id": child.ID})
+	require.NoError(t, err)
+	ackText := string(ackBytes)
+	launch := session.ToolCall{
+		ID: "launch-call", Tool: tool, Status: "success",
+		Parameters: map[string]any{"task": "research", "label": "research"},
+		Result:     map[string]any{"text": ackText},
+	}
+	sid, _ := seedApprovalReplay1397(t, store, launch)
+	spanID := agent.SubagentSpanID(string(launch.ID), 1)
+	start := subagentStartEntryFull(spanID, string(launch.ID), "research", "mia", child.ID)
+	start.SubagentStart.SessionId = sid
+	require.NoError(t, store.AppendTranscript(sid, start))
+	ordinary := session.ToolCall{
+		ID: "ordinary-call", Tool: "read_file", Status: "pending",
+		Parameters: map[string]any{"path": "ordinary.txt"},
+	}
+	addr, err := store.AppendTranscriptAddressed(sid, session.TranscriptEntry{
+		Type: session.EntryTypeToolCall, Role: "assistant", AgentID: "mia", TurnID: "turn-1397",
+		ToolCalls: []session.ToolCall{ordinary},
+	})
+	require.NoError(t, err)
+	publish := func(call session.ToolCall, result string) {
+		h.hubSyncTap(agent.Event{
+			Kind: agent.EventKindToolExecStart, Meta: agent.EventMeta{TurnID: "turn-1397"},
+			Payload: agent.ToolExecStartPayload{
+				ToolCallID: call.ID, SessionID: sid, Tool: call.Tool, Arguments: call.Parameters, AgentID: "mia",
+			},
+		})
+		h.hubSyncTap(agent.Event{
+			Kind: agent.EventKindToolExecEnd, Meta: agent.EventMeta{TurnID: "turn-1397"},
+			Payload: agent.ToolExecEndPayload{
+				ToolCallID: call.ID, SessionID: sid, Tool: call.Tool, Result: result, AgentID: "mia",
+			},
+		})
+	}
+	const ordinaryText = "ordinary call genuinely finished"
+	publish(launch, ackText)
+	publish(ordinary, ordinaryText)
+	wantOpen := []string{
+		"start:finished-call", "result:finished-call:success", "start:launch-call", "subagent_start",
+		"start:ordinary-call", "result:ordinary-call:success",
+	}
+	for range 2 {
+		frames := attachApprovalReplay1397(t, srv, sid)
+		assert.Equal(t, wantOpen, frames.events, "projection must not restore an intentionally withheld launch acknowledgement")
+		require.Len(t, frames.results, 2, "only the two genuinely finished ordinary calls have results")
+		assert.Equal(t, "finished-call", frames.results[0].CallId)
+		assert.Equal(t, "ordinary-call", frames.results[1].CallId)
+		assert.Equal(t, ordinaryText, frames.results[1].Result)
+	}
+
+	// Persist the ordinary result before the real parent TurnEnd clears the
+	// projection. The child outlives that turn, so its launch must stay running.
+	ordinary.Status = "success"
+	ordinary.Result = map[string]any{"text": ordinaryText}
+	_, err = store.SettleToolCall(sid, addr, "pending", ordinary)
+	require.NoError(t, err)
+	h.hubSyncTap(agent.Event{Kind: agent.EventKindTurnEnd, Meta: agent.EventMeta{TurnID: "turn-1397"}})
+	hub := h.hubs.getOrCreate(sid)
+	hub.mu.Lock()
+	active := hub.proj.active()
+	hub.mu.Unlock()
+	require.False(t, active, "the parent TurnEnd must actually clear the retained acknowledgement")
+	afterParent := attachApprovalReplay1397(t, srv, sid)
+	assert.Equal(t, wantOpen, afterParent.events, "parent completion must not flip an active child's launch badge")
+	require.Len(t, afterParent.results, 2)
+	assert.Equal(t, ordinary.Result, afterParent.results[1].Result)
+
+	// Withholding is per snapshot, not sticky. Once the child's persisted span
+	// closes, the real replay terminal result becomes visible exactly once.
+	end := subagentEndEntry(spanID, "success", 23)
+	end.SubagentEnd.SessionId = sid
+	parentID := string(launch.ID)
+	end.SubagentEnd.ParentCallId = &parentID
+	require.NoError(t, store.AppendTranscript(sid, end))
+	closed := attachApprovalReplay1397(t, srv, sid)
+	assert.Equal(t, []string{
+		"start:finished-call", "result:finished-call:success", "start:launch-call", "result:launch-call:success",
+		"subagent_start", "start:ordinary-call", "result:ordinary-call:success", "subagent_end",
+	}, closed.events)
+	require.Len(t, closed.results, 3)
+	assert.Equal(t, launch.Result, closed.results[1].Result)
 }
 
 // A reconnect at the already observed head is incremental: no snapshot wipe,

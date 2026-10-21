@@ -281,7 +281,7 @@ func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.Trans
 			lifecycle = store
 		}
 	}
-	framesEmitted, err := streamReplay(wh.ctx, wh.attachID, entries, rs, emit, mediaStore, wh.h.toolStore, terminalAsk, lifecycle)
+	framesEmitted, err := streamReplayWithCoverage(wh.ctx, wh.attachID, entries, rs, emit, mediaStore, wh.h.toolStore, terminalAsk, lifecycle, emitted)
 	durationMS := time.Since(started).Milliseconds()
 	if err != nil {
 		logsafeWarn("ws: replay_aborted",
@@ -314,27 +314,37 @@ type replayCoverageKey struct {
 	id   string
 }
 
-type replayCoverage map[replayCoverageKey]bool
+// replayCoverageState distinguishes an absent result from one replay deliberately
+// withheld. Projection must not restore an active child's launch acknowledgement.
+type replayCoverageState uint8
+
+const (
+	replayUncovered replayCoverageState = iota
+	replayEmitted
+	replayWithheld
+)
+
+type replayCoverage map[replayCoverageKey]replayCoverageState
 
 // recordEmittedIDs records which transcript frames the snapshot already sent.
 func recordEmittedIDs(emitted replayCoverage, f any) {
 	switch v := f.(type) {
 	case generated.ReplayMessageFrame:
 		if v.Id != nil {
-			emitted[replayCoverageKey{id: *v.Id}] = true
+			emitted[replayCoverageKey{id: *v.Id}] = replayEmitted
 		}
 	case generated.ToolCallStartFrame:
-		emitted[replayCoverageKey{kind: hubKindToolStart, id: v.CallId}] = true
+		emitted[replayCoverageKey{kind: hubKindToolStart, id: v.CallId}] = replayEmitted
 	case generated.ToolCallResultFrame:
-		emitted[replayCoverageKey{kind: hubKindToolResult, id: v.CallId}] = true
+		emitted[replayCoverageKey{kind: hubKindToolResult, id: v.CallId}] = replayEmitted
 	case generated.SubagentStartFrame:
-		emitted[replayCoverageKey{id: v.SpanId}] = true
+		emitted[replayCoverageKey{id: v.SpanId}] = replayEmitted
 	case generated.SubagentEndFrame:
-		emitted[replayCoverageKey{id: v.SpanId}] = true
+		emitted[replayCoverageKey{id: v.SpanId}] = replayEmitted
 	case generated.GoalOutcomeFrame:
-		emitted[replayCoverageKey{id: v.MessageId}] = true
+		emitted[replayCoverageKey{id: v.MessageId}] = replayEmitted
 	case generated.HelperEventFrame:
-		emitted[replayCoverageKey{id: v.MessageId}] = true
+		emitted[replayCoverageKey{id: v.MessageId}] = replayEmitted
 	}
 }
 

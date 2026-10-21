@@ -75,6 +75,9 @@ type streamReplayState struct {
 	childSessionBySpan map[string]string
 	// lifecycleCache memoizes Load for one replay, including misses.
 	lifecycleCache map[string]*session.LifecycleRecord
+	// coverage, when supplied by attach, carries deliberate result withholding
+	// into projection merging. It never emits an internal bookkeeping frame.
+	coverage replayCoverage
 }
 
 // streamReplayStateFlow reports how a block stage of streamReplayState wants the conductor to proceed.
@@ -104,7 +107,7 @@ const (
 //     boundary may reintroduce a transcript visibility filter (FR-038).
 //   - For user/system entries: emit replay_message{role, content, agent_id}.
 //   - For assistant entries: emit replay_message if content is non-empty, then
-//     for each ToolCall emit tool_call_start + tool_call_result (FR-I-001).
+//     emit tool_call_start for each ToolCall and any non-withheld terminal result (FR-I-001).
 //   - Spawn spans: scan all entries first to build the set of spawn IDs whose
 //     children are present.  Nested tool calls (ParentToolCallID != "") are
 //     wrapped with subagent_start / subagent_end when the parent is in the set
@@ -138,7 +141,25 @@ func streamReplay(
 	terminalAsk *askuser.PendingSet,
 	lifecycle lifecycleRecordLoader,
 ) (framesEmitted int, err error) {
-	sr := &streamReplayState{sessionID: sessionID, entries: entries, toolStore: toolStore, terminalAsk: terminalAsk, lifecycle: lifecycle}
+	return streamReplayWithCoverage(ctx, sessionID, entries, rs, emit, mediaStore, toolStore, terminalAsk, lifecycle, nil)
+}
+
+// streamReplayWithCoverage is the shared replay implementation. Attach supplies
+// coverage so projection merging preserves deliberate active-child withholding;
+// replay-only callers use streamReplay with no projection bookkeeping.
+func streamReplayWithCoverage(
+	ctx context.Context,
+	sessionID string,
+	entries []session.TranscriptEntry,
+	rs replayStats,
+	emit func(any) error,
+	mediaStore media.MediaStore,
+	toolStore *toolResultStore,
+	terminalAsk *askuser.PendingSet,
+	lifecycle lifecycleRecordLoader,
+	coverage replayCoverage,
+) (framesEmitted int, err error) {
+	sr := &streamReplayState{sessionID: sessionID, entries: entries, toolStore: toolStore, terminalAsk: terminalAsk, lifecycle: lifecycle, coverage: coverage}
 
 	sr.prepareReplay()
 
@@ -380,6 +401,7 @@ func (sr *streamReplayState) emitSpawnParentToolCall(
 		// Withhold the outer tool_call_result. stillActive follows the latest
 		// generation with a saved start, which may be newer than generation 1.
 		// The client already has tool_call_start plus the start frames.
+		sr.withholdToolResult(tc)
 		return streamReplayStateContinue, nil
 	}
 
@@ -428,6 +450,7 @@ func (sr *streamReplayState) emitFlatToolCall(
 		// "0 steps working" live, "done 0ms" on reload). Withhold the
 		// result frame; the client sees only tool_call_start, i.e.
 		// genuinely in progress.
+		sr.withholdToolResult(tc)
 		return streamReplayStateContinue, nil
 	}
 	if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
@@ -439,6 +462,15 @@ func (sr *streamReplayState) emitFlatToolCall(
 		}
 	}
 	return streamReplayStateNext, nil
+}
+
+// withholdToolResult records replay's actual suppression decision without
+// pretending the terminal frame was emitted. Ordinary pending placeholders do
+// not use this: their genuinely finished result may already be in projection.
+func (sr *streamReplayState) withholdToolResult(tc session.ToolCall) {
+	if sr.coverage != nil {
+		sr.coverage[replayCoverageKey{kind: hubKindToolResult, id: string(tc.ID)}] = replayWithheld
+	}
 }
 
 // dispatchTurnCancelled replays one persisted turn-cancelled entry as the
