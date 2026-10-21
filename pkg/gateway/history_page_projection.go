@@ -29,6 +29,7 @@ type historyPreparedGroup struct {
 	message            generated.Message
 	encoded            []byte
 	frames             [][]byte
+	media              map[int]*historyPreparedMedia
 	emitted            map[string]bool
 	terminalAskEmitted bool
 }
@@ -156,6 +157,7 @@ func (r *historyPageRequest) prepare(ctx context.Context, p session.ChatHistoryP
 		return out, err
 	}
 	out.Response.PageInfo = info
+	seenMedia := make(map[string]struct{})
 	for _, entry := range p.Entries {
 		if err = ctx.Err(); err != nil {
 			return out, err
@@ -169,7 +171,10 @@ func (r *historyPageRequest) prepare(ctx context.Context, p session.ChatHistoryP
 			r.memo[entry.Position] = group
 		}
 		out.Response.Entries = append(out.Response.Entries, group.message)
-		out.ReplayFrames = append(out.ReplayFrames, group.frames...)
+		out.ReplayFrames, err = group.appendFrames(out.ReplayFrames, seenMedia)
+		if err != nil {
+			return out, err
+		}
 		for id := range group.emitted {
 			out.emitted[id] = true
 		}

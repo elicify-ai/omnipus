@@ -17,6 +17,7 @@ type historyMediaResolution struct {
 type historyReadOnlyMedia struct {
 	media.MediaStore
 	paths   map[string]historyMediaResolution
+	urls    map[string]string
 	failure error
 }
 
@@ -26,6 +27,12 @@ func (m *historyReadOnlyMedia) ResolveWithOpts(ref string, opts media.ResolveOpt
 	}
 	path, err := m.MediaStore.ResolveWithOpts(ref, opts)
 	m.paths[ref] = historyMediaResolution{path, err}
+	if err == nil && path != "" {
+		if m.urls == nil {
+			m.urls = make(map[string]string)
+		}
+		m.urls[mediaRefURL(ref)] = path
+	}
 	if err != nil {
 		m.failure = err
 	}
@@ -190,6 +197,12 @@ func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHis
 		}
 		if frameErr = validateHistorySourceFrame(raw); frameErr != nil {
 			return frameErr
+		}
+		if mediaFrame, ok := frame.(generated.MediaFrame); ok {
+			if out.media == nil {
+				out.media = make(map[int]*historyPreparedMedia)
+			}
+			out.media[len(out.frames)] = newHistoryPreparedMedia(mediaFrame, raw, r.media)
 		}
 		recordEmittedIDs(out.emitted, frame)
 		out.frames = append(out.frames, raw)

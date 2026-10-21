@@ -9,13 +9,14 @@ import (
 )
 
 type historyPageAttempt struct {
-	started       time.Time
-	carrier, mode string
-	opts          *session.ChatHistoryPageOptions
-	requested     *int
-	metrics       session.ChatHistoryReadMetrics
-	page          *session.ChatHistoryPage
-	err           error
+	started          time.Time
+	preparationEnded time.Time
+	carrier, mode    string
+	opts             *session.ChatHistoryPageOptions
+	requested        *int
+	metrics          session.ChatHistoryReadMetrics
+	page             *session.ChatHistoryPage
+	err              error
 }
 
 func newHistoryPageAttempt(carrier string) *historyPageAttempt {
@@ -62,9 +63,18 @@ func historyPageOutcome(err error) string {
 	}
 	return "storage"
 }
+
+// Freeze the preparation phase before any response/control delivery can block.
+// Summary emission remains at the single existing finish site for each attempt.
+func (a *historyPageAttempt) preparationComplete() {
+	if a.preparationEnded.IsZero() {
+		a.preparationEnded = time.Now()
+	}
+}
 func (a *historyPageAttempt) finish() {
+	a.preparationComplete()
 	m := a.metrics
-	fields := []any{"event", "history_page", "carrier", a.carrier, "mode", a.mode, "outcome", historyPageOutcome(a.err), "duration_ms", float64(time.Since(a.started).Nanoseconds()) / 1e6, "soft_byte_budget", session.DefaultChatHistorySoftByteBudget,
+	fields := []any{"event", "history_page", "carrier", a.carrier, "mode", a.mode, "outcome", historyPageOutcome(a.err), "duration_ms", float64(a.preparationEnded.Sub(a.started).Nanoseconds()) / 1e6, "soft_byte_budget", session.DefaultChatHistorySoftByteBudget,
 		"selected_archive_records", m.SelectedArchiveRecords, "selected_archive_bytes", m.SelectedArchiveBytes,
 		"lookahead_archive_records", m.LookaheadArchiveRecords, "lookahead_archive_bytes", m.LookaheadArchiveBytes,
 		"dependency_archive_records", m.DependencyArchiveRecords, "dependency_archive_bytes", m.DependencyArchiveBytes,

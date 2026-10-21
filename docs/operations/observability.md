@@ -107,7 +107,7 @@ The canonical [OpenAPI contract](https://github.com/elicify-ai/omnipus/blob/main
 
 ### Content-free history diagnostics
 
-One structured `message=history_page`, `event=history_page` summary records each authorized page attempt, including rejected input, failure or cancellation. Carriers are `rest_messages`, `rest_detail` and `ws_attach`. A servable journal-only attach performs no page attempt and emits no such summary. `success` means public page preparation completed, not that the socket, browser rendering or user acceptance completed.
+One structured `message=history_page`, `event=history_page` summary records each authorized page attempt, including rejected input, failure or cancellation. Carriers are `rest_messages`, `rest_detail` and `ws_attach`. A servable journal-only attach performs no page attempt and emits no such summary. `success` means public page preparation completed, not that the socket, browser rendering or user acceptance completed. `duration_ms` stops when preparation and validation finish, before HTTP response delivery or WebSocket history/control delivery can block; it is not an end-to-end delivery timer.
 
 | Field group | Recorded fields |
 |---|---|
