@@ -169,6 +169,9 @@ func TestSteeringCeilingDrain(t *testing.T) {
 				assert.Equal(t, 2, ends[0].Iterations, "the original turn stops at exactly two iterations")
 			}
 			requests := provider.Requests()
+			if tc.followUp && assert.GreaterOrEqual(t, len(requests), 3, "a continuation request must be observable") {
+				assertCeilingCompletedResults(t, requests[2])
+			}
 			for i, request := range requests {
 				t.Logf("request=%d follow_up_occurrences=%d", i+1, countMessagesContaining(request, followUp))
 			}
