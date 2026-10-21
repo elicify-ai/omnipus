@@ -1,10 +1,16 @@
 import { createRequire } from 'node:module'
+import { statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { expect, test, type Page } from '@playwright/test'
 import { selectAgent } from './fixtures/selectors'
 
 // Temporary Linux crash diagnostics: remove before final verification.
 const { debug } = createRequire(import.meta.url)('playwright-core/lib/utilsBundle')
 debug.enable([process.env.DEBUG, 'pw:browser'].filter(Boolean).join(','))
+const inheritedTmpdir = tmpdir()
+console.info('[sidebar-probe] inherited tmpdir', inheritedTmpdir, 'uid', process.getuid?.(), 'mode', (statSync(inheritedTmpdir).mode & 0o7777).toString(8), 'owner', statSync(inheritedTmpdir).uid)
+process.env.TMPDIR = '/tmp'
+console.info('[sidebar-probe] control tmpdir', tmpdir(), 'mode', (statSync(tmpdir()).mode & 0o7777).toString(8), 'owner', statSync(tmpdir()).uid)
 test.describe.configure({ retries: 0 })
 test.beforeEach(async ({ page, browser }) => {
   console.info('[sidebar-probe] context ready', process.platform, browser.version(), page.url())
