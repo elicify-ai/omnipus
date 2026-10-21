@@ -25,7 +25,9 @@ A kernel that is too old for a right Omnipus asks for is different: Omnipus star
 
 ### It exits with "bind: address already in use"
 
-The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port. Check what holds it:
+The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port.
+
+Before returning the final bind error, the gateway runs cleanup for services created during that startup attempt. It requests shutdown of scheduled jobs, the task and mail pollers, task triggers and the plan engine, where present. Cleanup can delay the final error while active work is stopping; the delay is not guaranteed to be short. Some stop requests do not wait for every in-flight operation to finish. The same cleanup runs for errors returned by other steps in this service-startup sequence, skipping services that were not created. Check what holds the port:
 
 ```bash
 lsof -i :5000 | grep LISTEN
@@ -40,6 +42,14 @@ Stop that process, or set another port in `~/.omnipus/config.json` and start aga
 ```
 
 The port is read at startup; a running gateway does not move its listener.
+
+### Stopping the gateway takes a moment
+
+When you stop the gateway normally — Ctrl-C, or SIGTERM from a service manager — Omnipus stops its chat channels and cancels the agent loop. It tries to let tracked work finish writing before tearing down the stores it uses, including background task runs and helper-agent turns. This cleanup also covers a helper turn already being resumed by a redirect as shutdown begins.
+
+Shutdown has several wait budgets, not one 30-second limit. The gateway waits up to 65 seconds for active requests, limited by the time remaining on its 70-second shutdown context. Agent cleanup has separate waits of up to 30 seconds for recaps, task dispatches and helper-agent turns, and up to five seconds for each session worker. These are individual wait budgets, not a guaranteed total stop time. If the gateway's shutdown context expires, it can continue shutdown without waiting for agent cleanup to finish.
+
+When a wait runs out, cleanup continues and the log shows a warning such as `Close: steered-turn drain budget exceeded; proceeding with teardown`. Some work or its final writes may be left unfinished.
 
 ## A connection shows a credential error (degraded)
 

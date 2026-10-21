@@ -442,7 +442,15 @@ func (al *AgentLoop) closeSessionWorkerSpawns() {
 	al.workerSpawnMu.Lock()
 	al.workerSpawnClosed = true
 	al.workerSpawnMu.Unlock()
+	if afterWorkerSpawnFenceTestHook != nil {
+		afterWorkerSpawnFenceTestHook(al)
+	}
 }
+
+// afterWorkerSpawnFenceTestHook is a test-only seam fired inside Close after
+// the spawn fence is set and before stopSessionWorkers takes its snapshot. It
+// is nil in production.
+var afterWorkerSpawnFenceTestHook func(al *AgentLoop)
 
 // dispatchSystemMessageToSessionWorker routes an async-origin system message
 // (#505, AsyncTranscriptSessionID set) through the per-session sessionWorker

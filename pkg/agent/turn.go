@@ -685,6 +685,18 @@ type turnState struct {
 	toolRepeatSig        string
 	toolRepeatRun        int
 	toolRepeatStopNotice string
+	// toolBreakerRefusedRound records, per signature the identical-failure
+	// breaker has marked broken, the round (iteration) of its first refusal.
+	// A refusal of the same signature in a LATER round means the model saw
+	// the refusal and asked again anyway: toolFailureStopNotice is then set
+	// and consumed at the end of that round, ending the turn like
+	// toolRepeatStopNotice does. Guarded by mu; per-turn, never persisted.
+	toolBreakerRefusedRound map[string]int
+	toolFailureStopNotice   string
+	// toolRoundProgressed is set when a dispatched call succeeds in the
+	// current tool round and cleared at the end of every round; a round
+	// that made progress never ends the turn on the breaker stop.
+	toolRoundProgressed bool
 	// delegatePolls tracks, per polled child session, what each delegate
 	// polling action last returned and how many times new information was
 	// seen (delegate_poll_guard.go). Guarded by mu; per-turn, never persisted.
@@ -1597,6 +1609,19 @@ func (ts *turnState) resolveContinuation() {
 	// consumed by nextRoundMessageID (e.g. a later round completed WITHOUT
 	// going through the truncation branch at all) must not leave a stale
 	// "reuse the old id" flag armed for some unrelated future round.
+	ts.continueSameMessageID = false
+}
+
+// retireContinuationAccumulator empties the D6 accumulator and settles the
+// chain once the accumulated answer has been saved as a whole answer of its
+// own (keepAnswerBeforeSteering). Without it a later round's answer is
+// prefixed with the already-saved text (finishTextResponse appends to the
+// accumulator for the rest of the turn once hadContinuation is true).
+func (ts *turnState) retireContinuationAccumulator() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationAccum = ""
+	ts.continuationPending = false
 	ts.continueSameMessageID = false
 }
 
