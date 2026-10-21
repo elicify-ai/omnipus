@@ -175,7 +175,7 @@ async function completeSetupAttaches(socket: TestSocket) {
       socket.receive(wireHistorySnapshot(page([], { sessionId: request.session_id }), {
         seq: 1, boot_id: 'stage1-fixture', reason: 'unknown_position',
       }))
-      socket.receive({ type: 'session_state', session_id: request.session_id, user_id: 'stage1-tester', emitted_at: NOW, pending_approvals: [] })
+      socket.receive({ type: 'session_state', session_id: request.session_id, user_id: 'stage1-tester', emitted_at: NOW, pending_approvals: [], history_state: { status: 'available' } })
       socket.receive({ type: 'catch_up_complete', session_id: request.session_id, seq: 1, boot_id: 'stage1-fixture', mode: 'snapshot' })
     }
   })

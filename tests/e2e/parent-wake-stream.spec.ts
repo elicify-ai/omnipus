@@ -101,10 +101,15 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
     await chatInput(page).press('Enter');
     await expect(assistantMessages(page).filter({ hasText: 'Launched' })).toHaveCount(1);
     await expect.poll(async () => (await terminalTranscript(page, gw!.baseURL, parent.id)).session.lifecycle_state).toBe('done');
-    await expect.poll(async () => (await terminalTranscript(page, gw!.baseURL, parent.id)).messages
-      .flatMap((message) => message.tool_calls ?? [])
-      .filter((call) => call.tool === 'delegate')
-      .map((call) => call.status), 'the actual delegate call succeeded, not just the scripted launch sentence').toEqual(['success']);
+    await expect.poll(async () => {
+      const detail = await terminalTranscript(page, gw!.baseURL, parent.id);
+      if (detail.history_state.status !== 'available' || detail.messages === undefined) {
+        throw new Error('Expected available parent history with messages before inspecting delegate completion');
+      }
+      return detail.messages.flatMap((message) => message.tool_calls ?? [])
+        .filter((call) => call.tool === 'delegate')
+        .map((call) => call.status);
+    }, 'the actual delegate call succeeded, not just the scripted launch sentence').toEqual(['success']);
     provider.releaseHelper();
 
     await expect(page.getByText(PARENT_WAKE_PARTIAL, { exact: false })).toBeVisible({ timeout: 90_000 });
