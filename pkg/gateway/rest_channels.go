@@ -171,7 +171,7 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			_ = a.setChannelEnabled(w, channelID, false)
+			a.disableChannel(w, channelID)
 		case "configure":
 			if r.Method != http.MethodPut {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -918,6 +918,14 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		jsonErr(w, http.StatusNotFound, "unknown instance")
 		return
 	}
+	// Close pairing admission for the instance while it is deleted and revoke
+	// its attempts and Retry eligibility; a recreated instance starts new and
+	// unowned (gate r3 M12).
+	removed := false
+	if a.agentLoop != nil {
+		a.agentLoop.BeginPairingDelete(channelID)
+		defer func() { a.agentLoop.EndPairingDelete(channelID, removed) }()
+	}
 
 	// Snapshot credential ref names to delete AFTER the config write.
 	chBaseType, _ := config.ParseInstanceKey(channelID)
@@ -982,6 +990,7 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
+	removed = true
 
 	// Step 2b (FINAL-REVIEW Medium-High — leaked running channel): reload the
 	// manager NOW, after the config entry is removed but BEFORE the credential and
@@ -1058,10 +1067,41 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 }
 
 func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) bool {
+	if a.applyChannelEnabled(w, channelID, enabled, channelEnableOptions{requireExisting: !enabled}) == enableFailed {
+		return false
+	}
+	jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: enabled})
+	return true
+}
+
+// enableOutcome is applyChannelEnabled's result. enableFailed means the
+// refusal or failure response is already written.
+type enableOutcome int
+
+const (
+	enableFailed enableOutcome = iota
+	enableConfirmed
+	enableUnconfirmed // saved; the reload did not confirm within its wait
+)
+
+// channelEnableOptions shapes applyChannelEnabled.
+type channelEnableOptions struct {
+	// requireExisting refuses a missing instance with 404 instead of creating
+	// it (a disable, a chat Retry — gate r3 M12).
+	requireExisting bool
+	// afterCommit runs once the enabled flag is saved and before the reload
+	// that applies it (a pairing admission becomes startable there — M14). A
+	// false result skips the reload; the response is already written.
+	afterCommit func(w http.ResponseWriter) bool
+}
+
+// applyChannelEnabled saves channelID's enabled flag and reloads so the
+// channel starts or stops; it writes only refusal and failure responses.
+func (a *restAPI) applyChannelEnabled(w http.ResponseWriter, channelID string, enabled bool, opts channelEnableOptions) enableOutcome {
 	baseType, _ := config.ParseInstanceKey(channelID)
 	if !validChannelIDs[baseType] {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
-		return false
+		return enableFailed
 	}
 	if enabled {
 		// Stage 1 of the channel-Test redesign: enabling a channel with an
@@ -1074,11 +1114,11 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		if err != nil {
 			slog.Error("rest: read config for channel enable validation", "channel", channelID, "error", err)
 			jsonServerFailure(w, http.StatusInternalServerError, "could not read config", err)
-			return false
+			return enableFailed
 		}
 		if msg := validateChannelConfigComplete(baseType, stored, nil, nil); msg != "" {
 			jsonErr(w, http.StatusBadRequest, msg)
-			return false
+			return enableFailed
 		}
 	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
@@ -1089,6 +1129,9 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		}
 		ch, _ := channels[channelID].(map[string]any)
 		if ch == nil {
+			if opts.requireExisting {
+				return errChannelAbsent
+			}
 			ch = map[string]any{}
 			channels[channelID] = ch
 		}
@@ -1099,9 +1142,13 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		ch["enabled"] = enabled
 		return nil
 	}); err != nil {
+		if errors.Is(err, errChannelAbsent) {
+			jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
+			return enableFailed
+		}
 		slog.Error("rest: set channel enabled", "channel", channelID, "enabled", enabled, "error", err)
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
-		return false
+		return enableFailed
 	}
 	// #358: persisting channels.<id>.enabled via safeUpdateConfigJSON only swaps the
 	// in-memory config pointer (refreshConfigAndRewireServices → SwapConfig); it does
@@ -1112,6 +1159,10 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 	// unwired reload pipeline (the unit-test environment) as a no-op and only returns an
 	// error on a genuine reload failure, which we surface rather than reporting a false
 	// success (the flag persisted but the channel did not start).
+	if opts.afterCommit != nil && !opts.afterCommit(w) {
+		return enableFailed
+	}
+	outcome := enableConfirmed
 	if a.agentLoop != nil {
 		if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 			verb := "start"
@@ -1122,8 +1173,9 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 				"channel", channelID, "enabled", enabled, "error", err)
 			jsonErr(w, http.StatusInternalServerError,
 				fmt.Sprintf("channel %s saved but failed to %s. Details are in the server log.", channelID, verb))
-			return false
+			return enableFailed
 		} else if !confirmed {
+			outcome = enableUnconfirmed
 			verb := "start"
 			if !enabled {
 				verb = "stop"
@@ -1133,8 +1185,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 				"channel", channelID, "enabled", enabled)
 		}
 	}
-	jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: enabled})
-	return true
+	return outcome
 }
 
 // redactChannelConfig returns a copy of cfg with sensitive fields replaced by a

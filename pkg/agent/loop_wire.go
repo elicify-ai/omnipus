@@ -2142,14 +2142,20 @@ func (al *AgentLoop) WireSysagentDeps(deps *systools.Deps) {
 	if depsCopy.ChannelLiveStatus == nil {
 		depsCopy.ChannelLiveStatus = al.channelLiveStatus
 	}
-	if depsCopy.NotePairingRequest == nil {
-		depsCopy.NotePairingRequest = al.NotePairingRequest
+	if depsCopy.AdmitPairing == nil {
+		depsCopy.AdmitPairing = al.AdmitConnectPairing
 	}
-	if depsCopy.SettlePairingRequest == nil {
-		depsCopy.SettlePairingRequest = al.SettlePairingRequest
+	if depsCopy.CommitPairing == nil {
+		depsCopy.CommitPairing = al.CommitPairing
 	}
-	if depsCopy.EnsureChannelStarted == nil {
-		depsCopy.EnsureChannelStarted = al.ensureChannelStarted
+	if depsCopy.ReleasePairing == nil {
+		depsCopy.ReleasePairing = al.ReleasePairing
+	}
+	if depsCopy.RequestChannelRestart == nil {
+		depsCopy.RequestChannelRestart = al.requestChannelRestart
+	}
+	if depsCopy.LastStartError == nil {
+		depsCopy.LastStartError = al.lastStartError
 	}
 	al.sysagentDeps = &depsCopy
 	al.wireSysagentDepsLocked(al.registry, &depsCopy)

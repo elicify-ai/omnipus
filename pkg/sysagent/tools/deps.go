@@ -175,19 +175,28 @@ type Deps struct {
 	// after the last reload, with a value-free failure reason (connect_channel).
 	// WireSysagentDeps fills it from the agent loop's channel manager.
 	ChannelLiveStatus func(id string) (running bool, failure string, known bool)
-	// NotePairingRequest correlates a chat-started QR pairing with its
-	// request and chat (K10, FR-081). WireSysagentDeps fills it.
-	NotePairingRequest func(channelID, requestID, sessionID string)
-	// SettlePairingRequest disarms that claim once connect_channel's start
-	// finished without beginning a pairing attempt, so a later unrelated
-	// attempt cannot inherit it (gate r2 T2-R2-S1). WireSysagentDeps fills it.
-	SettlePairingRequest func(channelID, requestID, sessionID string)
-	// EnsureChannelStarted starts a registered channel that is not running,
-	// for connect_channel only: a channel stopped in place (its pairing was
-	// stopped from the chat) keeps an unchanged config, so a reload alone
-	// never starts it again (gate r1 architect F04). It reports whether it
-	// started the channel. WireSysagentDeps fills it.
-	EnsureChannelStarted func(id string) (bool, error)
+	// AdmitPairing reserves the next QR pairing attempt of a channel for the
+	// approved connect call (request id) in its chat (session id), before
+	// anything is saved; an error refuses it (another attempt is in flight
+	// and keeps its owner). Gate r3 M1, M5. WireSysagentDeps fills it.
+	AdmitPairing func(channelID, requestID, sessionID string) (attemptID string, err error)
+	// CommitPairing makes the admitted attempt startable once its
+	// configuration saved and asks the next reload for a fresh start (M4,
+	// M10, M14). It reports false when the attempt is no longer admitted (a
+	// Stop revoked it). WireSysagentDeps fills it.
+	CommitPairing func(channelID, attemptID string) bool
+	// ReleasePairing ends an admitted attempt no start consumed (a failed
+	// save, or a confirmed reload that did not start it). WireSysagentDeps
+	// fills it.
+	ReleasePairing func(channelID, attemptID string)
+	// RequestChannelRestart asks the next reload to start a registered
+	// channel that is not running — one stopped in place or whose earlier
+	// start failed — through the reload lifecycle (gate r1 F04, gate r3
+	// M10). WireSysagentDeps fills it.
+	RequestChannelRestart func(id string) bool
+	// LastStartError returns a channel's most recent start failure, for a
+	// value-free cause and repair (gate r2 T2-SF-10). WireSysagentDeps fills it.
+	LastStartError func(id string) error
 	// WaitForPendingReloadFunc BLOCKS until any reload already queued by a
 	// prior publish hook (UpsertAgentFastFunc / ReloadFunc) has actually
 	// landed in memory, OR returns an error after reloadWaitTimeout elapses.

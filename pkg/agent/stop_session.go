@@ -101,12 +101,16 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	}
 	ctx = al.withSecretStopIntent(ctx, intentCause)
 	// BDD-8.8: Stop in the chat that started a pairing ends that pairing even
-	// when the chat has no live turn to cancel (gate r1 CR-T2-03). The pairing
-	// teardown can block on the platform client (up to pairingStopTimeout), so
-	// it runs only after this Stop has stamped its durable fence and asked the
-	// turn to stop (gate r2 CR-T2-R2-02): deferred, so every return path —
-	// including a Stop whose target could not be read — still ends the pairing.
-	defer al.stopPairingsForSession(req.SessionID)
+	// when the chat has no live turn to cancel (gate r1 CR-T2-03). Each reached
+	// session's owned attempts are selected at its admission — the requested
+	// session here, every helper a Stop-all reaches in stopTurn below (gate r3
+	// M6, M9) — and the selection is frozen. The teardown can block on the
+	// platform client, so it runs only after this Stop has stamped its durable
+	// fence and asked the turns to stop (gate r2 CR-T2-R2-02, gate r3 M7):
+	// deferred, so every return path still ends the selected pairings.
+	pairings := &pairingStopSelection{}
+	pairings.add(al.selectOwnedPairings(req.SessionID))
+	defer func() { al.stopSelectedPairings(pairings.all()) }()
 	// N6: once this Stop has ended the session's episode, release any retained
 	// external-CLI driver (its option/env snapshot). No-op while the run is still
 	// winding down (releaseExternalRunIfIdle checks the running flag; the steered
@@ -143,6 +147,8 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	res.Selected = make(map[string]session.StopSelection)
 	swept := make(map[string]bool) // sessions whose stop already ran the shell hook
 	stopTurn := func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
+		// A reached helper's own pairing attempts are part of this Stop (M9).
+		pairings.add(al.selectOwnedPairings(id))
 		// D5: this Stop supersedes the session's older pending steers.
 		if selected, carried := stopSelectionFromContext(effectCtx); carried {
 			if err := al.supersedePendingSteers(id, selected.Effect.ControlID); err != nil {

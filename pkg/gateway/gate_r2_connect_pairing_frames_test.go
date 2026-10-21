@@ -3,13 +3,11 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -17,34 +15,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
-
-// connectPairingChannel models the WhatsApp channel the connect starts: its
-// Start begins a pairing attempt through the production emitter
-// (EmitWhatsAppPairing), exactly as the real channel's pairing observer does.
-type connectPairingChannel struct {
-	al         *agent.AgentLoop
-	id         string
-	running    atomic.Bool
-	stopCalled chan struct{}
-}
-
-func (c *connectPairingChannel) Name() string { return c.id }
-func (c *connectPairingChannel) Start(context.Context) error {
-	c.running.Store(true)
-	c.al.EmitWhatsAppPairing(c.id, channels.PairingStatusWaiting, "", "")
-	c.al.EmitWhatsAppPairing(c.id, channels.PairingStatusCode, "QR-F3-CODE", "")
-	return nil
-}
-func (c *connectPairingChannel) Stop(context.Context) error                      { c.running.Store(false); return nil }
-func (c *connectPairingChannel) Send(context.Context, bus.OutboundMessage) error { return nil }
-func (c *connectPairingChannel) IsRunning() bool                                 { return c.running.Load() }
-func (c *connectPairingChannel) IsAllowed(string) bool                           { return true }
-func (c *connectPairingChannel) IsAllowedSender(bus.SenderInfo) bool             { return true }
-func (c *connectPairingChannel) ReasoningChannelID() string                      { return "" }
-func (c *connectPairingChannel) StopPairing(context.Context) bool {
-	c.stopCalled <- struct{}{}
-	return true
-}
 
 // TestPairingStop_ConnectFramesCarryTheExactConnectCall is Train 2 gate r2
 // pr-test F3: the approved connect_channel call's own tool-call id must be
@@ -56,16 +26,19 @@ func TestPairingStop_ConnectFramesCarryTheExactConnectCall(t *testing.T) {
 	seedWU5Membership(t, w.f1277.home)
 	const waInstance = "whatsapp.wu7"
 	const connectCallID = "wu7-connect-wa-exact"
-	ch := &connectPairingChannel{al: w.al, id: waInstance, stopCalled: make(chan struct{}, 2)}
-	w.svc.ChannelManager.RegisterChannel(waInstance, ch)
-	// The fixture has no reload pipeline; with the reload reported complete
-	// the connect reaches its real explicit start (EnsureChannelStarted).
+	ch := newAttemptChannel(waInstance)
+	registerAttemptChannel(t, w.al, w.svc.ChannelManager, ch)
+	// The fixture has no reload pipeline: this reload starts the connector the
+	// way the manager's reload does — consuming the connect's admitted attempt.
 	w.al.WireSysagentDeps(&systools.Deps{
 		Home: w.f1277.home, ConfigPath: w.f1277.configPath,
 		GetCfg: w.al.GetConfig, MutateConfig: w.al.MutateConfig,
-		SaveConfigLocked:  func(c *config.Config) error { return config.SaveConfig(w.f1277.configPath, c) },
-		CredStore:         w.store,
-		WaitForReloadFunc: func() error { return nil },
+		SaveConfigLocked: func(c *config.Config) error { return config.SaveConfig(w.f1277.configPath, c) },
+		CredStore:        w.store,
+		WaitForReloadFunc: func() error {
+			token := w.svc.ChannelManager.PairingAttempts().TakeReady(waInstance, channels.ChannelRevision(w.al.GetConfig(), waInstance))
+			return ch.Start(channels.WithPairingStart(context.Background(), token, false))
+		},
 	})
 
 	main, err := w.al.GetSessionStore().GetOrCreateMainSession(testHarnessWorkspaceMembershipID, "omnipus")
@@ -117,7 +90,7 @@ func TestPairingStop_ConnectFramesCarryTheExactConnectCall(t *testing.T) {
 	require.Equal(t, connectCallID, code["request_id"], "the code frame names exactly this connect call")
 	require.Equal(t, main.ID, code["session_id"])
 
-	w.al.EmitWhatsAppPairing(waInstance, channels.PairingStatusTimeout, "", "the QR code expired before it was scanned")
+	ch.timeout()
 	timeout := requireFrame("timeout")
 	require.Equal(t, connectCallID, timeout["request_id"], "the timeout frame names exactly this connect call")
 	require.Equal(t, main.ID, timeout["session_id"])

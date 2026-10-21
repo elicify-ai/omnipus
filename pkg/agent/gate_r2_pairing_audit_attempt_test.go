@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -14,11 +15,11 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 )
 
-// TestPairingAudit_RowNamesTheAttemptsOwnRequest is Train 2 gate r2
-// T2-R2-S1 (audit attribution): chat A's attempt ends without a terminal
-// event (the channel was disabled); a later attempt started without a chat
-// claim (Connectors) times out. Its audit row must not name A's request —
-// only the attempt's own owner, here none.
+// TestPairingAudit_RowNamesTheAttemptsOwnRequest is Train 2 gate r2/r3
+// (T2-R3-S2, M13): chat A's attempt ends without a terminal event (its channel
+// was disabled); a later attempt started without a chat claim (Connectors)
+// times out. Its audit row names its own attempt and no chat — never A's
+// request. An owned attempt's row names its own request (control).
 func TestPairingAudit_RowNamesTheAttemptsOwnRequest(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -27,14 +28,15 @@ func TestPairingAudit_RowNamesTheAttemptsOwnRequest(t *testing.T) {
 	al, err := NewAgentLoop(auditBootTestConfig(), msgBus, &mockProvider{})
 	require.NoError(t, err)
 	t.Cleanup(func() { al.Close() })
+	store := pairingAttemptsFor(t, al)
+	noop := func(string) func(context.Context) error { return func(context.Context) error { return nil } }
 
-	al.NotePairingRequest("whatsapp", "req-a", "sess-a")
-	al.EmitWhatsAppPairing("whatsapp", channels.PairingStatusWaiting, "", "")
-	al.EmitWhatsAppPairing("whatsapp", channels.PairingStatusWaiting, "", "") // Connectors restart, no claim
-	al.EmitWhatsAppPairing("whatsapp", channels.PairingStatusTimeout, "", "expired")
-	al.NotePairingRequest("whatsapp-2", "req-b", "sess-b")
-	al.EmitWhatsAppPairing("whatsapp-2", channels.PairingStatusWaiting, "", "")
-	al.EmitWhatsAppPairing("whatsapp-2", channels.PairingStatusTimeout, "", "expired")
+	_, _ = startOwnedAttempt(t, store, "whatsapp", "sess-a", "req-a")
+	connectors, err := store.Activate("whatsapp", "", noop) // Connectors restart, no claim
+	require.NoError(t, err)
+	al.EmitWhatsAppPairingAttempt("whatsapp", connectors.AttemptID, channels.PairingStatusTimeout, "", "expired")
+	owned, _ := startOwnedAttempt(t, store, "whatsapp-2", "sess-b", "req-b")
+	al.EmitWhatsAppPairingAttempt("whatsapp-2", owned, channels.PairingStatusTimeout, "", "expired")
 
 	raw, err := os.ReadFile(filepath.Join(home, "system", "audit.jsonl"))
 	require.NoError(t, err)
@@ -51,6 +53,8 @@ func TestPairingAudit_RowNamesTheAttemptsOwnRequest(t *testing.T) {
 	}
 	require.Contains(t, rows, "whatsapp-2", "control: an owned attempt's timeout is audited")
 	require.Equal(t, "req-b", rows["whatsapp-2"]["request_id"], "control: an owned attempt names its own request")
+	require.Equal(t, owned, rows["whatsapp-2"]["attempt_id"])
 	require.Contains(t, rows, "whatsapp")
 	require.NotContains(t, rows["whatsapp"], "request_id", "an unowned attempt's row must not name an earlier chat's request")
+	require.Equal(t, connectors.AttemptID, rows["whatsapp"]["attempt_id"])
 }

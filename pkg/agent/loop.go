@@ -105,9 +105,10 @@ type AgentLoop struct {
 	// (FR-019): key sessionKey (string), value *RecallSpan. Never persisted;
 	// set by recall_conversation, read/dropped by windowTrim + assembly.
 	recallSpans sync.Map // key: sessionKey (string), value: *RecallSpan
-	// pairingOwners is each channel's per-attempt chat ownership of its QR
-	// pairing (K10, FR-081; see pairing_ownership.go).
-	pairingOwners pairingOwnership
+	// pairingEmitMu orders pairing publications against attempt transitions,
+	// so an old attempt's event never lands after its successor's (gate r3 M8;
+	// pairing_correlation.go).
+	pairingEmitMu sync.Mutex
 	// pairingSeq numbers WhatsApp pairing events in emit order
 	// (WhatsAppPairingPayload.Seq).
 	pairingSeq atomic.Uint64

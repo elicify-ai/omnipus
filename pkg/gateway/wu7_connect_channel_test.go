@@ -117,7 +117,7 @@ func TestWU7ConnectChannel_WrongBinding_NothingSaved(t *testing.T) {
 
 // TestWU7Pairing_QRFrameCorrelatesRequest is BDD-8.4 + K10/FR-081: a
 // chat-started WhatsApp pairing carries RequestID/SessionID on its payload
-// (connect_channel stamps them via AgentLoop.NotePairingRequest) and the
+// (connect_channel admits its attempt via AgentLoop.AdmitConnectPairing) and the
 // forwarder copies both into the whatsapp_pairing frame; a Settings-started
 // pairing carries neither and the frame stays uncorrelated.
 func TestWU7Pairing_QRFrameCorrelatesRequest(t *testing.T) {
@@ -174,7 +174,7 @@ func TestWU7Pairing_QRFrameCorrelatesRequest(t *testing.T) {
 
 // agent_NewEventForWU7 builds the pairing event the two start paths emit:
 // a chat-started pairing carries RequestID/SessionID (connect_channel stamps
-// them via AgentLoop.NotePairingRequest); a Settings-started one carries
+// them by admitting its attempt via AgentLoop.AdmitConnectPairing); a Settings-started one carries
 // neither.
 func agent_NewEventForWU7(requestID, sessionID, qr string) agent.Event {
 	payload := agent.WhatsAppPairingPayload{ChannelID: "whatsapp_native", Status: channels.PairingStatusCode, QR: qr}

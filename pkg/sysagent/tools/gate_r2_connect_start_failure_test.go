@@ -20,7 +20,8 @@ func (timeoutError) Timeout() bool   { return true }
 func (timeoutError) Temporary() bool { return true }
 
 // TestConnectChannel_StartFailureKeepsItsCauseAndRepair is Train 2 gate r2
-// T2-SF-10: when the explicit start fails, the saved-but-not-working result
+// T2-SF-10 (re-aimed for gate r3 M10, where the reload's start reports its
+// failure through LastStartError): when the channel's start fails, the saved-but-not-working result
 // names a value-free cause and the matching repair — a damaged local session
 // store is not a credential problem — and never the raw platform text.
 func TestConnectChannel_StartFailureKeepsItsCauseAndRepair(t *testing.T) {
@@ -49,7 +50,7 @@ func TestConnectChannel_StartFailureKeepsItsCauseAndRepair(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			tool, _ := connectRevisionFixture(t, func(*config.Config) {})
 			tool.deps.ChannelLiveStatus = func(string) (bool, string, bool) { return false, "", true }
-			tool.deps.EnsureChannelStarted = func(string) (bool, error) { return false, tc.err }
+			tool.deps.LastStartError = func(string) error { return tc.err }
 			res := tool.Execute(context.Background(), map[string]any{
 				"id": "whatsapp", "workspace_id": "sales", "agent_id": "mia", "expected_revision": "absent"})
 			require.NotNil(t, res)

@@ -20,14 +20,15 @@
 //     kept (chief ruling 2026-10-18 keeps that for uncorrelated pairings).
 //
 // Unit boundary: the loop-level tests drive the REAL Stop path
-// (RequestCancelForSession → StopSession → the pairing sweep → the channel
-// manager) against a REAL channels.Manager with a registered test channel
-// whose StopPairing reports an in-flight pairing. The real whatsapp_native
-// channel's QR loop is whatsmeow-driven and needs the WhatsApp servers, so
-// the channel side of "no further codes" is the PairingStoppable contract
-// the fake models; what the loop-level tests prove is that the Stop reaches
-// the manager-resolved channel and emits the correlated "stopped" frame, and
-// that an unrelated chat's Stop reaches nothing. The reconnect tests drive
+// (RequestCancelForSession → StopSession → the selected pairing attempt's own
+// teardown) against a REAL channels.Manager and its pairing-attempt store,
+// with a registered test channel that runs a real admitted and started
+// attempt (gate r3 pairing-ownership model; re-aimed under chief ruling Q4 =
+// A). The real whatsapp_native channel's QR loop is whatsmeow-driven and
+// needs the WhatsApp servers, so only that platform client is faked; what the
+// loop-level tests prove is that the Stop reaches the started attempt's own
+// teardown and emits the correlated "stopped" frame, and that an unrelated
+// chat's Stop reaches nothing. The reconnect tests drive
 // the real forwarder and the real subscribe re-emit over the real event bus.
 //
 // RED expectation on the pre-implementation base: the Stop oracle and the
@@ -46,8 +47,10 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -57,36 +60,13 @@ import (
 // through the manager, not through a hard-coded production name.
 const pairingTestChannelID = "whatsapp-pairing-test"
 
-// pairingTestChannel is a minimal Channel whose pairing is stoppable: it
-// models the in-flight state of the real WhatsApp channel's QR loop.
-// StopPairing is declared as a plain method — the production type assertion
-// (channels.PairingStoppable) is what discovers it, so the test never needs
-// the interface type by name.
-type pairingTestChannel struct {
-	running    chan struct{}
-	stopCalled chan string
-}
+// pairingTestChannel models the real WhatsApp channel's QR loop as a
+// store-tracked pairing attempt (gate_r3_pairing_fakes_test.go): its started
+// attempt's own teardown records the stop on stopCalled.
+type pairingTestChannel = attemptChannel
 
 func newPairingTestChannel() *pairingTestChannel {
-	return &pairingTestChannel{running: make(chan struct{}), stopCalled: make(chan string, 4)}
-}
-
-func (c *pairingTestChannel) Name() string                    { return pairingTestChannelID }
-func (c *pairingTestChannel) Start(ctx context.Context) error { close(c.running); return nil }
-func (c *pairingTestChannel) Stop(ctx context.Context) error  { return nil }
-func (c *pairingTestChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
-	return nil
-}
-func (c *pairingTestChannel) IsRunning() bool                            { return true }
-func (c *pairingTestChannel) IsAllowed(senderID string) bool             { return true }
-func (c *pairingTestChannel) IsAllowedSender(sender bus.SenderInfo) bool { return true }
-func (c *pairingTestChannel) ReasoningChannelID() string                 { return "" }
-
-// StopPairing models the in-flight pairing: the real channel returns true
-// only while its QR loop runs and the device has not linked.
-func (c *pairingTestChannel) StopPairing(ctx context.Context) bool {
-	c.stopCalled <- pairingTestChannelID
-	return true
+	return newAttemptChannel(pairingTestChannelID)
 }
 
 // pairingStopFixture is the loop-level fixture: a real loop (its own event
@@ -111,7 +91,7 @@ func newPairingStopFixture(t *testing.T) *pairingStopFixture {
 	mgr, err := channels.NewManager(cfg, nil, msgBus, nil)
 	require.NoError(t, err)
 	fake := newPairingTestChannel()
-	mgr.RegisterChannel(pairingTestChannelID, fake)
+	registerAttemptChannel(t, al, mgr, fake)
 	al.SetChannelManager(mgr)
 
 	store := al.GetSessionStore()
@@ -124,9 +104,9 @@ func newPairingStopFixture(t *testing.T) *pairingStopFixture {
 	require.NoError(t, store.SetMeta(other.ID, session.MetaPatch{Owner: &owner}))
 
 	requestID := "req-pairing-stop"
-	// The chat-started correlation (K10/FR-081): the loop records which chat
-	// request started the pairing.
-	al.NotePairingRequest(pairingTestChannelID, requestID, main.ID)
+	// The chat-started pairing (K10/FR-081): the chat's request is admitted
+	// as the owner of a new attempt, which then starts.
+	admitAndStartConnect(t, al, mgr, fake, requestID, main.ID)
 
 	return &pairingStopFixture{
 		t: t, al: al, fake: fake, mainID: main.ID, otherID: other.ID,
@@ -315,16 +295,27 @@ func TestPairingStop_ConnectChannelStampsTheChatCorrelation(t *testing.T) {
 	w := newWU6Fixture(t)
 	// The binding is valid: sales exists with mia on its team (BDD-8.1).
 	seedWU5Membership(t, w.f1277.home)
-	// The manager-resolved channel the Stop must reach: a stoppable test
-	// channel under the WhatsApp instance id the connect call names. The id
-	// is a proper namespaced key (type prefix "whatsapp" — the connect tool
+	// The channel the connect's pairing attempt runs on: an attempt-tracking
+	// test channel under the WhatsApp instance id the connect call names. The
+	// id is a proper namespaced key (type prefix "whatsapp" — the connect tool
 	// resolves the type from it). The real whatsapp_native channel's QR loop
 	// needs the WhatsApp servers; what this journey proves is the
-	// tool→loop→channel wiring, and the fake models the stoppable in-flight
-	// pairing.
+	// tool→admission→start→Stop wiring, and the fake models the platform.
 	const waInstance = "whatsapp.wu7"
-	fake := newPairingTestChannel()
-	w.svc.ChannelManager.RegisterChannel(waInstance, fake)
+	fake := newAttemptChannel(waInstance)
+	registerAttemptChannel(t, w.al, w.svc.ChannelManager, fake)
+	// The fixture has no reload pipeline: this reload starts the connector the
+	// way the manager's reload does — consuming the admitted attempt.
+	w.al.WireSysagentDeps(&systools.Deps{
+		Home: w.f1277.home, ConfigPath: w.f1277.configPath,
+		GetCfg: w.al.GetConfig, MutateConfig: w.al.MutateConfig,
+		SaveConfigLocked: func(c *config.Config) error { return config.SaveConfig(w.f1277.configPath, c) },
+		CredStore:        w.store,
+		WaitForReloadFunc: func() error {
+			token := w.svc.ChannelManager.PairingAttempts().TakeReady(waInstance, channels.ChannelRevision(w.al.GetConfig(), waInstance))
+			return fake.Start(channels.WithPairingStart(context.Background(), token, false))
+		},
+	})
 
 	// The real approved connect call for the WhatsApp instance — no
 	// credentials (WhatsApp pairs by QR), no configure step.
@@ -356,9 +347,9 @@ func TestPairingStop_ConnectChannelStampsTheChatCorrelation(t *testing.T) {
 	w.awaitApproval("connect_channel", 15*time.Second)
 	w.approveNext() // connect_channel
 
-	// The connect's own report: saved, bound, enabled. With no reload wired
-	// (the fixture's honest state) the outcome is "saved but not working:
-	// the reload after saving did not complete".
+	// The connect's own report: saved, bound, enabled. The reload above
+	// starts the admitted pairing, so the outcome is "saved but not working:
+	// pairing not finished".
 	reportDeadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(reportDeadline) {
 		result := strings.ToLower(w.provider.lastToolResult())
@@ -368,9 +359,8 @@ func TestPairingStop_ConnectChannelStampsTheChatCorrelation(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	result := strings.ToLower(w.provider.lastToolResult())
-	// With no reload wired (the fixture's honest state), liveResult reports
-	// "saved but not working: the reload after saving did not complete" —
-	// the save itself carries the binding and the enable.
+	// liveResult reports "saved but not working: pairing not finished" — the
+	// save itself carries the binding and the enable.
 	require.Contains(t, result, "whatsapp.wu7", "the connect report names the instance; result: %s", result)
 	require.Contains(t, result, "outcome", "the connect report carries its outcome; result: %s", result)
 	savedCfg := w.al.GetConfig()

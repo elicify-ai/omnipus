@@ -14,6 +14,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -22,37 +23,120 @@ import (
 const pairingRetryConflictText = "This chat can no longer retry this pairing. " +
 	"Open the WhatsApp connector to start a new pairing."
 
+// pairingRetryUnconfirmedText answers a Retry whose enable saved but whose
+// reload did not confirm the start in time: the admitted attempt is kept,
+// because its start can still happen (gate r3 M10).
+const pairingRetryUnconfirmedText = "The WhatsApp connection is enabled, but its restart could not be " +
+	"confirmed yet. The new code appears in this chat when the pairing starts."
+
 // channelEnableBodyLimit bounds the optional enable body; the contract's
 // largest valid body is a few hundred bytes.
 const channelEnableBodyLimit = 64 << 10
 
+// errChannelAbsent refuses to create a missing channel entry where the request
+// requires an existing one.
+var errChannelAbsent = errors.New("channel instance does not exist")
+
 // enableChannel serves PUT /channels/{id}/enable. An absent body or {} is an
-// ordinary enable that grants no chat ownership. A pairing_retry body is an
-// explicit chat Retry (Train 2 gate r2 T2-R2-S1 / R2-A02 / CR-T2-04 /
-// T2-SF-04, architect ruling arch-retry-contract.md): the caller must own the
-// session, and the request/session pair must be the channel's recorded
-// pairing owner; the next attempt is claimed for that chat before anything is
-// enabled. Any refusal enables nothing and changes no ownership.
+// ordinary enable that grants no chat ownership; turning a WhatsApp connector
+// on starts a new unowned pairing attempt. A pairing_retry body is an explicit
+// chat Retry (gate r3, binding pairing-ownership model M1–M4, M10, M12, M14):
+// the connector must exist, the caller must own the session, and the chat
+// must own the latest ended attempt; a NEW attempt is reserved for it before
+// anything is enabled. Any refusal enables nothing and changes no ownership.
 func (a *restAPI) enableChannel(w http.ResponseWriter, r *http.Request, channelID string) {
 	req, ok := decodeChannelEnableRequest(w, r)
 	if !ok {
 		return
 	}
 	if req == nil || req.PairingRetry == nil {
-		_ = a.setChannelEnabled(w, channelID, true)
+		a.enableChannelOrdinary(w, channelID)
 		return
 	}
 	requestID, sessionID := req.PairingRetry.RequestId, req.PairingRetry.SessionId
-	if !a.admitPairingRetry(w, r, channelID, requestID, sessionID) {
+	attemptID, ok := a.admitPairingRetry(w, r, channelID, requestID, sessionID)
+	if !ok {
 		return
 	}
-	if !a.setChannelEnabled(w, channelID, true) {
-		a.agentLoop.ReleasePairingClaim(channelID, requestID, sessionID)
-		return
+	outcome := a.applyChannelEnabled(w, channelID, true, channelEnableOptions{
+		requireExisting: true,
+		afterCommit: func(w http.ResponseWriter) bool {
+			if a.agentLoop.CommitPairing(channelID, attemptID) {
+				return true
+			}
+			// A Stop or deletion revoked the reservation between admission and
+			// commit: refuse instead of starting a fallback pairing (M14).
+			jsonErrCode(w, http.StatusConflict, pairingRetryConflictText, "pairing_retry_conflict")
+			return false
+		},
+	})
+	switch outcome {
+	case enableFailed:
+		a.agentLoop.ReleasePairing(channelID, attemptID)
+	case enableUnconfirmed:
+		jsonErr(w, http.StatusInternalServerError, pairingRetryUnconfirmedText)
+	default:
+		// The reload completed: an admission no start consumed (the device
+		// was already linked) is closed; one the start took is left to it.
+		a.agentLoop.ReleasePairing(channelID, attemptID)
+		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
 	}
-	// The enable waited for the reload, so an attempt it started has bound the
-	// claim; a claim no attempt consumed must not pass to a later one.
-	a.agentLoop.SettlePairingRequest(channelID, requestID, sessionID)
+}
+
+// enableChannelOrdinary is the bodyless enable. Turning a WhatsApp connector
+// on reserves an unowned attempt for its start (M1); an enable of a connector
+// already on is idempotent and reserves nothing.
+func (a *restAPI) enableChannelOrdinary(w http.ResponseWriter, channelID string) {
+	attemptID := ""
+	if a.agentLoop != nil && pairingCapable(channelID) && !a.channelEnabledNow(channelID) {
+		admitted, err := a.agentLoop.AdmitEnablePairing(channelID)
+		if err != nil {
+			// Another attempt is in flight (or the store is unavailable): the
+			// enable still turns the connector on, and that attempt keeps its
+			// owner; the start then runs as an ordinary unowned start.
+			slog.Info("rest: enable reserved no pairing attempt", "channel", channelID, "error", err)
+		}
+		attemptID = admitted
+	}
+	opts := channelEnableOptions{}
+	if attemptID != "" {
+		opts.afterCommit = func(http.ResponseWriter) bool {
+			a.agentLoop.CommitPairing(channelID, attemptID)
+			return true
+		}
+	}
+	outcome := a.applyChannelEnabled(w, channelID, true, opts)
+	if attemptID != "" && outcome != enableUnconfirmed {
+		a.agentLoop.ReleasePairing(channelID, attemptID)
+	}
+	if outcome != enableFailed {
+		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
+	}
+}
+
+// disableChannel serves PUT /channels/{id}/disable. A not-yet-started pairing
+// admission of a connector being turned off can never start late (gate r3
+// M2), and a missing connector is a 404, never created (M12).
+func (a *restAPI) disableChannel(w http.ResponseWriter, channelID string) {
+	if a.agentLoop != nil {
+		a.agentLoop.RevokePairingForDisable(channelID)
+	}
+	_ = a.setChannelEnabled(w, channelID, false)
+}
+
+func pairingCapable(channelID string) bool {
+	baseType, _ := config.ParseInstanceKey(channelID)
+	return baseType == "whatsapp" || baseType == "whatsapp_native"
+}
+
+// channelEnabledNow reports whether channelID is enabled in the live config.
+func (a *restAPI) channelEnabledNow(channelID string) bool {
+	cfg := a.agentLoop.GetConfig()
+	if cfg == nil {
+		return false
+	}
+	inst, ok := cfg.Channels[channelID]
+	return ok && inst.Enabled
 }
 
 // decodeChannelEnableRequest reads the optional body. It validates against
@@ -93,46 +177,60 @@ func decodeChannelEnableRequest(w http.ResponseWriter, r *http.Request) (*gen.Ch
 	return &req, true
 }
 
-// admitPairingRetry authenticates the Retry and claims the channel's next
-// pairing attempt for that chat. It writes the refusal and returns false on
-// any failure, before any configuration or ownership change.
-func (a *restAPI) admitPairingRetry(w http.ResponseWriter, r *http.Request, channelID, requestID, sessionID string) bool {
+// admitPairingRetry authenticates the Retry and reserves a new pairing attempt
+// for that chat. It writes the refusal and returns false on any failure,
+// before any configuration or ownership change.
+func (a *restAPI) admitPairingRetry(w http.ResponseWriter, r *http.Request, channelID, requestID, sessionID string) (string, bool) {
 	baseType, _ := config.ParseInstanceKey(channelID)
 	if !validChannelIDs[baseType] {
 		jsonErr(w, http.StatusNotFound, "channel not found")
-		return false
+		return "", false
 	}
-	if baseType != "whatsapp" && baseType != "whatsapp_native" {
+	if !pairingCapable(channelID) {
 		jsonErr(w, http.StatusBadRequest, "pairing_retry applies only to WhatsApp QR pairing")
-		return false
+		return "", false
 	}
 	if a.agentLoop == nil {
 		jsonErr(w, http.StatusServiceUnavailable, "pairing ownership is unavailable; nothing was enabled")
-		return false
+		return "", false
+	}
+	if cfg := a.agentLoop.GetConfig(); cfg == nil || !channelInstanceExists(cfg, channelID) {
+		// A deleted connector is not recreated by a Retry (M12).
+		jsonErr(w, http.StatusNotFound, "this WhatsApp connection no longer exists; nothing was enabled")
+		return "", false
 	}
 	store := a.resolveSessionStore(sessionID)
 	if store == nil {
 		jsonErr(w, http.StatusNotFound, "session not found; nothing was enabled")
-		return false
+		return "", false
 	}
 	meta, err := store.GetMeta(sessionID)
 	if err != nil || meta == nil {
 		slog.Error("rest: pairing retry could not read the session", "channel", channelID, "error", err)
 		jsonErr(w, http.StatusServiceUnavailable, "the chat session could not be read; nothing was enabled")
-		return false
+		return "", false
 	}
 	if meta.Owner != requestUsername(r) {
 		jsonErr(w, http.StatusForbidden, "this chat belongs to another user; nothing was enabled")
-		return false
+		return "", false
 	}
-	if err := a.agentLoop.ClaimPairingRetry(channelID, requestID, sessionID); err != nil {
-		if errors.Is(err, agent.ErrPairingRetryConflict) {
-			jsonErrCode(w, http.StatusConflict, pairingRetryConflictText, "pairing_retry_conflict")
-			return false
-		}
-		slog.Error("rest: pairing retry claim failed", "channel", channelID, "error", err)
+	attemptID, err := a.agentLoop.AdmitRetryPairing(channelID, requestID, sessionID)
+	switch {
+	case errors.Is(err, channels.ErrPairingConflict):
+		jsonErrCode(w, http.StatusConflict, pairingRetryConflictText, "pairing_retry_conflict")
+		return "", false
+	case errors.Is(err, agent.ErrPairingUnavailable):
 		jsonErr(w, http.StatusServiceUnavailable, "pairing ownership is unavailable; nothing was enabled")
-		return false
+		return "", false
+	case err != nil:
+		slog.Error("rest: pairing retry admission failed", "channel", channelID, "error", err)
+		jsonErr(w, http.StatusServiceUnavailable, "pairing ownership is unavailable; nothing was enabled")
+		return "", false
 	}
-	return true
+	return attemptID, true
+}
+
+func channelInstanceExists(cfg *config.Config, channelID string) bool {
+	_, ok := cfg.Channels[channelID]
+	return ok
 }

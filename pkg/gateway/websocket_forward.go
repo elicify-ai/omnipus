@@ -333,8 +333,11 @@ func (h *WSHandler) updatePairingCache(p agent.WhatsAppPairingPayload, pairF gen
 		// frame, status only, so a reconnecting chat sees the final state
 		// (BDD-8.8, chief ruling 2026-10-18); the channel's next code frame
 		// replaces it. A Settings-started pairing keeps #368: evict, so a
-		// late subscriber is never shown an outdated code.
-		if p.RequestID == "" {
+		// late subscriber is never shown an outdated code. The unowned
+		// restart-interrupted result is kept, status only: every page
+		// reconnects after the restart that produced it, and must see it
+		// (founder ruling 2026-10-21).
+		if p.RequestID == "" && !p.RestartInterrupted {
 			h.lastPairingState.Delete(p.ChannelID)
 			break
 		}

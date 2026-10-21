@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -30,9 +31,17 @@ func TestPairingAudit_StoppedHasItsOwnTerminalRow(t *testing.T) {
 	t.Cleanup(func() { al.Close() })
 	require.NotNil(t, al.AuditLogger(), "instrument: a real audit logger")
 
-	al.NotePairingRequest("whatsapp", "req-stop", "sess-stop")
-	al.EmitWhatsAppPairing("whatsapp", channels.PairingStatusCode, "QR-SECRET-PAYLOAD", "")
-	al.EmitWhatsAppPairing("whatsapp", channels.PairingStatusStopped, "", "pairing stopped from the chat")
+	// A chat-owned attempt that showed a QR, then the chat's Stop (gate r3:
+	// the Stop ends exactly the selected attempt); timeout and linked rows
+	// come from unowned attempts of other connectors.
+	store := pairingAttemptsFor(t, al)
+	attemptID, _ := startOwnedAttempt(t, store, "whatsapp", "sess-stop", "req-stop")
+	al.EmitWhatsAppPairingAttempt("whatsapp", attemptID, channels.PairingStatusCode, "QR-SECRET-PAYLOAD", "")
+	al.stopSelectedPairings(store.OwnedBy("sess-stop"))
+	for _, other := range []string{"whatsapp-2", "whatsapp-3"} {
+		_, err := store.Activate(other, "", func(string) func(context.Context) error { return func(context.Context) error { return nil } })
+		require.NoError(t, err)
+	}
 	al.EmitWhatsAppPairing("whatsapp-2", channels.PairingStatusTimeout, "", "expired")
 	al.EmitWhatsAppPairing("whatsapp-3", channels.PairingStatusLinked, "", "")
 
@@ -59,4 +68,5 @@ func TestPairingAudit_StoppedHasItsOwnTerminalRow(t *testing.T) {
 	require.Equal(t, "whatsapp", details["channel"])
 	require.Equal(t, "req-stop", details["request_id"])
 	require.Equal(t, "sess-stop", details["session_id"])
+	require.Equal(t, attemptID, details["attempt_id"], "the row names the stopped attempt (gate r3 M13)")
 }

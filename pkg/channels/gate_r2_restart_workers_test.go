@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,23 +15,31 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
-// failOnceChannel fails its first Start (a transient platform outage) and
-// starts on every later attempt. It records what the manager delivers.
+// failOnceChannel records what the manager delivers and how it was started.
+// startFailures is shared by every instance its factory builds, so "the
+// first start fails" holds across the fresh instance a restart constructs.
 type failOnceChannel struct {
-	name   string
-	mu     sync.Mutex
-	starts int
-	run    bool
-	texts  []string
-	media  []string
+	name          string
+	startFailures *atomic.Int32
+	mu            sync.Mutex
+	run           bool
+	texts         []string
+	media         []string
+	starts        []startIntent
+}
+
+type startIntent struct {
+	token string
+	boot  bool
 }
 
 func (c *failOnceChannel) Name() string { return c.name }
-func (c *failOnceChannel) Start(context.Context) error {
+func (c *failOnceChannel) Start(ctx context.Context) error {
+	token, boot := PairingStartFrom(ctx)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.starts++
-	if c.starts == 1 {
+	c.starts = append(c.starts, startIntent{token: token, boot: boot})
+	if c.startFailures != nil && c.startFailures.Add(-1) >= 0 {
 		return errors.New("platform temporarily unreachable")
 	}
 	c.run = true
@@ -69,16 +78,24 @@ func (c *failOnceChannel) delivered() (texts, media []string) {
 	return append([]string(nil), c.texts...), append([]string(nil), c.media...)
 }
 
-// registerFailOnceFactory installs a factory for typeName that counts how
-// many channel instances the manager constructs and hands back the latest.
-func registerFailOnceFactory(t *testing.T, typeName string) (constructed func() []*failOnceChannel) {
+func (c *failOnceChannel) startIntents() []startIntent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]startIntent(nil), c.starts...)
+}
+
+// registerFailOnceFactory installs a factory for typeName whose instances
+// together fail their first `failures` starts, and returns every built instance.
+func registerFailOnceFactory(t *testing.T, typeName string, failures int32) (constructed func() []*failOnceChannel) {
 	t.Helper()
 	var mu sync.Mutex
 	var built []*failOnceChannel
+	shared := &atomic.Int32{}
+	shared.Store(failures)
 	RegisterFactory(typeName, func(_ *config.Config, instanceID string, _ credentials.SecretBundle, _ *bus.MessageBus) (Channel, error) {
 		mu.Lock()
 		defer mu.Unlock()
-		ch := &failOnceChannel{name: instanceID}
+		ch := &failOnceChannel{name: instanceID, startFailures: shared}
 		built = append(built, ch)
 		return ch, nil
 	})
@@ -94,6 +111,16 @@ func registerFailOnceFactory(t *testing.T, typeName string) (constructed func() 
 	}
 }
 
+func registerHealthyFactory(t *testing.T, typeName string) {
+	t.Helper()
+	RegisterFactory(typeName, stubFactory(nil))
+	t.Cleanup(func() {
+		factoriesMu.Lock()
+		delete(factories, typeName)
+		factoriesMu.Unlock()
+	})
+}
+
 func requireDelivered(t *testing.T, mb *bus.MessageBus, ch *failOnceChannel, name string) {
 	t.Helper()
 	ctx := context.Background()
@@ -102,28 +129,23 @@ func requireDelivered(t *testing.T, mb *bus.MessageBus, ch *failOnceChannel, nam
 	require.Eventually(t, func() bool {
 		texts, media := ch.delivered()
 		return len(texts) == 1 && len(media) == 1
-	}, 10*time.Second, 20*time.Millisecond, "the explicitly started channel must receive the text and media reply")
+	}, 10*time.Second, 20*time.Millisecond, "the restarted channel must receive the text and media reply")
 	texts, _ := ch.delivered()
 	require.Equal(t, []string{"the reply"}, texts)
 }
 
-// TestManager_StartChannel_AfterFailedBootStart_DeliversReplies is Train 2
-// gate r2 CR-T2-R2-01 / R2-A01 / T2-SF-09: a channel whose first boot Start
-// failed stays registered with no reply worker; an unchanged approved
-// reconnect reloads nothing and then starts it through StartChannel. The
-// explicit start must complete the manager lifecycle, so a real outbound
-// text and media reply reach the channel (not only IsRunning).
-func TestManager_StartChannel_AfterFailedBootStart_DeliversReplies(t *testing.T) {
-	built := registerFailOnceFactory(t, "gate-r2-failboot")
-	RegisterFactory("gate-r2-healthy", stubFactory(nil))
-	t.Cleanup(func() {
-		factoriesMu.Lock()
-		delete(factories, "gate-r2-healthy")
-		factoriesMu.Unlock()
-	})
+// TestManager_RequestRestart_AfterFailedBootStart_DeliversReplies is Train 2
+// gate r2 CR-T2-R2-01 / R2-A01 / T2-SF-09, now through the gate r3 M10 path:
+// a channel whose boot Start failed stays registered with no reply worker; an
+// approved explicit restart is serviced by the serialized reload lifecycle,
+// which builds a fresh instance with its text and media workers, so a real
+// outbound reply reaches it.
+func TestManager_RequestRestart_AfterFailedBootStart_DeliversReplies(t *testing.T) {
+	built := registerFailOnceFactory(t, "gate-r3-failboot", 1)
+	registerHealthyFactory(t, "gate-r3-healthy")
 	cfg := minimalCfg(map[string]config.ChannelInstanceConfig{
-		"gate-r2-failboot": {Type: "gate-r2-failboot", Enabled: true},
-		"gate-r2-healthy":  {Type: "gate-r2-healthy", Enabled: true},
+		"gate-r3-failboot": {Type: "gate-r3-failboot", Enabled: true},
+		"gate-r3-healthy":  {Type: "gate-r3-healthy", Enabled: true},
 	})
 	mb := bus.NewMessageBus()
 	t.Cleanup(mb.Close)
@@ -131,38 +153,27 @@ func TestManager_StartChannel_AfterFailedBootStart_DeliversReplies(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, m.StartAll(context.Background()), "the healthy channel keeps the gateway up")
 	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
-	require.Len(t, built(), 1)
-	flaky := built()[0]
-	require.False(t, flaky.IsRunning(), "the first boot start failed")
+	require.False(t, built()[0].IsRunning(), "the first boot start failed")
 
-	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}), "an unchanged approved reconnect reloads nothing")
-	started, err := m.StartChannel("gate-r2-failboot")
-	require.NoError(t, err)
-	require.True(t, started)
+	m.RequestRestart("gate-r3-failboot")
+	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}), "an unchanged configuration still services the explicit restart")
+	require.Len(t, built(), 2, "the restart builds a fresh instance")
+	fresh := built()[1]
+	require.True(t, fresh.IsRunning())
+	requireDelivered(t, mb, fresh, "gate-r3-failboot")
 
-	requireDelivered(t, mb, flaky, "gate-r2-failboot")
-
-	started, err = m.StartChannel("gate-r2-failboot")
-	require.NoError(t, err)
-	require.False(t, started, "a running channel is left alone (no duplicate worker)")
-	require.Len(t, built(), 1)
+	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
+	require.Len(t, built(), 2, "a restart is serviced once; the next unchanged reload builds nothing")
 }
 
-// TestManager_StartChannel_AfterFailedReloadStart_IsNotRebuiltByTheNextReload
-// covers the reload variant: a newly added instance whose first Start failed
-// has no committed config hash. Once StartChannel succeeds, the manager must
-// record it as successfully started, so the next unchanged reload does not
-// construct and start a second instance next to the running one.
-func TestManager_StartChannel_AfterFailedReloadStart_IsNotRebuiltByTheNextReload(t *testing.T) {
-	built := registerFailOnceFactory(t, "gate-r2-failreload")
-	RegisterFactory("gate-r2-healthy2", stubFactory(nil))
-	t.Cleanup(func() {
-		factoriesMu.Lock()
-		delete(factories, "gate-r2-healthy2")
-		factoriesMu.Unlock()
-	})
+// TestManager_RequestRestart_AfterFailedReloadStart_IsNotRebuiltByTheNextReload:
+// a newly added instance whose first Start failed is restarted explicitly; once
+// it runs, the next unchanged reload does not construct a second instance.
+func TestManager_RequestRestart_AfterFailedReloadStart_IsNotRebuiltByTheNextReload(t *testing.T) {
+	built := registerFailOnceFactory(t, "gate-r3-failreload", 1)
+	registerHealthyFactory(t, "gate-r3-healthy2")
 	base := minimalCfg(map[string]config.ChannelInstanceConfig{
-		"gate-r2-healthy2": {Type: "gate-r2-healthy2", Enabled: true},
+		"gate-r3-healthy2": {Type: "gate-r3-healthy2", Enabled: true},
 	})
 	mb := bus.NewMessageBus()
 	t.Cleanup(mb.Close)
@@ -172,16 +183,138 @@ func TestManager_StartChannel_AfterFailedReloadStart_IsNotRebuiltByTheNextReload
 	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
 
 	withFlaky := minimalCfg(map[string]config.ChannelInstanceConfig{
-		"gate-r2-healthy2":   {Type: "gate-r2-healthy2", Enabled: true},
-		"gate-r2-failreload": {Type: "gate-r2-failreload", Enabled: true},
+		"gate-r3-healthy2":   {Type: "gate-r3-healthy2", Enabled: true},
+		"gate-r3-failreload": {Type: "gate-r3-failreload", Enabled: true},
 	})
 	require.NoError(t, m.Reload(context.Background(), withFlaky, credentials.SecretBundle{}))
 	require.Len(t, built(), 1)
-	started, err := m.StartChannel("gate-r2-failreload")
-	require.NoError(t, err)
-	require.True(t, started)
+	require.False(t, built()[0].IsRunning())
+	m.RequestRestart("gate-r3-failreload")
+	require.NoError(t, m.Reload(context.Background(), withFlaky, credentials.SecretBundle{}))
+	built2 := built()
+	require.True(t, built2[len(built2)-1].IsRunning())
+	count := len(built2)
 
 	require.NoError(t, m.Reload(context.Background(), withFlaky, credentials.SecretBundle{}))
-	require.Len(t, built(), 1, "the next unchanged reload must not construct a second instance")
-	requireDelivered(t, mb, built()[0], "gate-r2-failreload")
+	require.Len(t, built(), count, "the next unchanged reload must not construct another instance")
+	requireDelivered(t, mb, built()[count-1], "gate-r3-failreload")
+}
+
+// TestManager_RequestRestart_RestartsAStoppedChannel keeps gate r1 architect
+// F04's intent: a channel stopped in place (its pairing was stopped) has an
+// unchanged configuration, so only an explicit restart starts it again; an
+// unknown name is ignored.
+func TestManager_RequestRestart_RestartsAStoppedChannel(t *testing.T) {
+	built := registerFailOnceFactory(t, "gate-r3-stopped", 0)
+	cfg := minimalCfg(map[string]config.ChannelInstanceConfig{
+		"gate-r3-stopped": {Type: "gate-r3-stopped", Enabled: true},
+	})
+	mb := bus.NewMessageBus()
+	t.Cleanup(mb.Close)
+	m, err := NewManager(cfg, credentials.SecretBundle{}, mb, nil)
+	require.NoError(t, err)
+	require.NoError(t, m.StartAll(context.Background()))
+	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
+	require.NoError(t, built()[0].Stop(context.Background()))
+
+	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
+	require.Len(t, built(), 1, "control: an unchanged reload alone does not restart it")
+	m.RequestRestart("gate-r3-stopped")
+	m.RequestRestart("no-such-channel")
+	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
+	require.Len(t, built(), 2)
+	require.True(t, built()[1].IsRunning())
+}
+
+// TestManager_ReloadHandoff_RestartAndRegisterDuringHandoffComplete is gate r3
+// CR-T2-R3-01 (M10): while a reload waits for the old dispatchers with the
+// manager lock released, an explicit restart is requested and a channel is
+// registered on the new dispatch context. The reload must still finish (it
+// joins only the generation it cancelled), the restart is serviced by the
+// next reload, and both channels deliver text and media.
+func TestManager_ReloadHandoff_RestartAndRegisterDuringHandoffComplete(t *testing.T) {
+	built := registerFailOnceFactory(t, "gate-r3-handoff", 1)
+	registerHealthyFactory(t, "gate-r3-healthy3")
+	cfg := minimalCfg(map[string]config.ChannelInstanceConfig{
+		"gate-r3-handoff":  {Type: "gate-r3-handoff", Enabled: true},
+		"gate-r3-healthy3": {Type: "gate-r3-healthy3", Enabled: true},
+	})
+	mb := bus.NewMessageBus()
+	t.Cleanup(mb.Close)
+	m, err := NewManager(cfg, credentials.SecretBundle{}, mb, nil)
+	require.NoError(t, err)
+	require.NoError(t, m.StartAll(context.Background()))
+	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
+
+	registered := &failOnceChannel{name: "gate-r3-registered"}
+	var once sync.Once
+	m.mu.Lock()
+	m.reloadHandoffHook = func() {
+		once.Do(func() {
+			m.RequestRestart("gate-r3-handoff")
+			m.RegisterChannel("gate-r3-registered", registered)
+		})
+	}
+	m.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- m.Reload(context.Background(), cfg, credentials.SecretBundle{}) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the reload deadlocked on a worker started during its own handoff")
+	}
+	m.mu.Lock()
+	m.reloadHandoffHook = nil
+	m.mu.Unlock()
+	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}), "the next reload services the requested restart")
+	all := built()
+	fresh := all[len(all)-1]
+	require.True(t, fresh.IsRunning(), "the restart requested during the handoff was serviced")
+	requireDelivered(t, mb, fresh, "gate-r3-handoff")
+	requireDelivered(t, mb, registered, "gate-r3-registered")
+}
+
+// TestManager_Starts_CarryTheirPairingIntent pins how the manager hands pairing
+// intent to a start (gate r3 M2, M14, founder restart ruling): the gateway's
+// boot start says boot; a reload start consumes only a ready admission bound to
+// the instance's current revision; a stale-revision admission is interrupted
+// and the start carries no token.
+func TestManager_Starts_CarryTheirPairingIntent(t *testing.T) {
+	built := registerFailOnceFactory(t, "gate-r3-intent", 0)
+	cfg := minimalCfg(map[string]config.ChannelInstanceConfig{
+		"gate-r3-intent": {Type: "gate-r3-intent", Enabled: true},
+	})
+	mb := bus.NewMessageBus()
+	t.Cleanup(mb.Close)
+	m, err := NewManager(cfg, credentials.SecretBundle{}, mb, nil)
+	require.NoError(t, err)
+	require.NoError(t, m.StartAll(context.Background()))
+	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
+	require.Equal(t, []startIntent{{boot: true}}, built()[0].startIntents(), "the boot start says boot and carries no token")
+
+	store := m.PairingAttempts()
+	owner := &PairingOwner{SessionID: "chat-a", RequestID: "req-a"}
+	admitted, err := store.Admit("gate-r3-intent", PairingAdmissionConnect, owner)
+	require.NoError(t, err)
+	require.True(t, store.MarkReady("gate-r3-intent", admitted.AttemptID, ChannelRevision(cfg, "gate-r3-intent")))
+	m.RequestRestart("gate-r3-intent")
+	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
+	all := built()
+	require.Equal(t, []startIntent{{token: admitted.AttemptID}}, all[len(all)-1].startIntents(), "the restart consumes exactly its admitted token")
+
+	consumed, ok := store.Attempt("gate-r3-intent", admitted.AttemptID)
+	require.True(t, ok)
+	require.Equal(t, PairingOutcomeNoPairing, consumed.Outcome, "a start that activated no pairing closes its admission")
+
+	stale, err := store.Admit("gate-r3-intent", PairingAdmissionEnable, nil)
+	require.NoError(t, err)
+	require.True(t, store.MarkReady("gate-r3-intent", stale.AttemptID, "an-older-revision"))
+	m.RequestRestart("gate-r3-intent")
+	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
+	all = built()
+	require.Equal(t, []startIntent{{}}, all[len(all)-1].startIntents(), "a stale-revision admission never starts")
+	got, ok := store.Attempt("gate-r3-intent", stale.AttemptID)
+	require.True(t, ok)
+	require.Equal(t, PairingOutcomeInterrupted, got.Outcome)
 }

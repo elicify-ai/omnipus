@@ -93,6 +93,25 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 		return refusal
 	}
 	chType, _ := config.ParseInstanceKey(id)
+	// A QR-paired channel reserves its next pairing attempt for this call
+	// before anything is saved (gate r3 M5): a refusal leaves the winner's
+	// attempt untouched and saves nothing.
+	var attemptID string
+	if whatsappChannel(chType) && t.deps.AdmitPairing != nil {
+		admitted, err := t.deps.AdmitPairing(id, tools.ToolCallID(ctx), tools.ToolTranscriptSessionID(ctx))
+		if err != nil {
+			return tools.ErrorResult(errorJSON("PAIRING_IN_PROGRESS",
+				"another WhatsApp pairing of this connection is starting, running or stopping; nothing saved",
+				"Wait for it to finish, or stop it from the chat that started it (or use its Retry there), then connect again"))
+		}
+		attemptID = admitted
+	}
+	committed := false
+	defer func() {
+		if attemptID != "" && !committed && t.deps.ReleasePairing != nil {
+			t.deps.ReleasePairing(id, attemptID)
+		}
+	}()
 	configure := &ChannelConfigureTool{deps: t.deps}
 	var saved config.ChannelInstanceConfig
 	var savedRevision string
@@ -142,16 +161,30 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 		}
 	}
 	t.selected(ctx, t.Name(), id, refs)
-	if whatsappChannel(chType) && t.deps.NotePairingRequest != nil {
-		requestID, sessionID := tools.ToolCallID(ctx), tools.ToolTranscriptSessionID(ctx)
-		t.deps.NotePairingRequest(id, requestID, sessionID)
-		if t.deps.SettlePairingRequest != nil {
-			// The live check below waits for the reload and the start, so a
-			// pairing attempt this connect began has bound the claim by then.
-			defer t.deps.SettlePairingRequest(id, requestID, sessionID)
+	switch {
+	case attemptID != "":
+		committed = t.deps.CommitPairing != nil && t.deps.CommitPairing(id, attemptID)
+		if !committed {
+			fields := map[string]any{"id": id, "workspace_id": ws, "agent_id": agentID,
+				"revision": savedRevision, "saved": "configuration, binding and enable saved"}
+			return changeSuccess(fields, savedNotWorking("the pairing was stopped before it started; connect again to start a new one",
+				"the channel's start after the configuration reload",
+				"inbound message delivery and routing to the agent", "outbound replies"))
 		}
+	case t.deps.RequestChannelRestart != nil:
+		// A channel stopped in place, or whose earlier start failed, keeps an
+		// unchanged configuration: the reload below starts it (gate r3 M10).
+		t.deps.RequestChannelRestart(id)
 	}
-	return t.liveResult(id, ws, agentID, chType, savedRevision)
+	res, confirmed := t.liveResult(id, ws, agentID, chType, savedRevision)
+	if attemptID != "" && confirmed && t.deps.ReleasePairing != nil {
+		// The reload completed: an admission no start consumed (the device was
+		// already linked, or nothing started) must not pass to a later attempt.
+		// One the start took is left to it. An unconfirmed reload keeps the
+		// reservation, since that start can still happen (M10).
+		t.deps.ReleasePairing(id, attemptID)
+	}
+	return res
 }
 
 // startFailureReason turns an explicit start failure into a value-free cause
@@ -214,7 +247,7 @@ func (t *ChannelConnectTool) validateBinding(ws, agentID string) *tools.ToolResu
 
 // liveResult reloads, then reports what the real start proved and what was
 // not tested. A channel that did not start is never "working" (BDD-8.3).
-func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision string) *tools.ToolResult {
+func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision string) (*tools.ToolResult, bool) {
 	fields := map[string]any{"id": id, "workspace_id": ws, "agent_id": agentID,
 		"revision": savedRevision, "saved": "configuration, binding and enable saved"}
 	notTested := []string{"inbound message delivery and routing to the agent", "outbound replies"}
@@ -224,26 +257,13 @@ func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision s
 		wait = t.deps.ReloadAndWaitFallback
 	}
 	if wait == nil {
-		return changeSuccess(fields, savedNotWorking("not live-tested: no live reload is wired", scope, notTested...))
+		return changeSuccess(fields, savedNotWorking("not live-tested: no live reload is wired", scope, notTested...)), false
 	}
 	if err := wait(); err != nil {
-		return changeSuccess(fields, savedNotWorking("the reload after saving did not complete", scope, notTested...))
-	}
-	// An unchanged config does not restart a channel stopped in place (for
-	// example after Stop ended its pairing): this approved connect starts it.
-	if t.deps.EnsureChannelStarted != nil {
-		if _, err := t.deps.EnsureChannelStarted(id); err != nil {
-			// The full cause goes to the operator log (registered credential
-			// values are filtered there); the model gets a value-free cause
-			// and the matching repair (gate r2 T2-SF-10).
-			logger.ErrorCF("sysagent", "Approved channel start failed", map[string]any{
-				"channel_id": id, "operation": "start_channel", "error": err.Error(),
-			})
-			return changeSuccess(fields, savedNotWorking(startFailureReason(err), scope, notTested...))
-		}
+		return changeSuccess(fields, savedNotWorking("the reload after saving did not complete", scope, notTested...)), false
 	}
 	if t.deps.ChannelLiveStatus == nil {
-		return changeSuccess(fields, savedNotWorking("not live-tested: channel status is unavailable", scope, notTested...))
+		return changeSuccess(fields, savedNotWorking("not live-tested: channel status is unavailable", scope, notTested...)), true
 	}
 	running, failure, known := t.deps.ChannelLiveStatus(id)
 	// Another save between this write and the reload replaced the entry: the
@@ -252,19 +272,31 @@ func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision s
 		fields["revision"] = current
 		return changeSuccess(fields, savedNotWorking(
 			"the connection was changed by another save while it was being applied; re-read it with list_channels",
-			scope, notTested...))
+			scope, notTested...)), true
 	}
 	switch {
 	case whatsappChannel(chType) && running:
 		fields["pairing"] = "QR pairing started; the connection works only after the QR code is scanned"
-		return changeSuccess(fields, savedNotWorking("pairing not finished: scan the WhatsApp QR code", scope, append([]string{"device pairing"}, notTested...)...))
+		return changeSuccess(fields, savedNotWorking("pairing not finished: scan the WhatsApp QR code", scope, append([]string{"device pairing"}, notTested...)...)), true
 	case running:
 		fields["proven"] = []string{"the channel started after the reload with the saved configuration and credentials"}
-		return changeSuccess(fields, working(scope, notTested...))
+		return changeSuccess(fields, working(scope, notTested...)), true
 	case !known:
-		return changeSuccess(fields, savedNotWorking("not live-tested: channel status is unavailable", scope, notTested...))
-	case failure == "":
+		return changeSuccess(fields, savedNotWorking("not live-tested: channel status is unavailable", scope, notTested...)), true
+	}
+	if t.deps.LastStartError != nil {
+		if err := t.deps.LastStartError(id); err != nil {
+			// The full cause goes to the operator log (registered credential
+			// values are filtered there); the model gets a value-free cause
+			// and the matching repair (gate r2 T2-SF-10).
+			logger.ErrorCF("sysagent", "Approved channel start failed", map[string]any{
+				"channel_id": id, "operation": "start_channel", "error": err.Error(),
+			})
+			return changeSuccess(fields, savedNotWorking(startFailureReason(err), scope, notTested...)), true
+		}
+	}
+	if failure == "" {
 		failure = "the channel did not start"
 	}
-	return changeSuccess(fields, savedNotWorking(failure, scope, notTested...))
+	return changeSuccess(fields, savedNotWorking(failure, scope, notTested...)), true
 }

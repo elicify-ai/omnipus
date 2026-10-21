@@ -68,11 +68,16 @@ type WhatsAppNativeChannel struct {
 	runCancel    context.CancelFunc
 	reconnectMu  sync.Mutex
 	reconnecting bool
-	stopping     atomic.Bool // set once Stop begins; prevents new wg.Add calls
-	// pairingActive is true while a QR pairing loop runs and the device has
-	// not linked yet (BDD-8.8: only an in-flight pairing can be stopped).
-	pairingActive atomic.Bool
-	wg            sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
+	stopping     atomic.Bool    // set once Stop begins; prevents new wg.Add calls
+	wg           sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
+
+	// attempts is the manager-owned pairing-attempt store and instance this
+	// channel's id in it (gate r3). attemptID is the pairing attempt the QR
+	// loop currently runs, guarded by mu; every event carries it (M8).
+	attempts        *channels.PairingAttempts
+	instance        string
+	attemptID       string
+	attemptObserver func(attemptID string, status channels.PairingStatus, qr, message string)
 
 	// pairingObserver, if set, receives linked-device pairing updates (QR code +
 	// status) so the gateway can surface them in the SPA (#283). Wired at boot
@@ -90,6 +95,27 @@ func (c *WhatsAppNativeChannel) SetPairingObserver(fn func(status channels.Pairi
 	c.mu.Unlock()
 }
 
+// SetPairingAttempts hands the channel the manager's attempt store and its
+// instance id (channels.PairingAttemptAware).
+func (c *WhatsAppNativeChannel) SetPairingAttempts(store *channels.PairingAttempts, instance string) {
+	c.mu.Lock()
+	c.attempts, c.instance = store, instance
+	c.mu.Unlock()
+}
+
+// SetPairingAttemptObserver installs the attempt-carrying pairing callback
+// (channels.PairingAttemptObservable). It takes precedence over the plain
+// observer.
+func (c *WhatsAppNativeChannel) SetPairingAttemptObserver(fn func(attemptID string, status channels.PairingStatus, qr, message string)) {
+	c.mu.Lock()
+	c.attemptObserver = fn
+	c.mu.Unlock()
+}
+
+// restartInterruptedMessage is what a chat card and Connectors show for a
+// pairing a gateway restart cut off (founder ruling 2026-10-21).
+const restartInterruptedMessage = "A server restart interrupted this pairing. Press Retry to get a new code."
+
 // emitPairing invokes the pairing observer if one is set (best-effort; never
 // blocks the QR loop). qr is non-empty only for status=="code". When no observer
 // is wired but a QR is ready, warn so an unwired/regressed bridge is visible
@@ -97,8 +123,21 @@ func (c *WhatsAppNativeChannel) SetPairingObserver(fn func(status channels.Pairi
 // shows the code as a fallback.
 func (c *WhatsAppNativeChannel) emitPairing(status channels.PairingStatus, qr, message string) {
 	c.mu.Lock()
-	obs := c.pairingObserver
+	attemptID := c.attemptID
 	c.mu.Unlock()
+	c.emitAttempt(attemptID, status, qr, message)
+}
+
+// emitAttempt reports one pairing event of attemptID.
+func (c *WhatsAppNativeChannel) emitAttempt(attemptID string, status channels.PairingStatus, qr, message string) {
+	c.mu.Lock()
+	obs := c.pairingObserver
+	attemptObs := c.attemptObserver
+	c.mu.Unlock()
+	if attemptObs != nil {
+		attemptObs(attemptID, status, qr, message)
+		return
+	}
 	if obs == nil {
 		if status == channels.PairingStatusCode {
 			logger.WarnCF(
@@ -139,10 +178,70 @@ func (c *WhatsAppNativeChannel) handleQREvent(evt whatsmeow.QRChannelItem, repai
 
 	logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
 	status, message := mapQRLifecycle(evt.Event)
-	if status == channels.PairingStatusLinked {
-		c.pairingActive.Store(false)
+	// A terminal event ends exactly this loop's attempt; when the attempt is
+	// no longer the connector's current one (a Stop is tearing it down, or a
+	// successor started) the event is not published (gate r3 M8).
+	c.mu.Lock()
+	attemptID, store, instance := c.attemptID, c.attempts, c.instance
+	c.mu.Unlock()
+	if store != nil && attemptID != "" {
+		if _, applied := store.Complete(instance, attemptID, pairingOutcomeFor(status)); !applied {
+			return
+		}
+		c.mu.Lock()
+		if c.attemptID == attemptID {
+			c.attemptID = ""
+		}
+		c.mu.Unlock()
 	}
-	c.emitPairing(status, "", message)
+	c.emitAttempt(attemptID, status, "", message)
+}
+
+func pairingOutcomeFor(status channels.PairingStatus) channels.PairingOutcome {
+	switch status {
+	case channels.PairingStatusLinked:
+		return channels.PairingOutcomeLinked
+	case channels.PairingStatusTimeout:
+		return channels.PairingOutcomeTimeout
+	default:
+		return channels.PairingOutcomeError
+	}
+}
+
+// beginAttempt makes this start's pairing attempt active before the platform
+// call (gate r3 M2, M6): token is the admitted attempt the start consumes; an
+// empty token mints an unowned attempt. The attempt's teardown handle stops
+// this channel only while that attempt is still the one it runs.
+func (c *WhatsAppNativeChannel) beginAttempt(token string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	store, instance := c.attempts, c.instance
+	if store == nil {
+		return "", nil
+	}
+	// Holding mu across Activate keeps a Stop that selects the new attempt from
+	// observing this channel before its attempt id is recorded.
+	rec, err := store.Activate(instance, token, func(attemptID string) func(context.Context) error {
+		return func(ctx context.Context) error { return c.stopAttempt(ctx, attemptID) }
+	})
+	if err != nil {
+		return "", err
+	}
+	c.attemptID = rec.AttemptID
+	return rec.AttemptID, nil
+}
+
+// stopAttempt is an attempt's own teardown (its Stop handle): it stops the
+// channel in place only while attemptID is still the attempt it runs, and
+// reports a teardown that did not finish (gate r3 M6, M7).
+func (c *WhatsAppNativeChannel) stopAttempt(ctx context.Context, attemptID string) error {
+	c.mu.Lock()
+	current := c.attemptID
+	c.mu.Unlock()
+	if current != attemptID {
+		return nil // that attempt's loop is already gone
+	}
+	return c.stop(ctx, false)
 }
 
 // mapQRLifecycle maps a non-"code" whatsmeow QR event to an SPA pairing status
@@ -266,12 +365,39 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 		_ = container.Close()
 	}()
 
+	token, boot := channels.PairingStartFrom(ctx)
 	if client.Store.ID == nil {
+		c.mu.Lock()
+		store, instance := c.attempts, c.instance
+		c.mu.Unlock()
+		if boot && token == "" && store != nil {
+			// A gateway restart cut off this connector's pairing: nothing is
+			// resumed and no ownership is inferred. Record it interrupted and
+			// unowned and say so; the chat Retry or Connectors starts a new
+			// one (founder ruling 2026-10-21). The device is not paired, so
+			// there is nothing else to connect.
+			rec := store.RecordRestartInterrupted(instance)
+			// Headless operators read the log, not the pairing view.
+			logger.WarnCF("whatsapp", restartInterruptedMessage, map[string]any{"channel_id": instance})
+			c.emitAttempt(rec.AttemptID, channels.PairingStatusError, "", restartInterruptedMessage)
+			return nil
+		}
+		attemptID, err := c.beginAttempt(token)
+		if err != nil {
+			return fmt.Errorf("begin pairing: %w", err)
+		}
+		failAttempt := func() {
+			if store != nil && attemptID != "" {
+				store.Complete(instance, attemptID, channels.PairingOutcomeStartFailed)
+			}
+		}
 		qrChan, err := client.GetQRChannel(c.runCtx)
 		if err != nil {
+			failAttempt()
 			return fmt.Errorf("get QR channel: %w", err)
 		}
 		if err := client.Connect(); err != nil {
+			failAttempt()
 			return fmt.Errorf("connect: %w", err)
 		}
 		// Handle QR events in a background goroutine so Start() returns
@@ -283,17 +409,16 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 		c.reconnectMu.Lock()
 		if c.stopping.Load() {
 			c.reconnectMu.Unlock()
+			failAttempt()
 			return fmt.Errorf("channel stopped during QR setup")
 		}
 		c.wg.Add(1)
-		c.pairingActive.Store(true)
 		c.reconnectMu.Unlock()
 		// A new pairing starts: "waiting" evicts any terminal frame a
 		// previous chat-started pairing left cached (BDD-8.8).
 		c.emitPairing(channels.PairingStatusWaiting, "", "")
 		go func() {
 			defer c.wg.Done()
-			defer c.pairingActive.Store(false)
 			for {
 				select {
 				case <-c.runCtx.Done():
@@ -307,6 +432,15 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 			}
 		}()
 	} else {
+		if token != "" {
+			// Already linked: the admitted start needs no pairing (M14).
+			c.mu.Lock()
+			store, instance := c.attempts, c.instance
+			c.mu.Unlock()
+			if store != nil {
+				store.CloseNoPairing(instance, token)
+			}
+		}
 		if err := client.Connect(); err != nil {
 			return fmt.Errorf("connect: %w", err)
 		}
@@ -318,24 +452,24 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 	return nil
 }
 
-// StopPairing ends an in-flight QR pairing (BDD-8.8): it stops the channel,
-// which cancels the QR loop and disconnects and releases the whatsmeow client,
-// so no further codes are produced. A linked device or a channel with no
-// pairing in flight is left untouched and false is returned. The saved
-// configuration is not changed; the channel stays saved but not working
-// until it is started again.
-func (c *WhatsAppNativeChannel) StopPairing(ctx context.Context) bool {
-	if !c.pairingActive.Load() {
-		return false
-	}
-	if err := c.Stop(ctx); err != nil {
-		logger.WarnCF("whatsapp", "Stopping the in-flight pairing did not finish cleanly", map[string]any{"error": err.Error()})
-	}
-	return true
+func (c *WhatsAppNativeChannel) Stop(ctx context.Context) error {
+	return c.stop(ctx, true)
 }
 
-func (c *WhatsAppNativeChannel) Stop(ctx context.Context) error {
+// stop stops the channel. interrupt marks a pairing attempt still running as
+// interrupted (a disable, reload or shutdown cut it off); an attempt's own
+// Stop handle passes false because its Stop publishes the stopped result.
+// A teardown whose goroutines did not finish within ctx is reported.
+func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error {
 	logger.InfoC("whatsapp", "Stopping WhatsApp native channel")
+	c.mu.Lock()
+	attemptID, store, instance := c.attemptID, c.attempts, c.instance
+	c.attemptID = ""
+	c.mu.Unlock()
+	if interrupt && store != nil && attemptID != "" {
+		store.Complete(instance, attemptID, channels.PairingOutcomeInterrupted)
+	}
+	var teardownErr error
 
 	// Mark as stopping under reconnectMu so the flag is visible to
 	// eventHandler atomically with respect to its wg.Add(1) call.
@@ -375,6 +509,7 @@ func (c *WhatsAppNativeChannel) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		// Context canceled or timed out; log and proceed with best-effort cleanup.
 		logger.WarnC("whatsapp", fmt.Sprintf("Stop context canceled before all goroutines finished: %v", ctx.Err()))
+		teardownErr = fmt.Errorf("the WhatsApp client did not finish stopping: %w", ctx.Err())
 	}
 
 	// Now it is safe to clear and close resources.
@@ -387,7 +522,7 @@ func (c *WhatsAppNativeChannel) Stop(ctx context.Context) error {
 		_ = container.Close()
 	}
 	c.SetRunning(false)
-	return nil
+	return teardownErr
 }
 
 func (c *WhatsAppNativeChannel) eventHandler(evt any) {
@@ -637,8 +772,11 @@ func (c *WhatsAppNativeChannel) handleLoggedOut() {
 		return
 	}
 
-	c.pairingActive.Store(true)
-	defer c.pairingActive.Store(false)
+	// Automatic re-pairing is a new, unowned attempt (gate r3 M1).
+	if _, err := c.beginAttempt(""); err != nil {
+		logger.ErrorCF("whatsapp", "Re-pairing could not start a pairing attempt", map[string]any{"error": err.Error()})
+		return
+	}
 	c.emitPairing(channels.PairingStatusWaiting, "", "")
 	for {
 		select {
