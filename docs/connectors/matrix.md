@@ -71,6 +71,25 @@ Credentials (`access_token_ref`, `crypto_passphrase_ref`) are resolved from the 
 | `enabled` | bool | Send a placeholder message before the final reply. Default: `false`. |
 | `text` | string or []string | Placeholder text. Multiple values: one is chosen at random. Default: `"Thinking..."`. |
 
+## Markdown in rich-text replies
+
+With `message_format: "richtext"`, when a quote line (`>`) follows a list item and has fewer than four leading spaces, it now appears as a separate quotation outside the list, even without a blank line between them. For example, this quote is outside the list:
+
+```markdown
+1. A list item
+  > A separate quotation
+```
+
+To keep a quotation inside a list item, add a blank line after the item text and indent `>` by four spaces:
+
+```markdown
+1. A list item
+
+    > A quotation inside the item
+```
+
+To place a quotation after the list instead, use a blank line and leave `>` unindented. `message_format: "plain"` sends the text without Markdown formatting.
+
 ## Setup
 
 1. Register a Matrix account for your bot on any homeserver (e.g. `matrix.org`).
