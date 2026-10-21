@@ -57,7 +57,7 @@ func (ts *turnState) recordIterationLimitNotice(content string, messageBus *bus.
 		}
 	}
 	if setter, ok := streamer.(interface {
-		SetSystemNotice(generated.ReplayMessageFrame)
+		SetSystemNotice(frame generated.ReplayMessageFrame)
 	}); ok {
 		stamp := entry.Timestamp.Format(time.RFC3339Nano)
 		frame := generated.ReplayMessageFrame{

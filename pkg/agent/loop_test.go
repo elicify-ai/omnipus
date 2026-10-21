@@ -2408,9 +2408,9 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	if len(history) != 4 {
 		t.Fatalf("history len = %d, want 4", len(history))
 	}
-	assertRoles(t, history, "user", "assistant", "tool", "assistant")
+	assertRoles(t, history, "user", "assistant", "tool", "system")
 	if history[3].Content != toolLimitResponse {
-		t.Fatalf("final assistant content = %q, want %q", history[3].Content, toolLimitResponse)
+		t.Fatalf("final system notice content = %q, want %q", history[3].Content, toolLimitResponse)
 	}
 	// Assert that the turn is marked failed — reaching the iteration ceiling
 	// without a final response is a genuine failure.

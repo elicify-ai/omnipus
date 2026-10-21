@@ -147,14 +147,17 @@ func TestSteeringCeilingDrain(t *testing.T) {
 			eventsMu.Lock()
 			captured := append([]Event(nil), events...)
 			eventsMu.Unlock()
-			var starts, ends []Event
+			var starts []Event
+			var ends []TurnEndPayload
 			for _, event := range captured {
 				if event.Kind == EventKindTurnStart {
 					starts = append(starts, event)
 				}
 				if event.Kind == EventKindTurnEnd {
-					ends = append(ends, event)
-					t.Logf("turn=%s iterations=%d", event.Meta.TurnID, event.Payload.(TurnEndPayload).Iterations)
+					payload, ok := event.Payload.(TurnEndPayload)
+					require.True(t, ok, "turn-end events carry their typed iteration record")
+					ends = append(ends, payload)
+					t.Logf("turn=%s iterations=%d", event.Meta.TurnID, payload.Iterations)
 				}
 			}
 			assert.Len(t, starts, tc.wantTurns, "the ceiling follow-up must run in a fresh turn with its own budget")
@@ -163,7 +166,7 @@ func TestSteeringCeilingDrain(t *testing.T) {
 				assert.NotEqual(t, starts[0].Meta.TurnID, starts[1].Meta.TurnID)
 			}
 			if tc.limit == 2 && len(ends) > 0 {
-				assert.Equal(t, 2, ends[0].Payload.(TurnEndPayload).Iterations, "the original turn stops at exactly two iterations")
+				assert.Equal(t, 2, ends[0].Iterations, "the original turn stops at exactly two iterations")
 			}
 			requests := provider.Requests()
 			for i, request := range requests {
