@@ -13,7 +13,7 @@ import (
 // real fixtures (all below40 groups) and the declared40/20 defaults.
 func historyMigrationMetadata(t *testing.T, info generated.SessionHistoryPageInfo, mode string) {
 	t.Helper()
-	require.Equal(t, mode, string(info.Mode))
+	require.Equal(t, mode, info.Mode)
 	require.Equal(t, 40, info.Limit)
 	require.Equal(t, 20, info.MinRows)
 	require.EqualValues(t, 4194304, info.SoftByteBudget)
