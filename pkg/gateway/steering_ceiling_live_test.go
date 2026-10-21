@@ -87,6 +87,12 @@ func TestSteeringCeilingGatewayDrain(t *testing.T) {
 				}
 			}
 			require.Len(t, ends, 2, "both actual turns settle, with nothing left stranded")
+			firstEnd, firstOK := ends[0].Payload.(agent.TurnEndPayload)
+			secondEnd, secondOK := ends[1].Payload.(agent.TurnEndPayload)
+			require.True(t, firstOK)
+			require.True(t, secondOK)
+			assert.Equal(t, 2, firstEnd.Iterations, "both completed tools belong to the original ceiling turn")
+			assert.Equal(t, 1, secondEnd.Iterations, "one fresh turn answers the accepted batch")
 			assert.NotEqual(t, ends[0].Meta.TurnID, ends[1].Meta.TurnID)
 			frames := terminalAcceptanceCollect(t, h.conn)
 			ceilingLiveAssertDelivery(t, h, frames, ends[0].Meta.TurnID, ends[1].Meta.TurnID)
