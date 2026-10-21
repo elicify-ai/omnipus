@@ -830,9 +830,10 @@ function wouldToolCallBeVisible(
     // (SetGoalCardBlock), which pre-empts GenericToolCall on both paths.
     // "Visible" here must mean "that UI actually renders something", so
     // this consults the SAME decision table the block renders from
-    // (classifySetGoalCall, review S4) — verbose chat shows the raw call,
-    // a failed call shows its quiet failure line, a record shows the card,
-    // a present-but-unparseable result shows a chip; only a still-running
+    // (classifySetGoalCall, review S4) — a record shows the card, with the
+    // raw call added below it in verbose chat. Non-verbose failures show
+    // their quiet failure line; a present-but-unparseable result shows a
+    // chip (or the raw call in verbose chat). Only a still-running
     // call (no result yet) or a completed call with no result at all is
     // hidden, so a bubble consisting solely of one still shows the
     // ThinkingIndicator rather than a blank shell.
