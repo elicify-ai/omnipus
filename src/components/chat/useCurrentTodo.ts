@@ -66,7 +66,9 @@ export function useCurrentTodo(enabled: boolean) {
   const active = enabled && !!bucket?.isStreaming && !bucket.isReplaying && !bucket.awaitingCatchUp
   const turnId = active ? bucket?.activeTurnId ?? null : null
   const history = useQuery({
-    queryKey: ['messages', sessionId],
+    // Recovery is optional: its data/error state must never replace the main
+    // chat-history query or unmount an otherwise usable conversation.
+    queryKey: ['current-todo-history', sessionId, turnId],
     queryFn: () => fetchSessionMessages(sessionId!),
     enabled: !!sessionId && !!turnId,
     staleTime: 0,

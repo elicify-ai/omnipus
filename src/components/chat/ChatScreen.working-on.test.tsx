@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import type { ServerFrame, ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
 import type { Todo } from '@/lib/api/generated/openapi-types'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
@@ -13,6 +13,7 @@ import { useConnectionStore } from '@/store/connection'
 import { fetchSessionMessages } from '@/lib/api'
 import type { Message } from '@/lib/api'
 import { queryClient } from '@/lib/queryClient'
+import { ApiError } from '@/lib/api-error'
 import { __resetFinishedTurnIdsForTests } from '@/store/chat/frames'
 
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock())
@@ -37,7 +38,6 @@ import { ChatScreen } from './ChatScreen'
 
 const SID = 'working-on-current'
 const OTHER = 'working-on-other'
-let client: QueryClient
 let callNumber = 0
 
 function feed(frame: ServerFrame) {
@@ -76,7 +76,7 @@ function activeItem(text: string): Todo[] {
 
 async function renderChat() {
   await act(async () => {
-    render(<QueryClientProvider client={client}><ChatScreen /></QueryClientProvider>)
+    render(<QueryClientProvider client={queryClient}><ChatScreen /></QueryClientProvider>)
   })
   expect(screen.getByTestId('composer-card')).toBeInTheDocument()
 }
@@ -95,7 +95,6 @@ beforeEach(() => {
   __resetFinishedTurnIdsForTests()
   queryClient.clear()
   vi.mocked(fetchSessionMessages).mockReset().mockResolvedValue([])
-  client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   useChatStore.setState(useChatStore.getInitialState(), true)
   useSessionStore.setState({ ...useSessionStore.getInitialState(), activeSessionId: SID, activeAgentId: 'mia' }, true)
   useConnectionStore.setState({ ...useConnectionStore.getInitialState(), isConnected: true, liteMode: false }, true)
@@ -112,7 +111,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
-  client.clear()
   queryClient.clear()
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -319,7 +317,6 @@ describe('current item recovery and indicator design — round 1', () => {
     setList(activeItem('Before page reload'))
     expectLine('Before page reload')
     cleanup()
-    client.clear()
     queryClient.clear()
     useChatStore.setState(useChatStore.getInitialState(), true)
     vi.mocked(fetchSessionMessages).mockResolvedValue([
@@ -358,10 +355,11 @@ describe('current item recovery and indicator design — round 1', () => {
     act(() => useSessionStore.getState().setActiveSession(OTHER, 'mia'))
     snapshotRestore('late-turn', 'late-call', 'Late other-chat item', OTHER, false)
     await waitFor(() => expect(fetchSessionMessages).toHaveBeenCalledWith(OTHER))
+    await waitFor(() => expect(queryClient.getQueryState(['current-todo-history', OTHER, 'late-turn'])?.fetchStatus).toBe('fetching'))
     act(() => useSessionStore.getState().setActiveSession(SID, 'mia'))
     expectLine('Keep the original chat item')
     await act(async () => resolveHistory([savedList('late-turn', 'Late other-chat item', 'late-call')]))
-    await waitFor(() => expect(queryClient.getQueryState(['messages', OTHER])?.status).toBe('success'))
+    await waitFor(() => expect(queryClient.getQueryState(['current-todo-history', OTHER, 'late-turn'])?.status).toBe('success'))
     expectLine('Keep the original chat item')
   })
 
@@ -388,8 +386,8 @@ describe('current item recovery and indicator design — round 1', () => {
     feed({ type: 'done', session_id: SID, stats: { frames_emitted: 3 } })
     completeCatchUp('snapshot')
     await waitFor(() => {
-      expect(queryClient.getQueryState(['messages', SID])?.status).toBe('success')
-      expect(queryClient.getQueryState(['messages', SID])?.fetchStatus).toBe('idle')
+      expect(queryClient.getQueryState(['current-todo-history', SID, turnId])?.status).toBe('success')
+      expect(queryClient.getQueryState(['current-todo-history', SID, turnId])?.fetchStatus).toBe('idle')
     })
     expect(screen.queryByTestId('reply-current-todo')).not.toBeInTheDocument()
   })
@@ -405,10 +403,10 @@ describe('current item recovery and indicator design — round 1', () => {
     feed({ type: 'tool_call_result', session_id: SID, seq: 6, call_id: 'completed-call', tool: 'set_todos', status: 'success', result: 'saved earlier' })
     completeCatchUp('incremental')
     await waitFor(() => {
-      expect(queryClient.getQueryState(['messages', SID])?.status).toBe('success')
-      expect(queryClient.getQueryState(['messages', SID])?.fetchStatus).toBe('idle')
+      expect(queryClient.getQueryState(['current-todo-history', SID, 'new-turn-without-todos'])?.status).toBe('success')
+      expect(queryClient.getQueryState(['current-todo-history', SID, 'new-turn-without-todos'])?.fetchStatus).toBe('idle')
     })
-    expect(queryClient.getQueryData(['messages', SID])).toEqual([savedList('completed-turn', 'Do not revive me', 'completed-call')])
+    expect(queryClient.getQueryData(['current-todo-history', SID, 'new-turn-without-todos'])).toEqual([savedList('completed-turn', 'Do not revive me', 'completed-call')])
     expect(useChatStore.getState().sessionsById[SID].activeTurnId).toBe('new-turn-without-todos')
     expect(useChatStore.getState().sessionsById[SID].toolCalls['completed-call']).toBeUndefined()
     expect(screen.queryByTestId('reply-current-todo')).not.toBeInTheDocument()
@@ -482,12 +480,83 @@ describe('current item recovery and indicator design — round 1', () => {
     })
   })
 
-  it('makes a failed history recovery visible instead of presenting an unknown checklist as an empty one', async () => {
-    await renderChat()
-    vi.mocked(fetchSessionMessages).mockRejectedValue(new Error('History storage unavailable'))
-    act(() => useChatStore.getState().clearStreamingState())
+})
+
+describe('checklist recovery error isolation — round 2', () => {
+  it('limits a failed recovery read to the indicator without removing the running chat or controls', async () => {
+    await loadUsableChat()
+    const failure = new Error('Checklist recovery unavailable')
+    vi.mocked(fetchSessionMessages).mockRejectedValue(failure)
+    act(() => {
+      useConnectionStore.setState({ isConnected: false })
+      useChatStore.getState().clearStreamingState()
+      useConnectionStore.setState({ isConnected: true })
+      useChatStore.getState().setReplaying(true)
+    })
     announceTurn('turn-one')
     completeCatchUp('incremental')
-    await waitFor(() => expect(within(screen.getByTestId('reply-status-indicator')).getByText('Current checklist unavailable')).toBeInTheDocument())
+    await waitForHistoryFailure(failure)
+    expectLoadedChatUsable()
+    expect(within(screen.getByTestId('reply-status-indicator')).getByText('Current checklist unavailable')).toBeInTheDocument()
+    expect(screen.queryByTestId('reply-current-todo')).not.toBeInTheDocument()
+  })
+
+  it('keeps a confirmed live item and the chat usable when an optional history read fails', async () => {
+    await loadUsableChat()
+    const callId = setList(activeItem('Keep this accepted live item'))
+    expectLine('Keep this accepted live item')
+    const failure = new Error('Optional history read failed')
+    vi.mocked(fetchSessionMessages).mockRejectedValue(failure)
+    announceTurn('turn-one')
+    await waitForHistoryFailure(failure)
+    expectLoadedChatUsable()
+    expectLine('Keep this accepted live item')
+    expect(useChatStore.getState().sessionsById[SID].toolCalls[callId].status).toBe('success')
+    expect(screen.queryByText('Current checklist unavailable')).not.toBeInTheDocument()
+  })
+
+  it('still presents a genuine initial main-history failure instead of swallowing it as an optional read', async () => {
+    const failure = new ApiError(403, 'History read forbidden')
+    vi.mocked(fetchSessionMessages).mockRejectedValue(failure)
+    await act(async () => {
+      render(<QueryClientProvider client={queryClient}><ChatScreen /></QueryClientProvider>)
+    })
+    expect(await screen.findByText('Could not load messages.')).toBeInTheDocument()
+    expect(queryClient.getQueryState(['messages', SID])?.error).toBe(failure)
+    expect(screen.getByRole('button', { name: /^Retry$/ })).toBeEnabled()
+    expect(screen.queryByTestId('composer-card')).not.toBeInTheDocument()
   })
 })
+
+const loadedHistory: Message[] = [{
+  id: 'request', role: 'user', content: 'Prepare the report', status: 'done', timestamp: '2026-10-21T12:00:00Z',
+}]
+
+async function loadUsableChat() {
+  vi.mocked(fetchSessionMessages).mockResolvedValue(loadedHistory)
+  await renderChat()
+  await waitFor(() => expect(queryClient.getQueryState(['messages', SID])?.status).toBe('success'))
+  expect(queryClient.getQueryData(['messages', SID])).toEqual(loadedHistory)
+  expect(screen.getByText('Starting the report')).toBeInTheDocument()
+  expect(screen.getByTestId('stop-btn')).toBeEnabled()
+}
+
+async function waitForHistoryFailure(failure: Error) {
+  // Observe a real same-session query rejection, without assuming whether the
+  // production fix has isolated that query yet. No fake query/error state.
+  await waitFor(() => expect(queryClient.getQueryCache().findAll().some((query) =>
+    query.queryKey.includes(SID) && query.state.error === failure,
+  )).toBe(true))
+}
+
+function expectLoadedChatUsable() {
+  expect(screen.getByTestId('composer-card')).toBeInTheDocument()
+  expect(screen.getByTestId('composer-input')).toBeEnabled()
+  expect(screen.getByTestId('stop-btn')).toBeEnabled()
+  expect(screen.getByText('Starting the report')).toBeInTheDocument()
+  expect(screen.queryByText('Could not load messages.')).not.toBeInTheDocument()
+  expect(queryClient.getQueryState(['messages', SID])?.status).toBe('success')
+  expect(queryClient.getQueryData(['messages', SID])).toEqual(loadedHistory)
+  expect(useChatStore.getState().sessionsById[SID].isStreaming).toBe(true)
+  expect(useChatStore.getState().sessionsById[SID].activeTurnId).toBe('turn-one')
+}

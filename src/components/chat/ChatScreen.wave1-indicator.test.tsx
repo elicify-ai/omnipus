@@ -7,10 +7,10 @@
 // VirtualAssistantMessageRow, including a streaming row.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, within, waitFor } from '@testing-library/react'
+import { cleanup, render, within, waitFor } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { AssistantRuntimeProvider, useMessagePartText } from '@assistant-ui/react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
 import type { ChatMessage } from '@/store/chat'
@@ -19,7 +19,8 @@ import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { useOmnipusRuntime } from '@/lib/omnipus-runtime'
 import { useToolApprovalStore } from '@/store/toolApproval'
-import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import type { AskUserQuestionCard, GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import { queryClient } from '@/lib/queryClient'
 
 class ResizeObserverStub {
   observe() {}
@@ -75,17 +76,19 @@ vi.mock('./markdown-text', () => ({
 import { ChatScreen } from './ChatScreen'
 
 function Providers({ children }: { children: React.ReactNode }) {
-  const queryClientRef = React.useRef<QueryClient | null>(null)
-  if (!queryClientRef.current) {
-    queryClientRef.current = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  }
   const runtime = useOmnipusRuntime()
   return (
-    <QueryClientProvider client={queryClientRef.current}>
+    <QueryClientProvider client={queryClient}>
       <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
     </QueryClientProvider>
   )
 }
+
+beforeEach(() => queryClient.clear())
+afterEach(() => {
+  cleanup()
+  queryClient.clear()
+})
 
 function seedMessages(sid: string, messages: ChatMessage[], flags: { streaming: boolean; replaying: boolean }) {
   const bucket = makeBucketMessages(messages)
@@ -499,6 +502,69 @@ describe('live inline indicator', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
     expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
     expect(within(bubble).queryByText('Thinking…')).not.toBeInTheDocument()
+  })
+})
+
+describe('current todo yields to notices in the real live runtime — round 2', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
+    useChatPreferencesStore.getState().setVerboseChatEnabled(false)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+  })
+
+  it.each([
+    ['approval', 'Waiting for your approval — bash', 'waiting'],
+    ['question', 'Waiting for your input', 'waiting'],
+    ['connection', 'Unavailable/reconnecting', 'none'],
+  ] as const)('preserves %s priority over a confirmed item and restores it afterwards', async (notice, copy, motion) => {
+    const sid = `todo-notice-${notice}`
+    seedMessages(sid, streamingPair(sid, 'agent-1'), { streaming: true, replaying: false })
+    const bubble = assistantBubble(await mount())
+    expect(bubble).toHaveAttribute('data-status', 'running') // Real AssistantUI path, not the plain/replay row.
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_start', session_id: sid, tool: 'set_todos', call_id: 'notice-todo', params: { outcome: 'Review the report', todos: [{ text: 'Review the sources', status: 'in_progress' }] } })
+      useChatStore.getState().handleFrame({ type: 'tool_call_result', session_id: sid, tool: 'set_todos', call_id: 'notice-todo', status: 'success', result: 'Checklist saved' })
+    })
+    const indicator = within(bubble).getByTestId('reply-status-indicator')
+    await waitFor(() => expect(within(indicator).getByTestId('reply-current-todo').textContent).toBe('Working on: Review the sources'))
+    expect(within(indicator).getByText('Working on a checklist item')).toHaveClass('sr-only')
+
+    act(() => {
+      if (notice === 'approval') {
+        useToolApprovalStore.setState({ queue: [{ approvalId: 'notice-approval', toolCallId: 'notice-exec', toolName: 'bash', args: {}, agentId: 'agent-1', sessionId: sid, turnId: `${sid}_turn`, expiresAt: Date.now() + 60_000 }], resolvedIds: [] })
+      } else if (notice === 'question') {
+        const pendingAsk: AskUserQuestionCard = {
+          card_id: 'notice-question', session_id: sid, agent_id: 'agent-1', status: 'pending', created_at: '2026-10-21T12:00:00Z',
+          questions: [{ header: 'Scope', question: 'Continue with this scope?', options: [{ label: 'Continue' }, { label: 'Change scope' }] }],
+        }
+        useChatStore.setState((state) => ({ pendingAsk, sessionsById: { ...state.sessionsById, [sid]: { ...state.sessionsById[sid], pendingAsk } } }))
+      } else {
+        // Keep the running bucket and accepted call: clearing them here would
+        // make the phase-guard mutation invisible, reproducing the old gap.
+        useConnectionStore.setState({ isConnected: false, reconnectPhase: 'reconnecting', reconnectAttempt: 1 })
+      }
+    })
+    expect(useChatStore.getState().sessionsById[sid].isStreaming).toBe(true)
+    expect(useChatStore.getState().sessionsById[sid].toolCalls['notice-todo'].status).toBe('success')
+    expect(within(indicator).getByText(copy, { exact: true })).toBeInTheDocument()
+    expect(within(indicator).queryByTestId('reply-current-todo')).not.toBeInTheDocument()
+    expect(within(indicator).queryByText('Working on a checklist item')).not.toBeInTheDocument()
+    expectMarkMotion(bubble, motion)
+
+    act(() => {
+      useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
+      useChatStore.setState((state) => ({ pendingAsk: null, sessionsById: { ...state.sessionsById, [sid]: { ...state.sessionsById[sid], pendingAsk: null } } }))
+      useConnectionStore.setState({ isConnected: true, reconnectPhase: null, reconnectAttempt: 0, connectionError: null })
+    })
+    await waitFor(() => expect(within(indicator).getByTestId('reply-current-todo').textContent).toBe('Working on: Review the sources'))
+    expect(within(indicator).getByText('Working on a checklist item')).toHaveClass('sr-only')
+    expect(within(indicator).queryByText(copy, { exact: true })).not.toBeInTheDocument()
+    expectMarkMotion(bubble, 'thinking')
   })
 })
 
