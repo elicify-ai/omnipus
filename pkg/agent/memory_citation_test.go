@@ -69,7 +69,7 @@ func TestCitationTracker_RecallThenCiteWritesOpCited(t *testing.T) {
 
 	adapter := NewMemoryStoreAdapter(ms)
 	recall := tools.NewRecallMemoryTool(adapter)
-	tracker := newCitationTracker(ms)
+	tracker := newCitationTracker(ms, "")
 	ctx := tools.WithCitationTracker(context.Background(), tracker)
 
 	// Recall surfaces the memory and records it on the tracker.
@@ -145,7 +145,7 @@ func TestCitationTracker_NoReferenceNoCite(t *testing.T) {
 
 	adapter := NewMemoryStoreAdapter(ms)
 	recall := tools.NewRecallMemoryTool(adapter)
-	tracker := newCitationTracker(ms)
+	tracker := newCitationTracker(ms, "")
 	ctx := tools.WithCitationTracker(context.Background(), tracker)
 
 	if res := recall.Execute(ctx, map[string]any{"query": "helm"}); res == nil || res.IsError {
@@ -174,7 +174,7 @@ func TestCitationTracker_TitleCite(t *testing.T) {
 
 	adapter := NewMemoryStoreAdapter(ms)
 	recall := tools.NewRecallMemoryTool(adapter)
-	tracker := newCitationTracker(ms)
+	tracker := newCitationTracker(ms, "")
 	ctx := tools.WithCitationTracker(context.Background(), tracker)
 
 	if res := recall.Execute(ctx, map[string]any{"query": "postgres"}); res == nil || res.IsError {

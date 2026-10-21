@@ -31,7 +31,8 @@ import (
 // installs it on the tool context, and calls EmitCitations after each LLM
 // response.
 type citationTracker struct {
-	ms *MemoryStore
+	ms    *MemoryStore
+	scope MemoryScope // immutable identity of the citing turn
 
 	mu       sync.Mutex
 	recalled []recalledMem
@@ -50,11 +51,11 @@ type recalledMem struct {
 // Returns nil when ms is nil (main gateway agent has no memory store) — the
 // agent loop treats nil as "no tracking", matching WithCitationTracker's
 // nil-short-circuit.
-func newCitationTracker(ms *MemoryStore) *citationTracker {
+func newCitationTracker(ms *MemoryStore, workspaceID string) *citationTracker {
 	if ms == nil {
 		return nil
 	}
-	return &citationTracker{ms: ms, emitted: make(map[string]bool)}
+	return &citationTracker{ms: ms, scope: ms.scopeForWorkspace(workspaceID), emitted: make(map[string]bool)}
 }
 
 // RecordRecalled implements tools.CitationTracker. It captures the IDs/titles
@@ -159,14 +160,14 @@ func citationMatches(lowerText string, m recalledMem) bool {
 }
 
 // resolveCountersPath locates which room holds the memory file and returns that
-// room's counters.jsonl path. Private room is checked first, then the active
+// room's counters.jsonl path. Private room is checked first, then the citing turn's
 // shared room. Returns "" when the memory is not found in either room.
 func (c *citationTracker) resolveCountersPath(memoryID string) string {
 	memFile := filepath.Join(c.ms.privateRoom.MemoriesDir, memrooms.Filename(memoryID))
 	if _, err := os.Stat(memFile); err == nil {
 		return c.ms.privateRoom.CountersPath
 	}
-	if shared := c.ms.currentSharedRoom(); shared != nil {
+	if shared := c.ms.SharedRoom(c.scope); shared != nil {
 		memFile := filepath.Join(shared.MemoriesDir, memrooms.Filename(memoryID))
 		if _, err := os.Stat(memFile); err == nil {
 			return shared.CountersPath

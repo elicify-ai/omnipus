@@ -1,16 +1,16 @@
 # Memory
 
-Memory is what your agents keep between conversations. When a session ends, Omnipus writes a short recap of it, and anything an agent saved during it stays available to the team. This page explains what agents remember, where it lives, and which settings control it.
+Memory is what your agents keep between conversations. **Shared notes belong to the workspace of the chat**, not whichever workspace the agent used most recently. Private notes belong to one agent and stay private to that agent across its chats. This page explains what agents remember, where it lives, and which settings control it.
 
 ## What it is
 
 Three kinds of memory, all stored as plain files on your machine:
 
-- **Saved notes.** An agent saves a fact, decision, reference, or lesson with the `remember` tool. A note lives in one of two rooms: a shared room the whole workspace team reads, or a private room for one agent.
-- **Recaps and retrospectives.** When a conversation has been idle for a while, a background call summarizes it — what it was about, what went well, what to improve. The recap is loaded back into the agent's context at the start of its next session, so it picks up where it left off.
+- **Saved notes.** An agent saves a fact, decision, reference, or lesson with the `remember` tool. A shared note goes to the current chat's workspace, where teammate agents can read it in their chats in that workspace. A private note is available only to the agent that saved it.
+- **Recaps and retrospectives.** When a conversation has been idle for a while, a background call summarizes it — what it was about, what went well, what to improve. The recap is loaded back into the same agent's context in the same workspace, so it picks up where it left off.
 - **The transcript.** The full conversation stays on disk. Only the recent part sits in the agent's live view; the rest can be read back on demand.
 
-Every new session starts with the last recap and up to twenty recent saved notes already in the agent's context. The agent does not wait to be asked.
+When memory is enabled for the agent, a prompt includes that workspace's last recap for the agent, when available, and up to twenty recent saved notes within a size limit: the agent's private notes plus only the current chat's workspace's shared notes. If the chat has no resolvable workspace, no shared notes are included and Omnipus logs a warning; the agent's private notes remain available. Teammates' newly saved shared notes are picked up at the next prompt build, without the agent first needing to call a memory tool.
 
 ## When you would use it
 
@@ -23,15 +23,15 @@ Every new session starts with the last recap and up to twenty recent saved notes
 
 1. In a chat, tell the agent what to keep: "Remember that the staging server is called elm." The agent calls `remember`, and the tool call appears in the thread.
 2. Every `remember` call explicitly chooses **shared** or **private** memory; the tool has no room default. Ask for a shared note when the workspace team should recall it, or a private note for the agent alone. A shared choice outside a workspace is stored privately, and the tool explains that fallback.
-3. In any later conversation, ask about it. The agent searches with `recall_memory` and answers from saved notes and past retrospectives.
+3. In a later chat in the same workspace, ask about a shared note. The agent searches with `recall_memory` and answers from that workspace's shared notes, its own private notes, and its past private retrospectives. A chat in another workspace cannot recall the first workspace's shared notes. The agent's private notes remain available across its own chats.
 4. For something said earlier in the same conversation, the agent uses `recall_conversation` instead. That tool never crosses into other conversations.
 
 The two rooms:
 
 | Room | Who can read it | Good for |
 |---|---|---|
-| Shared (chosen explicitly) | Every agent in the workspace | Project decisions, conventions, references |
-| Private | One agent only | Personal working notes, individual lessons |
+| Shared (chosen explicitly) | Teammate agents in chats in the note's workspace | Project decisions, conventions, references |
+| Private | Only the agent that saved it, across its own chats | Personal working notes, individual lessons |
 
 ## The four memory tools
 
@@ -40,7 +40,7 @@ Omnipus provides these four memory tools. Which an agent can use depends on its 
 | Tool | What it does | Bounds |
 |---|---|---|
 | `remember` | Saves a note as a decision, reference, or lesson | Up to 4,096 characters; every call chooses shared or private memory |
-| `recall_memory` | Keyword search over saved notes and past retrospectives | Both rooms by default; 20 results, at most 50 |
+| `recall_memory` | Keyword search over saved notes and past retrospectives | Current chat's shared room plus the agent's private room by default; 20 results, at most 50 |
 | `recall_conversation` | Reads back earlier context from the current conversation | By keyword, turn numbers, time window, an addressed tool result, or an inclusive archive-line range |
 | `run_retrospective` | Records what went well and what to improve | Always the agent's private room |
 
