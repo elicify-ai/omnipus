@@ -13,6 +13,12 @@ Open **Agents** in the sidebar and the roster has four sections:
 
 A filter above the roster narrows the list to one [workspace](workspaces.md) team.
 
+When addressing an agent by its ID, use the exact letter case. For example, `Jim` does not address the built-in ID `jim`; it is an unknown ID. This rule applies to new chats, existing chats and bound channels. The one exception is addressing the system agent Omnipus in chat: its ID comparison ignores case, and an existing chat keeps its stored owner spelling. Display names are labels, not ID aliases.
+
+For an existing chat, a differently cased ordinary ID is refused before the message is saved or sent to the agent. Omitting the ID continues under that chat's stored owner; it does not choose another agent.
+
+For a new chat message, an unknown or differently cased ordinary ID is refused before a session is created or the message is saved. Requests for Omnipus in any letter case point to its canonical main chat rather than creating another conversation.
+
 ## When you would use it
 
 - You want a colleague with a fixed job and personality. Create a Main agent.
@@ -27,7 +33,7 @@ The three built-in chat agents cover the everyday jobs.
 |---|---|---|
 | Mia | Assistant | Your everyday starting point. Answers questions and connects you with the right specialist. |
 | Jim | Planner and Orchestrator | Turns a complex goal into tasks, delegates them to the right agents, and tracks the work to completion. |
-| Omnipus | System agent | Sets up and changes your agents, teams, skills, connectors, providers and channels, for every workspace, from one conversation. |
+| Omnipus | System agent | Sets up and changes your agents, workspaces, teams, skills, connectors, providers and channels, from one conversation. |
 
 Any chat colleague can ask a teammate for help: start a message with `@` and pick the agent, and the request is delivered to that agent's own chat. Omnipus keeps your conversation with its current agent.
 
@@ -36,9 +42,16 @@ Any chat colleague can ask a teammate for help: start a message with `@` and pic
 Omnipus is your system agent for setup and configuration. It lives in your default workspace only: it cannot be added to another workspace or removed from the default one, and its chats live there. It works from its own folder, and its file tools can still reach the work folders of every workspace (and their mounts) to set them up — never a workspace's record or its private memory folder. Other agents keep to their own workspace.
 
 - **Protected name.** No other agent can be created or renamed to "Omnipus", ignoring letter case and leading or trailing whitespace. A different name such as "Omnipus Helper" is allowed.
+- **Workspaces.** On a fresh install with the shipped policies, Omnipus can create a workspace without a tool-approval prompt, but cannot delete one. Delete a non-default workspace in its **Settings** instead. Agent-driven deletion is deferred to [#1363](https://github.com/elicify-ai/omnipus/issues/1363); its per-agent Deny stays in force even under God Mode. These fresh-install defaults do not replace existing saved permissions.
 - **Approvals.** Under the shipped non-God-Mode policy, deleting an agent, removing a skill or connector, adding a connector, configuring a provider, and enabling or configuring a channel ask for your approval, as does changing an agent's permissions (`set_agent_permissions`). These calls keep asking when their effective policy is Ask, even with Auto-approve on.
 - **No per-agent Ask for Omnipus.** You can set any of Omnipus's tools to Deny, but not to Ask on Omnipus itself; set Ask on the global tool policy instead. Every path that changes per-agent permissions refuses it with "Omnipus takes no per-agent Ask; set Ask globally or use Deny".
 - **God Mode.** While God Mode is on, Omnipus is told so in every turn; it then proceeds without approvals.
+
+**Agent ids and names.** Every agent you or Omnipus create gets a generated id — a random identifier such as `3f1c9a2e-…` — that never changes. The name is a free label: it is kept exactly as typed, in any letter case, and two agents may share a name. Built-in agents keep their fixed ids (`omnipus`, `jim`, `mia`, …). Ids match exactly: `Jim` or `JIM` is not the id `jim` and is reported as an unknown agent. A name may be at most 100 characters; a longer one is refused on every path, including the agent tools.
+
+**Where a new agent lands.** `create_agent` takes an optional `workspace_id`: the new agent joins that workspace's team and gets its main chat there, and your current workspace and chat stay as they are. Without it, the agent joins the workspace of the conversation it was created from. Only Omnipus may name another workspace; an unknown workspace is refused before anything is saved.
+
+**What an agent tool can change.** Besides identity, model, skills and the soul, `update_agent` can replace an agent's `AGENT.md` (`agent_md`), under the same rules as the soul: not on the built-in agents and not on external workers, while system agents keep their instructions editable. `get_agent_tools` finds an agent by its exact `name` as well as by its id; when several agents share that name it refuses with `AMBIGUOUS` and lists their ids. When the global tool policy is stricter than a per-agent setting, `set_agent_permissions` still saves the agent's own value but reports it in `clamped` — for example `{tool: "read_file", requested: "allow", effective: "ask"}` — with a sentence in `message`; `get_agent_tools` lists the same `clamped` entries when you read the agent back. Every change tool reports one of four outcomes — see [tools](tools.md#what-a-change-tool-reports).
 
 When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`. Under the shipped non-God-Mode policy, that tool asks before it runs, even with Auto-approve on. Omnipus skips those global approvals in God Mode.
 

@@ -357,8 +357,11 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		if strings.EqualFold(explicitID, string(coreagent.IDOmnipus)) {
 			explicitID = string(coreagent.IDOmnipus)
 		}
+		lookupID := explicitID
 		if owner := al.existingSessionOwner(msg); owner != "" {
-			if !strings.EqualFold(owner, explicitID) {
+			// Only the WU-1 system owner keeps case-fold matching (#1330).
+			omnipusOwner := explicitID == string(coreagent.IDOmnipus) && strings.EqualFold(owner, explicitID)
+			if owner != explicitID && !omnipusOwner {
 				logger.WarnCF("agent", "Explicit agent_id conflicts with the session owner; refused",
 					map[string]any{"agent_id": explicitID, "owner": owner, "session_id": msg.SessionID})
 				return routing.ResolvedRoute{}, nil, fmt.Errorf(
@@ -367,7 +370,7 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 			// A matching id runs under the owner's stored spelling.
 			explicitID = owner
 		}
-		if agent, ok := registry.GetAgent(explicitID); ok {
+		if agent, ok := registry.GetAgent(lookupID); ok {
 			// A worker is a delegation-only labor tier — never a chat target,
 			// and there is no default agent to fall back to (FR-120): refuse.
 			if agent.IsWorker() {

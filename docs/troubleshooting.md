@@ -288,6 +288,14 @@ Opening an agent's main chat (see [Each agent's own chat, per workspace](workspa
 
 It means the agent is entitled to a main chat in that workspace, but Omnipus could not create it, or could not trust the one it found. The message deliberately names no file, folder or id; the full cause is in the gateway log as an error-level line starting `rest: main session could not be prepared on open`, with the `workspace_id`, `agent_id` and the underlying error. (A missing chat for an agent that is *not* on the team, a worker, or Omnipus outside the default workspace is different: that stays a plain "session not found".)
 
+**A workspace can be saved while its main chat is unavailable.** Saving team membership and preparing the chat are separate steps. The workspace-details response includes a safe preparation reason for each failed member instead of a main-chat address. It does not expose filesystem paths or the contents of a damaged saved identity. If a file occupies a location that must be a folder, the reason is:
+
+> The main chat could not be prepared because session storage has a file where a folder is required. Ask the server operator to fix it, then retry.
+
+When this failure prevents the workspace's first conversation agent from opening, Chat shows the server's reason with **Retry**, keeps the message box disabled, and does not say **Your agent is ready**. If no reason is provided, Chat keeps the generic **This chat is unavailable right now** notice instead. It never switches to the next teammate to hide the failure.
+
+The operator must correct the storage layout; **Retry** does not remove or replace the blocking file. Retry reads the same workspace's details and makes one preparation attempt per eligible member. Once storage is repaired, the next read returns the matching main-chat address and no preparation error; Chat opens that main and clears the notice. Sending resumes after the conversation finishes loading. Corrupt, mismatched or unclassified failures keep the fixed generic message above; full diagnostics stay in the server log. A healthy teammate's main chat remains available.
+
 **Why it can happen at startup too.** On every start Omnipus creates the main chats of the default workspace's team (the system agent Omnipus included) and of every saved workspace team. A failure there does not stop the gateway. It is logged at error level — `rest: boot mains: ...`, naming the workspace (and the agent) — and the chat is tried again the next time someone opens it.
 
 **What to do.**

@@ -1,21 +1,21 @@
 [
   {
     "name": "add_mcp_server",
-    "description": "Add an MCP server to the configuration (tools.mcp.servers). The server is saved to config.json, a connection is attempted immediately, and the result reports live connection status and tool count. Every key in env is stored in the encrypted credential store and referenced from config.json by a ref (mcp_\u003cname\u003e_\u003ckey\u003e) — never written in plaintext, mirroring configure_channel's credential handling. sse/http URLs must be https, or http only for loopback addresses (localhost, 127.x.x.x, ::1). Adding a server when MCP is globally disabled and no other server is enabled will turn tools.mcp.enabled ON — an install-wide change; if another server is already enabled the global flag is left alone and the new server will not connect until an operator enables it. A name that already exists is refused, not updated — remove it first with remove_mcp_server. Tools the server exposes register with no tool policy and cannot be called until an operator assigns one.\nParameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env.",
+    "description": "Add an MCP server to the configuration (tools.mcp.servers). The server is saved to config.json, a connection is attempted immediately, and the result reports live connection status and tool count. Every key in env is stored in the encrypted credential store and referenced from config.json by a ref (mcp_\u003cname\u003e_\u003ckey\u003e) — never written in plaintext, mirroring configure_channel's credential handling. sse/http URLs must be https, or http only for loopback addresses (localhost, 127.x.x.x, ::1). Adding a server when MCP is globally disabled and no other server is enabled will turn tools.mcp.enabled ON — an install-wide change; if another server is already enabled the global flag is left alone and the new server will not connect until an operator enables it. A name that already exists is refused, not updated — remove it first with remove_mcp_server. Tools the server exposes register with no tool policy and cannot be called until an operator assigns one. expected_revision must be \"absent\" (the name's revision from list_mcp_servers); the write is refused if a server of that name appeared since.\nParameters: name (required), expected_revision (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env.",
     "scope": "core",
     "category": "mcp",
     "source": "builtin"
   },
   {
     "name": "configure_channel",
-    "description": "Store a channel's credentials and settings. Secrets (token, app_secret) go into the encrypted credential store and are referenced from config.json by a *_ref — they are never written to config.json in plaintext. Non-secret fields (bot_id, app_id, mode) are written to config.json directly. This does NOT enable the channel and does NOT check whether it is enabled: call enable_channel separately, and note the channel only connects on the next config reload. WhatsApp does not take credentials here — it pairs by QR code in the Channels screen.\nParameters: id (required, from list_channels), token, app_secret, bot_id, app_id, mode.",
+    "description": "Store a channel's credentials and settings. Secrets (token, app_secret) go into the encrypted credential store and are referenced from config.json by a *_ref — they are never written to config.json in plaintext. Non-secret fields (bot_id, app_id, mode) are written to config.json directly. This does NOT enable the channel and does NOT check whether it is enabled: call enable_channel separately, and note the channel only connects on the next config reload. WhatsApp does not take credentials here — it pairs by QR code in the Channels screen. expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, from list_channels), expected_revision (required), token, app_secret, bot_id, app_id, mode.",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
   },
   {
     "name": "configure_provider",
-    "description": "Store an LLM provider's API key in the encrypted credential store and wire it into config.json so the provider becomes usable. Does NOT contact the provider — the key is stored and referenced, never validated against the live API, so a wrong or revoked key is accepted here without complaint; call list_models afterwards to confirm the key actually works. name must be a catalog provider id (list_models or the Settings → Providers screen show the valid ids; note the ids are 'amazon-bedrock' and 'google', not 'bedrock' or 'gemini'). api_key is required for every cloud provider and optional only for local ones (ollama, lmstudio, vllm). api_base is optional and overrides the catalog's default endpoint; it must be a full http:// or https:// URL with a host.\nParameters: name (required), api_key, api_base.",
+    "description": "Store an LLM provider's API key in the encrypted credential store and wire it into config.json so the provider becomes usable, then check the SAVED entry: the configured endpoint is asked for its model list over the provider's protocol with the saved credential (local providers need no key). The result's outcome says whether that check passed; it does not prove that a chosen model runs. name must be a catalog provider id (list_models or the Settings → Providers screen show the valid ids; note the ids are 'amazon-bedrock' and 'google', not 'bedrock' or 'gemini'). api_key is required for every cloud provider and optional only for local ones (ollama, lmstudio, vllm). api_base is optional and overrides the catalog's default endpoint; it must be a full http:// or https:// URL with a host. expected_revision is the provider's revision from list_providers (\"absent\" when it is not configured yet); the write is refused if the provider changed since. dry_run checks the input shape only and saves nothing.\nParameters: name (required), api_key, api_base, expected_revision (required unless dry_run), dry_run.",
     "scope": "core",
     "category": "providers",
     "source": "builtin"
@@ -57,7 +57,7 @@
   },
   {
     "name": "disable_channel",
-    "description": "Disable a channel connection. The channel will stop on the next config reload. A channel that has never been configured cannot be disabled — it is already inactive.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
+    "description": "Disable a channel connection. The channel will stop on the next config reload. A channel that has never been configured cannot be disabled — it is already inactive. expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, the channel type e.g. 'telegram', 'discord'), expected_revision (required).",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
@@ -71,7 +71,7 @@
   },
   {
     "name": "enable_channel",
-    "description": "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
+    "description": "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first. expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, the channel type e.g. 'telegram', 'discord'), expected_revision (required).",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
@@ -162,14 +162,14 @@
   },
   {
     "name": "remove_mcp_server",
-    "description": "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change.\nParameters: name (required), confirm (bool, must be true).",
+    "description": "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change. expected_revision is the server's revision from list_mcp_servers; the removal is refused if the server changed since.\nParameters: name (required), confirm (bool, must be true), expected_revision (required).",
     "scope": "core",
     "category": "mcp",
     "source": "builtin"
   },
   {
     "name": "remove_skill",
-    "description": "Remove an installed skill. IRREVERSIBLE — the skill's whole directory, including any version history it holds, is permanently deleted; there is no undo. This only reaches a skill in the operator's installed-skills directory (populated by installing from the marketplace) — it does NOT reach a skill authored with create_skill or a user override created with edit_skill, which live in a separate directory: naming one here returns NOT_FOUND even though list_skills reports it as available. If the removed skill was shadowing a lower-priority skill of the same id (an override or a built-in), that one becomes visible again. Parameters: name (required, the skill id as reported by list_skills — no path separators), revision (required from the reviewed skill read), confirm (bool, must be true). A conflict requires a fresh read; do not retry the stale deletion.",
+    "description": "Remove a project or installation-wide skill. IRREVERSIBLE — the skill's whole directory, including any version history it holds, is permanently deleted; there is no undo. It searches the target workspace's project shelf first and removes a matching skill from its own project. Only if no project skill matches does it use the installation's skills directory, which also contains installation-wide authored skills and user overrides. A project-shelf read failure returns READ_FAILED without removal or fallback; project-path integrity errors also stop removal instead of falling back. A skill present only on the built-in shelf is not removed. If the removed skill was shadowing a lower-priority skill of the same id (an override or a built-in), that one becomes visible again. Parameters: name (required, the skill id as reported by list_skills — no path separators), revision (required from the reviewed skill read), confirm (bool, must be true). A conflict requires a fresh read; do not retry the stale deletion.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"

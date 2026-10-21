@@ -69,6 +69,9 @@ type restAPI struct {
 	// setupOfferPoster posts the workspace-setup offer into Omnipus's main
 	// (FR-047). nil means the real poster (workspace_setup_offer.go).
 	setupOfferPoster workspaceSetupOfferPoster
+	// beforeWorkspaceDetailPreparation is a scheduling observer for lifecycle
+	// interleaving tests. Nil in production; never replaces reads or writes.
+	beforeWorkspaceDetailPreparation func()
 	// stopSession, when set, replaces agentLoop.StopSession in the delete
 	// path (a test seam for outcomes a real Stop cannot be made to produce
 	// portably, such as a failed background-shell kill). Nil in production.

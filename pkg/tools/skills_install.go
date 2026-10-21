@@ -166,7 +166,10 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 	}
 }
 
-func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) (res *ToolResult) {
+	// FR-030: every result carries the outcome fields; refusals before the
+	// publish step changed nothing.
+	defer func() { res = FinalizeChangeResult(t.Name(), res) }()
 	// Install lock to prevent concurrent directory operations.
 	// Ideally this should be done at a `slug` level, currently, its at the
 	// (single, global) skills-directory level.
@@ -322,6 +325,11 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 			if publish.Revision != "" {
 				payload["revision"] = publish.Revision
 			}
+			if publish.PersistenceStatus != skills.PersistenceNone {
+				return ChangeErrorResult(payload, ChangePartlySaved(
+					fmt.Sprintf("the skill was partly published (stage %s)", publish.ErrorStage), "",
+					[]string{"skill publication"}))
+			}
 			encoded, marshalErr := json.Marshal(payload)
 			if marshalErr != nil {
 				return ErrorResult("skill publication state could not be encoded; inspect installed skill state before retrying")
@@ -348,7 +356,13 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		output += "\nWarning: " + publish.Warning
 	}
 
-	payload, marshalErr := json.Marshal(map[string]any{
+	const checkScope = "registry moderation check passed and the skill was published into the skills directory"
+	verdict := ChangeWorking(checkScope, "an agent loading and running the skill")
+	if publish.PersistenceStatus != skills.PersistenceComplete || publish.ActivationStatus != skills.ActivationActive {
+		verdict = ChangePartlySaved(fmt.Sprintf("publication reported persistence %s, activation %s",
+			publish.PersistenceStatus, publish.ActivationStatus), checkScope, []string{"skill activation"})
+	}
+	payload, marshalErr := json.Marshal(verdict.Into(map[string]any{
 		"success":            true,
 		"name":               slug,
 		"revision":           publish.Revision,
@@ -357,7 +371,7 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		"changed_fields":     publish.ChangedFields,
 		"message":            output,
 		"warning":            publish.Warning,
-	})
+	}))
 	if marshalErr != nil {
 		return ErrorResult(fmt.Sprintf("installed skill but failed to encode mutation state: %v", marshalErr))
 	}

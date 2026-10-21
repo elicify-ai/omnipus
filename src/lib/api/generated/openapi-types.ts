@@ -2657,7 +2657,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a workspace by ID */
+        /**
+         * Get a workspace by ID
+         * @description Reads the workspace and makes one idempotent main-chat preparation attempt for each currently eligible member. A preparation failure does not undo saved membership or fail the workspace read: that member has main_session_error instead of main_session_id. Repeating this read retries preparation after storage is repaired; unreadable or mismatched saved identities are never replaced.
+         */
         get: operations["getWorkspace"];
         /** Update a workspace (partial update — absent fields unchanged) */
         put: operations["updateWorkspace"];
@@ -8873,7 +8876,7 @@ export interface components {
              */
             type: "Main";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -8960,7 +8963,7 @@ export interface components {
              */
             type: "Subagent";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -9039,7 +9042,7 @@ export interface components {
              */
             type: "subagent_3p";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -9104,7 +9107,7 @@ export interface components {
             mcp_servers?: components["schemas"]["AgentMCPBinding"][];
             tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
-             * @description New display name. Rejected on locked agents.
+             * @description New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Renamed Agent
              */
             name?: string;
@@ -15092,6 +15095,8 @@ export interface components {
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             readonly main_session_id?: string;
+            /** @description Safe, server-classified reason why this eligible member's main chat could not be prepared or resolved. Omitted when main_session_id is present or the member is ineligible. Contains no raw error text, filesystem paths, file names, session IDs or stored identity values. */
+            readonly main_session_error?: string;
             heartbeat?: components["schemas"]["WorkspaceMemberHeartbeat"];
             /** @description Display-only: when true the sidebar omits this member's row in this workspace, but the member stays a full team member — messageable, delegable, @-addressable; main and work untouched. Merge rules inside an incoming member config: absent => the stored flag is preserved (a heartbeat save never un-hides). Present with heartbeat absent (a pure hide/show) => the stored heartbeat is preserved unchanged. An entry with neither field ({}) keeps the ordinary replace behaviour: the stored heartbeat is cleared and the flag is still preserved by the absent rule. A heartbeat that IS present is always replaced wholesale, never merged field-by-field. Off-team entries are garbage-collected, so removing a member clears the flag and re-adding the agent starts visible. */
             hidden_from_sidebar?: boolean;

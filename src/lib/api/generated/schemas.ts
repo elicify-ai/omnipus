@@ -2533,6 +2533,7 @@ type WorkspaceDelegationEdge = {
 };
 type WorkspaceMemberConfig = Partial<{
   main_session_id: string;
+  main_session_error: string;
   heartbeat: WorkspaceMemberHeartbeat;
   hidden_from_sidebar: boolean;
 }>;
@@ -4037,7 +4038,7 @@ export const AgentCreateRequestMain =
     mcp_servers: z.array(AgentMCPBinding).optional(),
     tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Main"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
@@ -4061,7 +4062,7 @@ export const AgentCreateRequestSubagent =
     mcp_servers: z.array(AgentMCPBinding).optional(),
     tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Subagent"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
@@ -4082,7 +4083,7 @@ export const AgentCreateRequestSubagent =
 export const AgentCreateRequestSubagent3p =
   z.object({
     type: z.literal("subagent_3p"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
@@ -4117,7 +4118,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   mcp_servers: z.array(AgentMCPBinding).optional(),
   tool_policy_changes: ToolPolicyChanges.optional(),
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).max(100).optional(),
   description: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().max(64).optional(),
@@ -5571,6 +5572,7 @@ export const WorkspaceMemberHeartbeat: z.ZodType<WorkspaceMemberHeartbeat> = z
 export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
   .object({
     main_session_id: z.string().max(255),
+    main_session_error: z.string().min(1),
     heartbeat: WorkspaceMemberHeartbeat,
     hidden_from_sidebar: z.boolean(),
   })
@@ -15507,6 +15509,8 @@ Returns HTTP 201 on success.
     method: "get",
     path: "/workspaces/:id",
     alias: "getWorkspace",
+    description: `Reads the workspace and makes one idempotent main-chat preparation attempt for each currently eligible member. A preparation failure does not undo saved membership or fail the workspace read: that member has main_session_error instead of main_session_id. Repeating this read retries preparation after storage is repaired; unreadable or mismatched saved identities are never replaced.
+`,
     requestFormat: "json",
     parameters: [
       {

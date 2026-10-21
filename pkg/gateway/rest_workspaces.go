@@ -398,7 +398,7 @@ func workspaceToWireFrom(
 	w storedWorkspace,
 	taskCount int,
 	graph *workspace.State,
-	mains func(storedWorkspace, string) string,
+	mains func(storedWorkspace, string) (string, error),
 ) gen.Workspace {
 	createdAt, err := time.Parse(time.RFC3339, w.CreatedAt)
 	if err != nil {
@@ -470,26 +470,30 @@ func workspaceToWireFrom(
 				entry.HiddenFromSidebar = &h
 			}
 			if mains != nil {
-				if id := mains(w, agentID); id != "" {
+				if id, mainErr := mains(w, agentID); id != "" {
 					entry.MainSessionId = &id
+				} else if mainErr != nil {
+					reason := mainSessionErrorMessage(mainErr)
+					entry.MainSessionError = &reason
 				}
 			}
 			wireMC[agentID] = entry
 		}
-		// C-MAIN: a member who owns a resolved main is listed even without
-		// stored settings. main_session_id is a computed, read-only projection
-		// that names an identity that actually exists; a member whose main does
-		// not resolve gets no entry and no address (never a guessed one).
+		// Eligible members get an address OR a safe preparation error even
+		// without stored settings. Neither field is persisted, and an error
+		// never makes an unresolved main address usable.
 		if mains != nil {
 			for _, agentID := range w.CoreTeam {
 				if _, listed := wireMC[agentID]; listed {
 					continue
 				}
-				id := mains(w, agentID)
-				if id == "" {
-					continue
+				id, mainErr := mains(w, agentID)
+				if id != "" {
+					wireMC[agentID] = gen.WorkspaceMemberConfig{MainSessionId: &id}
+				} else if mainErr != nil {
+					reason := mainSessionErrorMessage(mainErr)
+					wireMC[agentID] = gen.WorkspaceMemberConfig{MainSessionError: &reason}
 				}
-				wireMC[agentID] = gen.WorkspaceMemberConfig{MainSessionId: &id}
 			}
 		}
 		wire.MemberConfigs = &wireMC
@@ -1028,11 +1032,30 @@ func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id 
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
-	state, err := workspace.ReadState(a.homePath, id)
+	if a.beforeWorkspaceDetailPreparation != nil {
+		a.beforeWorkspaceDetailPreparation()
+	}
+	// Preparation writes sessions, so its eligibility read and writes must be
+	// ordered with workspace deletion. Keep the existing workspace -> session
+	// lock order, and never prepare from a snapshot read before this lock.
+	unlock := sync.OnceFunc(workspace.LockID(id))
+	defer unlock()
+	state, err := workspace.ReadStateLocked(a.homePath, id)
 	if err != nil {
 		writeWorkspaceReadError(w, err)
 		return
 	}
+	// Retry reaches this detail read even when the failed member has no main
+	// address. Make one eligible-pair preparation attempt, never in the shared
+	// serializer or list projection; damaged identities remain untouched.
+	if len(state.Workspace.CoreTeam) > 0 {
+		if mainsErr := a.ensureMainsForTeam(state.Workspace); mainsErr != nil {
+			logsafeError("rest: workspace detail: some team mains could not be prepared", "workspace_id", id, "error", mainsErr)
+		}
+	}
+	// The shared serializer reads workspace-owned stores itself. Release the
+	// non-reentrant lifecycle lock before response work can acquire it again.
+	unlock()
 	// FR-1.9: owner is attribution only — no access gate.
 	jsonOK(w, workspaceToWireFrom(a.homePath, state.Workspace, countTasksForWorkspace(a.homePath, id), &state, a.mainSessionAddress))
 }
@@ -1651,9 +1674,9 @@ func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
 	// FR-1.9: no access gate — owner is attribution only.
 
 	// Default workspace cannot be deleted (FR-1.6 delete-protection retained).
-	if rd.ws.IsDefault {
+	if err := workspace.RefuseDefaultDeletion(rd.ws.IsDefault); err != nil {
 		unlock()
-		jsonErr(rd.w, http.StatusConflict, "cannot delete the default workspace")
+		jsonErr(rd.w, http.StatusConflict, err.Error())
 		return true
 	}
 
@@ -1673,7 +1696,7 @@ func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
 	// workspace file. If this config write fails the delete aborts with 500,
 	// leaving the workspace + bindings fully consistent (no orphan). Ordering
 	// guarantee: config unbind → workspace file delete.
-	if err := unbindChannelInstancesForWorkspace(rd.a, rd.id); err != nil {
+	if _, err := unbindChannelInstancesForWorkspace(rd.a, rd.id); err != nil {
 		unlock()
 		logsafeError("rest: delete workspace: cascade channel unbind", "id", rd.id, "error_type", fmt.Sprintf("%T", err))
 		jsonErr(rd.w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
@@ -2013,13 +2036,13 @@ func deduplicateStrings(in []string) []string {
 	return out
 }
 
-// unbindChannelInstancesForWorkspace disables and unbinds every channel instance
-// bound to workspaceID. Called from handleWorkspaceDelete BEFORE the workspace
-// file is removed (ADR-029 FR-025/MAJ-005) so that a config-write failure aborts
-// the delete cleanly with no orphan. "Unbind" clears BOTH WorkspaceID AND Identity
-// (leaving Identity would make the next inbound drift on a now-missing workspace)
-// and sets Enabled=false. If no instances are bound this is a no-op returning nil.
-func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) error {
+// unbindChannelInstancesForWorkspace is the one hard channel-cleanup path for
+// HTTP and tool workspace deletion, called BEFORE workspace removal (ADR-029
+// FR-025/MAJ-005). It clears BOTH WorkspaceID and Identity and sets Enabled=false.
+// Returns sorted IDs whose cleanup was persisted. A refresh error returns those
+// IDs with the error: the saved channel changes must not be reported as undone.
+// With no bound instances this is a no-op, including no config-file write.
+func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) ([]string, error) {
 	cfg := a.agentLoop.GetConfig()
 	// Identify bound instances.
 	var boundKeys []string
@@ -2029,11 +2052,11 @@ func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) error {
 		}
 	}
 	if len(boundKeys) == 0 {
-		return nil // nothing to do
+		return nil, nil // nothing to do
 	}
-	sort.Strings(boundKeys) // deterministic order for logging
-
-	return a.safeUpdateConfigJSON(func(m map[string]any) error {
+	sort.Strings(boundKeys) // deterministic order for logging and tool reporting
+	var changedKeys []string
+	err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		channels, _ := m["channels"].(map[string]any)
 		if channels == nil {
 			// No channels section in raw JSON — nothing to unbind.
@@ -2049,13 +2072,21 @@ func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) error {
 			delete(ch, "identity")
 			ch["enabled"] = false
 			channels[key] = ch
+			changedKeys = append(changedKeys, key)
 		}
 		m["channels"] = channels
-
-		logsafeInfo("rest: workspace delete: disabled and unbound channel instances",
-			"workspace_id", workspaceID, "instance_ids", boundKeys)
 		return nil
 	})
+	if err != nil {
+		var refreshErr *configRefreshError
+		if errors.As(err, &refreshErr) {
+			return changedKeys, err // durable write; the workspace must still remain
+		}
+		return nil, err
+	}
+	logsafeInfo("rest: workspace delete: disabled and unbound channel instances",
+		"workspace_id", workspaceID, "instance_ids", changedKeys)
+	return changedKeys, nil
 }
 
 // removeMailboxesForWorkspace removes every (agent, workspace) mailbox pair

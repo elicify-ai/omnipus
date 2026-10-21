@@ -2,6 +2,7 @@ package skills
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -97,26 +98,41 @@ type SlugCollision struct {
 // A SKILL.md that is a symlink to another file INSIDE the same mount (row 12)
 // resolves inside the mount root and is discovered normally.
 func DiscoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugCollision) {
+	found, collisions, _ := discoverProjectSkills(mountName, mountRoot, "")
+	return found, collisions
+}
+
+// discoverProjectSkills is DiscoverProjectSkills that also reports whether the
+// mount could be inspected completely: a non-nil error means the mount root,
+// a recognised skills folder or a candidate skill could not be resolved or
+// read. A missing recognised folder or candidate, or one refused because it
+// escapes the mount, is a complete answer (no error).
+func discoverProjectSkills(mountName, mountRoot, requestedSlug string) ([]ProjectSkill, []SlugCollision, error) {
 	mountRootReal, err := filepath.EvalSymlinks(mountRoot)
 	if err != nil {
 		// A mount whose own root cannot be resolved (missing, broken) has
 		// nothing to discover. This is not logged as a warning here — mount
 		// existence is a precondition enforced by the mount store itself, not
-		// this discovery step's concern.
-		return nil, nil
+		// this discovery step's concern — but it is reported to a caller that
+		// needs to know whether the scan was complete.
+		return nil, nil, fmt.Errorf("mount %q: project folder unavailable: %w", mountName, err)
 	}
 	mountRootReal = filepath.Clean(mountRootReal)
 
 	found := make(map[string]ProjectSkill) // slug (case-folded) -> winning skill
 	wonBy := make(map[string]string)       // slug (case-folded) -> winning dir's description
 	var collisions []SlugCollision
+	var incomplete error
 
 	for _, dirRel := range projectSkillsDirs {
 		dirPath := filepath.Join(mountRoot, filepath.FromSlash(dirRel))
-		if _, ok := realWithinRoot(mountRootReal, dirPath); !ok {
-			// Missing, or a symlink (direct or via any parent component)
-			// resolving outside the mount — the whole directory is refused,
-			// nothing under it is even listed.
+		if _, ok, resolveErr := realWithinRoot(mountRootReal, dirPath); !ok {
+			if resolveErr != nil {
+				incomplete = errors.Join(incomplete, fmt.Errorf("mount %q: %s: %w", mountName, dirRel, resolveErr))
+			}
+			// Only confirmed absence or an out-of-mount path is a complete
+			// exclusion. Other resolution failures leave the shelf unknown.
+			// Nothing under an unconfined directory is even listed.
 			continue
 		}
 
@@ -125,6 +141,7 @@ func DiscoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugC
 			if !errors.Is(readErr, os.ErrNotExist) {
 				slog.Warn("skills: failed to read project skills directory",
 					"mount", mountName, "dir", dirPath, "error", readErr)
+				incomplete = errors.Join(incomplete, fmt.Errorf("mount %q: %s: %w", mountName, dirRel, readErr))
 			}
 			continue
 		}
@@ -134,11 +151,20 @@ func DiscoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugC
 				continue
 			}
 			slug := entry.Name()
+			// A named lookup needs complete directory discovery, but not the
+			// contents of unrelated skills. Keep target failures and collisions
+			// visible without letting an unreadable sibling poison this read.
+			if requestedSlug != "" && !strings.EqualFold(slug, requestedSlug) {
+				continue
+			}
 			skillFile := filepath.Join(dirPath, slug, "SKILL.md")
-			if _, ok := realWithinRoot(mountRootReal, skillFile); !ok {
-				// Either no SKILL.md at this path, or it is a symlink
-				// resolving outside the mount (row 11) — refuse just this
-				// one candidate, its siblings are unaffected.
+			if _, ok, resolveErr := realWithinRoot(mountRootReal, skillFile); !ok {
+				if resolveErr != nil {
+					incomplete = errors.Join(incomplete,
+						fmt.Errorf("mount %q: %s/%s/SKILL.md: %w", mountName, dirRel, slug, resolveErr))
+				}
+				// A missing or out-of-mount SKILL.md excludes just this
+				// candidate; other resolution failures make the scan incomplete.
 				continue
 			}
 
@@ -148,7 +174,13 @@ func DiscoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugC
 				Path:   skillFile,
 				Source: string(ShelfProject),
 			}
-			if meta := (&SkillsLoader{}).getSkillMetadata(skillFile); meta != nil {
+			meta, metadataErr := (&SkillsLoader{}).getSkillMetadataChecked(skillFile)
+			if metadataErr != nil {
+				incomplete = errors.Join(incomplete,
+					fmt.Errorf("mount %q: %s/%s/SKILL.md: %w", mountName, dirRel, slug, metadataErr))
+				continue
+			}
+			if meta != nil {
 				info.Description = meta.Description
 				if meta.Name != "" {
 					info.Name = meta.Name
@@ -183,30 +215,34 @@ func DiscoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugC
 	}
 
 	if len(found) == 0 {
-		return nil, collisions
+		return nil, collisions, incomplete
 	}
 	out := make([]ProjectSkill, 0, len(found))
 	for _, ps := range found {
 		out = append(out, ps)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, collisions
+	return out, collisions, incomplete
 }
 
 // realWithinRoot resolves candidate to its real (symlink-free) path and
 // reports whether that real path lies at or under rootReal (which must
 // already be resolved and Clean-ed). A missing path, or one whose real path
-// escapes rootReal, reports ok=false.
-func realWithinRoot(rootReal, candidate string) (resolved string, ok bool) {
-	resolved, err := filepath.EvalSymlinks(candidate)
+// escapes rootReal, reports ok=false with no error. Other resolution failures
+// are preserved so checked discovery cannot mistake an unknown shelf for absence.
+func realWithinRoot(rootReal, candidate string) (resolved string, ok bool, err error) {
+	resolved, err = filepath.EvalSymlinks(candidate)
 	if err != nil {
-		return "", false
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
 	}
 	resolved = filepath.Clean(resolved)
 	if resolved == rootReal {
-		return resolved, true
+		return resolved, true, nil
 	}
-	return resolved, strings.HasPrefix(resolved, rootReal+string(filepath.Separator))
+	return resolved, strings.HasPrefix(resolved, rootReal+string(filepath.Separator)), nil
 }
 
 // lookupByName returns the project skill in the shelf whose display name
@@ -245,6 +281,28 @@ func (shelf ProjectShelf) lookupByName(name string) (ProjectSkill, bool) {
 // earliest) mount wins and the collision is recorded naming both mounts
 // (D4.2's ordering rule).
 func MergeProjectSkills(mounts []ProjectMount) (ProjectShelf, []SlugCollision) {
+	shelf, collisions, _ := mergeProjectSkills(mounts, "")
+	return shelf, collisions
+}
+
+// MergeProjectSkillsChecked is MergeProjectSkills for a caller that must not
+// act on a partial scan (a workspace-specific skill change): err is non-nil
+// when any mount could not be inspected completely, and then the shelf may be
+// missing skills that do exist.
+func MergeProjectSkillsChecked(mounts []ProjectMount) (ProjectShelf, []SlugCollision, error) {
+	return mergeProjectSkills(mounts, "")
+}
+
+// LookupProjectSkillChecked inspects only the requested slug's candidates,
+// case-insensitively, across every mount and recognised skills directory.
+// Unreadable directories or target files still return an error: neither can
+// prove the target absent. Unrelated skill contents are never read. An empty
+// slug requests the full checked inventory, as MergeProjectSkillsChecked does.
+func LookupProjectSkillChecked(mounts []ProjectMount, slug string) (ProjectShelf, []SlugCollision, error) {
+	return mergeProjectSkills(mounts, slug)
+}
+
+func mergeProjectSkills(mounts []ProjectMount, requestedSlug string) (ProjectShelf, []SlugCollision, error) {
 	sorted := make([]ProjectMount, len(mounts))
 	copy(sorted, mounts)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
@@ -252,9 +310,11 @@ func MergeProjectSkills(mounts []ProjectMount) (ProjectShelf, []SlugCollision) {
 	shelf := make(ProjectShelf)
 	winningMount := make(map[string]string) // slug (case-folded) -> owning mount name
 	var collisions []SlugCollision
+	var incomplete error
 
 	for _, m := range sorted {
-		discovered, dirCollisions := DiscoverProjectSkills(m.Name, m.Root)
+		discovered, dirCollisions, err := discoverProjectSkills(m.Name, m.Root, requestedSlug)
+		incomplete = errors.Join(incomplete, err)
 		collisions = append(collisions, dirCollisions...)
 
 		for _, ps := range discovered {
@@ -277,5 +337,5 @@ func MergeProjectSkills(mounts []ProjectMount) (ProjectShelf, []SlugCollision) {
 		}
 	}
 
-	return shelf, collisions
+	return shelf, collisions, incomplete
 }

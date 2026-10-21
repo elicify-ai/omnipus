@@ -78,7 +78,6 @@ pkg/records/schema_test.go	TestSchema_LoadAndReject	41
 pkg/tools/browser/live_document_frame.go	liveDocumentWatch.onEvent	41
 pkg/tools/browser/webrtc/dedicated_input_queue.go	dedicatedInputQueue.enqueueLocked	41
 pkg/agent/plan_restart_continuity_adr052_qa_test.go	TestRestartContinuity_DoneMembersPreservedNonDoneReset	40
-pkg/migrate/sources/openclaw/openclaw_config.go	OpenClawConfig.convertChannels	40
 pkg/tools/tier1_bounding_params_test.go	TestTier1Tools_BoundingParams	40
 pkg/agent/attach_hydrate.go	AgentLoop.HydrateAgentHistoryFromTranscript	39
 pkg/gateway/rest_agents_update.go	restAPIUpdateAgentPersistAgent.updateRecord	39

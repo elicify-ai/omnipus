@@ -123,6 +123,8 @@ To connect one:
 
 Server tools carry the server's name, so you can tell where a tool came from. In both policy editors they sit in their own group under the server's name. One Allow, Ask or Deny control covers every tool from that server. The stricter-wins rule applies to them like any other tool.
 
+From a script, `GET /api/v1/mcp-servers` answers to the gateway's command-line token (sent as `Authorization: Bearer <token>`) as well as to a signed-in session; without either it answers 401.
+
 ### Loaded tools stay with the conversation
 
 When an agent loads a tool on demand, its definition stays advertised for that
@@ -137,6 +139,23 @@ session load. A request that must offer only goal-setting tools can deliberately
 narrow the list; the next ordinary request uses the session's loaded list again.
 
 Under Auto-approve, a server tool set to Ask runs without a card only when its server labels it read-only or explicitly not destructive. A tool with no label asks. Most servers send no labels today, so most server tools still ask. Each server tool set to Ask shows its own **Auto: runs** or **Auto: asks** marker.
+
+## What a change tool reports
+
+When Omnipus (or any agent allowed to) changes something through a tool — an agent, a workspace, a skill, a provider, a connected server or a channel — the result says plainly how far the change got. It is one of four outcomes:
+
+| Outcome | What it means |
+|---|---|
+| `working` | Saved, and the tool's own check passed |
+| `saved but not working` | Saved, but the check failed or could not run; `reason` says why |
+| `partly saved` | Some parts are saved and others are not; `missing_parts` lists what is missing and `reason` says why |
+| `failed: nothing saved` | Nothing changed — used only when the tool knows no part was written |
+
+Next to the outcome, `check_scope` says what the check actually proved and `not_tested` lists what it did not prove. For example, after a provider is configured, `working` means the saved endpoint answered a request for its model list with the saved key; `not_tested` then names model execution, quota and tool support. A channel change is saved at once but connects or disconnects only on the next configuration reload, so it reports `saved but not working` with that reason. `environment_setup` gives its outcome when the installation finishes: an exit code of 0 is `working` — the command succeeded, but whether the installed program works inside the agent's sandbox is listed under `not_tested` — and any other ending is `partly saved`, because the installer may already have changed files. Omnipus only reports a part as done when the tool's outcome for that part says so.
+
+### When a shared setting changed in the meantime
+
+Providers, connected servers and channels are shared by the whole installation, and both you (in Settings) and an agent can change them. The tools that list them return a `revision` for each entry (for channels, each connection — such as `telegram.eu` — has its own) — a short code that changes whenever the entry's settings change (it never contains a key or password). A missing entry has the revision `absent`. The tools that change these entries — `configure_provider`, `add_mcp_server`, `remove_mcp_server`, `enable_channel`, `configure_channel` and `disable_channel` — must send the revision they planned against (`expected_revision`). If the entry changed since, for example because you saved it in Settings while Omnipus was preparing its summary, the change is refused with `CONFLICT`, nothing is saved, and Omnipus re-reads the entry and asks you again. A tool change and a Settings save of these entries never run at the same time: they take turns.
 
 ## Limits and things to watch
 

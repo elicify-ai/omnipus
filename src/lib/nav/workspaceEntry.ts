@@ -87,6 +87,7 @@ export type UnavailableEntry = { // not-wire-format: client entry outcome when n
   sendEnabled: false
   acknowledged: false
   retry: true
+  mainSessionError?: WorkspaceMemberConfig['main_session_error']
 }
 
 export type FailedAttempt = { // not-wire-format: client entry outcome that keeps the committed chat after a transport failure; SPA-only, never a wire body
@@ -131,7 +132,8 @@ function teamEntry(team: EntryTeam): WelcomeEntry | EmptyTeamEntry | Unavailable
   if (agentId === undefined) {
     return { status: 'empty-team', sessionId: null, sendEnabled: false, acknowledged: false, setupOffer: true }
   }
-  const sessionId = validatedMainId(team.memberConfigs[agentId] ?? {})
+  const member = team.memberConfigs[agentId] ?? {}
+  const sessionId = validatedMainId(member)
   if (sessionId === undefined) {
     return {
       status: 'unavailable',
@@ -139,6 +141,7 @@ function teamEntry(team: EntryTeam): WelcomeEntry | EmptyTeamEntry | Unavailable
       sendEnabled: false,
       acknowledged: false,
       retry: true,
+      ...(member.main_session_error ? { mainSessionError: member.main_session_error } : {}),
     }
   }
   return {

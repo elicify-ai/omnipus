@@ -2910,6 +2910,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 // ── Welcome state ─────────────────────────────────────────────────────────────
 
 function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
+  const workspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
+  const entryBlocked = useSessionStore((state) => workspaceEntryBlocksSend(state, workspaceId))
+  if (entryBlocked) return null
   return (
     <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-[var(--space-5)] p-[var(--space-5)]">
       <div className="flex flex-col items-center gap-[var(--space-4)] text-center max-w-md">
