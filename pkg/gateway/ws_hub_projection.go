@@ -274,26 +274,32 @@ func (p *activeTurnProjection) snapshot() []projSnapshotItem {
 
 // projectionFrames turns snapshot items the transcript replay did NOT
 // already emit into the unsequenced frames a snapshot catch-up sends after
-// the replay (BE-DESIGN.md §4.1 A6). emitted holds every message id, tool
-// call id and span id the replay sent (spans are never projected, see
-// activeTurnProjection.active).
-func projectionFrames(sessionID string, items []projSnapshotItem, emitted map[string]bool) [][]byte {
+// the replay (BE-DESIGN.md §4.1 A6). emitted tracks tool START and RESULT
+// independently: a transcript's pending START does not cover a result that
+// has since finished in the active projection. Spans are never projected
+// (see activeTurnProjection.active).
+func projectionFrames(sessionID string, items []projSnapshotItem, emitted replayCoverage) [][]byte {
 	var out [][]byte
 	for _, it := range items {
 		switch it.kind {
 		case hubKindToken:
-			if it.messageID != "" && emitted[it.messageID] {
+			if it.messageID != "" && emitted[replayCoverageKey{id: it.messageID}] {
 				continue
 			}
 			out = append(out, projectionTokenFrames(sessionID, it)...)
 		case hubKindToolStart:
-			// A result whose call is no longer in the projection is never
-			// rebuilt on its own: the client would show it as an unmatched
-			// tool result (final-review N6).
-			if emitted[it.id] || len(it.start) == 0 {
+			startCovered := emitted[replayCoverageKey{kind: hubKindToolStart, id: it.id}]
+			// A result needs its START from either transcript replay or this
+			// projection. Without either, it remains an orphan (final-review N6).
+			if !startCovered && len(it.start) == 0 {
 				continue
 			}
-			out = appendNonEmpty(out, it.start, it.end)
+			if !startCovered {
+				out = appendNonEmpty(out, it.start)
+			}
+			if !emitted[replayCoverageKey{kind: hubKindToolResult, id: it.id}] {
+				out = appendNonEmpty(out, it.end)
+			}
 		case hubKindItem:
 			out = appendNonEmpty(out, it.start)
 		}

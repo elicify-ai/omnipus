@@ -240,7 +240,7 @@ func TestHub_N6_OverBudget_NeverEvictsARunningToolsStart(t *testing.T) {
 func TestHub_N6_RebuildDropsAnOrphanToolResult(t *testing.T) {
 	frames := projectionFrames("s", []projSnapshotItem{{
 		kind: hubKindToolStart, id: "orphan", end: []byte(`{"type":"tool_call_result","call_id":"orphan"}`),
-	}}, map[string]bool{})
+	}}, replayCoverage{})
 	assert.Empty(t, frames, "a result without its call must not be rebuilt")
 }
 

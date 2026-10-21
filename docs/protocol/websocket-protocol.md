@@ -317,6 +317,8 @@ On transcript replay after a reload or reconnect, a call still awaiting approval
 
 Signals that a tool invocation has completed. Updates the tool call badge with result status.
 
+A reconnect snapshot merges saved transcript frames with the still-active turn. If the transcript already supplies a call's start but its finished result is held in the active turn, the snapshot includes that result once. A result already supplied by transcript replay is not repeated from the active turn. Repeated reconnects do not add another copy of the result to the rebuilt conversation; a call still awaiting approval has no terminal result.
+
 ```json
 {
   "type": "tool_call_result",

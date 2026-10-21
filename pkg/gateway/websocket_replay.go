@@ -237,10 +237,10 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 }
 
 // replayTranscript streams the persisted transcript to the connection
-// (unsequenced), recording every message id, tool call id and span id it
-// emitted so the projection filter can skip items the replay already
+// (unsequenced), recording message/span IDs and tool START/RESULT coverage
+// separately so the projection filter skips only frames the replay already
 // covers. Returns false when the attach was aborted.
-func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.TranscriptEntry) (map[string]bool, bool) {
+func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.TranscriptEntry) (replayCoverage, bool) {
 	rs := computeReplayStats(entries)
 	logsafeInfo("ws: replay_start",
 		"event", "replay_start",
@@ -253,7 +253,7 @@ func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.Trans
 		"truncated_result_count", rs.truncatedResultCount,
 	)
 	started := time.Now()
-	emitted := make(map[string]bool)
+	emitted := make(replayCoverage)
 	send := wsEmitFunc(wh.ctx, wh.wc)
 	emit := func(f any) error {
 		recordEmittedIDs(emitted, f)
@@ -306,25 +306,35 @@ func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.Trans
 	return emitted, true
 }
 
-// recordEmittedIDs adds the ids a replayed frame carries to emitted.
-func recordEmittedIDs(emitted map[string]bool, f any) {
+// replayCoverageKey keeps a tool call's START and terminal RESULT independent.
+// Non-tool IDs retain their shared namespace under the zero (hubKindOther) kind.
+// This is internal snapshot bookkeeping, not a wire or persisted type.
+type replayCoverageKey struct {
+	kind hubFrameKind
+	id   string
+}
+
+type replayCoverage map[replayCoverageKey]bool
+
+// recordEmittedIDs records which transcript frames the snapshot already sent.
+func recordEmittedIDs(emitted replayCoverage, f any) {
 	switch v := f.(type) {
 	case generated.ReplayMessageFrame:
 		if v.Id != nil {
-			emitted[*v.Id] = true
+			emitted[replayCoverageKey{id: *v.Id}] = true
 		}
 	case generated.ToolCallStartFrame:
-		emitted[v.CallId] = true
+		emitted[replayCoverageKey{kind: hubKindToolStart, id: v.CallId}] = true
 	case generated.ToolCallResultFrame:
-		emitted[v.CallId] = true
+		emitted[replayCoverageKey{kind: hubKindToolResult, id: v.CallId}] = true
 	case generated.SubagentStartFrame:
-		emitted[v.SpanId] = true
+		emitted[replayCoverageKey{id: v.SpanId}] = true
 	case generated.SubagentEndFrame:
-		emitted[v.SpanId] = true
+		emitted[replayCoverageKey{id: v.SpanId}] = true
 	case generated.GoalOutcomeFrame:
-		emitted[v.MessageId] = true
+		emitted[replayCoverageKey{id: v.MessageId}] = true
 	case generated.HelperEventFrame:
-		emitted[v.MessageId] = true
+		emitted[replayCoverageKey{id: v.MessageId}] = true
 	}
 }
 
