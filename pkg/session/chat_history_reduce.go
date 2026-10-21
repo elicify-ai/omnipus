@@ -342,6 +342,14 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 	if entry.Content != "" || rows == 0 {
 		rows++
 	}
+	position, err := historyPositionForAddress(cp.SessionID, r.Address)
+	if err != nil || position != r.Position {
+		return ChatHistoryEntry{}, errors.New("history occurrence position disagrees with canonical address")
+	}
+	if t.positions == nil {
+		t.positions = make(map[HistoryPosition]uint64)
+	}
+	t.positions[position] = r.Rank
 	out := ChatHistoryEntry{Position: r.Position, Entry: entry, RowCount: rows}
 	cache[r.Rank] = out
 	return out, nil

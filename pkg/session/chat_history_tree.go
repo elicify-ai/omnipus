@@ -47,6 +47,8 @@ type chatHistoryIndexTree struct {
 	// Unlike pending tree nodes, these values can never flush to the journal.
 	overlay      map[string]json.RawMessage
 	dependencies map[historyDependencyKey]struct{}
+	// Only successfully projected occurrences at this cut, not a session map.
+	positions map[HistoryPosition]uint64
 }
 
 func historyEncodeFrame(v historyFrame) ([]byte, error) {
