@@ -5,9 +5,10 @@
  * Traces to: docs/internal/specs/cancel-cross-channel-spec.md US-1, US-4, US-5; T21–T26.
  *
  * Tests T21–T24, T26 drive a real LLM (OPENROUTER_API_KEY_CI required in CI).
- * T25 is partially driven by real LLM; the "Force-stopping..." path requires a
- * stuck goroutine and is documented as manually-verifiable — the test covers
- * the "Stopping..." label only, which fires from React state on click.
+ * T25 uses the existing isolated GatewayProcess provider-endpoint seam with a
+ * controlled, slow text stream. The browser, gateway and cancellation stay real;
+ * only the external model is scripted. T21–T24 and T26 retain live-model coverage.
+ * T25 covers the immediate "Stopping..." label, not stuck-loop escalation.
  *
  * Architecture note: Tests switch the active agent to Jim, which generates
  * long inline prose rather than handing off to another agent (Mia has strong
@@ -17,10 +18,13 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { expect, errors, type Page, type Locator } from '@playwright/test'
+import http from 'node:http'
+import { expect, errors, type BrowserContext, type Page, type Locator } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, closeSidebar, openSidebar, selectAgent, selectedAgentRow, waitForConnected } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
+import { GatewayProcess } from './fixtures/gateway-process'
+import { E2E_MODEL } from './fixtures/e2e-model'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -836,49 +840,154 @@ test(
 )
 
 // ── T25: Stop button UI progression (EC-15, FR-21) ──────────────────────────
-// Traces to: cancel-cross-channel-spec.md line 604 (T25)
-// BDD: Given a cancel is fired on a streaming turn
-//      When the user clicks Stop
-//      Then the button label is "Stopping..." (or shows a spinner) within 100ms.
-//
-// Note: "Force-stopping..." requires a stuck loop (t=3s) and "Cancelled" requires
-// detach (t=8s). These stages need a goroutine that ignores context cancellation,
-// which cannot be reliably induced via E2E. Those stages are documented as
-// manually-verifiable. This test asserts only the t=0 "Stopping..." label.
+// Traces to: cancel-cross-channel-spec.md §8 Flow G, §10 T25, FR-21.
+// The spec calls for immediate (<100ms) feedback; retain the original browser
+// assertion's 500ms bound, without making it depend on a vendor's first token.
+// Stuck-loop force (3s) and detach (6s) progression are not exercised here and
+// were not asserted by the original T25. No manual verification is claimed.
 
-test(
-  'T25 — stop button morphs to "Stopping..." immediately on click (EC-15, FR-21)',
-  async ({ page }) => {
-    test.slow()
+/** Script only the external provider, using the same apiBase seam as agent-grep. */
+async function startStopLabelProvider() {
+  const evidence = { streamRequests: 0, chunksSent: 0, streamsClosed: 0, errors: [] as string[] }
+  // External OpenAI-compatible protocol, not a gateway/SPA wire format.
+  const chunk = (content: string) => 'data: ' + JSON.stringify({
+    id: 'stop-label-stream', object: 'chat.completion.chunk', model: E2E_MODEL,
+    created: Math.floor(Date.now() / 1000),
+    choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }],
+  }) + '\n\n'
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (data: Buffer) => chunks.push(data))
+    req.on('error', (error) => evidence.errors.push(`provider request: ${error.message}`))
+    const fail = (message: string) => {
+      evidence.errors.push(message)
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message } }))
+    }
+    req.on('end', () => {
+      if (req.method === 'GET' && req.url?.includes('/models')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ object: 'list', data: [{ id: E2E_MODEL, object: 'model' }] }))
+        return
+      }
+      if (req.method !== 'POST' || !req.url?.includes('/chat/completions')) {
+        fail(`unexpected provider route: ${req.method} ${req.url}`)
+        return
+      }
+      let body: Record<string, unknown>
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
+      } catch (error) {
+        fail(`invalid provider request JSON: ${String(error)}`)
+        return
+      }
+      if (body.stream !== true) {
+        // Onboarding/key validation does not start the acceptance stream.
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          id: 'stop-label-validation', object: 'chat.completion', model: E2E_MODEL,
+          choices: [{ index: 0, message: { role: 'assistant', content: 'probe ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+        }))
+        return
+      }
+      const messages = Array.isArray(body.messages) ? body.messages as Record<string, unknown>[] : []
+      // The gateway can append a current-time user message after the person's
+      // message. Require the original prompt, not a position in that history.
+      const hasPrompt = messages.some((message) => {
+        if (message.role !== 'user') return false
+        const content = message.content
+        const text = typeof content === 'string' ? content : Array.isArray(content) ?
+          content.map((part: Record<string, unknown>) => part.type === 'text' ? part.text : '').join('') : ''
+        return text.includes(LONG_PROSE_PROMPT)
+      })
+      if (!hasPrompt || evidence.streamRequests !== 0) {
+        fail('expected exactly one streaming request for the original long-prose prompt')
+        return
+      }
+      evidence.streamRequests += 1
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      const sendToken = () => {
+        res.write(chunk('Solar and wind power sustain this controlled stream. '))
+        evidence.chunksSent += 1
+      }
+      // Two chunks exceed the unchanged >80-character readiness gate. Keep
+      // streaming every 250ms until the REAL gateway cancels its HTTP request;
+      // never emit a finish chunk or [DONE], so natural completion cannot pass.
+      const timer = setInterval(sendToken, 250)
+      res.once('close', () => {
+        clearInterval(timer)
+        evidence.streamsClosed += 1
+      })
+      res.on('error', (error) => evidence.errors.push(`provider response: ${error.message}`))
+      sendToken()
+    })
+  })
+  const url = await new Promise<string>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') return reject(new Error('Stop-label provider: no port'))
+      resolve(`http://127.0.0.1:${address.port}`)
+    })
+  })
+  return { url, evidence, close: () => new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve())
+    server.closeAllConnections()
+  }) }
+}
 
-    await page.goto('/')
+test.describe(() => {
+  // Scope zero retries to this deterministic acceptance, not its live-model siblings.
+  test.describe.configure({ retries: 0 })
+  test(
+    'T25 — stop button morphs to "Stopping..." immediately on click (EC-15, FR-21)',
+    async ({ browser }, info) => {
+      test.slow()
+      const provider = await startStopLabelProvider()
+      let gateway: GatewayProcess | undefined
+      let context: BrowserContext | undefined
+      try {
+        gateway = await GatewayProcess.start({ apiBase: provider.url, model: E2E_MODEL })
+        context = await browser.newContext({
+          baseURL: gateway.baseURL, storageState: await gateway.browserStorageState(),
+        })
+        const page = await context.newPage()
+        await page.goto('/')
+        // Preserve Stop visibility AND >80 genuinely delivered characters.
+        await triggerLongStreamingTurn(page)
+        expect(provider.evidence.streamRequests, 'the real turn reached the scripted provider once').toBe(1)
+        expect(provider.evidence.streamsClosed, 'the provider stream is still open before Stop').toBe(0)
 
-    await triggerLongStreamingTurn(page)
+        const stopBtn = page.locator('[data-testid="stop-btn"]')
+        await stopBtn.click({ timeout: 15_000 })
 
-    const stopBtn = page.locator('[data-testid="stop-btn"]')
+        // Original label and settlement assertions, with unchanged deadlines.
+        await expect(stopBtn).toContainText('Stopping...', { timeout: 500 })
+        await expect(stopBtn).not.toBeVisible({ timeout: 10_000 })
+        await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
 
-    // Capture the moment of click — the label should change within 100ms.
-    // We click and immediately check for the "Stopping..." text.
-    await stopBtn.click({ timeout: 15_000 })
-
-    // Within 500ms (generous for flaky environments): button text is "Stopping..."
-    // MessageInput.tsx: handleCancel calls setStopLabel('stopping') synchronously
-    // before cancelStream(), so this fires as local React state with no network RTT.
-    await expect(stopBtn).toContainText('Stopping...', { timeout: 500 })
-
-    // Allow the test to settle — the stop button disappears when streaming ends.
-    await expect(stopBtn).not.toBeVisible({ timeout: 10_000 })
-    await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
-
-    // SKIP ASSERTION — "Force-stopping..." state (t=3s):
-    // Requires the agent goroutine to ignore context.Cancel() for 3s. In normal
-    // operation the LLM stream aborts quickly via providerCancel(). This stage
-    // is not reliably inducible in E2E. Verified manually per EC-15.
-    //
-    // SKIP ASSERTION — "Cancelled" state (t=8s detach):
-    // Same reason as above. Verified manually.
-  },
-)
+        // Check before teardown: closing our context/provider must not supply
+        // the abort that only the real Stop action is allowed to demonstrate.
+        await expect.poll(() => provider.evidence.streamsClosed, {
+          timeout: 5_000, message: 'Stop must close the actual in-flight provider stream',
+        }).toBe(1)
+        expect(provider.evidence.errors, 'no unexpected or failed scripted-provider request').toEqual([])
+      } finally {
+        try {
+          await info.attach('stop-label-provider-evidence', {
+            body: JSON.stringify(provider.evidence, null, 2), contentType: 'application/json',
+          })
+          console.log(`[T25] provider evidence: ${JSON.stringify(provider.evidence)}`)
+        } finally {
+          try { await context?.close() } finally {
+            try { await gateway?.stop() } finally { await provider.close() }
+          }
+        }
+      }
+    },
+  )
+})
 
 // ── T26: Audit entries exist after cancel (US-5.1, US-5.2) ──────────────────
 // Traces to: cancel-cross-channel-spec.md line 605 (T26)
