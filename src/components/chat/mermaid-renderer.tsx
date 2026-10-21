@@ -181,6 +181,9 @@ async function getMermaid() {
         // Brand: Sovereign Deep — Deep Space Black, Liquid Silver text, Forge Gold accent;
         // neutral surfaces (NOT the previous blue-purple #1a1a2e family).
         theme: 'base',
+        // Mermaid 12 defaults to ELK + neo; keep existing chat diagrams' layout/look.
+        layout: 'dagre',
+        look: 'classic',
         flowchart: { curve: 'basis', htmlLabels: true },
         // Quadrant layout: default padding lets the title clip against the viewBox top
         // and seats the 4 quadrant labels on the divider lines. Reserve top space and
