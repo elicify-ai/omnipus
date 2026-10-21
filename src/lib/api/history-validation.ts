@@ -1,5 +1,5 @@
 // Semantic validation supplements (never replaces) generated structural schemas.
-import { SessionHistoryResponse as PageSchema, HistoryEntryOrigin } from './generated/schemas'
+import { SessionHistoryResponse as PageSchema, Message as MessageSchema, HistoryEntryOrigin } from './generated/schemas'
 import type { Message as WireMessage, SessionHistoryResponse } from './generated/openapi-types'
 import { ApiSchemaError, _recordApiSchemaError } from './http'
 
@@ -40,7 +40,7 @@ export function validateHistoryPage(raw: unknown, sessionId: string, endpoint: s
   validateHistoryMetadata(page, positions, endpoint, raw)
   // Invalid public items still have positions, but their row weight cannot be
   // reconstructed reliably. Do not turn item degradation into page rejection.
-  const countable = page.entries.every(entry => entry && ['user', 'assistant', 'system'].includes(entry.role ?? '') && typeof entry.content === 'string')
+  const countable = page.entries.every(entry => MessageSchema.safeParse(entry).success)
   if (countable && page.entries.reduce((sum, entry) => sum + historyRowWeight(entry), 0) !== page.page_info.row_count) historyProtocolError(endpoint, ['page_info', 'row_count'], raw)
   return page
 }

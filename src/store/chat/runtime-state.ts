@@ -1,7 +1,6 @@
 // runtime-state.ts: Module-scoped replay, cancellation, routing, and diagnostics state used by the store
 
 import { emptySessionState } from './session'
-import type { ChatMessage } from './types'
 import type { SessionHistoryPage } from '@/lib/api/sessions'
 
 // Module-scoped handle for the 60s auto-clear timer on rate-limit events, keyed per session.

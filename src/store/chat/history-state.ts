@@ -19,20 +19,26 @@ export function historyMetadata(page: SessionHistoryPage): SessionHistoryMetadat
 
 /** Live objects changed since request start win; unchanged cached history can be refreshed. */
 export function mergeHistoryEntry(entry: SessionHistoryEntry, current: ChatMessage | undefined, baseline: ChatMessage | undefined): ChatMessage {
-  if (!current || current === baseline) return entry
-  const merged = { ...entry, ...current, historyPosition: entry.historyPosition } as ChatMessage
-  if (entry.role === 'assistant' && current.role === 'assistant') {
+  if (!current) return entry
+  const liveWins = current !== baseline || current.isStreaming === true || current.status === 'streaming'
+  const merged = { ...entry, ...(liveWins ? current : {}), id: entry.id, historyPosition: entry.historyPosition } as ChatMessage
+  if (entry.role === 'assistant' && current.role === 'assistant' && (entry.tool_calls || current.tool_calls)) {
     const calls = new Map((entry.tool_calls ?? []).map(call => [call.id, call]))
-    for (const call of current.tool_calls ?? []) calls.set(call.id, call)
+    for (const call of current.tool_calls ?? []) {
+      const incoming = calls.get(call.id)
+      if (liveWins || (call.status !== 'running' && (!incoming || incoming.status === 'running'))) calls.set(call.id, call)
+    }
     merged.tool_calls = [...calls.values()]
   }
   return merged
 }
 
 export function retainedPending(bucket: SessionChatState): ChatMessage[] {
-  return bucket.messageOrder.flatMap(id => {
+  const owners = new Set(bucket.toolCallOrder.flatMap(id => bucket.toolCallOwnerMessageId?.[id] ? [bucket.toolCallOwnerMessageId[id]] : []))
+  return [...new Set([...bucket.messageOrder, ...(bucket.historyLiveOrder ?? [])])].flatMap(id => {
     const row = bucket.messagesById[id]
-    return row && (isPendingTailMessage(row) || row.isStreaming || (row.role === 'user' && row.deliveryStatus === 'working')) ? [row] : []
+    const recovered = row?.role === 'user' && bucket.recoveredFirstSend && (row.clientMessageId ?? row.id) === bucket.recoveredFirstSend.clientMessageId
+    return row && (isPendingTailMessage(row) || row.isStreaming || recovered || ((bucket.isStreaming || bucket.activeTurnId) && owners.has(id))) ? [row] : []
   })
 }
 

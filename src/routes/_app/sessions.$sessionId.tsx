@@ -56,7 +56,7 @@ function SessionRoute() {
   const { data: detail, isError: detailIsError, error: detailError } = useQuery({
     queryKey: ['session-detail', sessionId],
     initialData: loaderData ?? undefined,
-    queryFn: () => fetchSessionDetail(sessionId),
+    queryFn: ({ signal }) => fetchSessionDetail(sessionId, { signal }),
     enabled: !!sessionId,
     retry: false,
     staleTime: 10_000,
@@ -266,7 +266,7 @@ function SessionRoute() {
 
 export const Route = createFileRoute('/_app/sessions/$sessionId')({
   component: SessionRoute,
-  loader: async ({ params }) => {
+  loader: async ({ params, abortController }) => {
     // Pre-fetch session detail ONLY — as `initialData` for the component's
     // useQuery — so the query doesn't waterfall behind mount.
     //
@@ -284,7 +284,7 @@ export const Route = createFileRoute('/_app/sessions/$sessionId')({
     // do not reintroduce the store write here.
     try {
       const { fetchSessionDetail } = await import('@/lib/api')
-      const detail = await fetchSessionDetail(params.sessionId)
+      const detail = await fetchSessionDetail(params.sessionId, { signal: abortController.signal })
       return detail ?? null
     } catch (err) {
       if (isApiError(err) && err.status === 404) {

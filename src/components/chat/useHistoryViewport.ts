@@ -1,23 +1,56 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import type { ChatMessage } from '@/store/chat'
-import { useChatStore } from '@/store/chat'
+import { emptyHistoryState, useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { HistoryRowMeasurements, historyPageSizing, historyPixelTrigger, recordHistoryGeometry, forgetHistoryGeometry } from '@/lib/chat-history-sizing'
-import { shouldRenderToolCall } from '@/lib/toolVisibility'
+import { shouldRenderJudgeVerdictInThread, shouldRenderToolCall } from '@/lib/toolVisibility'
 import { protectHistoryPositions, releaseHistoryProtection } from '@/store/chat/history-merge'
 
 export function drawnHistoryRows(message: ChatMessage, verbose: boolean): number {
+  if (message.type === 'judge_verdict') return Number(shouldRenderJudgeVerdictInThread(verbose) && !!message.verdict)
   const tools = message.tool_calls?.filter(call => shouldRenderToolCall(call.tool, call.params, verbose, call.status === 'error')).length ?? 0
   return Number(!!message.content || (tools === 0 && message.role !== 'assistant')) + tools
 }
 type Anchor = { position: string; offset: number; alternatives: { position: string; screenTop: number }[] } // not-wire-format
 
+function bindReaderIntent(scroller: HTMLElement, enter: () => void, dragging: { current: boolean }): () => void {
+  let touchY: number | null = null
+  const wheel = (event: WheelEvent) => { if (event.deltaY < 0 && !event.ctrlKey) enter() }
+  const key = (event: KeyboardEvent) => {
+    if (!event.defaultPrevented && ['ArrowUp', 'PageUp', 'Home'].includes(event.key) && !(event.target instanceof Element && event.target.closest('input, textarea, [contenteditable="true"], [role="combobox"]'))) enter()
+  }
+  const touchStart = (event: TouchEvent) => { touchY = event.touches.length === 1 ? event.touches[0].clientY : null }
+  const touchMove = (event: TouchEvent) => {
+    const y = event.touches.length === 1 ? event.touches[0].clientY : null
+    if (y !== null && touchY !== null && y > touchY) enter()
+    touchY = y
+  }
+  const pointerDown = (event: PointerEvent) => { dragging.current = event.target === scroller }
+  const pointerEnd = () => { dragging.current = false }
+  scroller.addEventListener('wheel', wheel, { passive: true })
+  scroller.addEventListener('keydown', key)
+  scroller.addEventListener('touchstart', touchStart, { passive: true })
+  scroller.addEventListener('touchmove', touchMove, { passive: true })
+  scroller.addEventListener('pointerdown', pointerDown)
+  document.addEventListener('pointerup', pointerEnd)
+  document.addEventListener('pointercancel', pointerEnd)
+  window.addEventListener('blur', pointerEnd)
+  return () => {
+    scroller.removeEventListener('wheel', wheel); scroller.removeEventListener('keydown', key)
+    scroller.removeEventListener('touchstart', touchStart); scroller.removeEventListener('touchmove', touchMove)
+    scroller.removeEventListener('pointerdown', pointerDown); document.removeEventListener('pointerup', pointerEnd)
+    document.removeEventListener('pointercancel', pointerEnd); window.removeEventListener('blur', pointerEnd)
+    pointerEnd()
+  }
+}
+
 /** One signed compensation/fill owner for virtual and plain layouts. */
 export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, messages: ChatMessage[]) {
   const sid = useSessionStore(s => s.activeSessionId)
   const history = useChatStore(s => s.history)
+  const catchingUp = useChatStore(s => s.isReplaying || (sid ? s.sessionsById[sid]?.awaitingCatchUp === true : false))
   const verbose = useChatPreferencesStore(s => s.verboseChatEnabled)
   const samples = useRef(new HistoryRowMeasurements())
   const heights = useRef(new Map<string, number>())
@@ -25,14 +58,16 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const priorFocus = useRef<Element | null>(null)
   const priorWidth = useRef(0)
   const lastTop = useRef(0)
+  const dragging = useRef(false)
   const compensating = useRef(false)
   const opening = useRef(true)
-  const fill = useRef(false)
+  const fill = useRef<{ frame: number | null; finishLayout: (() => void) | null } | null>(null)
   const [average, setAverage] = useState(80)
   const [prefix, setPrefix] = useState(0)
+  const [widthGeneration, bumpWidthGeneration] = useState(0)
   const current = useRef({ sid, history, messages, verbose })
   useLayoutEffect(() => { current.current = { sid, history, messages, verbose } })
-  const rows = useCallback(() => [...(scrollRef.current?.querySelectorAll<HTMLElement>('[data-history-position]') ?? [])], [scrollRef])
+  const rows = useCallback(() => [...(scrollRef.current?.querySelectorAll<HTMLElement>('[data-history-anchor]') ?? [])], [scrollRef])
   const offset = useCallback((element: Element) => {
     const scroller = scrollRef.current!
     return element.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
@@ -41,11 +76,13 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     const scroller = scrollRef.current
     if (!scroller) return
     const top = scroller.getBoundingClientRect().top
-    const visible = rows().filter(row => row.getBoundingClientRect().bottom > top)
+    const mounted = rows().filter(row => row.getBoundingClientRect().height > 0)
+    const visible = mounted.filter(row => row.getBoundingClientRect().bottom > top)
     const first = visible[0]
     if (!first) return
-    anchor.current = { position: first.dataset.historyPosition!, offset: offset(first), alternatives: visible.map(row => ({ position: row.dataset.historyPosition!, screenTop: row.getBoundingClientRect().top - top })) }
-    const protectedPositions = new Set(visible.filter(row => row.getBoundingClientRect().top < top + 2 * scroller.clientHeight).map(row => row.dataset.historyPosition!))
+    const alternatives = [...visible, ...mounted.filter(row => row.getBoundingClientRect().bottom <= top).reverse()]
+    anchor.current = { position: first.dataset.historyAnchor!, offset: offset(first), alternatives: alternatives.map(row => ({ position: row.dataset.historyAnchor!, screenTop: row.getBoundingClientRect().top - top })) }
+    const protectedPositions = new Set(visible.filter(row => row.dataset.historyPosition && row.getBoundingClientRect().top < top + 2 * scroller.clientHeight).map(row => row.dataset.historyPosition!))
     const focused = document.activeElement?.closest<HTMLElement>('[data-history-position]')
     if (focused?.dataset.historyPosition) protectedPositions.add(focused.dataset.historyPosition)
     if (current.current.sid) protectHistoryPositions(current.current.sid, protectedPositions)
@@ -56,12 +93,12 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     const held = anchor.current
     if (!scroller || !held || current.current.history.viewMode !== 'historical') return
     const mounted = rows()
-    let row = mounted.find(item => item.dataset.historyPosition === held.position)
+    let row = mounted.find(item => item.dataset.historyAnchor === held.position)
     let delta = 0
     if (row) delta = offset(row) - held.offset
     else {
-      const fallback = held.alternatives.find(item => mounted.some(element => element.dataset.historyPosition === item.position))
-      row = fallback ? mounted.find(item => item.dataset.historyPosition === fallback.position) : undefined
+      const fallback = held.alternatives.find(item => mounted.some(element => element.dataset.historyAnchor === item.position))
+      row = fallback ? mounted.find(item => item.dataset.historyAnchor === fallback.position) : undefined
       if (row && fallback) delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - fallback.screenTop
     }
     if (Number.isFinite(delta) && delta !== 0) {
@@ -76,27 +113,31 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     const scroller = scrollRef.current
     const state = current.current
     if (!scroller || !state.sid) return
+    const stablePositions = new Set(state.messages.filter(message => message.historyPosition && !message.isStreaming && message.status !== 'streaming').map(message => message.historyPosition!))
+    for (const position of heights.current.keys()) if (!stablePositions.has(position)) heights.current.delete(position)
     const width = scroller.getBoundingClientRect().width
-    if (priorWidth.current && Math.abs(width - priorWidth.current) > 1) { samples.current.reset(); heights.current.clear() }
+    if (priorWidth.current && Math.abs(width - priorWidth.current) > 1) { samples.current.reset(); heights.current.clear(); bumpWidthGeneration(value => value + 1) }
     priorWidth.current = width
     for (const element of rows()) {
-      const position = element.dataset.historyPosition!
+      const position = element.dataset.historyPosition
+      if (!position) continue // Live DOM anchors are not public page selectors or history samples.
       const message = state.messages.find(item => item.historyPosition === position)
-      if (!message || message.isStreaming || message.status === 'streaming' || element.hidden || element.getAttribute('aria-hidden') === 'true') continue
-      const height = element.getBoundingClientRect().height
-      if (!Number.isFinite(height) || height <= 0) continue
-      heights.current.set(position, height)
-      // Measure drawn tool rows, not both the parent wrapper and its children.
-      const tools = [...element.querySelectorAll<HTMLElement>('[data-tool]')].filter(node => !node.parentElement?.closest('[data-tool]'))
-      let toolHeight = 0
-      for (const [index, tool] of tools.entries()) {
-        const value = tool.getBoundingClientRect().height
-        toolHeight += value
-        samples.current.observe(`${position}:tool:${index}`, value)
+      if (!message || message.isStreaming || message.status === 'streaming' || element.hidden || element.getAttribute('aria-hidden') === 'true') {
+        stablePositions.delete(position); heights.current.delete(position); continue
       }
+      const height = element.getBoundingClientRect().height
+      if (!Number.isFinite(height) || height < 0) { stablePositions.delete(position); heights.current.delete(position); continue }
+      heights.current.set(position, height)
+      if (height === 0) { stablePositions.delete(position); continue }
+      // One complete tool row includes its expanded body, not only a toggle.
+      const tools = [...element.querySelectorAll<HTMLElement>('[data-history-tool-row]')].map(node => ({ key: node.dataset.historyToolRow!, height: node.getBoundingClientRect().height })).filter(row => Number.isFinite(row.height) && row.height > 0)
+      const toolHeight = tools.reduce((sum, tool) => sum + tool.height, 0)
+      const overhead = !message.content && tools.length ? Math.max(0, height - toolHeight) / tools.length : 0
+      for (const tool of tools) samples.current.observe(`${position}:tool:${tool.key}`, tool.height + overhead)
       if (message.content) samples.current.observe(`${position}:text`, height - toolHeight)
       else if (tools.length === 0 && drawnHistoryRows(message, state.verbose) > 0) samples.current.observe(position, height)
     }
+    samples.current.retainPositions(stablePositions)
     const next = samples.current.average
     setAverage(value => value === next ? value : next)
     const content = scroller.querySelector('[data-history-content]')
@@ -106,45 +147,58 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
 
   const requestFill = useCallback(async (direction: 'older' | 'newer', initial = false) => {
     const scroller = scrollRef.current
-    const first = current.current
-    if (!scroller || !first.sid || fill.current || document.hidden || scroller.clientHeight <= 0) return
-    const generation = first.history.viewGeneration
-    const starting = new Set(first.history.readerPositions)
-    const goal = (initial ? 4 : 2) * scroller.clientHeight
-    fill.current = true
+    const sessionId = current.current.sid
+    if (!scroller || !sessionId || fill.current || document.hidden || scroller.clientHeight <= 0) return
+    const generation = current.current.history.viewGeneration
+    const starting = new Set(current.current.history.readerPositions)
+    const owner = { frame: null as number | null, finishLayout: null as (() => void) | null }
+    fill.current = owner
     try {
       for (;;) {
         const state = useChatStore.getState()
-        const kept = state.sessionsById[first.sid]
-        if (!kept || kept.history.viewGeneration !== generation || kept.history.requests.refresh.status !== 'idle' || kept.history.requests[direction].status !== 'idle') break
+        const kept = state.sessionsById[sessionId]
+        if (fill.current !== owner || current.current.sid !== sessionId || document.hidden || scroller.clientHeight <= 0 || !kept || kept.isReplaying || kept.awaitingCatchUp || kept.history.viewGeneration !== generation || kept.history.requests.refresh.status !== 'idle' || kept.history.requests[direction].status === 'error') break
         const selected = current.current.messages.filter(message => message.historyPosition && (!starting.has(message.historyPosition) || initial))
         const added = selected.reduce((sum, message) => sum + (heights.current.get(message.historyPosition!) ?? drawnHistoryRows(message, current.current.verbose) * samples.current.average), 0)
-        const remaining = Math.max(0, goal - added)
+        const remaining = Math.max(0, (initial ? 4 : 2) * scroller.clientHeight - added)
         if (remaining <= 0) break
         const before = direction === 'older' ? kept.history.olderBoundary : kept.history.newerBoundary
-        const countBefore = kept.history.readerPositions.length
+        const previousPositions = new Set(kept.history.readerPositions)
         const size = historyPageSizing(scroller.clientHeight, samples.current.average)
         size.limit = Math.min(100, Math.max(20, Math.ceil(remaining / samples.current.average)))
         size.min_rows = Math.min(size.limit, size.min_rows)
-        await (direction === 'older' ? state.loadOlderHistory(first.sid, size) : state.loadNewerHistory(first.sid, size))
-        const after = useChatStore.getState().sessionsById[first.sid]
-        if (!after || after.history.requests[direction].status !== 'idle' || before === (direction === 'older' ? after.history.olderBoundary : after.history.newerBoundary)) break
-        // No invisible-history walk: only positive newly rendered content can
-        // sustain a chain. On reaching the window cap leave further browsing
-        // to the next reader trigger after safe eviction.
+        await (direction === 'older' ? state.loadOlderHistory(sessionId, size) : state.loadNewerHistory(sessionId, size))
+        if (fill.current !== owner || document.hidden) break
+        // External-store commits must reach layout before newly drawn heights
+        // can decide whether this same fill owner needs a contiguous top-up.
+        await new Promise<void>(resolve => {
+          owner.finishLayout = resolve
+          owner.frame = requestAnimationFrame(() => { owner.frame = null; owner.finishLayout = null; resolve() })
+        })
+        if (fill.current !== owner || current.current.sid !== sessionId || document.hidden) break
+        const after = useChatStore.getState().sessionsById[sessionId]
+        if (!after || after.history.viewGeneration !== generation || after.history.requests[direction].status !== 'idle' || before === (direction === 'older' ? after.history.olderBoundary : after.history.newerBoundary)) break
         measure()
-        const newRows = Object.values(after.messagesById).filter(message => message.historyPosition && !starting.has(message.historyPosition))
-        if (!newRows.some(message => drawnHistoryRows(message, current.current.verbose) > 0) || countBefore === 500) break
-        current.current = { ...current.current, messages: after.messageOrder.map(id => after.messagesById[id]), history: after.history }
+        const newRows = current.current.messages.filter(message => message.historyPosition && !previousPositions.has(message.historyPosition))
+        if (!newRows.some(message => (heights.current.get(message.historyPosition!) ?? drawnHistoryRows(message, current.current.verbose) * samples.current.average) > 0) || previousPositions.size === 500) break
       }
-    } finally { fill.current = false; if (initial) opening.current = false }
+    } finally {
+      if (fill.current === owner) { fill.current = null; if (initial) opening.current = false }
+    }
   }, [measure, scrollRef])
 
+  const cancelFill = useCallback(() => {
+    const owner = fill.current
+    fill.current = null
+    if (owner?.frame !== null && owner?.frame !== undefined) cancelAnimationFrame(owner.frame)
+    owner?.finishLayout?.()
+    if (owner) { owner.frame = null; owner.finishLayout = null }
+  }, [])
   const onScroll = useCallback(() => {
     const scroller = scrollRef.current
     const state = current.current
     if (!scroller || !state.sid || compensating.current) return
-    if (scroller.scrollTop < lastTop.current) useChatStore.getState().enterHistoryReading(state.sid)
+    if (dragging.current && scroller.scrollTop < lastTop.current) useChatStore.getState().enterHistoryReading(state.sid)
     lastTop.current = scroller.scrollTop
     capture()
     if (state.history.requests.refresh.status !== 'idle') return
@@ -152,13 +206,35 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     else if (historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden) && state.history.hasLater) void requestFill('newer')
   }, [capture, prefix, requestFill, scrollRef])
   useLayoutEffect(() => {
-    samples.current.reset(); heights.current.clear(); anchor.current = null; opening.current = true; setAverage(80)
-    return () => { if (sid) { forgetHistoryGeometry(sid); releaseHistoryProtection(sid) } }
-  }, [sid, verbose])
+    samples.current.reset(); heights.current.clear(); anchor.current = null; opening.current = true
+    priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; setAverage(80); setPrefix(0)
+    return () => {
+      cancelFill(); samples.current.reset(); heights.current.clear(); anchor.current = null; priorFocus.current = null
+      current.current = { sid: null, history: emptyHistoryState(), messages: [], verbose }
+      if (sid) { forgetHistoryGeometry(sid); releaseHistoryProtection(sid) }
+    }
+  }, [sid, verbose, cancelFill])
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current
+    if (!scroller || !sid) return
+    return bindReaderIntent(scroller, () => useChatStore.getState().enterHistoryReading(sid), dragging)
+  }, [sid, scrollRef])
+  useLayoutEffect(() => {
+    const visibility = () => {
+      if (document.hidden) cancelFill()
+      else { measure(); if (opening.current && current.current.history.viewMode === 'latest' && samples.current.count > 0) void requestFill('older', true) }
+    }
+    document.addEventListener('visibilitychange', visibility)
+    return () => document.removeEventListener('visibilitychange', visibility)
+  }, [cancelFill, measure, requestFill])
+  useLayoutEffect(() => {
+    cancelFill()
+    if (current.current.history.viewMode === 'latest') opening.current = true
+  }, [history.viewGeneration, cancelFill])
   useLayoutEffect(() => {
     correct(); measure()
     const scroller = scrollRef.current
-    if (scroller && history.historyLoaded && history.viewMode === 'latest') {
+    if (scroller && history.historyLoaded && history.viewMode === 'latest' && !catchingUp) {
       scroller.scrollTop = scroller.scrollHeight
       capture()
       // A layoutless/plain fallback stays manually reachable rather than
@@ -168,14 +244,28 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   })
   useLayoutEffect(() => {
     const scroller = scrollRef.current
-    if (!scroller || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(() => { correct(); measure() })
-    observer.observe(scroller)
-    for (const row of rows()) observer.observe(row)
-    const content = scroller.querySelector('[data-history-content]')
-    if (content) observer.observe(content)
-    return () => observer.disconnect()
+    if (!scroller) return
+    const settle = () => { correct(); measure() }
+    scroller.addEventListener('load', settle, true); scroller.addEventListener('error', settle, true)
+    window.addEventListener('resize', settle); document.fonts?.addEventListener('loadingdone', settle)
+    let observer: ResizeObserver | MutationObserver | undefined
+    if (typeof ResizeObserver !== 'undefined') {
+      const resize = new ResizeObserver(settle)
+      resize.observe(scroller)
+      for (const row of rows()) resize.observe(row)
+      const content = scroller.querySelector('[data-history-content]')
+      if (content) resize.observe(content)
+      observer = resize
+    } else if (typeof MutationObserver !== 'undefined') {
+      const mutations = new MutationObserver(settle)
+      mutations.observe(scroller, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'open'] })
+      observer = mutations
+    }
+    return () => {
+      observer?.disconnect(); scroller.removeEventListener('load', settle, true); scroller.removeEventListener('error', settle, true)
+      window.removeEventListener('resize', settle); document.fonts?.removeEventListener('loadingdone', settle)
+    }
   }, [messages, correct, measure, rows, scrollRef])
   const busy = Object.values(history.requests).some(request => request.status === 'loading')
-  return { average, prefix, onScroll, busy, historical: history.viewMode === 'historical' }
+  return { average, prefix, widthGeneration, onScroll, busy, historical: history.viewMode === 'historical' }
 }

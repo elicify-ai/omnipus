@@ -39,7 +39,6 @@ import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
 import { SecretRequestThreadTail } from './SecretRequestCard'
 import { ToolApprovalThreadTail } from '@/components/agents/ToolApprovalPanel'
-import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { ModelPicker } from './composer/ModelPicker'
 import { AutoApprovePicker } from './composer/AutoApprovePicker'
@@ -52,7 +51,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { isClearCommandText } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
 import { AgentReplyLabel, ParticipantMessageRow, useParticipantLabelParts } from './ParticipantLabels'
-import { collectPairedReplyToIds, isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
+import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
 import { pendingRedirectSids } from '@/store/chat/runtime-state'
 import { stampToolCallOffset } from '@/store/chat/session'
@@ -66,26 +65,22 @@ import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread, shouldRenderContextWindowNoticeInThread } from '@/lib/toolVisibility'
+import { shouldRenderToolCall, shouldRenderContextWindowNoticeInThread } from '@/lib/toolVisibility'
 import {
-  delegationEventsAtEnd,
   liveSnapshotIds,
   splitAnchoredDelegationEvents,
   type DelegationPlacementMessage,
 } from '@/lib/delegationEventPlacement'
-import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, useClaimedCallIds } from './DelegationEventLine'
-import { useChatDelegationEvents } from './useChatDelegationEvents'
+import { DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, useClaimedCallIds } from './DelegationEventLine'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { isGoalRunning } from '@/lib/goalActivity'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
-import { SystemMessage, VirtualSystemMessageRow } from './SystemMessageRows'
 import { fetchAgents, fetchCommands, fetchSkills } from '@/lib/api'
 import { MainChatAddParticipant } from './AddParticipant'
 import { AGENT_PRIVATE_SECRETS_ENABLED, INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED } from '@/lib/featureSwitches'
-import { RoomTrafficMessage } from './RoomTrafficEntry'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
@@ -1275,7 +1270,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
             }
             const callId = part.call.id
             const tc = toolCalls[callId] ?? part.call
-            return renderHistoricalToolCall({
+            return <div key={callId} data-history-tool-row={callId}>{renderHistoricalToolCall({
               tc,
               callId,
               inlineEvents: inlineByCall.get(callId),
@@ -1283,7 +1278,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
               verboseChatEnabled,
               goalRecordEmpty,
               liteMode,
-            })
+            })}</div>
           })}
           {/* Inline indicator — 1b (founder UI feedback 2026-10-11): rendered
               AFTER the parts, pinned at the bottom of the running reply, in
@@ -1375,7 +1370,7 @@ export function VirtualizerAutoFollow({
     }
     const onPointerDown = () => { pointerActive = isReplaying }
     const onPointerUp = () => { pointerActive = false }
-    const canFollow = () => !userScrolledUp.current && (viewportStore.getState().isAtBottom || el.scrollTop === pin.current)
+    const canFollow = () => useChatStore.getState().history.viewMode !== 'historical' && !userScrolledUp.current && (viewportStore.getState().isAtBottom || el.scrollTop === pin.current)
     // Keep explicit upward intent across the replay-completion effect. Row
     // measurement can move scrollTop too, so position changes alone are not
     // evidence of a user scroll. Never prevent any native input here.

@@ -54,9 +54,11 @@ function handleSessionSnapshotFrame({ frame, targetSid, withBucket }: {
   const snapshotFrame = frame as SessionSnapshotFrame
   noteServerAttentionFrame(targetSid, snapshotFrame)
   withBucket(targetSid, (b) => {
+    const witnessed = Object.values(b.messagesById).filter(message => message.role === 'assistant' && message.turnId && (message.isStreaming || message.status === 'streaming')).map(message => message.turnId!)
     return {
       awaitingCatchUp: true,
       snapshotWasBootMismatch: snapshotFrame.reason === 'boot_mismatch',
+      wipedOpenTurnIds: witnessed.length ? [...new Set([...(b.wipedOpenTurnIds ?? []), ...witnessed])] : b.wipedOpenTurnIds,
       history: { ...b.history },
     }
   })
@@ -100,20 +102,15 @@ function handleSessionSnapshotFrame({ frame, targetSid, withBucket }: {
 // attach to at all; verified separately via activeTurnId/
 // assistantMessages, not this per-message flag.)
 //
-// One real gap remained: a turn genuinely cut short by a gateway
-// crash (not a graceful disconnect, so BUG 1's "stop closing
-// bubbles" fix never gets a chance to run) goes through a FULL
-// session_snapshot rebuild on reconnect — and `applySnapshotHistoryWipe`
-// necessarily erases the pre-crash bubble's own isStreaming:true
-// before replay_message ever reconstructs it as 'done'. `wipedOpenTurnIds`
-// (cursor.ts) captures exactly that lost signal before the wipe, so
-// it's checked here as an explicit exception to the "done → skip"
-// rule above — narrower than reverting to "even if done" outright,
-// since it only ever matches a turn THIS bucket personally watched
-// streaming immediately before the wipe.
-// Returns the witness set — the turns this bucket personally watched
-// streaming immediately before the wipe — for the restart-signal
-// decision that follows (decideRestartInterruptedSignal).
+// A gateway crash still needs this tab's pre-snapshot streaming witness.
+// Paging no longer wipes the reader: handleSessionSnapshotFrame captures that
+// witness before a latest-page merge can replace the live bubble. The existing
+// local field retains its historical name, wipedOpenTurnIds. It does not mean
+// that a wipe occurred. Only personally witnessed turns get the narrower
+// "done → unfinished" exception; ordinary completed history stays completed.
+// A detached reader is reduced through its separate current-tail projection,
+// never through the last question or answer in the old displayed interval.
+// Returns that witness for decideRestartInterruptedSignal.
 function sweepConfirmedUnfinishedReplays(draft: SessionChatState): Set<string> {
   const wasWipedOpen = new Set(draft.wipedOpenTurnIds ?? [])
   for (const id of draft.messageOrder) {
@@ -124,6 +121,8 @@ function sweepConfirmedUnfinishedReplays(draft: SessionChatState): Set<string> {
     if (m.status === 'done' && !m.isStreaming && !wipedOpen) continue
     if (m.turnId && m.turnId !== draft.activeTurnId) {
       m.confirmedUnfinished = true
+      m.isStreaming = false
+      if (m.status === 'streaming') m.status = 'done'
     }
   }
   draft.wipedOpenTurnIds = undefined
@@ -194,8 +193,9 @@ function handleCatchUpCompleteFrame({ frame, targetSid, get, set, withBucket }: 
     draft.awaitingCatchUp = false
     draft.isReplaying = false
     draft.history.liveControlsReady = true
+    if (completeFrame.mode === 'live_only') draft.historyNeedsSnapshot = false
     if (draft.history.requests.latest.status === 'loading') draft.history.requests.latest.status = 'idle'
-    if (completeFrame.mode === 'live_only' || draft.history.serverState?.status === 'unavailable') {
+    if (completeFrame.mode === 'live_only' || draft.history.serverState?.status === 'unavailable' || !draft.history.historyLoaded) {
       draft.history.historyLoaded = false
       // Control-only completion never certifies rows, confirms a first send,
       // acknowledges attention or runs a history-derived restart sweep.
@@ -245,7 +245,7 @@ function handleCatchUpCompleteFrame({ frame, targetSid, get, set, withBucket }: 
     decideRestartInterruptedSignal(draft, completeFrame, bootChanged, wasWipedOpen)
     draft.snapshotWasBootMismatch = undefined
   }))
-  if (completeFrame.mode === 'live_only' || get().sessionsById[targetSid]?.history.serverState?.status === 'unavailable') return
+  if (completeFrame.mode === 'live_only' || get().sessionsById[targetSid]?.history.serverState?.status === 'unavailable' || !get().sessionsById[targetSid]?.history.historyLoaded) return
   finishRecoveredFirstSend({ set, get, withBucket }, targetSid)
   if (!isSupersededAttachFrame(frame)) acknowledgeShownCatchUp(targetSid)
   // D1/V2: catch-up completion is a replay→idle transition — a projection

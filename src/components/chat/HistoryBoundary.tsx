@@ -29,6 +29,7 @@ export function HistoryBoundary({ action, average = 80 }: { action: HistoryActio
   const run = () => {
     if (!sid || request.status === 'loading') return
     const state = useChatStore.getState()
+    if (action === 'latest' && history.serverState?.status === 'unavailable') { void state.retryHistory(sid, action); return }
     if (request.error) { void state.retryHistory(sid, action); return }
     const region = ref.current?.closest<HTMLElement>('[aria-label="Conversation history"]')
     const size = historyPageSizing(region?.clientHeight || 800, average)
@@ -56,7 +57,7 @@ export function HistoryBoundary({ action, average = 80 }: { action: HistoryActio
           {action === 'older' ? 'Show earlier messages' : action === 'newer' ? 'Show newer messages' : 'Return to latest'}
         </Button>
       )}
-      {error && <ErrorState message={`${error}${request.status === 'error' && request.attempt > 1 ? ` Retry ${request.attempt} failed.` : ''}`} onRetry={run} className="py-[var(--space-1)]" />}
+      {error && <ErrorState message={`${error}${request.status === 'error' && request.attempt > 1 ? ` Retry ${request.attempt} failed.` : ''}`} onRetry={run} retryDisabled={request.status === 'loading'} className="py-[var(--space-1)]" />}
       {request.status === 'loading' && <>
         <Skeleton className="h-4 w-32" />
         <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{loading[action]}</p>

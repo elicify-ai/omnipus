@@ -163,6 +163,8 @@ In the simpler message-list fallback, live tool activity appears against the rep
 
 The mark's figure and badge stay fully opaque. With normal motion they gently change size, and a separate glow animates behind them; Working also has a moving highlight. If your system requests reduced motion, these loops stop and the thinking phrase stops rotating. The name and current phrase remain visible.
 
+A fallback-model note can include **Pick a new model in the agent's settings.** when the recorded condition is a retired model. That hint appears once: replayed notes that already contain it do not gain a duplicate line. The saved note text stays unchanged; reading it does not change the model or retry the instruction.
+
 ### Who each message is from
 
 Your own messages sit on the right with no name. Every other message in the conversation carries a name above its text:

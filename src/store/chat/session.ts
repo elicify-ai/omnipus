@@ -11,6 +11,7 @@ import type { ChatMessage, PositionedToolCall, SessionChatState } from './types'
 export function emptySessionState(): SessionChatState {
   return {
     history: emptyHistoryState(),
+    historyNeedsSnapshot: false,
     messagesById: {},
     messageOrder: [],
     trimmedCount: 0,
@@ -279,7 +280,7 @@ export function applyMessageArray(
   let toolCallOwnerMessageIdPatch: Record<string, string> = { ...bucket.toolCallOwnerMessageId }
   let spanBySpanIdPatch: typeof bucket.spanBySpanId = { ...(bucket.spanBySpanId ?? {}) }
 
-  if (msgs.length > MAX_MESSAGES_PER_SESSION) {
+  if (msgs.length > MAX_MESSAGES_PER_SESSION && bucket.history.viewMode !== 'historical') {
     const evictCount = msgs.length - MAX_MESSAGES_PER_SESSION
     const evicted = msgs.slice(0, evictCount)
     finalMsgs = msgs.slice(evictCount)

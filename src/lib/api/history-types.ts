@@ -20,4 +20,3 @@ export type UnavailableSessionDetail = DetailBase & {
   history_state: WireHistoryState & { status: 'unavailable' } & Required<Pick<WireHistoryState, 'reason' | 'message'>>
 } & { [K in keyof SessionHistoryMetadata | 'messages']?: never }
 export type SessionDetail = AvailableSessionDetail | UnavailableSessionDetail
-

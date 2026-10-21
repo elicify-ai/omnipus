@@ -78,7 +78,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
           }
           const trailing = splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing
           return (
-            <div key={msg.historyPosition ?? msg.id} data-history-position={msg.historyPosition}>
+            <div key={msg.historyPosition ?? msg.id} data-history-position={msg.historyPosition} data-history-anchor={msg.historyPosition ?? `live:${msg.id}`}>
               {row}
               <DelegationEventLineList events={trailing} />
             </div>
@@ -86,7 +86,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
         })}
         </div>
         <HistoryBoundary action="newer" average={viewport.average} />
-        <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
+        {!viewport.historical && <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />}
       </div>
     </div>
   )
@@ -164,7 +164,11 @@ function VirtualizedMessageListInner({
   })
 
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => !viewport.historical
-  useLayoutEffect(() => { virtualizer.measure() }, [virtualizer, viewport.average, verboseChatEnabled])
+  useLayoutEffect(() => { virtualizer.measure() }, [virtualizer, viewport.average, viewport.widthGeneration, verboseChatEnabled])
+  useLayoutEffect(() => {
+    const kept = new Set(historicalMessages.map(message => message.historyPosition ?? message.id))
+    for (const key of virtualizer.itemSizeCache.keys()) if (!kept.has(String(key))) virtualizer.itemSizeCache.delete(key)
+  }, [virtualizer, historicalMessages])
   const virtualItems = virtualizer.getVirtualItems()
 
   const rowForMessage = (msg: ChatMessage) => {
@@ -244,7 +248,7 @@ function VirtualizedMessageListInner({
                 <div
                   key={virtualRow.key}
                   data-index={virtualRow.index}
-                  data-history-position={msg.historyPosition}
+                  data-history-position={msg.historyPosition} data-history-anchor={msg.historyPosition ?? `live:${msg.id}`}
                   ref={virtualizer.measureElement}
                 >
                   {rowForMessage(msg)}
@@ -266,7 +270,7 @@ function VirtualizedMessageListInner({
             snapshots={textAtToolCallStart}
             owners={toolCallOwners}
           >
-            <div data-testid="streaming-message-anchor">
+            <div data-testid="streaming-message-anchor" data-history-position={messages[messages.length - 1].historyPosition} data-history-anchor={messages[messages.length - 1].historyPosition ?? `live:${messages[messages.length - 1].id}`}>
               <ThreadPrimitive.Messages>
                 {({ message }) => {
                   const isLast = message.id === messages[messages.length - 1]?.id
@@ -283,9 +287,8 @@ function VirtualizedMessageListInner({
           </StreamingDelegation>
         )}
         <HistoryBoundary action="newer" average={viewport.average} />
-        <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
+        {!viewport.historical && <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />}
       </div>
     </ThreadPrimitive.Viewport>
   )
 }
-

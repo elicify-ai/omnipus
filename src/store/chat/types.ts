@@ -443,6 +443,8 @@ export interface ProviderRetryEventData {
 export interface SessionChatState {
   history: SessionHistoryState
   historyNotice?: string
+  /** Release retains the live cursor, but the next visible attach needs a fresh page. */
+  historyNeedsSnapshot?: boolean
   /** Body-free source/display aliases and hidden current-tail order, released on leave. */
   historySourceAliases?: Record<string, string>
   historyLiveOrder?: string[]
@@ -892,7 +894,7 @@ export type HistorySliceContext = {
 }
 
 export interface ChatStore extends HistorySlice {
-  acceptHistoryFallback(sessionId: string, page: import('@/lib/api/sessions').SessionHistoryPage, generation: number): void
+  acceptHistoryFallback(sessionId: string, page: import('@/lib/api/sessions').SessionHistoryPage, generation: number, baseline?: Record<string, ChatMessage>): void
   history: SessionHistoryState
   historyNotice?: string
   /** Per-session state buckets keyed by session_id. */

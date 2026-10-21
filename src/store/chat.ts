@@ -39,7 +39,10 @@ registerIsSessionReplaying((sessionId) => useChatStore.getState().sessionsById[s
 // attachToSession read a bucket's cursor without importing the chat store
 // directly (same circular-import-break pattern as the three registrations
 // above).
-registerGetSessionCursor((sessionId) => useChatStore.getState().sessionsById[sessionId]?.cursor ?? null)
+registerGetSessionCursor((sessionId) => {
+  const bucket = useChatStore.getState().sessionsById[sessionId]
+  return bucket?.historyNeedsSnapshot ? null : bucket?.cursor ?? null
+})
 
 // ADR-092 UX fix: see session.ts's registerChatClearPendingAutoApprove doc
 // comment for why this is not folded into setReplaying/resetForReplay.

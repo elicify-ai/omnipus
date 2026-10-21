@@ -11,7 +11,7 @@ export class HistoryRowMeasurements {
     if (!stable || !Number.isFinite(height) || height <= 0) return false
     const previous = this.samples.get(key)
     if (previous === height) return false
-    if (previous !== undefined) this.total -= previous
+    if (previous !== undefined) { this.total -= previous; this.samples.delete(key) }
     this.samples.set(key, height)
     this.total += height
     if (this.samples.size > 100) {
@@ -20,6 +20,11 @@ export class HistoryRowMeasurements {
       this.samples.delete(first)
     }
     return true
+  }
+  retainPositions(positions: ReadonlySet<string>): void {
+    for (const [key, height] of this.samples) {
+      if (!positions.has(key.split(':', 1)[0])) { this.samples.delete(key); this.total -= height }
+    }
   }
   reset(): void { this.samples.clear(); this.total = 0 }
 }
