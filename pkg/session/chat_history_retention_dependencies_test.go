@@ -58,8 +58,20 @@ func TestChatHistoryRetention_EffectTargetExpiryVersusRequiredEffectDamage(t *te
 				p := historyRead(t, s, sid, historyOptions(100))
 				require.Equal(t, []string{"retained-001"}, historyIDs(p), "retained effect is metadata, never an orphan public result")
 			} else {
-				// Keep a later anchor intact, damage only the required correction body.
+				// Prove the real dependency projects correctly before damaging it;
+				// a generic not-implemented failure is not an integrity refusal.
 				historyRows(t, s, sid, "later-anchor", 1)
+				healthy := historyRead(t, s, sid, historyOptions(100))
+				var settled bool
+				for _, entry := range healthy.Entries {
+					if entry.Entry.ID == "old-call-owner" {
+						require.Len(t, entry.Entry.ToolCalls, 1)
+						require.Equal(t, "success", entry.Entry.ToolCalls[0].Status)
+						settled = true
+					}
+				}
+				require.True(t, settled, "healthy correction source is actually eligible before corruption")
+				// Keep a later saved anchor intact; damage only correction bytes.
 				path := filepath.Join(s.BaseDir(), sid, "transcript.jsonl")
 				f, err := os.OpenFile(path, os.O_WRONLY, 0)
 				require.NoError(t, err)

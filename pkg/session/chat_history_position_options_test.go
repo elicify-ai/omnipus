@@ -132,6 +132,7 @@ func TestChatHistoryPage_CoreOptionsAndInvalidWeighing(t *testing.T) {
 			s, sid := newEffectsSession(t)
 			_, err := s.ReadChatHistoryPage(context.Background(), sid, historyOptions(limit))
 			require.Error(t, err, "invalid internal limits refuse rather than clamp")
+			require.False(t, errors.Is(err, ErrChatHistoryNotImplemented), "an unimplemented reader error is not proof of argument validation")
 		})
 	}
 }
