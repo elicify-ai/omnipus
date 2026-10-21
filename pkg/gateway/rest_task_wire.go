@@ -163,8 +163,9 @@ func (a *restAPI) taskAssigneeWarning(t task.Task, g *goal.Goal) string {
 // not-wire-format: this is a local alias for the generated inline struct; see
 // the gen.Task.Todos field for the authoritative shape.
 type wireTodo = struct {
-	Status gen.TaskTodosStatus `json:"status"`
-	Text   string              `json:"text"`
+	ActiveForm *string             `json:"active_form,omitempty"`
+	Status     gen.TaskTodosStatus `json:"status"`
+	Text       string              `json:"text"`
 }
 
 // setWireListFields copies a task's list-valued fields (blocked_by, todos,
@@ -178,7 +179,7 @@ func setWireListFields(out *gen.Task, t task.Task) {
 	if len(t.Todos) > 0 {
 		todos := make([]wireTodo, 0, len(t.Todos))
 		for _, td := range t.Todos {
-			todos = append(todos, wireTodo{Text: td.Text, Status: gen.TaskTodosStatus(td.Status)})
+			todos = append(todos, toWireTodo(td))
 		}
 		out.Todos = &todos
 	}

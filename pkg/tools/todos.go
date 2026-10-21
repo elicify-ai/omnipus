@@ -48,7 +48,8 @@ func (t *SetTodosTool) Description() string {
 		"Your checklist is shown on the board and re-shown to you each turn. " +
 		"You have ONE active checklist at a time: calling this with a different `outcome` closes the " +
 		"previous checklist card as done and starts a fresh one, so reuse the exact same `outcome` string " +
-		"for every update to the same unit of work."
+		"for every update to the same unit of work. " +
+		"Optionally give each item an `active_form`: how it reads while in progress, e.g. \"Drafting the Q4 summary\"."
 }
 
 func (t *SetTodosTool) Parameters() map[string]any {
@@ -67,6 +68,10 @@ func (t *SetTodosTool) Parameters() map[string]any {
 						"text": map[string]any{
 							"type":        "string",
 							"description": "Checklist item text (1-500 chars)",
+						},
+						"active_form": map[string]any{
+							"type":      "string",
+							"maxLength": 500,
 						},
 						"status": map[string]any{
 							"type":        "string",
@@ -280,7 +285,8 @@ func (t *SetTodosTool) resolveWorkspaceID(ctx context.Context) (string, error) {
 
 // parseTodosArg converts the raw []any slice from LLM args into []task.Todo.
 // Each element must be a map with "text" (string, non-empty) and optional
-// "status" (one of pending/in_progress/completed; default "pending").
+// "status" (one of pending/in_progress/completed; default "pending"), and
+// "active_form" (trimmed, optional, up to 500 characters).
 func parseTodosArg(raw []any) ([]task.Todo, error) {
 	todos := make([]task.Todo, 0, len(raw))
 	for i, item := range raw {
@@ -291,6 +297,17 @@ func parseTodosArg(raw []any) ([]task.Todo, error) {
 		text, _ := m["text"].(string)
 		if text == "" {
 			return nil, fmt.Errorf("todos[%d]: text must not be empty", i)
+		}
+		activeForm := ""
+		if value, exists := m["active_form"]; exists {
+			activeFormRaw, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("todos[%d]: active_form must be a string", i)
+			}
+			activeForm = strings.TrimSpace(activeFormRaw)
+			if len([]rune(activeForm)) > 500 {
+				return nil, fmt.Errorf("todos[%d]: active_form must be 500 characters or fewer", i)
+			}
 		}
 		statusRaw, _ := m["status"].(string)
 		if statusRaw == "" {
@@ -304,7 +321,7 @@ func parseTodosArg(raw []any) ([]task.Todo, error) {
 				statusRaw,
 			)
 		}
-		todos = append(todos, task.Todo{Text: text, Status: st})
+		todos = append(todos, task.Todo{Text: text, Status: st, ActiveForm: activeForm})
 	}
 	return todos, nil
 }
@@ -320,7 +337,7 @@ func renderChecklist(goal string, todos []task.Todo) string {
 		sb.WriteString("- [")
 		sb.WriteString(string(td.Status))
 		sb.WriteString("] ")
-		sb.WriteString(td.Text)
+		sb.WriteString(td.ScratchpadText())
 		sb.WriteByte('\n')
 	}
 	if len(todos) == 0 {
