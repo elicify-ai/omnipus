@@ -21,7 +21,11 @@ func TestAskUserQuestion_RejectsRemovedAutoAnswerParameter(t *testing.T) {
 			registry := NewToolRegistry()
 			registry.Register(tool)
 			args := validAskArgs()
-			question := args["questions"].([]any)[0].(map[string]any)
+			questions, ok := args["questions"].([]any)
+			require.True(t, ok, "fixture questions must be an array")
+			require.Len(t, questions, 2)
+			question, ok := questions[0].(map[string]any)
+			require.True(t, ok, "fixture question must be an object")
 			delete(question, "default_safe")
 
 			// Control: a recommendation remains valid and never pre-answers.

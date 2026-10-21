@@ -12,8 +12,8 @@
 // answers, cancels the card, or stops the session.
 //
 // The WS card frames and the SPA card are a later, serialized stream — this
-// package deliberately exposes narrow interfaces (CardSink, ResumeDispatcher,
-// AuditSink) with fail-safe no-op/nil behavior so everything here compiles,
+// package deliberately exposes narrow interfaces (CardSink, ResumeDispatcher)
+// with fail-safe no-op/nil behavior so everything here compiles,
 // runs and tests without any wire format existing yet.
 package askuser
 

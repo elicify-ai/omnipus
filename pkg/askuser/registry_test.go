@@ -590,12 +590,6 @@ func (c *countingMeta) SetMeta(sessionID string, patch session.MetaPatch) error 
 	return c.inner.SetMeta(sessionID, patch)
 }
 
-func (c *countingMeta) sets() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.setCalls
-}
-
 // ParseResumeCardID must recognize exactly what ResumeMessage renders (the
 // two share resumeMessagePrefix) — the gateway's replay suppression of the
 // §0.2 raw-JSON bubble depends on this round-trip.
