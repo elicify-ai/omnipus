@@ -692,7 +692,7 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	); !ok {
 		return true
 	}
-	// Write SOUL.md, HEARTBEAT.md, and AGENT.md BEFORE triggering reload,
+	// Write SOUL.md and HEARTBEAT.md BEFORE triggering reload,
 	// so the new AgentInstance reads the updated files.
 	// Capture agentWorkspace into a local to avoid TOCTOU on cfg.Agents.List (M1).
 	capturedWorkspace := uf.cfg.Agents.List[uf.foundIdx].Home

@@ -80,7 +80,7 @@ func l11274WindowsCreateWithPATHEXT(t *testing.T, value string, unset bool, exte
 	before := l11274Fix1ReadResources(t, f)
 	result := f.execute(t, "create_agent", l11274CreateArgs("Created codex", "codex", path))
 	if allow {
-		l11274AssertCreated(t, f, result, "created-codex", "codex", path, "#6E8BA8")
+		l11274AssertCreated(t, f, result, "codex", path, "#6E8BA8")
 	} else {
 		message := l11274FailureDetails(t, result, "INVALID_INPUT")
 		if !strings.Contains(message, "cli_path") || !l11274ReasonNamesPath(message, path) {

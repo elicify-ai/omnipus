@@ -69,11 +69,20 @@ export async function assertRestoredControl(history: HistoryHarness, pending: Pe
 }
 export async function reconnectWithPending(history: HistoryHarness, pending: PendingHistoryControl, unavailable: boolean) {
   const start = history.traffic.frames.length;
+  if (unavailable) {
+    await expect(history.page.getByRole('alert').filter({ hasText: UNAVAILABLE }), 'US1.6: history error precedes the initial decision focus check').toBeVisible();
+  }
   await pendingAction(history.page, pending).focus();
   await dropSocket(history.page);
   await waitForConnected(history.page);
   await expect.poll(() => history.traffic.frames.slice(start).filter((f) => f.type === 'catch_up_complete' && f.session_id === history.sessionId).length).toBe(1);
+  if (unavailable) {
+    await expect(history.page.getByRole('alert').filter({ hasText: UNAVAILABLE }), 'US1.6: restored history error precedes restored-decision checks and action').toBeVisible();
+  }
   await assertRestoredControl(history, pending, start, unavailable);
+  if (unavailable) {
+    await expect(pendingAction(history.page, pending), 'US1.6: the restored decision remains enabled after the history error').toBeEnabled();
+  }
   await expect(pendingAction(history.page, pending), 'current focused decision survives catch-up').toBeFocused();
   if (unavailable) await expect(history.page.getByRole('alert').filter({ hasText: UNAVAILABLE })).toBeVisible();
 }

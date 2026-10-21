@@ -36,7 +36,7 @@ export function isExternalType(type: string | null | undefined): boolean {
 }
 
 export interface AgentKindFlags { // not-wire-format: UI-only kind classification derived from an Agent client-side; never serialized or sent over the gateway boundary
-  /** Built-in roster agent (Mia/Jim/Ava/Ray) — identity/prompt/skills locked. */
+  /** Built-in roster agent (Mia, Jim) — identity/prompt/skills locked. */
   isLocked: boolean
   /** Subagent or subagent_3p — delegation-only, never a chat target. */
   isWorker: boolean
@@ -78,7 +78,7 @@ export function agentKindFlags(agent: {
 // pure and lib-level consumers of the restored @-mention addressing
 // (src/lib/recipientAddress.ts) need it without a hooks-module import.
 // useChatAgents re-exports it, so its own callers are unchanged.
-const CHAT_BUILTIN_IDS = new Set(['mia', 'jim', 'ava', 'admin'])
+const CHAT_BUILTIN_IDS = new Set(['mia', 'jim'])
 
 export function isChatEligibleAgent(agent: {
   type: string | null | undefined

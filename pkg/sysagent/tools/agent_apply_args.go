@@ -9,6 +9,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -24,6 +25,7 @@ var agentUpdateArgNames = map[string]struct{}{
 	"max_tool_iterations": {}, "skills": {},
 	"memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
+	"agent_md": {}, // AGENT.md (#1064), written beside the record
 }
 
 // permissionFieldNames are the capability fields only set_agent_permissions
@@ -51,6 +53,7 @@ var agentCreateArgNames = map[string]struct{}{
 	"heartbeat": {}, "max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
 	"tool_policy_changes": {}, "memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
+	workspaceIDParam: {}, // destination workspace (FR-040), not an agent field
 }
 
 func rejectUnknownAgentFields(args map[string]any, allowed map[string]struct{}) error {
@@ -65,7 +68,8 @@ func rejectUnknownAgentFields(args map[string]any, allowed map[string]struct{}) 
 func mutationFieldNames(args map[string]any) []string {
 	fields := make([]string, 0, len(args))
 	for name := range args {
-		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" || name == "cli_path" || name == "heartbeat" {
+		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" || name == "cli_path" ||
+			name == "heartbeat" || name == "agent_md" || name == workspaceIDParam {
 			continue
 		}
 		fields = append(fields, name)
@@ -93,6 +97,9 @@ func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any, defau
 	if err := applyOptionalString(args, "name", func(v string) error {
 		if strings.TrimSpace(v) == "" {
 			return fieldErr("name", "name must be nonblank")
+		}
+		if coreagent.AgentNameTooLong(v) {
+			return fieldErr("name", coreagent.AgentNameTooLongRefusal)
 		}
 		a.Name = v
 		return nil
@@ -323,23 +330,33 @@ func applyModelParams(a *config.AgentConfig, raw any) error {
 	return nil
 }
 
+// jsonInt reads a whole number: a JSON-decoded float64 without a fraction,
+// or a Go integer from an in-process caller.
 func jsonInt(raw any, field string) (int, error) {
-	f, ok := raw.(float64)
-	if !ok {
-		return 0, fieldErr(field, field+" must be an integer")
+	switch v := raw.(type) {
+	case int:
+		return v, nil
+	case int32:
+		return int(v), nil
+	case int64:
+		if v < math.MinInt || v > math.MaxInt {
+			return 0, fieldErr(field, field+" must be an integer")
+		}
+		return int(v), nil
+	case float64:
+		// Check the signed-int range BEFORE conversion: an out-of-range float
+		// converts implementation-dependently, and ARM64 can saturate to MaxInt.
+		// float64(MaxInt64) rounds up to 2^63, so a round-trip alone misses it.
+		limit := math.Ldexp(1, strconv.IntSize-1)
+		if v < -limit || v >= limit {
+			return 0, fieldErr(field, field+" must be an integer")
+		}
+		n := int(v)
+		if float64(n) == v {
+			return n, nil
+		}
 	}
-	// Check the signed-int range BEFORE conversion: an out-of-range float
-	// converts implementation-dependently, and ARM64 can saturate to MaxInt.
-	// float64(MaxInt64) rounds up to 2^63, so a round-trip alone misses it.
-	limit := math.Ldexp(1, strconv.IntSize-1)
-	if f < -limit || f >= limit {
-		return 0, fieldErr(field, field+" must be an integer")
-	}
-	n := int(f)
-	if float64(n) != f {
-		return 0, fieldErr(field, field+" must be an integer")
-	}
-	return n, nil
+	return 0, fieldErr(field, field+" must be an integer")
 }
 
 func requiredStringArray(raw any, field string) ([]string, error) {

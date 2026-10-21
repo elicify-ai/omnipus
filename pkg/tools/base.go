@@ -1,6 +1,9 @@
 package tools
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // ToolScope classifies a tool's privilege level for per-agent visibility filtering.
 type ToolScope string
@@ -123,6 +126,7 @@ var (
 	ctxKeyVerifierSessionScope  = &toolCtxKey{"verifierSessionScope"}
 	ctxKeySearchPromotion       = &toolCtxKey{"searchPromotion"}
 	ctxKeyAutoDenyAsk           = &toolCtxKey{"autoDenyAsk"}
+	ctxKeyAskRefusalReason      = &toolCtxKey{"askRefusalReason"}
 	ctxKeyToolRootChatSessionID = &toolCtxKey{"toolRootChatSessionID"}
 )
 
@@ -154,6 +158,33 @@ func ToolAutoDenyAsk(ctx context.Context) bool {
 	v, _ := ctx.Value(ctxKeyAutoDenyAsk).(bool)
 	return v
 }
+
+// WithAskRefusalReason stamps the turn's own refusal reason for an Ask call
+// nobody can answer (#1263 R4): the loop sets it for a task or plan chain so
+// a tool that refuses its OWN escalation (the shell's D3/D7/D8 and
+// no-kernel-sandbox gates) refuses with the same task/plan reason instead of
+// the cron-flavoured headless text (gate round 1, SF-03). Empty means no
+// specific reason: the tool keeps its own headless wording.
+func WithAskRefusalReason(ctx context.Context, reason string) context.Context {
+	return context.WithValue(ctx, ctxKeyAskRefusalReason, reason)
+}
+
+// ToolAskRefusalReason returns the reason stamped by WithAskRefusalReason, or
+// "" when none was stamped.
+func ToolAskRefusalReason(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	v, _ := ctx.Value(ctxKeyAskRefusalReason).(string)
+	return v
+}
+
+// ErrUnattendedAskRefused marks a ToolResult whose call a tool refused because
+// it needed approval in a turn whose stamped refusal reason
+// (WithAskRefusalReason) says nobody can approve. The agent loop turns such a
+// result into its one canonical refusal: permanent model message, fixed
+// transcript row and audit pair (#1263 R4, gate round 1, SF-03).
+var ErrUnattendedAskRefused = errors.New("tool call needed approval and was refused: nobody can approve it in this run")
 
 // WithSearchPromotion returns a child context marking the enclosing
 // markLoaded call as originating from ToolSearch's query (by-description)

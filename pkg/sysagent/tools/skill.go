@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,12 +27,13 @@ func NewSkillRemoveTool(d *Deps) *SkillRemoveTool { return &SkillRemoveTool{deps
 func (t *SkillRemoveTool) Name() string           { return "remove_skill" }
 func (t *SkillRemoveTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillRemoveTool) Description() string {
-	return "Remove an installed skill. IRREVERSIBLE — the skill's whole directory, including " +
-		"any version history it holds, is permanently deleted; there is no undo. This only " +
-		"reaches a skill in the operator's installed-skills directory (populated by installing " +
-		"from the marketplace) — it does NOT reach a skill authored with create_skill or a user " +
-		"override created with edit_skill, which live in a separate directory: naming one here " +
-		"returns NOT_FOUND even though list_skills reports it as available. If the removed skill " +
+	return "Remove a project or installation-wide skill. IRREVERSIBLE — the skill's whole directory, including " +
+		"any version history it holds, is permanently deleted; there is no undo. It searches the target " +
+		"workspace's project shelf first and removes a matching skill from its own project. Only if no " +
+		"project skill matches does it use the installation's skills directory, which also contains " +
+		"installation-wide authored skills and user overrides. A project-shelf read failure returns " +
+		"READ_FAILED without removal or fallback; project-path integrity errors also stop removal instead " +
+		"of falling back. A skill present only on the built-in shelf is not removed. If the removed skill " +
 		"was shadowing a lower-priority skill of the same id (an override or a built-in), that " +
 		"one becomes visible again. Parameters: name (required, the skill id as " +
 		"reported by list_skills — no path separators), revision (required from the reviewed skill read), confirm (bool, must be true). A conflict requires a fresh read; do not retry the stale deletion."
@@ -41,15 +43,17 @@ func (t *SkillRemoveTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":     map[string]any{"type": "string"},
-			"confirm":  map[string]any{"type": "boolean"},
-			"revision": map[string]any{"type": "string", "description": "Revision returned by the reviewed skill read."},
+			"name":           map[string]any{"type": "string"},
+			"confirm":        map[string]any{"type": "boolean"},
+			"revision":       map[string]any{"type": "string", "description": "Revision returned by the reviewed skill read."},
+			workspaceIDParam: workspaceIDProperty("whose project skills are searched first (FR-042)"),
 		},
 		"required": []string{"name", "confirm", "revision"},
 	}
 }
 
-func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	name, _ := args["name"].(string)
 	confirm, _ := args["confirm"].(bool)
 	revision, _ := args["revision"].(string)
@@ -72,13 +76,21 @@ func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *too
 		return tools.ErrorResult(errorJSON("CONFIRMATION_REQUIRED",
 			"confirm must be true to remove a skill", ""))
 	}
+	target, refusal := resolveTargetWorkspace(t.deps, ctx, args)
+	if refusal != nil {
+		return refusal
+	}
 
 	// ADR-072 D6.1 ("remove_skill follows the same rule — deleting a project
 	// skill deletes the project's file"): resolve against the current turn's
 	// workspace project shelf FIRST — independent of SkillInstaller, which
 	// only ever reaches the central registry. Only a slug absent from the
 	// project shelf falls through to the registry path below, unchanged.
-	if shelf := resolveProjectShelf(t.deps, ctx); shelf != nil {
+	shelf, shelfRefusal := resolveProjectShelf(t.deps, target.ID)
+	if shelfRefusal != nil {
+		return shelfRefusal
+	}
+	if shelf != nil {
 		if projWriter, ps, perr := skills.ResolveProjectSkillWriter(shelf, name); perr == nil {
 			if revision == "" {
 				return tools.ErrorResult(errorJSON("INVALID_INPUT", "revision is required", "read the skill again before removing it"))
@@ -93,19 +105,20 @@ func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *too
 					fmt.Sprintf("could not remove skill %q: %v", name, rmErr), ""))
 			}
 			tools.EmitSkillWriteAudit("project", t.Name(),
-				tools.ToolAgentID(ctx), tools.ToolTranscriptSessionID(ctx), tools.ToolWorkspaceID(ctx), ps.Path)
+				tools.ToolAgentID(ctx), tools.ToolTranscriptSessionID(ctx), target.ID, ps.Path)
 			slog.Info("sysagent: remove_skill removed project skill",
 				"name", name, "shelf", "project", "mount", ps.MountName, "path", ps.Path)
-			return tools.NewToolResult(successJSON(map[string]any{
+			return skillRemovedResult(ps.Path, map[string]any{
 				"success":            true,
 				"name":               name,
 				"shelf":              "project",
 				"mount":              ps.MountName,
+				"workspace_id":       target.ID,
 				"revision":           revision,
 				"persistence_status": "complete",
 				"activation_status":  "active",
 				"changed_fields":     []string{"installed"},
-			}))
+			})
 		} else if !errors.Is(perr, skills.ErrNotFound) {
 			// ErrProjectWriteEscapesMount or another shelf-integrity problem —
 			// not "no such project skill". Surface it rather than silently
@@ -142,14 +155,26 @@ func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *too
 			fmt.Sprintf("could not remove skill %q: %v", name, err), ""))
 	}
 
-	return tools.NewToolResult(successJSON(map[string]any{
+	return changeSuccess(map[string]any{
 		"success":            true,
 		"name":               name,
 		"revision":           revision,
 		"persistence_status": "complete",
 		"activation_status":  "active",
 		"changed_fields":     []string{"installed"},
-	}))
+	}, working("the installer removed the skill directory and reported success"))
+}
+
+// skillRemovedResult renders a project-skill removal with its read-back: the
+// skill's SKILL.md must be gone from disk.
+func skillRemovedResult(skillFile string, fields map[string]any) *tools.ToolResult {
+	const scope = "the skill's SKILL.md checked absent from disk"
+	if _, err := os.Stat(skillFile); err == nil {
+		return changeSuccess(fields, savedNotWorking("the skill file is still present after removal", scope))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return changeSuccess(fields, savedNotWorking("the removal could not be checked: "+err.Error(), scope))
+	}
+	return changeSuccess(fields, working(scope))
 }
 
 // isNotFound reports whether err is a "not found" error from the skill installer.
@@ -172,8 +197,9 @@ func (t *SkillListTool) Description() string {
 
 func (t *SkillListTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
-		"scope": map[string]any{"type": "string", "enum": []string{"usable", "management"}, "default": "usable"},
-		"name":  map[string]any{"type": "string", "description": "Installed skill id to inspect; management scope only."},
+		"scope":          map[string]any{"type": "string", "enum": []string{"usable", "management"}, "default": "usable"},
+		"name":           map[string]any{"type": "string", "description": "Installed skill id to inspect; management scope only."},
+		workspaceIDParam: workspaceIDProperty("whose project skills the management listing includes (management scope only)"),
 	}}
 }
 
@@ -184,6 +210,11 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]any) *tools
 	}
 
 	scope, name, err := parseSkillListArgs(args)
+	if err == nil {
+		if _, present := args[workspaceIDParam]; present && scope != "management" {
+			err = errors.New("workspace_id is available only with management scope")
+		}
+	}
 	if err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "use scope usable or management and an installed skill id"))
 	}
@@ -191,7 +222,11 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]any) *tools
 		if err := authorizeSkillManagementRead(t.deps, ctx); err != nil {
 			return tools.ErrorResult(errorJSON("PERMISSION_DENIED", err.Error(), "use an authorized configuration agent"))
 		}
-		return t.executeManagement(ctx, name)
+		target, refusal := resolveTargetWorkspace(t.deps, ctx, args)
+		if refusal != nil {
+			return refusal
+		}
+		return t.executeManagement(target.ID, name)
 	}
 	if name != "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is available only with management scope", "set scope to management"))
@@ -242,7 +277,7 @@ func (t *SkillListTool) Execute(ctx context.Context, args map[string]any) *tools
 func parseSkillListArgs(args map[string]any) (scope, name string, err error) {
 	scope = "usable"
 	for key := range args {
-		if key != "scope" && key != "name" {
+		if key != "scope" && key != "name" && key != workspaceIDParam {
 			return "", "", fmt.Errorf("unknown parameter %q", key)
 		}
 	}
@@ -295,10 +330,13 @@ type managedSkill struct {
 	mount        string
 }
 
-func (t *SkillListTool) executeManagement(ctx context.Context, name string) *tools.ToolResult {
+func (t *SkillListTool) executeManagement(wsID, name string) *tools.ToolResult {
 	items := make([]managedSkill, 0)
 	seen := make(map[string]struct{})
-	shelf, collisions := resolveProjectShelfWithCollisions(t.deps, ctx)
+	shelf, collisions, shelfRefusal := resolveProjectShelfWithCollisions(t.deps, wsID, name)
+	if shelfRefusal != nil {
+		return shelfRefusal
+	}
 	if name != "" {
 		for _, collision := range collisions {
 			if strings.EqualFold(collision.Slug, name) {

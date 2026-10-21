@@ -105,7 +105,7 @@ Convention:
 | 6 | `model` | R (seeded) | R (seeded) | R (picker) | R (picker) | R (free text) |
 | 7 | `model_params.{temperature, max_tokens, top_p}` | ro | ro | O | O | **—** |
 | 8 | `soul` ⭐ (mandatory everywhere) | ro | ro | **R** ⭐ | **R** ⭐ | **R** ⭐ |
-| 9 | `instructions` | ro | ro | O | O | O |
+| 9 | `instructions` (not an automatic prompt source; §4.8) | — | — | — | — | — |
 | 10 | `heartbeat` | ro | **—** | O | **—** | **—** |
 | 11 | `heartbeat_enabled` | O | **—** | O | **—** | **—** |
 | 12 | `heartbeat_interval` | O | **—** | O | **—** | **—** |
@@ -144,7 +144,7 @@ Convention:
 |---|---|
 | `tool_feedback` (per-agent bool) | This is **channel behavior**, not an agent property. The web chat surface already renders tool calls inline (`SessionPanel.tsx`, `ToolCallBadge`, `SubagentBlock`); publishing them again as outbound messages is duplication. Per-channel routing at runtime: `webchat` → never, messaging → always. |
 | `executor.auth_method` | Each CLI handles its own auth (claude-code OAuth, etc.). Omnipus just spawns the CLI process. |
-| `executor.instructions_file` | Omnipus passes `soul` + `instructions` as prompt content at runtime, not via a file the CLI reads. |
+| `executor.instructions_file` | Omnipus passes the resolved soul (when present) and task content at runtime, not an agent-folder instruction body or a file path for the CLI to read. |
 | `executor.model_override` | `model` IS the model name passed to the CLI. |
 | `executor.workdir` | Set by the calling Main agent at runtime (invocation context), not by the Subagent itself. |
 
@@ -213,9 +213,14 @@ Subagent (External). For Main and Subagent, Omnipus injects it into every
 LLM call. For Subagent (External), Omnipus **passes it as part of the CLI
 prompt at runtime** — the CLI never reads a file from disk.
 
-### 4.8 `instructions` (row 9)
-AGENT.md body. Same scoping as `soul` (everywhere), but **optional**
-(empty is valid).
+### 4.8 `instructions` (row 9) — not an automatic prompt source
+The agent-folder instruction body is not a prompt or agent-form input. Since the
+2026-10-21 founder decision, the native prompt loader reads the agent's `SOUL.md`
+and the global `USER.md`; it does not load agent-folder `AGENT.md`, `AGENTS.md` or
+`IDENTITY.md`. The body must not be described as following `soul` into a request.
+Workspace Project Instructions and mounted-project root instructions remain
+separate supported sources. This is a prompt/form mapping correction, not a claim
+that a wire-format field was removed.
 
 ### 4.9 `heartbeat*` (rows 10–12)
 **Main only** — chat agents have a periodic poll. Workers don't poll
@@ -514,7 +519,7 @@ The `type` (and `cli`, for External) is shown as a locked chip at the top.
 | Step | Visible fields |
 |---|---|
 | **① Identity** | `color` (default: `Verdant`), `icon` (default: `Robot`), `name` *, `description`, `model` * (picker) |
-| **② Personality** | `soul` * ⭐, `instructions`, `heartbeat`, `heartbeat_enabled`, `heartbeat_interval`, `voice` (dynamic widget) |
+| **② Personality** | `soul` * ⭐, `heartbeat`, `heartbeat_enabled`, `heartbeat_interval`, `voice` (dynamic widget) |
 | **③ Tools** | `tools_cfg` (ToolPolicyEditor, default `deny`), `skills[]`, `fallback_models[]` (max 2) |
 | **Advanced** | `model_params`, `sandbox_profile`, `shell_policy`, `rate_limits`, ~~`delegation_policy` (link to `/agents/trust`)~~ **[removed — ADR-037]**, `timeout_seconds` (default 300), `max_tool_iterations` (default 50), `steering_mode` (default `one-at-a-time`) |
 
@@ -525,7 +530,7 @@ The `type` (and `cli`, for External) is shown as a locked chip at the top.
 | Step | Visible fields |
 |---|---|
 | **① Identity** | `color`, `icon`, `name` *, **`description` * (required for routing)**, `model` * (picker) |
-| **② Personality** | `soul` * ⭐ (label: *"Soul / task prompt"*), `instructions` (no Heartbeat, no Voice) |
+| **② Personality** | `soul` * ⭐ (label: *"Soul / task prompt"*) (no Heartbeat, no Voice) |
 | **③ Tools** | `tools_cfg` (default `deny`), `skills[]`, `fallback_models[]` (max 2) |
 | **Advanced** | `model_params`, `sandbox_profile`, `shell_policy`, `rate_limits`, `timeout_seconds`, `max_tool_iterations` (no steering_mode, no delegation_policy [field removed entirely — ADR-037], no Heartbeat, no Voice) |
 
@@ -536,7 +541,7 @@ The `type` (and `cli`, for External) is shown as a locked chip at the top.
 | Step | Visible fields |
 |---|---|
 | **① Identity** | `color`, `icon`, `name` *, `description` * (required for routing), `model` * (free-text slug input — NOT picker) |
-| **② Personality** | `soul` * ⭐, `instructions` (no Heartbeat, no Voice) |
+| **② Personality** | `soul` * ⭐ (no Heartbeat, no Voice) |
 | **③ Tools** | `skills[]` (no tools_cfg — CLI doesn't see Omnipus tools, no fallback_models — CLI handles retries) |
 | **Advanced** | `rate_limits`, `timeout_seconds`, `max_tool_iterations`, **`executor.cli_path` *, `executor.env_overrides`, `executor.cli_args`** (no `sandbox_profile` / `shell_policy` — CLI manages its own isolation, per matrix rows 17-18) |
 
@@ -836,7 +841,7 @@ near-rewrite. Recommended file split (per F-11):
 
 - `src/components/agents/CreateAgentWizard.tsx` — top-level container, the `Dialog`/`Sheet` wrapper, the `type` + `cli` chip, the numbered stepper
 - `src/components/agents/CreateAgentStep1Identity.tsx` — step ① (color, icon, name, description, model)
-- `src/components/agents/CreateAgentStep2Personality.tsx` — step ② (soul ⭐, instructions, heartbeat, voice — fields conditional on `type`)
+- `src/components/agents/CreateAgentStep2Personality.tsx` — step ② (soul ⭐, heartbeat, voice — fields conditional on `type`)
 - `src/components/agents/CreateAgentStep3Tools.tsx` — step ③ (tools_cfg, skills, fallback_models — fields conditional on `type`)
 - `src/components/agents/CreateAgentAdvanced.tsx` — Advanced disclosure (sandbox, shell, rate_limits, executor CLI fields for External, etc.)
 - `src/components/agents/AgentFormFields.tsx` — keep for shared input primitives (AvatarColorPicker, IconPicker, etc.)
@@ -954,7 +959,7 @@ Scenario: Step ② Subagent wizard has no Heartbeat field
   Given a Subagent wizard is open at step ②
   When the form renders
   Then [data-testid="wizard-heartbeat"] is NOT in the DOM
-  And the Personalities section contains only `soul` and `instructions`
+  And the Personalities section contains only `soul`
 
 Scenario: Step ② wizard of any worker type has no Voice field
   Given a Subagent or Subagent (External) wizard is open at step ②
@@ -1148,7 +1153,7 @@ The semver-major bump + DB migration is one-way. If the rollout fails:
 ### Open for follow-up
 4. **"Defaults" tab** — For built-in agents, the operator-tunable subset (Sandbox, Shell, Rate limits, Timeouts, Heartbeat) takes up most of the Advanced tab. Recommendation: keep it in Advanced for now; split into its own tab if usage data shows operators revisit these often.
 5. ✅ **`built-in Subagent` column rename** — Confirmed by the user: `Worker` → `Subagent` everywhere, including the built-in matrix column. No revert needed.
-6. **`soul` + `instructions` delivery to External CLIs** — Currently passed as prompt content (`<cli_path> --prompt <prompt> --model <model>`). Confirm the long-string-prompt path works against all three CLIs (claude-code, codex, opencode) — particularly Codex's input handling. If a CLI rejects long prompts, fall back to writing a tmp file and pointing at it (which would re-introduce `executor.instructions_file` — currently dropped).
+6. **Resolved soul and task delivery to External CLIs** — The resolved soul (when present) and task are passed as prompt content (`<cli_path> --prompt <prompt> --model <model>`), not an agent-folder instruction body. Confirm the long-string-prompt path works against all three CLIs (claude-code, codex, opencode) — particularly Codex's input handling. If a CLI rejects long prompts, fall back to writing a tmp file and pointing at it (which would re-introduce `executor.instructions_file` — currently dropped).
 7. **Voice widget edge case** — What if the user installs a voice provider that *partially* exposes a voices enum (returns some voices but errors on others)? Decision tree currently picks "free-text" — confirm with frontend-lead whether a partial-enum provider should render as dropdown (filtering known voices) or free-text.
 
 ---

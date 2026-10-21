@@ -178,6 +178,9 @@ func TestWorkspaceUpdate_PreservesDelegationGraph(t *testing.T) {
 		{"from_agent":"mia","to_agent":"worker","modes":["task","background"]},
 		{"from_agent":"jim","to_agent":"ava","modes":["task"]}
 	]`)
+	// #1057 F2: a newly added core_team member must be a real agent, so the
+	// added "codereview" agent has its entity record.
+	seedAgentEntityForTest(t, home, "codereview")
 
 	// Update the workspace exactly as Ava did: add a new agent to core_team.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
@@ -1485,6 +1488,10 @@ func TestWorkspaceUpdate_RemovalOnly_NoNewEdgesNoGC(t *testing.T) {
 // present on core_team and matches a real coreagent.SeedDelegationEdges key.
 func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim") // "worker" NOT registered in config
+	// #1057 F2 refuses a core_team entry that names no agent at all, so the
+	// "absent from the live config" case is modelled as an agent whose entity
+	// record exists but which the live config does not (yet) list.
+	seedAgentEntityForTest(t, home, "worker")
 	id := "01KW60SEED0000000000000006"
 	wsPath := filepath.Join(home, "workspaces", id+".json")
 	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
@@ -1952,5 +1959,21 @@ func TestWorkspaceDelete_PathTraversalRejected(t *testing.T) {
 	errBlock, _ := m["error"].(map[string]any)
 	if errBlock["code"] == nil {
 		t.Errorf("expected error code in response, got nil")
+	}
+}
+
+// seedAgentEntityForTest writes a minimal agent entity record so a core_team
+// entry names a real agent (#1057 F2) without registering it in the live config.
+func seedAgentEntityForTest(t *testing.T, home string, ids ...string) {
+	t.Helper()
+	dir := filepath.Join(home, "entities", "agents")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		body := `{"id":"` + id + `","name":"` + id + `"}`
+		if err := os.WriteFile(filepath.Join(dir, id+".json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

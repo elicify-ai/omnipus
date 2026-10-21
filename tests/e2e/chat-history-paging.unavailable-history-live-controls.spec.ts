@@ -144,6 +144,8 @@ for (const kind of ['approval', 'question'] as const) {
     test(`T35 B43 B49: real pending ${kind} survives reconnect, its action works, then Stop ends the real resumed turn`, async ({ history, page }) => {
       await unavailableFixture(history);
       await history.open();
+      await expect(page.getByRole('alert').filter({ hasText: UNAVAILABLE }), 'US1.6: explicit unavailable-history error precedes the initial send').toBeVisible();
+      await expect(chatInput(page), 'US1.6: the composer remains usable after the history error and before the genuine decision opens').toBeEnabled();
       await sendControlInstruction(page);
       const pending = await waitForPendingControl(history);
       const calls = controlProvider(history).calls();
@@ -167,6 +169,8 @@ for (const kind of ['approval', 'question'] as const) {
     test(`T35 B43 B49: Stop cancels the genuine pending ${kind}, without granting or answering it`, async ({ history, page }) => {
       await unavailableFixture(history);
       await history.open();
+      await expect(page.getByRole('alert').filter({ hasText: UNAVAILABLE }), 'US1.6: explicit unavailable-history error precedes the initial send').toBeVisible();
+      await expect(chatInput(page), 'US1.6: the composer remains usable after the history error and before the genuine decision opens').toBeEnabled();
       await sendControlInstruction(page);
       const pending = await waitForPendingControl(history);
       await reconnectWithPending(history, pending, true);
