@@ -115,23 +115,29 @@ mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/inde
 **5 machines**, each with its own `/cache` volume (repo clone, Go build cache,
 `node_modules`) and its own `/tmp/runci.lock`; three of them each run one TIER (`go`, `node`, `xplat`) and two shared machines are spare. They are sized per test type on purpose
 (founder ruling 2026-10-12, no resizing): ONE `performance` 8x machine (`080d74db170408`)
-for the heavy sustained work - the `go` tier and the full `e2e` gate, one after the other,
-never in parallel - and `shared` 8x machines for `node` (default `d8d0d90a1e9648`) and `xplat`
-(default `78113d4f329908`); a targeted few-spec e2e rerun may use a shared machine, the full
-e2e gate must not (measured: 2 h starved on shared; a placement error, not undersizing). Scaled to zero when
+for the `go` tier (Go gates, then `spa`) and, afterwards, the full `e2e` gate — never in
+parallel — and `shared` 8x machines for contracts-only `node` (default `d8d0d90a1e9648`)
+and `xplat` (default `78113d4f329908`). Founder decision 2026-10-21 ("ok a") moves the SPA
+test gate to performance, sequentially after the Go gates; machine sizes stay unchanged.
+A targeted few-spec e2e rerun may use a shared machine; the full e2e gate must not
+(measured: 2 h starved on shared; a placement error, not undersizing). Scaled to zero when
 idle; a stopped machine bills nothing for compute. One command fans the gates out and stops
 every machine it started, on every exit path including Ctrl-C:
 
 ```bash
 deploy/ci-worker/ci-cluster.sh <git-ref>            # full fan-out (ref must be PUSHED)
-deploy/ci-worker/ci-cluster.sh <git-ref> go node    # restrict to tiers
+deploy/ci-worker/ci-cluster.sh <git-ref> go         # Go gates + SPA only
 ```
 
-| Tier | Gates | ~time |
+| Tier | Gates | Indicative time (new placement not remeasured) |
 |---|---|---|
-| `go` | `gofmt go-build go-vet lint go-test go-race` | ~43 min (`go-race` alone ~25) |
-| `node` | `contracts spa` | ~12 min |
-| `xplat` | `embed-build records-no-sqlite cli-verb-guard` | ~8 min |
+| `go` | `gofmt go-build go-vet lint go-test go-race spa` | prior Go-only ~43 min (`go-race` alone ~25), plus SPA |
+| `node` | `contracts` | contracts-only not measured; former contracts + SPA ~12 min |
+| `xplat` | `embed-build records-no-sqlite cli-verb-guard` | prior ~8 min |
+
+`node` stays contracts-only: both `contracts` and `spa` run their own `npm ci`, replacing
+`node_modules`, so combining them would not reuse an installed dependency tree. This keeps
+every existing per-tier machine override working without adding dispatcher logic.
 
 Gates run **sequentially within a tier** (that machine's warm cache is the point; the lock
 would queue a second run for up to 90 min) and **tiers run concurrently**. One tier per
@@ -144,8 +150,8 @@ ids above, override them with `CI_CLUSTER_{GO,NODE,XPLAT}_MACHINE`, and check si
 
 **`e2e` is deliberately NOT in the default map** — it needs the OpenRouter secret, runs
 ~20-30 min on the performance machine, and would pin it for the whole run. Run it on the
-performance machine (`080d74db170408`) after the go tier has finished (`ci-cluster.sh` with a
-custom tier, or by hand:
+performance machine (`080d74db170408`) after the entire go tier, including SPA, has finished
+(`ci-cluster.sh` with a custom map, or by hand:
 `fly ssh console -a ci-omnipus-1 --machine <id> -C "/cache/runci.sh <ref> e2e"`). Inside
 that one gate the Playwright suite fans out across the 24 shards in `tests/e2e/shards.json`
 — the same plan `.github/workflows/pr.yml` uses, so the two surfaces cannot drift —
