@@ -517,7 +517,9 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 		// saved, naming the agents (CHECK F02). An unknown session id
 		// resolves no owner here; the session checks below reject it.
 		if owner := hcm.existingSessionOwner(); owner != "" {
-			if hcm.targetAgentID != "" && !strings.EqualFold(hcm.targetAgentID, owner) {
+			// #1330: only the requested system ID folds above; ordinary IDs
+			// must match the stored canonical owner exactly before any write.
+			if hcm.targetAgentID != "" && hcm.targetAgentID != owner {
 				logsafeWarn("ws: rejecting message frame whose agent_id conflicts with the session owner",
 					"agent_id", hcm.targetAgentID, "owner", owner, "session_id", hcm.frameSessionID)
 				hcm.sendResolveRefusal(sessionOwnerConflictRefusal(owner, hcm.targetAgentID))
@@ -546,6 +548,14 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 			Message: agentMustBeNamed,
 		})
 		return true
+	}
+	// New-chat admission must finish before minting or publishing anything.
+	if hcm.frameSessionID == "" {
+		if _, registered := hcm.h.agentLoop.GetRegistry().GetAgent(hcm.targetAgentID); !registered {
+			logsafeWarn("ws: rejecting new-chat frame for an unknown agent", "agent_id", hcm.targetAgentID)
+			hcm.sendResolveRefusal(fmt.Sprintf("the requested agent is not available: %q", hcm.targetAgentID))
+			return true
+		}
 	}
 	if isWorkerAgentID(hcm.h.agentLoop.GetConfig(), hcm.targetAgentID) && !hcm.addressesExistingHelperOf(hcm.targetAgentID) {
 		// An explicit agent_id that resolves to a worker is illegitimate: a worker

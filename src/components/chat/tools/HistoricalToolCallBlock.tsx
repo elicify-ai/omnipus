@@ -108,9 +108,9 @@ export function renderHistoricalToolCall({
   }
   // ADR-082 D9: set_goal renders its dedicated record card
   // (SetGoalCardBlock) at the call's own interleaved position,
-  // built from the call's own result — never GenericToolCall
-  // (which self-gates set_goal to null; see toolVisibility.ts's
-  // `set_goal` case). Mirrors the live registration
+  // built from the call's own result. In verbose chat the same
+  // block adds GenericToolCall below the card; otherwise the raw
+  // call stays hidden. Mirrors the live registration
   // (SetGoalToolUI, OmnipusRuntimeProvider.tsx) so replay and
   // live render identically.
   if (tc.tool === 'set_goal') {

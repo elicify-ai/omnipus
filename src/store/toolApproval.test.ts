@@ -1,13 +1,15 @@
-// L1 amendment §1.2 R6 / §1.5: one root-scoped queue; B3 stub cases retained by dispatch.
+// L1 amendment §1.2 R6 / §1.5: one root-scoped queue.
 // Unit tests for the toolApproval Zustand store — specifically
 // reconcileWithSessionState's reconnect-gap fix.
 //
+// SUPERSESSION (Train 3, amendment section 1 / bundle B3): the snapshot now
+// CARRIES the full request — SessionStatePendingApproval requires tool_call_id,
+// turn_id and args — so reconnect restores the complete approvable entry. The
+// pre-B3 "honest Deny-only stub" pins are re-aimed to full-restore pins at the
+// same strength; the '' sentinel they asserted is retired.
+//
 // Pure store-level tests (no rendering): given a session_state frame, does
-// the QUEUE end up in the right shape? See
-// src/components/agents/ToolApprovalModal.readablePreviews.test.tsx for the
-// end-to-end proof that a stub entry actually renders the
-// "Approval Details Unavailable" card — this file only proves the store side
-// of that contract.
+// the QUEUE end up in the right shape?
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
@@ -20,8 +22,8 @@ beforeEach(() => {
   })
 })
 
-describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
-  it('adds a stub entry for a pending_approvals id absent from the local queue', () => {
+describe('reconcileWithSessionState — reconnect-gap full restore (bundle B3)', () => {
+  it('restores the full entry (toolCallId, turnId, args, segments) from the snapshot for an id absent from the local queue', () => {
     const before = Date.now()
     const frame: SessionStateFrame = {
       type: 'session_state',
@@ -29,6 +31,10 @@ describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
       pending_approvals: [
         {
           approval_id: 'appr-unseen',
+          tool_call_id: 'call-unseen',
+          turn_id: 'turn-unseen',
+          args: { path: 'reports/q4.md', mode: 'append' },
+          segments: [{ segment_index: 0, command_text: 'Append to the Q4 report' }],
           session_id: 'sess-1',
           tool_name: 'request_mount',
           agent_id: 'agent-jim',
@@ -45,31 +51,35 @@ describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
 
     const queue = useToolApprovalStore.getState().queue
     expect(queue).toHaveLength(1)
-    const stub = queue[0]
-    expect(stub.approvalId).toBe('appr-unseen')
-    expect(stub.toolName).toBe('request_mount')
-    expect(stub.agentId).toBe('agent-jim')
-    expect(stub.sessionId).toBe('sess-1')
-    // The collision-free sentinel ToolApprovalModal.tsx's isReconnectStub
-    // reads — see reconcileWithSessionState's comment for why '' can never
-    // collide with a genuine live tool_approval_required frame.
-    expect(stub.toolCallId).toBe('')
-    expect(stub.turnId).toBe('')
-    expect(stub.args).toEqual({})
+    const restored = queue[0]
+    expect(restored.approvalId).toBe('appr-unseen')
+    expect(restored.toolName).toBe('request_mount')
+    expect(restored.agentId).toBe('agent-jim')
+    expect(restored.sessionId).toBe('sess-1')
+    // Bundle B3: the snapshot carries the FULL request — the same shape
+    // enqueue() builds from a live tool_approval_required frame — so the
+    // restored card is fully approvable, never a Deny-only stub.
+    expect(restored.toolCallId).toBe('call-unseen')
+    expect(restored.turnId).toBe('turn-unseen')
+    expect(restored.args).toEqual({ path: 'reports/q4.md', mode: 'append' })
+    expect(restored.segments).toEqual([{ segment_index: 0, command_text: 'Append to the Q4 report' }])
     // expires_in_ms is a RELATIVE delta from receipt, not an absolute
     // timestamp — expiresAt must be Date.now() + expires_in_ms, computed at
     // reconcile time, same conversion enqueue() uses for a live frame.
-    expect(stub.expiresAt).toBeGreaterThanOrEqual(before + 200_000)
-    expect(stub.expiresAt).toBeLessThanOrEqual(after + 200_000)
+    expect(restored.expiresAt).toBeGreaterThanOrEqual(before + 200_000)
+    expect(restored.expiresAt).toBeLessThanOrEqual(after + 200_000)
   })
 
-  it('adds stubs for multiple unseen approvals in the same frame', () => {
+  it('restores multiple unseen approvals in the same frame', () => {
     const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [
         {
           approval_id: 'appr-a',
+          tool_call_id: 'call-a',
+          turn_id: 'turn-a',
+          args: {},
           session_id: 'sess-1',
           tool_name: 'fetch_url',
           agent_id: 'agent-main',
@@ -77,6 +87,9 @@ describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
         },
         {
           approval_id: 'appr-b',
+          tool_call_id: 'call-b',
+          turn_id: 'turn-b',
+          args: {},
           session_id: 'sess-1',
           tool_name: 'bash',
           agent_id: 'agent-main',
@@ -106,6 +119,9 @@ describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
       pending_approvals: [
         {
           approval_id: 'appr-zero',
+          tool_call_id: 'call-zero',
+          turn_id: 'turn-zero',
+          args: {},
           session_id: 'sess-1',
           tool_name: 'request_mount',
           agent_id: 'agent-jim',
@@ -120,11 +136,11 @@ describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
     })
     const after = Date.now()
 
-    const stub = useToolApprovalStore.getState().queue[0]
-    expect(stub.expiresAt).toBeGreaterThanOrEqual(before)
-    expect(stub.expiresAt).toBeLessThanOrEqual(after)
+    const restored = useToolApprovalStore.getState().queue[0]
+    expect(restored.expiresAt).toBeGreaterThanOrEqual(before)
+    expect(restored.expiresAt).toBeLessThanOrEqual(after)
     // Nowhere near 1970 — the classic "forgot to add Date.now()" bug shape.
-    expect(stub.expiresAt).toBeGreaterThan(before - 1000)
+    expect(restored.expiresAt).toBeGreaterThan(before - 1000)
   })
 })
 
@@ -154,6 +170,9 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
       pending_approvals: [
         {
           approval_id: 'appr-live',
+          tool_call_id: 'call-live',
+          turn_id: 'turn-1',
+          args: { url: 'https://example.com' },
           session_id: 'sess-1',
           tool_name: 'fetch_url',
           agent_id: 'agent-main',
@@ -186,7 +205,7 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
     expect(queue[0].expiresAt).toBeGreaterThan(oldExpiresAt)
   })
 
-  it('handles a mix in one frame: refresh an existing entry AND stub a newly-reported one, with no duplicates', () => {
+  it('handles a mix in one frame: refresh an existing entry AND restore a newly-reported one, with no duplicates', () => {
     act(() => {
       useToolApprovalStore.setState({
         queue: [
@@ -210,6 +229,9 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
       pending_approvals: [
         {
           approval_id: 'appr-known',
+          tool_call_id: 'call-known',
+          turn_id: 'turn-known',
+          args: { url: 'https://example.com' },
           session_id: 'sess-1',
           tool_name: 'fetch_url',
           agent_id: 'agent-main',
@@ -217,6 +239,9 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
         },
         {
           approval_id: 'appr-unseen',
+          tool_call_id: 'call-unseen',
+          turn_id: 'turn-unseen',
+          args: { path: 'notes.txt' },
           session_id: 'sess-1',
           tool_name: 'request_mount',
           agent_id: 'agent-jim',
@@ -234,8 +259,12 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
     expect(queue).toHaveLength(2)
     const known = queue.find((a) => a.approvalId === 'appr-known')
     const unseen = queue.find((a) => a.approvalId === 'appr-unseen')
-    expect(known?.toolCallId).toBe('call-known') // refreshed, not stubbed
-    expect(unseen?.toolCallId).toBe('') // stubbed, not a live frame
+    expect(known?.toolCallId).toBe('call-known') // refreshed in place
+    // Bundle B3: the newly-reported entry restores its REAL identity from the
+    // snapshot — same full-restore contract as a fresh reconnect.
+    expect(unseen?.toolCallId).toBe('call-unseen')
+    expect(unseen?.turnId).toBe('turn-unseen')
+    expect(unseen?.args).toEqual({ path: 'notes.txt' })
   })
 
   it('still removes a queued approval the server no longer reports as pending', () => {
@@ -375,12 +404,15 @@ describe('L1 K7 / amendment §1.2 R6 — root/acting/origin metadata', () => {
     })
   })
 
-  it('L1 R6 / K7: optional root/name/origin survive thin snapshot hydration without deleting the B3 stub guard', () => {
+  it('L1 R6 / K7: optional root/name/origin survive snapshot hydration alongside the B3-required request identity', () => {
     const frame: SessionStateFrame = {
       type: 'session_state', user_id: 'user-1', emitted_at: '2026-10-14T09:00:00Z',
       pending_approvals: [{
         approval_id: 'appr-root-stub', tool_name: 'bash', agent_id: 'helper', session_id: 'helper-session',
         root_session_id: 'omnipus-main', acting_agent_name: 'Setup helper', origin_label: 'asked by Mia',
+        // Bundle B3: the request identity is REQUIRED on the snapshot — the
+        // pre-B3 "thin snapshot" literal is a contract violation now.
+        tool_call_id: 'call-root-stub', turn_id: 'turn-root-stub', args: { command: 'npm run build' },
         expires_in_ms: 600_000,
       }],
     }
@@ -388,7 +420,7 @@ describe('L1 K7 / amendment §1.2 R6 — root/acting/origin metadata', () => {
     expect(useToolApprovalStore.getState().queue).toHaveLength(1)
     expect(useToolApprovalStore.getState().queue[0]).toMatchObject({
       rootSessionId: 'omnipus-main', actingAgentName: 'Setup helper', originLabel: 'asked by Mia',
-      toolCallId: '', turnId: '', args: {}, // B3 is explicitly not this pack
+      toolCallId: 'call-root-stub', turnId: 'turn-root-stub', args: { command: 'npm run build' },
     })
   })
 

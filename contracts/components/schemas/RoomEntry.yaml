@@ -42,7 +42,6 @@ properties:
     maxLength: 5242880
   addressees:
     type: array
-    maxItems: 256
     items:
       type: string
       minLength: 1
@@ -55,7 +54,6 @@ properties:
       never forwards its mentions (§6.11).
   deliveries:
     type: array
-    maxItems: 256
     items:
       $ref: './RoomDeliveryState.yaml'
     description: Per-member delivery states for this entry. Never null.

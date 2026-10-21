@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/skills"
@@ -65,12 +67,20 @@ func (t *SkillCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Full SKILL.md content including YAML frontmatter.",
 			},
+			workspaceIDParam: map[string]any{
+				"type": "string",
+				"description": "Optional. The workspace whose project shelf gets the new skill (it needs exactly one " +
+					"mounted project folder). Unlike the other skill tools, omitting it does NOT mean the current " +
+					"workspace: it creates an installation-wide user skill available in every workspace. Only " +
+					"Omnipus may name a workspace other than its own.",
+			},
 		},
 		"required": []string{"name", "content"},
 	}
 }
 
-func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	name, _ := args["name"].(string)
 	content, _ := args["content"].(string)
 	if name == "" {
@@ -87,6 +97,17 @@ func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) *too
 			"skill writer not configured", "ensure the gateway is started with a valid workspace"))
 	}
 
+	target, refusal := resolveTargetWorkspace(t.deps, ctx, args)
+	if refusal != nil {
+		return refusal
+	}
+	// Ruling 2026-10-15 (WU-3 Q1): only an explicit workspace_id targets a
+	// project shelf; omitted, create_skill writes an installation-wide user
+	// skill — the documented exception to the contextual-workspace default.
+	if target.Explicit {
+		return t.createProjectSkill(ctx, target.ID, name, content)
+	}
+
 	path, revision, err := t.deps.SkillWriter.CreateSkillReviewed(name, content)
 	if err != nil {
 		return skillAuthoringError("create", name, err)
@@ -97,7 +118,7 @@ func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) *too
 	slog.Info("sysagent: create_skill wrote skill",
 		"event", "skill_authored", "action", "create", "name", name, "path", path)
 
-	return tools.NewToolResult(successJSON(map[string]any{
+	return skillWrittenResult(path, content, map[string]any{
 		"success":            true,
 		"name":               name,
 		"path":               path,
@@ -106,7 +127,71 @@ func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) *too
 		"persistence_status": "complete",
 		"activation_status":  "active",
 		"changed_fields":     []string{"content"},
-	}))
+	})
+}
+
+// projectSkillsDir is the recognised skills folder of a mounted project that
+// a new project skill goes into: the folder the project already uses
+// (.omnipus/skills, else .claude/skills), or .omnipus/skills when it has none.
+func projectSkillsDir(mountRoot string) string {
+	for _, rel := range []string{filepath.Join(".omnipus", "skills"), filepath.Join(".claude", "skills")} {
+		dir := filepath.Join(mountRoot, rel)
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			return dir
+		}
+	}
+	return filepath.Join(mountRoot, ".omnipus", "skills")
+}
+
+// createProjectSkill creates a project skill on the target workspace's shelf
+// (FR-042, BDD-4.8): <name>/SKILL.md in the recognised skills folder
+// (projectSkillsDir) of the workspace's one mounted project folder. A workspace with no mount, or with
+// several (the destination would be a guess), is refused before any write.
+func (t *SkillCreateTool) createProjectSkill(ctx context.Context, wsID, name, content string) *tools.ToolResult {
+	mounts, ok := workspacepkg.LoadMounts(t.deps.Home, wsID)
+	if !ok {
+		return tools.ErrorResult(errorJSON("READ_FAILED",
+			fmt.Sprintf("the project folders of workspace %q could not be read", wsID), "Retry, or check the workspace's folders"))
+	}
+	switch len(mounts) {
+	case 0:
+		return tools.ErrorResult(errorJSON("NO_PROJECT_FOLDER",
+			fmt.Sprintf("workspace %q has no mounted project folder to hold a project skill", wsID),
+			"Omit workspace_id to create a user skill, or mount a project folder in the workspace first"))
+	case 1:
+	default:
+		names := make([]string, 0, len(mounts))
+		for _, m := range mounts {
+			names = append(names, m.Name)
+		}
+		return tools.ErrorResult(errorJSON("AMBIGUOUS",
+			fmt.Sprintf("workspace %q has several mounted project folders (%s); the destination would be a guess",
+				wsID, strings.Join(names, ", ")),
+			"Create the skill in the project folder from the app, or omit workspace_id to create a user skill"))
+	}
+	writer := skills.NewSkillWriter(projectSkillsDir(mounts[0].HostPath))
+	path, revision, err := writer.CreateSkillReviewed(name, content)
+	if err != nil {
+		return skillAuthoringError("create", name, err)
+	}
+	tools.EmitSkillWriteAudit("project", t.Name(),
+		tools.ToolAgentID(ctx), tools.ToolTranscriptSessionID(ctx), wsID, path)
+	slog.Info("sysagent: create_skill wrote project skill",
+		"event", "skill_authored", "action", "create", "name", name, "path", path, "shelf", "project",
+		"mount", mounts[0].Name, "workspace_id", wsID)
+	return skillWrittenResult(path, content, map[string]any{
+		"success":            true,
+		"name":               name,
+		"path":               path,
+		"action":             "created",
+		"shelf":              "project",
+		"mount":              mounts[0].Name,
+		"workspace_id":       wsID,
+		"revision":           revision,
+		"persistence_status": "complete",
+		"activation_status":  "active",
+		"changed_fields":     []string{"content"},
+	})
 }
 
 // ---- edit_skill ----
@@ -139,13 +224,15 @@ func (t *SkillEditTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Full new SKILL.md content including YAML frontmatter.",
 			},
-			"revision": map[string]any{"type": "string", "description": "Revision returned by the reviewed skill read."},
+			"revision":       map[string]any{"type": "string", "description": "Revision returned by the reviewed skill read."},
+			workspaceIDParam: workspaceIDProperty("whose project skills are searched first (FR-042)"),
 		},
 		"required": []string{"name", "content", "revision"},
 	}
 }
 
-func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	name, _ := args["name"].(string)
 	content, _ := args["content"].(string)
 	revision, _ := args["revision"].(string)
@@ -169,6 +256,10 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 		return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
 			"skill loader not configured", "ensure the gateway is started with a valid workspace"))
 	}
+	target, refusal := resolveTargetWorkspace(t.deps, ctx, args)
+	if refusal != nil {
+		return refusal
+	}
 
 	// ADR-072 D6.1: a project skill — one discovered under a mounted
 	// repository's own .claude/skills or .omnipus/skills — is edited
@@ -176,29 +267,34 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 	// Resolve against the CURRENT TURN's workspace project shelf FIRST; only
 	// a slug absent from that shelf falls through to the ordinary
 	// global-root path below, unchanged.
-	if shelf := resolveProjectShelf(t.deps, ctx); shelf != nil {
+	shelf, shelfRefusal := resolveProjectShelf(t.deps, target.ID)
+	if shelfRefusal != nil {
+		return shelfRefusal
+	}
+	if shelf != nil {
 		if projWriter, ps, perr := skills.ResolveProjectSkillWriter(shelf, name); perr == nil {
 			path, _, nextRevision, editErr := projWriter.EditSkillReviewed(name, content, true, revision)
 			if editErr != nil {
 				return skillAuthoringError("edit", name, editErr)
 			}
 			tools.EmitSkillWriteAudit("project", t.Name(),
-				tools.ToolAgentID(ctx), tools.ToolTranscriptSessionID(ctx), tools.ToolWorkspaceID(ctx), path)
+				tools.ToolAgentID(ctx), tools.ToolTranscriptSessionID(ctx), target.ID, path)
 			slog.Info("sysagent: edit_skill wrote project skill",
 				"event", "skill_authored", "action", "edit", "name", name,
 				"path", path, "shelf", "project", "mount", ps.MountName)
-			return tools.NewToolResult(successJSON(map[string]any{
+			return skillWrittenResult(path, content, map[string]any{
 				"success":            true,
 				"name":               name,
 				"path":               path,
 				"action":             "edited",
 				"shelf":              "project",
 				"mount":              ps.MountName,
+				"workspace_id":       target.ID,
 				"revision":           nextRevision,
 				"persistence_status": "complete",
 				"activation_status":  "active",
 				"changed_fields":     []string{"content"},
-			}))
+			})
 		} else if !errors.Is(perr, skills.ErrNotFound) {
 			// ErrProjectWriteEscapesMount or another shelf-integrity problem —
 			// not "no such project skill". Surface it rather than silently
@@ -247,7 +343,7 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 	if createdOverride {
 		action = "override_created"
 	}
-	return tools.NewToolResult(successJSON(map[string]any{
+	return skillWrittenResult(path, content, map[string]any{
 		"success":            true,
 		"name":               name,
 		"path":               path,
@@ -257,7 +353,24 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 		"persistence_status": "complete",
 		"activation_status":  "active",
 		"changed_fields":     []string{"content"},
-	}))
+	})
+}
+
+// skillWrittenResult renders a create_skill / edit_skill result with its FR-030
+// verdict. The check is the existing activation check: the written SKILL.md is
+// read back from the path the writer reports and must equal the submitted
+// content (the writer already validated it against the loader contract).
+func skillWrittenResult(path, content string, fields map[string]any) *tools.ToolResult {
+	const scope = "SKILL.md validated against the loader contract and read back from disk"
+	notTested := []string{"an agent loading and running the skill"}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		return changeSuccess(fields, savedNotWorking("the written skill could not be read back: "+err.Error(), scope, notTested...))
+	}
+	if string(got) != content {
+		return changeSuccess(fields, savedNotWorking("the skill read back differs from what was written", scope, notTested...))
+	}
+	return changeSuccess(fields, working(scope, notTested...))
 }
 
 // resolveProjectShelf builds the ADR-072 D4.1 project shelf (skill.Skill
@@ -267,7 +380,7 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 // this installation's default workspace when the call carries none, mirroring
 // pkg/agent/loop_env.go's wireDelegationInjectors/wireProjectShelfResolvers
 // fallback exactly. Returns nil (no project shelf) when no workspace
-// resolves, its mount record is unreadable, or it simply has no mounts — the
+// resolves or it simply has no mounts — the
 // authoring tools' existing global-root SkillWriter/SkillInstaller path is
 // then unaffected, exactly as before this fix (D6: "silent when there is
 // nothing to find").
@@ -279,36 +392,59 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 // for the agent's own ContextBuilder, computed independently here because
 // sysagent tools have no access to a live ContextBuilder from inside
 // Execute.
-func resolveProjectShelf(deps *Deps, ctx context.Context) skills.ProjectShelf {
-	shelf, _ := resolveProjectShelfWithCollisions(deps, ctx)
-	return shelf
+//
+// WU-3 (FR-040, FR-042): the workspace is now the call's resolved target
+// (resolveTargetWorkspace — the explicit workspace_id or the contextual
+// workspace), passed in rather than read from ctx here.
+//
+// An unreadable mount record is NOT "no project shelf" (silent-failure-hunter
+// SF-01): it returns a shelfReadFailure refusal, because the workspace may
+// hold a project copy of the slug and falling back to the global writer would
+// change a different, possibly byte-identical, skill.
+func resolveProjectShelf(deps *Deps, wsID string) (skills.ProjectShelf, *tools.ToolResult) {
+	shelf, _, refusal := resolveProjectShelfWithCollisions(deps, wsID, "")
+	return shelf, refusal
 }
 
-func resolveProjectShelfWithCollisions(deps *Deps, ctx context.Context) (skills.ProjectShelf, []skills.SlugCollision) {
+func resolveProjectShelfWithCollisions(deps *Deps, wsID, name string) (skills.ProjectShelf, []skills.SlugCollision, *tools.ToolResult) {
 	if deps == nil || strings.TrimSpace(deps.Home) == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	home := deps.Home
 
-	wsID := strings.TrimSpace(tools.ToolWorkspaceID(ctx))
+	wsID = strings.TrimSpace(wsID)
 	if wsID == "" {
 		def, err := workspacepkg.ResolveDefaultID(home)
 		if err != nil || def == "" {
-			return nil, nil
+			return nil, nil, nil
 		}
 		wsID = def
 	}
 
-	mounts, ok := workspacepkg.LoadMounts(home, wsID)
-	if !ok || len(mounts) == 0 {
-		return nil, nil
+	mounts, ok, dropped := workspacepkg.LoadMountsWithDropStatus(home, wsID)
+	if !ok || dropped {
+		return nil, nil, tools.ErrorResult(errorJSON("READ_FAILED",
+			fmt.Sprintf("the project folders of workspace %q could not be read completely, so its project skills are unknown", wsID),
+			"Repair the workspace's folders in the app, then read the skill again before retrying"))
+	}
+	if len(mounts) == 0 {
+		return nil, nil, nil
 	}
 
 	pm := make([]skills.ProjectMount, 0, len(mounts))
 	for _, m := range mounts {
 		pm = append(pm, skills.ProjectMount{Name: m.Name, Root: m.HostPath})
 	}
-	return skills.MergeProjectSkills(pm)
+	// Only a complete scan of the requested scope may prove a slug absent:
+	// named reads inspect that slug in every project; writes and full listings
+	// pass an empty name and still require a complete shelf scan.
+	shelf, collisions, err := skills.LookupProjectSkillChecked(pm, name)
+	if err != nil {
+		return nil, nil, tools.ErrorResult(errorJSON("READ_FAILED",
+			fmt.Sprintf("the project skills of workspace %q could not be inspected: %v", wsID, err),
+			"Restore access to the project folder, then read the skill again before retrying"))
+	}
+	return shelf, collisions, nil
 }
 
 // skillExistsOnLoadPath reports whether a skill of the given name is resolvable

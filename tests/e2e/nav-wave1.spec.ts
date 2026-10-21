@@ -73,8 +73,18 @@ test('phone Sessions titles wrap above metadata and keep same-prefix chats disti
 })
 
 test('a built-in agent shows locked figure, role and colour and no upload', async ({ page }) => {
-  await page.goto('/#/agents')
-  await page.getByTestId('agent-card-mia').click()
+  // WU-11 (FR-108): the Agents screen is retired — the SAME locked-identity
+  // editor opens from the default workspace's Team panel card menu.
+  const wsList = await page.request.get('/api/v1/workspaces')
+  expect(wsList.ok()).toBeTruthy()
+  const def = ((await wsList.json()) as Array<{ id?: string; is_default?: boolean }>).find(
+    (workspace) => workspace.is_default === true,
+  )
+  expect(def?.id, 'no default workspace to open the Team panel in').toBeTruthy()
+  await page.goto(`/#/workspaces/${def!.id}/chat?panel=team`)
+  await expect(page.getByTestId('team-card-actions-mia')).toBeVisible({ timeout: 20_000 })
+  await page.getByTestId('team-card-actions-mia').click()
+  await page.getByRole('button', { name: 'Edit Mia' }).click()
   // The ONE avatar editor is AgentLookPicker (founder 2026-10-10, "pick by
   // picture"): role is a single searchable dropdown, the look is five figure
   // thumbnails, the colour is the founder's ten metallic dots

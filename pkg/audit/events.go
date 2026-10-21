@@ -540,6 +540,14 @@ const (
 	// filenames, bytes_freed, count}. Same shape convention as
 	// EventMediaDelete / workspace.delete.
 	EventMediaCascadeDelete = "media.cascade_delete"
+
+	// EventRoomChanged — INFO. A group chat (room) was created, its
+	// membership or mutes changed, its team room followed a workspace team
+	// change, or it was deleted (omnipus-system-agent FR-172). Emitted by
+	// pkg/gateway/rooms_runtime.go for pkg/rooms. User = the authenticated web
+	// user (empty for a change driven by a workspace edit). Fields:
+	// {room_id, workspace_id, action, agent_ids}.
+	EventRoomChanged = "room.changed"
 )
 
 // ---------------------------------------------------------------------------
@@ -611,6 +619,14 @@ const (
 	// tool.policy.deny.attempted entry (via emitPolicyDenyAudit's extra Details
 	// map) and on the structured INFO log line in emitScheduledAutoDenyAudit.
 	AskDenyReasonScheduled AskDenyReason = "scheduled"
+
+	// AskDenyReasonTaskRun — the call ran in a task or plan session chain
+	// (#1263 R4): task and plan runs, whatever started them, never ask a
+	// person, so an Ask-policy call that Auto, an operator rule or a standing
+	// grant did not settle is refused at once. Distinct from
+	// AskDenyReasonScheduled so a task refusal never reads as a cron job with
+	// missing identity.
+	AskDenyReasonTaskRun AskDenyReason = "task_run"
 )
 
 // IsValidAskDenyReason reports whether `r` is one of the known enum values
@@ -623,7 +639,8 @@ func IsValidAskDenyReason(r AskDenyReason) bool {
 		AskDenyReasonRestart,
 		AskDenyReasonSaturated,
 		AskDenyReasonBatchShortCircuit,
-		AskDenyReasonScheduled:
+		AskDenyReasonScheduled,
+		AskDenyReasonTaskRun:
 		return true
 	}
 	return false

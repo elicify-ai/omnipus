@@ -351,6 +351,12 @@ type TranscriptEntry struct {
 	// reply_to_participant live, on replay and in REST.
 	Participant        *generated.ChatParticipant `json:"participant,omitempty"`
 	ReplyToParticipant *generated.ChatParticipant `json:"reply_to_participant,omitempty"`
+	// RoomRef marks a main-session entry that is group-chat traffic
+	// (omnipus-system-agent K33, FR-202, FR-215): the room's request to this
+	// agent (role "request") or this agent's answer into the room (role
+	// "answer"). Server-stamped display and navigation data only; it grants
+	// nothing. Projected as room_ref live, on replay and in REST.
+	RoomRef *generated.RoomRef `json:"room_ref,omitempty"`
 	// Model records which model produced this assistant message. Populated
 	// on every assistant message written via pkg/agent/turn.go (FR-013).
 	// Empty for legacy turns written before this field existed; the UI

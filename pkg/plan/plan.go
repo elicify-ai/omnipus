@@ -700,7 +700,7 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	Owner string `json:"owner,omitempty"`
 	// CreatedBy is WHO authored the plan — a human username (REST/UI) or an
 	// agent ID (create_plan tool). A name from two namespaces with no
-	// discriminator: a human "admin" also resolves to the Admin agent, so
+	// discriminator: a username can equal an agent id, so
 	// CreatedByKind is the gate-authoritative discriminator and this field
 	// is display + attribution only.
 	CreatedBy string `json:"created_by,omitempty"`

@@ -346,7 +346,7 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 				_ = cmd.Process.Kill()
 			}
 			_ = cmd.Wait()
-			return setupStartAbortResult(plan.area, fmt.Sprintf("sandbox post-start hardening failed: %v", err))
+			return setupPostStartAbortResult(plan.area, fmt.Sprintf("sandbox post-start hardening failed: %v", err))
 		}
 	}
 
@@ -440,19 +440,19 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 		pub := t.publishTarget(plan, plan.area, naturalExit, finalExitCode)
 
 		completion := backgroundCompletionResult(session.ID, effectiveStatus, finalExitCode, outputSoFar)
-		// The command's OWN failure (nonzero natural exit) is an error
-		// result: backgroundCompletionResult reports any natural exit as
-		// "finished", but the environment_setup contract is exit 0 = command
-		// success only — a nonzero exit must not fold into a clean result.
-		if effectiveStatus == StatusDone && finalExitCode != 0 {
-			completion.IsError = true
-		}
-		switch pub.outcome {
-		case "commit_failed", "abort_failed":
+		// One terminal verdict and error classification (setupTerminalVerdict),
+		// shared with every later poll/read/kill of this session: exit 0 is
+		// command success only, and a failed publication or cleanup is an
+		// error even after exit 0.
+		o, isError, done := setupTerminalVerdict(string(effectiveStatus), finalExitCode, pub.outcome)
+		if isError {
 			completion.IsError = true
 		}
 		notice := t.setupCompletionNotice(plan, pub)
 		completion.ForLLM += notice
+		if done {
+			completion.ForLLM += "\n\nOutcome: " + marshalResult(o.Into(map[string]any{}))
+		}
 		if completion.ForUser != "" {
 			completion.ForUser += notice
 		}
@@ -534,6 +534,7 @@ func (t *EnvironmentSetupTool) persistCompletionOutcome(session *ProcessSession,
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	session.resultNote = t.setupPollNote(pub)
+	session.publication = pub.outcome
 	if !session.outputTruncated {
 		session.outputBuffer.WriteString(notice)
 	}
@@ -550,9 +551,27 @@ func (t *EnvironmentSetupTool) persistCompletionOutcome(session *ProcessSession,
 // is the only result the caller can use to inspect the partial effect.
 func setupStartAbortResult(area EnvironmentSetupTarget, cause string) *ToolResult {
 	if err := area.Abort(); err != nil {
-		return ErrorResult(cause + "; staging cleanup FAILED: " + err.Error())
+		// FR-030: the allocated area could not be cleaned up — a side effect
+		// is proven, so this is never "failed: nothing saved".
+		msg := cause + "; staging cleanup FAILED: " + err.Error()
+		return ChangeErrorResult(map[string]any{"error": msg, "changed_fields": []string{"installation area"}},
+			ChangePartlySaved(msg, "", []string{"installation area cleanup"}))
 	}
 	return ErrorResult(cause)
+}
+
+// setupPostStartAbortResult is setupStartAbortResult for a failure AFTER the
+// installer process started: it ran, however briefly, so side effects are not
+// proven absent (FR-030).
+func setupPostStartAbortResult(area EnvironmentSetupTarget, cause string) *ToolResult {
+	res := setupStartAbortResult(area, cause)
+	var m map[string]any
+	if json.Unmarshal([]byte(res.ForLLM), &m) == nil && m["outcome"] != nil {
+		return res
+	}
+	msg := cause + "; the installer process had started, so side effects are not proven absent"
+	return ChangeErrorResult(map[string]any{"error": msg, "changed_fields": []string{}},
+		ChangePartlySaved(msg, "", []string{"a successful installation"}))
 }
 
 // setupPublication is the outcome record publishTarget returns: the outcome
@@ -730,7 +749,7 @@ func (t *EnvironmentSetupTool) executePoll(ctx context.Context, args map[string]
 		Status:    session.GetStatus(),
 		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := json.Marshal(resp)
+	data, marshalErr := marshalSetupStatus(resp, session.Publication())
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal poll response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -754,8 +773,9 @@ func (t *EnvironmentSetupTool) executeRead(ctx context.Context, args map[string]
 		SessionID: sessionID,
 		Output:    output,
 		Status:    session.GetStatus(),
+		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := json.Marshal(resp)
+	data, marshalErr := marshalSetupStatus(resp, session.Publication())
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal read response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -801,7 +821,7 @@ func (t *EnvironmentSetupTool) sessionActionResult(sessionID string, session *Pr
 		Status:    status,
 		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := json.Marshal(resp)
+	data, marshalErr := marshalSetupStatus(resp, session.Publication())
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal session action response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -818,4 +838,69 @@ func (t *EnvironmentSetupTool) sessionActionResult(sessionID string, session *Pr
 		result.ForLLM += "\n\n" + note
 	}
 	return result
+}
+
+// environmentSetupOutcome is the FR-030 verdict of a FINISHED installation
+// (chief ruling Q3, 2026-10-15; ADR-090: exit 0 is command success, not
+// readiness). A session still running has no verdict (ok=false).
+func environmentSetupOutcome(status string, exitCode int) (ChangeOutcome, bool) {
+	const scope = "installer command exit status"
+	switch SessionStatus(status) {
+	case StatusDone:
+		if exitCode == 0 {
+			return ChangeWorking("installer command exited 0", "readiness inside the agent's sandbox"), true
+		}
+		return ChangePartlySaved(fmt.Sprintf("installer exited %d; side effects not proven absent", exitCode),
+			scope, []string{"a successful installation"}, "readiness inside the agent's sandbox"), true
+	case StatusKilled, StatusTimeout, StatusCanceled:
+		return ChangePartlySaved(fmt.Sprintf("installer was %s before it finished (exit %d); side effects not proven absent",
+			status, exitCode), scope, []string{"a successful installation"}, "readiness inside the agent's sandbox"), true
+	}
+	return ChangeOutcome{}, false
+}
+
+// setupTerminalVerdict is THE terminal verdict of an installation and its
+// error classification, used by the completion and by every later
+// poll/read/kill so they never disagree (WU-3 IM-02/SF-06): the
+// exit-status verdict (environmentSetupOutcome), overridden to "partly saved"
+// when the installation area could not be published or cleaned up. A run that
+// has not finished has no verdict (done=false).
+func setupTerminalVerdict(status string, exitCode int, publication string) (o ChangeOutcome, isError, done bool) {
+	o, done = environmentSetupOutcome(status, exitCode)
+	if !done {
+		return ChangeOutcome{}, false, false
+	}
+	isError = SessionStatus(status) == StatusDone && exitCode != 0
+	switch publication {
+	case "commit_failed", "abort_failed":
+		o = ChangePartlySaved("the installer finished but the installation area could not be "+
+			"published or cleaned up; side effects not proven absent", o.CheckScope,
+			[]string{"published installation area"}, o.NotTested...)
+		isError = true
+	}
+	return o, isError, true
+}
+
+// marshalSetupStatus renders a poll/read/kill status; a finished session also
+// carries the FR-030 outcome fields of setupTerminalVerdict — the same verdict
+// the completion gave. The status action itself succeeded, so its result is
+// not an error (IsError means the poll/read/kill failed); the installation's
+// verdict is in the outcome fields.
+func marshalSetupStatus(resp ExecResponse, publication string) ([]byte, error) {
+	o, _, done := setupTerminalVerdict(resp.Status, resp.ExitCode, publication)
+	if !done {
+		return json.Marshal(resp)
+	}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	// exitCode is omitempty on the shared response type; a finished
+	// installation always states it, 0 included.
+	m["exitCode"] = resp.ExitCode
+	return json.Marshal(o.Into(m))
 }

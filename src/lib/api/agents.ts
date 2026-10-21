@@ -145,9 +145,9 @@ export function createAgent(data: AgentCreateRequest): Promise<Agent> {
 // (founder bug 2026-10-11): the sidebar roster is membership-driven
 // (workspaceRoster.ts::memberRoster reads the workspace's core_team +
 // member_configs), so invalidating only ['agents'] left a newly created
-// Main agent's sidebar row waiting for the 30 s workspaces poll. Both the
-// create dialog (CreateAgentModal.tsx onSuccess) and the WS 'agent_created'
-// frame (frames.ts) call this — nobody re-copies the key set.
+// Main agent's sidebar row waiting for the 30 s workspaces poll. The WS
+// 'agent_created' frame (frames.ts) calls this — nobody re-copies the key
+// set. (The app has no create form; Omnipus creates agents, FR-108.)
 //
 // The list keys are spelled per status on purpose: workspacesQueryKeys.list()
 // with NO params produces ['workspaces', undefined], which matches ZERO

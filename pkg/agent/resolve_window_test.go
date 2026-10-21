@@ -529,13 +529,13 @@ func TestResolveContextWindow_ByLocality(t *testing.T) {
 }
 
 // TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive — spec test 3b
-// (B-05b; FR-005b / A-18). DS-4 row 16: W = 8,192, max_tokens = 8,192 →
-// effective max_tokens = 2,048, one WARN naming the model, B > 0.
+// (B-05b; FR-005b / A-18). Founder minimum 2026-10-21: W = 16,384,
+// max_tokens = 16,384 → 4,096, one WARN naming the model, B > 0.
 func TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive(t *testing.T) {
 	installWindowTestCatalog(t, 1_048_576)
 	installLiveWindowStub(t, func(provider, _, _ string) (int, bool) {
 		if provider == "ollama" {
-			return 8192, true
+			return 16_384, true
 		}
 		return 0, false
 	})
@@ -560,26 +560,46 @@ func TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive(t *testing.T) {
 		return cfg
 	}
 
-	t.Run("DS-4 #16 8,192 / 8,192 → 2,048 + one WARN", func(t *testing.T) {
+	t.Run("DS-4 #16 16,384 / 16,384 → 4,096 + one WARN", func(t *testing.T) {
 		readLog := captureLogFile(t, logger.WARN)
-		cfg := newCfg(t, 8192)
+		cfg := newCfg(t, 16_384)
 		agent := NewAgentInstance(&cfg.Agents.List[0], &cfg.Agents.Defaults, cfg, &mockProvider{})
-		assert.Equal(t, 8192, agent.ContextWindow)
+		assert.Equal(t, 16_384, agent.ContextWindow)
 		assert.Equal(t, WindowSourceLive, agent.WindowSource)
-		assert.Equal(t, 2048, agent.MaxTokens)
-		assert.Positive(t, agentContextBudget(agent), "B must be > 0 after the clamp")
+		assert.Equal(t, 4_096, agent.MaxTokens)
+		assert.Positive(t, agentContextBudget(agent), "B must be > 0 after the clamp at the supported minimum")
 		log := readLog()
 		assert.Contains(t, log, "llama3:8b", "the WARN names the model")
-		assert.Contains(t, log, "8192")
-		assert.Contains(t, log, "2048")
+		assert.Contains(t, log, "16384")
+		assert.Contains(t, log, "4096")
 	})
 
 	t.Run("a max_tokens that leaves B > 0 is left alone", func(t *testing.T) {
 		cfg := newCfg(t, 1024)
 		agent := NewAgentInstance(&cfg.Agents.List[0], &cfg.Agents.Defaults, cfg, &mockProvider{})
-		assert.Equal(t, 8192, agent.ContextWindow)
+		assert.Equal(t, 16_384, agent.ContextWindow)
 		assert.Equal(t, 1024, agent.MaxTokens)
 		assert.Positive(t, agentContextBudget(agent))
+	})
+
+	t.Run("below the supported minimum preserves the reported capability", func(t *testing.T) {
+		// Characterization: support starts at 16,384, but the resolver does not
+		// invent a minimum-window refusal or inflate a known smaller window.
+		// FR-005b's existing floor(W/4) still applies: floor(16,383/4)=4,095.
+		installLiveWindowStub(t, func(provider, _, _ string) (int, bool) {
+			if provider == "ollama" {
+				return 16_383, true
+			}
+			return 0, false
+		})
+		cfg := newCfg(t, 16_383)
+		resolved := ResolveWindow(cfg, "ollama", "llama3:8b", "mia")
+		assert.Equal(t, WindowResolution{Window: 16_383, Source: WindowSourceLive}, resolved)
+		agent := NewAgentInstance(&cfg.Agents.List[0], &cfg.Agents.Defaults, cfg, &mockProvider{})
+		assert.Equal(t, 16_383, agent.ContextWindow)
+		assert.Equal(t, WindowSourceLive, agent.WindowSource)
+		assert.Equal(t, 4_095, agent.MaxTokens)
+		// No positive-budget/turn-readiness promise below the supported minimum.
 	})
 }
 

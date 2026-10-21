@@ -956,6 +956,8 @@ behind each *category* of move, which is what a future reader needs:
 
 ### 4.3 The accepted risk, stated plainly
 
+Superseded 2026-10-21 (founder): agent-folder AGENT.md/AGENTS.md/IDENTITY.md and the per-request skill reminder were removed; see PR #1400.
+
 **Tier 3 is now the largest tier: 63 of the 71 lazy tools, 71% of the whole catalog, become
 invisible by default.** Before this change every one of those 63 was one free preview line away and
 cost the agent nothing to notice. After it, an agent that does not already suspect a capability

@@ -16,7 +16,7 @@ package tools
 //	4. Admin targeting a workspace with no record is refused (no host-path
 //	   probing via workspaces/), BEFORE allocation.
 //	5. Path-shaped targets never resolve, even for Admin, BEFORE allocation.
-//	6. scope=shared + explicit target_workspace is refused BEFORE allocation
+//	6. scope=shared + explicit workspace_id is refused BEFORE allocation
 //	   (the target selects a workspace-scope destination).
 //	7. Admin first-use: a workspace record with no work/ dir yet is prepared
 //	   (sanctioned workspace.EnsureWorkDir) and the install targets it —
@@ -115,7 +115,7 @@ func TestEnvironmentSetupTarget_AdminCrossWorkspace_TargetsWorkDir(t *testing.T)
 	// Admin's own turn context is admin-home: no beta membership anywhere.
 	ctx := newTargetTestContext("admin-home", filepath.Join(home, "workspaces", "admin-home"))
 	a := targetRunArgs()
-	a["target_workspace"] = "beta"
+	a["workspace_id"] = "beta"
 	res := tool.Execute(ctx, a)
 
 	// Resolution PASSED (began 1); the fake store then refused allocation —
@@ -149,7 +149,7 @@ func TestEnvironmentSetupTarget_AdminInstallMatchesMemberDefaultLookup(t *testin
 	adminCtx := newTargetTestContext("admin-home", filepath.Join(home, "workspaces", "admin-home"))
 	adminRes := adminTool.Execute(adminCtx, func() map[string]any {
 		a := targetRunArgs()
-		a["target_workspace"] = "beta"
+		a["workspace_id"] = "beta"
 		return a
 	}())
 	require.Equal(t, 1, adminStore.began, "Admin leg must reach allocation; result: %s", adminRes.ForLLM)
@@ -175,12 +175,12 @@ func TestEnvironmentSetupTarget_NonAdmin_OtherWorkspace_BlockedBeforeAllocation(
 
 	ctx := newTargetTestContext("alpha", filepath.Join(home, "workspaces", "alpha"))
 	a := targetRunArgs()
-	a["target_workspace"] = "beta"
+	a["workspace_id"] = "beta"
 	res := tool.Execute(ctx, a)
 
 	require.True(t, res.IsError)
 	assert.Equal(t, 0, store.began, "unauthorized target must be refused BEFORE allocation")
-	assert.Contains(t, res.ForLLM, "target_workspace")
+	assert.Contains(t, res.ForLLM, "workspace_id")
 	assert.Contains(t, res.ForLLM, "only Omnipus can target another workspace")
 }
 
@@ -191,7 +191,7 @@ func TestEnvironmentSetupTarget_Admin_NonexistentWorkspace_Refused(t *testing.T)
 
 	ctx := newTargetTestContext("admin-home", filepath.Join(home, "workspaces", "admin-home"))
 	a := targetRunArgs()
-	a["target_workspace"] = "ghostws"
+	a["workspace_id"] = "ghostws"
 	res := tool.Execute(ctx, a)
 
 	require.True(t, res.IsError)
@@ -207,11 +207,11 @@ func TestEnvironmentSetupTarget_Admin_PathShapedTarget_NeverResolves(t *testing.
 	ctx := newTargetTestContext("admin-home", filepath.Join(home, "workspaces", "admin-home"))
 	for _, bad := range []string{"/tmp/omnipus-evil", "../outside", "sub/dir", ".", ".."} {
 		a := targetRunArgs()
-		a["target_workspace"] = bad
+		a["workspace_id"] = bad
 		res := tool.Execute(ctx, a)
 		require.True(t, res.IsError, "path-shaped target %q must be refused", bad)
 		assert.Equal(t, 0, store.began, "path-shaped target %q must never reach allocation", bad)
-		assert.Contains(t, res.ForLLM, "target_workspace", bad)
+		assert.Contains(t, res.ForLLM, "workspace_id", bad)
 	}
 }
 
@@ -228,7 +228,7 @@ func TestEnvironmentSetupTarget_Admin_FirstUse_WorkDirEnsured(t *testing.T) {
 
 	ctx := newTargetTestContext("admin-home", filepath.Join(home, "workspaces", "admin-home"))
 	a := targetRunArgs()
-	a["target_workspace"] = "beta"
+	a["workspace_id"] = "beta"
 	res := tool.Execute(ctx, a)
 
 	require.Equal(t, 1, store.began, "Admin first-use must reach allocation; result: %s", res.ForLLM)
@@ -253,7 +253,7 @@ func TestEnvironmentSetupTarget_Admin_RealStorage_VisibleToMemberLookup(t *testi
 
 	ctx := newTargetTestContext("admin-home", filepath.Join(home, "workspaces", "admin-home"))
 	a := targetRunArgs()
-	a["target_workspace"] = "beta"
+	a["workspace_id"] = "beta"
 	res := tool.Execute(ctx, a)
 	require.Equal(t, 1, store.began, "resolution must pass; result: %s", res.ForLLM)
 
@@ -287,10 +287,10 @@ func TestEnvironmentSetupTarget_SharedScope_ExplicitTarget_Refused(t *testing.T)
 	ctx := newTargetTestContext("admin-home", filepath.Join(home, "workspaces", "admin-home"))
 	a := targetRunArgs()
 	a["scope"] = "shared"
-	a["target_workspace"] = "beta"
+	a["workspace_id"] = "beta"
 	res := tool.Execute(ctx, a)
 
 	require.True(t, res.IsError)
 	assert.Equal(t, 0, store.began, "shared scope with an explicit target must be refused BEFORE allocation")
-	assert.Contains(t, res.ForLLM, "target_workspace")
+	assert.Contains(t, res.ForLLM, "workspace_id")
 }

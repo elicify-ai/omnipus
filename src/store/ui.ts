@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import { generateId } from '@/lib/constants'
-import type { WizardCli, WizardType } from '@/components/agents/wizard/types'
 import type { ActivePanel, OpenPanel, PanelOpenArgs } from '@/components/panel-shell/types'
 import { capturePanelTriggerOrigin } from '@/components/panel-shell/panelFocus'
 
@@ -8,7 +7,10 @@ export interface Toast {
   id: string
   message: string
   variant: 'default' | 'error' | 'success' | 'warning'
+  /** Zero keeps the notice until explicitly dismissed. Omitted defaults to 4s. */
   duration?: number
+  /** Omitted for global toasts; history information belongs to its own chat. */
+  sessionId?: string
   testId?: string
   /** Optional primary action rendered inside the toast. */
   action?: {
@@ -55,40 +57,13 @@ interface UiStore {
   requestActivityPanel: (sessionId: string) => void
   consumeActivityPanelRequest: (sessionId: string) => void
 
-  // Create agent modal
-  createAgentModalOpen: boolean
-  /**
-   * Lifecycle preset for the create-agent modal. Controls which wizard branch
-   * the modal renders and which `type` value the create request sends. Reset
-   * to 'Main' on every close so the next open defaults back to the chat-agent
-   * shape unless an explicit opener (e.g. the per-section "+ Add" buttons on
-   * the Agents screen, W6) sets it again.
-   *
-   * W4 (agent-form-requirements): widened from `'custom' | 'worker'` (the
-   * legacy 2-tier enum) to the 3-type wire enum (`Main` / `Subagent` /
-   * `subagent_3p`). The store is the single source of truth for the wizard's
-   * locked type; the modal renders the corresponding wizard branch.
-   */
-  createAgentModalType: 'Main' | 'Subagent' | 'subagent_3p'
-  /**
-   * CLI choice for the create-agent modal. Only meaningful when
-   * `createAgentModalType === 'subagent_3p'` — wizard pre-fills the executor
-   * CLI chip (Step 1) and the executor.cli path (Step 3). Reset to `null`
-   * on every close so the next open defaults back to the bare subagent_3p
-   * shape unless an explicit opener (e.g. the per-CLI "+ Add" button on the
-   * Agents roster, W6) sets it again. W4 of agent-form-requirements added
-   * the second optional parameter to `openCreateAgentModal`.
-   */
-  createAgentModalCli: WizardCli | null
-  openCreateAgentModal: (type?: WizardType, cli?: WizardCli) => void
-  closeCreateAgentModal: () => void
 
   // Edit/view agent slide-over; null = closed.
   editAgentId: string | null
   /**
    * The workspace that opened the agent slide-over. Set when the editor is
-   * opened from a workspace Team tab (FR-018 / A5); null when opened from
-   * the global Agents screen. Drives the conditional Heartbeat tab
+   * opened from a workspace Team tab (FR-018 / A5); null when opened without
+   * a workspace (Settings → System agents). Drives the conditional Heartbeat tab
    * (US-5 / FR-016): the tab renders only when this is non-null AND the
    * agent is not a worker (FR-025).
    */
@@ -99,7 +74,7 @@ interface UiStore {
    * @param agentId - The agent to edit.
    * @param workspaceId - When provided (opened from a workspace Team tab),
    *   the Heartbeat tab is shown for this (workspace, agent) pair. When
-   *   omitted (opened from the global Agents screen), no Heartbeat tab.
+   *   omitted (opened without a workspace), no Heartbeat tab.
    */
   openEditAgentSlideOver: (agentId: string, workspaceId?: string) => void
   closeEditAgentSlideOver: () => void
@@ -232,21 +207,6 @@ export const useUiStore = create<UiStore>((set, get) => ({
     if (get().activityPanelRequest === sessionId) set({ activityPanelRequest: null })
   },
 
-  createAgentModalOpen: false,
-  createAgentModalType: 'Main',
-  createAgentModalCli: null,
-  openCreateAgentModal: (type, cli) =>
-    set({
-      createAgentModalOpen: true,
-      createAgentModalType: type ?? 'Main',
-      createAgentModalCli: cli ?? null,
-    }),
-  closeCreateAgentModal: () =>
-    set({
-      createAgentModalOpen: false,
-      createAgentModalType: 'Main',
-      createAgentModalCli: null,
-    }),
 
   editAgentId: null,
   editAgentWorkspaceId: null,
@@ -265,6 +225,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
     const id = generateId()
     set((state) => ({ toasts: [...state.toasts, { ...toast, id }] }))
     const duration = toast.duration ?? 4000
+    if (duration === 0) return
     const timer = setTimeout(() => {
       get().removeToast(id)
       toastTimers.delete(id)

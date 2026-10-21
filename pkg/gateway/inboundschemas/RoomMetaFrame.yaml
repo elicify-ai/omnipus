@@ -32,14 +32,12 @@ properties:
     minimum: 1
   members:
     type: array
-    maxItems: 256
     items:
       type: string
       minLength: 1
       maxLength: 128
   muted:
     type: array
-    maxItems: 256
     items:
       type: string
       minLength: 1

@@ -2657,7 +2657,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a workspace by ID */
+        /**
+         * Get a workspace by ID
+         * @description Reads the workspace and makes one idempotent main-chat preparation attempt for each currently eligible member. A preparation failure does not undo saved membership or fail the workspace read: that member has main_session_error instead of main_session_id. Repeating this read retries preparation after storage is repaired; unreadable or mismatched saved identities are never replaced.
+         */
         get: operations["getWorkspace"];
         /** Update a workspace (partial update — absent fields unchanged) */
         put: operations["updateWorkspace"];
@@ -4017,7 +4020,7 @@ export interface paths {
         };
         /**
          * List a workspace's rooms
-         * @description Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+         * @description Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md). A storage or read failure is an explicit 500 with the error body, never 200 with an empty list (#1314).
          */
         get: operations["listWorkspaceRooms"];
         put?: never;
@@ -4083,7 +4086,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Read a backward page of room history
+         * @description #1332. Read the complete retained transcript, including entries older than the newest 10,000 returned by attach. With before_seq omitted, select the newest page including the newest entry. Otherwise select only entries with seq strictly less than before_seq. Return the newest limit eligible entries in strictly ascending seq order. A cursor need not equal an entry sequence; gaps do not prove that older entries exist.
+         *     The newest entry sequence is the greatest actual entry seq in the room at the locked read, or 0 for an empty room, not the room stream's high-water sequence. A cursor greater than that entry sequence is a 400, never clamped. Select entries, continuation and delivery projections from the same room-locked view. Paging does not change entries, membership, the live stream cursor or the forward attach subscription.
+         *     Uses exactly the existing authenticated room-read access and room-open path. Authenticate first, validate limit, validate before_seq syntax, open the room, then check the cursor's room-dependent upper bound. Query rules apply with inbound validation enabled or disabled. Missing, invalid or deleted rooms and missing workspaces return the existing 404 ErrorResponse with error "no such group chat". Paused, read-only and hidden-but-not-deleted rooms remain readable while the room and workspace exist. Storage/recovery failures remain errors, normally 500, never successful empty pages. No new reader-membership model or 403.
+         *     Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 400 {"error":"limit must be an integer from 1 to 1000"}. Invalid, empty, duplicated, overflowing or non-positive before_seq returns exactly 400 {"error":"before_seq must be a positive int64 integer"}. A valid positive cursor beyond the newest entry sequence returns exactly 400 {"error":"before_seq must not be greater than the newest entry seq"}. These use the existing ErrorResponse with no additional error fields.
+         */
+        get: operations["getRoomHistory"];
         put?: never;
         /**
          * Post a message into a room
@@ -8873,7 +8883,7 @@ export interface components {
              */
             type: "Main";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -8960,7 +8970,7 @@ export interface components {
              */
             type: "Subagent";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -9039,7 +9049,7 @@ export interface components {
              */
             type: "subagent_3p";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -9104,7 +9114,7 @@ export interface components {
             mcp_servers?: components["schemas"]["AgentMCPBinding"][];
             tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
-             * @description New display name. Rejected on locked agents.
+             * @description New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Renamed Agent
              */
             name?: string;
@@ -15092,6 +15102,8 @@ export interface components {
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             readonly main_session_id?: string;
+            /** @description Safe, server-classified reason why this eligible member's main chat could not be prepared or resolved. Omitted when main_session_id is present or the member is ineligible. Contains no raw error text, filesystem paths, file names, session IDs or stored identity values. */
+            readonly main_session_error?: string;
             heartbeat?: components["schemas"]["WorkspaceMemberHeartbeat"];
             /** @description Display-only: when true the sidebar omits this member's row in this workspace, but the member stays a full team member — messageable, delegable, @-addressable; main and work untouched. Merge rules inside an incoming member config: absent => the stored flag is preserved (a heartbeat save never un-hides). Present with heartbeat absent (a pure hide/show) => the stored heartbeat is preserved unchanged. An entry with neither field ({}) keeps the ordinary replace behaviour: the stored heartbeat is cleared and the flag is still preserved by the absent rule. A heartbeat that IS present is always replaced wholesale, never merged field-by-field. Off-team entries are garbage-collected, so removing a member clears the flag and re-adding the agent starts visible. */
             hidden_from_sidebar?: boolean;
@@ -18015,6 +18027,22 @@ export interface components {
             mentions: string[];
         };
         /**
+         * RoomHistoryResponse
+         * @description One backward page of the complete retained room transcript (#1332). Select the newest entries eligible for the exclusive before_seq cursor and applied limit, then return them in strictly ascending entry seq order. An omitted cursor includes the newest entry. This page does not change the live room stream position or the forward attach subscription.
+         *     has_older is true exactly when another actual eligible entry precedes this page, not merely when the page is full or sequence numbers have gaps. next_before_seq is present if and only if has_older is true and equals the first returned entry's seq. Otherwise omit it, never send null or zero. An empty page is entries: [] with has_older: false and no next_before_seq. These conditional continuation rules are producer/consumer invariants; structural schema validation alone does not prove them.
+         */
+        RoomHistoryResponse: {
+            /** @description The newest eligible entries, returned oldest to newest in strictly ascending seq order, with at most the applied limit. Always present and non-null, including an empty array at the beginning of history. Every entry belongs to the requested room and includes its existing delivery projection. */
+            entries: components["schemas"]["RoomEntry"][];
+            /** @description True exactly when another actual eligible entry precedes the first returned entry. False for an empty page or when the beginning of history has been reached, even if the page is full. */
+            has_older: boolean;
+            /**
+             * Format: int64
+             * @description Present if and only if has_older is true; exactly the first returned entry's seq, to use as the next exclusive before_seq cursor. Omitted when has_older is false; never null or zero.
+             */
+            next_before_seq?: number;
+        };
+        /**
          * AgentDependency
          * @description One thing that depends on an agent in one workspace (spec omnipus-system-agent K50, §6.19; FR-243). Landing 1 kinds: a channel connection whose main agent it is, a mailbox, a private secret, a room; `people_row` is filled from landing 2 (WU-14).
          */
@@ -18386,6 +18414,54 @@ export interface components {
             kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
             /** @description Display lines, in order. Never null, never empty. */
             lines: string[];
+        };
+        /**
+         * RoomEntryAuthor
+         * @description Author of a room entry (spec omnipus-system-agent K26): the person (kind `user`) or a member agent (kind `agent`, with agent_id). Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntryAuthor) — keep both copies in sync by hand.
+         */
+        RoomEntryAuthor: {
+            /** @enum {string} */
+            kind: "user" | "agent";
+            /** @description Present iff kind is `agent`. */
+            agent_id?: string;
+        };
+        /**
+         * RoomDeliveryState
+         * @description State of one (room message, member) delivery (spec omnipus-system-agent K27, §6.11; FR-169, FR-201, FR-213). request_id is the stable delivery id, which is also the receiver's request id. The values are exactly the §6.11 states; the UI labels are in the §6.11 table. Anything the server cannot prove after a restart is `unknown`, never `working`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomDeliveryState) — keep both copies in sync by hand.
+         */
+        RoomDeliveryState: {
+            /** @description The member agent. */
+            agent_id: string;
+            request_id: string;
+            /** @enum {string} */
+            state: "recorded" | "awaiting_approval" | "admitted" | "held" | "working" | "waiting_on_user" | "answered" | "refused" | "failed" | "interrupted" | "unavailable" | "cancelled" | "unknown";
+            /** @description Optional reason, e.g. `rate_limit` or `removed`. */
+            reason?: string;
+        };
+        /**
+         * RoomEntry
+         * @description One entry of a room transcript (spec omnipus-system-agent K26; FR-166). Group entries carry the authoring agent and the resolved addressees. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntry) — keep both copies in sync by hand.
+         */
+        RoomEntry: {
+            id: string;
+            room_id: string;
+            /**
+             * Format: int64
+             * @description Position in the room transcript; strictly increasing.
+             */
+            seq: number;
+            /** @description Echo of RoomMessageRequest.client_message_id for a person's entry. */
+            client_message_id?: string;
+            author: components["schemas"]["RoomEntryAuthor"];
+            text: string;
+            /** @description Resolved addressee agent ids. Never null. */
+            addressees: string[];
+            /** @description True for an answer to work consumed before a /pause; such an answer never forwards its mentions (§6.11). */
+            after_pause: boolean;
+            /** @description Per-member delivery states for this entry. Never null. */
+            deliveries: components["schemas"]["RoomDeliveryState"][];
+            /** Format: date-time */
+            timestamp: string;
         };
     };
     responses: {
@@ -27193,6 +27269,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     createRoom: {
@@ -27224,6 +27301,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     getRoom: {
@@ -27250,6 +27328,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     deleteRoom: {
@@ -27275,6 +27354,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     updateRoomMembers: {
@@ -27306,6 +27386,39 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getRoomHistory: {
+        parameters: {
+            query?: {
+                /** @description Exclusive entry-sequence boundary, with no default. Omit for the newest page. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, signed int64 overflow and repeated occurrences (even identical ones) are rejected with the exact before_seq syntax 400 documented above. Must not exceed the newest actual entry seq, not the live stream high-water sequence; a cursor beyond that bound returns the distinct cursor-ahead 400 above. Positive values within the bound need not identify an existing entry, including values before the first entry. */
+                before_seq?: number;
+                /** @description Maximum number of entries to return. Omitted means 100; present empty does not mean default. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, overflow, values outside 1 to 1000 and repeated occurrences (even identical ones) return exactly 400 {"error":"limit must be an integer from 1 to 1000"}. Never clamp an invalid value. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The newest eligible page in ascending entry seq order. entries is always an array, never null. has_older is required; next_before_seq is present if and only if has_older is true and equals the first returned entry's seq. An empty or terminal page has has_older false and omits next_before_seq, even when the terminal page is full. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoomHistoryResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     postRoomMessage: {
@@ -27335,6 +27448,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
 }
@@ -27771,5 +27885,6 @@ export type Room = components["schemas"]["Room"];
 export type RoomCreateRequest = components["schemas"]["RoomCreateRequest"];
 export type RoomMembersUpdateRequest = components["schemas"]["RoomMembersUpdateRequest"];
 export type RoomMessageRequest = components["schemas"]["RoomMessageRequest"];
+export type RoomHistoryResponse = components["schemas"]["RoomHistoryResponse"];
 export type AgentDependency = components["schemas"]["AgentDependency"];
 export type AgentDependencyList = components["schemas"]["AgentDependencyList"];

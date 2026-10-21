@@ -642,7 +642,7 @@ func TestExpandedGolden_StaticOnlyCacheReadFailsProof(t *testing.T) {
 // ordinal instead of the captured prefix. It also proves the boundary counts
 // front instructions: adding a known front instruction must raise the bound.
 func TestExpandedGolden_ChangedHistoryPrefixFailsProof(t *testing.T) {
-	tmp := setupWorkspace(t, map[string]string{"AGENT.md": "# Agent\nStable front for the mismatch control."})
+	tmp := setupWorkspace(t, map[string]string{"SOUL.md": "# Agent\nStable front for the mismatch control."})
 	t.Cleanup(func() { os.RemoveAll(tmp) })
 	cb := NewContextBuilder(filepath.Clean(tmp))
 	toolDefs := []providers.ToolDefinition{{
@@ -676,7 +676,7 @@ func TestExpandedGolden_ChangedHistoryPrefixFailsProof(t *testing.T) {
 	// Front-boundary instrument check: a builder over a workspace with one
 	// MORE known front instruction must raise the pre-history bound. This
 	// kills a tools-only boundary — the exact omission SC-001 forbids.
-	tmpRich := setupWorkspace(t, map[string]string{"AGENT.md": "# Agent\nStable front for the mismatch control.\nKNOWN-EXTRA-FRONT-INSTRUCTION-BOUNDARY"})
+	tmpRich := setupWorkspace(t, map[string]string{"SOUL.md": "# Agent\nStable front for the mismatch control.\nKNOWN-EXTRA-FRONT-INSTRUCTION-BOUNDARY"})
 	t.Cleanup(func() { os.RemoveAll(tmpRich) })
 	cbRich := NewContextBuilder(filepath.Clean(tmpRich))
 	fake.derive(nil, captureWith(cbRich, historyA, "mismatch question one"))
