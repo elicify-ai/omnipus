@@ -10,7 +10,7 @@ You don't enable these. They run on every install, by default, with no extra ser
 
 ## Session transcript
 
-Each session has a folder at `$OMNIPUS_HOME/sessions/<session-id>/` (`~/.omnipus/sessions/<session-id>/` by default). All sessions live in this one shared store; there are no per-agent session folders. The history is one append-only stream of entries (one line per entry, atomic writes via temp-file-rename), split into one file per UTC day: `transcript.jsonl` holds the current day, and earlier days are frozen as `<YYYY-MM-DD>.jsonl` beside it (a small `transcript.day` file records which day `transcript.jsonl` holds). A script that reads a whole session must read all of these files in date order. The replay APIs do this for you.
+Each session has a folder at `$OMNIPUS_HOME/sessions/<session-id>/` (`~/.omnipus/sessions/<session-id>/` by default). All sessions live in this one shared store; there are no per-agent session folders. The history is one append-only stream of entries (one line per entry, atomic writes via temp-file-rename), split into one file per UTC day: `transcript.jsonl` holds the current day, and earlier days are frozen as `<YYYY-MM-DD>.jsonl` beside it (a small `transcript.day` file records which day `transcript.jsonl` holds). A script that reads a whole session must read all of these files in date order. Paged APIs project requested ranges. Clients that need all retained chat history must explicitly enumerate pages.
 
 ### Entry types (`pkg/session/daypartition.go::EntryType`)
 
@@ -66,6 +66,55 @@ When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying
 ### Replay
 
 The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, call `UnifiedStore.ReadTranscript(sessionID)` (`pkg/session/unified_write.go::ReadTranscript`) — it reads the day files in order and returns the entries in order.
+
+### Derived paging index and recovery
+
+Paged history keeps content in the canonical archive. Its separate, content-free index stores occurrence locations and correction references, not another copy of messages or tool results. Fresh sessions publish a durable empty baseline before their identity becomes readable. Each accepted archive or discarded-input record is saved before the derived checkpoint advances. A derived write failure does not make an already saved message unsaved.
+
+Startup, open and Retry may reconcile **at most 64** combined records after a valid checkpoint: archive records (including private model records), discarded-input records, and confirmed missing rolled partitions. Zero pending records is a no-op. A gap of 65 or more records is not repaired in repeated batches. Missing, incompatible or inconsistent baselines require the separate offline operator repair; ordinary sending does not build a newest-only replacement index.
+
+Positions identify occurrences, not message IDs, timestamps, model positions or live WebSocket sequence numbers. Treat them as opaque strings; do not sort or decode them. A known expired position remains an ordering boundary. Retention keeps only its opaque token and private rank, not its former ID, timestamp, size, content or disk address. This ledger can grow with expired occurrences on disk; deleting the session removes it. Rich expired index fragments are retired when old-cut readers close.
+
+A page captures a short immutable read cut. Content reads then open and close one bounded record handle at a time, outside session and append locks. Later writes are excluded from that cut. If retention changes the retained set during a read, the result is discarded and selected again. On Windows a genuine sharing violation postpones only that present partition's removal; later eligible partitions are still processed, and the next ordinary sweep retries after the handle closes. Other permission or storage failures are not treated as expiry.
+
+### Paged session API
+
+The messages response is a **`SessionHistoryResponse` envelope**, not a bare array. Read `entries` together with `page_info`, `has_earlier`, `has_later`, and their optional `next_before` / `next_after` positions. The old `X-Has-Earlier-Messages` header is not paging authority. Matching server and browser assets must be deployed together; reload old browser tabs after deployment.
+
+| Read | Request example | Meaning |
+|---|---|---|
+| Latest | `GET /api/v1/sessions/{session_id}/messages` | Default target 40 drawn-row units, ascending results from the recent end, stopping at the latest exact clear marker if reached. |
+| Older | `GET /api/v1/sessions/{session_id}/messages?limit=20&before={next_before}` | Nearest predecessors, excluding the supplied position. Use the actual position returned by the preceding response. |
+| Newer | `GET /api/v1/sessions/{session_id}/messages?limit=20&after={next_after}` | Nearest successors, excluding the supplied position. This reloads a newer edge dropped while browsing backward. |
+| Refresh a loaded interval | `GET /api/v1/sessions/{session_id}/messages?window_start={first_position}&window_end={last_position}&limit=100` | The two bounds are inclusive. Continue backward within this same interval with `before={next_before}` until its own continuation ends; this is not a message-ID lookup. |
+
+For an all-retained-history operation, start with latest and follow `next_before` while `has_earlier` is true. Deliberately continue before reached clear markers when that operation really intends to include pre-clear history. Require progress and valid envelopes on every request; a failed or wrongly shaped response is not an empty page. Do not infer continuation from a full page, a sequence gap or the lexical order of opaque positions. A window-refresh page describes only its requested interval, not the whole conversation.
+
+`limit` is a digits-only integer from 20 through 100; omission means 40. `min_rows` is a digits-only integer from 1 through the effective limit; omission means 20. Duplicates, explicit zero, blank, signed, fractional, exponent and overflowing values are rejected, not clamped. Position syntax, multiplicity and range combinations are also strict. Authentication and addressed-session access precede paging validation. A malformed unknown raw query key or value returns `400` with `invalid history query`; malformed recognized fields retain their field-specific errors. A well-formed unknown or foreign position returns `404`, not a latest-page fallback.
+
+Whole source groups stay together. A finished tool's start/result is one drawn tool row, not two. A group's drawn weight can exceed the requested target. The server's current **4 MiB soft projected-byte target** uses the larger of prepared REST and historical WebSocket encodings, including ownership and relevant context. Once the estimated floor is met, unnecessary additional groups can stop at the budget. The floor and whole groups win: `byte_budget_exceeded` and `budget_override=height_floor|atomic_group` explain an intentional overshoot; `stop_reason` distinguishes byte, row, source-cap, clear, end and range-end stops. The advertised budget is a positive integer, not a fixed-value enum.
+
+`min_rows` is an authenticated caller's advisory height estimate, not proof of viewport geometry or a denial-of-service defense. Setting it equal to a limit of 100 can require 100 large admitted groups despite the soft byte target. This is not a hard response-size or memory ceiling. Clients measure actual drawn height and request contiguous top-ups where needed; they must not split tools to fit bytes.
+
+Session detail remains useful when history is unavailable. An available detail contains `messages`, `page_info` and continuation fields with `history_state.status=available`. An unavailable detail retains authorized `session` / optional `agent_removed` metadata and has `history_state.status=unavailable` with a fixed `reason` / `message`; it **omits** messages and every page/continuation field. Do not interpret it as `messages: []`, deletion or successful history loading. The messages endpoint instead returns the fixed `500` index-unavailable error after missing, inconsistent or over-64 recovery. Storage/projection failures retain the redacted storage-error response. Current authorized live controls can remain usable independently of historical reconstruction.
+
+The canonical [OpenAPI contract](https://github.com/elicify-ai/omnipus/blob/main/contracts/openapi.yaml) defines the complete generated shapes. Offline index preparation belongs in the separate operator runbook, not an automatic API repair loop.
+
+### Content-free history diagnostics
+
+One structured `message=history_page`, `event=history_page` summary records each authorized page attempt, including rejected input, failure or cancellation. Carriers are `rest_messages`, `rest_detail` and `ws_attach`. A servable journal-only attach performs no page attempt and emits no such summary. `success` means public page preparation completed, not that the socket, browser rendering or user acceptance completed.
+
+| Field group | Recorded fields |
+|---|---|
+| Classification / timing | `carrier`, `mode`, `outcome`, `duration_ms`, `soft_byte_budget`; validated `limit` / `min_rows`, and `requested_limit` only after successful explicit parsing. |
+| Actual archive work | `selected_archive_records` / `selected_archive_bytes`, `lookahead_archive_records` / `lookahead_archive_bytes`, `dependency_archive_records` / `dependency_archive_bytes`, `recovery_archive_records` / `recovery_archive_bytes`, `discarded_archive_records` / `discarded_archive_bytes`; `archive_records_read` / `archive_bytes_read` are their disjoint sums. |
+| Other actual work | `disposition_records_read`, `disposition_bytes_read`, `index_bytes_read`, `dependency_count`, `recovery_items`, `recovery_anchor_records`, `recovery_overflow_records`, `retention_retries`. An overflow probe reports 65 recovery items, not a lifetime recount. |
+| Successful pages only | `source_group_count`, `row_count`, `projected_bytes`, `has_earlier`, `has_later`, `byte_budget_exceeded`, `stop_reason`, `retention_generation`; `budget_override` only for an exceeded budget. |
+| Failure classification | `abort`, `invalid_request`, `protocol`, `storage`, `index_unavailable`, `projection_error`; failures do not invent an empty successful page. |
+
+These summaries contain no session, agent or user IDs, bodies, parameters, results, secrets, raw query text, positions, disk addresses, paths or underlying error causes. Byte counters are actual encoded bytes read, including partial and discarded work, not decoded text size. Zero means measured zero work.
+
+Allocation measurements are separate, isolated test evidence: `message=history_page_measurement`, `case=short_prefix|long_prefix`, positive `sample_count`, validated `limit` / `min_rows`, and nonnegative `allocated_bytes` per complete real reader-plus-carrier operation. Fixture construction and unrelated activity are outside that measurement. There is no concurrent production per-request heap-delta claim. A missing receipt is unverified, not zero allocation or a pass.
 
 ## Live event stream
 

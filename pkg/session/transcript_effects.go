@@ -45,7 +45,11 @@ func (us *UnifiedStore) appendArchiveRecordLocked(sessionID string, rec ArchiveR
 	if err != nil {
 		return ArchiveAddress{}, err
 	}
-	return store.Append(rec)
+	addr, err := store.Append(rec)
+	if err == nil {
+		us.historyAccepted(sessionID, addr, rec)
+	}
+	return addr, err
 }
 
 // truncateBack removes bytes a failed append left after pre. They were never
@@ -123,6 +127,7 @@ func (us *UnifiedStore) SettleToolCall(sessionID string, target ArchiveAddress, 
 	if err := validateSessionID(sessionID); err != nil {
 		return ArchiveAddress{}, err
 	}
+	us.prepareHistoryAppend(sessionID)
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
 	if err := us.checkToolCallTarget(sessionID, target, tc.ID); err != nil {
@@ -144,6 +149,7 @@ func (us *UnifiedStore) ProjectToolCalls(sessionID string, edits []ToolCallProje
 	if len(edits) == 0 {
 		return ArchiveAddress{}, errors.New("unified_store: project tool calls: no edits")
 	}
+	us.prepareHistoryAppend(sessionID)
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
 	for _, e := range edits {
@@ -167,6 +173,7 @@ func (us *UnifiedStore) RetractToolCallEffects(sessionID string, effects []Archi
 	if len(effects) == 0 {
 		return ArchiveAddress{}, errors.New("unified_store: retract tool call effects: nothing to retract")
 	}
+	us.prepareHistoryAppend(sessionID)
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
 	for _, a := range effects {

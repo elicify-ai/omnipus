@@ -32,6 +32,7 @@ func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now().UTC()
 	}
+	us.prepareHistoryAppend(sessionID)
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
 	return us.appendTranscriptLocked(sessionID, entry, what, provenance)
@@ -54,6 +55,7 @@ func (us *UnifiedStore) AppendTranscriptOnce(sessionID string, entry TranscriptE
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now().UTC()
 	}
+	us.prepareHistoryAppend(sessionID)
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
 	existing, err := us.ReadTranscript(sessionID)
