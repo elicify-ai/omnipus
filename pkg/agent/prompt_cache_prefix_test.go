@@ -216,7 +216,7 @@ func volatileTailError(messages []providers.Message, history, scratch string) er
 			text += part.Text
 		}
 		if secondsInPrefix.MatchString(text) || strings.Contains(text, "Current Time") ||
-			(scratch != "" && strings.Contains(text, scratch)) || strings.Contains(text, skillReminderNote) {
+			(scratch != "" && strings.Contains(text, scratch)) {
 			return fmt.Errorf("volatile note at message %d before the history boundary", i)
 		}
 	}

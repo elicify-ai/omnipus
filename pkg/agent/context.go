@@ -1294,7 +1294,7 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 }
 
 // buildDynamicContext renders live metadata in its original system-prefix slot.
-// Clock and skill-reminder text are rendered separately by buildVolatileContext.
+// The clock is rendered separately by buildVolatileContext.
 func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, channel, chatID, senderID, senderDisplayName string) string {
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
@@ -1346,7 +1346,7 @@ func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, 
 //     recalled turns precede the recent window (FR-019 chronology).
 //  3. history messages (the Skip-trimmed sliding window, post-eviction).
 //  4. Current user message.
-//  5. One request-only user-role block for the clock and skill reminder.
+//  5. One request-only user-role block for the clock.
 //
 // delegationDepth is the turn's current delegation-chain depth (ts.depth, the
 // value the enforcement gate compares against its cap); it lets the
@@ -1381,7 +1381,7 @@ func (cb *ContextBuilder) BuildMessages(
 
 	// The static part (identity, bootstrap, skills, memory) is cached locally to
 	// avoid repeated file I/O and string building on every call (fixes issue #607).
-	// Only the clock and skill reminder move behind history. Live sender/session
+	// Only the clock moves behind history. Live sender/session
 	// metadata stays in the system stream for provider compatibility:
 	// - Anthropic adapter extracts messages[0] (Role=="system") and maps its content
 	//   to the top-level "system" parameter in the Messages API request. A single
