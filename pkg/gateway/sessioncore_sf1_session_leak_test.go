@@ -7,6 +7,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -81,8 +83,10 @@ func sf1NewChat(t *testing.T, env *u1Env) string {
 	return meta.ID
 }
 
-// A valid main whose transcript cannot be read answers with the fixed message
-// on both reads of it (detail and messages) - never the raw filesystem error.
+// D7a/D10 and the explicit Q2 migration: authorized metadata remains usable
+// when history fails. The error text never reveals paths/identity; the caller's
+// own contracted session/agent identity is legitimate metadata, not a leak.
+// Security-lead must independently confirm this migrated security oracle.
 func TestSF1_UnreadableTranscriptOfAValidMainLeaksNothing(t *testing.T) {
 	env := u1NewEnv(t, false)
 	const ws = "01JSF1WS0000000000000000H"
@@ -96,9 +100,72 @@ func TestSF1_UnreadableTranscriptOfAValidMainLeaksNothing(t *testing.T) {
 	sf1BlockParent(t, filepath.Join(env.store(t).BaseDir(), id, "transcript.jsonl"))
 
 	code, body := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
-	sf1AssertFixedStorageMessage(t, env, code, body, "read", ws, "mia", "transcript")
+	require.Equal(t, http.StatusOK, code, "authorized metadata is independent of unreadable history: %s", body)
+	var detail generated.SessionDetail
+	require.NoError(t, json.Unmarshal([]byte(body), &detail))
+	require.Equal(t, id, detail.Session.Id)
+	require.Equal(t, "mia", detail.Session.AgentId)
+	require.Equal(t, "unavailable", detail.HistoryState.Status)
+	require.NotNil(t, detail.HistoryState.Reason)
+	require.Equal(t, "storage_error", *detail.HistoryState.Reason)
+	require.NotNil(t, detail.HistoryState.Message)
+	require.Equal(t, "This session could not be read because session storage failed. Check disk space and permissions, then retry. Details are in the server log.", *detail.HistoryState.Message)
+	// All original identity/path bans still apply to the sanitized error text.
+	sf1AssertNoInternalDetail(t, env, *detail.HistoryState.Message, ws, "mia", "transcript")
+	// Physical paths/raw errors remain forbidden across the entire response.
+	sf1AssertNoPhysicalStorageDetail(t, env, body)
+	for _, value := range []any{detail.Messages, detail.PageInfo, detail.HasEarlier, detail.HasLater, detail.NextBefore, detail.NextAfter} {
+		require.Nil(t, value, "unavailable detail must not fabricate history/page/continuation fields")
+	}
+	message, serverError := validateBodyAgainstSchema("SessionDetail", []byte(body))
+	require.False(t, serverError)
+	require.Empty(t, message)
 	code, body = sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id+"/messages", "")
 	sf1AssertFixedStorageMessage(t, env, code, body, "read", ws, "mia", "transcript")
+}
+
+func sf1AssertNoPhysicalStorageDetail(t *testing.T, env *u1Env, body string) {
+	t.Helper()
+	home, homeErr := os.UserHomeDir()
+	require.NoError(t, homeErr)
+	for _, fragment := range []string{env.home, env.store(t).BaseDir(), os.TempDir(), home, "/Users/", "/var/", "/tmp", "~", "meta.json", ".jsonl", "OMNIPUS_HOME", "ENOTDIR", "not a directory", "permission denied"} {
+		if fragment != "" {
+			assert.NotContains(t, body, fragment, "physical storage/cause data must remain private in every union variant")
+		}
+	}
+}
+
+func TestSF1_UnauthorizedUnreadableHistoryNeverReturnsMetadata(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JSF1AUTH000000000000000H"
+	env.seedWorkspace(t, ws, false, "mia")
+	id := u1MainID(ws, "mia")
+	code, _ := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
+	require.Equal(t, http.StatusOK, code)
+	require.NoError(t, env.store(t).AppendTranscript(id, session.TranscriptEntry{ID: "private-auth-row", Role: "user", Content: "PRIVATE_AUTH_HISTORY", AgentID: "mia", Timestamp: time.Now().UTC()}))
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "sf1-auth-secret")
+	// Positive control: the same real authentication wrapper reaches metadata
+	// for the authorized caller; an always-refusing wrapper cannot pass this test.
+	allowed := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+id, nil)
+	allowed.Header.Set("Authorization", "Bearer sf1-auth-secret")
+	control := httptest.NewRecorder()
+	env.api.withAuth(env.api.HandleSessions)(control, allowed)
+	require.Equal(t, http.StatusOK, control.Code)
+	historyMigrationDetail(t, id, control.Body.Bytes(), false)
+	sf1BlockParent(t, filepath.Join(env.store(t).BaseDir(), id, "transcript.jsonl"))
+	for _, endpoint := range []string{"/api/v1/sessions/" + id, "/api/v1/sessions/" + id + "/messages"} {
+		for _, tc := range []struct{ header, message string }{
+			{"", "unauthorized: missing Bearer token"}, {"Bearer wrong", "unauthorized: invalid Bearer token"},
+		} {
+			request := httptest.NewRequest(http.MethodGet, endpoint, nil)
+			request.Header.Set("Authorization", tc.header)
+			response := httptest.NewRecorder()
+			env.api.withAuth(env.api.HandleSessions)(response, request)
+			pagingRefusal(t, response, http.StatusUnauthorized, tc.message)
+			sf1AssertNoInternalDetail(t, env, response.Body.String(), id, ws, "mia", "transcript", "PRIVATE_AUTH_HISTORY")
+			require.NotContains(t, response.Body.String(), "history_state", "no unavailable-history authorization bypass")
+		}
+	}
 }
 
 // A session whose metadata is unreadable (not merely absent) is a storage

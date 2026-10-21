@@ -182,25 +182,23 @@ func TestGetSession_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code,
 		"GET /sessions/{id} must return 200; got %d body=%s", w.Code, w.Body.String())
 
-	var detail struct {
-		Messages []session.TranscriptEntry `json:"messages"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail),
-		"response must unmarshal into a session-detail envelope")
+	detail := historyMigrationDetail(t, sessionID, w.Body.Bytes(), false)
+	entries := *detail.Messages
 
-	require.Len(t, detail.Messages, 2,
+	require.Len(t, entries, 2,
 		"both the parent entry and the ParentSpawnCallID-tagged entry must be "+
 			"present, unfiltered, in the session-detail envelope's messages — "+
-			"got %d entries: %+v", len(detail.Messages), detail.Messages)
+			"got %d entries: %+v", len(entries), entries)
 
 	var sawParent, sawChild bool
-	for _, e := range detail.Messages {
-		switch e.ID {
+	for _, e := range entries {
+		switch e.Id {
 		case "parent-msg-1":
 			sawParent = true
 		case "child-msg-1":
 			sawChild = true
-			assert.Contains(t, e.Content, "external-cli permission",
+			require.NotNil(t, e.Content)
+			assert.Contains(t, *e.Content, "external-cli permission",
 				"the delegate-shaped entry's raw narration must reach the session-detail messages unfiltered")
 		}
 	}
@@ -252,8 +250,8 @@ func TestGetSessionMessages_JudgeVerdictEntry_PopulatesWireVerdict(t *testing.T)
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 
 	var found map[string]any
 	for _, e := range entries {
@@ -306,8 +304,8 @@ func TestGetSessionMessages_JudgeVerdictEntry_MalformedContent_OmitsVerdict(t *t
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 
 	var found map[string]any
 	for _, e := range entries {
@@ -589,11 +587,7 @@ func TestHandleSessions_RenamePersistence(t *testing.T) {
 	require.Equal(t, http.StatusOK, wGet.Code,
 		"GET after rename must return 200; body=%s", wGet.Body.String())
 
-	var detail struct {
-		Session  session.UnifiedMeta       `json:"session"`
-		Messages []session.TranscriptEntry `json:"messages"`
-	}
-	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &detail))
+	detail := historyMigrationDetail(t, sessionID, wGet.Body.Bytes(), false)
 	assert.Equal(t, "Persisted Title", detail.Session.Title,
 		"GET must return the persisted title after rename")
 }
@@ -787,9 +781,8 @@ func TestGetSessionMessages_ToolCallEntries_PassesWireSchema(t *testing.T) {
 		w.Code, w.Body.String())
 
 	// Parse the response and validate every entry against Message.yaml.
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
-		"response must be a JSON array of message objects")
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 	require.NotEmpty(t, entries, "must have at least one entry seeded")
 
 	schema := loadMessageSchema(t)
@@ -860,9 +853,8 @@ func TestGetSessionMessages_InterruptedToolCall_PassesWireSchema(t *testing.T) {
 		"GET /sessions/{id}/messages must return 200 for a session containing an "+
 			"interrupted delegation; got %d body=%s", w.Code, w.Body.String())
 
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
-		"response must be a JSON array of message objects")
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 	require.NotEmpty(t, entries, "must have at least one entry seeded")
 
 	// This is the exact assertion that failed pre-fix: the SPA's zod schema
@@ -926,8 +918,8 @@ func TestGetSessionMessages_TurnCanceledEntry_PassesWireSchema(t *testing.T) {
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 
 	schema := loadMessageSchema(t)
 	for i, entry := range entries {
@@ -996,9 +988,8 @@ func TestGetSessionMessages_TruncatedEntry_PassesWireSchema(t *testing.T) {
 		"GET /sessions/{id}/messages must return 200; got %d body=%s",
 		w.Code, w.Body.String())
 
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
-		"response must be a JSON array of message objects")
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 	require.NotEmpty(t, entries, "must have at least one entry seeded")
 
 	schema := loadMessageSchema(t)

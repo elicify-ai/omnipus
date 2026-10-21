@@ -77,8 +77,8 @@ func TestContextWindowNoticeRESTPreservesClassification_Q33(t *testing.T) {
 			api.HandleSessions(w, r)
 			require.Equal(t, http.StatusOK, w.Code, "real session-history GET: %s", w.Body.String())
 
-			var got []generated.Message
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got), "decode the real GET response, not a fixture response")
+			page := historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+			got := page.Entries
 			// An empty/failed history read cannot satisfy an absence assertion.
 			require.Len(t, got, 1, "the retained diagnostic must remain in REST history even when hidden by the client")
 			assert.Equal(t, want.Type, got[0].Type, "REST must not erase context_window_notice classification")
