@@ -786,10 +786,9 @@ type WhatsAppPairingPayload struct {
 	// started elsewhere (e.g. the Channels screen).
 	RequestID string `json:"request_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
-	// Seq orders pairing events in emit order (never on the wire). The
-	// gateway's reconnect cache is written from two places — once per event
-	// by the sync tap, and by each connection's lagging forwarder — and keeps
-	// only the newest (gate r1 SFH T2-SF-06).
+	// Generation/Seq are assigned at acceptance under the channel order,
+	// never on the wire. Cache and queue effects revalidate this pair and the
+	// fixed AttemptID; a delayed emit is not permission to deliver old progress.
 	Seq        uint64 `json:"-"`
 	Generation uint64 `json:"-"`
 	AttemptID  string `json:"-"`

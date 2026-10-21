@@ -2161,7 +2161,8 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	return mr.restartExisting()
 }
 
-// prepareDispatch saves rollback state, installs the new configuration, and refreshes the dispatch context.
+// prepareDispatch computes this published snapshot's diff and refreshes dispatch.
+// publishConfigSnapshot already guarded the config/rollback-state publication.
 func (mr *managerReload) prepareDispatch() {
 	mr.list = toChannelHashes(mr.cfg)
 	mr.added, mr.removed = compareChannels(mr.m.channelHashes, mr.list)

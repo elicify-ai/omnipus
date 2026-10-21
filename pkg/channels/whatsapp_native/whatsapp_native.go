@@ -80,10 +80,10 @@ type WhatsAppNativeChannel struct {
 	resourceGeneration uint64
 	originConfig       *config.Config // immutable snapshot used by this factory
 	attemptObserver    func(attemptID string, status channels.PairingStatus, qr, message string)
-	// unfinishedTeardowns holds, per attempt whose own Stop timed out, the
-	// signal that its tracked work finally joined (gate r5 R5-A02): a retry of
-	// that attempt's handle waits on it, never treating the already-cleared
-	// running attempt as proof of disposal. Guarded by mu.
+	// unfinishedTeardowns pins each captured attempt's known teardown before
+	// clearing its active id. Stop/replacement handles join that exact work,
+	// never treating an empty active id as completion. This does not establish
+	// the separate late-connected client's final disposal (T6). Guarded by mu.
 	unfinishedTeardowns map[string]<-chan struct{}
 
 	// pairingObserver, if set, receives linked-device pairing updates (QR code +
@@ -272,7 +272,13 @@ func (c *WhatsAppNativeChannel) stopAttempt(ctx context.Context, attemptID strin
 	unfinished := c.unfinishedTeardowns[attemptID]
 	c.mu.Unlock()
 	if attemptID != "" && current == attemptID {
-		return c.stop(ctx, false)
+		err := c.stop(ctx, false)
+		if err == nil {
+			c.mu.Lock()
+			delete(c.unfinishedTeardowns, attemptID)
+			c.mu.Unlock()
+		}
+		return err
 	}
 	if unfinished == nil {
 		return nil // that attempt's loop is gone and its teardown completed
@@ -572,6 +578,16 @@ func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error 
 	logger.InfoC("whatsapp", "Stopping WhatsApp native channel")
 	c.mu.Lock()
 	attemptID, store, instance := c.attemptID, c.attempts, c.instance
+	resourceDone := make(chan struct{})
+	if attemptID != "" {
+		// Publish the captured resource's join before clearing its active id.
+		// A concurrent retained handle must join this cleanup, not infer that
+		// an empty active id means it already finished.
+		if c.unfinishedTeardowns == nil {
+			c.unfinishedTeardowns = make(map[string]<-chan struct{})
+		}
+		c.unfinishedTeardowns[attemptID] = resourceDone
+	}
 	c.attemptID = ""
 	c.mu.Unlock()
 	var replacement channels.PairingAttempt
@@ -624,16 +640,6 @@ func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error 
 		// Context canceled or timed out; log and proceed with best-effort cleanup.
 		logger.WarnC("whatsapp", fmt.Sprintf("Stop context canceled before all goroutines finished: %v", ctx.Err()))
 		teardownErr = fmt.Errorf("the WhatsApp client did not finish stopping: %w", ctx.Err())
-		if !interrupt && attemptID != "" {
-			// The attempt's own Stop: a retry of its handle must join this
-			// same unfinished work (gate r5 R5-A02).
-			c.mu.Lock()
-			if c.unfinishedTeardowns == nil {
-				c.unfinishedTeardowns = make(map[string]<-chan struct{})
-			}
-			c.unfinishedTeardowns[attemptID] = done
-			c.mu.Unlock()
-		}
 	}
 
 	// Now it is safe to clear and close resources.
@@ -646,6 +652,11 @@ func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error 
 		_ = container.Close()
 	}
 	c.SetRunning(false)
+	if teardownErr == nil {
+		close(resourceDone)
+	} else {
+		go func() { <-done; close(resourceDone) }()
+	}
 	if replacement.AttemptID != "" {
 		if teardownErr == nil {
 			store.FinishReplacement(instance, replacement.AttemptID, replacement.StopGeneration, nil)

@@ -294,6 +294,11 @@ func (al *AgentLoop) EmitWhatsAppPairingAttempt(channelID, attemptID string, sta
 func (al *AgentLoop) PublishPairingProgress(progress []channels.PairingProgress) {
 	for _, p := range progress {
 		al.publishPairingProgress(p)
+		if p.Dispose != nil {
+			if store := al.pairingAttempts(); store != nil {
+				go al.disposeReplacedPairing(store, p)
+			}
+		}
 	}
 }
 

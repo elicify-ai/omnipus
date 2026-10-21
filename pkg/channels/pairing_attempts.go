@@ -119,7 +119,8 @@ type pairingAttemptRecord struct {
 	startFenced bool // explicit Stop cancellation, not HTTP/tool response expiry
 	// disposal belongs to the captured resource, not to the channel's newest
 	// settings. A later write cannot remove an unfinished stopping barrier.
-	disposal pairingDisposal
+	disposal        pairingDisposal
+	disposalRunning bool
 }
 
 type pairingConnector struct {
@@ -392,8 +393,8 @@ func (s *PairingAttempts) IsCurrent(instance, attemptID string) bool {
 // another revision is left alone — a reload built from an older (or newer)
 // configuration snapshot never consumes or interrupts an attempt it was not
 // built for (gate r5 R5-A05). A stale attempt is closed by its own operation
-// once its reload is confirmed, or by the next admission
-// (InterruptStaleReady).
+// once its reload is confirmed, or by the exact successful settings-replacement
+// write. Native dispatch uses ReadyForSnapshot to check the generation too.
 func (s *PairingAttempts) TakeReady(instance, revision string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -683,9 +684,9 @@ func (s *PairingAttempts) BeginDelete(instance string) (PairingAttempt, bool) {
 	return PairingAttempt{}, false
 }
 
-// EndDelete drops instance's attempts once it is removed: a recreated
-// connector starts new and unowned (M12). When the delete failed, reopen
-// admission instead (keepRecord).
+// EndDelete retires an instance after its extra state cleanup. Undisposed
+// captured resources keep their own records/barriers; deletion never releases
+// them. The stable order/tombstone prevents generation reuse on recreation.
 func (s *PairingAttempts) EndDelete(instance string, removed bool) {
 	order := s.LockChannel(instance)
 	defer order.Unlock()

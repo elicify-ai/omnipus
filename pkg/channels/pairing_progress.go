@@ -4,16 +4,19 @@
 
 package channels
 
+import "context"
+
 // PairingProgress is an immutable, private event envelope. Accept it under the
 // channel order, emit it after unlocking, and revalidate it at each delivery.
 // not-wire-format: only generated WhatsAppPairingFrame crosses the gateway.
 type PairingProgress struct {
-	Attempt    PairingAttempt `json:"-"`
-	Generation uint64         `json:"-"`
-	Sequence   uint64         `json:"-"`
-	Status     PairingStatus  `json:"-"`
-	QR         string         `json:"-"`
-	Message    string         `json:"-"`
+	Attempt    PairingAttempt              `json:"-"`
+	Generation uint64                      `json:"-"`
+	Sequence   uint64                      `json:"-"`
+	Status     PairingStatus               `json:"-"`
+	QR         string                      `json:"-"`
+	Message    string                      `json:"-"`
+	Dispose    func(context.Context) error `json:"-"` // captured resource, never lookup by channel name
 }
 
 // Progress accepts a native event, including the terminal transition for an
@@ -71,7 +74,7 @@ func (o *PairingOrder) progressLocked(attempt PairingAttempt, status PairingStat
 	}
 	p := PairingProgress{Attempt: attempt, Generation: generation, Status: status, QR: qr, Message: message}
 	c := o.connector
-	if !c.retired && generation == c.generation && (attempt.AttemptID == "" && c.latest == nil || c.latest != nil && c.latest.AttemptID == attempt.AttemptID) {
+	if (!c.retired && !c.deleting || c.isDeletionProgress(generation, attempt.AttemptID, status)) && generation == c.generation && (attempt.AttemptID == "" && c.latest == nil || c.latest != nil && c.latest.AttemptID == attempt.AttemptID) {
 		c.sequence++
 		if c.sequence == 0 {
 			panic("pairing progress sequence exhausted")
@@ -87,7 +90,10 @@ func (o *PairingOrder) AcceptsProgress(generation, sequence uint64, attemptID st
 	o.store.mu.Lock()
 	defer o.store.mu.Unlock()
 	c := o.connector
-	if c.retired || c.deleting || generation != c.generation || sequence == 0 || sequence != c.sequence {
+	if generation != c.generation || sequence == 0 || sequence != c.sequence {
+		return false
+	}
+	if (c.retired || c.deleting) && !c.isDeletionProgress(generation, attemptID, status) {
 		return false
 	}
 	if attemptID == "" {
@@ -100,6 +106,15 @@ func (o *PairingOrder) AcceptsProgress(generation, sequence uint64, attemptID st
 		return c.latest.Phase == PairingPhaseActive && !c.latest.startFenced
 	}
 	return true
+}
+
+// The deleting intent's own terminal notification is current, not progress
+// from its retired client. All earlier generations and all QR frames stay
+// rejected, including after this id is recreated.
+func (c *pairingConnector) isDeletionProgress(generation uint64, attemptID string, status PairingStatus) bool {
+	rec := c.latest
+	return status == PairingStatusError && rec != nil && rec.AttemptID == attemptID && rec.StopGeneration == generation && rec.Outcome == PairingOutcomeInterrupted &&
+		(rec.Phase == PairingPhaseTerminal || rec.Phase == PairingPhaseStopping && rec.disposal == pairingDisposalReplacement)
 }
 
 func pairingStatusOutcome(status PairingStatus) PairingOutcome {

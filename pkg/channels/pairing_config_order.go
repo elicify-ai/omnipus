@@ -212,7 +212,14 @@ func (c *PairingConfigCommit) Commit(applied bool) []PairingProgress {
 	for i, order := range c.orders {
 		changed, _ := order.CommitConfig(c.intents[i], applied)
 		for _, attempt := range changed {
-			progress = append(progress, order.Transition(attempt, PairingStatusError, PairingInterruptedMessage))
+			p := order.Transition(attempt, PairingStatusError, PairingInterruptedMessage)
+			order.store.mu.Lock()
+			rec := order.connector.attempts[attempt.AttemptID]
+			if rec != nil && rec.Phase == PairingPhaseStopping && rec.disposal == pairingDisposalReplacement && rec.StopGeneration == attempt.StopGeneration && !rec.disposalRunning {
+				p.Dispose, rec.disposalRunning = rec.cancel, true
+			}
+			order.store.mu.Unlock()
+			progress = append(progress, p)
 		}
 	}
 	return progress

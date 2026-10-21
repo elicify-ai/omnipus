@@ -25,6 +25,11 @@ func (a *restAPI) saveChannelEnabled(w http.ResponseWriter, channelID, baseType 
 		fixed = []*channels.PairingOrder{order}
 	}
 	reservations := make(map[string]string)
+	if !enabled {
+		// A disable is an explicit revocation even when its saved flag is
+		// already false; a pending admission may still be waiting on its save.
+		reservations[channelID] = ""
+	}
 	err := a.orderedConfigJSONLocked(store, fixed, reservations, func(doc map[string]any) error {
 		entries, _ := doc["channels"].(map[string]any)
 		if entries == nil {
@@ -40,9 +45,13 @@ func (a *restAPI) saveChannelEnabled(w http.ResponseWriter, channelID, baseType 
 			entries[channelID] = entry
 		}
 		if enabled {
+			alreadyEnabled, _ := entry["enabled"].(bool)
 			if msg := validateChannelConfigComplete(baseType, entry, nil, nil); msg != "" {
 				jsonErr(w, http.StatusBadRequest, msg)
 				return errChannelEnableRefused
+			}
+			if alreadyEnabled && opts.retryRequest == nil && opts.reservedAttempt == "" {
+				return nil // idempotent enable preserves the exact owner and generation
 			}
 			var attemptID string
 			var ok bool

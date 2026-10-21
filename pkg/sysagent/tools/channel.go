@@ -442,6 +442,8 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (re
 		return missing
 	}
 	if err := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
+		// Empty token means a revoking intent, not a new pairing reservation.
+		write.reservations[id] = ""
 		return write.withConfig(func(cfg *config.Config) error {
 			ch, ok := cfg.Channels[id]
 			if !ok {
