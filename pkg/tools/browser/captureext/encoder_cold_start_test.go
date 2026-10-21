@@ -12,13 +12,13 @@ import (
 // the complete script with configuration present before its real entry point.
 func TestEncoderColdStartReplayOwnership(t *testing.T) {
 	for _, stage := range []string{"lookup", "stream-id", "media", "offer"} {
-		for _, mode := range []string{"baseline", "replay", "repeated-replay", "changed-target", "changed-geometry", "enriched", "stale", "conflicting-target", "conflicting-geometry", "conflicting-scale", "shutdown"} {
+		for _, mode := range []string{"baseline", "replay", "repeated-replay", "changed-target", "changed-geometry", "changed-generation", "enriched", "stale", "conflicting-target", "conflicting-geometry", "conflicting-scale", "shutdown"} {
 			t.Run(stage+"/"+mode, func(t *testing.T) {
 				runEncoderColdStartJS(t, stage, mode)
 			})
 		}
 	}
-	for _, mode := range []string{"recovery-before-answer", "recovery-connected", "recovery-overlap", "media-rejection"} {
+	for _, mode := range []string{"recovery-before-answer", "recovery-connected", "recovery-overlap", "recovery-unanswered-overlap", "media-rejection", "reconnect-resolve", "reconnect-reject"} {
 		t.Run(mode, func(t *testing.T) {
 			runEncoderColdStartJS(t, "media", mode)
 		})
@@ -53,7 +53,7 @@ const deferred = () => {
   return {promise,resolve,reject};
 };
 const entered = deferred(), release = deferred();
-const counts = {}, frames = [], streams = [], peers = [], selections = [], constraints = [], replaced = [], warnings = [];
+const counts = {}, frames = [], streams = [], peers = [], selections = [], constraints = [], replaced = [], warnings = [], sockets = [], offeredOn = [];
 const timers = new Map();
 let socket, sandbox, run, opening, recoveryBarrier;
 async function barrier(name) {
@@ -69,7 +69,7 @@ async function barrier(name) {
 }
 function later(fn, delay, ...args) {
   const timer = setTimeout(() => {timers.delete(timer);fn(...args)}, delay);
-  timers.set(timer, 'timeout');
+  timers.set(timer, {kind:'timeout',fn,delay,args});
   return timer;
 }
 function every(fn, delay, ...args) {
@@ -84,7 +84,7 @@ function cancel(timer) {
 }
 class Socket {
   static OPEN = 1;
-  constructor() {this.readyState=0;this.listeners={};this.closes=0;socket=this}
+  constructor() {this.readyState=0;this.listeners={};this.closes=0;socket=this;sockets.push(this)}
   addEventListener(name, fn) {(this.listeners[name] ||= []).push(fn)}
   open() {this.readyState=1;return Promise.all((this.listeners.open || []).map(fn=>fn({})))}
   send(raw) {
@@ -92,6 +92,7 @@ class Socket {
     const frame=JSON.parse(raw);
     delete frame.token;
     frames.push(frame);
+    if (frame.type==='browser_capture_offer') offeredOn.push(this);
   }
   close() {
     this.closes++;
@@ -138,6 +139,29 @@ async function control(frame) {
   await run('handleWsMessage(incoming)');
 }
 async function replay(frame=first) {await control({action:'recapture',...frame})}
+async function reconnectWhileHeld() {
+  socket.close();
+  const timer=run('reconnectTimer'), scheduled=timers.get(timer);
+  assert.equal(typeof scheduled.fn,'function','socket close schedules the real reconnect callback');
+  cancel(timer);scheduled.fn(...scheduled.args);
+  assert.equal(sockets.length,2,'reconnect creates one replacement socket');
+  await socket.open();await replay();
+  if (mode==='reconnect-reject') release.reject(new Error('retired cold acquisition failed'));
+  else release.resolve();
+  await opening;await run('senderParamsChain');
+  assert.equal(constraints.length,2,'replacement socket must acquire fresh media after old work retires');
+  assert.equal(offers().length,1,'only the replacement startup publishes an offer');
+  assert.equal(offeredOn[0],sockets[1],'replacement offer is sent on the current socket');
+  assert.deepEqual([offers()[0].capture_generation,offers()[0].target_id],[1,'fixture'],'replacement keeps the authorized source');
+  assert.deepEqual(sockets.map(item=>item.closes),[1,0],'retired completion cannot close replacement signaling');
+  assert.equal(stopped(),mode==='reconnect-reject'?0:2,'late resolved old media is released');
+  assert.deepEqual(streams.at(-1).tracks.map(track=>track.readyState),['live','live'],'replacement audio/video stay live');
+  assert.equal(run('window.__omnipusState.lastError'),null,'retired rejection cannot become a current failure');
+  assert.equal(run('captureInFlight'),false,'replacement work drains');
+  assert.equal(run('captureRerunRequested'),false,'replacement leaves no abandoned command');
+  assert.deepEqual(warnings,[],'reconnect path has no hidden browser-edge failure');
+  console.log('COLD_START_CASE_COMPLETE '+stage+'/'+mode);
+}
 async function main() {
   const initial={...first};
   if (mode==='enriched') {delete initial.expected_width;delete initial.expected_height}
@@ -165,9 +189,11 @@ async function main() {
   assert.equal(await Promise.race([entered.promise.then(()=>true),opening.then(()=>false)]),true,'startup must reach the controlled barrier');
   assert.equal(frames.filter(frame=>frame.type==='browser_capture_hello').length,1,'one hello precedes capture');
   assert.equal(offers().length,0,'no offer may escape the held stage');
+  if (mode.startsWith('reconnect-')) {await reconnectWhileHeld();return}
   let expected=first;
   if (mode==='changed-target') {expected=replacement;await replay(expected)}
   else if (mode==='changed-geometry') {expected={...replacement,target_id:'fixture'};await replay(expected)}
+  else if (mode==='changed-generation') {expected={...first,capture_generation:2};await replay(expected)}
   else if (mode==='stale') {
     // Advance from generation one to two, then reject a delayed generation one.
     expected=replacement;await replay(expected);
@@ -203,7 +229,7 @@ async function main() {
     assert.equal(offers().length,1,'only one current initial offer');
     const offer=offers()[0];
     assert.deepEqual([offer.capture_generation,offer.target_id],[expected.capture_generation,expected.target_id],'offer identifies the requested source');
-    const changed=['changed-target','changed-geometry','stale','enriched'].includes(mode);
+    const changed=['changed-target','changed-geometry','changed-generation','stale','enriched'].includes(mode);
     const expectedAcquisitions=changed&&(stage==='media'||stage==='offer')?2:1;
     assert.equal(counts.lookup,changed?2:1,'equivalent initial replay must not restart target lookup');
     assert.equal(constraints.length,expectedAcquisitions,'equivalent initial replay must retain the first media acquisition');
@@ -217,13 +243,13 @@ async function main() {
     const dims=constraints.at(-1).video.mandatory;
     assert.deepEqual([dims.maxWidth,dims.maxHeight],[Math.floor(expected.expected_width/12)*12,Math.floor(expected.expected_height/12)*12],'capture uses the requested immutable geometry');
     if (mode.startsWith('recovery-')) {
-      const connected=mode!=='recovery-before-answer';
+      const connected=mode!=='recovery-before-answer'&&mode!=='recovery-unanswered-overlap';
       if (connected) {
         sandbox.incoming=JSON.stringify({type:'browser_capture_answer',sdp:'v=0\r\n',capture_generation:offer.capture_generation,target_id:offer.target_id,offer_id:offer.offer_id});
         await run('handleWsMessage(incoming)');await run('senderParamsChain');
         assert.equal(peers[0].connectionState,'connected','recovery begins on a connected peer');
       }
-      if (mode==='recovery-overlap') {
+      if (mode.endsWith('overlap')) {
         const held={entered:deferred(),release:deferred()};recoveryBarrier=held;
         const recovery=replay();
         try {
@@ -234,6 +260,16 @@ async function main() {
         assert.equal(constraints.length,3,'a later recovery command must still supersede overlapping recovery work');
         assert.equal(stopped(),4,'superseded recovery releases the old and retired replacement audio/video');
         assert.deepEqual(streams.at(-1).tracks.map(track=>track.readyState),['live','live'],'latest recovery stream survives');
+        const active=run('currentPC');
+        assert.equal(active,peers.at(-1),'latest recovery owns the current peer');
+        assert.deepEqual(active.getSenders().map(sender=>sender.track),streams.at(-1).tracks,'current peer sends the newest audio and video tracks');
+        if (active.signalingState==='have-local-offer') {
+          const latest=offers().at(-1);
+          assert.deepEqual([latest.capture_generation,latest.target_id],[1,'fixture'],'recovery offer retains the authorized identity');
+          sandbox.incoming=JSON.stringify({type:'browser_capture_answer',sdp:'v=0\r\n',capture_generation:latest.capture_generation,target_id:latest.target_id,offer_id:latest.offer_id});
+          await run('handleWsMessage(incoming)');await run('senderParamsChain');
+        }
+        assert.equal(active.connectionState,'connected','latest recovery media has a usable negotiated peer');
       } else {
         await replay();await run('senderParamsChain');
         assert.equal(constraints.length,2,'later same-generation recovery must acquire new media');

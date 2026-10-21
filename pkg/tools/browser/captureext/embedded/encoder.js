@@ -1394,6 +1394,7 @@ function mungeVideoStartBitrate(sdp) {
 
 function teardownCapture() {
   captureGeneration += 1;
+  initialCaptureAttempt = null;
   clearOfferAnswerTimeout();
   // Stop sampling BEFORE the PC goes away, so a tick in flight cannot call
   // getStats()/setParameters() on a closing sender. Whether the learned scale
@@ -1665,7 +1666,7 @@ function newPeerConnection() {
 // shutdown retires both the active attempt and any pending pass.
 let captureInFlight = false;
 let captureRerunRequested = false;
-let initialCaptureCommand = null;
+let initialCaptureAttempt = null;
 
 function validatedCaptureCommand(command) {
   let next = captureCommandFrom(command || desiredCaptureCommand || readConfig());
@@ -1693,38 +1694,40 @@ async function runCaptureAndOffer(command, initial = false) {
   // it just to acquire the same tab again. This window ends when startup
   // drains or a different command supersedes it; later explicit recovery,
   // including overlapping same-generation recovery, still requests a rerun.
-  if (captureInFlight && initialCaptureCommand &&
-      next.capture_generation === initialCaptureCommand.capture_generation &&
-      next.target_id === initialCaptureCommand.target_id &&
-      next.expected_width === initialCaptureCommand.expected_width &&
-      next.expected_height === initialCaptureCommand.expected_height &&
-      next.capture_scale === initialCaptureCommand.capture_scale) {
+  if (!initial && captureInFlight && initialCaptureAttempt &&
+      initialCaptureAttempt.generation === captureGeneration && initialCaptureAttempt.socket === ws &&
+      ws && ws.readyState === WebSocket.OPEN &&
+      next.capture_generation === initialCaptureAttempt.command.capture_generation &&
+      next.target_id === initialCaptureAttempt.command.target_id &&
+      next.expected_width === initialCaptureAttempt.command.expected_width &&
+      next.expected_height === initialCaptureAttempt.command.expected_height &&
+      next.capture_scale === initialCaptureAttempt.command.capture_scale) {
     record('runCaptureAndOffer: equivalent initial replay, retaining startup');
     return;
   }
   desiredCaptureCommand = next;
   if (captureInFlight) {
-    initialCaptureCommand = null;
+    initialCaptureAttempt = null;
     captureGeneration += 1;
     captureRerunRequested = true;
     record('runCaptureAndOffer: already in flight, coalescing into a rerun');
     return;
   }
   captureInFlight = true;
-  initialCaptureCommand = initial ? next : null;
   try {
     do {
       captureRerunRequested = false;
-      await runCaptureAndOfferOnce(desiredCaptureCommand);
+      await runCaptureAndOfferOnce(desiredCaptureCommand, initial);
+      initial = false;
     } while (captureRerunRequested && !shuttingDown);
   } finally {
-    initialCaptureCommand = null;
+    initialCaptureAttempt = null;
     captureInFlight = false;
     captureRerunRequested = false;
   }
 }
 
-async function runCaptureAndOfferOnce(command) {
+async function runCaptureAndOfferOnce(command, initial = false) {
   command = captureCommandFrom(command || desiredCaptureCommand || readConfig());
   let generation = captureGeneration;
   try {
@@ -1769,6 +1772,9 @@ async function runCaptureAndOfferOnce(command) {
     }
     teardownCapture();
     generation = ++captureGeneration;
+    // Sharing belongs to this live attempt on this socket, not just its
+    // command. Reconnect teardown must retire it before opening another socket.
+    if (initial) initialCaptureAttempt = { command, generation, socket: ws };
     setStatus('capturing');
 
     const stream = await captureActiveTabStream(command);

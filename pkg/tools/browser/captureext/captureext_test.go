@@ -401,6 +401,8 @@ func TestSeed_AtomicNoPartialLeftovers(t *testing.T) {
 // embedded/manifest.json's "version" together, then ADD a new entry here —
 // never edit an existing entry, the history is the point.
 var versionContentHashes = map[string]string{
+	// 1.0.26: bind startup sharing to its live attempt and signaling socket.
+	"1.0.26": "05bb149de7c9d1ba1231ac17f8c02b92ee83000ae402fd8dc1e45fb15e59f398",
 	// 1.0.25: retain equivalent cold-start acquisition without suppressing recovery.
 	"1.0.25": "1a1f5369712f81d5fa5378852f67218ebc2e4aef7e7ddd904e2b83eb3af8caa0",
 	// 1.0.24: do not reuse consumed tabCapture tokens during rate adaptation.
