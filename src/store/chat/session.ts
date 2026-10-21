@@ -1,6 +1,7 @@
 // session.ts: Empty session construction and normalized message-array mutation
 
 import { useUiStore } from '@/store/ui'
+import { emptyHistoryState } from './history-state'
 import type { ToolCall } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { MAX_MESSAGES_PER_SESSION } from './messages'
@@ -9,6 +10,7 @@ import type { ChatMessage, PositionedToolCall, SessionChatState } from './types'
 
 export function emptySessionState(): SessionChatState {
   return {
+    history: emptyHistoryState(),
     messagesById: {},
     messageOrder: [],
     trimmedCount: 0,

@@ -21,6 +21,25 @@ This page is an explanatory protocol guide. The authoritative wire contract is t
 
 ---
 
+### Bounded history and control catch-up
+
+The gateway and web app must use matching generated contracts; reload older tabs after deploying the paged-history change. A snapshot reconstructs a bounded recent page, not the session's lifetime. Ordinary incremental catch-up still delivers the full servable journal tail; page-size options do not truncate it.
+
+```text
+attach → access/parameter checks → bind and hold live frames at W
+  incremental: current session_state → journal tail → catch_up_complete(W)
+  snapshot: session_snapshot(page metadata) → current session_state
+            → source-owned history frames → replay done
+            → uncovered active projection → catch_up_complete(W)
+  history unavailable: session_state(history_state=unavailable)
+            → current projection → catch_up_complete(W, live_only)
+then held live frames after W, in order
+```
+
+Replay `done` and `catch_up_complete` are distinct: current projection can arrive after replay done. The web client applies its render-once historical batch through complete, never treats a live done as attach completion, and discards incomplete history on refusal/replay failure/disconnect. An incomplete socket/control delivery cannot complete catch-up or advance a successful cursor.
+
+A person reading older history keeps that reader window, opened clear boundaries, focus and scroll anchor through a replacement snapshot. The new recent page goes into a separate bounded tail cache. After completed catch-up, the browser revalidates only the kept closed interval through REST window-refresh pages. A failed interval check leaves cached, explicitly out-of-date rows and range-only Retry; it does not roll back a completed live cursor or return the reader to latest.
+
 ## Client to Server Frames
 
 These frames are sent by the frontend to the backend over the WebSocket connection.
@@ -114,6 +133,19 @@ A valid request receives `session_mode_updated` with the resolved per-session se
 
 ---
 
+### `attach_session`
+
+Attach to an authorized existing session. `since_seq` plus `boot_id` requests incremental catch-up when the journal can serve that cursor; otherwise the server selects a recent snapshot. Access and session eligibility precede paging validation and binding.
+
+| Field | Meaning |
+|---|---|
+| `session_id` | Addressed session; no parent/other-session fallback. |
+| `since_seq`, `boot_id` | Live transport cursor, separate from REST occurrence positions. Omit for an explicit fresh history Retry. |
+| `history_limit` | Optional integer 20–100, default 40; logical drawn-row target for snapshots only. |
+| `history_min_rows` | Optional integer 1–effective limit, default 20; advisory estimated two-screen floor. Whole source groups and this floor take precedence over the 4 MiB soft historical-page target. |
+
+With known geometry, the browser estimates roughly four screens for opening and two for the floor. Otherwise it omits the size fields and uses server defaults; it does not send a second attach merely to correct sizing. REST contiguous top-ups correct actual height underfill. Invalid size fields reject before bind/wipe, never become an unlimited replay.
+
 ### `cancel`
 
 Cancels an in-progress streaming response or tool execution for the given session.
@@ -180,6 +212,20 @@ Registers or clears THIS connection's interest in a channel's `whatsapp_pairing`
 ## Server to Client Frames
 
 These frames are sent by the backend to the frontend over the WebSocket connection.
+
+### History metadata, ownership and availability
+
+| Frame/field | Contract |
+|---|---|
+| `session_snapshot` | Carries the selected page's `page_info`, `has_earlier`/`has_later` and matching optional cursors. No duplicate entries array or ordinal/frame-range manifest. A rejected history read sends no successful snapshot or history wipe. |
+| Source frame `history_origin` | `{position, entry_id?}` names the actual persisted occurrence. Narration, tool start/result, source-derived special/media/span/question frames carry it when replayed from a page. A tool-only source does not borrow the previous assistant bubble. |
+| Session-only frames | Replay warning/done, current controls and session-only terminal-card rehydration have no invented chronological owner. A replayed pending tool has no fabricated terminal result. |
+| Session-scoped `session_state.history_state` | `available`, or `unavailable` with sanitized `reason` and `message`. Missing history metadata is not successful empty history. Reasons are `index_missing`, `index_inconsistent`, `catchup_limit`, `storage_error`, `projection_error`. |
+| `catch_up_complete.mode` | `snapshot`, `incremental`, or `live_only`. Only completed control/projection delivery advances the live cursor. `live_only` is explicitly not reconstructed history, a history-derived restart/unanswered sweep or an attention-seen acknowledgement. |
+
+When history is unavailable but access and current control delivery succeed, the connection remains bound. The web app shows a persistent history-only ErrorState/Retry while Stop, current approvals/questions and the normal composer remain in their independent owners. Existing question/read-only/connection locks still apply. New output is distinguished as **Live output — earlier history unavailable**, not concatenated into a falsely gap-free history. New sends follow ordinary durable-save rules and are not automatically resent.
+
+History Retry sends `attach_session` **without** `since_seq`/`boot_id`, preserving already-ready current controls and pending input. A repeated history refusal can complete controls as `live_only` again; it does not start a repair poll or lifetime rebuild. An incremental live reconnect while history remains unavailable does not clear that error. Only validated history success clears the matching history error. See [paged REST history](../operations/observability.md#paged-session-api) and the [operator runbook](../operations/chat-history-index.md).
 
 ### `session_mode_updated`
 

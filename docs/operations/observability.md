@@ -65,7 +65,40 @@ When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying
 
 ### Replay
 
-The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, call `UnifiedStore.ReadTranscript(sessionID)` (`pkg/session/unified_write.go::ReadTranscript`) — it reads the day files in order and returns the entries in order.
+The saved transcript remains the content authority; the paged chat view uses derived, content-free lookup metadata rather than a second history database. The web app reads bounded public pages through the gateway. Explicit internal full-history uses can still call `UnifiedStore.ReadTranscript(sessionID)` to read day files in order; this is not the browser's page-loading path.
+
+### Paged session API
+
+The messages endpoint now returns a **`SessionHistoryResponse` envelope**, not a bare array. Deploy matching gateway and web-app versions together and reload older browser tabs. There is no array/full-history compatibility fallback. [OpenAPI](../../contracts/openapi.yaml) defines the generated request, response and public message fields.
+
+| Read | Example request | Meaning |
+|---|---|---|
+| Recent end | `GET /api/v1/sessions/{session_id}/messages` | Latest segment, default `limit=40`, `min_rows=20`. |
+| Older page | `GET /api/v1/sessions/{session_id}/messages?before={next_before}&limit=20&min_rows=20` | Nearest retained predecessors, exclusive of the supplied occurrence. Crossing a reached clear marker is deliberate. |
+| Newer page | `GET /api/v1/sessions/{session_id}/messages?after={next_after}&limit=20&min_rows=20` | Nearest retained successors, not a live-event cursor. |
+| Held interval refresh | `GET /api/v1/sessions/{session_id}/messages?window_start={first_position}&window_end={last_position}&limit=100&min_rows=20` | Revalidate the closed interval already being read. Continue backward with `before={next_before}` and the same two bounds. No walk from the new tail. |
+
+Use the cursor values returned by the server, URL-encoded as query values; the braces above are operands, not literal positions. Opaque `hp1_` positions name same-session occurrences, not message IDs, timestamps or sortable sequence numbers. Authentication and addressed-session access still apply before lookup.
+
+The response has `session_id`, non-null `entries`, `has_earlier`, `has_later`, and `page_info`. Each entry has `history_position` and its recorded `id`. `next_before` and `next_after` exist exactly when the corresponding flag is true, and equal the selected first and last positions. Empty and exactly-full terminal pages have no phantom cursor. Do not infer continuation from array length or the retired `X-Has-Earlier-Messages` header. A terminal **window refresh** describes only that interval, not the whole conversation.
+
+`page_info` describes effective `limit`/`min_rows`, logical `row_count`, `source_group_count`, mode, first/last positions, the reached/latest clear boundary, retention generation and bounded public dependencies. The browser normalizes message payloads but preserves metadata keys unchanged. It validates metadata before committing any rows or flags; an invalid individual message with a usable position gets a stable visible placeholder, while contradictory page metadata fails the read.
+
+| Size rule | Client implication |
+|---|---|
+| `limit` is an integer 20–100; `min_rows` is an integer 1–limit | Invalid external values reject; they are not silently clamped. The browser estimates drawn rows from its chat viewport. |
+| Default `soft_byte_budget=4194304` | This is a positive integer, not a single-value enum. Consistent alternative positive advertised budgets are accepted. |
+| Whole groups and the estimated two-screen floor win over bytes | `projected_bytes`, `byte_budget_exceeded`, `stop_reason` and optional `budget_override` explain the outcome. Overrides are `height_floor` or `atomic_group`. A tool's start/result is not split. |
+| `min_rows` is advisory client input | It is not server proof of viewport height or a hard-byte defense against an authenticated caller. Large responses can exceed the soft target. |
+| Actual heights differ from estimates | The browser tops up contiguous pages toward four screens on opening and two new screens during prefetch, stopping at clear/end/error. Range refreshes may require more than five physical pages. |
+
+Clients whose assertion means **all retained history** must explicitly enumerate backward until `has_earlier=false`, including deliberate crossings of clear dividers. Validate each envelope, reject a repeated boundary or overlapping/out-of-order page, and keep occurrence identity separate from duplicate display IDs. Searching only the latest suffix is not a whole-history absence check.
+
+Session detail is a union. With `history_state.status="available"`, it includes bounded `messages` and complete page metadata. With `status="unavailable"`, it keeps authorized `session` identity and optional `agent_removed`, but **omits** `messages`, `page_info`, flags and cursors. This is not empty history or a deleted session. Routing can still attach to current controls.
+
+Missing, inconsistent or over-bound history metadata produces the fixed messages-endpoint error **Session history is unavailable. Retry after the operator restores its index.** A valid known baseline may reconcile at most 64 pending suffix/delete facts; missing baselines and larger/inconsistent gaps require explicit operator repair, not automatic lifetime construction or a preparing-history state. See the [history-index runbook](chat-history-index.md); repair/build/backup/stop procedures belong there, not in client metrics.
+
+The structured `history_page` summary is content-free: carrier/mode/outcome, timing, validated size options, actual read-work counters and successful-page accounting. It is not proof that the browser rendered the page or that live/control catch-up completed. Browser diagnostics likewise must not contain message bodies, tool parameters/results, identities, raw positions or query strings. Allocated bytes belong to an isolated measurement receipt, not a guessed per-request heap delta in a busy server.
 
 ## Live event stream
 

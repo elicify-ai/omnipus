@@ -2,6 +2,7 @@
 
 import { emptySessionState } from './session'
 import type { ChatMessage } from './types'
+import type { SessionHistoryPage } from '@/lib/api/sessions'
 
 // Module-scoped handle for the 60s auto-clear timer on rate-limit events, keyed per session.
 export const rateLimitClearTimers: Record<string, ReturnType<typeof setTimeout>> = {}
@@ -56,7 +57,7 @@ export interface PendingClearRefresh {
   /** Wall-clock ms at arm time — the cutoff that keeps newer client-only rows (e.g. a /new refusal) in a merge. */
   armedAt: number
   /** A successfully fetched projection held back because the bucket was busy; applied once it goes idle. */
-  heldProjection?: ChatMessage[]
+  heldProjection?: SessionHistoryPage
   /**
    * Ids of the /clear marker rows the session's view already carried when
    * this operation was armed (founder ruling 2026-10-11). The server keeps
