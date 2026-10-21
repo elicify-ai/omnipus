@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -50,10 +51,15 @@ func TestSteeringCeilingDrain(t *testing.T) {
 		wantTurns    int
 		wantRequests int
 		wantNotices  int
+		toolRounds   int
+		wantReply    bool
 	}{
-		{"ceiling_with_follow_up", 2, true, 2, 3, 1},
-		{"below_limit_positive_control", 3, true, 1, 3, 0},
-		{"ceiling_without_follow_up", 2, false, 1, 2, 1},
+		{"ceiling_with_follow_up", 2, true, 2, 3, 1, 2, true},
+		{"below_limit_positive_control", 3, true, 1, 3, 0, 2, true},
+		{"ceiling_without_follow_up", 2, false, 1, 2, 1, 2, false},
+		// A new input earns one fresh budget, never an unbounded sequence
+		// of automatic turns if the model keeps requesting tools.
+		{"continuation_hits_ceiling_again", 2, true, 2, 4, 2, 4, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const agentID = "ceiling-drain-agent"
@@ -72,11 +78,14 @@ func TestSteeringCeilingDrain(t *testing.T) {
 				List: []config.AgentConfig{{ID: agentID, Name: "Ceiling drain", Type: config.AgentTypeCustom,
 					Home: workspace, MaxToolIterations: tc.limit}},
 			}}
-			provider := &truncationScriptedProvider{steps: []truncationScriptStep{
-				{finishReason: "tool_calls", toolCalls: []providers.ToolCall{truncationEchoCall("ceiling-call-1", "first")}},
-				{finishReason: "tool_calls", toolCalls: []providers.ToolCall{truncationEchoCall("ceiling-call-2", "second")}},
-				{content: reply, finishReason: "stop"},
-			}}
+			var steps []truncationScriptStep
+			for round := 1; round <= tc.toolRounds; round++ {
+				steps = append(steps, truncationScriptStep{finishReason: "tool_calls", toolCalls: []providers.ToolCall{
+					truncationEchoCall(fmt.Sprintf("ceiling-call-%d", round), fmt.Sprintf("note-%d", round)),
+				}})
+			}
+			steps = append(steps, truncationScriptStep{content: reply, finishReason: "stop"})
+			provider := &truncationScriptedProvider{steps: steps}
 			msgBus := bus.NewMessageBus()
 			t.Cleanup(msgBus.Close)
 			al := mustNewAgentLoop(t, cfg, msgBus, provider)
@@ -131,7 +140,7 @@ func TestSteeringCeilingDrain(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("worker failed to settle its turn and automatic drain")
 			}
-			assert.Equal(t, int32(2), tool.calls.Load(), "no tool call is replayed or allowed past the per-turn ceiling")
+			assert.Equal(t, int32(tc.toolRounds), tool.calls.Load(), "no tool call is replayed or allowed past the per-turn ceiling")
 			assert.Equal(t, tc.wantRequests, provider.CallCount(), "automatic follow-up request, without a manual Continue or resend")
 			assert.Zero(t, al.pendingSteeringCountForScope(scope), "worker leaves no stranded input")
 
@@ -163,7 +172,11 @@ func TestSteeringCeilingDrain(t *testing.T) {
 			history := inst.Sessions.GetHistory(scope)
 			if tc.followUp {
 				assert.Equal(t, 1, countMessagesContaining(history, followUp), "accepted instruction enters model history exactly once")
-				assert.Equal(t, []string{reply}, followUpBoundaryAnswers(history), "the follow-up is answered exactly once, without a harness notice posing as an answer")
+				var wantAnswers []string
+				if tc.wantReply {
+					wantAnswers = []string{reply}
+				}
+				assert.Equal(t, wantAnswers, followUpBoundaryAnswers(history), "only real model answers are saved; a second cutoff cannot renew its own budget")
 				if assert.Len(t, requests, tc.wantRequests) {
 					assert.Equal(t, 1, countMessagesContaining(requests[len(requests)-1], followUp), "the answer-producing request receives the original instruction exactly once")
 				}

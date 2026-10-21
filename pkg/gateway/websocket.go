@@ -1717,6 +1717,9 @@ type wsStreamer struct {
 	// the lastStreamer that gets finalized). Guarded by statsMu, which Finalize
 	// already holds while reading stats.
 	transcriptPersisted bool
+	// systemNotice is an already-persisted harness outcome, never model text.
+	// Guarded by statsMu, like the other finalization inputs.
+	systemNotice *generated.ReplayMessageFrame
 
 	// shadowResolved/isShadowStream implement the concurrent-stream
 	// interleaving fix — see WSHandler.streamOwners' doc comment for the

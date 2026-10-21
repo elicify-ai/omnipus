@@ -145,7 +145,9 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 
 ## Tool calls per turn
 
-**Max tool calls per turn**, on the Performance tab, caps how many tool steps any agent may take in one turn. A turn is one message, one task run, or one heartbeat run. When an agent reaches the limit without a final answer, the turn stops and the agent replies that it hit its limit of tool steps for one turn. You can then ask it to continue.
+**Max tool calls per turn**, on the Performance tab, caps how many tool steps any agent may take in one turn. A turn is one message, one task run, or one heartbeat run. When an agent reaches the limit without a final answer, the turn stops. Omnipus records a system notice explaining the limit; this is not an answer written by the model and carries no model attribution.
+
+If you sent a follow-up while the agent was working, an accepted follow-up is not lost at this limit, even if it had already reached the model before the turn stopped. Omnipus automatically starts one fresh turn in the same conversation to handle it, keeping the instruction and completed tool results. You do not need to resend it. Without another new instruction, that continuation does not keep renewing its own limit: if it also reaches the limit without an answer, ask the agent to continue. If there was no follow-up waiting to be handled, reaching the limit also waits for you to ask it to continue.
 
 A turn can also stop before the limit when the agent repeats itself without progress: after the same tool call with the same arguments succeeds eight times in a row, or when, in a round where nothing else succeeded, it asks again for a call that already failed five times with the same arguments and was then blocked. The agent's last reply names the tool and says why it stopped; a task run in that state counts as a try that did not finish, so the task retries or ends Failed instead of staying in progress.
 

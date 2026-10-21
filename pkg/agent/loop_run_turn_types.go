@@ -79,7 +79,11 @@ type agentLoopRunTurnIteration struct {
 	// block (loop_run_turn.go's "Inject pending steering messages") can
 	// stamp applied_at and emit one steering_receipt per genuinely injected
 	// steer, never for one still queued.
-	pendingSteeringReceipts      []string
+	pendingSteeringReceipts []string
+	// Live steering can already be in history when another tool response
+	// exhausts this turn. Its one post-ceiling continuation carries no text.
+	inTurnSteering               bool
+	inTurnSteeringOrigin         approvalOrigin
 	toolCallTruncationRepairUsed bool
 	gracefulTerminal             bool
 	ret0                         turnResult
