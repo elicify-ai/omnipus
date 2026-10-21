@@ -59,7 +59,7 @@ async function startLargeReplay(socket: TestSocket) {
   const history = wireHistoryPage(MAIN_ID, [
     { id: 'saved-question', type: 'message', role: 'user', agent_id: 'mia', content: 'Saved question', timestamp: stamp, history_position: questionPosition },
     { id: toolId, type: 'tool_call', role: 'assistant', agent_id: 'mia', content: '', timestamp: stamp, history_position: toolPosition,
-      tool_calls: [{ id: 'large-read', tool: 'read_file', params: { path: 'large.txt' }, status: 'success', result, content_state: 'full' }] },
+      tool_calls: [{ id: 'large-read', tool: 'read_file', parameters: { path: 'large.txt' }, status: 'success', result, content_state: 'full' }] },
   ], 2, { info: { byte_budget_exceeded: true, budget_override: 'atomic_group' } })
   act(() => {
     expect(useSessionStore.getState().attachToSession(MAIN_ID, 'main', 'Mia main chat', 'mia')).toBe(true)

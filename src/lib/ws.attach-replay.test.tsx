@@ -48,7 +48,7 @@ function snapshotFor(sources: Message[], rows: number, carriers: ServerFrame[] =
 }
 const questionSource = recordedSource('question', 'user', 'Saved question')
 const answerSource = recordedSource('answer', 'assistant', 'Saved answer', [
-  { id: 'read', tool: 'read_file', params: { path: 'note.txt' }, status: 'success', result: { content: 'Saved result' }, content_state: 'full' },
+  { id: 'read', tool: 'read_file', parameters: { path: 'note.txt' }, status: 'success', result: { content: 'Saved result' }, content_state: 'full' },
 ])
 const sourceFrames: ServerFrame[] = [
   { type: 'replay_message', session_id: SID, id: 'question', role: 'user', content: 'Saved question', history_origin: originFor('question') },
@@ -206,7 +206,7 @@ describe('bounded replay fallback', () => {
     const largeResult: ServerFrame = { type: 'tool_call_result', session_id: SID, call_id: 'large-result', tool: 'read_file', status: 'success', result, history_origin: originFor('bounded-final') }
     const final: ServerFrame = { type: 'replay_message', session_id: SID, id: 'bounded-final', role: 'assistant', content: 'Final saved answer', history_origin: originFor('bounded-final') }
     const finalSource = recordedSource('bounded-final', 'assistant', 'Final saved answer', [
-      { id: 'large-result', tool: 'read_file', params: { path: 'large.txt' }, status: 'success', result, content_state: 'full' },
+      { id: 'large-result', tool: 'read_file', parameters: { path: 'large.txt' }, status: 'success', result, content_state: 'full' },
     ])
     const snapshot = snapshotFor([questionSource, finalSource], 3, [history[1], largeStart, largeResult, final], { byte_budget_exceeded: true, budget_override: 'atomic_group' })
     attach()
