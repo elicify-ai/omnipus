@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,6 +126,15 @@ func chatHistoryFixtureRoot(t testing.TB, planPath, dataRoot string) string {
 		require.NoError(t, err, "independent owned gateway-root control")
 		require.Zero(t, info.Mode()&os.ModeSymlink, "no canonical-tree symlink escape")
 	}
+	require.NoError(t, filepath.WalkDir(filepath.Join(root, "sessions"), func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("fixture refuses session-tree symlink: %s", path)
+		}
+		return nil
+	}), "no source/index path may escape the isolated session tree through a symlink")
 	return root
 }
 
