@@ -23,6 +23,7 @@ const affinityFixtureCredential = "affinity-fixture-credential"
 func TestChatGPTCacheAffinity(t *testing.T) {
 	t.Setenv("OPENAI_CUSTOM_HEADERS", "")
 	t.Run("subscription_session_is_stable_private_and_request_scoped", testSubscriptionSessionAffinity)
+	t.Run("subscription_overlapping_sessions", testOverlappingSubscriptionSessionAffinity)
 	t.Run("other_provider_requests_are_byte_identical_to_release", testOtherProviderAffinityRequests)
 }
 
