@@ -17,7 +17,7 @@ export type AvailableHistoryDetailView = Omit<SessionDetail, 'session' | 'messag
   & Omit<SessionHistoryResponse, 'session_id' | 'entries'> & {
     session: DisplaySession
     messages: HistoryPageView['entries']
-    history_state: SessionDetail['history_state'] & { status: 'available' }
+    history_state: SessionDetail['history_state'] & { status: 'available'; reason?: never; message?: never }
   }
 
 // not-wire-format: a test-owned dependency port, not a production declaration.

@@ -6,6 +6,7 @@ import { useChatStore, makeBucketMessages } from '@/store/chat'
 import type { WsConnection } from '@/lib/ws'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { emptyHistoryFixture } from '../../../tests/chat-history-paging/empty-history'
 import { ChatThread } from '@/components/chat/ChatThread'
 
 // test_chat_streaming_integration (test #24)
@@ -183,6 +184,7 @@ describe('cancel integration (test #40)', () => {
       useChatStore.setState({
         sessionsById: {
           'sess_cancel': {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages([cancelMsg]),
             toolCalls: {},
             toolCallOrder: [],
