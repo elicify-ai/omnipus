@@ -78,11 +78,28 @@ func (f *ownershipFixture) connect(requestID, sessionID string) agent.WhatsAppPa
 	return f.await(channels.PairingStatusCode)
 }
 
-// connectorsStart starts an unowned attempt, as a Connectors enable does.
+// connectorsStart starts an unowned attempt the way a Connectors enable
+// does: its own admission, committed, then the start consumes it (gate r4:
+// no start without its own token).
 func (f *ownershipFixture) connectorsStart() agent.WhatsAppPairingPayload {
 	f.t.Helper()
-	require.NoError(f.t, f.ch.Start(channels.WithPairingStart(context.Background(), "", false)))
+	attemptID, err := f.al.AdmitEnablePairing(ownershipChannelID)
+	require.NoError(f.t, err)
+	require.True(f.t, f.al.CommitPairing(ownershipChannelID, attemptID))
+	startAdmitted(f.t, f.al, f.mgr, f.ch)
 	return f.await(channels.PairingStatusCode)
+}
+
+// cutOff ends the running attempt the way a disable or reload stop of the
+// native channel does: interrupted, with its frame.
+func (f *ownershipFixture) cutOff() {
+	f.t.Helper()
+	attemptID := f.ch.currentAttempt()
+	_, applied := f.mgr.PairingAttempts().Complete(ownershipChannelID, attemptID, channels.PairingOutcomeInterrupted)
+	require.True(f.t, applied)
+	f.ch.mu.Lock()
+	f.ch.attemptID, f.ch.running = "", false
+	f.ch.mu.Unlock()
 }
 
 func (f *ownershipFixture) timeout() agent.WhatsAppPairingPayload {
@@ -198,7 +215,14 @@ func TestPairingRetry_PassiveReconnectNeverReclaims(t *testing.T) {
 	f.connect("req-a", f.chatA)
 	f.timeout()
 
+	before, ok := f.mgr.PairingAttempts().Latest(ownershipChannelID)
+	require.True(t, ok)
 	f.subscribe("req-a", f.chatA)
+	// Gate r4 CHECK: a passive subscribe reserves NOTHING — no Retry
+	// admission, no new pair_ id; the attempt store is unchanged.
+	after, ok := f.mgr.PairingAttempts().Latest(ownershipChannelID)
+	require.True(t, ok)
+	require.Equal(t, before, after, "a reconnect only observes; it never admits an attempt")
 	code := f.connectorsStart()
 	require.Empty(t, code.RequestID, "a Connectors-started attempt is unowned")
 	require.Empty(t, code.SessionID)
@@ -215,7 +239,8 @@ func TestPairingRetry_PassiveReconnectNeverReclaims(t *testing.T) {
 func TestPairingRetry_OldChatCannotRetryAfterANewerAttempt(t *testing.T) {
 	f := newOwnershipFixture(t)
 	f.connect("req-a", f.chatA)
-	code := f.connectorsStart() // A was disabled mid-attempt; Connectors restarted
+	f.cutOff()                  // A was disabled mid-attempt
+	code := f.connectorsStart() // and Connectors started a new pairing
 	require.Empty(t, code.RequestID, "a stale owner must not label a later attempt")
 	f.stop(f.chatA)
 	f.requireStopReached(false, "a stale owner's Stop must not reach a later attempt")
@@ -261,19 +286,34 @@ func TestPairingRetry_CompetingClaimsKeepTheFirst(t *testing.T) {
 		f := newOwnershipFixture(t)
 		f.connect("req-a", f.chatA)
 		f.timeout()
-		_, err := f.al.AdmitConnectPairing(ownershipChannelID, "req-b", f.chatB)
+		winner, err := f.al.AdmitConnectPairing(ownershipChannelID, "req-b", f.chatB)
 		require.NoError(t, err)
 		rec, _ := f.admit(wu6Owner, "req-a", f.chatA)
 		requireConflict(t, rec)
+		// Restored (gate r4 CHECK): the refused Retry left B's claim intact —
+		// the winning connect's next code still carries B's ids and owner.
+		require.True(t, f.al.CommitPairing(ownershipChannelID, winner))
+		startAdmitted(t, f.al, f.mgr, f.ch)
+		code := f.await(channels.PairingStatusCode)
+		require.Equal(t, "req-b", code.RequestID, "B's claim survives A's competing Retry")
+		require.Equal(t, f.chatB, code.SessionID)
+		latest, ok := f.mgr.PairingAttempts().Latest(ownershipChannelID)
+		require.True(t, ok)
+		require.Equal(t, winner, latest.AttemptID)
+		require.Equal(t, channels.PairingOwner{SessionID: f.chatB, RequestID: "req-b"}, *latest.Owner)
 	})
 	t.Run("retry first", func(t *testing.T) {
 		f := newOwnershipFixture(t)
 		f.connect("req-a", f.chatA)
 		f.timeout()
-		rec, _ := f.admit(wu6Owner, "req-a", f.chatA)
+		rec, retry := f.admit(wu6Owner, "req-a", f.chatA)
 		require.Equal(t, http.StatusOK, rec.Code)
 		_, err := f.al.AdmitConnectPairing(ownershipChannelID, "req-b", f.chatB)
 		require.ErrorIs(t, err, channels.ErrPairingConflict, "B's connect is refused while A's Retry holds the next attempt")
+		require.True(t, f.al.CommitPairing(ownershipChannelID, retry))
+		startAdmitted(t, f.al, f.mgr, f.ch)
+		require.Equal(t, "req-a", f.await(channels.PairingStatusCode).RequestID,
+			"A's admitted Retry is not overwritten by B's later claim")
 	})
 	t.Run("connect after the first code", func(t *testing.T) {
 		f := newOwnershipFixture(t)
@@ -468,13 +508,16 @@ func TestPairingStop_NeverActsOnASuccessor(t *testing.T) {
 	t.Run("no successor while A is torn down", func(t *testing.T) {
 		f := newOwnershipFixture(t)
 		f.connect("req-a", f.chatA)
-		var startErr error
+		var admitErr, repairErr error
 		f.ch.onTeardown = func() {
-			startErr = f.ch.Start(channels.WithPairingStart(context.Background(), "", false))
+			_, admitErr = f.al.AdmitConnectPairing(ownershipChannelID, "req-b", f.chatB)
+			_, repairErr = f.mgr.PairingAttempts().ActivateRepair(ownershipChannelID,
+				func(string) func(context.Context) error { return nil })
 		}
 		f.stop(f.chatA)
 		f.requireStopReached(true, "A's own Stop tears A down")
-		require.ErrorIs(t, startErr, channels.ErrPairingStopping, "a successor cannot start over a client still being torn down")
+		require.ErrorIs(t, admitErr, channels.ErrPairingConflict, "no successor is admitted while A's client is torn down")
+		require.ErrorIs(t, repairErr, channels.ErrPairingStopping, "nor does one start")
 		stopped := f.await(channels.PairingStatusStopped)
 		require.Equal(t, "req-a", stopped.RequestID, "the stopped frame names A")
 	})

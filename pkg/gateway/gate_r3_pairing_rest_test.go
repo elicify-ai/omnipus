@@ -103,6 +103,20 @@ func (f *pairingRESTFixture) put(action, body string) *httptest.ResponseRecorder
 	return f.do(http.MethodPut, "/api/v1/channels/whatsapp/"+action, body)
 }
 
+// admit runs the real Retry admission (no disable, nothing saved) and returns
+// its response and reserved attempt.
+func (f *pairingRESTFixture) admit(requestID, sessionID string) (*httptest.ResponseRecorder, string) {
+	f.t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/channels/whatsapp/enable", nil)
+	req = req.WithContext(context.WithValue(req.Context(), UserContextKey{}, &config.UserConfig{Username: wu6Owner}))
+	attemptID, ok := f.api.admitPairingRetry(rec, req, "whatsapp", requestID, sessionID)
+	if ok {
+		rec.Code = http.StatusOK
+	}
+	return rec, attemptID
+}
+
 func retryBody(requestID, sessionID string) string {
 	raw, _ := json.Marshal(map[string]any{"pairing_retry": map[string]string{"request_id": requestID, "session_id": sessionID}})
 	return string(raw)
@@ -142,7 +156,8 @@ func (f *pairingRESTFixture) connectOwned(requestID, sessionID string) agent.Wha
 // Retry begins from (its Retry disables, then enables with pairing_retry).
 func (f *pairingRESTFixture) endedOwnedAttempt() string {
 	f.t.Helper()
-	require.Equal(f.t, http.StatusOK, f.put("enable", "").Code, "Connectors creates and enables the connector")
+	require.Equal(f.t, http.StatusOK, f.put("configure", "{}").Code, "Connectors adds the connector (Configure)")
+	require.Equal(f.t, http.StatusOK, f.put("enable", "").Code, "and turns it on")
 	unowned := f.await(channels.PairingStatusCode)
 	require.Empty(f.t, unowned.RequestID, "a Connectors enable starts an unowned attempt")
 	require.Empty(f.t, unowned.SessionID)
@@ -328,12 +343,21 @@ func TestPairingRetryREST_LinkedDeviceAdmissionDoesNotLeak(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, channels.PairingPhaseTerminal, latest.Phase)
 	require.Equal(t, channels.PairingOutcomeNoPairing, latest.Outcome, "a linked start closes the admission with no pairing")
+	// Gate r4 R4-A05: the chat is told the device is linked, never left
+	// waiting for a code.
+	linked := f.await(channels.PairingStatusLinked)
+	require.Equal(t, "req-a", linked.RequestID)
+	require.Equal(t, "This WhatsApp device is already linked.", linked.Message)
+	// Gate r4 CHECK: a linked device offers no Retry — the no-pairing result is
+	// not Retry-eligible, even immediately.
+	rec, _ := f.admit("req-a", f.chatA)
+	requireRESTConflict(t, rec)
 
 	ch := f.factory.latest(t)
 	ch.mu.Lock()
 	ch.paired = false
 	ch.mu.Unlock()
-	require.NoError(t, ch.Start(channels.WithPairingStart(context.Background(), "", false)), "the device logged out and re-pairs")
+	require.NoError(t, ch.repair(), "the device logged out and re-pairs")
 	code := f.await(channels.PairingStatusCode)
 	require.Empty(t, code.RequestID, "the re-pairing is not attributed to the earlier Retry")
 	require.Empty(t, code.SessionID)
@@ -399,6 +423,7 @@ func TestPairingRetryREST_SlowReloadKeepsTheReservation(t *testing.T) {
 // from that state is a fresh attempt owned by that chat.
 func TestPairingRetryREST_RestartInterruptedPairingIsRetried(t *testing.T) {
 	f := newPairingRESTFixture(t)
+	require.Equal(t, http.StatusOK, f.put("configure", "{}").Code)
 	require.Equal(t, http.StatusOK, f.put("enable", "").Code)
 	f.await(channels.PairingStatusCode)
 	ch := f.factory.latest(t)

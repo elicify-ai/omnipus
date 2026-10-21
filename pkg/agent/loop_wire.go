@@ -2157,6 +2157,15 @@ func (al *AgentLoop) WireSysagentDeps(deps *systools.Deps) {
 	if depsCopy.LastStartError == nil {
 		depsCopy.LastStartError = al.lastStartError
 	}
+	if depsCopy.AdmitEnablePairing == nil {
+		depsCopy.AdmitEnablePairing = al.admitEnablePairingForTool
+	}
+	if depsCopy.RevokePairingForDisable == nil {
+		depsCopy.RevokePairingForDisable = al.RevokePairingForDisable
+	}
+	if depsCopy.PairingAttemptState == nil {
+		depsCopy.PairingAttemptState = al.PairingAttemptState
+	}
 	al.sysagentDeps = &depsCopy
 	al.wireSysagentDepsLocked(al.registry, &depsCopy)
 }

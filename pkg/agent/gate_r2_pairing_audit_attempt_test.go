@@ -31,9 +31,12 @@ func TestPairingAudit_RowNamesTheAttemptsOwnRequest(t *testing.T) {
 	store := pairingAttemptsFor(t, al)
 	noop := func(string) func(context.Context) error { return func(context.Context) error { return nil } }
 
-	_, _ = startOwnedAttempt(t, store, "whatsapp", "sess-a", "req-a")
-	connectors, err := store.Activate("whatsapp", "", noop) // Connectors restart, no claim
-	require.NoError(t, err)
+	a, _ := startOwnedAttempt(t, store, "whatsapp", "sess-a", "req-a")
+	// A disable cut A off; Connectors then turned the connector on again: an
+	// unowned attempt of its own admission (gate r4: no tokenless start).
+	_, interrupted := store.Complete("whatsapp", a, channels.PairingOutcomeInterrupted)
+	require.True(t, interrupted)
+	connectors := startUnownedAttempt(t, store, "whatsapp", noop)
 	al.EmitWhatsAppPairingAttempt("whatsapp", connectors.AttemptID, channels.PairingStatusTimeout, "", "expired")
 	owned, _ := startOwnedAttempt(t, store, "whatsapp-2", "sess-b", "req-b")
 	al.EmitWhatsAppPairingAttempt("whatsapp-2", owned, channels.PairingStatusTimeout, "", "expired")

@@ -20,6 +20,18 @@ func noCancel(string) func(context.Context) error {
 	return func(context.Context) error { return nil }
 }
 
+// startUnowned admits an ordinary (Connectors) enable, commits it and
+// activates it: an unowned attempt, started with its own token.
+func startUnowned(t *testing.T, s *PairingAttempts) PairingAttempt {
+	t.Helper()
+	admitted, err := s.Admit(testInstance, PairingAdmissionEnable, nil)
+	require.NoError(t, err)
+	require.True(t, s.MarkReady(testInstance, admitted.AttemptID, "rev-1"))
+	active, err := s.Activate(testInstance, s.TakeReady(testInstance, "rev-1"), noCancel)
+	require.NoError(t, err)
+	return active
+}
+
 // startOwned admits owner's connect, commits it and activates it.
 func startOwned(t *testing.T, s *PairingAttempts, owner *PairingOwner) PairingAttempt {
 	t.Helper()
@@ -61,10 +73,9 @@ func TestPairingAttempts_ANewerUnownedAttemptEndsOlderEligibility(t *testing.T) 
 	a := startOwned(t, s, ownerA)
 	_, _ = s.Complete(testInstance, a.AttemptID, PairingOutcomeTimeout)
 
-	connectors, err := s.Activate(testInstance, "", noCancel)
-	require.NoError(t, err)
+	connectors := startUnowned(t, s)
 	require.Nil(t, connectors.Owner, "a Connectors start is unowned")
-	_, err = s.Admit(testInstance, PairingAdmissionRetry, ownerA)
+	_, err := s.Admit(testInstance, PairingAdmissionRetry, ownerA)
 	require.ErrorIs(t, err, ErrPairingConflict, "an old Retry cannot adopt a running unowned pairing")
 
 	_, _ = s.Complete(testInstance, connectors.AttemptID, PairingOutcomeTimeout)
@@ -166,8 +177,10 @@ func TestPairingAttempts_StopIsPinnedToItsAttempt(t *testing.T) {
 	stop, ok := s.BeginStop(fresh[0])
 	require.True(t, ok, "control: a selection of the current attempt stops it")
 	require.NotNil(t, stop.Cancel)
-	_, err = s.Activate(testInstance, "", noCancel)
+	_, err = s.ActivateRepair(testInstance, noCancel)
 	require.ErrorIs(t, err, ErrPairingStopping, "no successor starts while the client is being torn down")
+	_, err = s.Admit(testInstance, PairingAdmissionEnable, nil)
+	require.ErrorIs(t, err, ErrPairingConflict, "nor is one admitted")
 	done, ok := s.FinishStop(testInstance, successor.AttemptID, nil)
 	require.True(t, ok)
 	require.Equal(t, PairingOutcomeStopped, done.Outcome)
@@ -224,10 +237,101 @@ func TestPairingAttempts_DeleteClosesAdmissionAndForgets(t *testing.T) {
 	_, _ = s.Complete(testInstance, a.AttemptID, PairingOutcomeTimeout)
 	s.BeginDelete(testInstance)
 	_, err := s.Admit(testInstance, PairingAdmissionRetry, ownerA)
-	require.ErrorIs(t, err, ErrPairingConflict, "admission is closed while the connector is deleted")
+	require.ErrorIs(t, err, ErrPairingDeleting, "admission is closed while the connector is deleted")
+	_, err = s.Admit(testInstance, PairingAdmissionEnable, nil)
+	require.ErrorIs(t, err, ErrPairingDeleting, "an ordinary enable is refused too (gate r4 R4-A02)")
+	_, err = s.ActivateRepair(testInstance, noCancel)
+	require.ErrorIs(t, err, ErrPairingDeleting, "and automatic re-pairing")
 	s.EndDelete(testInstance, true)
 	_, ok := s.Latest(testInstance)
 	require.False(t, ok, "a deleted connector keeps no attempts")
 	_, err = s.Admit(testInstance, PairingAdmissionRetry, ownerA)
 	require.ErrorIs(t, err, ErrPairingConflict, "nothing is retryable on a recreated connector")
+}
+
+// TestPairingAttempts_APairingStartsOnlyWithItsOwnToken is gate r4 R4-A01 /
+// R4-A02 / T2-SF-13 (M2, M14): a start without its own ready token is
+// refused — it can neither mint a fallback unowned attempt nor replace a
+// chat's pending or ready reservation; automatic re-pairing is an admission
+// that refuses a reservation too, and a delete closes token starts.
+func TestPairingAttempts_APairingStartsOnlyWithItsOwnToken(t *testing.T) {
+	s := NewPairingAttempts()
+	_, err := s.Activate(testInstance, "", noCancel)
+	require.ErrorIs(t, err, ErrPairingConflict, "no token, no pairing")
+	_, ok := s.Latest(testInstance)
+	require.False(t, ok, "and nothing was minted")
+
+	pending, err := s.Admit(testInstance, PairingAdmissionRetry, ownerA)
+	require.ErrorIs(t, err, ErrPairingConflict, "instrument: nothing to retry")
+	pending, err = s.Admit(testInstance, PairingAdmissionConnect, ownerA)
+	require.NoError(t, err)
+	_, err = s.ActivateRepair(testInstance, noCancel)
+	require.ErrorIs(t, err, ErrPairingConflict, "re-pairing never replaces a pending reservation")
+	_, err = s.Admit(testInstance, PairingAdmissionEnable, nil)
+	require.ErrorIs(t, err, ErrPairingConflict, "nor does an ordinary enable")
+	require.True(t, s.MarkReady(testInstance, pending.AttemptID, "rev-1"))
+	_, err = s.ActivateRepair(testInstance, noCancel)
+	require.ErrorIs(t, err, ErrPairingConflict, "nor a ready one")
+	_, err = s.Activate(testInstance, "pair_someone_else", noCancel)
+	require.ErrorIs(t, err, ErrPairingConflict, "a start consumes only its own token")
+	latest, _ := s.Latest(testInstance)
+	require.Equal(t, pending.AttemptID, latest.AttemptID)
+	require.Equal(t, PairingPhaseReady, latest.Phase, "the winner's reservation is intact")
+	require.Equal(t, *ownerA, *latest.Owner)
+	require.True(t, s.IsReady(testInstance, pending.AttemptID))
+
+	s.BeginDelete(testInstance)
+	_, err = s.Activate(testInstance, pending.AttemptID, noCancel)
+	require.ErrorIs(t, err, ErrPairingDeleting, "a delete in progress refuses even a token start")
+	require.False(t, s.IsReady(testInstance, pending.AttemptID), "the delete revoked the reservation")
+}
+
+// TestPairingAttempts_StartFailureIsRetryableByItsChat is gate r4 T2-SF-16: a
+// pairing whose start failed belongs to the same chat, which may Retry it; a
+// different chat may not.
+func TestPairingAttempts_StartFailureIsRetryableByItsChat(t *testing.T) {
+	s := NewPairingAttempts()
+	admitted, err := s.Admit(testInstance, PairingAdmissionConnect, ownerA)
+	require.NoError(t, err)
+	require.True(t, s.MarkReady(testInstance, admitted.AttemptID, "rev-1"))
+	require.True(t, s.Release(testInstance, admitted.AttemptID, PairingOutcomeStartFailed))
+	_, err = s.Admit(testInstance, PairingAdmissionRetry, ownerB)
+	require.ErrorIs(t, err, ErrPairingConflict, "another chat cannot retry it")
+	retry, err := s.Admit(testInstance, PairingAdmissionRetry, ownerA)
+	require.NoError(t, err, "its own chat can")
+	require.NotEqual(t, admitted.AttemptID, retry.AttemptID)
+}
+
+// TestPairingAttempts_FailedTeardownIsRetriedOnItsOwnHandle is gate r4
+// T2-SF-14 (M7): a failed teardown stays stopping, is selected again by a
+// later Stop of its chat, is retried on that attempt's own handle, and ends
+// stopped once the client is disposed.
+func TestPairingAttempts_FailedTeardownIsRetriedOnItsOwnHandle(t *testing.T) {
+	s := NewPairingAttempts()
+	calls := 0
+	admitted, err := s.Admit(testInstance, PairingAdmissionConnect, ownerA)
+	require.NoError(t, err)
+	require.True(t, s.MarkReady(testInstance, admitted.AttemptID, "rev-1"))
+	_, err = s.Activate(testInstance, admitted.AttemptID, func(string) func(context.Context) error {
+		return func(context.Context) error { calls++; return nil }
+	})
+	require.NoError(t, err)
+	stop, ok := s.BeginStop(s.OwnedBy("chat-a")[0])
+	require.True(t, ok)
+	_, ok = s.FinishStop(testInstance, stop.Attempt.AttemptID, context.DeadlineExceeded)
+	require.False(t, ok, "a failed teardown is not reported stopped")
+
+	again := s.OwnedBy("chat-a")
+	require.Len(t, again, 1, "the stuck attempt can be selected again")
+	retried, ok := s.BeginStop(again[0])
+	require.True(t, ok)
+	require.Equal(t, admitted.AttemptID, retried.Attempt.AttemptID)
+	require.NoError(t, retried.Cancel(context.Background()))
+	require.Equal(t, 1, calls, "the retry runs that attempt's own handle")
+	_, ok = s.BeginStop(again[0])
+	require.False(t, ok, "a retry in progress is not selected twice")
+	done, ok := s.FinishStop(testInstance, admitted.AttemptID, nil)
+	require.True(t, ok)
+	require.Equal(t, PairingOutcomeStopped, done.Outcome)
+	require.Empty(t, s.OwnedBy("chat-a"))
 }

@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -197,6 +198,21 @@ type Deps struct {
 	// LastStartError returns a channel's most recent start failure, for a
 	// value-free cause and repair (gate r2 T2-SF-10). WireSysagentDeps fills it.
 	LastStartError func(id string) error
+	// AdmitEnablePairing reserves an unowned pairing attempt for enable_channel
+	// turning a QR-paired connector on, before anything is saved (gate r4
+	// R4-A02, M1/M2). An error refuses it: another attempt is in flight
+	// (channels.ErrPairingConflict) or the connector is being deleted
+	// (channels.ErrPairingDeleting). WireSysagentDeps fills it.
+	AdmitEnablePairing func(channelID string) (attemptID string, err error)
+	// RevokePairingForDisable ends a not-yet-started pairing admission of a
+	// connector disable_channel turns off, so it can never start late (gate r4
+	// R4-A02). WireSysagentDeps fills it.
+	RevokePairingForDisable func(channelID string)
+	// PairingAttemptState returns an admitted attempt's current record, so a
+	// connect result reports what its own start did — a running pairing, an
+	// already-linked device or a failed start (gate r4 R4-A05).
+	// WireSysagentDeps fills it.
+	PairingAttemptState func(channelID, attemptID string) (channels.PairingAttempt, bool)
 	// WaitForPendingReloadFunc BLOCKS until any reload already queued by a
 	// prior publish hook (UpsertAgentFastFunc / ReloadFunc) has actually
 	// landed in memory, OR returns an error after reloadWaitTimeout elapses.

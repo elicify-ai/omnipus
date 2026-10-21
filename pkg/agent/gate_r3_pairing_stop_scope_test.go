@@ -45,6 +45,18 @@ func startOwnedAttempt(t *testing.T, store *channels.PairingAttempts, instance, 
 	return active.AttemptID, torn
 }
 
+// startUnownedAttempt admits an ordinary (Connectors) enable of instance,
+// commits it and activates it: an unowned attempt started with its own token.
+func startUnownedAttempt(t *testing.T, store *channels.PairingAttempts, instance string, newCancel func(string) func(context.Context) error) channels.PairingAttempt {
+	t.Helper()
+	admitted, err := store.Admit(instance, channels.PairingAdmissionEnable, nil)
+	require.NoError(t, err)
+	require.True(t, store.MarkReady(instance, admitted.AttemptID, "rev"))
+	active, err := store.Activate(instance, admitted.AttemptID, newCancel)
+	require.NoError(t, err)
+	return active
+}
+
 func requireTornDown(t *testing.T, torn chan string, attemptID string, want bool, msg string) {
 	t.Helper()
 	select {

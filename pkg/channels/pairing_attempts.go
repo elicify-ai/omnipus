@@ -23,8 +23,12 @@ import (
 //   - Admission (connect_channel, a chat Retry, an ordinary enable) reserves a
 //     NEW attempt: pending, then ready once its configuration committed. The
 //     check and the reservation are one step under the store lock (M2).
-//   - A start consumes the ready token (or mints an unowned attempt) and makes
-//     it active before the platform call; QR events carry the attempt id.
+//   - A pairing loop starts only by consuming its own admitted ready token
+//     (Activate), or for automatic re-pairing after a logout through its own
+//     unowned admission (ActivateRepair). A start without a token never
+//     pairs: a revoked, stale or missing admission never becomes a fallback
+//     unowned loop (gate r4 R4-A01/R4-A02, M2, M14). QR events carry the
+//     attempt id of their own loop.
 //   - Stop selects attempts by owner, then re-checks the exact attempt id and
 //     owner under the lock, marks it stopping and returns that attempt's own
 //     cancel handle (M6). A successor is never touched.
@@ -97,9 +101,17 @@ var ErrPairingConflict = errors.New("pairing attempt conflict")
 // connector's previous attempt.
 var ErrPairingStopping = errors.New("a previous pairing is still stopping")
 
+// ErrPairingDeleting refuses an admission or a start while the connector is
+// being deleted (M12).
+var ErrPairingDeleting = errors.New("the connector is being deleted")
+
 type pairingAttemptRecord struct {
 	PairingAttempt
 	cancel func(context.Context) error // the active attempt's own teardown
+	// stopFailed marks a stopping attempt whose teardown failed: it stays
+	// stopping (no successor over an undisposed client) and a later Stop may
+	// select it again to retry that same teardown (gate r4 T2-SF-14).
+	stopFailed bool
 }
 
 type pairingConnector struct {
@@ -181,7 +193,7 @@ func (s *PairingAttempts) Admit(instance string, kind PairingAdmission, owner *P
 	defer s.mu.Unlock()
 	c := s.connectorLocked(instance)
 	if c.deleting {
-		return PairingAttempt{}, ErrPairingConflict
+		return PairingAttempt{}, ErrPairingDeleting
 	}
 	if c.latest != nil && inFlight(c.latest.Phase) {
 		return PairingAttempt{}, ErrPairingConflict
@@ -214,10 +226,20 @@ func retryEligible(latest *pairingAttemptRecord, owner PairingOwner) bool {
 		return false
 	}
 	switch latest.Outcome {
-	case PairingOutcomeTimeout, PairingOutcomeError, PairingOutcomeStopped, PairingOutcomeInterrupted:
+	case PairingOutcomeTimeout, PairingOutcomeError, PairingOutcomeStopped, PairingOutcomeInterrupted,
+		PairingOutcomeStartFailed: // its start failed: the same chat may try again (gate r4 T2-SF-16)
 		return true
 	}
 	return false
+}
+
+// IsReady reports whether attemptID is instance's latest attempt and still
+// ready to start — what a queued restart for that attempt requires (M2).
+func (s *PairingAttempts) IsReady(instance, attemptID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.connectors[instance]
+	return c != nil && c.latest != nil && c.latest.AttemptID == attemptID && c.latest.Phase == PairingPhaseReady
 }
 
 // MarkReady records that attemptID's configuration committed at revision
@@ -316,38 +338,56 @@ func (s *PairingAttempts) TakeReady(instance, revision string) string {
 	return c.latest.AttemptID
 }
 
-// Activate makes the start's attempt active just before the platform pairing
-// call and records its own teardown handle. token is the admitted ready
-// attempt this start consumes; an empty token mints a new unowned attempt
-// (an ordinary start or automatic re-pairing). A Stop still tearing down the
-// previous attempt refuses the start (M6). newCancel builds the attempt's own
-// teardown handle from its id.
+// Activate makes the start's own admitted attempt active just before the
+// platform pairing call and records its teardown handle. token is the ready
+// attempt this start consumes; without one no pairing loop may start (an
+// empty token is refused), so a revoked, stale or missing admission never
+// becomes a fallback unowned loop (gate r4 R4-A01, M2, M14). A Stop still
+// tearing down the previous attempt, or a delete in progress, refuses the
+// start. newCancel builds the attempt's own teardown handle from its id.
 func (s *PairingAttempts) Activate(instance, token string, newCancel func(attemptID string) func(context.Context) error) (PairingAttempt, error) {
+	if token == "" {
+		return PairingAttempt{}, ErrPairingConflict
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.connectorLocked(instance)
+	if c.deleting {
+		return PairingAttempt{}, ErrPairingDeleting
+	}
 	if c.latest != nil && c.latest.Phase == PairingPhaseStopping {
 		return PairingAttempt{}, ErrPairingStopping
 	}
-	if token != "" {
-		rec := c.attempts[token]
-		if rec == nil || rec != c.latest || rec.Phase != PairingPhaseReady {
+	rec := c.attempts[token]
+	if rec == nil || rec != c.latest || rec.Phase != PairingPhaseReady {
+		return PairingAttempt{}, ErrPairingConflict
+	}
+	rec.Phase, rec.cancel = PairingPhaseActive, newCancel(rec.AttemptID)
+	return copyAttempt(rec), nil
+}
+
+// ActivateRepair admits and activates the automatic re-pairing loop of a
+// device the platform logged out (M1: unowned). It is an admission like any
+// other (M2): it refuses while the connector is being deleted, while another
+// attempt is pending, ready or stopping, and never replaces a reservation.
+// An active latest attempt (a loop that ended without a terminal event) is
+// interrupted first.
+func (s *PairingAttempts) ActivateRepair(instance string, newCancel func(attemptID string) func(context.Context) error) (PairingAttempt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.connectorLocked(instance)
+	if c.deleting {
+		return PairingAttempt{}, ErrPairingDeleting
+	}
+	if c.latest != nil {
+		switch c.latest.Phase {
+		case PairingPhaseStopping:
+			return PairingAttempt{}, ErrPairingStopping
+		case PairingPhasePending, PairingPhaseReady:
 			return PairingAttempt{}, ErrPairingConflict
+		case PairingPhaseActive:
+			c.latest.Phase, c.latest.Outcome, c.latest.cancel = PairingPhaseTerminal, PairingOutcomeInterrupted, nil
 		}
-		rec.Phase, rec.cancel = PairingPhaseActive, newCancel(rec.AttemptID)
-		return copyAttempt(rec), nil
-	}
-	if c.latest != nil && (c.latest.Phase == PairingPhasePending || c.latest.Phase == PairingPhaseReady) {
-		// An admitted start is pending for this connector: an unrelated start
-		// must not overtake it, but it is not an error to start the channel.
-		// Interrupt the admission so it cannot start late (M2), keeping its
-		// owner eligible to Retry.
-		c.latest.Phase, c.latest.Outcome = PairingPhaseTerminal, PairingOutcomeInterrupted
-	}
-	if c.latest != nil && c.latest.Phase == PairingPhaseActive {
-		// The previous loop ended without a terminal event (its channel was
-		// stopped by a reload or disable): it was interrupted.
-		c.latest.Phase, c.latest.Outcome, c.latest.cancel = PairingPhaseTerminal, PairingOutcomeInterrupted, nil
 	}
 	id := newAttemptID()
 	rec := &pairingAttemptRecord{
@@ -388,28 +428,35 @@ func (s *PairingAttempts) Complete(instance, attemptID string, outcome PairingOu
 }
 
 // CloseNoPairing ends a consumed start token whose device was already linked:
-// no pairing is needed, nothing is retryable (M14).
-func (s *PairingAttempts) CloseNoPairing(instance, token string) {
+// no pairing is needed, nothing is retryable (M14). It reports whether it
+// closed that attempt, so the start can say so truthfully.
+func (s *PairingAttempts) CloseNoPairing(instance, token string) (PairingAttempt, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.connectors[instance]
 	if c == nil || c.latest == nil || c.latest.AttemptID != token || c.latest.Phase != PairingPhaseReady {
-		return
+		return PairingAttempt{}, false
 	}
 	c.latest.Phase, c.latest.Outcome = PairingPhaseTerminal, PairingOutcomeNoPairing
+	return copyAttempt(c.latest), true
 }
 
 // OwnedBy returns every in-flight attempt sessionID owns — the selection a
-// Stop captures at its admission (M6, M9).
+// Stop captures at its admission (M6, M9). A stopping attempt is included
+// only when its teardown failed, so a later Stop retries it (T2-SF-14).
 func (s *PairingAttempts) OwnedBy(sessionID string) []PairingAttempt {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []PairingAttempt
 	for _, c := range s.connectors {
 		rec := c.latest
-		if rec != nil && rec.Owner != nil && rec.Owner.SessionID == sessionID && inFlight(rec.Phase) && rec.Phase != PairingPhaseStopping {
-			out = append(out, copyAttempt(rec))
+		if rec == nil || rec.Owner == nil || rec.Owner.SessionID != sessionID || !inFlight(rec.Phase) {
+			continue
 		}
+		if rec.Phase == PairingPhaseStopping && !rec.stopFailed {
+			continue
+		}
+		out = append(out, copyAttempt(rec))
 	}
 	return out
 }
@@ -444,14 +491,20 @@ func (s *PairingAttempts) BeginStop(selected PairingAttempt) (PairingStopSelecti
 	case PairingPhaseActive:
 		rec.Phase = PairingPhaseStopping
 		return PairingStopSelection{Attempt: copyAttempt(rec), Cancel: rec.cancel}, true
+	case PairingPhaseStopping:
+		if rec.stopFailed && rec.cancel != nil {
+			// A failed teardown is retried on that same attempt's handle.
+			rec.stopFailed = false
+			return PairingStopSelection{Attempt: copyAttempt(rec), Cancel: rec.cancel}, true
+		}
 	}
 	return PairingStopSelection{}, false
 }
 
 // FinishStop publishes a stopping attempt's teardown result: on success it
 // ends stopped (its owner stays eligible to Retry); on failure it stays
-// stopping, so the failure is visible and no successor starts over a client
-// that was not disposed (M7).
+// stopping, marked for a retried teardown, so no successor starts over a
+// client that was not disposed (M7, T2-SF-14).
 func (s *PairingAttempts) FinishStop(instance, attemptID string, teardownErr error) (PairingAttempt, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -460,37 +513,44 @@ func (s *PairingAttempts) FinishStop(instance, attemptID string, teardownErr err
 		return PairingAttempt{}, false
 	}
 	if teardownErr != nil {
+		rec.stopFailed = true
 		return copyAttempt(rec), false
 	}
-	rec.Phase, rec.Outcome, rec.cancel = PairingPhaseTerminal, PairingOutcomeStopped, nil
+	rec.Phase, rec.Outcome, rec.cancel, rec.stopFailed = PairingPhaseTerminal, PairingOutcomeStopped, nil, false
 	return copyAttempt(rec), true
 }
 
 // RevokeForDisable ends a pending or ready admission when its connector is
-// disabled, so it can never start late; its owner stays eligible (M2).
-func (s *PairingAttempts) RevokeForDisable(instance string) {
+// disabled, so it can never start late; its owner stays eligible (M2). It
+// returns the revoked attempt, so its chat can be told.
+func (s *PairingAttempts) RevokeForDisable(instance string) (PairingAttempt, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.connectors[instance]
 	if c == nil || c.latest == nil {
-		return
+		return PairingAttempt{}, false
 	}
 	if c.latest.Phase == PairingPhasePending || c.latest.Phase == PairingPhaseReady {
 		c.latest.Phase, c.latest.Outcome = PairingPhaseTerminal, PairingOutcomeInterrupted
+		return copyAttempt(c.latest), true
 	}
+	return PairingAttempt{}, false
 }
 
 // BeginDelete closes admission for instance while it is deleted and revokes
 // its pending, ready and active attempts and all Retry eligibility (M12). The
-// connector's own removal (its reload stop) tears an active loop down.
-func (s *PairingAttempts) BeginDelete(instance string) {
+// connector's own removal (its reload stop) tears an active loop down. It
+// returns the revoked attempt, so its chat can be told.
+func (s *PairingAttempts) BeginDelete(instance string) (PairingAttempt, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.connectorLocked(instance)
 	c.deleting = true
 	if c.latest != nil && c.latest.Phase != PairingPhaseTerminal && c.latest.Phase != PairingPhaseStopping {
 		c.latest.Phase, c.latest.Outcome, c.latest.cancel = PairingPhaseTerminal, PairingOutcomeInterrupted, nil
+		return copyAttempt(c.latest), true
 	}
+	return PairingAttempt{}, false
 }
 
 // EndDelete drops instance's attempts once it is removed: a recreated

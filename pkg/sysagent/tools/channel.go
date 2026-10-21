@@ -6,10 +6,12 @@ package systools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
 
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -171,6 +173,18 @@ func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) (res
 	if missing != nil {
 		return missing
 	}
+	// Turning a QR-paired connector on reserves its unowned pairing attempt
+	// before anything is saved, like every other start (gate r4 R4-A02, M2).
+	attemptID, refused := t.admitPairing(id)
+	if refused != nil {
+		return refused
+	}
+	committed := false
+	defer func() {
+		if attemptID != "" && !committed && t.deps.ReleasePairing != nil {
+			t.deps.ReleasePairing(id, attemptID)
+		}
+	}()
 	if err := t.deps.withSharedResourceWrite(sharedChannel, id, expected, func() error {
 		return t.deps.WithConfig(func(cfg *config.Config) error {
 			if cfg.Channels == nil {
@@ -191,10 +205,45 @@ func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) (res
 		}
 		return tools.ErrorResult(errorJSON("ENABLE_FAILED", err.Error(), ""))
 	}
+	if attemptID != "" {
+		committed = t.deps.CommitPairing != nil && t.deps.CommitPairing(id, attemptID)
+		if !committed {
+			fields := map[string]any{"id": id, "revision": channelRevision(t.deps.GetCfg(), id), "changed_fields": []string{"enabled"}}
+			return changeSuccess(fields, savedNotWorking("the connection is turned on, but its pairing was cancelled before it started; "+
+				"turn it off and on again to start a new one", "saved configuration read back",
+				"authentication with the platform", "the live connection"))
+		}
+	}
 	return channelWriteResult(t.deps.GetCfg(), id, map[string]any{
 		"enabled": true,
 		"message": "Channel enabled. It will connect on the next config reload.",
 	}, []string{"enabled"}, func(ch config.ChannelInstanceConfig) bool { return ch.Enabled })
+}
+
+// admitPairing reserves the unowned pairing attempt of a QR-paired connector
+// this enable turns on. An enable of a connector already on is idempotent and
+// reserves nothing (M1). A refusal saves nothing.
+func (t *ChannelEnableTool) admitPairing(id string) (string, *tools.ToolResult) {
+	chType, _ := config.ParseInstanceKey(id)
+	if !whatsappChannel(chType) || t.deps.AdmitEnablePairing == nil {
+		return "", nil
+	}
+	if cfg := t.deps.GetCfg(); cfg != nil {
+		if ch, ok := cfg.Channels[id]; ok && ch.Enabled {
+			return "", nil
+		}
+	}
+	attemptID, err := t.deps.AdmitEnablePairing(id)
+	switch {
+	case errors.Is(err, channels.ErrPairingDeleting):
+		return "", tools.ErrorResult(errorJSON("CHANNEL_BEING_DELETED",
+			"this WhatsApp connection is being deleted; nothing saved", "Add the connection again once the deletion has finished"))
+	case err != nil:
+		return "", tools.ErrorResult(errorJSON("PAIRING_IN_PROGRESS",
+			"another WhatsApp pairing of this connection is starting, running or stopping; nothing saved",
+			"Wait for it to finish, or stop it from the chat that started it, then enable it again"))
+	}
+	return attemptID, nil
 }
 
 // channelWriteResult reads the saved entry back and renders a channel write's
@@ -388,6 +437,11 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (re
 	expected, missing := expectedRevisionArg(args, "list_channels")
 	if missing != nil {
 		return missing
+	}
+	// A not-yet-started pairing admission of the connector being turned off
+	// can never start late (gate r4 R4-A02, M2).
+	if t.deps.RevokePairingForDisable != nil {
+		t.deps.RevokePairingForDisable(id)
 	}
 	if err := t.deps.withSharedResourceWrite(sharedChannel, id, expected, func() error {
 		return t.deps.WithConfig(func(cfg *config.Config) error {

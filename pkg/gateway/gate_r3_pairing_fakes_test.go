@@ -12,11 +12,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 )
 
-// attemptChannel is a pairing channel that runs its QR pairing as store-tracked
-// attempts, exactly as the native WhatsApp channel does (gate r3 model): its
-// Start consumes the start's admitted token (or mints an unowned attempt),
-// registers the attempt's own teardown handle and reports progress with the
-// attempt id. Only the platform (whatsmeow) is faked.
+// attemptChannel is a pairing channel that follows the native WhatsApp
+// channel's attempt rules (gate r3/r4 model): its Start consumes the start's
+// own admitted token — a start without one runs no pairing — registers the
+// attempt's own teardown handle and reports progress with the attempt id. It
+// replaces the whole native adapter; the native lifecycle itself is driven by
+// pkg/channels/whatsapp_native's own tests.
 type attemptChannel struct {
 	id         string
 	mu         sync.Mutex
@@ -31,6 +32,28 @@ type attemptChannel struct {
 	onTeardown func()
 	// paired models a device already linked: a start needs no pairing.
 	paired bool
+	// idleStarts counts starts that ran no pairing (no admitted token).
+	idleStarts int
+}
+
+// repair starts the automatic re-pairing of a logged-out device: its own
+// unowned admission, as the native channel's handleLoggedOut.
+func (c *attemptChannel) repair() error {
+	c.mu.Lock()
+	store := c.store
+	c.mu.Unlock()
+	rec, err := store.ActivateRepair(c.id, func(attemptID string) func(context.Context) error {
+		return func(ctx context.Context) error { return c.teardown(attemptID) }
+	})
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.attemptID, c.running = rec.AttemptID, true
+	c.mu.Unlock()
+	c.emit(channels.PairingStatusWaiting, "", "")
+	c.emit(channels.PairingStatusCode, "QR-"+rec.AttemptID, "")
+	return nil
 }
 
 // restartInterruptedText is the ruled text for a pairing a server restart cut
@@ -79,17 +102,25 @@ func (c *attemptChannel) Start(ctx context.Context) error {
 	switch {
 	case paired:
 		// Already linked, as the native channel: an admitted start needs no
-		// pairing and closes its admission.
-		if token != "" {
-			store.CloseNoPairing(c.id, token)
-		}
+		// pairing, closes its admission and says the device is linked.
 		c.setRunning(true)
+		if token != "" {
+			if rec, closed := store.CloseNoPairing(c.id, token); closed {
+				c.emitFor(rec.AttemptID, channels.PairingStatusLinked, "", "This WhatsApp device is already linked.")
+			}
+		}
 		return nil
 	case boot && token == "":
 		// A gateway start of an unpaired connector, as the native channel:
 		// the earlier pairing was interrupted; nothing resumes.
 		rec := store.RecordRestartInterrupted(c.id)
 		c.emitFor(rec.AttemptID, channels.PairingStatusError, "", restartInterruptedText)
+		return nil
+	case token == "":
+		// No admitted pairing for this start: no pairing runs (gate r4).
+		c.mu.Lock()
+		c.idleStarts++
+		c.mu.Unlock()
 		return nil
 	}
 	rec, err := store.Activate(c.id, token, func(attemptID string) func(context.Context) error {

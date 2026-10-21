@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,19 @@ const pairingRetryConflictText = "This chat can no longer retry this pairing. " 
 // because its start can still happen (gate r3 M10).
 const pairingRetryUnconfirmedText = "The WhatsApp connection is enabled, but its restart could not be " +
 	"confirmed yet. The new code appears in this chat when the pairing starts."
+
+// pairingCancelledText answers an enable whose configuration saved but whose
+// reserved pairing was cancelled (a Stop, disable or delete) before it
+// started: the enabled setting stays saved and no fallback pairing starts
+// (gate r4 T2-SF-15, R4-A06, M14). It is not the effect-free 409.
+const pairingCancelledText = "The WhatsApp connection is turned on, but its pairing was cancelled before it started. " +
+	"Press Retry to start a new one."
+
+// pairingInProgressText refuses an ordinary enable while another pairing of
+// the connector is reserved, running or stopping: nothing is saved (gate r4
+// T2-SF-13, R4-A02, M2). Code pairing_in_progress.
+const pairingInProgressText = "Another WhatsApp pairing of this connection is starting, running or stopping, " +
+	"so nothing was changed. Wait for it to finish, or stop it from the chat that started it."
 
 // channelEnableBodyLimit bounds the optional enable body; the contract's
 // largest valid body is a few hundred bytes.
@@ -64,9 +78,10 @@ func (a *restAPI) enableChannel(w http.ResponseWriter, r *http.Request, channelI
 			if a.agentLoop.CommitPairing(channelID, attemptID) {
 				return true
 			}
-			// A Stop or deletion revoked the reservation between admission and
-			// commit: refuse instead of starting a fallback pairing (M14).
-			jsonErrCode(w, http.StatusConflict, pairingRetryConflictText, "pairing_retry_conflict")
+			// A Stop, disable or deletion revoked the reservation after the
+			// enable saved: say so truthfully — the setting is saved, the
+			// pairing did not start, and no fallback starts (gate r4 M14).
+			jsonErr(w, http.StatusInternalServerError, pairingCancelledText)
 			return false
 		},
 	})
@@ -83,26 +98,26 @@ func (a *restAPI) enableChannel(w http.ResponseWriter, r *http.Request, channelI
 	}
 }
 
-// enableChannelOrdinary is the bodyless enable. Turning a WhatsApp connector
-// on reserves an unowned attempt for its start (M1); an enable of a connector
-// already on is idempotent and reserves nothing.
+// enableChannelOrdinary is the bodyless enable. A QR-paired (WhatsApp)
+// connector must already exist — it is added through Configure, so an enable
+// racing its deletion never re-creates it (gate r4 DOCS R4-D2, M12). Turning
+// one on reserves an unowned pairing attempt for its start (M1, M2): a
+// refusal changes nothing (409 pairing_in_progress, or 404 while it is being
+// deleted). An enable of a connector already on is idempotent and reserves
+// nothing.
 func (a *restAPI) enableChannelOrdinary(w http.ResponseWriter, channelID string) {
-	attemptID := ""
-	if a.agentLoop != nil && pairingCapable(channelID) && !a.channelEnabledNow(channelID) {
-		admitted, err := a.agentLoop.AdmitEnablePairing(channelID)
-		if err != nil {
-			// Another attempt is in flight (or the store is unavailable): the
-			// enable still turns the connector on, and that attempt keeps its
-			// owner; the start then runs as an ordinary unowned start.
-			slog.Info("rest: enable reserved no pairing attempt", "channel", channelID, "error", err)
-		}
-		attemptID = admitted
+	opts := channelEnableOptions{requireExisting: pairingCapable(channelID)}
+	attemptID, ok := a.admitOrdinaryPairing(w, channelID)
+	if !ok {
+		return
 	}
-	opts := channelEnableOptions{}
 	if attemptID != "" {
-		opts.afterCommit = func(http.ResponseWriter) bool {
-			a.agentLoop.CommitPairing(channelID, attemptID)
-			return true
+		opts.afterCommit = func(w http.ResponseWriter) bool {
+			if a.agentLoop.CommitPairing(channelID, attemptID) {
+				return true
+			}
+			jsonErr(w, http.StatusInternalServerError, pairingCancelledText)
+			return false
 		}
 	}
 	outcome := a.applyChannelEnabled(w, channelID, true, opts)
@@ -112,6 +127,29 @@ func (a *restAPI) enableChannelOrdinary(w http.ResponseWriter, channelID string)
 	if outcome != enableFailed {
 		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
 	}
+}
+
+// admitOrdinaryPairing reserves the unowned attempt of a QR-paired connector
+// an ordinary enable turns on. It writes the refusal and returns false before
+// any effect. With no channel manager wired nothing can start, so there is
+// nothing to reserve.
+func (a *restAPI) admitOrdinaryPairing(w http.ResponseWriter, channelID string) (string, bool) {
+	if a.agentLoop == nil || !pairingCapable(channelID) || a.channelEnabledNow(channelID) {
+		return "", true
+	}
+	attemptID, err := a.agentLoop.AdmitEnablePairing(channelID)
+	switch {
+	case err == nil, errors.Is(err, agent.ErrPairingUnavailable):
+		return attemptID, true
+	case errors.Is(err, channels.ErrPairingDeleting):
+		jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
+	case errors.Is(err, channels.ErrPairingConflict), errors.Is(err, channels.ErrPairingStopping):
+		jsonErrCode(w, http.StatusConflict, pairingInProgressText, "pairing_in_progress")
+	default:
+		slog.Error("rest: ordinary enable pairing admission failed", "channel", channelID, "error", err)
+		jsonErr(w, http.StatusServiceUnavailable, "pairing ownership is unavailable; nothing was enabled")
+	}
+	return "", false
 }
 
 // disableChannel serves PUT /channels/{id}/disable. A not-yet-started pairing
@@ -216,6 +254,10 @@ func (a *restAPI) admitPairingRetry(w http.ResponseWriter, r *http.Request, chan
 	}
 	attemptID, err := a.agentLoop.AdmitRetryPairing(channelID, requestID, sessionID)
 	switch {
+	case errors.Is(err, channels.ErrPairingDeleting):
+		// The connector is being deleted (M12): it is not recreated.
+		jsonErr(w, http.StatusNotFound, "this WhatsApp connection no longer exists; nothing was enabled")
+		return "", false
 	case errors.Is(err, channels.ErrPairingConflict):
 		jsonErrCode(w, http.StatusConflict, pairingRetryConflictText, "pairing_retry_conflict")
 		return "", false

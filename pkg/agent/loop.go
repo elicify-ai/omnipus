@@ -109,6 +109,10 @@ type AgentLoop struct {
 	// so an old attempt's event never lands after its successor's (gate r3 M8;
 	// pairing_correlation.go).
 	pairingEmitMu sync.Mutex
+	// pairingRevokeHook is a test seam (gate r4 R4-A03): it runs in a Stop
+	// after a not-yet-started pairing was revoked and before its stopped
+	// frame is published. Nil in production.
+	pairingRevokeHook func()
 	// pairingSeq numbers WhatsApp pairing events in emit order
 	// (WhatsAppPairingPayload.Seq).
 	pairingSeq atomic.Uint64

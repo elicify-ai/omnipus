@@ -19,6 +19,11 @@ import (
 // torn down; Stop must not hang on a stuck platform connection.
 const pairingStopTimeout = 10 * time.Second
 
+// pairingStopRetryDelays spaces the retried teardowns of a pairing whose Stop
+// did not finish (gate r4 T2-SF-14): the attempt stays stopping until its
+// client is disposed, then ends stopped. A variable so tests can shorten it.
+var pairingStopRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute}
+
 // ErrPairingUnavailable refuses a pairing admission when no channel manager
 // (and so no attempt store) is wired.
 var ErrPairingUnavailable = errors.New("pairing ownership is unavailable")
@@ -68,11 +73,22 @@ func (al *AgentLoop) AdmitEnablePairing(channelID string) (string, error) {
 	return al.admitPairing(channelID, channels.PairingAdmissionEnable, nil)
 }
 
+// admitEnablePairingForTool is enable_channel's admission: with no channel
+// manager wired nothing can start, so there is nothing to reserve.
+func (al *AgentLoop) admitEnablePairingForTool(channelID string) (string, error) {
+	attemptID, err := al.AdmitEnablePairing(channelID)
+	if errors.Is(err, ErrPairingUnavailable) {
+		return "", nil
+	}
+	return attemptID, err
+}
+
 // CommitPairing marks an admitted attempt startable once the configuration it
 // enables committed, bound to that configuration's revision (M14), and asks
-// the next reload to give the connector a fresh start even when its
-// configuration is unchanged (M4, M10). A connector the manager does not hold
-// yet is started by the reload's own add.
+// a reload to give the connector a fresh start for exactly that attempt even
+// when its configuration is unchanged (M4, M10); the restart is dropped if a
+// Stop, disable or delete revokes the attempt first (gate r4 R4-A01). A
+// connector the manager does not hold yet is started by the reload's own add.
 func (al *AgentLoop) CommitPairing(channelID, attemptID string) bool {
 	mgr := al.GetChannelManager()
 	if mgr == nil {
@@ -82,9 +98,27 @@ func (al *AgentLoop) CommitPairing(channelID, attemptID string) bool {
 		return false
 	}
 	if _, registered := mgr.GetChannel(channelID); registered {
-		mgr.RequestRestart(channelID)
+		mgr.RequestRestart(channelID, attemptID)
+		// A reload that already ran for the saved configuration cannot have
+		// started this attempt: ask for one (coalesced with any pending).
+		if err := al.TriggerReload(); err != nil && !errors.Is(err, ErrReloadNotConfigured) &&
+			!errors.Is(err, ErrReloadAlreadyInProgress) {
+			logger.WarnCF("agent", "Could not request the reload that starts an admitted pairing; the next reload starts it",
+				map[string]any{"channel_id": channelID, "attempt_id": attemptID, "error": err.Error()})
+		}
 	}
 	return true
+}
+
+// PairingAttemptState returns attemptID's current record — for a connect
+// result that reports what its own admitted start actually did (gate r4
+// R4-A05): a running pairing, an already-linked device, or a failed start.
+func (al *AgentLoop) PairingAttemptState(channelID, attemptID string) (channels.PairingAttempt, bool) {
+	store := al.pairingAttempts()
+	if store == nil || attemptID == "" {
+		return channels.PairingAttempt{}, false
+	}
+	return store.Attempt(channelID, attemptID)
 }
 
 // ReleasePairing ends an admitted attempt that no start consumed: its save or
@@ -100,14 +134,27 @@ func (al *AgentLoop) ReleasePairing(channelID, attemptID string) {
 // being disabled, so it cannot start late (M2).
 func (al *AgentLoop) RevokePairingForDisable(channelID string) {
 	if store := al.pairingAttempts(); store != nil {
-		store.RevokeForDisable(channelID)
+		if revoked, ok := store.RevokeForDisable(channelID); ok {
+			al.publishInterrupted(revoked)
+		}
 	}
+}
+
+// publishInterrupted tells an attempt's chat (or Connectors) that a disable or
+// delete cut it off, so no card waits on a code that cannot come (gate r4).
+func (al *AgentLoop) publishInterrupted(attempt channels.PairingAttempt) {
+	al.pairingEmitMu.Lock()
+	defer al.pairingEmitMu.Unlock()
+	al.publishPairingLocked(attempt.Instance, attempt.AttemptID, attempt.Owner,
+		channels.PairingStatusError, "", channels.PairingInterruptedMessage)
 }
 
 // BeginPairingDelete and EndPairingDelete bracket a connector's deletion (M12).
 func (al *AgentLoop) BeginPairingDelete(channelID string) {
 	if store := al.pairingAttempts(); store != nil {
-		store.BeginDelete(channelID)
+		if revoked, ok := store.BeginDelete(channelID); ok {
+			al.publishInterrupted(revoked)
+		}
 	}
 }
 
@@ -129,7 +176,7 @@ func (al *AgentLoop) requestChannelRestart(id string) bool {
 	if !registered || ch.IsRunning() {
 		return false
 	}
-	mgr.RequestRestart(id)
+	mgr.RequestRestart(id, "")
 	return true
 }
 
@@ -246,12 +293,24 @@ func (al *AgentLoop) publishPairingLocked(channelID, attemptID string, owner *ch
 	if owner != nil {
 		payload.RequestID, payload.SessionID = owner.RequestID, owner.SessionID
 	}
+	var outcome channels.PairingOutcome
+	current := true
 	if store := al.pairingAttempts(); store != nil && attemptID != "" {
 		if rec, ok := store.Attempt(channelID, attemptID); ok {
 			payload.RestartInterrupted = rec.RestartInterrupted
+			outcome = rec.Outcome
 		}
+		// The public frame (live view, reconnect cache) is only ever the
+		// connector's latest attempt: an older attempt's late result never
+		// overwrites a successor's code or progress, even with the same
+		// request and session ids (gate r4 R4-A03, M8). Its audit row below is
+		// still written — the historical outcome of that attempt (M13).
+		latest, ok := store.Latest(channelID)
+		current = ok && latest.AttemptID == attemptID
 	}
-	al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, payload)
+	if current {
+		al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, payload)
+	}
 	// #358, FR-081/K10: audit-log device-pairing lifecycle transitions so linking a
 	// new WhatsApp device leaves a tamper-evident trail. We deliberately do NOT log
 	// the `code`/`connecting` states (high-frequency, and the QR itself is a
@@ -277,6 +336,9 @@ func (al *AgentLoop) publishPairingLocked(channelID, attemptID string, owner *ch
 		}
 		if attemptID != "" {
 			details["attempt_id"] = attemptID
+		}
+		if outcome != "" {
+			details["outcome"] = string(outcome)
 		}
 		if owner != nil {
 			details["request_id"] = owner.RequestID
@@ -335,7 +397,10 @@ func (al *AgentLoop) selectOwnedPairings(sessionID string) []channels.PairingAtt
 // still stoppable): a started one becomes stopping and only its own captured
 // teardown runs, never a channel looked up by name; one that never started is
 // revoked. The stopped frame and audit row carry the selected attempt's own
-// owner. A teardown that did not finish stays stopping and is reported.
+// owner, and a public frame is published only while the attempt is still the
+// connector's latest (gate r4 R4-A03). A teardown that did not finish stays
+// stopping, is reported to its chat and is retried until the client is
+// disposed (gate r4 T2-SF-14).
 func (al *AgentLoop) stopSelectedPairings(selected []channels.PairingAttempt) {
 	store := al.pairingAttempts()
 	if store == nil {
@@ -347,31 +412,67 @@ func (al *AgentLoop) stopSelectedPairings(selected []channels.PairingAttempt) {
 			continue // no longer that attempt, or not stoppable: a no-op
 		}
 		if sel.Cancel == nil {
+			if al.pairingRevokeHook != nil {
+				al.pairingRevokeHook() // test seam: the window after revocation
+			}
 			al.pairingEmitMu.Lock()
 			al.publishPairingLocked(sel.Attempt.Instance, sel.Attempt.AttemptID, sel.Attempt.Owner,
 				channels.PairingStatusStopped, "", "pairing stopped from the chat")
 			al.pairingEmitMu.Unlock()
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), pairingStopTimeout)
-		teardownErr := sel.Cancel(ctx)
-		cancel()
-		al.pairingEmitMu.Lock()
-		done, finished := store.FinishStop(sel.Attempt.Instance, sel.Attempt.AttemptID, teardownErr)
-		if finished {
-			al.publishPairingLocked(done.Instance, done.AttemptID, done.Owner,
-				channels.PairingStatusStopped, "", "pairing stopped from the chat")
+		if !al.finishPairingTeardown(store, sel, true) {
+			go al.retryPairingTeardown(store, sel.Attempt)
 		}
-		al.pairingEmitMu.Unlock()
-		if !finished {
-			fields := map[string]any{"channel_id": sel.Attempt.Instance, "attempt_id": sel.Attempt.AttemptID}
-			if teardownErr != nil {
-				fields["error"] = teardownErr.Error()
-			}
-			logger.ErrorCF("agent", "Stopping the pairing did not finish; it stays stopping and no new pairing starts until it does. Restart the channel or the gateway if it persists", fields)
-			continue
-		}
-		logger.InfoCF("agent", "Stopped an in-flight channel pairing on Stop",
-			map[string]any{"channel_id": sel.Attempt.Instance, "attempt_id": sel.Attempt.AttemptID})
 	}
+}
+
+// finishPairingTeardown runs a selected attempt's own teardown and publishes
+// its result. On failure the attempt stays stopping (no successor over an
+// undisposed client); the first failure is shown to its chat.
+func (al *AgentLoop) finishPairingTeardown(store *channels.PairingAttempts, sel channels.PairingStopSelection, first bool) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), pairingStopTimeout)
+	teardownErr := sel.Cancel(ctx)
+	cancel()
+	al.pairingEmitMu.Lock()
+	done, finished := store.FinishStop(sel.Attempt.Instance, sel.Attempt.AttemptID, teardownErr)
+	switch {
+	case finished:
+		al.publishPairingLocked(done.Instance, done.AttemptID, done.Owner,
+			channels.PairingStatusStopped, "", "pairing stopped from the chat")
+	case first && teardownErr != nil:
+		al.publishPairingLocked(sel.Attempt.Instance, sel.Attempt.AttemptID, sel.Attempt.Owner,
+			channels.PairingStatusError, "", channels.PairingStopPendingMessage)
+	}
+	al.pairingEmitMu.Unlock()
+	fields := map[string]any{"channel_id": sel.Attempt.Instance, "attempt_id": sel.Attempt.AttemptID}
+	if !finished {
+		if teardownErr != nil {
+			fields["error"] = teardownErr.Error()
+		}
+		logger.ErrorCF("agent", "Stopping the pairing did not finish; it stays stopping, no new pairing starts until it does, and the teardown is retried", fields)
+		return false
+	}
+	logger.InfoCF("agent", "Stopped an in-flight channel pairing on Stop", fields)
+	return true
+}
+
+// retryPairingTeardown retries a failed pairing teardown on that same
+// attempt's own handle until it is disposed (T2-SF-14). It stops when the
+// attempt is no longer the failed stopping one (another Stop retried it, or
+// the connector was deleted); after the last delay a later Stop of its chat
+// can still retry it.
+func (al *AgentLoop) retryPairingTeardown(store *channels.PairingAttempts, attempt channels.PairingAttempt) {
+	for _, delay := range pairingStopRetryDelays {
+		time.Sleep(delay)
+		sel, ok := store.BeginStop(attempt)
+		if !ok {
+			return
+		}
+		if al.finishPairingTeardown(store, sel, false) {
+			return
+		}
+	}
+	logger.ErrorCF("agent", "Stopping the pairing still has not finished; press Stop in its chat again, or restart the gateway",
+		map[string]any{"channel_id": attempt.Instance, "attempt_id": attempt.AttemptID})
 }

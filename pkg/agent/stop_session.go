@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -101,16 +103,17 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	}
 	ctx = al.withSecretStopIntent(ctx, intentCause)
 	// BDD-8.8: Stop in the chat that started a pairing ends that pairing even
-	// when the chat has no live turn to cancel (gate r1 CR-T2-03). Each reached
-	// session's owned attempts are selected at its admission — the requested
-	// session here, every helper a Stop-all reaches in stopTurn below (gate r3
-	// M6, M9) — and the selection is frozen. The teardown can block on the
-	// platform client, so it runs only after this Stop has stamped its durable
-	// fence and asked the turns to stop (gate r2 CR-T2-R2-02, gate r3 M7):
-	// deferred, so every return path still ends the selected pairings.
-	pairings := &pairingStopSelection{}
-	pairings.add(al.selectOwnedPairings(req.SessionID))
-	defer func() { al.stopSelectedPairings(pairings.all()) }()
+	// when the chat has no live turn to cancel (gate r1 CR-T2-03). The owned
+	// attempts are selected once, here, and frozen (gate r3 M6, gate r4 M7):
+	// the requested session's, and for Stop all every helper's in its tree —
+	// including helpers whose turn already completed and so are never reached
+	// by the turn cascade (gate r4 R4-A04, M9). A later explicit Retry is new
+	// intent and is never added (gate r4 T2-R3-S2a). The teardown can block on
+	// the platform client, so it runs only after this Stop has stamped its
+	// durable fence and asked the turns to stop (gate r2 CR-T2-R2-02, gate r3
+	// M7): deferred, so every return path still ends the selected pairings.
+	pairings := al.selectStopPairings(req)
+	defer func() { al.stopSelectedPairings(pairings) }()
 	// N6: once this Stop has ended the session's episode, release any retained
 	// external-CLI driver (its option/env snapshot). No-op while the run is still
 	// winding down (releaseExternalRunIfIdle checks the running flag; the steered
@@ -147,8 +150,6 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	res.Selected = make(map[string]session.StopSelection)
 	swept := make(map[string]bool) // sessions whose stop already ran the shell hook
 	stopTurn := func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
-		// A reached helper's own pairing attempts are part of this Stop (M9).
-		pairings.add(al.selectOwnedPairings(id))
 		// D5: this Stop supersedes the session's older pending steers.
 		if selected, carried := stopSelectionFromContext(effectCtx); carried {
 			if err := al.supersedePendingSteers(id, selected.Effect.ControlID); err != nil {
@@ -267,6 +268,27 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	}
 	res.Armed = !res.Fired && res.Armed
 	return res, nil
+}
+
+// selectStopPairings captures, at this Stop's admission, the pairing attempts
+// it ends: the requested session's, plus for Stop all those of every session
+// in its helper tree whatever their lifecycle state. A tree that cannot be
+// fully read still selects what it could read, and says so.
+func (al *AgentLoop) selectStopPairings(req StopRequest) []channels.PairingAttempt {
+	selection := &pairingStopSelection{}
+	selection.add(al.selectOwnedPairings(req.SessionID))
+	if !req.Tree {
+		return selection.all()
+	}
+	descendants, err := CollectDescendantSessionIDs(al.GetSessionLifecycleStore(), req.SessionID)
+	if err != nil {
+		logger.ErrorCF("agent", "Stop all could not read its whole helper tree; pairings of unread helpers are not stopped",
+			map[string]any{"session_id": req.SessionID, "error": err.Error()})
+	}
+	for _, id := range descendants {
+		selection.add(al.selectOwnedPairings(id))
+	}
+	return selection.all()
 }
 
 func (al *AgentLoop) finishPlainStop(res StopResult) StopResult {

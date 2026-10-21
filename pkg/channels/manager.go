@@ -183,8 +183,10 @@ type Manager struct {
 	// channel's Start, which runs under m.mu.
 	pairingAttempts atomic.Pointer[PairingAttempts]
 	// forcedRestarts names instances the next reload restarts even with an
-	// unchanged configuration (RequestRestart).
-	forcedRestarts map[string]bool
+	// unchanged configuration (RequestRestart), each with the pairing attempt
+	// it restarts for ("" for none): a restart for an attempt that is no
+	// longer ready is dropped (gate r4 R4-A01).
+	forcedRestarts map[string]string
 	// startErrors keeps each channel's last Start failure (cleared when it
 	// starts), so an approved connect can name the cause (gate r2 T2-SF-10).
 	startErrors map[string]error
@@ -1978,18 +1980,30 @@ func (m *Manager) evictStale(now time.Time) {
 	})
 }
 
+// notifyPairingLocked reports one pairing event of attemptID through the
+// attempt observer, for a pairing the manager itself ended.
+func (m *Manager) notifyPairingLocked(name, attemptID string, status PairingStatus, message string) {
+	if m.pairingAttemptObserver != nil {
+		m.pairingAttemptObserver(name, attemptID, status, "", message)
+	}
+}
+
 // RequestRestart asks the next reload to restart name even when its
 // configuration is unchanged, so an admitted pairing start (a chat Retry, or
 // connect_channel for a connector stopped in place) gets a fresh platform
 // start through the serialized reload lifecycle — never a start published
 // beside it (gate r3 M4, M10). An unknown or disabled name is ignored.
-func (m *Manager) RequestRestart(name string) {
+// attemptID binds the restart to that admitted pairing attempt: when a Stop,
+// disable or delete revoked it before the reload ran, the restart is dropped,
+// so a revoked admission never restarts anything (gate r4 R4-A01). An empty
+// attemptID requests an unconditional restart (no pairing involved).
+func (m *Manager) RequestRestart(name, attemptID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.forcedRestarts == nil {
-		m.forcedRestarts = make(map[string]bool)
+		m.forcedRestarts = make(map[string]string)
 	}
-	m.forcedRestarts[name] = true
+	m.forcedRestarts[name] = attemptID
 }
 
 // LastStartError returns name's most recent Start failure, or nil once it
@@ -2162,9 +2176,12 @@ func (mr *managerReload) prepareDispatch() {
 	// connector whose configuration did not change. The same removed+added
 	// pair stops the current instance and starts a fresh one, consuming the
 	// admission's token on this serialized path (gate r3 M4, M10).
-	for id := range mr.m.forcedRestarts {
+	for id, attemptID := range mr.m.forcedRestarts {
 		_, enabled := mr.list[id]
 		_, known := mr.m.channelHashes[id]
+		if attemptID != "" && !mr.m.PairingAttempts().IsReady(id, attemptID) {
+			continue // its admission was revoked or consumed: nothing to restart for
+		}
 		if enabled && known && !slices.Contains(mr.added, id) {
 			mr.added = append(mr.added, id)
 			mr.removed = append(mr.removed, id)
@@ -2438,14 +2455,26 @@ func (mr *managerReload) startAdded() {
 		})
 		// An admitted pairing start for n (ready, at this revision) is
 		// consumed by this start only (gate r3 M2, M14).
-		token := mr.m.PairingAttempts().TakeReady(n, mr.list[n])
+		store := mr.m.PairingAttempts()
+		before, hadLatest := store.Latest(n)
+		token := store.TakeReady(n, mr.list[n])
+		if token == "" && hadLatest && before.Phase == PairingPhaseReady {
+			// Its configuration changed after it committed: the stale
+			// admission was interrupted (M14) — say so, never start it.
+			if after, ok := store.Attempt(n, before.AttemptID); ok && after.Outcome == PairingOutcomeInterrupted {
+				mr.m.notifyPairingLocked(n, before.AttemptID, PairingStatusError, PairingInterruptedMessage)
+			}
+		}
 		if err := channel.Start(WithPairingStart(mr.ctx, token, false)); err != nil {
 			logger.ErrorCF("channels", "Failed to start channel", map[string]any{
 				"channel": n,
 				"error":   err.Error(),
 			})
-			if token != "" {
-				mr.m.PairingAttempts().Release(n, token, PairingOutcomeStartFailed)
+			if token != "" && mr.m.PairingAttempts().Release(n, token, PairingOutcomeStartFailed) {
+				// The admitted pairing ended before its start: its chat (or
+				// Connectors) is told why, never left waiting for a code
+				// (gate r4 T2-SF-16).
+				mr.m.notifyPairingLocked(n, token, PairingStatusError, PairingStartFailureMessage(err))
 			}
 			mr.m.noteStartLocked(n, err)
 			// Fix 35: don't commit the hash for channels that failed to start.

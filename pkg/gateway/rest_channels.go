@@ -1084,6 +1084,11 @@ const (
 	enableUnconfirmed // saved; the reload did not confirm within its wait
 )
 
+// enableSavedHook is a test seam (gate r4 T2-SF-15): it runs after an
+// enable's configuration saved and before its pairing commit. Nil in
+// production.
+var enableSavedHook func(channelID string)
+
 // channelEnableOptions shapes applyChannelEnabled.
 type channelEnableOptions struct {
 	// requireExisting refuses a missing instance with 404 instead of creating
@@ -1147,6 +1152,15 @@ func (a *restAPI) applyChannelEnabled(w http.ResponseWriter, channelID string, e
 			return enableFailed
 		}
 		slog.Error("rest: set channel enabled", "channel", channelID, "enabled", enabled, "error", err)
+		var refreshErr *configRefreshError
+		if errors.As(err, &refreshErr) {
+			// The setting IS saved on disk; only the running configuration
+			// was not refreshed. Never report it as not saved (gate r4
+			// R4-A06). Nothing starts from this request.
+			jsonServerFailure(w, http.StatusInternalServerError,
+				fmt.Sprintf("channel %s setting saved, but the running configuration could not be refreshed", channelID), err)
+			return enableFailed
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return enableFailed
 	}
@@ -1159,6 +1173,9 @@ func (a *restAPI) applyChannelEnabled(w http.ResponseWriter, channelID string, e
 	// unwired reload pipeline (the unit-test environment) as a no-op and only returns an
 	// error on a genuine reload failure, which we surface rather than reporting a false
 	// success (the flag persisted but the channel did not start).
+	if enableSavedHook != nil {
+		enableSavedHook(channelID) // test seam: the window after the save
+	}
 	if opts.afterCommit != nil && !opts.afterCommit(w) {
 		return enableFailed
 	}

@@ -39,8 +39,7 @@ func TestPairingAudit_StoppedHasItsOwnTerminalRow(t *testing.T) {
 	al.EmitWhatsAppPairingAttempt("whatsapp", attemptID, channels.PairingStatusCode, "QR-SECRET-PAYLOAD", "")
 	al.stopSelectedPairings(store.OwnedBy("sess-stop"))
 	for _, other := range []string{"whatsapp-2", "whatsapp-3"} {
-		_, activateErr := store.Activate(other, "", func(string) func(context.Context) error { return func(context.Context) error { return nil } })
-		require.NoError(t, activateErr)
+		startUnownedAttempt(t, store, other, func(string) func(context.Context) error { return func(context.Context) error { return nil } })
 	}
 	al.EmitWhatsAppPairing("whatsapp-2", channels.PairingStatusTimeout, "", "expired")
 	al.EmitWhatsAppPairing("whatsapp-3", channels.PairingStatusLinked, "", "")

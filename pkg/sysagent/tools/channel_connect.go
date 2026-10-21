@@ -99,6 +99,11 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 	var attemptID string
 	if whatsappChannel(chType) && t.deps.AdmitPairing != nil {
 		admitted, err := t.deps.AdmitPairing(id, tools.ToolCallID(ctx), tools.ToolTranscriptSessionID(ctx))
+		if errors.Is(err, channels.ErrPairingDeleting) {
+			return tools.ErrorResult(errorJSON("CHANNEL_BEING_DELETED",
+				"this WhatsApp connection is being deleted; nothing saved",
+				"Add the connection again once the deletion has finished"))
+		}
 		if err != nil {
 			return tools.ErrorResult(errorJSON("PAIRING_IN_PROGRESS",
 				"another WhatsApp pairing of this connection is starting, running or stopping; nothing saved",
@@ -176,7 +181,7 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 		// unchanged configuration: the reload below starts it (gate r3 M10).
 		t.deps.RequestChannelRestart(id)
 	}
-	res, confirmed := t.liveResult(id, ws, agentID, chType, savedRevision)
+	res, confirmed := t.liveResult(id, ws, agentID, chType, savedRevision, attemptID)
 	if attemptID != "" && confirmed && t.deps.ReleasePairing != nil {
 		// The reload completed: an admission no start consumed (the device was
 		// already linked, or nothing started) must not pass to a later attempt.
@@ -185,6 +190,47 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 		t.deps.ReleasePairing(id, attemptID)
 	}
 	return res
+}
+
+// pairingResult reports what this connect's own admitted pairing attempt
+// actually did after the reload (gate r4 R4-A05): a running pairing needs the
+// QR scanned; an already-linked device connected without pairing; a failed,
+// stopped or interrupted attempt is saved but not working. It does not decide
+// while the attempt has not started yet.
+func (t *ChannelConnectTool) pairingResult(id, attemptID string, running bool, fields map[string]any,
+	scope string, notTested []string,
+) (*tools.ToolResult, bool) {
+	rec, ok := t.deps.PairingAttemptState(id, attemptID)
+	if !ok {
+		return nil, false
+	}
+	switch {
+	case rec.Phase == channels.PairingPhaseActive:
+		fields["pairing"] = "QR pairing started; the connection works only after the QR code is scanned"
+		return changeSuccess(fields, savedNotWorking("pairing not finished: scan the WhatsApp QR code", scope,
+			append([]string{"device pairing"}, notTested...)...)), true
+	case rec.Outcome == channels.PairingOutcomeNoPairing && running:
+		fields["pairing"] = "the WhatsApp device was already linked; no QR code was needed"
+		fields["proven"] = []string{"the channel connected after the reload with its existing linked device"}
+		return changeSuccess(fields, working(scope, notTested...)), true
+	case rec.Outcome == channels.PairingOutcomeStartFailed:
+		var cause error
+		if t.deps.LastStartError != nil {
+			cause = t.deps.LastStartError(id)
+		}
+		if cause == nil {
+			return changeSuccess(fields, savedNotWorking("the WhatsApp pairing could not start; the server log names the cause. "+
+				"Use Retry in this chat to try again", scope, notTested...)), true
+		}
+		logger.ErrorCF("sysagent", "Approved channel start failed", map[string]any{
+			"channel_id": id, "operation": "start_channel", "error": cause.Error(),
+		})
+		return changeSuccess(fields, savedNotWorking(startFailureReason(cause), scope, notTested...)), true
+	case rec.Outcome == channels.PairingOutcomeStopped || rec.Outcome == channels.PairingOutcomeInterrupted:
+		return changeSuccess(fields, savedNotWorking("the pairing was stopped or interrupted before it finished; "+
+			"use Retry in this chat to get a new code", scope, notTested...)), true
+	}
+	return nil, false
 }
 
 // startFailureReason turns an explicit start failure into a value-free cause
@@ -247,7 +293,7 @@ func (t *ChannelConnectTool) validateBinding(ws, agentID string) *tools.ToolResu
 
 // liveResult reloads, then reports what the real start proved and what was
 // not tested. A channel that did not start is never "working" (BDD-8.3).
-func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision string) (*tools.ToolResult, bool) {
+func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision, attemptID string) (*tools.ToolResult, bool) {
 	fields := map[string]any{"id": id, "workspace_id": ws, "agent_id": agentID,
 		"revision": savedRevision, "saved": "configuration, binding and enable saved"}
 	notTested := []string{"inbound message delivery and routing to the agent", "outbound replies"}
@@ -273,6 +319,11 @@ func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision s
 		return changeSuccess(fields, savedNotWorking(
 			"the connection was changed by another save while it was being applied; re-read it with list_channels",
 			scope, notTested...)), true
+	}
+	if whatsappChannel(chType) && attemptID != "" && t.deps.PairingAttemptState != nil {
+		if res, decided := t.pairingResult(id, attemptID, running, fields, scope, notTested); decided {
+			return res, true
+		}
 	}
 	switch {
 	case whatsappChannel(chType) && running:
