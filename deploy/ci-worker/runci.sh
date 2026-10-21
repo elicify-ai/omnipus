@@ -231,6 +231,16 @@ ensure_spa_stub() {
 }
 run_spaembed() { npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa; }
 
+# Checkout cleanup removes ignored build/tools on every gate invocation. Rebuild
+# the real native prerequisites in the consuming gate, before any gateway test.
+# The helper pins CGO_ENABLED=0/tags for these fixture-only binaries; race test
+# consumers keep their own CGO_ENABLED=1 and -race settings unchanged.
+prepare_chat_history_fixture_tools() {
+  python3 -I deploy/ci-worker/chat-history-ci.py fixtures || return 1
+  export OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY="$REPO_DIR/build/tools/chat-history-fixture.test"
+  export OMNIPUS_CHAT_HISTORY_SEED_BINARY="$REPO_DIR/build/tools/chat-history-seed"
+}
+
 # gofmt's OWN exit code is read before anything counts lines.
 #
 # The old form was `n=$(gofmt -l . 2>/dev/null | grep -v '^$' | wc -l)`, which
@@ -361,6 +371,7 @@ run_lint() {
 # is proved by the CGO_ENABLED=0 build/test gates, not by this one.
 run_gorace() {
   ensure_spa_stub
+  prepare_chat_history_fixture_tools || return 1
   local out
   # CI=true is REQUIRED here, and is the single thing that makes this gate
   # predict GitHub's. GitHub Actions always sets CI, so pkg/tools/browser's
@@ -542,6 +553,7 @@ run_gorace() {
 
 run_gotest() {
   ensure_spa_stub
+  prepare_chat_history_fixture_tools || return 1
   # CI=true for the same reason run_gorace sets it: this gate exists to predict
   # GitHub's "Tests" job, and GitHub always sets CI. After #615 converted
   # pkg/tools/browser's real-Chrome tests to the package's own skipIfNoBrowser(t)
@@ -896,9 +908,7 @@ _e2e_build() {
 
   # Once per candidate, before any shard fan-out. The official fixture driver
   # is a session test executable, never a product test endpoint or copied engine.
-  python3 -I deploy/ci-worker/chat-history-ci.py fixtures || return 1
-  export OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY="$REPO_DIR/build/tools/chat-history-fixture.test"
-  export OMNIPUS_CHAT_HISTORY_SEED_BINARY="$REPO_DIR/build/tools/chat-history-seed"
+  prepare_chat_history_fixture_tools || return 1
   export OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT="$REPO_DIR/build/tools/chat-history-measurements.log"
   python3 -I deploy/ci-worker/chat-history-ci.py measurement --receipt "$OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT" || return 1
 

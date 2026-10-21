@@ -103,8 +103,21 @@ def build_fixtures():
                             check=True, text=True, capture_output=True, cwd=ROOT)
     if "TestChatHistoryFixtureDriver" not in result.stdout.splitlines():
         raise RuntimeError("official session fixture driver missing from compiled executable")
-    print("OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY=" + str(driver))
-    print("OMNIPUS_CHAT_HISTORY_SEED_BINARY=" + str(seed))
+    export_fixture_paths(driver, seed)
+
+
+def export_fixture_paths(driver, seed):
+    bindings = {"OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY": str(driver),
+                "OMNIPUS_CHAT_HISTORY_SEED_BINARY": str(seed)}
+    for name, value in bindings.items():
+        print(name + "=" + value)
+    # A workflow preparation step must export the just-built native paths to
+    # subsequent Go/race steps, not merely print assignments in its own process.
+    github_env = os.environ.get("GITHUB_ENV")
+    if github_env:
+        with Path(github_env).open("a", encoding="utf-8") as output:
+            for name, value in bindings.items():
+                output.write(name + "=" + value + "\n")
 
 
 def capture_measurement(receipt):
