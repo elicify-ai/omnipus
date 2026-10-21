@@ -21,7 +21,7 @@ export function pos(rank: number): string {
 
 export function entry(rank: number, overrides: Partial<Message> = {}): Message {
   return {
-    id: `history-${rank}`, type: 'user', role: 'user', agent_id: 'mia',
+    id: `history-${rank}`, type: 'message', role: 'user', agent_id: 'mia',
     content: `Saved row ${rank}`, timestamp: STAMP, history_position: pos(rank), ...overrides,
   }
 }
@@ -57,7 +57,7 @@ export function page(entries: Message[], options: PageOptions = {}): SessionHist
       // datasets supply their independently counted drawn weight explicitly.
       row_count: options.rows ?? entries.length, source_group_count: entries.length,
       soft_byte_budget: 4194304, projected_bytes: 0, byte_budget_exceeded: false,
-      stop_reason: 'end', retention_generation: 'fixture-retained-1',
+      stop_reason: options.earlier ? 'row_target' : 'end', retention_generation: 'fixture-retained-1',
       context: { spans: [], duplicate_ids: [] },
       ...(first ? { first_position: first, last_position: last } : {}),
       ...options.info,
@@ -120,6 +120,14 @@ export function expectPageAccounting(
   expect(metadata.next_after, 'D3 later flag iff last-position cursor').toBe(metadata.has_later ? positions.at(-1) : undefined)
   expect(info.byte_budget_exceeded, 'D4a exact exceeded bit').toBe(info.projected_bytes > info.soft_byte_budget)
   expect(info.budget_override !== undefined, 'D4a override iff exceeded').toBe(info.byte_budget_exceeded)
+  expect(info.min_rows, 'D4a advisory floor cannot exceed the row target').toBeLessThanOrEqual(info.limit)
+  if (info.stop_reason === 'row_target') expect(info.row_count, 'row_target is not an unexplained short page').toBeGreaterThanOrEqual(info.limit)
+  if (info.stop_reason === 'source_cap') expect(info.source_group_count, 'D3 source cap is exactly100').toBe(100)
+  if (info.stop_reason === 'byte_budget') expect(info.row_count, 'bytes may not stop below the modeled floor').toBeGreaterThanOrEqual(info.min_rows)
+  if (info.stop_reason === 'clear') expect(info.stopped_at_clear, 'clear underfill must identify the reached barrier').toBe(true)
+  if (info.stop_reason === 'end' && (info.mode === 'latest' || info.mode === 'older')) {
+    expect(metadata.has_earlier, 'true retained end cannot advertise an unexplained predecessor').toBe(false)
+  }
 }
 
 export function expectValidDetail(detail: SessionDetail, positions: string[], drawnRows: number): void {

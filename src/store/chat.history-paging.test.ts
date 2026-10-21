@@ -15,6 +15,8 @@ import { historyTransport } from '../../tests/chat-history-paging/transport'
 
 let transport: ReturnType<typeof historyTransport> | undefined
 beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(STAMP)
   resetRealStores()
   useSessionStore.getState().setActiveSession(SID, 'mia')
 })
@@ -25,6 +27,8 @@ afterEach(() => {
   useChatStore.setState(useChatStore.getInitialState(), true)
   useConnectionStore.setState(useConnectionStore.getInitialState(), true)
   vi.unstubAllGlobals()
+  vi.clearAllTimers()
+  vi.useRealTimers()
 })
 
 function state(available = true): SessionStateFrame {
@@ -37,7 +41,7 @@ function state(available = true): SessionStateFrame {
 function seedCached() {
   useChatStore.getState().setMessages([{ id: 'cached-reader', role: 'user', content: 'Keep this cached row', timestamp: STAMP }])
   useChatStore.setState((s) => ({ sessionsById: {
-    ...s.sessionsById, [SID]: { ...s.sessionsById[SID], cursor: { bootId: 'prior-boot', seq: 5 }, replayCompletedForSession: null, hasEarlierMessages: true },
+    ...s.sessionsById, [SID]: { ...s.sessionsById[SID], cursor: { bootId: 'prior-boot', seq: 5 }, replayCompletedForSession: null, hasEarlierMessages: true, unansweredLastUserMessageId: null },
   } }))
 }
 
@@ -49,7 +53,7 @@ describe('T08 replay completion composes with render-once base — B06/B26', () 
   it('commits historical rows once only after complete, including projection delivered after replay done', () => {
     seedCached()
     const one = entry(1)
-    const two = entry(2, { role: 'assistant', type: 'assistant', content: 'Final saved answer' })
+    const two = entry(2, { role: 'assistant', type: 'message', content: 'Final saved answer' })
     const history = page([one, two])
     expectPageAccounting(history, [pos(1), pos(2)], 2)
     transport = historyTransport()
@@ -100,7 +104,7 @@ describe('T08 replay completion composes with render-once base — B06/B26', () 
 
 describe('T08 snapshot semantic accounting — B23 / earlier CHECK survivor', () => {
   it.each(['source_group_count', 'row_count'] as const)('rejects a wrong snapshot %s rather than certifying history', (field) => {
-    const sources = [entry(1), entry(2, { type: 'assistant', role: 'assistant', content: 'Saved answer' })]
+    const sources = [entry(1), entry(2, { type: 'message', role: 'assistant', content: 'Saved answer' })]
     const valid = page(sources)
     expectPageAccounting(valid, [pos(1), pos(2)], 2)
     transport = historyTransport()

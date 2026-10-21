@@ -3,9 +3,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionDetail } from '@/lib/api/generated/openapi-types'
 import { makeSnapshotHistory } from '@/test/factories'
-import { Stage1Network } from '../l1-room-ui/stage1-harness'
-import { MAIN_ID } from '../l1-room-ui/harness'
-import { expectPageAccounting, expectValidDetail, entry, page, pos, snapshot, expectValidFrame } from './fixtures'
+import { Stage1Network } from '../../tests/l1-room-ui/stage1-harness'
+import { MAIN_ID } from '../../tests/l1-room-ui/harness'
+import { expectPageAccounting, expectValidDetail, entry, page, pos, snapshot, expectValidFrame } from '../../tests/chat-history-paging/fixtures'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -32,7 +32,7 @@ describe('T33 semantic fixture accounting — B23/B51', () => {
   })
 
   it('a snapshot with two source entries has two groups and narration rows despite control/done frames', () => {
-    const sources = [entry(1), entry(2, { type: 'assistant', role: 'assistant', content: 'Saved answer' })]
+    const sources = [entry(1), entry(2, { type: 'message', role: 'assistant', content: 'Saved answer' })]
     const history = page(sources)
     const frame = snapshot(history)
     expectValidFrame(frame)

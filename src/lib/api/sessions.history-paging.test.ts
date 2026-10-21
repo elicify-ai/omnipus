@@ -130,7 +130,9 @@ describe('T33 explicit detail availability — B31/B51', () => {
   })
 
   it('available detail preserves the exact bounded page metadata', async () => {
-    const history = page([entry(1), entry(2)], { earlier: true })
+    const history = page([entry(1, { type: 'system', role: 'system', content: 'Conversation context cleared' }), entry(2)], {
+      earlier: true, info: { stopped_at_clear: true, stop_reason: 'clear', latest_clear: { entry_id: 'history-1', history_position: pos(1) } },
+    })
     const fixture = availableDetail(history)
     expectValidDetail(fixture, [pos(1), pos(2)], 2)
     body = fixture
