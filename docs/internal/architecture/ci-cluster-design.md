@@ -78,7 +78,12 @@ All are documented with burn history in `deploy/ci-worker/CLAUDE.md`:
    RESULT line is `FAIL:no-result-line` (SSH drop or interruption) — never assumed green.
    The proof harness exploits this deliberately: its stub `fly` exits 0 even for failing
    gates, and the dispatcher still reports the failure.
-4. **Stale-checkout false-red.** Every gate log's `HEAD: <sha>` line must be a prefix of the
+4. **A dead gate must not leave an indefinite console wait.** The 2026-10-18
+   lint log stopped mid-line with no verdict while the local console remained
+   waiting. Inspected machine/kernel logs did not establish the exact killer.
+   Liveness checks and bounded control calls handle the missing-verdict state
+   without claiming an unproved cause of death.
+5. **Stale-checkout false-red.** Every gate log's `HEAD: <sha>` line must be a prefix of the
    locally-resolved ref sha. A worker that tested a different commit fails its gates'
    verdicts (`FAIL:head-mismatch`), so a mixed-commit run can never be reported as a pass.
    (By nature this check fires after dispatch — the HEAD line is printed during the run; it
@@ -89,18 +94,71 @@ All are documented with burn history in `deploy/ci-worker/CLAUDE.md`:
 1. **Pre-flight, per machine, before any dispatch**: `fly machine status` → start it if
    stopped (recording ownership) → poll `fly ssh console -C true` until the machine is
    actually SSH-reachable (a started machine is not immediately usable) → md5 check.
-2. **Dispatch, concurrently**: one background job per tier; each gate is its own
+2. **Run evidence and dispatch**: the local run directory is exclusively
+   created. An existing path is refused before machine work without modifying
+   or adopting old logs. An entropy/identity-write failure records a local
+   `FAIL:dispatch` outcome without launching the gate. Nonzero local tier exits
+   independently fail the overall invocation while collection still proceeds;
+   unlike remote SSH wrapper statuses, these are reliable orchestration errors.
+   Dispatch is concurrent: one background job per tier; each gate is its own
    `fly ssh console` with output captured to `<logdir>/<tier>-<gate>.log`. Gates within a
    tier run sequentially (the machine's `runci.lock` would queue a second run for up to 90
    minutes); all gates in a tier run even after one fails, mirroring `runci.sh all`.
+
+   **Gate watchdog (`ci-cluster.sh::dispatch_tier`).** Every gate invocation
+   has a fresh random token, saved locally and passed as the runner's third
+   argument. The liveness probe uses one quoted procps pattern for the resolved
+   full SHA, gate and exact token. Its explicit `PROBE_STATUS` distinguishes a
+   match, a clean no-match and an error independently of flyctl's wrapper
+   status. A healthy running or lock-queued gate has no duration cap.
+
+   The dispatcher checks console progress each second and probes at
+   `CI_CLUSTER_WATCH_INTERVAL` (default 30s). After
+   `CI_CLUSTER_DEAD_STRIKES` (3) consecutive not-alive answers it terminates and
+   reaps the owned console and attempts recovery. Each probe has its own
+   `CI_CLUSTER_PROBE_TIMEOUT` (20s). Recovery/copy calls have
+   `CI_CLUSTER_RECOVER_TIMEOUT` (60s); a timeout is an explicit failed operation,
+   never a successful partial copy. TERM-to-KILL escalation is bounded, and tier
+   exit traps retain ownership of active control and console children through
+   cancellation. A console that prints its verdict then hangs is reaped too.
+
+   **Attempt-bound evidence.** The runner names its file
+   `/cache/logs/<gate>@<sha>-<stamp>-at<token>.log` and announces its path.
+   Recovery refuses a missing or mismatched announcement: there is no
+   newest-by-gate search. Both recovery and collection require the exact
+   attempt/gate/ref identity line and a matching checked-out HEAD after a
+   successful transfer. An older PASS from the same commit cannot certify a
+   new attempt. Recovered partial artifacts stay available for triage; a
+   remote-only `RUNCI: KILLED by signal ...` trailer remains a nonzero
+   `FAIL:killed-by-signal`, not a reason-less stalled result.
+
+   With no valid completed verdict, the result is an explicit STALLED/DIED
+   (`FAIL:stalled`) naming the gate, machine and last output. The real runner's
+   HUP/INT/TERM traps print their trailer and exit 129/130/143; handling may be
+   deferred while a foreground child runs. SIGKILL has no catchable trailer.
+   The signal fixture rejects every wait timeout regardless of the eventual
+   cleanup status and retains separate timeout/observed-exit receipts. A
+   TERM-only trailer-then-hang mutation verifies that distinction.
+
+   **Producer and partial-transfer coverage.** The root runner prologue and
+   user-switch re-exec are exercised with guest filesystem prefixes remapped
+   into a private scratch guest and setup/user-switch commands stubbed. Both
+   supplied tokens must survive the real filename/header/child-argv producer.
+   For recovery and collection separately, unsuccessful transfers deliberately
+   leave correct identity/HEAD/verdict bytes behind; transfer status must
+   still reject them. The companion mutation checks cover both boundaries.
+   `FAIL:no-result-line`, `FAIL:gate` and other existing verdicts remain.
+
 3. **Collect**: verdicts + HEAD shas from the logs; a summary table; one exit code
-   (0 all green · 1 any failure/incomplete/mismatch · 2 config or pre-flight refusal).
-4. **Teardown**: an EXIT trap stops every machine *this run started* — including on gate
-   failure and on SIGINT/SIGTERM (proven with a stubbed `fly` in the script's development
-   log, 2026-09-16). Machines that were **already running** when the dispatcher arrived are
-   used but never stopped: another session may own them. Note on interrupt semantics:
-   killing the dispatcher mid-gate cuts the SSH session, which kills the non-detached
-   `runci.sh` on the machine; the log keeps no RESULT line and the run reports failure.
+   (0 all green · 1 any failure/incomplete/stalled/mismatch · 2 config or pre-flight refusal).
+4. **Teardown**: the EXIT path first reaps its owned local transports/tiers,
+   then collects and identity-verifies every dispatched log before stopping a
+   machine it started. Interrupted or failed collection leaves that machine
+   running with a manual-retrieval warning; the same exception applies to
+   foreign owners, active work or unreadable ownership/idleness. Those checks
+   and stop calls are bounded control operations. Already-running machines are
+   never claimed or stopped. Remote signal delivery on an SSH disconnect is
+   not assumed: the log and liveness evidence decide the verdict.
 
 **Cost note — stopping saves compute, not storage.** A stopped machine bills nothing for
 CPU but its persistent `/cache` volume bills while the machine is stopped. Scale-to-zero is
