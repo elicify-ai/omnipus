@@ -8,6 +8,21 @@
 
 export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "helper_event", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta"]);
 
+export const HistoryEntryOrigin = z
+  .object({
+    position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+    entry_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const SessionHistoryState = z
+  .object({
+    status: z.enum(["available", "unavailable"]),
+    reason: z.enum(["index_missing", "index_inconsistent", "catchup_limit", "storage_error", "projection_error"]).optional(),
+    message: z.string().min(1).optional(),
+  })
+  .strict();
+
 export const RoomRef = z
   .object({
     room_id: z.string().min(1).max(128),
@@ -267,6 +282,8 @@ export const AttachSessionFrame = z
   .object({
     type: z.literal("attach_session"),
     session_id: z.string().min(1).max(255),
+    history_limit: z.number().int().min(20).max(100).optional(),
+    history_min_rows: z.number().int().min(1).max(100).optional(),
     since_seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
     ack_attention: z.boolean().optional(),
@@ -395,6 +412,7 @@ export const ErrorFrame = z
 
 export const ToolCallStartFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("tool_call_start"),
     session_id: z.string().min(1).max(255),
     tool: z.string().min(1).max(128),
@@ -491,6 +509,7 @@ export const ToolResultRecallMark = z
 
 export const ToolCallResultFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("tool_call_result"),
     session_id: z.string().min(1).max(255),
     tool: z.string().min(1).max(128),
@@ -507,6 +526,7 @@ export const ToolCallResultFrame = z
 
 export const SubagentStartFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_start"),
     session_id: z.string().min(1),
     span_id: z.string().min(1),
@@ -520,6 +540,7 @@ export const SubagentStartFrame = z
 
 export const SubagentEndFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_end"),
     session_id: z.string().min(1),
     span_id: z.string().min(1),
@@ -536,6 +557,7 @@ export const SubagentEndFrame = z
 
 export const SubagentMessageFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_message"),
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
@@ -554,6 +576,7 @@ export const SubagentMessageFrame = z
 
 export const SubagentStateFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_state"),
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
@@ -601,6 +624,7 @@ export const TaskRunStatusFrame = z
 
 export const ReplayMessageFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     room_ref: RoomRef.optional(),
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
@@ -632,6 +656,7 @@ export const ReplayMessageFrame = z
 
 export const ReplayErrorFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("replay_error"),
     session_id: z.string().min(1),
     entry_id: z.string(),
@@ -699,6 +724,7 @@ export const ContextWindowNoticeFrameNotice = z
 
 export const ContextWindowNoticeFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("context_window_notice"),
     session_id: z.string().min(1).max(255),
     turn_id: z.string().min(1).max(128),
@@ -724,6 +750,7 @@ export const ProviderFallbackFrame = z
 
 export const ProviderFallbackNote = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("replay_provider_fallback"),
     session_id: z.string().min(1).max(255),
     entry_id: z.string().min(1).max(128),
@@ -756,6 +783,7 @@ export const MediaPart = z
 
 export const MediaFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("media"),
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
@@ -846,6 +874,7 @@ export const AskUserQuestionCard = z
 
 export const AskUserQuestionFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("ask_user_question"),
     card: AskUserQuestionCard,
   })
@@ -897,6 +926,7 @@ export const SessionStateActiveTurn = z
 
 export const SessionStateFrame = z
   .object({
+    history_state: SessionHistoryState.optional(),
     secret_requests: z.array(SessionStateSecretRequest).max(1000).optional(),
     type: z.literal("session_state"),
     user_id: z.string(),
@@ -1342,6 +1372,7 @@ export const PlanStatusFrame = z
 
 export const JudgeVerdictFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("judge_verdict"),
     id: z.string(),
     scope: z.enum(["task", "plan", "goal"]),
@@ -1378,6 +1409,7 @@ export const JudgeVerdictFrame = z
 
 export const BrowserHandoverNoticeFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("browser_handover_notice"),
     session_id: z.string().min(1),
     message_id: z.string().min(1),
@@ -1398,6 +1430,7 @@ export const HelperEventFrameEvent = z
 
 export const HelperEventFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("helper_event"),
     session_id: z.string().min(1),
     message_id: z.string().min(1),
@@ -1421,6 +1454,7 @@ export const GoalOutcomeFrameOutcome = z
 
 export const GoalOutcomeFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("goal_outcome"),
     session_id: z.string().min(1),
     message_id: z.string().min(1),
@@ -1504,15 +1538,68 @@ export const BrowserInputControlAckFrame = z
   })
   .strict();
 
+export const SessionHistoryContext = z
+  .object({
+    spans: z.array(z
+    .object({
+      span_id: z.string().min(1),
+      start: SubagentStartFrame.optional(),
+      state: SubagentStateFrame.optional(),
+      message: SubagentMessageFrame.optional(),
+      end: SubagentEndFrame.optional(),
+      has_run: z.boolean().optional(),
+    })
+    .strict()),
+    duplicate_ids: z.array(z
+    .object({
+      kind: z.enum(["message", "tool"]),
+      id: z.string().min(1),
+      canonical_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+      occurrence_count: z.number().int().min(2),
+    })
+    .strict()),
+  })
+  .strict();
+
+export const SessionHistoryPageInfo = z
+  .object({
+    mode: z.enum(["latest", "older", "newer", "window_refresh"]),
+    limit: z.number().int().min(20).max(100),
+    min_rows: z.number().int().min(1).max(100),
+    row_count: z.number().int().min(0),
+    source_group_count: z.number().int().min(0).max(100),
+    soft_byte_budget: z.number().int().min(1),
+    projected_bytes: z.number().int().min(0),
+    byte_budget_exceeded: z.boolean(),
+    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget"]),
+    budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
+    first_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    last_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    stopped_at_clear: z.boolean().optional(),
+    latest_clear: z
+    .object({
+      entry_id: z.string().min(1),
+      history_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+    })
+    .strict().optional(),
+    retention_generation: z.string().min(1),
+    context: SessionHistoryContext,
+  })
+  .strict();
+
 export const SessionSnapshotFrame = z
   .object({
-    secret_requests: z.array(SessionStateSecretRequest).max(1000).optional(),
     type: z.literal("session_snapshot"),
     session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
-    has_earlier_messages: z.boolean().optional(),
+    has_earlier: z.boolean(),
+    has_later: z.boolean(),
+    next_before: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    next_after: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    page_info: SessionHistoryPageInfo,
     reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position", "boot_mismatch"]).optional(),
+    secret_requests: z.array(SessionStateSecretRequest).max(1000).optional(),
   })
   .strict();
 
@@ -1522,7 +1609,7 @@ export const CatchUpCompleteFrame = z
     session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
-    mode: z.enum(["incremental", "snapshot"]),
+    mode: z.enum(["incremental", "snapshot", "live_only"]),
   })
   .strict();
 

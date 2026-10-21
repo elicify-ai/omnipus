@@ -1,30 +1,54 @@
 type: object
 description: >
-  Full session detail as returned by GET /sessions/{id}.
-  Contains the session metadata plus the complete ordered transcript.
+  Authorized session metadata and explicit history readiness (chat history paging
+  D7a/D10). No paging selectors: available history is the same bounded latest page
+  as GET /sessions/{id}/messages with defaults 40/20. When history_state.status is
+  available, messages, page_info, has_earlier and has_later are required; cursor
+  presence follows the same iff/first/last rules as SessionHistoryResponse. When
+  unavailable, omit messages, page_info, both flags and both cursors, never synthesize
+  messages:[]. session and optional agent_removed remain usable for routing/attach.
+  Generated shape plus producer/consumer semantic checks enforce these mutually
+  exclusive field sets. Absence is not successful empty history; no optional nulls.
 required:
   - session
-  - messages
+  - history_state
 additionalProperties: false
 properties:
   session:
     $ref: './Session.yaml'
+  history_state:
+    $ref: './SessionHistoryState.yaml'
+    x-go-type: SessionHistoryState
   messages:
     type: array
     items:
       $ref: './Message.yaml'
-    maxItems: 100000
+      x-go-type: Message
+    maxItems: 100
     description: >
-      Ordered list of transcript entries for this session.
-      Capped at 100000 messages to bound response payload size.
-  has_earlier_messages:
+      Required non-null bounded latest entries iff history is available; omitted
+      when unavailable. Every paged occurrence carries history_position.
+  page_info:
+    $ref: './SessionHistoryPageInfo.yaml'
+    x-go-type: SessionHistoryPageInfo
+  has_earlier:
     type: boolean
-    description: >
-      True when messages starts at the session's last /clear marker and earlier
-      transcript entries exist before it (cleared context). Absent (or false) when
-      messages is the whole transcript. The earlier entries are kept in the archive
-      and remain reachable by recall; they are simply not part of the chat view.
-    example: false
+    description: Required iff available; actual retained earlier groups, including across a closed clear.
+  has_later:
+    type: boolean
+    description: Required iff available; actual eligible retained later groups.
+  next_before:
+    type: string
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: Present iff available and has_earlier; equals the first selected history_position.
+  next_after:
+    type: string
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: Present iff available and has_later; equals the last selected history_position.
   agent_removed:
     type: boolean
     description: >

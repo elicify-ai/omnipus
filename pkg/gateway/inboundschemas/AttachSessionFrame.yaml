@@ -1,16 +1,19 @@
 title: AttachSessionFrame
 description: >
   Client → server. Requests the server to attach to a session and catch it up to the
-  present. #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor
-  (`since`, removed — the per-session gateway hub makes every session-scoped frame
-  strictly ordered and gap-free, which a timestamp comparison could never guarantee under
-  concurrent producers or clock skew). The server answers either with an incremental
-  catch-up (session_state, then the journal entries after since_seq, then
-  catch_up_complete) or, when the requested position cannot be served, with a full
-  snapshot (session_snapshot, then session_state, then a full replay of
-  replay_message/tool_call_start/tool_call_result/subagent_start/subagent_end/media
-  frames, then catch_up_complete) — see SessionSnapshotFrame's reason enum for why a
-  snapshot is chosen over an incremental catch-up.
+  present. A snapshot replays a bounded latest page; an authorized history-only
+  failure can instead deliver typed history_state=unavailable and live_only control
+  catch-up, never a successful history snapshot. Authenticate and resolve session
+  syntax/access/existence before validating history_limit, then history_min_rows,
+  before bind/wipe. Keep inbound-validation on/off refusal parity. #823 catch-up
+  redesign: since_seq/boot_id replace the retired timestamp cursor
+  (`since`, removed). The server answers with the full servable incremental journal
+  (session_state, journal entries after since_seq, catch_up_complete) or a bounded
+  latest snapshot (session_snapshot, current session_state, selected historical
+  frames, one replay done, uncovered active projection, catch_up_complete). Held
+  live frames follow complete in order; replay done alone never completes attach.
+  SessionSnapshotFrame explains why a snapshot is selected. A historical reader
+  keeps/revalidates its own interval instead of passively jumping to the new tail.
 type: object
 required:
   - type
@@ -25,6 +28,28 @@ properties:
     minLength: 1
     maxLength: 255
     description: Session ID to attach to and catch up.
+  history_limit:
+    type: integer
+    minimum: 20
+    maximum: 100
+    default: 40
+    description: >
+      Optional snapshot-only drawn-row target; never cuts a servable incremental
+      journal. Validate after session access and before history_min_rows/bind/wipe.
+      Null, wrong type, fraction, overflow or out-of-range values are refused by
+      the session-scoped ErrorFrame message "history_limit must be an integer from
+      20 to 100", with no successful complete, in both inbound validation modes.
+  history_min_rows:
+    type: integer
+    minimum: 1
+    maximum: 100
+    default: 20
+    description: >
+      Optional snapshot-only advisory two-screen row floor, from 1 to effective
+      history_limit; default 20. Whole groups/floor override soft page bytes.
+      After a valid history_limit, invalid/null/fraction/overflow/wrong-type values
+      get "history_min_rows must be an integer from 1 to history_limit" before
+      bind/wipe, with no catch_up_complete in either inbound validation mode.
   since_seq:
     type: integer
     format: int64
@@ -36,12 +61,12 @@ properties:
       instead of O(full session history). Works for every session the client knows
       about, including ones that were not open in the UI during the outage — the client
       keeps one cursor per session. Omit for a first load or whenever the session's
-      cursor is not known: the server then answers with a snapshot (reason
-      unknown_position), which rebuilds the session's state from scratch. When the
-      requested position can no longer be served from the gateway's retained window, the
-      server likewise answers with a session_snapshot frame instead of individual events
-      (reason retention_exceeded or cursor_ahead), and the client replaces its state
-      rather than merging.
+      cursor is not known: the server then answers with a bounded latest snapshot
+      (reason unknown_position). When the requested position can no longer be served
+      from the retained journal, it likewise answers with session_snapshot (reason
+      retention_exceeded or cursor_ahead). First open/follow-latest replaces its staged
+      history page on complete; a historical reader preserves/revalidates its own
+      bounded interval separately. Neither policy alters transport cursor semantics.
   boot_id:
     type: string
     description: >

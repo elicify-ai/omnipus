@@ -1,22 +1,26 @@
 title: SessionSnapshotFrame
 description: >
-  Server → client. Answers attach_session when the position the client asked for
-  (since_seq) can no longer be served as individual events. The client MUST replace its
-  history for this session rather than merging: this frame is followed by session_state
-  (so the wipe can never erase pending-approval/active-turn/goal state — see
-  SessionStateFrame), then a full replay of the session (replay_message,
-  tool_call_start, tool_call_result, subagent_start, subagent_end, media, unsequenced),
-  then any still-open active-turn projection items the replay did not already cover, then
-  exactly one catch_up_complete frame whose seq is this frame's seq. #823 catch-up
-  redesign: sending a snapshot is always safe — it costs more bytes than an incremental
-  catch-up but never drops an event, which is why the gateway prefers it over guessing
-  whenever it cannot prove the requested range is intact. Sent for a first load as well
-  (no cursor at all), where it is the ordinary full-replay path.
+  Server to client. Bounded latest-page metadata when attach_session cannot serve
+  the requested live position (chat history paging D7/D10). Read the page before
+  announcing replacement. Follow with current session_state, selected entry-derived
+  history/tool/special/media frames carrying local history_origin, one replay done,
+  uncovered active projection, then catch_up_complete(mode=snapshot) at this seq;
+  held live frames follow in sequence order. No second entries array or manifest.
+  First-open/follow-latest clients stage and commit this page once on completion.
+  A historical reader instead keeps its rows, anchor, focus and measurements, stages
+  the page into its separate bounded tail cache, refreshes authoritative controls,
+  and revalidates only its already-held interval after complete. A reason does not
+  authorize a passive jump to latest. A classified history-only failure sends no
+  snapshot/wipe and may complete live_only controls instead. Partial failed control
+  or socket delivery never acknowledges a successful catch-up.
 type: object
 required:
   - type
   - session_id
   - seq
+  - has_earlier
+  - has_later
+  - page_info
 additionalProperties: false
 properties:
   type:
@@ -26,29 +30,41 @@ properties:
     type: string
     minLength: 1
     maxLength: 255
-    description: Session the client must rebuild state for.
+    description: Session whose latest history page and current controls follow.
   seq:
     type: integer
     format: int64
     minimum: 1
     description: >
-      The session's current high-water sequence number at the moment the snapshot was
-      taken. Once the full-state replay that follows this frame has been applied, the
-      client's cursor for this session is exactly this value, and subsequent live frames
-      continue from seq + 1. Mirrored on the terminal catch_up_complete frame.
+      Live high-water W at bind/read cut, mirrored on catch_up_complete. Commit
+      only after the full selected-page/current-control catch-up completes; not a
+      history position. Subsequent held live frames continue at seq greater than W.
   boot_id:
     type: string
     description: >
-      #823 review finding 7 — the gateway process that produced this snapshot. The
-      client stores it alongside the seeded seq cursor above (same role as
-      SessionStateFrame.boot_id / AttachSessionFrame.boot_id), so a later reconnect can
-      tell whether the gateway has restarted since.
-  has_earlier_messages:
+      Gateway process identity, stored with the successfully completed live cursor;
+      same role as SessionStateFrame.boot_id / AttachSessionFrame.boot_id.
+  has_earlier:
     type: boolean
-    description: >
-      True when the replay that follows starts at the session's last /clear marker and
-      earlier transcript entries exist before it (cleared context). Absent (or false)
-      when the replay is the whole transcript.
+    description: Actual retained earlier groups; a reached closed clear needs explicit crossing.
+  has_later:
+    type: boolean
+    description: Actual eligible retained later groups at this same page cut.
+  next_before:
+    type: string
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: Present iff has_earlier, equal to page_info.first_position.
+  next_after:
+    type: string
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: Present iff has_later, equal to page_info.last_position.
+  page_info:
+    $ref: './SessionHistoryPageInfo.yaml'
+    description: Same latest-mode metadata/context/range as the shared REST reader; no entries array.
   reason:
     type: string
     enum:
@@ -57,22 +73,10 @@ properties:
       - unknown_position
       - boot_mismatch
     description: >
-      Why a snapshot was sent instead of an incremental catch-up.
-      cursor_ahead — the client's since_seq is greater than any sequence number
-      the gateway has emitted for this session; the client's position cannot be trusted.
-      retention_exceeded — the gateway retains only the most recent sequence
-      numbers for this session, so the range just after since_seq is already
-      gone and serving it would leave a hole.
-      unknown_position — the client sent no since_seq at all (a first load, or a
-      session the client has no cursor for), so there is nothing to catch up from.
-      boot_mismatch (#823 review finding 7) — the client's attach_session
-      carried a boot_id that does not match the gateway's current one, so
-      since_seq is being read against the WRONG counter: a restart mints a new hub whose
-      first seq is guaranteed strictly greater than anything the session ever emitted
-      before (the counter itself never resets), but the client's old boot_id proves its
-      remembered position predates the restart and must not be trusted. A boot_id
-      mismatch is checked and answered BEFORE the ordinary since_seq
-      servability check, so it always wins over the other three reasons.
+      Why snapshot replaces incremental catch-up: cursor_ahead is beyond the hub,
+      retention_exceeded is an unservable retained journal range, unknown_position
+      means no known cursor, boot_mismatch is a different gateway process and wins
+      before ordinary servability checks. None forces a historical reader to latest.
   secret_requests:
     type: array
     maxItems: 1000

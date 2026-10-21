@@ -23,6 +23,9 @@ required:
   - judge_agent_id
 additionalProperties: false
 properties:
+  history_origin:
+    $ref: './HistoryEntryOrigin.yaml'
+    x-go-type: HistoryEntryOrigin
   type:
     type: string
     const: judge_verdict

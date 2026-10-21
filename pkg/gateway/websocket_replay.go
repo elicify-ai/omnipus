@@ -215,7 +215,7 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 		Reason:    &reason,
 	}
 	if view.HasEarlier {
-		snapshot.HasEarlierMessages = &view.HasEarlier
+		snapshot.HasEarlier = view.HasEarlier
 	}
 	wh.directFrame(snapshot)
 	// AFTER the snapshot frame (which wipes the client's history for this

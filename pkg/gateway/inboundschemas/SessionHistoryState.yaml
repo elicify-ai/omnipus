@@ -1,0 +1,35 @@
+title: SessionHistoryState
+type: object
+description: >
+  Server history readiness, not proof that this client loaded a page (chat history
+  paging D7a/D10). status=available omits reason and message. status=unavailable
+  requires both reason and a fixed sanitized message. Producers and consumers must
+  reject any other combination. No preparing state or successful empty-history
+  fallback. Current authorized live controls and canonical sends remain independent.
+required:
+  - status
+additionalProperties: false
+properties:
+  status:
+    type: string
+    enum:
+      - available
+      - unavailable
+  reason:
+    type: string
+    enum:
+      - index_missing
+      - index_inconsistent
+      - catchup_limit
+      - storage_error
+      - projection_error
+    description: Present only for unavailable history, after the bounded recovery attempt.
+  message:
+    type: string
+    minLength: 1
+    description: >
+      Required only when unavailable. Fixed sanitized copy, never an underlying cause,
+      path, raw position or query. For index_missing/index_inconsistent/catchup_limit:
+      "Session history is unavailable. Retry after the operator restores its index."
+      Other required storage/projection failures retain the fixed redacted session-storage
+      error behavior in D11. Not a turn-ending ErrorFrame.

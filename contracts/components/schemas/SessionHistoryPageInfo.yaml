@@ -1,0 +1,131 @@
+title: SessionHistoryPageInfo
+type: object
+description: >
+  Shared metadata/context for REST messages, bounded latest session detail and the
+  selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are
+  opaque same-session occurrence selectors, never lexically ordered or live cursors.
+  Cross-field invariants are checked by producers and consumers: min_rows <= limit;
+  source_group_count matches selected groups and is at most 100; first/last positions
+  exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget
+  stop cannot underfill min_rows. No optional absence is serialized as null.
+required:
+  - mode
+  - limit
+  - min_rows
+  - row_count
+  - source_group_count
+  - soft_byte_budget
+  - projected_bytes
+  - byte_budget_exceeded
+  - stop_reason
+  - retention_generation
+  - context
+additionalProperties: false
+properties:
+  mode:
+    type: string
+    enum:
+      - latest
+      - older
+      - newer
+      - window_refresh
+    description: window_refresh continuation describes only the requested closed interval.
+  limit:
+    type: integer
+    minimum: 20
+    maximum: 100
+    description: Effective requested drawn-row target, not a frame count; default 40.
+  min_rows:
+    type: integer
+    minimum: 1
+    maximum: 100
+    description: >
+      Effective advisory two-screen row floor, at most limit; default 20. Whole
+      groups and this floor take precedence over the soft byte budget. Not proof
+      of viewport geometry or a hard defense against large authenticated requests.
+  row_count:
+    type: integer
+    minimum: 0
+    description: Drawn-row weight; a whole atomic group can exceed the row target or 100.
+  source_group_count:
+    type: integer
+    minimum: 0
+    maximum: 100
+    description: Number of selected whole source groups, not the number of replay frames.
+  soft_byte_budget:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >
+      Server-owned soft projected-page budget, currently 4194304 bytes (4 MiB).
+      Positive integer, deliberately not a one-value enum or a hard response cap.
+  projected_bytes:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      Larger of prepared public REST and historical WS encodings at this cut/context.
+      Excludes diagnostic accounting fields themselves, transport headers and separate
+      live controls/projection. Required projection failure is an error, never an estimate.
+  byte_budget_exceeded:
+    type: boolean
+    description: True iff projected bytes exceed the soft budget; requires budget_override.
+  stop_reason:
+    type: string
+    enum:
+      - row_target
+      - source_cap
+      - clear
+      - end
+      - range_end
+      - byte_budget
+    description: >
+      Actual selection boundary. row_target/source_cap take precedence when their
+      boundary coincides with bytes. True end, closed clear/range or source cap may
+      underfill; bytes alone may not cut below min_rows or split a whole group.
+  budget_override:
+    type: string
+    enum:
+      - height_floor
+      - atomic_group
+    description: Present iff the soft budget was exceeded to keep the floor or an atomic group.
+  first_position:
+    type: string
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: First selected occurrence in ascending acceptance order; absent iff empty.
+  last_position:
+    type: string
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: Last selected occurrence in ascending acceptance order; absent iff empty.
+  stopped_at_clear:
+    type: boolean
+    description: >
+      Optional indication that selection reached a protected exact clear marker.
+      Earlier retained groups remain reachable only through explicit clear crossing.
+  latest_clear:
+    type: object
+    required:
+      - entry_id
+      - history_position
+    additionalProperties: false
+    properties:
+      entry_id:
+        type: string
+        minLength: 1
+      history_position:
+        type: string
+        minLength: 47
+        maxLength: 47
+        pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: Actual latest clear identity, even when its marker lies outside this page.
+  retention_generation:
+    type: string
+    minLength: 1
+    description: Opaque retained-set generation; changes on actual expiry, not a failed removal.
+  context:
+    $ref: './SessionHistoryContext.yaml'
+    x-go-type: SessionHistoryContext
