@@ -34,7 +34,7 @@ func validateRepairJSON(name string, b []byte, into any) error {
 		return err
 	}
 	var extra any
-	if err := d.Decode(&extra); err != io.EOF {
+	if err := d.Decode(&extra); !errors.Is(err, io.EOF) {
 		return errors.New("multiple operator JSON values")
 	}
 	var schemaDoc, doc any

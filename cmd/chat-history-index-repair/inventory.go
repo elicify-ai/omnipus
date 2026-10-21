@@ -159,5 +159,5 @@ func inventoryCounts(entries []inventoryEntry) (files, directories int) {
 			directories++
 		}
 	}
-	return
+	return files, directories
 }

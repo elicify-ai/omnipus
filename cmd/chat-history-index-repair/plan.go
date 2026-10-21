@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -47,6 +48,13 @@ func classifyBuildError(err error) error {
 func prepareAllSessions(ctx context.Context, a repairArgs, inventory []inventoryEntry) []sessionRepairPlan {
 	plans := make([]sessionRepairPlan, 0)
 	legacy := map[string]bool{}
+	candidates := map[string]bool{}
+	for _, e := range inventory {
+		parts := strings.Split(e.Path, "/")
+		if len(parts) == 3 && parts[0] == "sessions" && !strings.HasPrefix(parts[1], ".") && (parts[2] == "meta.json" || parts[2] == "context.jsonl" || strings.HasPrefix(parts[2], "transcript")) {
+			candidates[parts[1]] = true
+		}
+	}
 	for _, e := range inventory {
 		parts := strings.Split(e.Path, "/")
 		if len(parts) == 2 && parts[0] == "sessions" && e.Kind == "file" && strings.HasSuffix(e.Path, ".jsonl") || len(parts) >= 3 && parts[0] == "sessions" && parts[1] == ".context" && strings.HasSuffix(e.Path, ".jsonl") {
@@ -57,10 +65,11 @@ func prepareAllSessions(ctx context.Context, a repairArgs, inventory []inventory
 		if len(parts) >= 4 && parts[0] == "agents" && parts[2] == "sessions" && e.Kind == "file" && (strings.HasSuffix(e.Path, ".jsonl") || filepath.Base(e.Path) == "meta.json") {
 			legacy[e.Path] = true
 		}
-		if len(parts) != 3 || parts[0] != "sessions" || parts[2] != "meta.json" || e.Kind != "file" {
+		if len(parts) != 2 || parts[0] != "sessions" || e.Kind != "directory" || !candidates[parts[1]] {
 			continue
 		}
 		p := sessionRepairPlan{id: parts[1], dir: filepath.Join(a.root, "sessions", parts[1])}
+		p.err = checkSessionFormat(p.dir)
 		if _, err := os.Stat(filepath.Join(p.dir, "context.jsonl")); err == nil {
 			p.err = refusal("unconverted")
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -80,6 +89,23 @@ func prepareAllSessions(ctx context.Context, a repairArgs, inventory []inventory
 		}
 	}
 	return plans
+}
+
+func checkSessionFormat(dir string) error {
+	b, err := os.ReadFile(filepath.Join(dir, "meta.json"))
+	if err != nil {
+		return integrity("io_error", err)
+	}
+	var meta struct { // not-wire-format: private canonical identity preflight
+		Type session.UnifiedSessionType `json:"type"`
+	}
+	if err = json.Unmarshal(b, &meta); err != nil {
+		return integrity("corrupt_archive", err)
+	}
+	if !session.IsValidSessionType(meta.Type) {
+		return refusal("unconverted")
+	}
+	return nil
 }
 
 type repairTotals struct{ sessions, create, rebuild, unchanged, published, refused, code int }
@@ -133,7 +159,7 @@ func runRepairPlan(ctx context.Context, a repairArgs, out io.Writer) int {
 	}
 	// Format/integrity of every session is established before any backup or
 	// stopped-instance prerequisite, and before publishing any session.
-	if totals.refused != 0 {
+	if totals.code == 2 {
 		return totals.code
 	}
 	if a.mode != "dry-run" {
@@ -146,6 +172,9 @@ func runRepairPlan(ctx context.Context, a repairArgs, out io.Writer) int {
 			totals.failure(&report, "", err)
 			return totals.code
 		}
+	}
+	if totals.refused != 0 {
+		return totals.code
 	}
 	if a.mode == "verify" {
 		for _, p := range plans {

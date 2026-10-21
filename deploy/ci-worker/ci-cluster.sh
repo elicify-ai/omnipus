@@ -82,7 +82,7 @@ PROBE_INTERVAL=5
 # id (CI_CLUSTER_NODE_MACHINE=) means "tier not provisioned" and the tier is skipped.
 default_tier_map() {
   printf '%s\n' \
-    "go|${CI_CLUSTER_GO_MACHINE-080d74db170408}|gofmt go-build go-vet lint go-test go-race" \
+    "go|${CI_CLUSTER_GO_MACHINE-080d74db170408}|gofmt go-build go-vet lint go-test go-race history-index-repair" \
     "node|${CI_CLUSTER_NODE_MACHINE-d8d0d90a1e9648}|contracts spa" \
     "xplat|${CI_CLUSTER_XPLAT_MACHINE-78113d4f329908}|embed-build records-no-sqlite cli-verb-guard"
 }

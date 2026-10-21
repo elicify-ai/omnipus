@@ -64,6 +64,7 @@ func normalizeRepairPaths(a *repairArgs) error {
 		return refusal("unsafe_path")
 	}
 	a.root = root
+	rootInfo := info
 	if a.backup != "" {
 		a.backup, err = canonicalLocation(a.backup)
 		if err != nil {
@@ -79,7 +80,7 @@ func normalizeRepairPaths(a *repairArgs) error {
 		if err != nil {
 			return integrity("io_error", err)
 		}
-		if !info.IsDir() {
+		if !info.IsDir() || os.SameFile(rootInfo, info) {
 			return refusal("unsafe_path")
 		}
 	}
