@@ -101,7 +101,7 @@ func (al *AgentLoop) assembleMessages(
 	if ts.opts.IsTaskRun && breadcrumb != "" {
 		breadcrumb += "\n\nReminder (task run): when the work is verified, report completion by calling goal_claim (status \"met\", with your one-line evidence) — not by writing a status yourself."
 	}
-	span := al.activeRecallSpan(ts.sessionKey)
+	span := al.roomSafeRecallSpan(ts)
 	// Same drop-only pass spliceRecallSpan uses. BuildMessages is called with
 	// nil history below, so it never sees the span; sanitizing here is what
 	// keeps a mid-group freeze from reaching the pre-send validator. The live

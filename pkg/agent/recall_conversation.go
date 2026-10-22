@@ -208,23 +208,25 @@ func (t *RecallConversationTool) Parameters() map[string]any {
 
 // recallConversationToolExecute carries the shared state of Execute across its stages.
 type recallConversationToolExecute struct {
-	t            *RecallConversationTool
-	ctx          context.Context
-	args         map[string]any
-	sessionKey   string
-	queryVal     string
-	hasQuery     bool
-	rangeVal     string
-	hasRange     bool
-	timeRaw      any
-	hasTime      bool
-	maxResults   int
-	archived     []memory.ArchivedMessage
-	turns        []archiveTurn
-	selectedIdxs []int
-	isRangeMode  bool
-	keptIdxs     []int
-	overflow     int
+	t                      *RecallConversationTool
+	ctx                    context.Context
+	args                   map[string]any
+	sessionKey             string
+	queryVal               string
+	hasQuery               bool
+	rangeVal               string
+	hasRange               bool
+	timeRaw                any
+	hasTime                bool
+	maxResults             int
+	archived               []memory.ArchivedMessage
+	turns                  []archiveTurn
+	selectedIdxs           []int
+	isRangeMode            bool
+	keptIdxs               []int
+	overflow               int
+	roomProjectionRevision uint64
+	roomProjectionBound    bool
 }
 
 // Execute routes archive_range to a literal DATA page and tool_call_id to an
@@ -338,6 +340,7 @@ func (rct *recallConversationToolExecute) validateRequest() (*tools.ToolResult, 
 func (rct *recallConversationToolExecute) loadTurns() (*tools.ToolResult, bool) {
 	// --- 1. Read the full archive (FR-013 / FR-016) -------------------
 	var err error
+	rct.beginRoomProjectionRead()
 	rct.archived, err = rct.t.archive.ReadArchive(rct.ctx, rct.t.archiveKey(rct.ctx, rct.sessionKey))
 	if err != nil {
 		slog.Warn("recall_conversation: ReadArchive failed",
@@ -524,6 +527,9 @@ func (rct *recallConversationToolExecute) buildAndStoreSpan() *tools.ToolResult 
 	spanMsgs := buildRecallSpanMessages(rct.keptIdxs, rct.turns, ordinals, rct.t.recallCapPolicy(), rct.archived)
 	// M7: use newRecallSpan so Tokens is always Σ estimateMessageTokens(Msgs).
 	span := newRecallSpan(fromTurnNum, toTurnNum, spanMsgs, ordinals)
+	if err := rct.bindRoomProjectionRead(span); err != nil {
+		return tools.ErrorResult(err.Error())
+	}
 
 	// --- 6. Store span (FR-019 lifecycle: replaced on next recall) ----
 	// Drop any prior span with reason "replaced" before installing the new one.
@@ -1045,6 +1051,7 @@ func (t *RecallConversationTool) executeToolCallID(
 			"cap_chars", capChars, "page_chars", utf8.RuneCountInString(pageContent))
 	}
 	span := newRecallSpan(turnNum, turnNum, []providers.Message{marker, asst, page}, []int{turnNum})
+	bindRecallFactProjection(span, t.archive)
 
 	// FR-019 lifecycle: replace any prior span, then install the page span.
 	// From here the D5.4 tool-result site takes over: fit-checked against B
