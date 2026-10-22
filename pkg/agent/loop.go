@@ -220,13 +220,10 @@ type AgentLoop struct {
 	// inbox/steer/cancel actions return "not configured"). See
 	// session_messaging_wire.go.
 	messageInboxStore *session.MessageInboxStore
-	// sessionLifecycleStoreForTools is the durable S2 session-lifecycle store
-	// (pkg/session/lifecycle.go), threaded to the delegate + message_parent
-	// tools so a child can read/park its own record and a parent can read a
-	// child's record. Distinct name from planEngine's own lifecycleStore
-	// reference to keep the two consumers (boot-sweep vs tool-surface) legible;
-	// both point at the SAME single *session.LifecycleStore instance the
-	// gateway constructs once.
+	// sessionLifecycleStoreForTools is the one gateway-owned durable store
+	// shared by steering, tools and planEngine. Its independent reference
+	// lock keeps Stop available while a configuration transaction holds mu.
+	sessionLifecycleMu            sync.RWMutex
 	sessionLifecycleStoreForTools *session.LifecycleStore
 
 	// clearNotPerformedHook receives a refused or not-performed /clear
