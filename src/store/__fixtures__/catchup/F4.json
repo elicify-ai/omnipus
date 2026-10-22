@@ -156,6 +156,26 @@
           "dir": "server→client",
           "frame": {
             "boot_id": "boot-1",
+            "has_earlier": false,
+            "has_later": false,
+            "page_info": {
+              "byte_budget_exceeded": false,
+              "context": {
+                "duplicate_ids": [],
+                "spans": []
+              },
+              "first_position": "hp1_WHBj2oAOLcz6AgXBMkyMfxCrcjqmF5Du8mgUcXYBNag",
+              "last_position": "hp1_psGlCMLbE6Mp_w1MkKdpQHv5wWiwD0lFE8xVGxR5KX0",
+              "limit": 40,
+              "min_rows": 20,
+              "mode": "latest",
+              "projected_bytes": 1,
+              "retention_generation": "fixture-generation-1",
+              "row_count": 2,
+              "soft_byte_budget": 4194304,
+              "source_group_count": 2,
+              "stop_reason": "end"
+            },
             "reason": "unknown_position",
             "seq": 8,
             "session_id": "sess-1",
@@ -167,6 +187,9 @@
           "frame": {
             "boot_id": "boot-1",
             "emitted_at": "2026-01-01T00:00:04Z",
+            "history_state": {
+              "status": "available"
+            },
             "pending_approvals": [],
             "session_id": "sess-1",
             "type": "session_state",
@@ -179,6 +202,10 @@
             "agent_id": "mia",
             "client_message_id": "client-1",
             "content": "finish while I reload",
+            "history_origin": {
+              "entry_id": "id-1",
+              "position": "hp1_WHBj2oAOLcz6AgXBMkyMfxCrcjqmF5Du8mgUcXYBNag"
+            },
             "id": "id-1",
             "role": "user",
             "session_id": "sess-1",
@@ -190,6 +217,10 @@
           "frame": {
             "agent_id": "mia",
             "content": "p0 p1 p2 p3 p4 p5 p6 p7 ",
+            "history_origin": {
+              "entry_id": "msg-1",
+              "position": "hp1_psGlCMLbE6Mp_w1MkKdpQHv5wWiwD0lFE8xVGxR5KX0"
+            },
             "id": "msg-1",
             "model": "controllable-test-model",
             "role": "assistant",
@@ -203,10 +234,7 @@
           "frame": {
             "session_id": "sess-1",
             "stats": {
-              "duplicate_tool_call_id_count": 0,
-              "frames_emitted": 2,
-              "orphan_count": 0,
-              "truncated_result_count": 0
+              "frames_emitted": 2
             },
             "type": "done"
           }
