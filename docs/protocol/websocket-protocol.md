@@ -48,7 +48,7 @@ These frames are sent by the frontend to the backend over the WebSocket connecti
 
 ### `attach_session` — bounded history and live catch-up
 
-Attach names the authorized session. Optional `since_seq` / `boot_id` request journal catch-up from a previously completed live cursor. Optional `history_limit` targets 20–100 drawn-row units for a snapshot (default 40); `history_min_rows` is its advisory 1–limit two-screen floor (default 20). Null, wrong types, fractional/exponent and out-of-range values are rejected. Session syntax and addressed-session access are checked before these history values; invalid values never bind, wipe history or send successful completion. Inbound-validation on/off uses the same precedence.
+Attach names the authorized session. Optional `since_seq` / `boot_id` request journal catch-up from a previously completed live cursor. Optional `history_limit` targets 20–100 drawn-row units for a snapshot (default 40); `history_min_rows` is its advisory 1–limit two-screen floor (default 20). Null, wrong types, fractional/exponent and out-of-range values are rejected. Session syntax and addressed-session access are checked before these history values; invalid values never bind, wipe history or send successful completion. Inbound-validation on/off uses the same precedence. A malformed envelope that cannot decode into an attach frame is dropped before binding; the operator receives one sanitized `ws: malformed attach_session frame` warning with a fixed phase classification, never the raw body, credentials, session identity or decoder cause. This syntax warning is separate from an authorized history-page attempt; a following valid attach can still proceed.
 
 | Branch | Ordered output | What completion proves |
 |---|---|---|

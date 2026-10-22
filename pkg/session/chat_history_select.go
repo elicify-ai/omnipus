@@ -384,6 +384,9 @@ func historySelect(t *chatHistoryIndexTree, dir string, cp historyCheckpoint, o 
 	return p, nil
 }
 
+// Initial selection plus at most two reselects after a retention move.
+const chatHistoryPageMaxAttempts = 3
+
 func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opts ChatHistoryPageOptions) (ChatHistoryPage, error) {
 	o, err := historyNormalizeOptions(opts)
 	if err != nil {
@@ -392,7 +395,7 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 	if err = validateSessionID(sid); err != nil {
 		return ChatHistoryPage{}, err
 	}
-	for {
+	for attempt := 1; ; attempt++ {
 		if _, err = us.reconcileChatHistoryIndex(ctx, sid); err != nil {
 			return ChatHistoryPage{}, err
 		}
@@ -456,6 +459,9 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 				m.DiscardedArchiveRecords += records
 				m.DiscardedArchiveBytes += count
 				m.RetentionRetries++
+			}
+			if attempt >= chatHistoryPageMaxAttempts {
+				return ChatHistoryPage{}, historyUnavailable("index_inconsistent", errors.New("retention changed during all bounded history read attempts"))
 			}
 			continue
 		}
