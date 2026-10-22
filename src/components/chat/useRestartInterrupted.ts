@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useSyncExternalStore } from 'react'
+import { hashKey, useQuery } from '@tanstack/react-query'
 import { fetchSessions } from '@/lib/api'
 import { interruptionNoticeDetail } from '@/lib/subagentStatus'
 import { queryClient } from '@/lib/queryClient'
@@ -28,12 +28,27 @@ function useSavedLifecycle(sessionId: string | null) {
     enabled: !!sessionId && sessionId !== '__pending',
     select: (list) => list.find((session) => session.id === sessionId),
   }, queryClient)
+  // A re-save of the byte-identical list (structural sharing keeps the same
+  // data reference) notifies no useQuery observer — its update count is not a
+  // tracked result prop — yet that re-save IS a new saved observation, the one
+  // signal a second same-boot ceiling needs (DESIGN Decision 1: re-arm for
+  // each new interrupted outcome/turn). Subscribing to the cache makes the
+  // update count a real reactive input instead of a render-by-accident read
+  // (same rationale as useQueryRefreshFailed: cache listeners run
+  // synchronously, the observer defers).
+  const version = useSyncExternalStore(
+    (onChange) => queryClient.getQueryCache().subscribe((event) => {
+      if (event.query.queryHash === hashKey(['sessions'])) onChange()
+    }),
+    () => queryClient.getQueryState(['sessions'])?.dataUpdateCount ?? 0,
+    () => 0,
+  )
   return {
     state: data?.lifecycle_state,
     reason: data?.interruption_reason,
     updatedAt: data?.updated_at,
     stopCause: data?.stop_note?.cause,
-    version: queryClient.getQueryState(['sessions'])?.dataUpdateCount ?? 0,
+    version,
     settled: !isFetching,
   }
 }
@@ -77,25 +92,48 @@ export function useInterruptionNoticeDetail(): string {
   return interruptionNoticeDetail(reason)
 }
 
-/** Ends the notice at the user's own action before the new turn's first frame arrives. */
+/** Ends the notice at the user's own action before the new turn's first frame
+ * arrives. An explicit dismissal also settles the saved interrupted report at
+ * the current list version (restartNoticeResolvedAt): later refetches of the
+ * same stale row must not re-arm the notice the user just dismissed. */
 export function dismissRestartNotice(sessionId: string) {
-  setDismissed(sessionId, true)
+  const currentVersion = queryClient.getQueryState(['sessions'])?.dataUpdateCount ?? 0
+  setDismissed(sessionId, true, false, undefined, false, currentVersion, currentVersion)
 }
 
-function setDismissed(sessionId: string, value: boolean, clearObserved = false, seenAt?: string, clearEnded = false) {
+function setDismissed(
+  sessionId: string,
+  value: boolean,
+  clearObserved = false,
+  seenAt?: string,
+  clearEnded = false,
+  seenVersion?: number,
+  resolvedAt?: number,
+  reopenReport = false,
+) {
   useChatStore.setState((state) => {
     const bucket = state.sessionsById[sessionId]
     if (!bucket) return state
     const nextAt = value ? (seenAt ?? bucket.restartNoticeDismissedAt) : undefined
     const nextEnded = clearObserved || clearEnded ? undefined : bucket.endedInterruption
     const nextBoot = clearObserved ? undefined : bucket.restartInterruptedBootId
-    const nextVersion = clearObserved ? undefined : bucket.restartInterruptedListVersion
+    const nextObservedVersion = clearObserved ? undefined : bucket.restartInterruptedListVersion
+    // Binding the dismissal to the list read that produced it (seenVersion)
+    // and settling or reopening the report (resolvedAt / reopenReport) is what
+    // lets a second same-boot ceiling re-arm while a stale refetch after a
+    // witnessed completion never does — see useRestartNoticeDismissal.
+    const nextDismissedVersion = value ? (seenVersion ?? bucket.restartNoticeDismissedListVersion) : undefined
+    const nextResolvedAt = value
+      ? (reopenReport ? undefined : (resolvedAt ?? bucket.restartNoticeResolvedAt))
+      : undefined
     if (
       !!bucket.restartNoticeDismissed === value
       && bucket.restartNoticeDismissedAt === nextAt
       && bucket.endedInterruption === nextEnded
       && bucket.restartInterruptedBootId === nextBoot
-      && bucket.restartInterruptedListVersion === nextVersion
+      && bucket.restartInterruptedListVersion === nextObservedVersion
+      && bucket.restartNoticeDismissedListVersion === nextDismissedVersion
+      && bucket.restartNoticeResolvedAt === nextResolvedAt
     ) return state
     return { sessionsById: { ...state.sessionsById, [sessionId]: {
       ...bucket,
@@ -103,7 +141,9 @@ function setDismissed(sessionId: string, value: boolean, clearObserved = false, 
       restartNoticeDismissedAt: nextAt,
       endedInterruption: nextEnded,
       restartInterruptedBootId: nextBoot,
-      restartInterruptedListVersion: nextVersion,
+      restartInterruptedListVersion: nextObservedVersion,
+      restartNoticeDismissedListVersion: nextDismissedVersion,
+      restartNoticeResolvedAt: nextResolvedAt,
     } } }
   })
 }
@@ -130,12 +170,27 @@ export function useRestartNoticeDismissal(): void {
   const ended = useChatStore((s) => (sessionId != null ? s.sessionsById[sessionId]?.endedInterruption : undefined))
   const dismissed = useChatStore((s) => (sessionId != null && !!s.sessionsById[sessionId]?.restartNoticeDismissed))
   const dismissedAt = useChatStore((s) => (sessionId != null ? s.sessionsById[sessionId]?.restartNoticeDismissedAt : undefined))
+  const dismissedVersion = useChatStore((s) => (sessionId != null ? s.sessionsById[sessionId]?.restartNoticeDismissedListVersion : undefined))
+  const resolvedAt = useChatStore((s) => (sessionId != null ? s.sessionsById[sessionId]?.restartNoticeResolvedAt : undefined))
   useEffect(() => {
     if (!sessionId) return
     const listStillPrevious = ended != null && (!saved.settled || saved.version <= ended.listVersion)
     if (oldBoot || progressed) setDismissed(sessionId, false, true)
-    else if (running && (observed || saved.state === 'interrupted' || ended != null)) setDismissed(sessionId, true, false, saved.updatedAt, true)
+    // The continuation dismissal binds itself to the current list read and
+    // reopens the report: the new turn's outcome is unknown until the UI
+    // witnesses how it ends.
+    else if (running && (observed || saved.state === 'interrupted' || ended != null)) setDismissed(sessionId, true, false, saved.updatedAt, true, saved.version, undefined, true)
     else if (!observed && saved.state !== undefined && saved.state !== 'interrupted' && !listStillPrevious) setDismissed(sessionId, false, false, undefined, true)
-    else if (!running && saved.state === 'interrupted' && dismissed && dismissedAt && saved.updatedAt && saved.updatedAt > dismissedAt) setDismissed(sessionId, false)
-  }, [sessionId, saved.state, saved.settled, saved.updatedAt, saved.version, running, observed, progressed, oldBoot, ended, dismissed, dismissedAt])
+    else if (!running && saved.state === 'interrupted' && dismissed && (
+      // A newer interrupted updated_at re-arms, as before. A second same-boot
+      // ceiling whose list read re-saves the byte-identical row — same
+      // updated_at, newer observation count — re-arms too, but only while the
+      // continuation's outcome is unwitnessed (restartNoticeResolvedAt unset):
+      // a witnessed clean completion or an explicit dismissal settles the
+      // report, so a stale refetch of the old interrupted row after a real
+      // done never brings the notice back.
+      (saved.updatedAt && dismissedAt && saved.updatedAt > dismissedAt) ||
+      (dismissedVersion != null && resolvedAt === undefined && saved.version > dismissedVersion)
+    )) setDismissed(sessionId, false)
+  }, [sessionId, saved.state, saved.settled, saved.updatedAt, saved.version, running, observed, progressed, oldBoot, ended, dismissed, dismissedAt, dismissedVersion, resolvedAt])
 }

@@ -93,6 +93,12 @@ function closeFinishedTurn(
       listVersion: queryClient.getQueryState(['sessions'])?.dataUpdateCount ?? 0,
     }
     draft.restartNoticeDismissed = false
+  } else {
+    // A witnessed clean completion settles the interrupted report: the turn
+    // the user continued is known to have finished, so a stale saved
+    // `interrupted` refetch after this done must not re-arm the notice
+    // (second-ceiling rearm, DESIGN Decision 1 — see useRestartInterrupted.ts).
+    draft.restartNoticeResolvedAt = queryClient.getQueryState(['sessions'])?.dataUpdateCount ?? 0
   }
   // The announced turn is finalized: record its id as finished BEFORE
   // clearing, so a stale session_state.active_turn that re-announces this
