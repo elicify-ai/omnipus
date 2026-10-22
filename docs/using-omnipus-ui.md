@@ -105,13 +105,36 @@ The chat is a conversation with the workspace's agents. When the open conversati
 
 Saved messages load quietly and appear together when loading finishes. Old tool calls and status changes do not play through as if the agent were working again. Opening a chat, switching to another chat, or refreshing the page brings you to the latest messages at the bottom. If you scroll up while a chat is loading, Omnipus keeps your reading position instead of pulling you back down.
 
-For a very large history, an informational notice says **Saved history is large. Showing messages as they load.** The chat then shows saved messages progressively instead of holding the whole replay for one update. This is history loading, not the agent starting those tool calls again. The notice stays until you select **Dismiss**, and appears only while its chat is selected. Dismissing it does not interrupt loading. It is not a connection error, has no connection **Retry**, and does not automatically reconnect or repeat the load.
+For a very large history, an informational notice says **Saved history is large. Showing messages as they load.** An initially blank history area can then show saved messages progressively instead of waiting for one update; an existing cached reader stays in place. This is history loading, not the agent starting those tool calls again. Partial messages are not confirmation that the load finished. If it is interrupted, the partial history is discarded while prior cached history and genuinely pending input are kept. The notice stays until you select **Dismiss**, and appears only while its chat is selected. Dismissing it does not interrupt loading. It is not a connection error, has no connection **Retry**, and does not automatically reconnect or repeat the load.
 
 When you quickly leave and reopen a main chat, Omnipus uses that visit's loaded history when marking results as seen, not an older load still waiting to appear.
 
-An answer that is still running continues to stream after the saved history appears. Pending tool approvals are restored for their chat; loading history does not approve them. Secret-entry cards are not available in chat in this release while that feature is disabled. If the connection drops before history finishes loading, Omnipus retries automatically. Brief drops stay quiet; the chat's connection notice appears after two minutes disconnected, or when automatic retries give up.
+An answer that is still running continues to stream after the saved history appears. On reconnect, a saved completed answer replaces an unchanged cached partial reply once the server confirms no turn is running. Newer live text and finished tool results keep priority. Pending tool approvals are restored for their chat; loading history does not approve them. Secret-entry cards are not available in chat in this release while that feature is disabled. If the connection drops before history finishes loading, Omnipus retries automatically. Brief drops stay quiet; the chat's connection notice appears after two minutes disconnected, or when automatic retries give up.
 
 If you choose a connection **Retry**, Omnipus closes the previous connection first. If closing fails, it reports the failure instead of opening another connection.
+
+### Reading earlier messages
+
+A conversation opens at its recent end, with roughly four screens of messages rather than its entire saved history. As you scroll within two screens of the loaded beginning, Omnipus requests roughly two more screens. Message and tool heights change the amount fetched; a finished tool's start and result stay together. **Show earlier messages** also works in a short conversation or the simpler list used when your browser cannot measure virtual rows. Use **Tab** to reach it, then **Enter** or **Space**.
+
+While reading older history, **Return to latest** is always available. It fetches the recent end before replacing your view. A newer edge removed from the loaded window can be read again with **Show newer messages** or by scrolling toward it. Neither action resends a message or changes the agent's context. Your draft and pending messages stay yours.
+
+| What happens | What stays, and how to recover |
+|---|---|
+| An earlier, newer or latest read fails | Your current messages stay. The action shows its own error and **Retry**, which repeats that read, not your last instruction. Focus stays on the action while it loads or fails. |
+| A reconnect needs a fresh snapshot while you read older history | The recent tail and current controls refresh separately. Your loaded interval is checked directly, without walking back from the live end or automatically returning you there. |
+| The interval check fails | **Could not refresh loaded messages.** appears with **Retry** and an out-of-date notice. Automatic paging pauses until that same interval is checked successfully or you deliberately leave it. |
+| Some loaded messages expire under retention | **Some loaded messages have expired.** appears. Surviving content stays in the old interval; Omnipus keeps the visible anchor where possible, otherwise a nearby survivor. |
+| The whole loaded interval expires | **These loaded messages have expired.** replaces that interval. **Return to latest** is explicit; this is not a claim that the conversation is empty. |
+| Current session state reports a missing, inconsistent or too-far-behind history index | **Session history is unavailable. Retry after the operator restores its index.** appears in the history area. |
+| Current session state reports a history storage or projection failure | **This session could not be read because session storage failed. Check disk space and permissions, then retry. Details are in the server log.** appears in the history area. |
+| The connection is down and the fallback history request fails | The history area can instead say **Could not load messages.**, without the server's more specific instruction. |
+
+Current approvals, question controls and Stop remain separate from a history error. Once current controls have caught up, the message box remains usable, subject to its normal locks. When rows remain on screen during unavailable history, one paragraph says **Cached messages may be out of date. Live output — earlier history unavailable**; it is not a label on every new message or a claim that the transcript is gap-free. If no rows are displayed, only the history error appears.
+
+History **Retry** never repeats a user send. For an unavailable index it requests a new history snapshot while keeping already-ready current controls usable. If the same error persists, contact the operator; repeatedly retrying cannot rebuild missing history metadata. See [history-index operations](operations/chat-history-index.md).
+
+Loading is announced once; new failures are announced as alerts. Loading older answers does not announce them as new responses. If a successful action removes the focused control, focus moves to **Conversation history** without scrolling to a new message or the composer. Reduced motion does not disable paging or require smooth scrolling.
 
 ### Answering a question card
 
@@ -143,6 +166,8 @@ During a live reply, an inline mark combines the agent's figure and role badge w
 In the simpler message-list fallback, live tool activity appears against the reply that owns it, before the answer finishes. If a hidden tool finishes successfully and the reply still has nothing visible, the mark returns to Thinking while the agent continues. If a tool failure makes its **Failed** card visible, that otherwise-empty reply shows the card without an extra Thinking mark, even when the failure has no separate error text.
 
 The mark's figure and badge stay fully opaque. With normal motion they gently change size, and a separate glow animates behind them; Working also has a moving highlight. If your system requests reduced motion, these loops stop and the thinking phrase stops rotating. The name and current phrase remain visible.
+
+A fallback-model note can include **Pick a new model in the agent's settings.** when the recorded condition is a retired model. That hint appears once: replayed notes that already contain it do not gain a duplicate line. The saved note text stays unchanged; reading it does not change the model or retry the instruction.
 
 ### Who each message is from
 
@@ -202,7 +227,7 @@ A turn stopped by `/stop-redirect` keeps its partial reply but is not labelled (
 
 - **The agent's context moves forward.** The next turn sends only your instructions and the agent's setup — not the earlier chat content — so the reply starts from a clean slate.
 - **The saved history is kept.** Every earlier message stays in the chat's saved history, and the agent can still recall it when a task needs something from before the clear.
-- **The screen starts fresh.** Once the server confirms the clear, the view begins at a quiet **Conversation context cleared** divider, followed by the new conversation. When there is earlier history, a quiet line above the divider says **Earlier messages are saved. The agent can still recall them.** (Reaching those earlier messages on screen is planned separately.) Your `/clear` message itself is not part of the fresh view — the divider stands where the new conversation begins.
+- **The screen starts fresh.** Once the server confirms your clear, the view shows the bounded recent part of the new conversation. A reached **Conversation context cleared** divider marks its beginning; a divider outside the selected page is not inserted across an unseen gap. **Show earlier messages** at a reached divider deliberately opens one preceding saved segment. It does not restore that segment to the agent's model context, and the next clear boundary stays closed until you open it. Your `/clear` message itself is not part of the fresh view.
 
 The `/clear` row appears in the chat immediately as a queued message. If a reply is being written when you send it, Omnipus does not refuse it: the running reply is stopped first, and then the clear runs. While Omnipus is stopping the agent's running reply so the clear can apply — a few seconds, and at most about 30 — the row shows **Not sent yet, will be sent automatically**; it appears only during that wait. A `/clear` sent to an idle or stopped agent applies at once. When the reply has stopped, the clear executes and the fresh view replaces the screen.
 
@@ -214,7 +239,7 @@ While the clear is held, or when the server cannot carry it out, your `/clear` r
 | **Couldn't be sent · Try again** | The server could not carry the clear out — for example, the running reply could not be stopped. The server's reason appears as a normal reply above the row. | Nothing was cleared. Select **Try again** to send the `/clear` again, or type a new `/clear` yourself. |
 | **Not applied** | You stopped the turn and the `/clear` was discarded before it could run. | Nothing was cleared. Sending `/clear` again works normally. |
 
-After the `/clear` is sent, the chat checks the server after later replies until the clear is confirmed. If a check cannot read the history, the chat shows **Could not load messages.** and that screen's **Retry** also completes the refresh — you do not need to repeat `/clear`.
+After the `/clear` is sent, the chat checks the server after later replies until the clear is confirmed. If a confirmed result arrives while saved messages are being restored or a reply is still running, it waits until normal catch-up has finished and the chat is idle. The saved result can then replace the view without another history read or another `/clear` send. Catching up current controls while history is unavailable is not confirmation of the clear. If a check cannot read the history, the chat shows **Could not load messages.** and that screen's **Retry** also completes the refresh — you do not need to repeat `/clear`.
 
 `/clear` works in a main or extra chat only. In a helper, worker, delegate or task-child session it refuses with an explanation and changes nothing — no view move, no history change, no new chat. The refusal appears as the command's reply.
 
@@ -257,7 +282,7 @@ The view is titled **Sessions** and offers two status filters:
 | **All** | The available sessions across workspaces, including queued and ended work. Search, date, and workspace filters can narrow the list. Internal verifier sessions are not included. |
 | **Running** | Sessions whose current lifecycle display is **Working** and whose server execution classification is running, plus their parent rows so helpers stay in context. Queued and restart-interrupted sessions do not match Running themselves, though a non-running parent can remain above a genuinely running helper. |
 
-Search matches a session's title, workspace, or agent name. The date-range control filters by when the session was last active, not when it started.
+Search matches a session's title, workspace, or agent name. The date-range control filters by when the session was last active, not when it started. Opening a result uses that conversation's recent bounded history; it is not a jump to a particular message. A history-index error does not mean the session was deleted: its authorized identity can still open with current controls and a separate history error.
 
 If agent details cannot be loaded and no saved agent list is available in the open app, Sessions warns that **agent-name search is unavailable**. Title and workspace search still work, but a search by agent name alone can show no matches. Select the notice's **Retry** to load agent details again; your search stays in place, and agent-name matches return when that request succeeds.
 
@@ -316,6 +341,10 @@ Library and Mail ask before an app-initiated close, panel switch, expansion, or 
 App-wide settings live behind **Settings** in the account menu, on tabs from providers and models to security, data, and chat behavior; [settings](settings.md) walks each one. Opening Settings stays on Settings, including while the app is still opening your workspace after sign-in. Your **Profile** (preferences, password, and what agents should know about you) and **Usage** (token history) are separate entries in the same menu. Settings for one workspace live in that workspace, under its name.
 
 ## Limits and things to watch
+
+The active reader keeps at most **500 whole source groups**, plus a separate cache of at most **100 recent groups**. A source group is one saved entry with its associated tool rows; it can draw more than one row. As you browse, safe groups at the far edge leave the reader and remain reloadable. The visible anchor and focused row are protected; if safe trimming is impossible, the page waits rather than growing beyond the bound. Leaving a chat releases its loaded history and measurement/query caches, but does not stop its work or discard genuinely pending input.
+
+Each server page has a **4 MiB soft projected-size target**. Whole groups and the estimated content for at least two screens take precedence, so a large tool group or the height floor can exceed it. This is not a hard memory or download limit. Normal opening targets about four screens; contiguous top-ups correct height estimates without crossing a closed clear divider. A true retained end, clear boundary or visible read failure can stop the fill earlier.
 
 - The sidebar starts closed unless you pinned it. **Show sidebar** (the hamburger in the header) appears only while the sidebar is off screen and shows it without pinning. **Pin sidebar**, inside the sidebar, appears at 1024 pixels and wider and docks it for this and future visits; **Unpin sidebar** removes the dock — a sidebar opened during this visit stays open as an overlay until a click outside closes it, and one that was visible only because of the saved pin closes when you unpin. While it is open but not pinned, Escape, a click outside, or choosing a destination closes it, and a pin saved on a wider window stays saved. Escape reaches the sidebar itself only when nothing is open inside it — a row's ⋯ menu, the menu under your name, or the new-workspace name field takes Escape first. While the sidebar is showing over the page, Escape closes only the sidebar; it never stops a running turn or arms Stop all. When focus is outside a field or text editor, **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux) hides a visible sidebar and shows a hidden one. Inside a field or editor, the shortcut stays with that control.
 - During a native working turn, sending a message steers that turn without stopping it. A live external-CLI helper is different: the message interrupts its subprocess and continues the same CLI conversation with the new instruction. Stopped or finished helpers follow their documented resume rules. Stop can discard an instruction that was accepted but not yet consumed; delivery is not a guarantee that its work already ran. Sending mid-turn normally steers the current turn; if it reaches its hard step limit, unprocessed instructions carry into the next turn. To let the agent finish first, wait for the reply before sending.

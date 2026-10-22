@@ -84,7 +84,7 @@ PROBE_INTERVAL=5
 # means "tier not provisioned" and the tier is skipped.
 default_tier_map() {
   printf '%s\n' \
-    "go|${CI_CLUSTER_GO_MACHINE-080d74db170408}|gofmt go-build go-vet lint go-test go-race spa" \
+    "go|${CI_CLUSTER_GO_MACHINE-080d74db170408}|gofmt go-build go-vet lint go-test go-race history-index-repair spa" \
     "node|${CI_CLUSTER_NODE_MACHINE-d8d0d90a1e9648}|contracts" \
     "xplat|${CI_CLUSTER_XPLAT_MACHINE-78113d4f329908}|embed-build records-no-sqlite cli-verb-guard"
 }
@@ -116,7 +116,7 @@ ci-cluster.sh — fan CI gates across the Fly worker cluster, scale to zero.
 Usage: deploy/ci-worker/ci-cluster.sh <git-ref> [tier ...]
 
 Default tiers (concurrent across machines; gates sequential within each tier):
-  go     gofmt go-build go-vet lint go-test go-race spa  (performance)
+  go     gofmt go-build go-vet lint go-test go-race history-index-repair spa  (performance)
   node   contracts                                     (shared)
   xplat  embed-build records-no-sqlite cli-verb-guard    (shared)
 Full e2e runs separately on performance after the entire go tier, including spa.

@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, makeBucketMessages, type ChatMessage } from './chat'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
 const SID = 'goal-ack-line-test-sid'
@@ -48,6 +49,7 @@ function seedBucket(seedMessages: ChatMessage[] = []): void {
     useChatStore.setState(() => ({
       sessionsById: {
         [SID]: {
+          ...emptyHistoryFixture(),
           ...makeBucketMessages(seedMessages),
           toolCalls: {},
           toolCallOrder: [],

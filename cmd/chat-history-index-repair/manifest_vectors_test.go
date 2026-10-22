@@ -45,11 +45,11 @@ func TestHistoryRepairCommand_ManifestFingerprintFrozenVectors(t *testing.T) {
 					continue
 				}
 				require.NoError(t, os.WriteFile(path, []byte(e.Content), 0o600))
-				ns, err := strconv.ParseInt(e.Mtime, 10, 64)
-				require.NoError(t, err)
+				ns, parseErr := strconv.ParseInt(e.Mtime, 10, 64)
+				require.NoError(t, parseErr)
 				require.NoError(t, os.Chtimes(path, time.Unix(0, ns), time.Unix(0, ns)))
-				info, err := os.Stat(path)
-				require.NoError(t, err)
+				info, statErr := os.Stat(path)
+				require.NoError(t, statErr)
 				require.Equal(t, ns, info.ModTime().UnixNano(), "instrument: native fixture preserves frozen file mtime")
 			}
 			backup := t.TempDir()

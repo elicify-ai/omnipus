@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getMessageStatusSuffix } from './truncation'
+import { wireHistoryPage } from '../../tests/chat-history-paging/legacy-wire'
+import { expectHistoryPage } from '../../tests/chat-history-paging/legacy-fixtures'
+import { SessionHistoryResponse as HistoryPageSchema } from '@/lib/api/generated/schemas'
 
 // Founder ruling 2026-10-07: cold-load (REST) history of a redirected turn
 // shows its partial text with NO "(interrupted)" marker; a plain-stopped turn
@@ -18,7 +21,7 @@ const userEntry = (id: string) => ({
 // role-less tool_call rows pkg/agent/turn_transcript.go writes. The REST route
 // (pkg/gateway/rest_sessions.go::getSessionMessages) returns them raw.
 const turnCanceled = {
-  id: 'sid-s7_canceled', type: 'turn_canceled', turn_id: 't1', timestamp: '2026-10-07T10:00:01Z',
+  id: 'sid-s7_canceled', type: 'turn_canceled', agent_id: 'jim', turn_id: 't1', timestamp: '2026-10-07T10:00:01Z',
   canceled_by_user: 'u1', canceled_by_channel: 'web', cancel_method: 'graceful',
 }
 const toolCall = (id: string) => ({
@@ -28,11 +31,21 @@ const toolCall = (id: string) => ({
 const ordinaryUser = userEntry('u-second')
 
 async function load(wire: unknown[]) {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(wire), {
+  // Each narration or tool-only source draws one row in this fixed fixture.
+  // The role-less turn_canceled source is retained context, not a second row
+  // alongside the partial assistant's own interruption suffix (D4).
+  const drawnRows = wire.filter((source) => typeof source === 'object' && source !== null && Reflect.get(source, 'type') !== 'turn_canceled').length
+  const response = wireHistoryPage('sid-s7', wire, drawnRows)
+  // A positive wire fixture must be generated-valid before the real adapter runs.
+  // Ignore parse output: validation must not silently repair the network fixture.
+  HistoryPageSchema.parse(response)
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(response), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   })))
   const { fetchSessionMessages } = await import('./api')
-  return fetchSessionMessages('sid-s7')
+  const decoded: unknown = await fetchSessionMessages('sid-s7')
+  expectHistoryPage(decoded)
+  return decoded.entries
 }
 
 const suffix = (m: unknown) => getMessageStatusSuffix(m as never)

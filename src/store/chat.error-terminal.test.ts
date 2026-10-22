@@ -38,6 +38,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, getMessages, makeBucketMessages, type ChatMessage } from './chat'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import { useConnectionStore } from './connection'
 import { useChatPreferencesStore } from './chatPreferences'
 import { codeToDisplay } from '@/lib/llm-error'
@@ -83,6 +84,7 @@ function seedBucket(seedMessages: ChatMessage[] = []): void {
     useChatStore.setState(() => ({
       sessionsById: {
         [SID]: {
+          ...emptyHistoryFixture(),
           ...makeBucketMessages(seedMessages),
           toolCalls: {},
           toolCallOrder: [],

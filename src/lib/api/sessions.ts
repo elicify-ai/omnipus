@@ -14,6 +14,7 @@ import {
   // of the retired two-variant oneOf (bare array | {sessions, partial_errors}).
   SessionPage as WireSessionPageSchema,
   OperationResult as OperationResultSchema,
+  SessionDetail as WireSessionDetailSchema,
 } from '@/lib/api/generated/schemas'
 import type {
   GoalOutcome as WireGoalOutcome,
@@ -24,7 +25,10 @@ import type {
   JudgeVerdict,
   Message as WireMessage,
 } from '@/lib/api/generated/openapi-types'
-import { _recordApiSchemaError, request } from './http'
+import { ApiSchemaError, _recordApiSchemaError, request } from './http'
+import { historyProtocolError, validateHistoryPage } from './history-validation'
+import type { HistoryPosition, SessionHistoryReadOptions, SessionDetailReadOptions, SessionHistoryPage, SessionHistoryEntry, SessionDetail, AvailableSessionDetail, UnavailableSessionDetail } from './history-types'
+export type { HistoryPosition, SessionHistoryPageInfo, SessionHistoryMetadata, SessionHistoryEntry, SessionHistoryPage, SessionHistoryQuery, SessionHistoryReadOptions, SessionDetailReadOptions, SessionDetail, AvailableSessionDetail, UnavailableSessionDetail } from './history-types'
 import type { UserDeliveryState } from '../userDeliveryState'
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
@@ -203,6 +207,7 @@ function rawToSession(raw: RawSession): Session {
 // surface area). Narrowing by role gives the role-specific status set.
 
 interface MessageBase { // not-wire-format
+  historyPosition?: HistoryPosition
   id: string
   session_id?: string
   content: string
@@ -1011,12 +1016,12 @@ export function insertOrphanSessionAsRoot(tree: SessionTreeNode[], orphan: Sessi
 // transcript noise but tells the truth — something was here and couldn't
 // be rendered — while the rest of the conversation still loads normally.
 
-function placeholderMessage(raw: unknown, index: number): SystemMessage {
+function placeholderMessage(raw: unknown, position: string): SystemMessage {
   const obj = (raw !== null && typeof raw === 'object') ? raw as Record<string, unknown> : {}
-  const id = typeof obj.id === 'string' && obj.id.length > 0 ? obj.id : `unrenderable-${index}`
+  const id = typeof obj.id === 'string' && obj.id.length > 0 ? obj.id : `unrenderable-${position}`
   const timestamp = typeof obj.timestamp === 'string' && obj.timestamp.length > 0
     ? obj.timestamp
-    : new Date().toISOString()
+    : '1970-01-01T00:00:00Z'
   return {
     id,
     session_id: undefined,
@@ -1035,26 +1040,27 @@ function placeholderMessage(raw: unknown, index: number): SystemMessage {
 // A single rate-limited dev toast summarises the drop (maybeDevToast is
 // throttled per key, so a burst of bad items in one response doesn't spam
 // the UI); production gets the existing _recordApiSchemaError telemetry.
-function parseWireMessageList(items: unknown[], endpoint: string): Message[] {
+function parseWireMessageList(items: WireMessage[], endpoint: string): SessionHistoryEntry[] {
   // The generic wire Message makes this payload optional; Q33 requires it
   // on classified diagnostics. Preserve the existing visible-error path.
   const messageSchema = WireMessageSchema.refine(
     (message) => message.type !== 'context_window_notice' || message.context_window_notice !== undefined,
     { message: 'Context window notice is missing its diagnostic payload.', path: ['context_window_notice'] },
   )
-  const messages: Message[] = []
+  const messages: SessionHistoryEntry[] = []
   let dropped = 0
   let firstIssue: string | undefined
-  items.forEach((item, index) => {
+  items.forEach((item) => {
+    const historyPosition = item.history_position!
     const result = messageSchema.safeParse(item)
     if (result.success) {
-      messages.push(rawToMessage(result.data as RawMessage))
+      messages.push({ ...rawToMessage(result.data as RawMessage), historyPosition })
       return
     }
     dropped++
     firstIssue ??= result.error.issues[0]?.message
     _recordApiSchemaError(endpoint, result.error.issues.length)
-    messages.push(placeholderMessage(item, index))
+    messages.push({ ...placeholderMessage(item, historyPosition), historyPosition })
   })
   clearRedirectedTurnMarkers(messages, items)
   if (dropped > 0) {
@@ -1066,69 +1072,61 @@ function parseWireMessageList(items: unknown[], endpoint: string): Message[] {
   return messages
 }
 
-// The chat-view read's X-Has-Earlier-Messages response header (contracts/
-// openapi.yaml GET /sessions/{id}/messages — "true" when the body starts at
-// the session's last /clear marker and earlier transcript entries exist
-// before it; the header is always present on a success response). Keyed by
-// session id, written by fetchSessionMessages and read by the chat state
-// writers (src/store/chat/has-earlier.ts consumers) after their read — the
-// smallest header channel that changes no caller's signature or return
-// shape. lib cannot import the store, so the flag hops through here.
-export const sessionMessagesHasEarlier: Record<string, boolean | undefined> = {}
-
-export async function fetchSessionMessages(sessionId: string): Promise<Message[]> {
-  // Top-level shape assertion only: the body must be an array. A non-array
-  // body (an error page, a wholly different endpoint shape) is a genuine
-  // contract break and still fails loudly here. Each element is validated
-  // and degraded individually by parseWireMessageList — see the block
-  // comment above for why.
-  const path = `/sessions/${encodeURIComponent(sessionId)}/messages`
-  const rawItems = await request<unknown[]>(
-    path,
-    undefined,
-    z.array(z.unknown()) as ZodType<unknown[]>,
-    (headers) => { sessionMessagesHasEarlier[sessionId] = headers.get('X-Has-Earlier-Messages') === 'true' },
-  )
-  return parseWireMessageList(rawItems, `GET /api/v1${path}`)
-}
-
-export interface SessionDetail { // not-wire-format: SPA-internal detail type. Uses the SPA-internal Session (stats-flattened) and SPA-internal Message (params field), not the wire-format generated SessionDetail. See fetchSessionDetail() which transforms the raw response.
-  session: Session
-  messages: Message[]
-  agent_removed?: boolean
-  /** Mirrors the generated SessionDetail.has_earlier_messages: messages starts at the session's last /clear marker and earlier transcript entries exist before it (cleared context). Absent (or false) when messages is the whole transcript. */
-  has_earlier_messages?: boolean
-}
-
-export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
-  // `session` (a single object) is still validated strictly via
-  // WireSessionSchema and fails loudly on mismatch — same policy as any
-  // other single-object GET. `messages` (a list) is loosened to
-  // z.array(z.unknown()) at this top-level shape check and validated /
-  // degraded per-item below via parseWireMessageList, so one malformed
-  // historical message can't take down the whole session-detail view
-  // (Issue 3 / library-uat HIGH finding — see the block comment above
-  // fetchSessionMessages for the full rationale and the placeholder
-  // judgment call).
-  type RawSessionDetailShape = { session: RawSession; messages: unknown[]; agent_removed?: boolean; has_earlier_messages?: boolean }
-  const shapeSchema = z.object({
-    session: WireSessionSchema,
-    messages: z.array(z.unknown()),
-    agent_removed: z.boolean().optional(),
-    has_earlier_messages: z.boolean().optional(),
-  })
-  const path = `/sessions/${encodeURIComponent(sessionId)}`
-  const raw = await request<RawSessionDetailShape>(
-    path,
-    undefined,
-    shapeSchema as ZodType<RawSessionDetailShape>,
-  )
-  return {
-    session: rawToSession(raw.session),
-    messages: parseWireMessageList(raw.messages, `GET /api/v1${path}`),
-    agent_removed: raw.agent_removed,
-    has_earlier_messages: raw.has_earlier_messages,
+export async function fetchSessionMessages(sessionId: string, options?: SessionHistoryReadOptions): Promise<SessionHistoryPage> {
+  const query = new URLSearchParams()
+  for (const key of ['before', 'after', 'window_start', 'window_end', 'limit', 'min_rows'] as const) {
+    if (options?.[key] !== undefined) query.set(key, String(options[key]))
   }
+  const path = `/sessions/${encodeURIComponent(sessionId)}/messages${query.size ? `?${query}` : ''}`
+  const endpoint = `GET /api/v1/sessions/${encodeURIComponent(sessionId)}/messages`
+  // A generated-schema transform keeps staged item validation inside the
+  // transport's validated path, rather than emitting an unchecked-read warning.
+  const schema = z.unknown().transform(raw => validateHistoryPage(raw, sessionId, endpoint))
+  const page = await request<ReturnType<typeof validateHistoryPage>>(path, options?.signal ? { signal: options.signal } : undefined, schema as ZodType<ReturnType<typeof validateHistoryPage>>)
+  if (!page) historyProtocolError(endpoint, ['entries'], page)
+  return { ...page, entries: parseWireMessageList(page.entries, endpoint) }
+}
+
+export function isSessionHistoryAvailable(detail: SessionDetail): detail is AvailableSessionDetail {
+  return detail.history_state.status === 'available'
+}
+
+export async function fetchSessionDetail(sessionId: string, options?: SessionDetailReadOptions): Promise<SessionDetail> {
+  const path = `/sessions/${encodeURIComponent(sessionId)}`
+  const endpoint = `GET /api/v1${path}`
+  const schema = z.unknown().transform(raw => normalizeSessionDetail(raw, sessionId, endpoint))
+  const detail = await request<SessionDetail>(path, options?.signal ? { signal: options.signal } : undefined, schema as ZodType<SessionDetail>)
+  if (!detail) historyProtocolError(endpoint, ['session'], detail)
+  return detail
+}
+
+function normalizeSessionDetail(raw: unknown, sessionId: string, endpoint: string): SessionDetail {
+  if (!raw || typeof raw !== 'object') historyProtocolError(endpoint, ['session'], raw)
+  // Generated detail validation sees the real identity/state/metadata, but item
+  // validation is staged so one malformed public row has a visible placeholder.
+  const source = raw as Record<string, unknown>
+  const parsed = WireSessionDetailSchema.safeParse({ ...source, ...('messages' in source ? { messages: [] } : {}) })
+  if (!parsed.success) {
+    _recordApiSchemaError(endpoint, parsed.error.issues.length)
+    throw new ApiSchemaError(endpoint, parsed.error.issues, raw)
+  }
+  const detail = parsed.data
+  if (detail.session.id !== sessionId) historyProtocolError(endpoint, ['session', 'id'], raw)
+  const base = { session: rawToSession(detail.session), ...(detail.agent_removed !== undefined ? { agent_removed: detail.agent_removed } : {}) }
+  if (detail.history_state.status === 'unavailable') {
+    for (const key of ['messages', 'page_info', 'has_earlier', 'has_later', 'next_before', 'next_after']) {
+      if (Object.hasOwn(source, key)) historyProtocolError(endpoint, [key], raw)
+    }
+    if (!detail.history_state.reason || !detail.history_state.message) historyProtocolError(endpoint, ['history_state'], raw)
+    return { ...base, history_state: detail.history_state } as UnavailableSessionDetail
+  }
+  if (detail.history_state.reason !== undefined || detail.history_state.message !== undefined) historyProtocolError(endpoint, ['history_state'], raw)
+  const { entries, session_id, ...metadata } = validateHistoryPage({
+    session_id: sessionId, entries: source.messages,
+    ...Object.fromEntries(['page_info', 'has_earlier', 'has_later', 'next_before', 'next_after'].filter(key => Object.hasOwn(source, key)).map(key => [key, source[key]])),
+  }, sessionId, endpoint)
+  void session_id
+  return { ...base, history_state: { status: 'available' }, messages: parseWireMessageList(entries, endpoint), ...metadata }
 }
 
 /**

@@ -123,7 +123,7 @@ describe('T15/T20 actual history actions — B10/B28/B29/B34', () => {
     await user.click(latest)
     expect((await barrier.request.promise).has('before'), 'D9 fresh latest read, not older retry').toBe(false)
     expect(screen.getByText('Saved row 79', { exact: true })).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('Loading latest messages…')
+    expect(within(screen.getByLabelText('Conversation history', { exact: true })).getByRole('status')).toHaveTextContent('Loading latest messages…')
     await act(async () => barrier.response.resolve(json({ error: 'latest read failed' }, 500)))
     const failure = await screen.findByRole('alert')
     expect(failure).toHaveTextContent('Could not load latest messages.')

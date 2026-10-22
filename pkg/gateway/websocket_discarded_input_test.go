@@ -3,7 +3,6 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -80,8 +79,8 @@ func TestGetSessionMessages_ShowsInputDispositionForADiscardedInput(t *testing.T
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
-	var msgs []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &msgs))
+	historyMigrationPage(t, meta.ID, w.Body.Bytes(), "latest", false, false)
+	msgs := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 	require.Len(t, msgs, 2)
 	assert.NotContains(t, msgs[0], "input_disposition")
 	assert.Equal(t, "discarded text", msgs[1]["content"], "the archived bytes are still returned")

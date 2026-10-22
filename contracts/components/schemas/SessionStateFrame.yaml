@@ -62,6 +62,16 @@ properties:
       the connection-open emit (no session yet). The SPA routes active_turn
       by this id instead of the globally active session. Keep in sync by
       hand with contracts/asyncapi.yaml's inline SessionStateFrame.
+  session_tokens_total:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Authoritative absolute session-wide consumed-token total, with the same
+      meaning as SessionStats.tokens_total. Present when authoritative usage is
+      available on an authorized session-scoped attach, including live_only;
+      omitted on unscoped connection-open state. Omitted means unknown, never zero.
+      Independent of history readiness; not a per-turn delta.
   attention_bound:
     type: integer
     format: int64

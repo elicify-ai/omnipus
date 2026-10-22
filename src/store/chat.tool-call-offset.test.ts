@@ -28,6 +28,7 @@ import { useChatStore, makeBucketMessages, evictMessageFromBucket, getMessages }
 import type { SessionChatState, PositionedToolCall } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 
 const SID = 'sess-offset-test'
 
@@ -189,6 +190,7 @@ describe('chat store — tool-call offset stamping (position-in-model fix)', () 
         useChatStore.setState({
           sessionsById: {
             [SID]: {
+              ...emptyHistoryFixture(),
               ...makeBucketMessages([
                 { id: assistantId, role: 'assistant', content: 'foo ', timestamp: '2026-07-16T00:00:00Z', status: 'streaming', isStreaming: true },
               ]),
@@ -236,6 +238,7 @@ describe('chat store — tool-call offset stamping (position-in-model fix)', () 
         useChatStore.setState({
           sessionsById: {
             [SID]: {
+              ...emptyHistoryFixture(),
               ...makeBucketMessages([
                 {
                   id: assistantId,
@@ -484,6 +487,7 @@ describe('chat store — tool-call offset stamping (position-in-model fix)', () 
         useChatStore.setState({
           sessionsById: {
             [SID]: {
+              ...emptyHistoryFixture(),
               ...makeBucketMessages([
                 { id: assistantId, role: 'assistant', content: 'reconnected text', timestamp: '', status: 'streaming', isStreaming: true },
               ]),
@@ -517,6 +521,7 @@ describe('chat store — tool-call offset stamping (position-in-model fix)', () 
   describe('evictMessageFromBucket — positioned tool calls', () => {
     it('evicting a message removes its positioned tool call from every dependent map, with no dangling entries', () => {
       const bucket: SessionChatState = {
+        ...emptyHistoryFixture(),
         messagesById: {
           m1: {
             id: 'm1',

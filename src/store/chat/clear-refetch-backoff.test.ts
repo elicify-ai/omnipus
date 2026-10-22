@@ -13,6 +13,8 @@ import { queryClient } from '@/lib/queryClient'
 import { pendingClearRefetches } from './runtime-state'
 import { retryClearTranscriptRead, FREE_UNRESOLVED_READS, MAX_TURN_ENDS_BETWEEN_READS } from './clear-refetch'
 import type { ServerFrame } from '@/lib/ws'
+import { clearHistoryPage, wireHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
+import { emptyHistoryPage, type HistoryPageView } from '../../../tests/chat-history-paging/legacy-fixtures'
 
 const requestMock = vi.hoisted(() => vi.fn())
 const logDiagnostic = vi.hoisted(() => vi.fn())
@@ -21,8 +23,8 @@ vi.mock('@/lib/api/http', async (importOriginal) => ({ ...(await importOriginal<
 
 const SID = 'sess-clear-backoff'
 const raw = (id: string, role: string, content: string, ts: string) => ({ id, role, content, timestamp: ts, agent_id: 'jim', status: 'ok' })
-const PRE_CLEAR = [raw('srv-u-1', 'user', 'earlier question', '2026-10-09T23:00:00Z'), raw('srv-a-1', 'assistant', 'earlier answer', '2026-10-09T23:00:05Z')]
-const POST_CLEAR = [raw('srv-marker', 'system', 'Conversation context cleared', '2026-10-10T00:00:00Z')]
+const PRE_CLEAR = wireHistoryPage(SID, [raw('srv-u-1', 'user', 'earlier question', '2026-10-09T23:00:00Z'), raw('srv-a-1', 'assistant', 'earlier answer', '2026-10-09T23:00:05Z')], 2)
+const POST_CLEAR = clearHistoryPage(SID, [raw('srv-marker', 'system', 'Conversation context cleared', '2026-10-10T00:00:00Z')], 1)
 
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 let seq = 0
@@ -90,11 +92,11 @@ describe('unresolvable /clear: the transcript re-read backs off', () => {
 describe('R3-SPA-SFH-05: the back-off counts real misses only and leaves a trace', () => {
   it('reads that merely joined a fetch already in flight do not burn the free reads', async () => {
     for (let round = 0; round < FREE_UNRESOLVED_READS + 3; round++) {
-      let release!: (rows: never[]) => void
-      const slow = new Promise<never[]>((resolve) => { release = resolve })
+      let release!: (page: HistoryPageView) => void
+      const slow = new Promise<HistoryPageView>((resolve) => { release = resolve })
       const inFlight = queryClient.fetchQuery({ queryKey: ['messages', SID], queryFn: () => slow, staleTime: 0 })
       await turnEnd() // the clear's re-read joins `inFlight`
-      release([])
+      release(emptyHistoryPage(SID))
       await inFlight
       await settle()
     }

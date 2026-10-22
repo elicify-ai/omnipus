@@ -4814,6 +4814,8 @@ export interface components {
          */
         SessionHistoryResponse: {
             session_id: string;
+            /** @description Authoritative absolute session-wide consumed-token total, with the same meaning as SessionStats.tokens_total, independent of the selected history range. Present when authoritative usage is available; omitted means unknown, never zero. Not a sum of this page's entries or a per-turn delta. */
+            readonly session_tokens_total?: number;
             /** @description Non-null public entries, one per whole selected source group. Every paged occurrence has history_position and preserves its recorded id. An individual group's drawn-row weight can exceed 100; its start/result are never split. */
             entries: components["schemas"]["Message"][];
             has_earlier: boolean;

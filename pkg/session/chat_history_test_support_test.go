@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -89,7 +90,7 @@ func historyTree(t testing.TB, root string) map[string]historyFileFact {
 	t.Helper()
 	out := map[string]historyFileFact{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if os.IsNotExist(err) && path == root {
+		if errors.Is(err, os.ErrNotExist) && path == root {
 			return nil
 		}
 		if err != nil {

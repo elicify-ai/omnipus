@@ -67,7 +67,7 @@ describe('T14 operation-owned page refresh — B03/B11/B13', () => {
     useChatStore.getState().retryClearTranscript(SID)
     await barrier.seen.promise
     const stale = page([entry(150, { id: 'previous-clear', role: 'system', type: 'system', content: 'Conversation context cleared' })], {
-      earlier: true, info: { mode: 'older', stopped_at_clear: true, latest_clear: { entry_id: 'previous-clear', history_position: pos(150) } },
+      earlier: true, info: { mode: 'older', stop_reason: 'clear', stopped_at_clear: true, latest_clear: { entry_id: 'previous-clear', history_position: pos(150) } },
     })
     expectValidPage(stale, [pos(150)], 1)
     await finishRead(barrier, stale)

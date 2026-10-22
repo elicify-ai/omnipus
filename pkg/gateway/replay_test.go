@@ -1024,66 +1024,27 @@ func TestAttach_RegistersLiveEventsBeforeReplay(t *testing.T) {
 // TDD Row 17 — TestAttach_StartLogged / TestAttach_EndLogged
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestAttach_StartLogged verifies that slog.Info is emitted at replay start with
-// the correct keys.
-//
-// Traces to: TDD row 17, FR-I-013
+// TestAttach_StartLogged retains FR-I-013's real diagnostic assertion under
+// the paging spec's deliberate replacement: one content-free history_page
+// summary with validated mode and actual selected-source counts, not IDs or
+// lifetime replay_start load counts.
 func TestAttach_StartLogged(t *testing.T) {
-	var logBuf bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	defer slog.SetDefault(slog.New(slog.Default().Handler()))
-
-	handler, _, _ := newTestWSHandler(t)
-	t.Cleanup(handler.Wait)
-
-	store := handler.agentLoop.GetSessionStore()
-	require.NotNil(t, store)
-
-	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "main")
-	require.NoError(t, err)
-
-	wc := &wsConn{
-		sendCh: make(chan []byte, 512),
-		doneCh: make(chan struct{}),
-	}
-	handler.handleAttachSession(context.Background(), "chat-log-test", meta.ID, nil, wc)
-
-	logOutput := logBuf.String()
-	assert.Contains(t, logOutput, "replay_start", "slog.Info must include event:replay_start")
-	assert.Contains(t, logOutput, meta.ID, "slog.Info must include session_id")
-	assert.Contains(t, logOutput, "entry_count_loaded", "slog.Info must include entry_count_loaded")
-	assert.Contains(t, logOutput, "tool_call_count_loaded", "slog.Info must include tool_call_count_loaded")
-	assert.Contains(t, logOutput, "span_count_detected", "slog.Info must include span_count_detected")
+	row := historyMigrationLoggedAttach(t)
+	require.Equal(t, "history_page", row["event"])
+	require.Equal(t, "ws_attach", row["carrier"])
+	require.Equal(t, "latest", row["mode"])
+	require.Equal(t, "success", row["outcome"])
 }
 
-// TestAttach_EndLogged verifies that slog.Info is emitted at replay end with
-// the correct keys.
-//
-// Traces to: TDD row 17, FR-I-013
+// TestAttach_EndLogged checks the completed preparation's bounded counts and
+// timing. The shared helper asserts every required field, exact single-summary
+// cardinality and privacy; replay_end/frames_emitted are no longer this log's
+// contract (Content-free observability).
 func TestAttach_EndLogged(t *testing.T) {
-	var logBuf bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	defer slog.SetDefault(slog.New(slog.Default().Handler()))
-
-	handler, _, _ := newTestWSHandler(t)
-	t.Cleanup(handler.Wait)
-
-	store := handler.agentLoop.GetSessionStore()
-	require.NotNil(t, store)
-
-	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "main")
-	require.NoError(t, err)
-
-	wc := &wsConn{
-		sendCh: make(chan []byte, 512),
-		doneCh: make(chan struct{}),
-	}
-	handler.handleAttachSession(context.Background(), "chat-end-log-test", meta.ID, nil, wc)
-
-	logOutput := logBuf.String()
-	assert.Contains(t, logOutput, "replay_end", "slog.Info must include event:replay_end")
-	assert.Contains(t, logOutput, "frames_emitted", "slog.Info must include frames_emitted")
-	assert.Contains(t, logOutput, "duration_ms", "slog.Info must include duration_ms")
+	row := historyMigrationLoggedAttach(t)
+	require.Contains(t, row, "duration_ms")
+	require.EqualValues(t, 1, pagingCounter(t, row, "selected_archive_records"))
+	require.Positive(t, pagingCounter(t, row, "projected_bytes"))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

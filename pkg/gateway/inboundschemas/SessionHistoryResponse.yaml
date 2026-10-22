@@ -22,6 +22,15 @@ properties:
     type: string
     minLength: 1
     maxLength: 255
+  session_tokens_total:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Authoritative absolute session-wide consumed-token total, with the same
+      meaning as SessionStats.tokens_total, independent of the selected history
+      range. Present when authoritative usage is available; omitted means unknown,
+      never zero. Not a sum of this page's entries or a per-turn delta.
   entries:
     type: array
     maxItems: 100

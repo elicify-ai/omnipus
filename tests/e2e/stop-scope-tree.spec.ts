@@ -41,8 +41,9 @@ import type { WebSocketRoute } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 import { chatInput, waitForConnected } from './fixtures/selectors'
 
-import type { ClientFrame, CancelFrame, DoneFrame, SessionStartedFrame, TokenFrame } from '../../src/lib/api/generated/asyncapi-types'
+import type { ClientFrame, CancelFrame, DoneFrame, ReplayMessageFrame, ServerFrame, SessionStartedFrame, SessionStateFrame, TokenFrame } from '../../src/lib/api/generated/asyncapi-types'
 import type { Message as WireMessage } from '../../src/lib/api/generated/openapi-types'
+import { fixtureHistoryPosition, wireHistoryPage, wireHistorySnapshot } from '../chat-history-paging/legacy-wire'
 
 type CapturedFrame = ClientFrame
 
@@ -54,9 +55,11 @@ const E2E_SECOND_TURN_TEXT = 'Second turn running.'
 /**
  * Installs the WS mock and starts collecting client→server frames.
  *
- * Server-side script: on the first `message` frame, ack with session_started
- * and stream a few tokens; never send done. auth/ping are ignored (the SPA
- * does not need acks to function — whatsapp-qr.spec.ts precedent).
+ * Server-side script: acknowledge real attaches with generated bounded history,
+ * current turn state/projection and catch_up_complete (D7). A replay done is not
+ * a live turn completion. Messages still stream indefinitely unless cancel is
+ * acknowledged by opts; heartbeat replies keep this synthetic transport healthy.
+ * Squad-lead approval: setup only; all five case bodies/oracles below are frozen.
  */
 async function mockChatWebSocket(
   page: import('@playwright/test').Page,
@@ -70,9 +73,21 @@ async function mockChatWebSocket(
   // session_started promises a durably saved first message. Its synthetic
   // session therefore needs matching HTTP history, not a real-gateway 404.
   const savedHistory: WireMessage[] = []
-  await page.route(`**/api/v1/sessions/${E2E_SESSION_ID}/messages`, (route) => route.fulfill({ status: 200, json: savedHistory }))
+  await page.route(`**/api/v1/sessions/${E2E_SESSION_ID}/messages`, (route) => route.fulfill({ status: 200, json: wireHistoryPage(E2E_SESSION_ID, savedHistory, savedHistory.length) }))
   await page.routeWebSocket(/api\/v1\/chat\/ws/, (ws: WebSocketRoute) => {
     let turnStarted = false
+    let activeTurn: SessionStateFrame['active_turn']
+    let activeText = ''
+    let turnNumber = 0
+    let attachSequence = 0
+    const startTurn = (message: Extract<ClientFrame, { type: 'message' }>) => {
+      activeText = ''
+      activeTurn = {
+        turn_id: `stop-scope-turn-${++turnNumber}`,
+        agent_id: message.agent_id ?? 'jim',
+        started_at: new Date().toISOString(),
+      }
+    }
     ws.onMessage((raw: string | Buffer) => {
       let frame: CapturedFrame
       try {
@@ -82,6 +97,59 @@ async function mockChatWebSocket(
       }
       sentToServer.push(frame)
 
+      if (frame.type === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong' } satisfies ServerFrame))
+        return
+      }
+      if (frame.type === 'attach_session') {
+        // Only persisted user occurrences are historical rows. The running
+        // answer is current active projection, excluded from page accounting.
+        const selected = frame.session_id === E2E_SESSION_ID ? savedHistory : []
+        const replay: ReplayMessageFrame[] = selected.map((source) => {
+          if (!source.id || source.role !== 'user' || typeof source.content !== 'string' || !source.history_position) {
+            throw new Error('Stop-scope fixture requires a recorded user source and history_position')
+          }
+          return {
+            type: 'replay_message', session_id: frame.session_id,
+            id: source.id, client_message_id: source.client_message_id,
+            role: 'user', content: source.content, timestamp: source.timestamp,
+            agent_id: source.agent_id,
+            history_origin: { position: source.history_position, entry_id: source.id },
+          }
+        })
+        const limit = frame.history_limit ?? 40
+        const history = wireHistoryPage(frame.session_id, selected, selected.length, {
+          info: { limit, min_rows: frame.history_min_rows ?? Math.min(limit, 20) },
+        })
+        const seq = ++attachSequence
+        const bootId = 'stop-scope-fixture'
+        const currentTurn = frame.session_id === E2E_SESSION_ID ? activeTurn : undefined
+        const current: SessionStateFrame = {
+          type: 'session_state', session_id: frame.session_id,
+          user_id: 'stop-scope-fixture', pending_approvals: [],
+          emitted_at: new Date().toISOString(),
+          history_state: { status: 'available' },
+          ...(currentTurn ? { active_turn: currentTurn } : {}),
+        }
+        const projection: TokenFrame[] = currentTurn && activeText ? [{
+          type: 'token', session_id: frame.session_id,
+          content: activeText, replace: true, turn_id: currentTurn.turn_id,
+          agent_id: currentTurn.agent_id,
+        }] : []
+        const replies: ServerFrame[] = [
+          wireHistorySnapshot(history, { seq, boot_id: bootId, reason: 'unknown_position' }, replay),
+          current, ...replay,
+          { type: 'done', session_id: frame.session_id, stats: { frames_emitted: replay.length } },
+          ...projection,
+          { type: 'catch_up_complete', session_id: frame.session_id, seq, boot_id: bootId, mode: 'snapshot' },
+        ]
+        for (const reply of replies) ws.send(JSON.stringify(reply))
+        return
+      }
+      if (frame.type === 'cancel') {
+        activeTurn = undefined
+        activeText = ''
+      }
       if (frame.type === 'cancel' && opts.ackCancelWithDone) {
         const done: DoneFrame = { type: 'done', session_id: E2E_SESSION_ID }
         ws.send(JSON.stringify(done))
@@ -89,15 +157,18 @@ async function mockChatWebSocket(
 
       if (frame.type === 'message' && turnStarted) {
         // A follow-up turn in the same session: stream and never finish.
+        startTurn(frame)
         if (frame.client_message_id) {
           savedHistory.push({
             id: frame.client_message_id, client_message_id: frame.client_message_id,
+            history_position: fixtureHistoryPosition(E2E_SESSION_ID, frame.client_message_id),
             role: 'user', content: frame.content, status: 'ok',
             agent_id: frame.agent_id ?? 'jim', timestamp: new Date().toISOString(),
           })
         }
         for (const chunk of ['Second ', 'turn ', 'running.']) {
-          const token: TokenFrame = { type: 'token', session_id: E2E_SESSION_ID, content: chunk }
+          activeText += chunk
+          const token: TokenFrame = { type: 'token', session_id: E2E_SESSION_ID, content: chunk, turn_id: activeTurn?.turn_id }
           ws.send(JSON.stringify(token))
         }
       }
@@ -105,16 +176,19 @@ async function mockChatWebSocket(
       if (frame.type === 'message' && !turnStarted) {
         expect(frame.content).toBe(E2E_TRIGGER_TEXT)
         if (!frame.client_message_id) throw new Error('Stop-scope first message is missing its delivery ID')
+        startTurn(frame)
         turnStarted = true
         savedHistory.push({
           id: frame.client_message_id, client_message_id: frame.client_message_id,
+          history_position: fixtureHistoryPosition(E2E_SESSION_ID, frame.client_message_id),
           role: 'user', content: E2E_TRIGGER_TEXT, status: 'ok',
           agent_id: frame.agent_id ?? 'jim', timestamp: new Date().toISOString(),
         })
         const ack: SessionStartedFrame = { type: 'session_started', session_id: E2E_SESSION_ID, client_message_id: frame.client_message_id }
         ws.send(JSON.stringify(ack))
         for (const chunk of ['Stop', '-scope ', 'e2e ', 'turn ', 'running.']) {
-          const token: TokenFrame = { type: 'token', session_id: E2E_SESSION_ID, content: chunk }
+          activeText += chunk
+          const token: TokenFrame = { type: 'token', session_id: E2E_SESSION_ID, content: chunk, turn_id: activeTurn?.turn_id }
           ws.send(JSON.stringify(token))
         }
         // Deliberately NO done frame — the turn stays mid-stream.
