@@ -18,7 +18,6 @@ test('attach replay paints history once at the bottom without intermediate rows'
   // Squad-lead test-setup decision Q1 A: this synthetic case tests replay
   // painting, NOT automatic attach sizing/geometry (T07/T16/T28). Only the
   // browser WS boundary sends explicit valid100/20; real consumers are untouched.
-  await installPaintAttachInput(page, sessionId);
   const observations: Array<{ rows: number; running: number }> = [];
   let completed = false;
   await page.routeWebSocket(/\/api\/v1\/chat\/ws/, socket => {
@@ -41,6 +40,9 @@ test('attach replay paints history once at the bottom without intermediate rows'
       completed = true;
     });
   });
+  // routeWebSocket installs a replacement WebSocket constructor on reload.
+  // Install the approved input wrapper AFTER that shim, not on the retired one.
+  await installPaintAttachInput(page, sessionId);
   await page.reload();
   await expect.poll(() => completed).toBe(true);
   // Positive control: the peer sent every frame and the final history really
