@@ -213,8 +213,11 @@ func testFallbackMissingPublisherDiagnostics(t *testing.T) {
 	al := &AgentLoop{eventBus: NewEventBus()}
 	sub := al.SubscribeEvents(1)
 	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
+	suppressedBeforeHealthy := eventEmissionsSuppressed.Load()
 	al.emitEvent(EventKindProviderFallback, meta, privatePayload)
 	require.Len(t, drainEvents(sub.C), 1)
+	require.Equal(t, suppressedBeforeHealthy, eventEmissionsSuppressed.Load(),
+		"a healthy publication must leave the suppression counter unchanged")
 
 	logged := readLog()
 	require.NotContains(t, logged, privatePayload)
