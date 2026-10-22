@@ -78,7 +78,9 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 
 ### Automatic reminders
 
-When an automatic reminder starts another work turn for a goal in your own chat—not a helper or task run—the web app shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line is saved in that chat's history and remains after you reload it. If that line cannot be saved, the chat shows an error instead, the reminder does not count as a finished outcome, and a later reminder can continue the same goal once saving works again.
+When an automatic reminder starts another work turn for a goal in your own chat—not a helper or task run—the web app shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line is saved in that chat's history and remains after you reload it.
+
+If that line cannot be saved, the live chat shows a generic turn error. The goal stays active, and this failed start leaves the reminder count unchanged. If chat history is unwritable, the explanation may not be saved either. A later reminder can continue the same goal once saving works again.
 
 The same system line also appears when the Judge sends the agent back to keep working in that chat. Those Judge follow-ups are not automatic idle reminders and do not add to the no-progress count.
 
