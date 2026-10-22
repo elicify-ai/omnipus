@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,7 +155,7 @@ func round3CitationAppendRetry(t *testing.T) {
 	tracker.RecordRecalled([]tools.MemoryEntry{{ID: "round3-cited", Title: "roomnote round3-cited"}})
 	counterPath := ms.PrivateRoom().CountersPath
 	before, err := os.ReadFile(counterPath)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		before = nil
 	} else {
 		require.NoError(t, err)
