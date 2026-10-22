@@ -24510,6 +24510,9 @@ type SessionHistoryResponse struct {
 	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
 	PageInfo  SessionHistoryPageInfo `json:"page_info"`
 	SessionId string                 `json:"session_id"`
+
+	// SessionTokensTotal Authoritative absolute session-wide consumed-token total, with the same meaning as SessionStats.tokens_total, independent of the selected history range. Present when authoritative usage is available; omitted means unknown, never zero. Not a sum of this page's entries or a per-turn delta.
+	SessionTokensTotal *int `json:"session_tokens_total,omitempty"`
 }
 
 // SessionLifecycleRecord The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.

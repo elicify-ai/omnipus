@@ -3177,8 +3177,9 @@ components:
             Keep in sync by hand with contracts/components/schemas/TokenFrame.yaml.
     DoneStats:
       title: DoneStats
-      description: 'Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted,
-        orphan_count, etc.).
+      description: 'Per-turn statistics in a done frame, with an optional absolute session_tokens_total when authoritative
+        usage is available. Omitted session_tokens_total means unknown, never zero. additionalProperties are allowed for
+        replay extras (frames_emitted, orphan_count, etc.).
 
         '
       type: object
@@ -3187,6 +3188,16 @@ components:
         tokens:
           type: number
           minimum: 0
+        session_tokens_total:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: >
+            Authoritative absolute session-wide consumed-token total, with the same
+            meaning as SessionStats.tokens_total. Present on live turn completion when
+            authoritative usage is available; omitted on replay-terminating done frames.
+            Omitted means unknown, never zero. Not a per-turn delta: tokens remains
+            per-turn usage, and frames_emitted remains replay-only diagnostics.
         cost:
           type: number
           minimum: 0
@@ -4292,8 +4303,8 @@ components:
           type: string
           minLength: 1
         result:
-          description: 'Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult,
-            MarshalErrorResult, and ToolResultRef are alternative shapes.
+          description: 'Tool return value. Any JSON type or null (null is the contract for error frames and cancelled calls
+            with no admitted result). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes.
 
 
             Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf`
@@ -4391,6 +4402,7 @@ components:
           enum:
           - success
           - error
+          - cancelled
         duration_ms:
           type: integer
         error:
@@ -6129,6 +6141,16 @@ components:
             ADR-082 (review CR3) — the transcript session this snapshot
             describes; absent on the connection-open emit. Keep in sync by
             hand with components/schemas/SessionStateFrame.yaml.
+        session_tokens_total:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: >
+            Authoritative absolute session-wide consumed-token total, with the same
+            meaning as SessionStats.tokens_total. Present when authoritative usage is
+            available on an authorized session-scoped attach, including live_only;
+            omitted on unscoped connection-open state. Omitted means unknown, never zero.
+            Independent of history readiness; not a per-turn delta.
         attention_bound:
           type: integer
           format: int64
