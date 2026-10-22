@@ -14,14 +14,38 @@ import type { SpanStatusConfigOptions, SpanStatusDotConfig } from '@/lib/toolSta
 
 export type SubagentInterruptReason = NonNullable<SubagentSpanTerminal['reason']>
 
-/** Human-readable label for the interrupted reason field (W1-9). */
-export function formatInterruptReason(reason: SubagentInterruptReason | undefined): string {
+/** Human-readable label for an interruption cause. Shared by helper rows and the session pill. */
+export function interruptionReasonText(reason: string | undefined): string {
   switch (reason) {
+    case 'tool_limit': return 'tool-call limit'
+    case 'reconciliation_required': return 'file check needed'
+    case 'restart': return 'restart'
     case 'parent_timeout': return 'parent timed out'
     case 'parent_cancelled': return 'parent cancelled'
     case 'parent_done_early': return 'parent completed early'
     case 'unknown': return 'unknown reason'
     default: return reason ?? ''
+  }
+}
+
+/** Human-readable label for the interrupted reason field (W1-9). */
+export function formatInterruptReason(reason: SubagentInterruptReason | undefined): string {
+  return interruptionReasonText(reason)
+}
+
+/**
+ * The one chat-body interruption sentence. A missing reason keeps the restart
+ * sentence: that is the existing restart projection, which may omit the field.
+ * A ceiling or file-check cause must not say a restart occurred.
+ */
+export function interruptionNoticeDetail(reason: string | undefined): string {
+  switch (reason) {
+    case 'tool_limit':
+      return 'This run reached its tool-call limit. Send a message to continue.'
+    case 'reconciliation_required':
+      return 'A file change could not be checked. Send a message to continue.'
+    default:
+      return 'The restart cut this answer off. Send a message to continue.'
   }
 }
 
@@ -48,8 +72,8 @@ export function formatLastUpdateAge(ageMs: number): string {
 export type SubagentLifecycleState = NonNullable<SubagentSpan['lifecycleState']>
 
 /**
- * ADR-091 D7/FR-E-004 (cross-family review finding 21): the six-state
- * `lifecycleState` domain (`subagent_state`, ADR-053) mapped onto the
+ * ADR-091 D7/FR-E-004 (cross-family review finding 21): the
+ * `lifecycleState` domain (`subagent_state`) mapped onto the
  * existing dot vocabulary (`toolStatusConfig.tsx::getSpanStatusDot`'s
  * `statusDot`/spinner) — ActivityPanel's row must prefer THIS whenever
  * `lifecycleState` is present, with the span's own `status` (the parent's
@@ -102,6 +126,10 @@ export function getLifecycleStatusDot(
       return { indicator: statusDot('bg-[var(--color-success)]'), label: 'done' }
     case 'failed':
       return { indicator: statusDot('bg-[var(--color-error)]'), label: 'failed' }
+    case 'interrupted':
+      // Ended, not running. Same neutral dot as the session pill — not the
+      // spinner, and not the Failed or Stopped colours.
+      return { indicator: statusDot('bg-[var(--color-muted)]'), label: 'Interrupted' }
     default: {
       // Safe fallback for any unexpected state value arriving from the wire.
       const _exhaustive: never = state

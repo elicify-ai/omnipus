@@ -18,7 +18,7 @@ import type { FirstSendStatus } from '@/store/chat/types'
 import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
 import type { UserDeliveryState } from '@/lib/userDeliveryState'
-import { dismissRestartNotice, useRestartInterrupted, useRestartNoticeDismissal } from './useRestartInterrupted'
+import { dismissRestartNotice, useInterruptionNoticeDetail, useRestartInterrupted, useRestartNoticeDismissal } from './useRestartInterrupted'
 
 
 const FIRST_SEND_COPY: Record<FirstSendStatus, { label: string; action?: 'Retry' | 'Generate again' }> = {
@@ -501,6 +501,7 @@ function useUnansweredQuestionId(): string | null {
 export function RestartInterruptedNotice() {
   useRestartNoticeDismissal()
   const interrupted = useRestartInterrupted()
+  const detail = useInterruptionNoticeDetail()
   const sessionId = useSessionStore((s) => s.activeSessionId)
   const unansweredId = useUnansweredQuestionId()
   if (!interrupted) return null
@@ -514,7 +515,7 @@ export function RestartInterruptedNotice() {
       <PauseCircle size={15} aria-hidden="true" />
       <span>Interrupted</span>
       <span aria-hidden="true">{' · '}</span>
-      <span>The restart cut this answer off. Send a message to continue.</span>
+      <span>{detail}</span>
       {unansweredId && (
         <StatusActionButton
           onClick={() => {
