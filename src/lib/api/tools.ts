@@ -150,6 +150,16 @@ export function submitToolApproval(
 // ── Global Tool Policies ──────────────────────────────────────────────────────
 // GlobalToolPolicies — re-exported from generated openapi-types (no local body needed).
 
+const persistedPolicyActivationMessage =
+  'The settings were saved, but could not be applied to running agents. ' +
+  'Retry applying the change, or restart Omnipus.'
+// Client-only provenance: status 503 alone never proves that a write committed.
+const persistedPolicyActivationErrors = new WeakSet<ApiError>()
+
+export function isPersistedPolicyActivationError(error: unknown): error is ApiError {
+  return isApiError(error) && persistedPolicyActivationErrors.has(error)
+}
+
 export function fetchGlobalToolPolicies(): Promise<GlobalToolPolicies> {
   return request<GlobalToolPolicies>('/security/tool-policies', undefined, GlobalToolPoliciesSchema)
 }
@@ -180,13 +190,17 @@ export async function updateGlobalToolPolicies(
     }
     const parsed = ErrorResponseSchema.safeParse(body)
     if (!parsed.success || !parsed.data.error.trim()) throw error
-    throw new ApiError(error.status, parsed.data.error, {
+    const saveError = new ApiError(error.status, parsed.data.error, {
       code: error.code,
       field: error.field,
       body: error.body,
       retryAfterMs: error.retryAfterMs,
       cause: error,
     })
+    if (parsed.data.error === persistedPolicyActivationMessage) {
+      persistedPolicyActivationErrors.add(saveError)
+    }
+    throw saveError
   }
 }
 
