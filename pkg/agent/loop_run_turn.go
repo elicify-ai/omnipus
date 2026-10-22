@@ -1341,7 +1341,6 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 			&offloadSink{workDir: ri.wsDir}, ri.turnCatalog, ri.turnRefcounter,
 			ri.rf.rt.ts.opts.WorkspaceID,
 		)
-		ri.rf.rt.ts.protectWindowControls(resolvedPending)
 		totalContentLen := 0
 		for i, pm := range ri.pendingMessages {
 			// Persist original compact media refs before using the resolved
@@ -1365,6 +1364,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 			if !include {
 				continue
 			}
+			ri.rf.rt.ts.protectWindowControls(resolvedPending[i : i+1])
 			ri.messages = append(ri.messages, resolvedPending[i])
 			totalContentLen += len(pm.Content)
 			logger.InfoCF("agent", "Injected steering message into context",
