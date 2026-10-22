@@ -124,14 +124,26 @@ func TestAttach_SnapshotReplaysSinceTheLastClearMarker(t *testing.T) {
 
 	snap := indexOfType(frames, "session_snapshot")
 	require.GreaterOrEqual(t, snap, 0, "a first load is a snapshot")
-	parsed := historyMigrationSnapshot(t, f.sid, frames[snap].raw, true, 2, 1)
+	// Section R1: the visible divider and the question each draw one row;
+	// metadata-only cancellation is a separate zero-row case.
+	parsed := historyMigrationSnapshot(t, f.sid, frames[snap].raw, true, 2, 2)
 	require.NotNil(t, parsed.NextBefore, "the snapshot says earlier messages exist with a real boundary")
 	require.True(t, parsed.HasEarlier)
 
 	var replayed strings.Builder
+	var ids []string
 	for _, fr := range frames {
 		replayed.Write(fr.raw)
+		if fr.Type == "replay_message" {
+			require.NotNil(t, fr.ID, "both selected visible sources retain their original identity")
+			ids = append(ids, *fr.ID)
+			if *fr.ID == "marker" {
+				require.Equal(t, "system", fr.Role)
+				require.Equal(t, session.ClearMarkerText, fr.Content, "the actual visible divider is not omitted")
+			}
+		}
 	}
+	require.Equal(t, []string{"marker", "new-q"}, ids, "two drawn rows must be the actual divider and question, in order")
 	require.NotContains(t, replayed.String(), "old question", "cleared content is not replayed")
 	require.NotContains(t, replayed.String(), "old answer")
 	require.Contains(t, replayed.String(), "new question")
