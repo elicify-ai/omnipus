@@ -188,7 +188,8 @@ async function completeSetupAttaches(socket: TestSocket) {
   })
 }
 
-export async function mountStage1App(path = MAIN_PATH) {
+// not-wire-format: test-server reply ownership, not a gateway request option.
+export async function mountStage1App(path = MAIN_PATH, options: { initialAttachResponse?: 'empty' | 'caller' } = {}) {
   const history = createMemoryHistory({ initialEntries: [path] })
   const router = createRouter({ routeTree, history, defaultPendingMinMs: 0 })
   await act(async () => { await router.load() })
@@ -201,7 +202,14 @@ export async function mountStage1App(path = MAIN_PATH) {
   })
   const socket = TestSocket.instances[0]!
   await act(async () => { socket.open() })
-  await completeSetupAttaches(socket)
+  if (options.initialAttachResponse === 'caller') {
+    // These actual requests belong to the caller's server fixture, not the
+    // default empty bootstrap. Claim them only for fixture bookkeeping: no
+    // completion/readiness is fabricated; the caller must send the real reply.
+    answeredAttachCount.set(socket, socket.sent.filter((frame) => frame.type === 'attach_session').length)
+  } else {
+    await completeSetupAttaches(socket)
+  }
   return { ...mounted, router, socket }
 }
 

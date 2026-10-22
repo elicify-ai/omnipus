@@ -9,7 +9,7 @@ import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
 import { MAIN_ID, json, TestSocket } from '../l1-room-ui/harness'
 import {
-  mountStage1App, resetStage1App, settledMainChat, Stage1Network, stopStage1App,
+  mountStage1App, resetStage1App, Stage1Network, stopStage1App,
 } from '../l1-room-ui/stage1-harness'
 import { deferred, expectPageAccounting, expectValidFrame, page, replay, snapshot, STAMP } from './fixtures'
 
@@ -41,8 +41,9 @@ export async function openHistory(initial: SessionHistoryResponse, options: { pl
   // this unrelated adapter failure to hide the shell would mask control tests.
   // The request is not treated as valid behavior or silently answered with [].
   network.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => initialRest.promise)
-  const mounted = await mountStage1App(options.path)
-  if (!options.path) await settledMainChat(mounted.socket)
+  // One fresh route/socket-open attach owns this initial page. Do not first
+  // complete an empty bootstrap and then add a separate member-click opening.
+  const mounted = await mountStage1App(options.path, { initialAttachResponse: 'caller' })
   const sessionId = useSessionStore.getState().activeSessionId
   if (sessionId !== MAIN_ID) throw new Error(`Fixture instrument: expected main session ${MAIN_ID}, got ${sessionId}`)
   await sendSnapshot(mounted.socket, { ...initial, session_id: MAIN_ID })
