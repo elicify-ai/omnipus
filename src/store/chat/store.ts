@@ -277,7 +277,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     toolCalls: {},
     toolCallOrder: [],
     textAtToolCallStart: {},
-    sessionTokens: 0,
+    sessionTokens: undefined,
     sessionCost: 0,
     rateLimitEvent: null,
     goalStatus: null,
