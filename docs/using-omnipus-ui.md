@@ -105,6 +105,8 @@ The chat is a conversation with the workspace's agents. When the open conversati
 
 Saved messages load quietly and appear together when loading finishes. Old tool calls and status changes do not play through as if the agent were working again. Opening a chat, switching to another chat, or refreshing the page brings you to the latest messages at the bottom. If you scroll up while a chat is loading, Omnipus keeps your reading position instead of pulling you back down.
 
+When you continue a saved chat, its messages keep that conversation's workspace, including when you steer, retry delivery or request another answer. An unfiled chat stays unfiled even if a workspace is selected elsewhere. A delivery retry also uses that conversation's owning agent, not the agent in another chat you have opened. If the owner is not loaded, the retry sends nothing, keeps the message available to retry, and asks you to reopen the conversation. To work in another workspace, open that workspace's conversation instead; see [workspaces](workspaces.md).
+
 For a very large history, an informational notice says **Saved history is large. Showing messages as they load.** The chat then shows saved messages progressively instead of holding the whole replay for one update. This is history loading, not the agent starting those tool calls again. The notice stays until you select **Dismiss**, and appears only while its chat is selected. Dismissing it does not interrupt loading. It is not a connection error, has no connection **Retry**, and does not automatically reconnect or repeat the load.
 
 When you quickly leave and reopen a main chat, Omnipus uses that visit's loaded history when marking results as seen, not an older load still waiting to appear.
