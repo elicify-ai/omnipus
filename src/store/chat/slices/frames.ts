@@ -24,7 +24,7 @@ import {
   readLLMErrorFromFrame,
   sanitizeLegacyErrorMessage,
 } from '@/lib/llm-error'
-import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, endTurnState, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
+import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, endTurnState, evictMessageFromBucket, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { flushHeldClearProjection, forgetClearRefreshForSend, settleClearRefetchAfterTurn } from '../clear-refetch'
@@ -617,6 +617,18 @@ function scheduleReplayingClear(
   return clearReplayingNow
 }
 
+/** Keep an occupied answer; discard only its data-free superseded placeholder. */
+function canRekeyAssistantPlaceholder(draft: SessionChatState, frame: TokenFrameType, localId: string): boolean {
+  if (!draft.messagesById[frame.message_id!]) return true
+  logDiagnostic('chatPlaceholderRekeyCollision', {
+    sessionId: frame.session_id,
+    turnId: frame.turn_id ?? null,
+    reason: 'occupied_destination',
+  })
+  if (!draft.messagesById[localId].tool_calls?.length) evictMessageFromBucket(draft, localId)
+  return false
+}
+
 /** Adopt a wire identity in place; tool/span references move only for step 2. */
 function rekeyAssistantPlaceholder(draft: SessionChatState, localId: string, messageId: string, remapOwnedReferences = false): void {
   const placeholder = draft.messagesById[localId]
@@ -849,7 +861,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       ownedIds.length === 0 &&
       !prevMsg.media?.length &&
       !prevMsg.spans?.length
-    if (isEmptyPlaceholder) {
+    if (isEmptyPlaceholder && canRekeyAssistantPlaceholder(draft, frame, prevOpenId)) {
       rekeyAssistantPlaceholder(draft, prevOpenId, messageId)
       const bubble = draft.messagesById[messageId]
       bubble.content = frame.content
@@ -859,7 +871,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       draft.isStreaming = true
       return
     }
-    if (prevMsg.isStreaming || prevMsg.status === 'streaming') {
+    if (draft.messagesById[prevOpenId] && (prevMsg.isStreaming || prevMsg.status === 'streaming')) {
       if (ownedIds.length > 0) {
         bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, prevOpenId, draft.textAtToolCallStart)
       }

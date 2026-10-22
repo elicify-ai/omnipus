@@ -174,3 +174,95 @@ describe('canonical identity controls outside local-placeholder adoption', () =>
     expect(assistants()[1]).toMatchObject({ content: 'Second turn.', turnId: 'different-turn', status: 'done', isStreaming: false })
   })
 })
+
+
+// Review R1/W1 oracle: an occupied wire key cannot consume a completed answer.
+const COMPLETED_ANSWER = 'Completed answer from turn A.'
+
+function completedDestination() {
+  const saved = bucket().messagesById[WIRE]
+  expect(saved, 'positive control: the completed destination exists before the collision').toMatchObject({
+    id: WIRE, role: 'assistant', content: COMPLETED_ANSWER, turnId: TURN, status: 'done', isStreaming: false,
+  })
+  return structuredClone(saved)
+}
+
+function distinctReply(saved: ReturnType<typeof completedDestination>, content: string) {
+  const state = bucket()
+  expect(state.messagesById[WIRE], 'an occupied destination must never overwrite the completed answer').toEqual(saved)
+  expect(assistants(), 'keep the completed answer and exactly one new answer, without an orphan placeholder').toHaveLength(2)
+  const replies = assistants().filter((message) => message.content === content)
+  expect(replies, 'the new reply must be rendered once, not twice or dropped').toHaveLength(1)
+  const reply = replies[0]
+  expect(reply.id).toEqual(expect.any(String))
+  expect(reply.id).not.toBe('')
+  expect(reply.id, 'the new answer must not steal the completed entry key').not.toBe(WIRE)
+  expect(new Set(state.messageOrder).size, 'ordered render positions have unique keys').toBe(state.messageOrder.length)
+  expect(getMessages(state).map((message) => message.id), 'entry identities agree with their ordered lookup keys').toEqual(state.messageOrder)
+  expect(Object.keys(state.messagesById).sort(), 'lookup has no orphan or aliased duplicate entry').toEqual([...state.messageOrder].sort())
+  expect(state.messagesById[reply.id]).toEqual(reply)
+  return reply
+}
+
+describe('occupied wire destinations preserve completed entries', () => {
+  it('occupied step-2 destination preserves the completed entry and the new sender placeholder identity', () => {
+    token(WIRE, COMPLETED_ANSWER, TURN)
+    done(WIRE, TURN)
+    const inputId = 'occupied-destination-input'
+    const nextTurn = 'occupied-destination-next-turn'
+    const nextText = 'New answer after an ordinary send.'
+    act(() => useChatStore.getState().sendMessage('Continue after the completed answer.', { clientMessageId: inputId }))
+    expect(send, 'the ordinary sender creates the next placeholder through its real socket edge').toHaveBeenCalledTimes(1)
+    expect(assistants()).toHaveLength(2)
+    const placeholder = assistants()[1]
+    expect(placeholder).toMatchObject({ content: '', status: 'streaming', isStreaming: true })
+    expect(placeholder.turnId, 'an unstamped current placeholder takes the step-2 adoption path').toBeUndefined()
+    expect(placeholder.id).not.toBe(WIRE)
+    const localId = placeholder.id
+    expect(bucket().messageOrder).toEqual([WIRE, inputId, localId])
+    const saved = completedDestination()
+
+    token(WIRE, nextText, nextTurn)
+    expect(distinctReply(saved, nextText)).toMatchObject({ id: localId, turnId: nextTurn, isStreaming: true })
+    expect(bucket().messageOrder).toEqual([WIRE, inputId, localId])
+    done(WIRE, nextTurn)
+    expect(distinctReply(saved, nextText)).toMatchObject({ id: localId, turnId: nextTurn, status: 'done', isStreaming: false })
+  })
+
+  it('W1 step-3 occupied destination preserves W and gives turn C one distinct reply instead of rendering it twice', () => {
+    token(WIRE, COMPLETED_ANSWER, TURN)
+    done(WIRE, TURN)
+    const placeholderId = 'empty-superseded-turn-b-placeholder'
+    const placeholderTurn = 'superseded-turn-b'
+    const incomingTurn = 'incoming-turn-c'
+    const replyText = 'New reply belonging only to turn C.'
+    act(() => {
+      useChatStore.getState().appendMessage({
+        id: placeholderId, role: 'assistant', content: '', timestamp: '2026-10-22T00:00:00Z',
+        status: 'streaming', isStreaming: true, agentId: AGENT, turnId: placeholderTurn,
+      })
+      useChatStore.setState((state) => ({
+        sessionsById: { ...state.sessionsById, [SID]: { ...state.sessionsById[SID], isStreaming: true } },
+        isStreaming: true,
+      }))
+    })
+    expect(bucket().messageOrder, 'W1 fixture is exactly [completed W, empty P]').toEqual([WIRE, placeholderId])
+    expect(assistants().map(({ id, content, turnId, status, isStreaming }) => ({ id, content, turnId, status, isStreaming })))
+      .toEqual([
+        { id: WIRE, content: COMPLETED_ANSWER, turnId: TURN, status: 'done', isStreaming: false },
+        { id: placeholderId, content: '', turnId: placeholderTurn, status: 'streaming', isStreaming: true },
+      ])
+    const saved = completedDestination()
+
+    token(WIRE, replyText, incomingTurn)
+    const reply = distinctReply(saved, replyText)
+    expect(reply).toMatchObject({ turnId: incomingTurn, isStreaming: true })
+    expect(reply.id, 'the abandoned turn-B placeholder is not the new turn-C entry').not.toBe(placeholderId)
+    expect(bucket().messageOrder, 'only the saved answer and one new answer remain').toEqual([WIRE, reply.id])
+    expect(bucket().messagesById[placeholderId], 'abandoned P is removed from the bucket').toBeUndefined()
+    done(WIRE, incomingTurn)
+    expect(distinctReply(saved, replyText)).toMatchObject({ id: reply.id, turnId: incomingTurn, status: 'done', isStreaming: false })
+    expect(bucket().messageOrder).toEqual([WIRE, reply.id])
+    expect(bucket().messagesById[placeholderId]).toBeUndefined()
+  })
+})
