@@ -39,6 +39,26 @@
           "dir": "server→client",
           "frame": {
             "boot_id": "boot-1",
+            "has_earlier": false,
+            "has_later": false,
+            "page_info": {
+              "byte_budget_exceeded": false,
+              "context": {
+                "duplicate_ids": [],
+                "spans": []
+              },
+              "first_position": "hp1_WHBj2oAOLcz6AgXBMkyMfxCrcjqmF5Du8mgUcXYBNag",
+              "last_position": "hp1_WHBj2oAOLcz6AgXBMkyMfxCrcjqmF5Du8mgUcXYBNag",
+              "limit": 40,
+              "min_rows": 20,
+              "mode": "latest",
+              "projected_bytes": 1,
+              "retention_generation": "fixture-generation-1",
+              "row_count": 1,
+              "soft_byte_budget": 4194304,
+              "source_group_count": 1,
+              "stop_reason": "end"
+            },
             "reason": "boot_mismatch",
             "seq": 1,
             "session_id": "sess-1",
@@ -50,6 +70,9 @@
           "frame": {
             "boot_id": "boot-1",
             "emitted_at": "2026-01-01T00:00:02Z",
+            "history_state": {
+              "status": "available"
+            },
             "pending_approvals": [],
             "session_id": "sess-1",
             "type": "session_state",
@@ -61,6 +84,10 @@
           "frame": {
             "client_message_id": "client-1",
             "content": "question before the restart",
+            "history_origin": {
+              "entry_id": "id-1",
+              "position": "hp1_WHBj2oAOLcz6AgXBMkyMfxCrcjqmF5Du8mgUcXYBNag"
+            },
             "id": "id-1",
             "role": "user",
             "session_id": "sess-1",
@@ -72,10 +99,7 @@
           "frame": {
             "session_id": "sess-1",
             "stats": {
-              "duplicate_tool_call_id_count": 0,
-              "frames_emitted": 1,
-              "orphan_count": 0,
-              "truncated_result_count": 0
+              "frames_emitted": 1
             },
             "type": "done"
           }
