@@ -298,6 +298,8 @@ func TestManager_Starts_CarryTheirPairingIntent(t *testing.T) {
 	admitted, err := store.Admit("gate-r3-intent", PairingAdmissionConnect, owner)
 	require.NoError(t, err)
 	require.True(t, store.MarkReady("gate-r3-intent", admitted.AttemptID, ChannelRevision(cfg, "gate-r3-intent")))
+	// Fixture: the accepted ready write and its reload share one private identity.
+	finalManagerAcceptedSnapshot(t, store, cfg, "gate-r3-intent", admitted.AttemptID)
 	m.RequestRestart("gate-r3-intent", admitted.AttemptID)
 	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
 	all := built()
@@ -307,12 +309,19 @@ func TestManager_Starts_CarryTheirPairingIntent(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, PairingOutcomeNoPairing, consumed.Outcome, "a start that activated no pairing closes its admission")
 
+	// Fixture: materialize a legitimate idle predecessor before the uncommitted
+	// stale admission; rejecting that old snapshot must not reuse a boot trace.
+	m.RequestRestart("gate-r3-intent", "")
+	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
+	idleCount := len(built())
+
 	stale, err := store.Admit("gate-r3-intent", PairingAdmissionEnable, nil)
 	require.NoError(t, err)
 	require.True(t, store.MarkReady("gate-r3-intent", stale.AttemptID, "an-older-revision"))
 	m.RequestRestart("gate-r3-intent", stale.AttemptID)
 	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
 	all = built()
+	require.Len(t, all, idleCount, "the uncommitted stale snapshot authorizes no new start")
 	// Gate r4 R4-T1 (corrected oracle): the channel still starts — a linked
 	// device must connect — but with no pairing token, and a start without a
 	// token can never begin a pairing loop: the store refuses it, so no
