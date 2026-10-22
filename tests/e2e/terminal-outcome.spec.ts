@@ -184,9 +184,14 @@ test.describe('terminal outcome agrees across real surfaces', () => {
       } finally {
         mock.finishToolRound();
         try {
-          if (gw) await gw.stop();
+          // Evidence and strict console checks above finish before this page's polling is stopped.
+          await page.close();
         } finally {
-          await mock.close();
+          try {
+            if (gw) await gw.stop();
+          } finally {
+            await mock.close();
+          }
         }
       }
     });
