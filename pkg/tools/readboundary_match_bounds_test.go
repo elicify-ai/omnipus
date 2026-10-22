@@ -13,10 +13,10 @@ import (
 
 var rbDS5MatchHeader = regexp.MustCompile(`(?m)^([0-9]+) match\(es\)`)
 
-// D7/FR-011, DS-5 row5: every admitted search keeps 1000 total/50 per-file.
-// The authoritative header survives the output cap. Visible per-file rows are
-// also checked; the real controlled single-file probe below checks the actual
-// per-file cap independently of a volume walk's potentially clipped output.
+// D7/FR-011 keeps1000 total hits and50 content rows per file. MV-14 filename
+// hits are admitted separately but still consume the total. The authoritative
+// header survives output clipping; the real probes also check actual content
+// caps independently of a volume walk's potentially clipped visible rows.
 func rbDS5MatchBoundError(out string, matchLimitFirst bool) error {
 	header := rbDS5MatchHeader.FindStringSubmatch(out)
 	if len(header) != 2 {
@@ -33,16 +33,20 @@ func rbDS5MatchBoundError(out string, matchLimitFirst bool) error {
 	visible := 0
 	for _, line := range strings.Split(out, "\n") {
 		path := ""
+		content := false
 		if strings.HasSuffix(line, "  (name match)") {
 			path = strings.TrimSuffix(line, "  (name match)")
 		} else if hit := rbContentHitLine.FindStringSubmatch(line); hit != nil {
 			path = hit[1]
+			content = true
 		}
 		if path != "" {
-			visible++
-			perFile[path]++
-			if perFile[path] > 50 {
-				return fmt.Errorf("DS-5: one file exceeds the unchanged50-hit cap")
+			visible++ // both kinds consume the total match budget
+			if content {
+				perFile[path]++
+				if perFile[path] > 50 {
+					return fmt.Errorf("DS-5: one file exceeds the unchanged50-hit cap")
+				}
 			}
 		}
 	}
@@ -57,16 +61,43 @@ func TestReadBoundary_DS5MatchCountInstrument(t *testing.T) {
 	valid := "1000 match(es) — truncated: true (reason: max_matches)\n/x:1:  needle\n"
 	require.NoError(t, rbDS5MatchBoundError(valid, true))
 	require.NoError(t, rbDS5MatchBoundError("0 match(es) — truncated: true (reason: deadline)\n", false))
-	for _, tc := range []struct{ name, input, want string }{
-		{"missing_header", "truncated: true (reason: max_matches)", "required authoritative match-count header is missing"},
-		{"total_over1000", strings.Replace(valid, "1000 match(es)", "1001 match(es)", 1), "match count 1001 violates total1000"},
-		{"false_max_matches", strings.Replace(valid, "1000 match(es)", "999 match(es)", 1), "match count 999 violates total1000"},
-		{"per_file_over50", "1000 match(es)\n" + strings.Repeat("/x:1:  needle\n", 51), "one file exceeds the unchanged50-hit cap"},
+	require.NoError(t, rbDS5MatchBoundError("51 match(es)\n/x  (name match)\n"+strings.Repeat("/x:1:  needle\n", 50), false))
+	for _, tc := range []struct {
+		name, input, want string
+		matchLimitFirst   bool
+	}{
+		{"missing_header", "truncated: true (reason: max_matches)", "required authoritative match-count header is missing", true},
+		{"total_over1000", strings.Replace(valid, "1000 match(es)", "1001 match(es)", 1), "match count 1001 violates total1000", true},
+		{"false_max_matches", strings.Replace(valid, "1000 match(es)", "999 match(es)", 1), "match count 999 violates total1000", true},
+		{"per_file_over50", "1000 match(es)\n" + strings.Repeat("/x:1:  needle\n", 51), "one file exceeds the unchanged50-hit cap", true},
+		{"filename_and_content_share_total", "1 match(es)\n/x  (name match)\n/x:1:  needle\n", "visible hits exceed the authoritative count", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.ErrorContains(t, rbDS5MatchBoundError(tc.input, true), tc.want)
+			require.ErrorContains(t, rbDS5MatchBoundError(tc.input, tc.matchLimitFirst), tc.want)
 		})
 	}
+}
+
+// MV-14 and the unchanged scanFile cap admit one filename hit PLUS50 content
+// rows. Only content rows consume the per-file50; all51 consume the total cap.
+func TestReadBoundary_DS5FilenameAndContentAreCountedSeparately(t *testing.T) {
+	f := newRBFixture(t)
+	dir := filepath.Join(f.ws, "dual-kind")
+	rbWrite(t, filepath.Join(dir, "needle_dual.txt"), strings.Repeat("needle_dual\n", 50))
+	result := f.grepCall("needle_dual", rbStr(dir))
+	require.False(t, result.IsError, result.ForLLM)
+	require.Regexp(t, `(?m)^51 match\(es\)`, result.ForLLM, "one filename plus50 content lines")
+	var names, contents int
+	for _, line := range strings.Split(result.ForLLM, "\n") {
+		if strings.HasSuffix(line, "  (name match)") {
+			names++
+		} else if rbContentHitLine.MatchString(line) {
+			contents++
+		}
+	}
+	require.Equal(t, 1, names, "positive control: actual filename hit is present")
+	require.Equal(t, 50, contents, "positive control: all50 actual content rows are visible")
+	require.NoError(t, rbDS5MatchBoundError(result.ForLLM, false), "filename hit must not false-fail the content-only per-file cap")
 }
 
 func TestReadBoundary_DS5MatchCaps(t *testing.T) {
