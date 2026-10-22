@@ -99,9 +99,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
   function attachAndSeed(session: Session, agentId: string | undefined): boolean {
     const attached = attachToSession(session.id, session.type, session.title, agentId)
     if (!attached) return false
-    if (session.total_tokens && session.total_tokens > 0) {
-      seedSessionTokens(session.total_tokens)
-    }
+    seedSessionTokens(session.total_tokens, session.id)
     if (session.type !== 'task') {
       const agent = agents.find((a) => a.id === agentId)
       if (agent?.type) {

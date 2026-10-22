@@ -27,6 +27,7 @@ import {
 import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
+import { resolvedToolPartStatus } from '@/lib/assistant-tool-status'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { renderHistoricalToolCall } from './tools/HistoricalToolCallBlock'
 import { classifySetGoalCall } from './tools/SetGoalToolUI'
@@ -614,6 +615,7 @@ function FallbackToolUI(props: {
   args: unknown
   result: unknown
   status: import('@assistant-ui/react').MessagePartStatus
+  artifact?: unknown
   isError?: boolean
 }) {
   const storeToolCalls = useChatStore((s) => s.toolCalls)
@@ -658,7 +660,7 @@ function FallbackToolUI(props: {
       toolName={props.toolName}
       args={props.args}
       result={liveCall?.result ?? props.result}
-      status={props.status}
+      status={resolvedToolPartStatus(props.status, props.artifact)}
       isError={isError}
       error={liveCall?.error}
       durationMs={liveCall?.duration_ms}

@@ -58,7 +58,7 @@ Every entry carries `agent_id` so multi-agent transcripts can be filtered to a s
 
 ### Tool call fidelity
 
-Each `ToolCall` records the full parameters AND the full result. When sub-agents are involved, `parent_tool_call_id` correlates child calls to their parent spawn (FR-H-001), so a deeply nested `subagent` → `spawn` → tool chain is reconstructable.
+Each `ToolCall` preserves its recorded parameters and known result facts; a cancelled call can have no result. Its original call ID and `cancelled` outcome survive projection separately from the interrupted assistant reply. A `turn_canceled` marker alone is not a replacement tool row, and a call missing from an old archive cannot be recreated from that marker. When sub-agents are involved, `parent_tool_call_id` correlates child calls to their parent spawn (FR-H-001), so a deeply nested `subagent` → `spawn` → tool chain is reconstructable.
 
 The entry-level `parent_spawn_call_id` is different: it is private archive provenance for internal readers, **not a public `Message` property**. Paged REST messages and session detail omit that key, including for older archives that retain it. The tagged entry and its public narration still appear; this is field projection, not an entry filter. API clients must not depend on that private key. Contracted event relationships such as `parent_call_id`, `span_id` and `child_session_id` keep their existing meanings; none is an alias for the omitted archive field.
 
@@ -71,6 +71,12 @@ When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying
 REST history and WebSocket snapshot replay use the bounded `UnifiedStore.ReadChatHistoryPage` path. The latest page stops at the last exact `/clear` marker, applies input-disposition and correction rules, and excludes private continuation inputs. Earlier segments require explicit paging across the marker. A page does not read the whole transcript before selecting its recent end.
 
 `UnifiedStore.ReadTranscriptView(sessionID)` remains a full current-segment helper for internal callers and tests: its display-oriented `Entries` start at the last `/clear` marker, apply input-disposition labels and exclude private continuation inputs. `UnifiedStore.ReadTranscript(sessionID)` returns the complete merged transcript for internal readers, including saved inputs. These readers are not interchangeable, and neither full reader is the paged API implementation. The archive remains the single on-disk content record.
+
+### Recorded session usage
+
+The optional generated `session_tokens_total` on a `SessionHistoryResponse`, session-scoped `SessionStateFrame`, or live turn's `DoneStats` is the absolute recorded session consumption, with the same provider/cache accounting as `SessionStats.tokens_total`. It is independent of the selected page's size or contents. Existing message usage and `DoneStats.tokens` retain their per-entry/per-turn meanings; `frames_emitted` is replay diagnostics, never a token baseline.
+
+Consumers merge known totals for the addressed session without lowering a newer observation or adding the turn delta again. Repeated pages, overlapping snapshot/live delivery and replay terminators must not double-count usage. A genuine recorded zero is valid; omission means unknown, not zero, and preserves an already-known total. The UI shows **Usage unavailable** until a total is established. View-generation and transport-cursor fences still apply. This uses bounded aggregate metadata, not a hidden lifetime transcript scan.
 
 ### Derived paging index and recovery
 
