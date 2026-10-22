@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,10 +65,22 @@ func TestCrashRecovery_InterruptionReasonCannotLeakToOtherOutcomes(t *testing.T)
 			path := filepath.Join(s.Dir(), original.SessionID+".jsonl")
 			before, err := os.ReadFile(path)
 			require.NoError(t, err)
-			bad := crashInterruptedRecord(t, state, "tool_limit")
-			if state == "failed" {
-				bad.FailedReason = "independent genuine failure"
+			forState := func(reason string) *LifecycleRecord {
+				candidate := crashInterruptedRecord(t, state, reason)
+				if state == "failed" {
+					candidate.FailedReason = "independent genuine failure"
+				}
+				if state == "stopped" {
+					candidate.StopNote = &StopNote{At: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC),
+						By: StopActorHumanUser("owner"), Seq: 1, Cause: StopCauseStop}
+				}
+				return candidate
 			}
+			// Positive instrument control: the identical outcome without a reason
+			// must be admissible. A missing StopNote must not fake a reason-validation pass.
+			control := newTestLifecycleStore(t)
+			require.NoError(t, control.Persist(forState("")), "valid outcome is accepted before testing its forbidden reason")
+			bad := forState("tool_limit")
 			// The design requires rejection, but does not prescribe an error string
 			// or sentinel. Assert refusal plus zero durable mutation, not invented copy.
 			assert.Error(t, s.Persist(bad), "reason belongs only to interrupted; a new non-interrupted record must not silently accept it")
