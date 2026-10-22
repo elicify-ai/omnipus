@@ -32,6 +32,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
+import { emptySessionState } from './session'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
@@ -116,6 +117,7 @@ function seedBucket(messages: ChatMessage[], opts: { isStreaming?: boolean; isRe
     sessionsById: {
       ...s.sessionsById,
       [SID]: {
+        ...emptySessionState(),
         ...(s.sessionsById ?? {})[SID],
         messagesById: Object.fromEntries(messages.map((m) => [m.id, m])),
         messageOrder: messages.map((m) => m.id),
