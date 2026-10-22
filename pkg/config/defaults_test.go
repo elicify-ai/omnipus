@@ -43,8 +43,8 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		"enable_channel": true, "configure_channel": true,
 		"connect_channel": true, "connect_mailbox": true, "set_agent_permissions": true,
 		"remove_secret": true, "select_secret_version": true,
-		// SPEC.md Global ceiling changes (2026-10-22): outbound mail and skill authoring are Ask.
-		"send_email": true, "reply": true, "create_skill": true, "edit_skill": true,
+		// SPEC.md Table + Q22=B: outbound mail stays Ask; skill authoring is globally Allow and per-agent Ask.
+		"send_email": true, "reply": true,
 	}
 
 	// operatorOnly is a SECOND, distinct exception to the allow-by-default

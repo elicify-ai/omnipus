@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
@@ -65,8 +66,15 @@ func defaultToolsParsePreview(t *testing.T, raw, kind string, names []string) ma
 	var actualNames []string
 	for _, line := range lines[1:] {
 		parts := strings.SplitN(line, " | ", 3)
-		require.Len(t, parts, 3)
-		assert.Equal(t, "Short description.", parts[2], "SPEC.md first sentence only; no schemas or long descriptions")
+		require.GreaterOrEqual(t, len(parts), 2)
+		if parts[1] == "deny" {
+			// SPEC.md Q21=D: Deny rows contain no description field.
+			require.Len(t, parts, 2)
+		} else {
+			// SPEC.md Q21=D: Allow/Ask descriptions retain only the short first sentence.
+			require.Len(t, parts, 3)
+			assert.Equal(t, "Short description.", parts[2], "Q21=D first sentence only; no schemas or long descriptions")
+		}
 		policies[parts[0]] = parts[1]
 		actualNames = append(actualNames, parts[0])
 	}
@@ -109,8 +117,17 @@ func defaultToolsCompactPolicies(t *testing.T, raw, header string) map[string]st
 	var names []string
 	for _, line := range lines[1:] {
 		parts := strings.SplitN(line, " | ", 3)
-		require.Len(t, parts, 3, "SPEC.md tool row has exactly three fields")
+		require.GreaterOrEqual(t, len(parts), 2, "SPEC.md Q21=D tool row has name and policy")
 		assert.Contains(t, []string{"allow", "ask", "deny"}, parts[1])
+		if parts[1] == "deny" {
+			// SPEC.md Q21=D: Deny has exactly two fields.
+			require.Len(t, parts, 2)
+		} else {
+			// SPEC.md Q21=D: Allow/Ask include a normalized description of at most 40 characters.
+			require.Len(t, parts, 3)
+			assert.LessOrEqual(t, utf8.RuneCountInString(parts[2]), 40)
+			assert.Equal(t, strings.Join(strings.Fields(parts[2]), " "), parts[2])
+		}
 		_, duplicate := result[parts[0]]
 		assert.False(t, duplicate, "one row per tool")
 		result[parts[0]] = parts[1]

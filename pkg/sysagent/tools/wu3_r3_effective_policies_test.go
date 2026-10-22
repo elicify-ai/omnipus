@@ -23,7 +23,7 @@ func TestWU3EffectivePoliciesMatchTheRuntimeResolver(t *testing.T) {
 		"write_file":      config.ToolPolicyDeny,  // per-agent deny survives God Mode
 		"edit_file":       config.ToolPolicyAsk,   // per-agent ask survives God Mode
 		"mcp_docs_search": config.ToolPolicyAllow, // global wildcard mcp_* deny
-		"ToolSearch":      config.ToolPolicyDeny,  // SPEC.md compact output: per-agent Deny wins for every tool, including discovery.
+		"ToolSearch":      config.ToolPolicyDeny,  // SPEC.md compact effective-policy contract / CR-03: runtime discovery remains Allow.
 	}
 	for _, tc := range []struct {
 		name    string
@@ -31,10 +31,10 @@ func TestWU3EffectivePoliciesMatchTheRuntimeResolver(t *testing.T) {
 		want    map[string]string
 	}{
 		{"god mode off", false, map[string]string{
-			"read_file": "ask", "write_file": "deny", "edit_file": "ask", "mcp_docs_search": "deny", "ToolSearch": "deny",
+			"read_file": "ask", "write_file": "deny", "edit_file": "ask", "mcp_docs_search": "deny", "ToolSearch": "allow",
 		}},
 		{"god mode on", true, map[string]string{
-			"read_file": "allow", "write_file": "deny", "edit_file": "ask", "mcp_docs_search": "allow", "ToolSearch": "deny",
+			"read_file": "allow", "write_file": "deny", "edit_file": "ask", "mcp_docs_search": "allow", "ToolSearch": "allow",
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,7 +70,12 @@ func TestWU3EffectivePoliciesMatchTheRuntimeResolver(t *testing.T) {
 			resolver := &tools.ToolPolicyCfg{Policies: policies, GodMode: tc.godMode,
 				GlobalPolicies: map[string]config.ToolPolicy{"read_file": "ask", "write_file": "allow", "edit_file": "allow", "mcp_*": "deny"}}
 			for name := range stored {
-				assert.Equal(t, tools.ResolveEffectivePolicy(resolver, name), effective[name], "runtime resolver for %s", name)
+				// SPEC.md compact effective-policy contract / CR-03: discovery is the explicit runtime exception, not a bare-map verdict.
+				if name == "ToolSearch" {
+					assert.Equal(t, "allow", effective[name], "registered discovery cannot be denied or approval-gated")
+				} else {
+					assert.Equal(t, tools.ResolveEffectivePolicy(resolver, name), effective[name], "runtime resolver for %s", name)
+				}
 			}
 		})
 	}

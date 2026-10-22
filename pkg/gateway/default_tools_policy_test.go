@@ -92,7 +92,8 @@ func defaultToolsAssertCeiling(t *testing.T, rows []defaultToolsPolicyCase) {
 	// Exact changes from Global ceiling changes, plus the unchanged bash row.
 	for _, row := range []struct{ name, want string }{
 		{"send_email", "ask"}, {"reply", "ask"}, {"download_email_attachment", "allow"},
-		{"create_skill", "ask"}, {"edit_skill", "ask"}, {"bash", "ask"},
+		// SPEC.md Q22=B: skill authoring asks per agent; the global ceiling remains Allow.
+		{"create_skill", "allow"}, {"edit_skill", "allow"}, {"bash", "ask"},
 	} {
 		t.Run("exact/"+row.name, func(t *testing.T) {
 			assert.Equal(t, row.want, ceiling[row.name], "Global ceiling changes: %s", row.name)
