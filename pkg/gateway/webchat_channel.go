@@ -119,6 +119,13 @@ func (c *webchatChannel) ReasoningChannelID() string            { return "" }
 // Send delivers an outbound message to the WebSocket client.
 // If the response was already delivered via streaming (wsStreamer), this is a no-op.
 func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error {
+	// A progress sentence is not an assistant response or turn completion.
+	// Transport retries stay unannounced in webchat (provider-messages MIN-001).
+	// Return before consuming either real-completion bookkeeping slot.
+	if msg.ProgressNotice {
+		return nil
+	}
+
 	c.mu.Lock()
 	alreadyStreamed := c.streamed[msg.ChatID]
 	delete(c.streamed, msg.ChatID) // consume the flag
