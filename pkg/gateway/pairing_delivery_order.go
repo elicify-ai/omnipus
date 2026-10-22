@@ -31,11 +31,26 @@ func (s pairingDeliveryStamp) before(next pairingDeliveryStamp) bool {
 // lockPairingDelivery enters the SAME manager-owned order as writers/native
 // effects. No cache/interest/queue lock may be held by its caller. A handler
 // without a manager has only the existing cache lock and no tracked resources.
-func (h *WSHandler) lockPairingDelivery(channelID string) (*channels.PairingOrder, func()) {
+func (h *WSHandler) lockPairingDelivery(channelID string) (*channels.PairingOrder, func(), bool) {
 	var order *channels.PairingOrder
+	known := true // untracked handlers retain their existing cache-only behavior
 	if h.agentLoop != nil {
 		if mgr := h.agentLoop.GetChannelManager(); mgr != nil {
-			order = mgr.PairingAttempts().LockChannel(channelID)
+			store := mgr.PairingAttempts()
+			var exists bool
+			order, exists = store.LockExistingChannel(channelID)
+			if !exists {
+				cfg := h.agentLoop.GetConfig()
+				configured := false
+				if cfg != nil {
+					_, configured = cfg.Channels[channelID]
+				}
+				if configured {
+					order = store.LockChannel(channelID)
+				} else {
+					known = false
+				}
+			}
 		}
 	}
 	h.pairingCacheMu.Lock()
@@ -44,7 +59,7 @@ func (h *WSHandler) lockPairingDelivery(channelID string) (*channels.PairingOrde
 		if order != nil {
 			order.Unlock()
 		}
-	}
+	}, known
 }
 
 // pairingFreshLocked is not an unlocked permission. Its caller performs its
@@ -58,16 +73,21 @@ func (h *WSHandler) pairingFreshLocked(order *channels.PairingOrder, channelID s
 }
 
 func (h *WSHandler) enqueuePairing(wc *wsConn, p agent.WhatsAppPairingPayload, frame []byte) {
-	order, unlock := h.lockPairingDelivery(p.ChannelID)
+	order, unlock, known := h.lockPairingDelivery(p.ChannelID)
 	defer unlock()
-	if !h.pairingFreshLocked(order, p.ChannelID, pairingStamp(p)) || !wc.wantsPairing(p.ChannelID) {
+	if !known || !h.pairingFreshLocked(order, p.ChannelID, pairingStamp(p)) || !wc.wantsPairing(p.ChannelID) {
 		return
 	}
 	sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frame)
 }
 
 func (h *WSHandler) replayPairing(wc *wsConn, channelID string, active bool) {
-	order, unlock := h.lockPairingDelivery(channelID)
+	order, unlock, known := h.lockPairingDelivery(channelID)
+	if !known {
+		wc.setPairingInterest(channelID, false)
+		unlock()
+		return
+	}
 	wc.setPairingInterest(channelID, active)
 	cached, exists := h.lastPairingState.Load(channelID)
 	stamp, stamped := h.pairingCacheStamp[channelID]
@@ -87,10 +107,10 @@ func (h *WSHandler) replayPairing(wc *wsConn, channelID string, active bool) {
 	// Passive speculative stage: a writer/new live event can win here. Never
 	// retain bytes as permission; compare the selected stamp again at enqueue.
 	runPairingDeliveryAfterCheckHook("replay", wc, channelID)
-	order, unlock = h.lockPairingDelivery(channelID)
+	order, unlock, known = h.lockPairingDelivery(channelID)
 	defer unlock()
 	current, hasCurrent := h.pairingCacheStamp[channelID]
-	if stamped != hasCurrent || stamped && stamp != current || !h.pairingFreshLocked(order, channelID, stamp) || !wc.wantsPairing(channelID) {
+	if !known || stamped != hasCurrent || stamped && stamp != current || !h.pairingFreshLocked(order, channelID, stamp) || !wc.wantsPairing(channelID) {
 		return
 	}
 	if _, stillCached := h.lastPairingState.Load(channelID); !stillCached {
@@ -116,10 +136,10 @@ func (h *WSHandler) cachePairing(p agent.WhatsAppPairingPayload, frame generated
 			return
 		}
 	}
-	order, unlock := h.lockPairingDelivery(p.ChannelID)
+	order, unlock, known := h.lockPairingDelivery(p.ChannelID)
 	defer unlock()
 	stamp := pairingStamp(p)
-	if !h.pairingFreshLocked(order, p.ChannelID, stamp) {
+	if !known || !h.pairingFreshLocked(order, p.ChannelID, stamp) {
 		return
 	}
 	if h.pairingCacheStamp == nil {

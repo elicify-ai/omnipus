@@ -33,6 +33,22 @@ func (s *PairingAttempts) LockChannel(instance string) *PairingOrder {
 	s.mu.Lock()
 	c := s.connectorLocked(instance)
 	s.mu.Unlock()
+	return s.lockConnectorOrder(instance, c)
+}
+
+// LockExistingChannel observes an existing real-channel/tombstone order. It
+// never allocates a connector for passive traffic carrying an unknown id.
+func (s *PairingAttempts) LockExistingChannel(instance string) (*PairingOrder, bool) {
+	s.mu.Lock()
+	c := s.connectors[instance]
+	s.mu.Unlock()
+	if c == nil {
+		return nil, false
+	}
+	return s.lockConnectorOrder(instance, c), true
+}
+
+func (s *PairingAttempts) lockConnectorOrder(instance string, c *pairingConnector) *PairingOrder {
 	if !c.guard.TryLock() {
 		s.orderHookMu.RLock()
 		hook := s.orderContended

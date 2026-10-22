@@ -283,9 +283,9 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 // was already published (the sync tap records every event's sequence at
 // emission).
 func (h *WSHandler) pairingEventSuperseded(p agent.WhatsAppPairingPayload) bool {
-	order, unlock := h.lockPairingDelivery(p.ChannelID)
+	order, unlock, known := h.lockPairingDelivery(p.ChannelID)
 	defer unlock()
-	return !h.pairingFreshLocked(order, p.ChannelID, pairingStamp(p))
+	return !known || !h.pairingFreshLocked(order, p.ChannelID, pairingStamp(p))
 }
 
 // pairingFrameFromPayload builds the K10 whatsapp_pairing frame for p.
