@@ -596,7 +596,7 @@ func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error 
 		// write cannot make it somebody else's teardown or release a Stop.
 		if captured, applied := store.BeginResourceTeardown(instance, attemptID); applied {
 			replacement = captured
-			c.emitAttempt(attemptID, channels.PairingStatusError, "", channels.PairingInterruptedMessage)
+			c.emitAttempt(attemptID, channels.PairingStatusError, "", channels.PairingStopPendingMessage)
 		}
 	}
 	var teardownErr error
@@ -659,13 +659,13 @@ func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error 
 	}
 	if replacement.AttemptID != "" {
 		if teardownErr == nil {
-			store.FinishReplacement(instance, replacement.AttemptID, replacement.StopGeneration, nil)
+			c.finishReplacement(store, replacement)
 		} else {
 			// Release only this captured replacement barrier after its known
 			// native work joins. Late-client final disposal is the separate T6.
 			go func() {
 				<-done
-				store.FinishReplacement(instance, replacement.AttemptID, replacement.StopGeneration, nil)
+				c.finishReplacement(store, replacement)
 			}()
 		}
 	}
