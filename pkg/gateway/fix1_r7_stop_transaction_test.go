@@ -27,6 +27,7 @@ import (
 type fix1CancelProvider struct {
 	providers.LLMProvider
 	entered, cancelled chan struct{}
+	returnAllowed      <-chan struct{}
 	session            string
 }
 
@@ -35,6 +36,7 @@ func (p *fix1CancelProvider) Chat(ctx context.Context, _ []providers.Message, _ 
 	close(p.entered)
 	<-ctx.Done()
 	close(p.cancelled)
+	<-p.returnAllowed // keep the owning turn from settling its durable effect before observation
 	return nil, ctx.Err()
 }
 
@@ -59,7 +61,7 @@ func fix1StopActualBoundary(t *testing.T, contended <-chan string, done <-chan s
 		stack := make([]byte, 1<<20)
 		n := runtime.Stack(stack, true)
 		for _, goroutine := range strings.Split(string(stack[:n]), "\n\n") {
-			if strings.Contains(goroutine, "TestPairingStop_HeldActualConfigTransactionDoesNotDelayCancelOrFence.func") &&
+			if strings.Contains(goroutine, "fix1HeldConfigStop.func") &&
 				strings.Contains(goroutine, "(*AgentLoop).StopSession") &&
 				strings.Contains(goroutine, "(*AgentLoop).GetSessionLifecycleStore") &&
 				strings.Contains(goroutine, "[sync.RWMutex.RLock]") {
@@ -76,13 +78,21 @@ func fix1StopActualBoundary(t *testing.T, contended <-chan string, done <-chan s
 // real persistence callback. Stop must stamp durable intent and cancel the live
 // turn before its deferred BeginStop can acquire the writer's channel guard.
 func TestPairingStop_HeldActualConfigTransactionDoesNotDelayCancelOrFence(t *testing.T) {
+	t.Run("inside actual save with runtime write lock", func(t *testing.T) { fix1HeldConfigStop(t, true) })
+	t.Run("channel write guard held before mutation", func(t *testing.T) { fix1HeldConfigStop(t, false) })
+}
+
+func fix1HeldConfigStop(t *testing.T, holdDuringSave bool) {
 	f, store, d := orderingWriterFixture(t)
 	chat := orderingChat(t, f)
 	require.NoError(t, os.MkdirAll(filepath.Join(f.f1277.home, "workspaces"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(f.f1277.home, "workspaces", "ordering.json"), []byte(`{"id":"ordering","name":"Ordering","status":"active","core_team":["mia"],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`), 0o600))
 	instance, exists := f.al.GetRegistry().GetAgent("mia")
 	require.True(t, exists)
-	provider := &fix1CancelProvider{LLMProvider: f.provider, entered: make(chan struct{}), cancelled: make(chan struct{})}
+	providerReturn := make(chan struct{})
+	var providerOnce sync.Once
+	releaseProvider := func() { providerOnce.Do(func() { close(providerReturn) }) }
+	provider := &fix1CancelProvider{LLMProvider: f.provider, entered: make(chan struct{}), cancelled: make(chan struct{}), returnAllowed: providerReturn}
 	instance.StoreProviderPool(map[string]providers.LLMProvider{"qa1277": provider})
 	turnCtx, cancelTurn := context.WithCancel(context.Background())
 	turnDone := make(chan struct{})
@@ -90,7 +100,7 @@ func TestPairingStop_HeldActualConfigTransactionDoesNotDelayCancelOrFence(t *tes
 		defer close(turnDone)
 		_, _ = f.al.ProcessScheduled(turnCtx, "mia", chat, "hold at the external model boundary", "webchat", chat)
 	}()
-	t.Cleanup(func() { cancelTurn(); orderingJoin(t, turnDone) })
+	t.Cleanup(func() { cancelTurn(); releaseProvider(); orderingJoin(t, turnDone) })
 	orderingWaitStage(t, provider.entered)
 	require.Equal(t, chat, provider.session)
 	lifecycle := f.al.GetSessionLifecycleStore()
@@ -100,10 +110,20 @@ func TestPairingStop_HeldActualConfigTransactionDoesNotDelayCancelOrFence(t *tes
 	held, resume, writerDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(resume) }) }
-	d.SaveConfigLocked = func(cfg *config.Config) error {
-		close(held)
-		<-resume
-		return config.SaveConfig(f.f1277.configPath, cfg)
+	if holdDuringSave {
+		d.SaveConfigLocked = func(cfg *config.Config) error {
+			close(held)
+			<-resume
+			return config.SaveConfig(f.f1277.configPath, cfg)
+		}
+	} else {
+		// Control: the real transaction already owns config-write + channel
+		// order and admitted A, but has not yet entered al.MutateConfig.
+		d.MutateConfig = func(fn func(*config.Config) error) error {
+			close(held)
+			<-resume
+			return f.al.MutateConfig(fn)
+		}
 	}
 	revision := orderingToolRevision(t, d)
 	var writeResult *tools.ToolResult
@@ -119,7 +139,18 @@ func TestPairingStop_HeldActualConfigTransactionDoesNotDelayCancelOrFence(t *tes
 	require.Equal(t, channels.PairingPhasePending, a.Phase, "admitted inside the actual still-held config transaction")
 	require.Equal(t, chat, a.Owner.SessionID)
 	contended := make(chan string, 1)
-	store.SetOrderContendedHookForTest(func(id string) { contended <- id })
+	teardownAllowed := make(chan struct{})
+	var teardownOnce sync.Once
+	allowTeardown := func() { teardownOnce.Do(func() { close(teardownAllowed) }) }
+	store.SetOrderContendedHookForTest(func(id string) {
+		var stack [32768]byte
+		n := runtime.Stack(stack[:], false)
+		if !strings.Contains(string(stack[:n]), "(*PairingAttempts).BeginStop") {
+			return
+		}
+		contended <- id
+		<-teardownAllowed // real failed TryLock, before guarded teardown can run
+	})
 	stopDone := make(chan struct{})
 	var stop agent.StopResult
 	var stopErr error
@@ -129,6 +160,7 @@ func TestPairingStop_HeldActualConfigTransactionDoesNotDelayCancelOrFence(t *tes
 	}()
 	t.Cleanup(func() {
 		release()
+		allowTeardown()
 		orderingJoin(t, writerDone)
 		orderingJoin(t, stopDone)
 		store.SetOrderContendedHookForTest(nil)
@@ -155,6 +187,14 @@ func TestPairingStop_HeldActualConfigTransactionDoesNotDelayCancelOrFence(t *tes
 	// A wrong positive lock-wait acknowledgement is sufficient to release the
 	// writer safely; no timeout is converted into a behavioural failure.
 	release()
+	if stage == "deferred channel guard" {
+		orderingJoin(t, writerDone)
+		beforeTeardown, ok := store.Attempt("whatsapp", a.AttemptID)
+		require.True(t, ok)
+		assert.Equal(t, channels.PairingPhasePending, beforeTeardown.Phase, "the early fence, not deferred BeginStop, must prevent the writer from making A ready")
+		assert.False(t, store.IsReady("whatsapp", a.AttemptID))
+	}
+	allowTeardown()
 	orderingJoin(t, writerDone)
 	orderingJoin(t, stopDone)
 	select {
@@ -162,6 +202,7 @@ func TestPairingStop_HeldActualConfigTransactionDoesNotDelayCancelOrFence(t *tes
 	case <-time.After(10 * time.Second):
 		t.Fatal("HARNESS: real cancellation did not settle after releasing the writer")
 	}
+	releaseProvider()
 	orderingJoin(t, turnDone)
 	assert.Equal(t, "deferred channel guard", stage, "Stop must get past durable acceptance/cancel without waiting on the config mutation's al.mu")
 	assert.True(t, durableBeforeRelease, "durable Stop acceptance must precede release of the actual config transaction")
