@@ -58,7 +58,9 @@ A **Main** agent talks with you in chats and rooms. A **Worker** runs delegated 
 
 **Allow** means no tool-policy approval is needed. **Ask** uses the normal approval rules, including Auto-approve. **Off** means Deny. Having permission does not remove a tool's other requirements: a mailbox, a workspace delegation link or the right kind of session may still be needed.
 
-A saved policy also does not add an unimplemented tool. This build reserves `list_secrets`, `request_secret` and `read_conversation` in its permission settings, but they are not yet in the real tool catalog and cannot be called. They will appear in the compact inventory only when their implementations are available.
+Both `list_secrets` and `request_secret` are implemented built-in tools. Main agents (Mia, Jim, Omnipus and custom mains) allow both by default; workers allow `list_secrets` and deny `request_secret`. Listing returns names and metadata, never secret values: ordinary agents see only their own private variables in the current workspace, while Omnipus sees all stored references. `read_conversation` in the table below is still reserved for a later implementation and cannot be called yet.
+
+`request_secret` opens a secure card in an interactive web conversation. Enter the value on the card, never in chat or a tool argument. Channel-triggered turns and unattended runs cannot open a card, even in God Mode. Ordinary helpers must ask their parent; a helper with permission under an Omnipus-rooted conversation can show its card in the Omnipus main chat. Submitting stores a version for the destination shown on the card and lets the agent continue with reference names only. Storing an integration secret does not select it for use: that still needs the integration's approved configuration tool. See [Entering a secret from a chat](security.md#entering-a-secret-from-a-chat).
 
 | Tool or group | Main | Worker |
 |---|---|---|
