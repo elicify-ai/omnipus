@@ -186,11 +186,18 @@ func defaultToolsPolicies(cfg *config.Config, agent *config.AgentConfig) (*tools
 	return tools.BuildFallbackPolicyCfg(&snapshot, agent.ID)
 }
 
-func defaultToolsScope(t *testing.T, catalog *tools.BuiltinRegistry, name string) tools.ToolScope {
+// Catalog reachability is separate from the spec's policy-resolution contract.
+// Chief's 2026-10-22 ruling: absent metadata must not hide a policy assertion.
+func defaultToolsReportCatalogGaps(t *testing.T, catalog *tools.BuiltinRegistry, rows []defaultToolsPolicyCase) {
 	t.Helper()
-	tool, ok := catalog.Get(name)
-	if !ok {
-		t.Fatalf("BLOCKED: %s not implemented in the central catalog — required by default-tools spec Table", name)
+	names := defaultToolsAdminOnlyNames()
+	for _, row := range rows {
+		names = append(names, row.name)
 	}
-	return tool.Scope()
+	sort.Strings(names)
+	for _, name := range names {
+		if _, ok := catalog.Get(name); !ok {
+			t.Logf("CATALOG GAP: %s has no central metadata entry; policy is still tested; reachability is separate", name)
+		}
+	}
 }

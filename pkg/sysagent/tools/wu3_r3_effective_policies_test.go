@@ -1,13 +1,12 @@
 package systools_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +23,7 @@ func TestWU3EffectivePoliciesMatchTheRuntimeResolver(t *testing.T) {
 		"write_file":      config.ToolPolicyDeny,  // per-agent deny survives God Mode
 		"edit_file":       config.ToolPolicyAsk,   // per-agent ask survives God Mode
 		"mcp_docs_search": config.ToolPolicyAllow, // global wildcard mcp_* deny
-		"ToolSearch":      config.ToolPolicyDeny,  // infrastructure: always callable
+		"ToolSearch":      config.ToolPolicyDeny,  // SPEC.md compact output: per-agent Deny wins for every tool, including discovery.
 	}
 	for _, tc := range []struct {
 		name    string
@@ -32,10 +31,10 @@ func TestWU3EffectivePoliciesMatchTheRuntimeResolver(t *testing.T) {
 		want    map[string]string
 	}{
 		{"god mode off", false, map[string]string{
-			"read_file": "ask", "write_file": "deny", "edit_file": "ask", "mcp_docs_search": "deny", "ToolSearch": "allow",
+			"read_file": "ask", "write_file": "deny", "edit_file": "ask", "mcp_docs_search": "deny", "ToolSearch": "deny",
 		}},
 		{"god mode on", true, map[string]string{
-			"read_file": "allow", "write_file": "deny", "edit_file": "ask", "mcp_docs_search": "allow", "ToolSearch": "allow",
+			"read_file": "allow", "write_file": "deny", "edit_file": "ask", "mcp_docs_search": "allow", "ToolSearch": "deny",
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -51,29 +50,26 @@ func TestWU3EffectivePoliciesMatchTheRuntimeResolver(t *testing.T) {
 			}
 			agent := &config.AgentConfig{ID: "policy-subject", Name: "Policy subject", Type: config.AgentTypeCustom,
 				Tools: &config.AgentToolsCfg{Builtin: config.AgentBuiltinToolsCfg{Policies: policies}}}
+			// SPEC.md compact output: live MCP tools are listed only after explicit assignment.
+			agent.Tools.MCP.Servers = []config.AgentMCPServerBinding{{ID: "docs", Tools: []string{"search"}, ToolsSpecified: true}}
+			search := tools.NewMCPTool(nil, "docs", &mcp.Tool{Name: "search", Description: "Search documents."})
+			require.Equal(t, "mcp_docs_search", search.Name(), "MCP name positive control")
 			_, err := agentstore.New(d.Home).CreateState(agent.ID, agent, "Help.")
 			require.NoError(t, err)
 
-			read := wu3Success(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"id": agent.ID}))
-			effective := wu3Object(t, read["effective_policies"])
+			// SPEC.md compact output: exact effective policy rows replace effective_policies/clamped JSON blocks.
+			_, effective := defaultToolsExistingBody(t, d, agent.ID, map[string]any{"id": agent.ID}, search)
 			for name, want := range tc.want {
-				assert.Equal(t, want, effective[name], "effective_policies[%s]", name)
+				assert.Equal(t, want, effective[name], "compact policy[%s]", name)
 			}
-			clamped, ok := read["clamped"].([]any)
-			require.True(t, ok)
-			for _, row := range clamped {
-				r := wu3Object(t, row)
-				tool, _ := r["tool"].(string)
-				assert.Equal(t, effective[tool], r["effective"], "clamped and effective_policies agree on %s", tool)
-				assert.NotEqual(t, "ToolSearch", tool, "an always-callable tool is never reported clamped")
-			}
+			storedAfter, err := agentstore.New(d.Home).Get(agent.ID)
+			require.NoError(t, err)
+			assert.Equal(t, policies, storedAfter.Tools.Builtin.Policies, "compact read must not change stored overrides")
+
 			// The runtime resolver itself is the oracle for every non-infrastructure stored tool.
 			resolver := &tools.ToolPolicyCfg{Policies: policies, GodMode: tc.godMode,
 				GlobalPolicies: map[string]config.ToolPolicy{"read_file": "ask", "write_file": "allow", "edit_file": "allow", "mcp_*": "deny"}}
 			for name := range stored {
-				if name == "ToolSearch" {
-					continue
-				}
 				assert.Equal(t, tools.ResolveEffectivePolicy(resolver, name), effective[name], "runtime resolver for %s", name)
 			}
 		})

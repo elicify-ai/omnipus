@@ -30,9 +30,13 @@ func TestDefaultToolSets_Founder20261022(t *testing.T) {
 	_, control := catalog.Get("read_file")
 	require.True(t, control, "catalog lookup positive control must see a known real tool")
 	rows := defaultToolsSpecRows(t, catalog)
+	defaultToolsReportCatalogGaps(t, catalog, rows)
 
 	t.Run("ceiling", func(t *testing.T) { defaultToolsAssertCeiling(t, rows) })
-	t.Run("builtins", func(t *testing.T) { defaultToolsAssertBuiltins(t, catalog, rows) })
+	t.Run("builtins", func(t *testing.T) { defaultToolsAssertBuiltins(t, rows) })
+	t.Run("preview_schema", defaultToolsAssertPreviewSchema)
+	t.Run("system_policy_baseline", defaultToolsAssertSystemBaseline)
+	t.Run("compact_contract", defaultToolsAssertCompactContract)
 
 	paths := []struct {
 		name   string
@@ -49,25 +53,26 @@ func TestDefaultToolSets_Founder20261022(t *testing.T) {
 				stored := path.create(t, api, kind)
 				require.Equal(t, kind, string(coreagent.ToWireType(*stored)), "persisted agent must really be the requested kind")
 				require.NotNil(t, stored.Tools, "created agent must carry real seeded tool configuration")
-				policy, agentType := defaultToolsPolicies(api.agentLoop.GetConfig(), stored)
+				policy, _ := defaultToolsPolicies(api.agentLoop.GetConfig(), stored)
 				for _, row := range rows {
 					want := defaultToolsWant(row, kind)
 					t.Run("effective/"+row.name, func(t *testing.T) {
-						scope := defaultToolsScope(t, catalog, row.name)
-						got := tools.EffectiveToolPolicy(policy, scope, agentType, row.name)
+						got := tools.ResolveEffectivePolicy(policy, row.name)
 						assert.Equal(t, want, got, "Table %s/%s: effective policy (ceiling=%q, agent=%q)",
 							kind, row.name, policy.GlobalPolicies[row.name], policy.Policies[row.name])
 					})
 				}
 				for _, name := range defaultToolsAdminOnlyNames() {
 					t.Run("admin_off/"+name, func(t *testing.T) {
-						scope := defaultToolsScope(t, catalog, name)
-						assert.Equal(t, "deny", tools.EffectiveToolPolicy(policy, scope, agentType, name),
+						assert.Equal(t, "deny", tools.ResolveEffectivePolicy(policy, name),
 							"Table Admin-only: %s must stay off for a new %s", name, kind)
 					})
 				}
 				t.Run("operator_deny_wins", func(t *testing.T) {
-					defaultToolsAssertOperatorDeny(t, catalog, policy, agentType, rows, kind)
+					defaultToolsAssertOperatorDeny(t, policy, rows, kind)
+				})
+				t.Run("preview", func(t *testing.T) {
+					defaultToolsAssertPreview(t, api, stored, policy, rows, kind)
 				})
 			})
 		}
@@ -107,16 +112,16 @@ func defaultToolsAssertCeiling(t *testing.T, rows []defaultToolsPolicyCase) {
 	}
 }
 
-func defaultToolsAssertBuiltins(t *testing.T, catalog *tools.BuiltinRegistry, rows []defaultToolsPolicyCase) {
+func defaultToolsAssertBuiltins(t *testing.T, rows []defaultToolsPolicyCase) {
 	t.Helper()
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Home = t.TempDir()
 	cfg.Agents.List = nil
 	coreagent.SeedConfig(cfg)
-	// The six ordinary built-ins cover both defined columns. Judge and Plan
-	// Supervisor are hidden engine agents, not user-facing Main or Worker agents.
+	// SPEC.md Founder exclusion: Omnipus, Judge and Plan Supervisor keep their baseline system policies.
+	// Only the five non-system built-ins receive the column core sets.
 	for _, builtin := range []struct{ id, column string }{
-		{"mia", "Main"}, {"jim", "Main"}, {"omnipus", "Main"},
+		{"mia", "Main"}, {"jim", "Main"},
 		{"worker", "Worker"}, {"planner", "Worker"}, {"researcher", "Worker"},
 	} {
 		t.Run(builtin.id, func(t *testing.T) {
@@ -128,7 +133,7 @@ func defaultToolsAssertBuiltins(t *testing.T, catalog *tools.BuiltinRegistry, ro
 				}
 			}
 			require.NotNil(t, found, "built-in %s must really be seeded", builtin.id)
-			policy, agentType := defaultToolsPolicies(cfg, found)
+			policy, _ := defaultToolsPolicies(cfg, found)
 			for _, row := range rows {
 				want := row.main
 				if builtin.column == "Worker" {
@@ -138,7 +143,7 @@ func defaultToolsAssertBuiltins(t *testing.T, catalog *tools.BuiltinRegistry, ro
 				// specialist grant for a row whose default is Off.
 				if want != "deny" {
 					t.Run(row.name, func(t *testing.T) {
-						got := tools.EffectiveToolPolicy(policy, defaultToolsScope(t, catalog, row.name), agentType, row.name)
+						got := tools.ResolveEffectivePolicy(policy, row.name)
 						assert.GreaterOrEqual(t, defaultToolsPermissionRank(t, got), defaultToolsPermissionRank(t, want),
 							"built-in %s must have at least %s column's %s=%s; effective=%s (ceiling=%q, agent=%q)",
 							builtin.id, builtin.column, row.name, want, got, policy.GlobalPolicies[row.name], policy.Policies[row.name])
@@ -148,14 +153,14 @@ func defaultToolsAssertBuiltins(t *testing.T, catalog *tools.BuiltinRegistry, ro
 			if builtin.id == "jim" {
 				t.Run("bash_stays_denied", func(t *testing.T) {
 					assert.Equal(t, config.ToolPolicyDeny, policy.Policies["bash"], "Jim keeps his deliberate per-agent shell denial")
-					assert.Equal(t, "deny", tools.EffectiveToolPolicy(policy, defaultToolsScope(t, catalog, "bash"), agentType, "bash"))
+					assert.Equal(t, "deny", tools.ResolveEffectivePolicy(policy, "bash"))
 				})
 			}
 		})
 	}
 }
 
-func defaultToolsAssertOperatorDeny(t *testing.T, catalog *tools.BuiltinRegistry, baseline *tools.ToolPolicyCfg, agentType string, rows []defaultToolsPolicyCase, kind string) {
+func defaultToolsAssertOperatorDeny(t *testing.T, baseline *tools.ToolPolicyCfg, rows []defaultToolsPolicyCase, kind string) {
 	t.Helper()
 	beforeAgent, beforeCeiling := maps.Clone(baseline.Policies), maps.Clone(baseline.GlobalPolicies)
 	for _, row := range rows {
@@ -167,11 +172,10 @@ func defaultToolsAssertOperatorDeny(t *testing.T, catalog *tools.BuiltinRegistry
 				changed := *baseline
 				changed.Policies = maps.Clone(baseline.Policies)
 				changed.Policies[row.name] = config.ToolPolicyDeny
-				scope := defaultToolsScope(t, catalog, row.name)
-				assert.Equal(t, "deny", tools.EffectiveToolPolicy(&changed, scope, agentType, row.name),
+				assert.Equal(t, "deny", tools.ResolveEffectivePolicy(&changed, row.name),
 					"Definitions / Hard Constraint #6: operator's %s deny must beat the %s default", row.name, kind)
-				assert.Equal(t, tools.EffectiveToolPolicy(baseline, scope, agentType, row.name),
-					tools.EffectiveToolPolicy(&tools.ToolPolicyCfg{Policies: beforeAgent, GlobalPolicies: beforeCeiling}, scope, agentType, row.name),
+				assert.Equal(t, tools.ResolveEffectivePolicy(baseline, row.name),
+					tools.ResolveEffectivePolicy(&tools.ToolPolicyCfg{Policies: beforeAgent, GlobalPolicies: beforeCeiling}, row.name),
 					"another agent's original policy must not change with a private override")
 			})
 		}

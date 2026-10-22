@@ -32,9 +32,15 @@ func TestWU3ClampReportFollowsActiveGodMode(t *testing.T) {
 				"id": id, "revision": before["revision"],
 				"tool_policy_changes": map[string]any{"set": map[string]any{"read_file": "allow", "write_file": "deny"}},
 			}))
-			read := wu3Success(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"id": id}))
+			// SPEC.md compact output: read-back reports effective policies; mutation clamp metadata remains unchanged.
+			_, read := defaultToolsExistingBody(t, d, id, map[string]any{"id": id})
 			assert.Equal(t, tc.want, body["clamped"], "mutation response")
-			assert.Equal(t, tc.want, read["clamped"], "read-back")
+			wantRead := "ask"
+			if tc.godMode {
+				wantRead = "allow"
+			}
+			assert.Equal(t, wantRead, read["read_file"], "compact read-back honors God Mode")
+			assert.Equal(t, "deny", read["write_file"], "operator deny survives God Mode")
 		})
 	}
 }
