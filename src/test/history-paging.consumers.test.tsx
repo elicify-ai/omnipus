@@ -63,6 +63,14 @@ describe('T33 actual identity consumers with unavailable history — B31/B51', (
         history_state: { status: 'unavailable', reason: 'index_missing', message: UNAVAILABLE } })
       mounted.socket.receive({ type: 'catch_up_complete', session_id: target, boot_id: 'history-boot', seq: 10, mode: 'live_only' })
     })
+    // receive queues real WS batching. Wait for that actual control completion,
+    // not a generic disconnected-start HTTP error that may already be mounted.
+    await waitFor(() => {
+      const bucket = useChatStore.getState().sessionsById[target]
+      if (bucket.cursor?.bootId !== 'history-boot' || bucket.cursor.seq !== 10 || bucket.isReplaying) {
+        throw new Error('Unavailable first attach has not applied its actual live_only completion')
+      }
+    })
     expect(await screen.findByRole('alert')).toHaveTextContent(UNAVAILABLE)
     expect(screen.getByTestId('chat-input')).toBeEnabled()
     expect(screen.queryByText('Session not found', { exact: true })).not.toBeInTheDocument()
@@ -83,6 +91,8 @@ describe('T33 actual identity consumers with unavailable history — B31/B51', (
     // erase genuine earlier proof when a later attach completes only controls.
     const mounted = await mountStage1App(`/sessions/${target}`)
     expect(useChatStore.getState().sessionsById[target].replayCompletedForSession, 'positive control: an actual available snapshot completed first').toBe(target)
+    network.respond('GET', `/api/v1/sessions/${target}`, () => json(unavailableDetail(session(target))))
+    network.respond('GET', `/api/v1/sessions/${target}/messages`, () => json({ error: UNAVAILABLE }, 500))
     const connection = useConnectionStore.getState().connection
     if (!connection) throw new Error('Fixture instrument: the real application WebSocket connection is missing')
     expect(connection.send({ type: 'attach_session', session_id: target, since_seq: 1, boot_id: 'stage1-fixture' }), 'the later live_only response must own an actual attach').toBe(true)

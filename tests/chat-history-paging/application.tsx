@@ -22,6 +22,9 @@ const originalRect = HTMLElement.prototype.getBoundingClientRect
 
 export async function openHistory(initial: SessionHistoryResponse, options: { plain?: boolean; path?: string } = {}) {
   resetStage1App()
+  // The generic room fixture preselects MAIN_ID while disconnected. A fresh
+  // history opening must instead let the real route select/attach it once.
+  act(() => useSessionStore.setState({ activeSessionId: null }))
   if (options.plain !== false) {
     vi.stubGlobal('ResizeObserver', undefined)
     // D5 plain/manual REQUEST fixture only: supply an 800px browser viewport
