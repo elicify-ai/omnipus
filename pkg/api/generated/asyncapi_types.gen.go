@@ -567,15 +567,18 @@ type DoneStats struct {
 	DuplicateToolCallIdCount *float64 `json:"duplicate_tool_call_id_count,omitempty"`
 	DurationMs               *float64 `json:"duration_ms,omitempty"`
 	FramesEmitted            *float64 `json:"frames_emitted,omitempty"`
-	OrphanCount              *float64 `json:"orphan_count,omitempty"`
-	ReplayError              *bool    `json:"replay_error,omitempty"`
-	Tokens                   *float64 `json:"tokens,omitempty"`
+	// Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+	InterruptionReason *string  `json:"interruption_reason,omitempty"`
+	OrphanCount        *float64 `json:"orphan_count,omitempty"`
+	ReplayError        *bool    `json:"replay_error,omitempty"`
+	Tokens             *float64 `json:"tokens,omitempty"`
 	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame, so a turn cut off while the user is still watching renders the notice immediately instead of only after reload/reattach via replay. Only present when true. Absent on a normal turn.
 	Truncated            *bool    `json:"truncated,omitempty"`
 	TruncatedResultCount *float64 `json:"truncated_result_count,omitempty"`
 	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame: narrows why truncated is true — "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a normal turn.
 	TruncationReason *string `json:"truncation_reason,omitempty"`
-	TurnFailed       *bool   `json:"turn_failed,omitempty"`
+	// Error fallback only; interruption_reason also indicates incomplete execution.
+	TurnFailed *bool `json:"turn_failed,omitempty"`
 }
 
 // ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
@@ -1079,6 +1082,8 @@ type ReplayMessageFrame struct {
 		Reason          string  `json:"reason"`
 		State           string  `json:"state"`
 	} `json:"input_disposition,omitempty"`
+	// Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+	InterruptionReason *string `json:"interruption_reason,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
 	Model       *string          `json:"model,omitempty"`
 	Participant *ChatParticipant `json:"participant,omitempty"`
@@ -1473,6 +1478,8 @@ type SubagentStateFrame struct {
 		Verb               string   `json:"verb"`
 	} `json:"control_receipt,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+	InterruptionReason *string `json:"interruption_reason,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/SubagentStateFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`

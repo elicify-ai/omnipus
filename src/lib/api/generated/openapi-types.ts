@@ -4587,17 +4587,22 @@ export interface components {
              */
             title: string;
             /**
-             * @description Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
+             * @description Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is an ended incomplete execution (tool limit or required file-effect reconciliation), or a turn cut off by a gateway restart; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
              * @example active
              * @enum {string}
              */
             status: "active" | "archived" | "failed" | "interrupted";
             /**
-             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 7-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A durable `interrupted` record maps to `interrupted` and exposes no execution. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
              * @example working
              * @enum {string}
              */
             lifecycle_state?: "working" | "waiting_for_answer" | "done" | "failed" | "stopped" | "interrupted";
+            /**
+             * @description Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+             * @enum {string}
+             */
+            readonly interruption_reason?: "tool_limit" | "reconciliation_required" | "restart";
             /** @description Present only when `lifecycle_state == stopped` (or the session's current generation last landed `stopped`) — the durable, lasting reason for the stop (who/when/why). Absent for every other `lifecycle_state`, and for a session with no lifecycle record. */
             stop_note?: components["schemas"]["StopNote"];
             /**
@@ -4941,6 +4946,11 @@ export interface components {
              * @example 120
              */
             messages_compacted?: number;
+            /**
+             * @description Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+             * @enum {string}
+             */
+            readonly interruption_reason?: "tool_limit" | "reconciliation_required";
             /**
              * @description Set to true on the last assistant entry when the entry is incomplete — see `truncation_reason` for why. Only present when true.
              * @example true
@@ -16877,7 +16887,7 @@ export interface components {
         };
         /**
          * SessionLifecycleRecord
-         * @description The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+         * @description The durable, per-entity-JSONL 7-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/`interrupted`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
          */
         SessionLifecycleRecord: {
             /**
@@ -16896,13 +16906,18 @@ export interface components {
              */
             resumed_from?: string | null;
             /**
-             * @description The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+             * @description The durable 7-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed" | "interrupted";
             /**
-             * @description Server-derived: true iff `state` is one of `completed`/`failed`.
+             * @description Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+             * @enum {string}
+             */
+            readonly interruption_reason?: "tool_limit" | "reconciliation_required";
+            /**
+             * @description Server-derived: true iff `state` is one of `completed`/`failed`/`interrupted`. Interrupted freezes the ended generation; explicit continuation creates G+1.
              * @example false
              */
             readonly terminal: boolean;
@@ -17569,7 +17584,12 @@ export interface components {
              * @example queued
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed" | "interrupted";
+            /**
+             * @description Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+             * @enum {string}
+             */
+            readonly interruption_reason?: "tool_limit" | "reconciliation_required";
         };
         /**
          * DelegateStatusResponse
@@ -17673,11 +17693,16 @@ export interface components {
             /** @example 550e8400-e29b-41d4-a716-446655440000 */
             session_id: string;
             /**
-             * @description `interrupted` is a helper session a gateway restart cut off (a lifecycle `failed` record whose failed_reason is `interrupted`; founder rule 2026-10-06: a session does not fail because of a restart). `failed` is a genuine failure only.
+             * @description `interrupted` is an ended incomplete helper execution or a helper a gateway restart cut off. `failed` is a genuine failure only. An ended interrupted generation stays frozen until explicit authorized G+1 continuation.
              * @example running
              * @enum {string}
              */
             state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed" | "interrupted";
+            /**
+             * @description Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+             * @enum {string}
+             */
+            readonly interruption_reason?: "tool_limit" | "reconciliation_required";
             /**
              * @description The most recent checkpoint summary, if any.
              * @example Wrote the write-set-scoped diff extractor; tests pending.
@@ -18242,7 +18267,12 @@ export interface components {
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed" | "interrupted";
+            /**
+             * @description Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+             * @enum {string}
+             */
+            readonly interruption_reason?: "tool_limit" | "reconciliation_required";
             /** @description Present when this state ping is reporting that a prior control (`steer`/`respond`/...) reached a receipt-worthy state (INV-3). */
             control_receipt?: components["schemas"]["ControlReceipt"];
             /**
@@ -18343,10 +18373,10 @@ export interface components {
             /** @description Optional textual summary of the sub-turn's output. */
             final_result?: string;
             /**
-             * @description When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+             * @description When status is "interrupted": the parent interruption or the engine-owned tool-limit/reconciliation cause. Interrupted is incomplete, not success or Failed.
              * @enum {string}
              */
-            reason?: "parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown";
+            reason?: "parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown" | "tool_limit" | "reconciliation_required";
             /** @description Agent that ran the sub-turn. */
             agent_id?: string;
             /** @description The spawn ToolCall.ID that triggered this sub-turn. */

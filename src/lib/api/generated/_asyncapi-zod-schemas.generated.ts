@@ -334,6 +334,7 @@ export const DoneStats = z
     truncated_result_count: z.number().min(0).optional(),
     replay_error: z.boolean().optional(),
     turn_failed: z.boolean().optional(),
+    interruption_reason: z.enum(["tool_limit", "reconciliation_required"]).optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
   })
@@ -527,7 +528,7 @@ export const SubagentEndFrame = z
     status: z.enum(["success", "error", "cancelled", "interrupted", "timeout", "parked"]),
     duration_ms: z.number().int().optional(),
     final_result: z.string().optional(),
-    reason: z.enum(["parent_timeout", "parent_cancelled", "parent_done_early", "unknown"]).optional(),
+    reason: z.enum(["parent_timeout", "parent_cancelled", "parent_done_early", "unknown", "tool_limit", "reconciliation_required"]).optional(),
     agent_id: z.string().optional(),
     parent_call_id: z.string().optional(),
     message: z.string().optional(),
@@ -559,7 +560,8 @@ export const SubagentStateFrame = z
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
-    state: z.enum(["queued", "running", "needs_input", "stopped", "completed", "failed"]),
+    state: z.enum(["queued", "running", "needs_input", "stopped", "completed", "failed", "interrupted"]),
+    interruption_reason: z.enum(["tool_limit", "reconciliation_required"]).optional(),
     control_receipt: z
     .object({
       seq: z.number().int().min(0),
@@ -616,6 +618,7 @@ export const ReplayMessageFrame = z
     model: z.string().max(256).optional(),
     turn_id: z.string().optional(),
     goal_id: z.string().optional(),
+    interruption_reason: z.enum(["tool_limit", "reconciliation_required"]).optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),

@@ -182,6 +182,15 @@ properties:
     type: integer
     description: Number of messages compacted (present only on compaction entries).
     example: 120
+  interruption_reason:
+    type: string
+    readOnly: true
+    enum:
+      - tool_limit
+      - reconciliation_required
+    description: >
+      Server-produced cause of the current interruption. Omitted rather than null.
+      Required for a newly recorded interrupted outcome; absent on other outcomes.
   truncated:
     type: boolean
     description: >

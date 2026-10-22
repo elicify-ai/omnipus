@@ -50,5 +50,15 @@ properties:
       - stopped
       - completed
       - failed
+      - interrupted
     description: The newly-spawned/resumed session's initial lifecycle state.
     example: "queued"
+  interruption_reason:
+    type: string
+    readOnly: true
+    enum:
+      - tool_limit
+      - reconciliation_required
+    description: >
+      Server-produced cause of the current interruption. Omitted rather than null.
+      Required for a newly recorded interrupted outcome; absent on other outcomes.

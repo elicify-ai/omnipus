@@ -24,11 +24,19 @@ properties:
       - failed
       - interrupted
     description: >
-      `interrupted` is a helper session a gateway restart cut off (a lifecycle
-      `failed` record whose failed_reason is `interrupted`; founder rule
-      2026-10-06: a session does not fail because of a restart). `failed` is a
-      genuine failure only.
+      `interrupted` is an ended incomplete helper execution or a helper a gateway
+      restart cut off. `failed` is a genuine failure only. An ended interrupted
+      generation stays frozen until explicit authorized G+1 continuation.
     example: "running"
+  interruption_reason:
+    type: string
+    readOnly: true
+    enum:
+      - tool_limit
+      - reconciliation_required
+    description: >
+      Server-produced cause of the current interruption. Omitted rather than null.
+      Required for a newly recorded interrupted outcome; absent on other outcomes.
   latest_checkpoint_summary:
     type: string
     description: The most recent checkpoint summary, if any.

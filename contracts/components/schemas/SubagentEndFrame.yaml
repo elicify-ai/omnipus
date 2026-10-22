@@ -59,9 +59,11 @@ properties:
       - parent_cancelled
       - parent_done_early
       - unknown
+      - tool_limit
+      - reconciliation_required
     description: >
-      When status is "interrupted": why the sub-turn was interrupted by the
-      parent. Populated by W1-9 coordination in the agent loop.
+      When status is "interrupted": the parent interruption or the engine-owned
+      tool-limit/reconciliation cause. Interrupted is incomplete, not success or Failed.
   agent_id:
     type: string
     description: Agent that ran the sub-turn.

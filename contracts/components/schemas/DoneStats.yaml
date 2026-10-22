@@ -45,19 +45,20 @@ properties:
   turn_failed:
     type: boolean
     description: >
-      True when the turn ended via the engine's error/limit fallback rather
-      than a real model response. Three conditions trigger it: (1) the LLM
-      returned an empty response after all retries and the engine substituted
-      its internal error sentinel; (2) the tool-iteration limit was reached
-      without a final response; (3) the generic empty-content exhaustion path
-      at turn finalization resolved to the engine's error sentinel — but NOT
-      when the caller supplied a custom success DefaultResponse (e.g. the
-      heartbeat/system path's "Background task completed." string). Absent (or
-      false) on a normal successful turn. This field is intentionally coarse —
-      it signals that a failure occurred but carries no failure-reason
-      granularity; a separate field would be needed for that detail.
-      CLI/automation clients should check this field and exit non-zero when
-      it is true.
+      True when the turn ended with the engine's error fallback rather than
+      a real model response. Empty-response exhaustion is an error; tool-limit
+      and reconciliation endings instead carry interruption_reason and are not
+      generic Failed outcomes. CLI/automation clients must treat either
+      turn_failed=true or interruption_reason as non-success/incomplete.
+  interruption_reason:
+    type: string
+    readOnly: true
+    enum:
+      - tool_limit
+      - reconciliation_required
+    description: >
+      Server-produced cause of the current interruption. Omitted rather than null.
+      Required for a newly recorded interrupted outcome; absent on other outcomes.
   truncated:
     type: boolean
     description: >

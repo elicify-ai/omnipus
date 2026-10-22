@@ -354,6 +354,7 @@ export interface DoneStats {
   truncated_result_count?: number;
   replay_error?: boolean;
   turn_failed?: boolean;
+  interruption_reason?: "tool_limit" | "reconciliation_required";
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
   [key: string]: unknown;
@@ -512,7 +513,7 @@ export interface SubagentEndFrame {
   status: "success" | "error" | "cancelled" | "interrupted" | "timeout" | "parked";
   duration_ms?: number;
   final_result?: string;
-  reason?: "parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown";
+  reason?: "parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown" | "tool_limit" | "reconciliation_required";
   agent_id?: string;
   parent_call_id?: string;
   message?: string;
@@ -540,7 +541,8 @@ export interface SubagentStateFrame {
   session_id: string;
   child_session_id?: string;
   span_id: string;
-  state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
+  state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed" | "interrupted";
+  interruption_reason?: "tool_limit" | "reconciliation_required";
   control_receipt?: {
     seq: number;
     control_id: string;
@@ -589,6 +591,7 @@ export interface ReplayMessageFrame {
   model?: string;
   turn_id?: string;
   goal_id?: string;
+  interruption_reason?: "tool_limit" | "reconciliation_required";
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
   client_message_id?: string;

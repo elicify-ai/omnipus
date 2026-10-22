@@ -51,8 +51,18 @@ properties:
       - stopped
       - completed
       - failed
+      - interrupted
     description: The child's current durable lifecycle state (SessionLifecycleRecord.state).
     example: "running"
+  interruption_reason:
+    type: string
+    readOnly: true
+    enum:
+      - tool_limit
+      - reconciliation_required
+    description: >
+      Server-produced cause of the current interruption. Omitted rather than null.
+      Required for a newly recorded interrupted outcome; absent on other outcomes.
   control_receipt:
     $ref: './ControlReceipt.yaml'
     # Not `nullable: true`: the Go side stamps this via an `omitempty`

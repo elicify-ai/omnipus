@@ -1,7 +1,7 @@
 type: object
 title: SessionLifecycleRecord
 description: >
-  The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053
+  The durable, per-entity-JSONL 7-state session-lifecycle record (ADR-053
   §Contract Surface, S2; state consolidated per F0929-2). Distinct from
   `Session.status` (active/archived/failed — the coarse chat-transcript-
   metadata status; see `Session.lifecycle_state` for the exact 5-state
@@ -9,7 +9,7 @@ description: >
   done/failed plan state machine) — do not conflate the three. This record is
   the durable authority the boot sweep (§5), idle settlement, `blocked_by`,
   and the S4 interlock state machine all read from. The immutable-terminal
-  invariant (L-3) holds: a terminal record (`completed`/`failed`) is never
+  invariant (L-3) holds: a terminal record (`completed`/`failed`/`interrupted`) is never
   mutated in place — `follow_up`/Play mint a NEW record with a new
   `generation`, linked back via `resumed_from`.
 required:
@@ -55,8 +55,9 @@ properties:
       - stopped
       - completed
       - failed
+      - interrupted
     description: >
-      The durable 6-state lifecycle (S2, the S4 interlock state machine's
+      The durable 7-state lifecycle (S2, the S4 interlock state machine's
       authority). `stopped` replaces the former `cancelled`/`timed_out`/
       `paused` states as one non-terminal state (session alive,
       continuable) — it covers cancellation, timeout, AND a plan-owner
@@ -65,11 +66,21 @@ properties:
       on the Plan record, not as a separate state here — see
       `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
     example: "running"
+  interruption_reason:
+    type: string
+    readOnly: true
+    enum:
+      - tool_limit
+      - reconciliation_required
+    description: >
+      Server-produced cause of the current interruption. Omitted rather than null.
+      Required for a newly recorded interrupted outcome; absent on other outcomes.
   terminal:
     type: boolean
     readOnly: true
     description: >
-      Server-derived: true iff `state` is one of `completed`/`failed`.
+      Server-derived: true iff `state` is one of `completed`/`failed`/`interrupted`.
+      Interrupted freezes the ended generation; explicit continuation creates G+1.
     example: false
   owner_scope_kind:
     type: string

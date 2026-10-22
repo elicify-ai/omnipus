@@ -90,10 +90,8 @@ properties:
     description: >
       Coarse chat-transcript-metadata status. `archived` means completed;
       `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is
-      a session whose turn a gateway restart cut off (the boot sweep writes
-      it — founder rule 2026-10-06: a session does not fail because of a
-      restart; it supersedes the sub-agent control plane ADR D4/MAJ-009
-      retirement of this value); `active` covers a session that is working,
+      an ended incomplete execution (tool limit or required file-effect
+      reconciliation), or a turn cut off by a gateway restart; `active` covers a session that is working,
       waiting for an answer, or stopped — see `lifecycle_state` for the exact
       distinction. An explicit RESUME of a `done`/`failed`/`interrupted`
       session resets this metadata back to `active`.
@@ -111,7 +109,7 @@ properties:
       Exact helper-state display (sub-agent control plane ADR D4/MAJ-009),
       populated from the session's authoritative `SessionLifecycleRecord`
       when one exists; absent for a session with no lifecycle record. Not a
-      straight re-export of `SessionLifecycleRecord.state`'s 6-value
+      straight re-export of `SessionLifecycleRecord.state`'s 7-value
       enum — `queued`/`running` both collapse to `working`, `needs_input`
       maps to `waiting_for_answer`, and `completed` maps to `done`. A
       `failed` lifecycle record whose `failed_reason` is `interrupted` (a
@@ -127,9 +125,20 @@ properties:
       A resumed `running` record projects to `working` and publishes
       `execution: running`, rather than retaining a stale Interrupted display.
       Gateway availability alone does not mean an old execution has resumed.
+      A durable `interrupted` record maps to `interrupted` and exposes no execution.
       A genuinely failed record still maps to `failed`. A stopped helper has
       `status: active`, `lifecycle_state: stopped`.
     example: "working"
+  interruption_reason:
+    type: string
+    readOnly: true
+    enum:
+      - tool_limit
+      - reconciliation_required
+      - restart
+    description: >
+      Server-produced cause of the current interruption. Omitted rather than null.
+      Required for a newly recorded interrupted outcome; absent on other outcomes.
   stop_note:
     $ref: './StopNote.yaml'
     description: >

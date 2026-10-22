@@ -132,6 +132,15 @@ properties:
       replay must retain the SAME association so the SPA joins each bubble to its
       own exact keyed goal criteria. Absent means UNKNOWN association; a later
       goal's frame must never rebind an earlier replayed message.
+  interruption_reason:
+    type: string
+    readOnly: true
+    enum:
+      - tool_limit
+      - reconciliation_required
+    description: >
+      Server-produced cause of the current interruption. Omitted rather than null.
+      Required for a newly recorded interrupted outcome; absent on other outcomes.
   truncated:
     type: boolean
     description: >

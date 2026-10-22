@@ -105,6 +105,9 @@ type Session = {
         | "interrupted"
       )
     | undefined;
+  interruption_reason?:
+    | ("tool_limit" | "reconciliation_required" | "restart")
+    | undefined;
   stop_note?:
     | {
         at: string;
@@ -208,6 +211,7 @@ type Message = {
   reply_to_participant?: participant | undefined;
   reply_to_message_id?: string | undefined;
   messages_compacted?: number | undefined;
+  interruption_reason?: ("tool_limit" | "reconciliation_required") | undefined;
   truncated?: boolean | undefined;
   truncation_reason?: ("cancelled" | "max_output_tokens") | undefined;
   turn_id?: string | undefined;
@@ -257,7 +261,11 @@ type Message = {
           | "needs_input"
           | "stopped"
           | "completed"
-          | "failed";
+          | "failed"
+          | "interrupted";
+        interruption_reason?:
+          | ("tool_limit" | "reconciliation_required")
+          | undefined;
         control_receipt?:
           | {
               seq: number;
@@ -332,6 +340,8 @@ type Message = {
               | "parent_cancelled"
               | "parent_done_early"
               | "unknown"
+              | "tool_limit"
+              | "reconciliation_required"
             )
           | undefined;
         agent_id?: string | undefined;
@@ -3053,7 +3063,9 @@ type SessionLifecycleRecord = {
     | "needs_input"
     | "stopped"
     | "completed"
-    | "failed";
+    | "failed"
+    | "interrupted";
+  interruption_reason?: ("tool_limit" | "reconciliation_required") | undefined;
   terminal: boolean;
   owner_scope_kind: "parent_session" | "plan" | "human";
   owner_scope_id?: string | undefined;
@@ -3483,6 +3495,9 @@ export const Session: z.ZodType<Session> = z.object({
       "interrupted",
     ])
     .optional(),
+  interruption_reason: z
+    .enum(["tool_limit", "reconciliation_required", "restart"])
+    .optional(),
   stop_note: z
     .object({
       at: z.string().datetime({ offset: true }),
@@ -3696,6 +3711,9 @@ export const Message: z.ZodType<Message> = z.object({
   reply_to_participant: participant.optional(),
   reply_to_message_id: z.string().min(1).optional(),
   messages_compacted: z.number().int().optional(),
+  interruption_reason: z
+    .enum(["tool_limit", "reconciliation_required"])
+    .optional(),
   truncated: z.boolean().optional(),
   truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
   turn_id: z.string().optional(),
@@ -3746,7 +3764,11 @@ export const Message: z.ZodType<Message> = z.object({
         "stopped",
         "completed",
         "failed",
+        "interrupted",
       ]),
+      interruption_reason: z
+        .enum(["tool_limit", "reconciliation_required"])
+        .optional(),
       control_receipt: z
         .object({
           seq: z.number().int().gte(0),
@@ -3824,6 +3846,8 @@ export const Message: z.ZodType<Message> = z.object({
           "parent_cancelled",
           "parent_done_early",
           "unknown",
+          "tool_limit",
+          "reconciliation_required",
         ])
         .optional(),
       agent_id: z.string().optional(),
@@ -7505,7 +7529,11 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
       "stopped",
       "completed",
       "failed",
+      "interrupted",
     ]),
+    interruption_reason: z
+      .enum(["tool_limit", "reconciliation_required"])
+      .optional(),
     terminal: z.boolean(),
     owner_scope_kind: z.enum(["parent_session", "plan", "human"]),
     owner_scope_id: z.string().optional(),
@@ -7728,7 +7756,11 @@ export const DelegateSessionResponse = z.object({
     "stopped",
     "completed",
     "failed",
+    "interrupted",
   ]),
+  interruption_reason: z
+    .enum(["tool_limit", "reconciliation_required"])
+    .optional(),
 });
 export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
   z.object({
@@ -7784,6 +7816,9 @@ export const DelegatePeekResponse = z.object({
     "failed",
     "interrupted",
   ]),
+  interruption_reason: z
+    .enum(["tool_limit", "reconciliation_required"])
+    .optional(),
   latest_checkpoint_summary: z.string().optional(),
   latest_progress_text: z.string().optional(),
   latest_progress_pct: z.number().int().gte(0).lte(100).optional(),
@@ -17462,6 +17497,7 @@ export const DoneStats = z
     truncated_result_count: z.number().min(0).optional(),
     replay_error: z.boolean().optional(),
     turn_failed: z.boolean().optional(),
+    interruption_reason: z.enum(["tool_limit", "reconciliation_required"]).optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
   })
@@ -17655,7 +17691,7 @@ export const SubagentEndFrame = z
     status: z.enum(["success", "error", "cancelled", "interrupted", "timeout", "parked"]),
     duration_ms: z.number().int().optional(),
     final_result: z.string().optional(),
-    reason: z.enum(["parent_timeout", "parent_cancelled", "parent_done_early", "unknown"]).optional(),
+    reason: z.enum(["parent_timeout", "parent_cancelled", "parent_done_early", "unknown", "tool_limit", "reconciliation_required"]).optional(),
     agent_id: z.string().optional(),
     parent_call_id: z.string().optional(),
     message: z.string().optional(),
@@ -17687,7 +17723,8 @@ export const SubagentStateFrame = z
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
-    state: z.enum(["queued", "running", "needs_input", "stopped", "completed", "failed"]),
+    state: z.enum(["queued", "running", "needs_input", "stopped", "completed", "failed", "interrupted"]),
+    interruption_reason: z.enum(["tool_limit", "reconciliation_required"]).optional(),
     control_receipt: z
     .object({
       seq: z.number().int().min(0),
@@ -17744,6 +17781,7 @@ export const ReplayMessageFrame = z
     model: z.string().max(256).optional(),
     turn_id: z.string().optional(),
     goal_id: z.string().optional(),
+    interruption_reason: z.enum(["tool_limit", "reconciliation_required"]).optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),

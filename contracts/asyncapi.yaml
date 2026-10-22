@@ -3096,6 +3096,16 @@ components:
           type: boolean
         turn_failed:
           type: boolean
+          description: Error fallback only; interruption_reason also indicates incomplete execution.
+        interruption_reason:
+          type: string
+          readOnly: true
+          enum:
+            - tool_limit
+            - reconciliation_required
+          description: >
+            Server-produced cause of the current interruption. Omitted rather than null.
+            Required for a newly recorded interrupted outcome; absent on other outcomes.
         truncated:
           type: boolean
           description: >
@@ -4392,6 +4402,8 @@ components:
           - parent_cancelled
           - parent_done_early
           - unknown
+          - tool_limit
+          - reconciliation_required
         agent_id:
           type: string
         parent_call_id:
@@ -4531,6 +4543,16 @@ components:
             - stopped
             - completed
             - failed
+            - interrupted
+        interruption_reason:
+          type: string
+          readOnly: true
+          enum:
+            - tool_limit
+            - reconciliation_required
+          description: >
+            Server-produced cause of the current interruption. Omitted rather than null.
+            Required for a newly recorded interrupted outcome; absent on other outcomes.
         control_receipt:
           type: object
           # Not nullable — see components/schemas/SubagentStateFrame.yaml's
@@ -4760,6 +4782,15 @@ components:
             replay must retain the SAME association so the SPA joins each bubble to its
             own exact keyed goal criteria. Absent means UNKNOWN association; a later
             goal's frame must never rebind an earlier replayed message.
+        interruption_reason:
+          type: string
+          readOnly: true
+          enum:
+            - tool_limit
+            - reconciliation_required
+          description: >
+            Server-produced cause of the current interruption. Omitted rather than null.
+            Required for a newly recorded interrupted outcome; absent on other outcomes.
         truncated:
           type: boolean
           description: >

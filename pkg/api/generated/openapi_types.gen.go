@@ -2390,6 +2390,24 @@ func (e DelegatePeekActionAction) Valid() bool {
 	}
 }
 
+// Defines values for DelegatePeekResponseInterruptionReason.
+const (
+	DelegatePeekResponseInterruptionReasonReconciliationRequired DelegatePeekResponseInterruptionReason = "reconciliation_required"
+	DelegatePeekResponseInterruptionReasonToolLimit              DelegatePeekResponseInterruptionReason = "tool_limit"
+)
+
+// Valid indicates whether the value is a known member of the DelegatePeekResponseInterruptionReason enum.
+func (e DelegatePeekResponseInterruptionReason) Valid() bool {
+	switch e {
+	case DelegatePeekResponseInterruptionReasonReconciliationRequired:
+		return true
+	case DelegatePeekResponseInterruptionReasonToolLimit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DelegatePeekResponseState.
 const (
 	DelegatePeekResponseStateCompleted   DelegatePeekResponseState = "completed"
@@ -3245,14 +3263,33 @@ func (e DelegateRunActionGoalTerminalHistoryVerdictScope) Valid() bool {
 	}
 }
 
+// Defines values for DelegateSessionResponseInterruptionReason.
+const (
+	DelegateSessionResponseInterruptionReasonReconciliationRequired DelegateSessionResponseInterruptionReason = "reconciliation_required"
+	DelegateSessionResponseInterruptionReasonToolLimit              DelegateSessionResponseInterruptionReason = "tool_limit"
+)
+
+// Valid indicates whether the value is a known member of the DelegateSessionResponseInterruptionReason enum.
+func (e DelegateSessionResponseInterruptionReason) Valid() bool {
+	switch e {
+	case DelegateSessionResponseInterruptionReasonReconciliationRequired:
+		return true
+	case DelegateSessionResponseInterruptionReasonToolLimit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DelegateSessionResponseState.
 const (
-	DelegateSessionResponseStateCompleted  DelegateSessionResponseState = "completed"
-	DelegateSessionResponseStateFailed     DelegateSessionResponseState = "failed"
-	DelegateSessionResponseStateNeedsInput DelegateSessionResponseState = "needs_input"
-	DelegateSessionResponseStateQueued     DelegateSessionResponseState = "queued"
-	DelegateSessionResponseStateRunning    DelegateSessionResponseState = "running"
-	DelegateSessionResponseStateStopped    DelegateSessionResponseState = "stopped"
+	DelegateSessionResponseStateCompleted   DelegateSessionResponseState = "completed"
+	DelegateSessionResponseStateFailed      DelegateSessionResponseState = "failed"
+	DelegateSessionResponseStateInterrupted DelegateSessionResponseState = "interrupted"
+	DelegateSessionResponseStateNeedsInput  DelegateSessionResponseState = "needs_input"
+	DelegateSessionResponseStateQueued      DelegateSessionResponseState = "queued"
+	DelegateSessionResponseStateRunning     DelegateSessionResponseState = "running"
+	DelegateSessionResponseStateStopped     DelegateSessionResponseState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegateSessionResponseState enum.
@@ -3261,6 +3298,8 @@ func (e DelegateSessionResponseState) Valid() bool {
 	case DelegateSessionResponseStateCompleted:
 		return true
 	case DelegateSessionResponseStateFailed:
+		return true
+	case DelegateSessionResponseStateInterrupted:
 		return true
 	case DelegateSessionResponseStateNeedsInput:
 		return true
@@ -3284,6 +3323,24 @@ const (
 func (e DelegateStatusActionAction) Valid() bool {
 	switch e {
 	case DelegateStatusActionActionStatus:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStatusResponseSessionInterruptionReason.
+const (
+	DelegateStatusResponseSessionInterruptionReasonReconciliationRequired DelegateStatusResponseSessionInterruptionReason = "reconciliation_required"
+	DelegateStatusResponseSessionInterruptionReasonToolLimit              DelegateStatusResponseSessionInterruptionReason = "tool_limit"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStatusResponseSessionInterruptionReason enum.
+func (e DelegateStatusResponseSessionInterruptionReason) Valid() bool {
+	switch e {
+	case DelegateStatusResponseSessionInterruptionReasonReconciliationRequired:
+		return true
+	case DelegateStatusResponseSessionInterruptionReasonToolLimit:
 		return true
 	default:
 		return false
@@ -3355,12 +3412,13 @@ func (e DelegateStatusResponseSessionOwnerScopeKind) Valid() bool {
 
 // Defines values for DelegateStatusResponseSessionState.
 const (
-	DelegateStatusResponseSessionStateCompleted  DelegateStatusResponseSessionState = "completed"
-	DelegateStatusResponseSessionStateFailed     DelegateStatusResponseSessionState = "failed"
-	DelegateStatusResponseSessionStateNeedsInput DelegateStatusResponseSessionState = "needs_input"
-	DelegateStatusResponseSessionStateQueued     DelegateStatusResponseSessionState = "queued"
-	DelegateStatusResponseSessionStateRunning    DelegateStatusResponseSessionState = "running"
-	DelegateStatusResponseSessionStateStopped    DelegateStatusResponseSessionState = "stopped"
+	DelegateStatusResponseSessionStateCompleted   DelegateStatusResponseSessionState = "completed"
+	DelegateStatusResponseSessionStateFailed      DelegateStatusResponseSessionState = "failed"
+	DelegateStatusResponseSessionStateInterrupted DelegateStatusResponseSessionState = "interrupted"
+	DelegateStatusResponseSessionStateNeedsInput  DelegateStatusResponseSessionState = "needs_input"
+	DelegateStatusResponseSessionStateQueued      DelegateStatusResponseSessionState = "queued"
+	DelegateStatusResponseSessionStateRunning     DelegateStatusResponseSessionState = "running"
+	DelegateStatusResponseSessionStateStopped     DelegateStatusResponseSessionState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegateStatusResponseSessionState enum.
@@ -3369,6 +3427,8 @@ func (e DelegateStatusResponseSessionState) Valid() bool {
 	case DelegateStatusResponseSessionStateCompleted:
 		return true
 	case DelegateStatusResponseSessionStateFailed:
+		return true
+	case DelegateStatusResponseSessionStateInterrupted:
 		return true
 	case DelegateStatusResponseSessionStateNeedsInput:
 		return true
@@ -6293,6 +6353,24 @@ func (e MessageInputDispositionState) Valid() bool {
 	}
 }
 
+// Defines values for MessageInterruptionReason.
+const (
+	MessageInterruptionReasonReconciliationRequired MessageInterruptionReason = "reconciliation_required"
+	MessageInterruptionReasonToolLimit              MessageInterruptionReason = "tool_limit"
+)
+
+// Valid indicates whether the value is a known member of the MessageInterruptionReason enum.
+func (e MessageInterruptionReason) Valid() bool {
+	switch e {
+	case MessageInterruptionReasonReconciliationRequired:
+		return true
+	case MessageInterruptionReasonToolLimit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageParticipantKind.
 const (
 	MessageParticipantKindAgent MessageParticipantKind = "agent"
@@ -6391,10 +6469,12 @@ func (e MessageStatus) Valid() bool {
 
 // Defines values for MessageSubagentEndReason.
 const (
-	MessageSubagentEndReasonParentCancelled MessageSubagentEndReason = "parent_cancelled"
-	MessageSubagentEndReasonParentDoneEarly MessageSubagentEndReason = "parent_done_early"
-	MessageSubagentEndReasonParentTimeout   MessageSubagentEndReason = "parent_timeout"
-	MessageSubagentEndReasonUnknown         MessageSubagentEndReason = "unknown"
+	MessageSubagentEndReasonParentCancelled        MessageSubagentEndReason = "parent_cancelled"
+	MessageSubagentEndReasonParentDoneEarly        MessageSubagentEndReason = "parent_done_early"
+	MessageSubagentEndReasonParentTimeout          MessageSubagentEndReason = "parent_timeout"
+	MessageSubagentEndReasonReconciliationRequired MessageSubagentEndReason = "reconciliation_required"
+	MessageSubagentEndReasonToolLimit              MessageSubagentEndReason = "tool_limit"
+	MessageSubagentEndReasonUnknown                MessageSubagentEndReason = "unknown"
 )
 
 // Valid indicates whether the value is a known member of the MessageSubagentEndReason enum.
@@ -6405,6 +6485,10 @@ func (e MessageSubagentEndReason) Valid() bool {
 	case MessageSubagentEndReasonParentDoneEarly:
 		return true
 	case MessageSubagentEndReasonParentTimeout:
+		return true
+	case MessageSubagentEndReasonReconciliationRequired:
+		return true
+	case MessageSubagentEndReasonToolLimit:
 		return true
 	case MessageSubagentEndReasonUnknown:
 		return true
@@ -6590,14 +6674,33 @@ func (e MessageSubagentStateControlReceiptVerb) Valid() bool {
 	}
 }
 
+// Defines values for MessageSubagentStateInterruptionReason.
+const (
+	MessageSubagentStateInterruptionReasonReconciliationRequired MessageSubagentStateInterruptionReason = "reconciliation_required"
+	MessageSubagentStateInterruptionReasonToolLimit              MessageSubagentStateInterruptionReason = "tool_limit"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateInterruptionReason enum.
+func (e MessageSubagentStateInterruptionReason) Valid() bool {
+	switch e {
+	case MessageSubagentStateInterruptionReasonReconciliationRequired:
+		return true
+	case MessageSubagentStateInterruptionReasonToolLimit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageSubagentStateState.
 const (
-	MessageSubagentStateStateCompleted  MessageSubagentStateState = "completed"
-	MessageSubagentStateStateFailed     MessageSubagentStateState = "failed"
-	MessageSubagentStateStateNeedsInput MessageSubagentStateState = "needs_input"
-	MessageSubagentStateStateQueued     MessageSubagentStateState = "queued"
-	MessageSubagentStateStateRunning    MessageSubagentStateState = "running"
-	MessageSubagentStateStateStopped    MessageSubagentStateState = "stopped"
+	MessageSubagentStateStateCompleted   MessageSubagentStateState = "completed"
+	MessageSubagentStateStateFailed      MessageSubagentStateState = "failed"
+	MessageSubagentStateStateInterrupted MessageSubagentStateState = "interrupted"
+	MessageSubagentStateStateNeedsInput  MessageSubagentStateState = "needs_input"
+	MessageSubagentStateStateQueued      MessageSubagentStateState = "queued"
+	MessageSubagentStateStateRunning     MessageSubagentStateState = "running"
+	MessageSubagentStateStateStopped     MessageSubagentStateState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the MessageSubagentStateState enum.
@@ -6606,6 +6709,8 @@ func (e MessageSubagentStateState) Valid() bool {
 	case MessageSubagentStateStateCompleted:
 		return true
 	case MessageSubagentStateStateFailed:
+		return true
+	case MessageSubagentStateStateInterrupted:
 		return true
 	case MessageSubagentStateStateNeedsInput:
 		return true
@@ -9932,6 +10037,27 @@ func (e SessionExecution) Valid() bool {
 	}
 }
 
+// Defines values for SessionInterruptionReason.
+const (
+	SessionInterruptionReasonReconciliationRequired SessionInterruptionReason = "reconciliation_required"
+	SessionInterruptionReasonRestart                SessionInterruptionReason = "restart"
+	SessionInterruptionReasonToolLimit              SessionInterruptionReason = "tool_limit"
+)
+
+// Valid indicates whether the value is a known member of the SessionInterruptionReason enum.
+func (e SessionInterruptionReason) Valid() bool {
+	switch e {
+	case SessionInterruptionReasonReconciliationRequired:
+		return true
+	case SessionInterruptionReasonRestart:
+		return true
+	case SessionInterruptionReasonToolLimit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionLifecycleState.
 const (
 	SessionLifecycleStateDone             SessionLifecycleState = "done"
@@ -10223,6 +10349,24 @@ func (e SessionDetailMessagesInputDispositionState) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesInterruptionReason.
+const (
+	SessionDetailMessagesInterruptionReasonReconciliationRequired SessionDetailMessagesInterruptionReason = "reconciliation_required"
+	SessionDetailMessagesInterruptionReasonToolLimit              SessionDetailMessagesInterruptionReason = "tool_limit"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesInterruptionReason enum.
+func (e SessionDetailMessagesInterruptionReason) Valid() bool {
+	switch e {
+	case SessionDetailMessagesInterruptionReasonReconciliationRequired:
+		return true
+	case SessionDetailMessagesInterruptionReasonToolLimit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesParticipantKind.
 const (
 	SessionDetailMessagesParticipantKindAgent SessionDetailMessagesParticipantKind = "agent"
@@ -10321,10 +10465,12 @@ func (e SessionDetailMessagesStatus) Valid() bool {
 
 // Defines values for SessionDetailMessagesSubagentEndReason.
 const (
-	SessionDetailMessagesSubagentEndReasonParentCancelled SessionDetailMessagesSubagentEndReason = "parent_cancelled"
-	SessionDetailMessagesSubagentEndReasonParentDoneEarly SessionDetailMessagesSubagentEndReason = "parent_done_early"
-	SessionDetailMessagesSubagentEndReasonParentTimeout   SessionDetailMessagesSubagentEndReason = "parent_timeout"
-	SessionDetailMessagesSubagentEndReasonUnknown         SessionDetailMessagesSubagentEndReason = "unknown"
+	SessionDetailMessagesSubagentEndReasonParentCancelled        SessionDetailMessagesSubagentEndReason = "parent_cancelled"
+	SessionDetailMessagesSubagentEndReasonParentDoneEarly        SessionDetailMessagesSubagentEndReason = "parent_done_early"
+	SessionDetailMessagesSubagentEndReasonParentTimeout          SessionDetailMessagesSubagentEndReason = "parent_timeout"
+	SessionDetailMessagesSubagentEndReasonReconciliationRequired SessionDetailMessagesSubagentEndReason = "reconciliation_required"
+	SessionDetailMessagesSubagentEndReasonToolLimit              SessionDetailMessagesSubagentEndReason = "tool_limit"
+	SessionDetailMessagesSubagentEndReasonUnknown                SessionDetailMessagesSubagentEndReason = "unknown"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndReason enum.
@@ -10335,6 +10481,10 @@ func (e SessionDetailMessagesSubagentEndReason) Valid() bool {
 	case SessionDetailMessagesSubagentEndReasonParentDoneEarly:
 		return true
 	case SessionDetailMessagesSubagentEndReasonParentTimeout:
+		return true
+	case SessionDetailMessagesSubagentEndReasonReconciliationRequired:
+		return true
+	case SessionDetailMessagesSubagentEndReasonToolLimit:
 		return true
 	case SessionDetailMessagesSubagentEndReasonUnknown:
 		return true
@@ -10520,14 +10670,33 @@ func (e SessionDetailMessagesSubagentStateControlReceiptVerb) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesSubagentStateInterruptionReason.
+const (
+	SessionDetailMessagesSubagentStateInterruptionReasonReconciliationRequired SessionDetailMessagesSubagentStateInterruptionReason = "reconciliation_required"
+	SessionDetailMessagesSubagentStateInterruptionReasonToolLimit              SessionDetailMessagesSubagentStateInterruptionReason = "tool_limit"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateInterruptionReason enum.
+func (e SessionDetailMessagesSubagentStateInterruptionReason) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStateInterruptionReasonReconciliationRequired:
+		return true
+	case SessionDetailMessagesSubagentStateInterruptionReasonToolLimit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesSubagentStateState.
 const (
-	SessionDetailMessagesSubagentStateStateCompleted  SessionDetailMessagesSubagentStateState = "completed"
-	SessionDetailMessagesSubagentStateStateFailed     SessionDetailMessagesSubagentStateState = "failed"
-	SessionDetailMessagesSubagentStateStateNeedsInput SessionDetailMessagesSubagentStateState = "needs_input"
-	SessionDetailMessagesSubagentStateStateQueued     SessionDetailMessagesSubagentStateState = "queued"
-	SessionDetailMessagesSubagentStateStateRunning    SessionDetailMessagesSubagentStateState = "running"
-	SessionDetailMessagesSubagentStateStateStopped    SessionDetailMessagesSubagentStateState = "stopped"
+	SessionDetailMessagesSubagentStateStateCompleted   SessionDetailMessagesSubagentStateState = "completed"
+	SessionDetailMessagesSubagentStateStateFailed      SessionDetailMessagesSubagentStateState = "failed"
+	SessionDetailMessagesSubagentStateStateInterrupted SessionDetailMessagesSubagentStateState = "interrupted"
+	SessionDetailMessagesSubagentStateStateNeedsInput  SessionDetailMessagesSubagentStateState = "needs_input"
+	SessionDetailMessagesSubagentStateStateQueued      SessionDetailMessagesSubagentStateState = "queued"
+	SessionDetailMessagesSubagentStateStateRunning     SessionDetailMessagesSubagentStateState = "running"
+	SessionDetailMessagesSubagentStateStateStopped     SessionDetailMessagesSubagentStateState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateState enum.
@@ -10536,6 +10705,8 @@ func (e SessionDetailMessagesSubagentStateState) Valid() bool {
 	case SessionDetailMessagesSubagentStateStateCompleted:
 		return true
 	case SessionDetailMessagesSubagentStateStateFailed:
+		return true
+	case SessionDetailMessagesSubagentStateStateInterrupted:
 		return true
 	case SessionDetailMessagesSubagentStateStateNeedsInput:
 		return true
@@ -10826,6 +10997,27 @@ func (e SessionDetailSessionExecution) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailSessionInterruptionReason.
+const (
+	SessionDetailSessionInterruptionReasonReconciliationRequired SessionDetailSessionInterruptionReason = "reconciliation_required"
+	SessionDetailSessionInterruptionReasonRestart                SessionDetailSessionInterruptionReason = "restart"
+	SessionDetailSessionInterruptionReasonToolLimit              SessionDetailSessionInterruptionReason = "tool_limit"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailSessionInterruptionReason enum.
+func (e SessionDetailSessionInterruptionReason) Valid() bool {
+	switch e {
+	case SessionDetailSessionInterruptionReasonReconciliationRequired:
+		return true
+	case SessionDetailSessionInterruptionReasonRestart:
+		return true
+	case SessionDetailSessionInterruptionReasonToolLimit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailSessionLifecycleState.
 const (
 	SessionDetailSessionLifecycleStateDone             SessionDetailSessionLifecycleState = "done"
@@ -10940,6 +11132,24 @@ func (e SessionDetailSessionType) Valid() bool {
 	}
 }
 
+// Defines values for SessionLifecycleRecordInterruptionReason.
+const (
+	SessionLifecycleRecordInterruptionReasonReconciliationRequired SessionLifecycleRecordInterruptionReason = "reconciliation_required"
+	SessionLifecycleRecordInterruptionReasonToolLimit              SessionLifecycleRecordInterruptionReason = "tool_limit"
+)
+
+// Valid indicates whether the value is a known member of the SessionLifecycleRecordInterruptionReason enum.
+func (e SessionLifecycleRecordInterruptionReason) Valid() bool {
+	switch e {
+	case SessionLifecycleRecordInterruptionReasonReconciliationRequired:
+		return true
+	case SessionLifecycleRecordInterruptionReasonToolLimit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionLifecycleRecordOriginKind.
 const (
 	SessionLifecycleRecordOriginKindChannel   SessionLifecycleRecordOriginKind = "channel"
@@ -11005,12 +11215,13 @@ func (e SessionLifecycleRecordOwnerScopeKind) Valid() bool {
 
 // Defines values for SessionLifecycleRecordState.
 const (
-	SessionLifecycleRecordStateCompleted  SessionLifecycleRecordState = "completed"
-	SessionLifecycleRecordStateFailed     SessionLifecycleRecordState = "failed"
-	SessionLifecycleRecordStateNeedsInput SessionLifecycleRecordState = "needs_input"
-	SessionLifecycleRecordStateQueued     SessionLifecycleRecordState = "queued"
-	SessionLifecycleRecordStateRunning    SessionLifecycleRecordState = "running"
-	SessionLifecycleRecordStateStopped    SessionLifecycleRecordState = "stopped"
+	SessionLifecycleRecordStateCompleted   SessionLifecycleRecordState = "completed"
+	SessionLifecycleRecordStateFailed      SessionLifecycleRecordState = "failed"
+	SessionLifecycleRecordStateInterrupted SessionLifecycleRecordState = "interrupted"
+	SessionLifecycleRecordStateNeedsInput  SessionLifecycleRecordState = "needs_input"
+	SessionLifecycleRecordStateQueued      SessionLifecycleRecordState = "queued"
+	SessionLifecycleRecordStateRunning     SessionLifecycleRecordState = "running"
+	SessionLifecycleRecordStateStopped     SessionLifecycleRecordState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the SessionLifecycleRecordState enum.
@@ -11019,6 +11230,8 @@ func (e SessionLifecycleRecordState) Valid() bool {
 	case SessionLifecycleRecordStateCompleted:
 		return true
 	case SessionLifecycleRecordStateFailed:
+		return true
+	case SessionLifecycleRecordStateInterrupted:
 		return true
 	case SessionLifecycleRecordStateNeedsInput:
 		return true
@@ -16705,6 +16918,9 @@ type DelegatePeekActionAction string
 
 // DelegatePeekResponse Response to `delegate` `action: peek` (ADR-053 §5.1). Read-only Agent-View parity snapshot — does not ack, steer, or consume the child's unacked ceiling (m8).
 type DelegatePeekResponse struct {
+	// InterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+	InterruptionReason *DelegatePeekResponseInterruptionReason `json:"interruption_reason,omitempty"`
+
 	// LatestCheckpointSummary The most recent checkpoint summary, if any.
 	LatestCheckpointSummary *string `json:"latest_checkpoint_summary,omitempty"`
 
@@ -16715,11 +16931,14 @@ type DelegatePeekResponse struct {
 	LatestProgressText *string `json:"latest_progress_text,omitempty"`
 	SessionId          string  `json:"session_id"`
 
-	// State `interrupted` is a helper session a gateway restart cut off (a lifecycle `failed` record whose failed_reason is `interrupted`; founder rule 2026-10-06: a session does not fail because of a restart). `failed` is a genuine failure only.
+	// State `interrupted` is an ended incomplete helper execution or a helper a gateway restart cut off. `failed` is a genuine failure only. An ended interrupted generation stays frozen until explicit authorized G+1 continuation.
 	State DelegatePeekResponseState `json:"state"`
 }
 
-// DelegatePeekResponseState `interrupted` is a helper session a gateway restart cut off (a lifecycle `failed` record whose failed_reason is `interrupted`; founder rule 2026-10-06: a session does not fail because of a restart). `failed` is a genuine failure only.
+// DelegatePeekResponseInterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+type DelegatePeekResponseInterruptionReason string
+
+// DelegatePeekResponseState `interrupted` is an ended incomplete helper execution or a helper a gateway restart cut off. `failed` is a genuine failure only. An ended interrupted generation stays frozen until explicit authorized G+1 continuation.
 type DelegatePeekResponseState string
 
 // DelegateRedirectAction `delegate` tool call, `action: redirect` (ADR-20260928 D2, retained by ADR-20260929 ruling 8; ADR-20261004 locked decision 3). Replaces the helper's current turn with the new instruction: the running turn is stopped (single session — never a cascade; descendants keep going) and the replacement turn runs with `text`. On an already-stopped helper it resumes it with the instruction; on a done/failed helper it starts nothing — use `resume`.
@@ -17367,6 +17586,9 @@ type DelegateSessionResponse struct {
 	// Generation The generation this response corresponds to.
 	Generation int `json:"generation"`
 
+	// InterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+	InterruptionReason *DelegateSessionResponseInterruptionReason `json:"interruption_reason,omitempty"`
+
 	// Is3p True when this session dispatches via an external CLI runner. Taken from the classification persisted at launch, not re-read from a mutable registry.
 	Is3p bool `json:"is_3p"`
 
@@ -17382,6 +17604,9 @@ type DelegateSessionResponse struct {
 	// State The newly-spawned/resumed session's initial lifecycle state.
 	State DelegateSessionResponseState `json:"state"`
 }
+
+// DelegateSessionResponseInterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+type DelegateSessionResponseInterruptionReason string
 
 // DelegateSessionResponseState The newly-spawned/resumed session's initial lifecycle state.
 type DelegateSessionResponseState string
@@ -17414,7 +17639,7 @@ type DelegateStatusResponse struct {
 		Text      *string    `json:"text,omitempty"`
 	} `json:"last_progress,omitempty"`
 
-	// Session The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+	// Session The durable, per-entity-JSONL 7-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/`interrupted`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
 	Session struct {
 		// AgentId The agent running this session.
 		AgentId string `json:"agent_id"`
@@ -17430,6 +17655,9 @@ type DelegateStatusResponse struct {
 
 		// GoalRef The goal-id this session is servicing, when it is goal-bearing.
 		GoalRef *string `json:"goal_ref,omitempty"`
+
+		// InterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+		InterruptionReason *DelegateStatusResponseSessionInterruptionReason `json:"interruption_reason,omitempty"`
 
 		// Is3p True when this session dispatches via an external CLI runner (subagent_3p: claude-code/codex/opencode) rather than natively. 3P sessions never advertise `question`/`needs_input`/warm-resume (D5).
 		Is3p bool `json:"is_3p"`
@@ -17476,7 +17704,7 @@ type DelegateStatusResponse struct {
 		// SessionId Unique durable session identifier.
 		SessionId string `json:"session_id"`
 
-		// State The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+		// State The durable 7-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 		State DelegateStatusResponseSessionState `json:"state"`
 
 		// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
@@ -17525,7 +17753,7 @@ type DelegateStatusResponse struct {
 			Generation int `json:"generation"`
 		} `json:"stop,omitempty"`
 
-		// Terminal Server-derived: true iff `state` is one of `completed`/`failed`.
+		// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/`interrupted`. Interrupted freezes the ended generation; explicit continuation creates G+1.
 		Terminal *bool `json:"terminal,omitempty"`
 
 		// UndeliveredMessageIds `message_id`s not yet delivered/acked at the time of the last persist — carried forward across a boot-sweep `failed(interrupted)` transition so the reason is inspectable.
@@ -17542,13 +17770,16 @@ type DelegateStatusResponse struct {
 	UnackedCount int `json:"unacked_count"`
 }
 
+// DelegateStatusResponseSessionInterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+type DelegateStatusResponseSessionInterruptionReason string
+
 // DelegateStatusResponseSessionOriginKind The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
 type DelegateStatusResponseSessionOriginKind string
 
 // DelegateStatusResponseSessionOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type DelegateStatusResponseSessionOwnerScopeKind string
 
-// DelegateStatusResponseSessionState The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+// DelegateStatusResponseSessionState The durable 7-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type DelegateStatusResponseSessionState string
 
 // DelegateStatusResponseSessionSteeredByAuthorizationMode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
@@ -21272,6 +21503,9 @@ type Message struct {
 		State     MessageInputDispositionState  `json:"state"`
 	} `json:"input_disposition,omitempty"`
 
+	// InterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+	InterruptionReason *MessageInterruptionReason `json:"interruption_reason,omitempty"`
+
 	// MessagesCompacted Number of messages compacted (present only on compaction entries).
 	MessagesCompacted *int `json:"messages_compacted,omitempty"`
 
@@ -21359,7 +21593,7 @@ type Message struct {
 		// ParentCallId The spawn ToolCall.ID that triggered this sub-turn.
 		ParentCallId *string `json:"parent_call_id,omitempty"`
 
-		// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+		// Reason When status is "interrupted": the parent interruption or the engine-owned tool-limit/reconciliation cause. Interrupted is incomplete, not success or Failed.
 		Reason *MessageSubagentEndReason `json:"reason,omitempty"`
 
 		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
@@ -21486,6 +21720,9 @@ type Message struct {
 
 		// CreatedAt RFC3339 timestamp this state ping was emitted.
 		CreatedAt time.Time `json:"created_at"`
+
+		// InterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+		InterruptionReason *MessageSubagentStateInterruptionReason `json:"interruption_reason,omitempty"`
 
 		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
@@ -21650,6 +21887,9 @@ type MessageInputDispositionReason string
 // MessageInputDispositionState defines model for Message.InputDisposition.State.
 type MessageInputDispositionState string
 
+// MessageInterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+type MessageInterruptionReason string
+
 // MessageParticipantKind defines model for Message.Participant.Kind.
 type MessageParticipantKind string
 
@@ -21665,7 +21905,7 @@ type MessageRoomRefRole string
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
 
-// MessageSubagentEndReason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+// MessageSubagentEndReason When status is "interrupted": the parent interruption or the engine-owned tool-limit/reconciliation cause. Interrupted is incomplete, not success or Failed.
 type MessageSubagentEndReason string
 
 // MessageSubagentEndStatus Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
@@ -21688,6 +21928,9 @@ type MessageSubagentStateControlReceiptState string
 
 // MessageSubagentStateControlReceiptVerb Which control this receipt reports on.
 type MessageSubagentStateControlReceiptVerb string
+
+// MessageSubagentStateInterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+type MessageSubagentStateInterruptionReason string
 
 // MessageSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
 type MessageSubagentStateState string
@@ -24842,10 +25085,13 @@ type Session struct {
 	// Id Unique session identifier. A main session's id is the server-computed main session id (format decided later). Other sessions keep their existing ids.
 	Id string `json:"id"`
 
+	// InterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+	InterruptionReason *SessionInterruptionReason `json:"interruption_reason,omitempty"`
+
 	// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 	LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
-	// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+	// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 7-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A durable `interrupted` record maps to `interrupted` and exposes no execution. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 	LifecycleState *SessionLifecycleState `json:"lifecycle_state,omitempty"`
 
 	// Model LLM model name used in this session (may be empty for legacy sessions).
@@ -24941,7 +25187,7 @@ type Session struct {
 		UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 	} `json:"stats"`
 
-	// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
+	// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is an ended incomplete execution (tool limit or required file-effect reconciliation), or a turn cut off by a gateway restart; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 	Status SessionStatus `json:"status"`
 
 	// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
@@ -24981,10 +25227,13 @@ type Session struct {
 // SessionExecution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
 type SessionExecution string
 
-// SessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+// SessionInterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+type SessionInterruptionReason string
+
+// SessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 7-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A durable `interrupted` record maps to `interrupted` and exposes no execution. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 type SessionLifecycleState string
 
-// SessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
+// SessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is an ended incomplete execution (tool limit or required file-effect reconciliation), or a turn cut off by a gateway restart; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 type SessionStatus string
 
 // SessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
@@ -25121,6 +25370,9 @@ type SessionDetail struct {
 			State     SessionDetailMessagesInputDispositionState  `json:"state"`
 		} `json:"input_disposition,omitempty"`
 
+		// InterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+		InterruptionReason *SessionDetailMessagesInterruptionReason `json:"interruption_reason,omitempty"`
+
 		// MessagesCompacted Number of messages compacted (present only on compaction entries).
 		MessagesCompacted *int `json:"messages_compacted,omitempty"`
 
@@ -25208,7 +25460,7 @@ type SessionDetail struct {
 			// ParentCallId The spawn ToolCall.ID that triggered this sub-turn.
 			ParentCallId *string `json:"parent_call_id,omitempty"`
 
-			// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+			// Reason When status is "interrupted": the parent interruption or the engine-owned tool-limit/reconciliation cause. Interrupted is incomplete, not success or Failed.
 			Reason *SessionDetailMessagesSubagentEndReason `json:"reason,omitempty"`
 
 			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
@@ -25335,6 +25587,9 @@ type SessionDetail struct {
 
 			// CreatedAt RFC3339 timestamp this state ping was emitted.
 			CreatedAt time.Time `json:"created_at"`
+
+			// InterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+			InterruptionReason *SessionDetailMessagesSubagentStateInterruptionReason `json:"interruption_reason,omitempty"`
 
 			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
 			Seq *int64 `json:"seq,omitempty"`
@@ -25507,10 +25762,13 @@ type SessionDetail struct {
 		// Id Unique session identifier. A main session's id is the server-computed main session id (format decided later). Other sessions keep their existing ids.
 		Id string `json:"id"`
 
+		// InterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+		InterruptionReason *SessionDetailSessionInterruptionReason `json:"interruption_reason,omitempty"`
+
 		// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 		LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
-		// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+		// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 7-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A durable `interrupted` record maps to `interrupted` and exposes no execution. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 		LifecycleState *SessionDetailSessionLifecycleState `json:"lifecycle_state,omitempty"`
 
 		// Model LLM model name used in this session (may be empty for legacy sessions).
@@ -25606,7 +25864,7 @@ type SessionDetail struct {
 			UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 		} `json:"stats"`
 
-		// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
+		// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is an ended incomplete execution (tool limit or required file-effect reconciliation), or a turn cut off by a gateway restart; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 		Status SessionDetailSessionStatus `json:"status"`
 
 		// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
@@ -25665,6 +25923,9 @@ type SessionDetailMessagesInputDispositionReason string
 // SessionDetailMessagesInputDispositionState defines model for SessionDetail.Messages.InputDisposition.State.
 type SessionDetailMessagesInputDispositionState string
 
+// SessionDetailMessagesInterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+type SessionDetailMessagesInterruptionReason string
+
 // SessionDetailMessagesParticipantKind defines model for SessionDetail.Messages.Participant.Kind.
 type SessionDetailMessagesParticipantKind string
 
@@ -25680,7 +25941,7 @@ type SessionDetailMessagesRoomRefRole string
 // SessionDetailMessagesStatus Completion status of this message turn.
 type SessionDetailMessagesStatus string
 
-// SessionDetailMessagesSubagentEndReason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+// SessionDetailMessagesSubagentEndReason When status is "interrupted": the parent interruption or the engine-owned tool-limit/reconciliation cause. Interrupted is incomplete, not success or Failed.
 type SessionDetailMessagesSubagentEndReason string
 
 // SessionDetailMessagesSubagentEndStatus Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
@@ -25703,6 +25964,9 @@ type SessionDetailMessagesSubagentStateControlReceiptState string
 
 // SessionDetailMessagesSubagentStateControlReceiptVerb Which control this receipt reports on.
 type SessionDetailMessagesSubagentStateControlReceiptVerb string
+
+// SessionDetailMessagesSubagentStateInterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+type SessionDetailMessagesSubagentStateInterruptionReason string
 
 // SessionDetailMessagesSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
 type SessionDetailMessagesSubagentStateState string
@@ -25740,10 +26004,13 @@ type SessionDetailMessagesViewMembership string
 // SessionDetailSessionExecution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
 type SessionDetailSessionExecution string
 
-// SessionDetailSessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+// SessionDetailSessionInterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+type SessionDetailSessionInterruptionReason string
+
+// SessionDetailSessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 7-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A durable `interrupted` record maps to `interrupted` and exposes no execution. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 type SessionDetailSessionLifecycleState string
 
-// SessionDetailSessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
+// SessionDetailSessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is an ended incomplete execution (tool limit or required file-effect reconciliation), or a turn cut off by a gateway restart; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 type SessionDetailSessionStatus string
 
 // SessionDetailSessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
@@ -25752,7 +26019,7 @@ type SessionDetailSessionStopNoteCause string
 // SessionDetailSessionType Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
 type SessionDetailSessionType string
 
-// SessionLifecycleRecord The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+// SessionLifecycleRecord The durable, per-entity-JSONL 7-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/`interrupted`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
 type SessionLifecycleRecord struct {
 	// AgentId The agent running this session.
 	AgentId string `json:"agent_id"`
@@ -25768,6 +26035,9 @@ type SessionLifecycleRecord struct {
 
 	// GoalRef The goal-id this session is servicing, when it is goal-bearing.
 	GoalRef *string `json:"goal_ref,omitempty"`
+
+	// InterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+	InterruptionReason *SessionLifecycleRecordInterruptionReason `json:"interruption_reason,omitempty"`
 
 	// Is3p True when this session dispatches via an external CLI runner (subagent_3p: claude-code/codex/opencode) rather than natively. 3P sessions never advertise `question`/`needs_input`/warm-resume (D5).
 	Is3p bool `json:"is_3p"`
@@ -25814,7 +26084,7 @@ type SessionLifecycleRecord struct {
 	// SessionId Unique durable session identifier.
 	SessionId string `json:"session_id"`
 
-	// State The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+	// State The durable 7-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 	State SessionLifecycleRecordState `json:"state"`
 
 	// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
@@ -25863,7 +26133,7 @@ type SessionLifecycleRecord struct {
 		Generation int `json:"generation"`
 	} `json:"stop,omitempty"`
 
-	// Terminal Server-derived: true iff `state` is one of `completed`/`failed`.
+	// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/`interrupted`. Interrupted freezes the ended generation; explicit continuation creates G+1.
 	Terminal *bool `json:"terminal,omitempty"`
 
 	// UndeliveredMessageIds `message_id`s not yet delivered/acked at the time of the last persist — carried forward across a boot-sweep `failed(interrupted)` transition so the reason is inspectable.
@@ -25876,13 +26146,16 @@ type SessionLifecycleRecord struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
+// SessionLifecycleRecordInterruptionReason Server-produced cause of the current interruption. Omitted rather than null. Required for a newly recorded interrupted outcome; absent on other outcomes.
+type SessionLifecycleRecordInterruptionReason string
+
 // SessionLifecycleRecordOriginKind The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
 type SessionLifecycleRecordOriginKind string
 
 // SessionLifecycleRecordOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type SessionLifecycleRecordOwnerScopeKind string
 
-// SessionLifecycleRecordState The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+// SessionLifecycleRecordState The durable 7-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type SessionLifecycleRecordState string
 
 // SessionLifecycleRecordSteeredByAuthorizationMode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
