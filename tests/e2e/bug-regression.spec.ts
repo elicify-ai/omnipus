@@ -396,7 +396,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
 
       // The replayed message must have the same content as before navigation.
       const replayedText = await assistantMessages(page).first().textContent()
-      if (firstMessageText && replayedText && firstMessageText !== replayedText) {
+      if (firstMessageText !== replayedText) {
         throw new Error(
           `BUG-5: Replayed message content differs from original. ` +
           `Before: "${firstMessageText}" | After replay: "${replayedText}". ` +

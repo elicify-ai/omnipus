@@ -93,7 +93,7 @@ func testProgressNoticeJSONNotWire(t *testing.T) {
 	}
 
 	var roundTrip bus.OutboundMessage
-	if err := json.Unmarshal(flaggedJSON, &roundTrip); err != nil {
+	if err = json.Unmarshal(flaggedJSON, &roundTrip); err != nil {
 		t.Fatalf("unmarshal flagged envelope: %v", err)
 	}
 	if roundTrip.ProgressNotice {
@@ -105,7 +105,7 @@ func testProgressNoticeJSONNotWire(t *testing.T) {
 	}
 
 	var wire map[string]any
-	if err := json.Unmarshal(plainJSON, &wire); err != nil {
+	if err = json.Unmarshal(plainJSON, &wire); err != nil {
 		t.Fatalf("unmarshal envelope object: %v", err)
 	}
 	wire["progress_notice"] = true
@@ -949,24 +949,6 @@ func retryStopStageOK(stage string) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func retryStopCancelAck(sessionID string) retryStopMatch {
-	return func(frames [][]byte) ([]byte, bool) {
-		for _, raw := range frames {
-			if retryStopFrameType(raw) != string(generated.WsFrameTypeCancelStage) {
-				continue
-			}
-			var frame generated.CancelStageFrame
-			if json.Unmarshal(raw, &frame) != nil {
-				continue
-			}
-			if frame.SessionId == sessionID && retryStopStageOK(frame.Stage) {
-				return raw, true
-			}
-		}
-		return nil, false
 	}
 }
 
