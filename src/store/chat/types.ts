@@ -7,6 +7,8 @@ import type {
   LoopStatusFrame,
   AskUserQuestionCard,
   AskUserAnswerFrame,
+  DoneStats,
+  SubagentEndFrame,
   SubagentStateFrame,
   MessageFrame,
   CancelFrame,
@@ -89,16 +91,22 @@ interface SubagentSpanBase {
   statusLine?: string
   /**
    * ADR-091 D7/FR-E-004: the last `subagent_state.state` reduced onto this
-   * span — the eight-value lifecycle domain (`queued`, `running`,
-   * `needs_input`, `paused`, `completed`, `failed`, `cancelled`,
-   * `timed_out`), distinct from this span's own running/terminal `status`
-   * (which is driven by `subagent_start`/`subagent_end`, the PARENT's own
-   * lifecycle events about the child — D7). The side panel row reads this
-   * to show "queued" while the span itself is still `status: 'running'`
-   * (a queued launch emits `subagent_start` immediately, before the child
-   * actually starts executing — I-4).
+   * span — the lifecycle domain (`queued`, `running`, `needs_input`,
+   * `stopped`, `completed`, `failed`, `interrupted`), distinct from this
+   * span's own running/terminal `status` (which is driven by
+   * `subagent_start`/`subagent_end`, the PARENT's own lifecycle events
+   * about the child — D7). The side panel row reads this to show "queued"
+   * while the span itself is still `status: 'running'` (a queued launch
+   * emits `subagent_start` immediately, before the child actually starts
+   * executing — I-4). `interrupted` is an ended execution: no spinner.
    */
   lifecycleState?: SubagentStateFrame['state']
+  /**
+   * Server cause for `lifecycleState === 'interrupted'`, or the end frame's
+   * reason when that frame arrived first. Omitted once a later state is not
+   * interrupted. Activity shows it in the existing reason tooltip.
+   */
+  interruptionReason?: NonNullable<SubagentEndFrame['reason']>
   /**
    * Sticky. True once a runnable `subagent_state` (`running`, `needs_input`,
    * `paused`, or `completed`) has been reduced onto this span. Never cleared
@@ -142,8 +150,8 @@ export interface SubagentSpanTerminal extends SubagentSpanBase {
   status: 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout' | 'parked'
   durationMs: number
   finalResult?: string
-  /** Reason populated when status is 'interrupted'. */
-  reason?: 'parent_timeout' | 'parent_cancelled' | 'parent_done_early' | 'unknown'
+  /** Reason populated when status is 'interrupted'. Generated end-frame enum. */
+  reason?: SubagentEndFrame['reason']
 }
 
 export type SubagentSpan = SubagentSpanRunning | SubagentSpanTerminal
@@ -548,6 +556,24 @@ export interface SessionChatState {
    * components/chat/useRestartInterrupted.ts.
    */
   restartNoticeDismissed?: boolean
+  /**
+   * `updated_at` of the interruption that dismissed the notice. A later
+   * interrupted `updated_at` re-arms it, including a second ceiling whose
+   * list read never passed through another lifecycle value.
+   */
+  restartNoticeDismissedAt?: string
+  /**
+   * Live `done` stats named an ended interruption before the session list
+   * refetch landed. `listVersion` is the sessions-query update count at
+   * record time, so a refetch that is still the previous lifecycle cannot
+   * clear it. Cleared when the user continues, or when a settled list read
+   * after that version is not `interrupted`.
+   */
+  endedInterruption?: {
+    reason: NonNullable<DoneStats['interruption_reason']>
+    turnId?: string
+    listVersion: number
+  }
   /** Narrow recovery flag: unknown_position alone does not mean interrupted. */
   recoveredFirstSend?: { clientMessageId: string; attemptGeneration: number; reconciled: boolean }
   sessionTokens: number
@@ -655,7 +681,7 @@ export interface SessionChatState {
    * message-only update and a later state-only update for the SAME span_id
    * both survive to be applied together.
    */
-  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string; hasRun?: boolean; notDelivered?: { text?: string; at: string } }>
+  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; interruptionReason?: SubagentStateFrame['interruption_reason']; lastUpdateAt?: string; hasRun?: boolean; notDelivered?: { text?: string; at: string } }>
   /**
    * Session-scoped record of every replay_message id that has EVER been
    * merged (via the `replay_message` same-turn/same-agent coalesce branch)

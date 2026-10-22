@@ -10,6 +10,7 @@ import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
 import { invalidateAfterAgentCreate, tasksQueryKeys } from '@/lib/api'
 import type {
+  DoneStats,
   SubagentStartFrame,
   SubagentEndFrame,
   SubagentMessageFrame,
@@ -63,6 +64,43 @@ function refreshSessionListForFrame(frameType: string, bucketReplaying: boolean)
   if (!SESSION_LIST_REFRESH_FRAMES.has(frameType)) return
   if (bucketReplaying && REPLAY_DEFERRED_REFRESH_FRAMES.has(frameType)) return
   void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+}
+
+/**
+ * Closes the turn's own `done` (not the replay terminator). Records an
+ * ended interruption from generated `DoneStats.interruption_reason` before
+ * the session list refetch, and clears the turn. Extracted so handleFrame's
+ * grandfathered budget does not grow.
+ */
+function closeFinishedTurn(
+  draft: SessionChatState,
+  sid: string,
+  stats: DoneStats | undefined,
+  turnId: string | undefined,
+  clearReplayingNow: boolean,
+): void {
+  const tokenDelta = stats?.tokens ?? 0
+  const costDelta = stats?.cost ?? 0
+  draft.isStreaming = false
+  draft.sessionTokens = draft.sessionTokens + tokenDelta
+  draft.sessionCost = draft.sessionCost + costDelta
+  draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
+  draft.cancelStage = null
+  if (stats?.interruption_reason) {
+    draft.endedInterruption = {
+      reason: stats.interruption_reason,
+      turnId,
+      listVersion: queryClient.getQueryState(['sessions'])?.dataUpdateCount ?? 0,
+    }
+    draft.restartNoticeDismissed = false
+  }
+  // The announced turn is finalized: record its id as finished BEFORE
+  // clearing, so a stale session_state.active_turn that re-announces this
+  // same turn_id is ignored. Then clear the turn so a later replay
+  // terminator cannot mistake a stale id for a still-open turn.
+  markTurnFinished(sid, draft.activeTurnId)
+  endTurnState(draft)
+  if (clearReplayingNow) draft.isReplaying = false
 }
 
 type FrameSlice = Pick<ChatStore, 'handleFrame'>
@@ -505,10 +543,13 @@ function spanWithLifecycle(
   span: SubagentSpan,
   state: NonNullable<SubagentSpan['lifecycleState']>,
   createdAt: string,
+  interruptionReason?: SubagentSpan['interruptionReason'],
 ): SubagentSpan {
   const hasRun = stickyHasRun(span.hasRun, state)
-  if (hasRun) return { ...span, lifecycleState: state, lastUpdateAt: createdAt, hasRun }
-  return { ...span, lifecycleState: state, lastUpdateAt: createdAt }
+  const reason = state === 'interrupted' ? (interruptionReason ?? span.interruptionReason) : undefined
+  const next: SubagentSpan = { ...span, lifecycleState: state, lastUpdateAt: createdAt, interruptionReason: reason }
+  if (hasRun) return { ...next, hasRun }
+  return next
 }
 
 /** Omit hasRun when unset so a merge cannot clobber a sticky true with undefined. */
@@ -516,10 +557,12 @@ function pendingLifecyclePatch(
   previous: PendingSpanUpdate | undefined,
   state: NonNullable<SubagentSpan['lifecycleState']>,
   createdAt: string,
+  interruptionReason?: PendingSpanUpdate['interruptionReason'],
 ): PendingSpanUpdate {
   const hasRun = stickyHasRun(previous?.hasRun, state)
-  if (hasRun) return { lifecycleState: state, lastUpdateAt: createdAt, hasRun }
-  return { lifecycleState: state, lastUpdateAt: createdAt }
+  const reason = state === 'interrupted' ? interruptionReason : undefined
+  if (hasRun) return { lifecycleState: state, lastUpdateAt: createdAt, hasRun, interruptionReason: reason }
+  return { lifecycleState: state, lastUpdateAt: createdAt, interruptionReason: reason }
 }
 
 // #823 catch-up redesign, Opus review round 2 (BE-DESIGN.md §6.3, "Turn-keyed
@@ -1694,33 +1737,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   draft.textAtToolCallStart = {}
                   draft.toolCallOwnerMessageId = {}
                 }
-                const tokenDelta = frame.stats?.tokens ?? 0
-                const costDelta = frame.stats?.cost ?? 0
-                draft.isStreaming = false
-                draft.sessionTokens = draft.sessionTokens + tokenDelta
-                draft.sessionCost = draft.sessionCost + costDelta
-                draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
-                draft.cancelStage = null
-                // ADR-082 D4 (FR-009 "finalize once"), review S1/S2: this is
-                // the turn's OWN done — the isReplayTerminatorDone branch
-                // above always `break`s before reaching here, so every path
-                // that gets here carries real turn stats (or is the
-                // stats-less outbound-publish fallback done, which is also
-                // always a real turn's own completion — see
-                // pkg/gateway/webchat_channel.go). The announced turn, if
-                // any, is now finalized: record its id as finished BEFORE
-                // clearing so a stale/racing session_state.active_turn that
-                // re-announces this same turn_id later (S2) is recognized
-                // and ignored rather than re-opening streaming state with no
-                // second done ever coming to close it. Then clear
-                // activeTurnId/activeTurnAgentId so a later, unrelated
-                // replay-terminating done for this session never mistakes a
-                // stale id for a still-open turn.
-                markTurnFinished(sid, draft.activeTurnId)
-                endTurnState(draft)
-                if (clearReplayingNow) {
-                  draft.isReplaying = false
-                }
+                closeFinishedTurn(draft, sid, frame.stats, frame.turn_id, clearReplayingNow)
               }) as Partial<SessionChatState>
             })
             // FR-030/031 (U10b): settle what this turn means for the /clear
@@ -2278,7 +2295,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 agentId: sf.agent_id,
                 childSessionId: sf.child_session_id,
                 statusLine: pendingUpdate?.statusLine,
-                lifecycleState: pendingUpdate?.lifecycleState, hasRun: pendingUpdate?.hasRun,
+                lifecycleState: pendingUpdate?.lifecycleState, hasRun: pendingUpdate?.hasRun, interruptionReason: pendingUpdate?.lifecycleState === 'interrupted' ? pendingUpdate.interruptionReason : undefined,
                 notDelivered: pendingUpdate?.notDelivered,
                 // Seeds the status line's "last update N s ago" fallback
                 // (D7 table) from the moment the span itself appears — a
@@ -2329,12 +2346,12 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   // subagent_start already stamped.
                   childSessionId: existingSpan.childSessionId,
                   statusLine: existingSpan.statusLine,
-                  lifecycleState: existingSpan.lifecycleState, hasRun: existingSpan.hasRun,
+                  lifecycleState: ef.reason === 'tool_limit' || ef.reason === 'reconciliation_required' ? 'interrupted' : existingSpan.lifecycleState, hasRun: existingSpan.hasRun,
                   lastUpdateAt: new Date().toISOString(),
                   status: ef.status,
                   durationMs: ef.duration_ms ?? 0,
                   finalResult: ef.final_result,
-                  reason: ef.reason,
+                  reason: ef.reason, interruptionReason: ef.reason === 'tool_limit' || ef.reason === 'reconciliation_required' ? ef.reason : existingSpan.interruptionReason,
                 }
               }
 
@@ -2449,7 +2466,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
               function applyToSpan(span: SubagentSpan): SubagentSpan {
-                return spanWithLifecycle(span, sf2.state, sf2.created_at)
+                return spanWithLifecycle(span, sf2.state, sf2.created_at, sf2.interruption_reason)
               }
 
               const indexEntry = draft.spanBySpanId?.[sf2.span_id]
@@ -2478,7 +2495,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               draft.pendingSpanUpdatesBySpanId = recordPendingSpanUpdate(
                 draft.pendingSpanUpdatesBySpanId,
                 sf2.span_id,
-                pendingLifecyclePatch(draft.pendingSpanUpdatesBySpanId?.[sf2.span_id], sf2.state, sf2.created_at),
+                pendingLifecyclePatch(draft.pendingSpanUpdatesBySpanId?.[sf2.span_id], sf2.state, sf2.created_at, sf2.interruption_reason),
               )
             }) as Partial<SessionChatState>
           })

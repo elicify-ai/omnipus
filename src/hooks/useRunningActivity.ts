@@ -608,6 +608,7 @@ function activityStatusForSpan(span: SubagentSpan): ActivityStatus {
     case 'stopped': return 'parked'
     case 'completed': return 'success'
     case 'failed': return 'error'
+    case 'interrupted': return 'interrupted'
     default: return 'parked'
   }
 }
@@ -710,7 +711,7 @@ export function useRunningActivity(): RunningActivity {
       status,
       durationMs,
       finalResult: terminal?.finalResult,
-      interruptReason: terminal?.reason,
+      interruptReason: terminal?.reason ?? span.interruptionReason,
       statusLine: span.statusLine,
       lifecycleState: span.lifecycleState,
       childSessionId: span.childSessionId,

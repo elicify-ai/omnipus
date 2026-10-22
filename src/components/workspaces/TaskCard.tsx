@@ -12,6 +12,7 @@ import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { TaskDetailsPopover } from './WorkItemDetails'
 import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
+import { TaskSessionInterrupted, useTaskSessionInterruption } from './taskSessionInterruption'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 
@@ -43,7 +44,8 @@ interface TaskCardProps {
 
 export function TaskCard({ task, plans = [], agents = [], altitude = 'top-level', onClick, onChildClick, drag, showActions = true, showDetails = true }: TaskCardProps) {
   const priority = task.priority ?? 3
-  const running = task.status === 'in_progress'
+  const sessionInterruption = useTaskSessionInterruption(task.status === 'in_progress' ? task.session_id : undefined)
+  const running = task.status === 'in_progress' && sessionInterruption == null
   const queue = useToolApprovalStore((state) => state.queue)
   const approval = taskAwaitingApproval(task, queue)
   const showsExecutionTime = running || task.status === 'done' || task.status === 'failed'
@@ -101,8 +103,9 @@ export function TaskCard({ task, plans = [], agents = [], altitude = 'top-level'
           between values, never stranded at a line edge. Full name is in info. */}
       <div data-testid="task-execution-row" className="flex min-w-0 items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         {agentName && <span className="min-w-0 flex-1 truncate">{agentName}</span>}
+        {sessionInterruption && <>{agentName && <span aria-hidden="true" className="shrink-0">·</span>}<TaskSessionInterrupted reason={sessionInterruption.reason} /></>}
         {running && <>{agentName && <span aria-hidden="true" className="shrink-0">·</span>}<RunningIndicator className="shrink-0" /></>}
-        {showsExecutionTime && <TaskElapsedTime key={task.started_at ?? 'execution'} task={task} live={showDetails} separator={Boolean(agentName) && !running} />}
+        {showsExecutionTime && !sessionInterruption && <TaskElapsedTime key={task.started_at ?? 'execution'} task={task} live={showDetails} separator={Boolean(agentName) && !running} />}
       </div>
       {todos.length > 0 && <div data-testid="task-checklist-row" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         <CheckSquare size={11} aria-hidden="true" /><span>{doneTodos}/{todos.length}</span>

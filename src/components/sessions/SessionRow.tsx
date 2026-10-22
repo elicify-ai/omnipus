@@ -14,6 +14,7 @@ import { formatTokens } from '@/lib/formatTokens'
 import { cn } from '@/lib/utils'
 import { isMainSession } from '@/lib/nav/sessionCoreSeam'
 import { sessionDisplayTitle } from '@/lib/nav/sessionDisplayTitle'
+import { interruptionReasonText } from '@/lib/subagentStatus'
 import { backgroundCommandSentence, sessionKindLabel, sessionStatusLabel, type SessionStatusTone } from './sessionLabels'
 
 const COARSE_TARGET =
@@ -128,6 +129,9 @@ export function SessionRow({ session, isActive, isHighlighted, onSelect, onRenam
   }
 
   const status = sessionStatusLabel(session)
+  const interruptionDetail = session.lifecycle_state === 'interrupted'
+    ? interruptionReasonText(session.interruption_reason)
+    : ''
   const kind = sessionKindLabel(session.type)
   const background = backgroundCommandSentence(session.background_command_count)
 
@@ -152,7 +156,7 @@ export function SessionRow({ session, isActive, isHighlighted, onSelect, onRenam
           )}
         </div>
         <div data-testid={`session-metadata-${session.id}`} className="mt-[var(--space-0-5)] w-full flex flex-wrap items-center gap-x-[var(--space-1)] gap-y-[var(--space-0-5)] whitespace-normal text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-          <Badge variant={TONE_VARIANT[status.tone]} data-testid={`session-status-${session.id}`}>{status.text}</Badge>
+          <Badge variant={TONE_VARIANT[status.tone]} data-testid={`session-status-${session.id}`} title={interruptionDetail ? `Interrupted: ${interruptionDetail}` : undefined}>{status.text}</Badge>
           <Badge variant="outline" data-testid={`session-kind-${session.id}`}>{kind}</Badge>
           <span>Started {formatRelative(session.created_at) || '—'}</span>
           <span aria-hidden>·</span>

@@ -181,7 +181,7 @@ function ActivityRow({
       ? "Couldn't refresh this run. It may already have finished."
       : pendingApproval
       ? `awaiting approval: ${pendingApproval.toolName}`
-      : (rawStatusLine ?? fallbackStatusLine)
+      : (rawStatusLine ?? (lifecycleState === 'interrupted' ? undefined : fallbackStatusLine))
 
   // ADR-049 D2/D4/US-13: a judge row is ALWAYS expandable — it has no step
   // detail at all (there is no live "judge started" frame, only the
@@ -223,7 +223,7 @@ function ActivityRow({
           {config.label}
           {/* W1-9, carried via Fix 2: interrupt reason appended to the
               status text, matching SubagentBlock's own inline treatment. */}
-          {item.status === 'interrupted' && interruptReason && (
+          {(item.status === 'interrupted' || lifecycleState === 'interrupted') && interruptReason && (
             <span
               className="font-body"
               title={`Interrupted: ${formatInterruptReason(interruptReason)}`}

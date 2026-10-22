@@ -16,6 +16,7 @@ import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_ORDER, statusLabel, taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
+import { TaskSessionInterrupted, useTaskSessionInterruption } from './taskSessionInterruption'
 import { isScheduledTrigger } from './taskFormFields'
 import type { Task, Agent, Plan } from '@/lib/api'
 import { TaskDetailsPopover } from './WorkItemDetails'
@@ -451,7 +452,8 @@ function TaskRow({ task, agents, plans, onClick }: { task: Task; agents: AgentRe
   const agentName = resolveAgentName(task, agents)
   // FR-022 (SP-41) + founder PI3: a running task's row shows THE catalogued
   // running indicator — animated spinner only, no token count.
-  const running = task.status === 'in_progress'
+  const sessionInterruption = useTaskSessionInterruption(task.status === 'in_progress' ? task.session_id : undefined)
+  const running = task.status === 'in_progress' && sessionInterruption == null
 
   return (
     // The row is mouse-clickable for whole-row convenience; the REAL keyboard/AT
@@ -489,7 +491,7 @@ function TaskRow({ task, agents, plans, onClick }: { task: Task; agents: AgentRe
             (orange), distinct from a genuine "Failed" (red), via the shared
             taskDisplayColor/taskDisplayLabel helpers (statusColors.ts). */}
         <div className="flex items-center gap-[var(--space-1)]">
-          {running ? <RunningIndicator /> : <span aria-hidden="true" style={{ color: taskDisplayColor(task) }}>●</span>}
+          {running ? <RunningIndicator /> : sessionInterruption ? <TaskSessionInterrupted reason={sessionInterruption.reason} /> : <span aria-hidden="true" style={{ color: taskDisplayColor(task) }}>●</span>}
           <span className="text-[length:var(--type-utility-xs-size)] font-medium" style={{ color: taskDisplayColor(task) }}>
             {taskDisplayLabel(task)}
           </span>
