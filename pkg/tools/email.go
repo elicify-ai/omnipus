@@ -108,6 +108,20 @@ func gateMailDial[T any](ctx context.Context, budget *email.MailBudget, agentID,
 	}, dial)
 }
 
+// gateMailMutation keeps a write on the budget's existing synchronous path.
+// Unlike shared read flights, an active mutation must settle before its caller
+// releases destination resources or reports the actual outcome.
+func gateMailMutation[T any](ctx context.Context, budget *email.MailBudget, agentID, op string, tp email.Transport, params map[string]any, dial func(context.Context) (T, error)) (T, error) {
+	if budget == nil {
+		return dial(ctx)
+	}
+	return email.CallValue(budget, ctx, email.MailBudgetRequest{
+		Account: mailAccountKeyOf(tp), AgentID: agentID,
+		WorkspaceID: ToolWorkspaceID(ctx), Operation: op, Params: params,
+		Retry: false, Purpose: "mutation",
+	}, dial)
+}
+
 // --- read_inbox ---
 
 // ReadInboxTool lists recent inbox messages (envelope only).

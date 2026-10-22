@@ -77,7 +77,7 @@ func NewAgentGetToolsTool(d *Deps) *AgentGetToolsTool { return &AgentGetToolsToo
 func (t *AgentGetToolsTool) Name() string             { return "get_agent_tools" }
 func (t *AgentGetToolsTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *AgentGetToolsTool) Description() string {
-	return "List all tools for an existing agent or a new-agent preview, one compact line per tool: name, effective policy (allow/ask/deny), and a very short description. Previews use main or worker defaults; existing-agent policies reflect saved per-agent overrides."
+	return "List tools and effective policies. For an existing agent or new-agent preview, allow/ask lines show name, effective policy, and a description of at most 40 characters; deny lines show only name and deny. Previews use main or worker defaults. ToolSearch reports allow. Existing agents use the effective policy, not only the stored override."
 }
 func (t *AgentGetToolsTool) Parameters() map[string]any {
 	return map[string]any{

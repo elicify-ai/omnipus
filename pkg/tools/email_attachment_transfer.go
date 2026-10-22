@@ -90,23 +90,31 @@ func (t *DownloadEmailAttachmentTool) newTransferService(ctx context.Context) (*
 	key := attachmentTransferKey{home: home, agentID: t.transferAgentID, workspaceID: wsID}
 	store, _ := attachmentTransferReceipts.LoadOrStore(key, mailattachment.NewSaveReceiptStore())
 	service := mailattachment.NewService(reader, writer,
-		attachmentTransferAudit{logger: t.auditLogger.Load(), agentID: t.transferAgentID, sessionID: ToolTranscriptSessionID(ctx)},
+		attachmentTransferAudit{logger: t.auditLogger.Load(), agentID: t.transferAgentID, workspaceID: wsID, sessionID: ToolTranscriptSessionID(ctx)},
 		store.(*mailattachment.SaveReceiptStore), identity.AccountAddress)
 	return service, root.Close, nil
 }
 
 type attachmentTransferAudit struct {
-	logger             *audit.Logger
-	agentID, sessionID string
+	logger                          *audit.Logger
+	agentID, workspaceID, sessionID string
 }
 
 func (a attachmentTransferAudit) AttachmentSaved(fields map[string]any) string {
 	if a.logger == nil {
 		return mailattachment.AuditDisabled
 	}
+	details := make(map[string]any, len(fields)+2)
+	for key, value := range fields {
+		details[key] = value
+	}
+	// The resolved registration/context pair is authoritative, not fields
+	// supplied by the transfer service or the model.
+	details["workspace_id"] = a.workspaceID
+	details["agent_id"] = a.agentID
 	if err := a.logger.Log(&audit.Entry{
 		Event: string(audit.EventMailAttachmentSaved), AgentID: a.agentID,
-		SessionID: a.sessionID, Tool: "download_email_attachment", Details: fields,
+		SessionID: a.sessionID, Tool: "download_email_attachment", Details: details,
 	}); err != nil {
 		// Service.Save returns this failure in the committed receipt's warning.
 		return mailattachment.AuditFailed
