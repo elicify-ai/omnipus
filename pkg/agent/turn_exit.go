@@ -24,6 +24,7 @@ func (ts *turnState) MarkAbandoned() {
 	// The controller, not the abandoned goroutine, preserves the started
 	// call's terminal display evidence before the late-write fence closes.
 	ts.cancelStartedTool()
+	ts.persistCancelOutcome("hard")
 	ts.abandoned.Store(true)
 }
 
