@@ -129,6 +129,10 @@
   --icon-weight-default: regular;
   --icon-weight-emphasis: fill;
   --layout-sidebar-width: min(256px, 80vw);
+  --motion-agent-icon-thinking-duration: 2600ms;
+  --motion-agent-icon-waiting-duration: 3400ms;
+  --motion-agent-icon-working-duration: 1600ms;
+  --motion-agent-status-text-minimum-opacity: 0.9;
   --motion-distance-large: 36px;
   --motion-distance-medium: 16px;
   --motion-distance-small: 4px;

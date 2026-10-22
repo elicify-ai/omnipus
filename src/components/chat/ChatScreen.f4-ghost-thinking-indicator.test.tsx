@@ -302,27 +302,26 @@ describe('plain-list fallback — real tool frame phase transition', () => {
       render(<ChatScreen />)
     })
     const reply = within(plainReply(messageId))
-    expect(reply.getByText('Thinking', { exact: true })).toBeInTheDocument()
-    expect(reply.getByText(THINKING_TEXT_RE)).toBeInTheDocument()
+    const fallback = reply.getByTestId('reply-status-fallback').textContent
+    expect(fallback, 'capture a real fallback phrase before tool execution').toMatch(THINKING_TEXT_RE)
+    expect(reply.getByText('Thinking', { exact: true })).toHaveClass('sr-only')
+    expect(reply.getByTestId('reply-status-indicator')).toHaveAttribute('data-agent-status-motion', 'thinking')
 
     startToolSearch(callId, messageId)
-    // Soft assertions remain CI failures, but allow the result frame and the
-    // return-to-Thinking checks to run even if this Working transition is red.
+    // Founder replacement contract: motion changes; the chosen visual fallback
+    // and accessible label do not. Assert phase independently of random copy.
+    // Soft failures still fail CI but let the real result transition run too.
     expect.soft(
-      reply.queryByText(THINKING_TEXT_RE)?.textContent ?? null,
-      'tool_call_start must change the plain reply to Working (not Thinking)',
-    ).toBe('Working on it…')
-    // The thinking phase can rotate to the *same* Working on it… phrase.
-    // Its stable accessible label must therefore disappear too; text alone
-    // would let a random thinking beat manufacture a false green.
-    expect.soft(
-      reply.queryByText('Thinking', { exact: true }),
-      'Working must replace the stable Thinking phase label',
-    ).toBeNull()
+      reply.getByTestId('reply-status-indicator'),
+      'real tool_call_start must select Working motion on the same plain reply',
+    ).toHaveAttribute('data-agent-status-motion', 'working')
+    expect.soft(reply.getByTestId('reply-status-fallback').textContent, 'tool start must preserve the chosen fallback').toBe(fallback)
+    expect.soft(reply.getByText('Thinking', { exact: true }), 'accessible copy stays stable during execution').toHaveClass('sr-only')
 
     resolveToolSearch(callId, 'success', { ok: true })
-    expect(reply.getByText('Thinking', { exact: true })).toBeInTheDocument()
-    expect(reply.getByText(THINKING_TEXT_RE)).toBeInTheDocument()
+    expect(reply.getByTestId('reply-status-indicator'), 'real tool_call_result must restore Thinking motion').toHaveAttribute('data-agent-status-motion', 'thinking')
+    expect(reply.getByTestId('reply-status-fallback').textContent, 'tool result must preserve the original fallback').toBe(fallback)
+    expect(reply.getByText('Thinking', { exact: true })).toHaveClass('sr-only')
     expect(useChatStore.getState().sessionsById[SID].messagesById[messageId].isStreaming).toBe(true)
   })
 })

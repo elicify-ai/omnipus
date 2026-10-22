@@ -32,30 +32,30 @@ export type AgentIconProps = AgentIconBase & {
 
 const MARK_CLASS = {
   none: '',
-  working: 'origin-center animate-[agent-icon-pump_1.6s_ease-in-out_infinite] motion-reduce:animate-none',
-  thinking: 'origin-center animate-[agent-icon-breathe_2.6s_ease-in-out_infinite] motion-reduce:animate-none',
-  waiting: 'origin-center animate-[agent-icon-pop_3.4s_ease-in-out_infinite] motion-reduce:animate-none',
+  working: 'origin-center animate-[agent-icon-pump_var(--motion-agent-icon-working-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
+  thinking: 'origin-center animate-[agent-icon-breathe_var(--motion-agent-icon-thinking-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
+  waiting: 'origin-center animate-[agent-icon-pop_var(--motion-agent-icon-waiting-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
 } as const
 
 const MARK_CLASS_FORCED = {
   none: '',
-  working: 'origin-center animate-[agent-icon-pump_1.6s_ease-in-out_infinite]',
-  thinking: 'origin-center animate-[agent-icon-breathe_2.6s_ease-in-out_infinite]',
-  waiting: 'origin-center animate-[agent-icon-pop_3.4s_ease-in-out_infinite]',
+  working: 'origin-center animate-[agent-icon-pump_var(--motion-agent-icon-working-duration)_var(--motion-easing-in-out)_infinite]',
+  thinking: 'origin-center animate-[agent-icon-breathe_var(--motion-agent-icon-thinking-duration)_var(--motion-easing-in-out)_infinite]',
+  waiting: 'origin-center animate-[agent-icon-pop_var(--motion-agent-icon-waiting-duration)_var(--motion-easing-in-out)_infinite]',
 } as const
 
 const GLOW_CLASS = {
   none: '',
-  working: 'animate-[agent-icon-glow_1.6s_ease-in-out_infinite] motion-reduce:animate-none',
-  thinking: 'animate-[agent-icon-think-glow_2.6s_ease-in-out_infinite] motion-reduce:animate-none',
-  waiting: 'animate-[agent-icon-flash_3.4s_ease-in-out_infinite] motion-reduce:animate-none',
+  working: 'animate-[agent-icon-glow_var(--motion-agent-icon-working-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
+  thinking: 'animate-[agent-icon-think-glow_var(--motion-agent-icon-thinking-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
+  waiting: 'animate-[agent-icon-flash_var(--motion-agent-icon-waiting-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
 } as const
 
 const GLOW_CLASS_FORCED = {
   none: '',
-  working: 'animate-[agent-icon-glow_1.6s_ease-in-out_infinite]',
-  thinking: 'animate-[agent-icon-think-glow_2.6s_ease-in-out_infinite]',
-  waiting: 'animate-[agent-icon-flash_3.4s_ease-in-out_infinite]',
+  working: 'animate-[agent-icon-glow_var(--motion-agent-icon-working-duration)_var(--motion-easing-in-out)_infinite]',
+  thinking: 'animate-[agent-icon-think-glow_var(--motion-agent-icon-thinking-duration)_var(--motion-easing-in-out)_infinite]',
+  waiting: 'animate-[agent-icon-flash_var(--motion-agent-icon-waiting-duration)_var(--motion-easing-in-out)_infinite]',
 } as const
 
 const SHEEN_CLASS = 'agent-icon-sheen pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[agent-icon-sheen_2.4s_ease-in-out_infinite] motion-reduce:animate-none'

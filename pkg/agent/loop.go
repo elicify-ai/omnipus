@@ -2710,7 +2710,7 @@ func (al *AgentLoop) buildScratchpadNote(agentID, sessionID string) string {
 		sb.WriteString("- [")
 		sb.WriteString(string(td.Status))
 		sb.WriteString("] ")
-		sb.WriteString(td.Text)
+		sb.WriteString(td.ScratchpadText())
 		sb.WriteByte('\n')
 	}
 	return sb.String()

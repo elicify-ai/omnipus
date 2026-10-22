@@ -11,7 +11,7 @@ import (
 // These are the founder-approved #1399 instructions, before the interim gate.
 // Gating changes their presence, never their wording.
 const approvedMemoryRule = `### Memory
-13. Use the memory guide to choose correct recall sources and appropriate saved-note audiences; if the guide is unavailable, do not invent its contents.`
+14. Use the memory guide to choose correct recall sources and appropriate saved-note audiences; if the guide is unavailable, do not invent its contents.`
 
 const approvedMemoryGuide = `<memory_guide>
 - Use the four dedicated memory tools, never write_file to memory files.
@@ -57,7 +57,7 @@ func TestContextBuilder_MemoryGuidanceFollowsMemoryEnabled(t *testing.T) {
 			assert.Contains(t, prompt, "<operating_rules>", "the interim memory gate preserves the other operating rules")
 			if !tc.enabled {
 				assert.NotContains(t, prompt, "### Memory")
-				assert.NotContains(t, prompt, "13. Use the memory guide")
+				assert.NotContains(t, prompt, "14. Use the memory guide")
 				assert.NotContains(t, prompt, "<memory_guide>")
 				assert.NotContains(t, prompt, "</memory_guide>")
 				return

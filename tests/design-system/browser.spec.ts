@@ -905,3 +905,155 @@ test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both 
         reducedMotion: true, inkAnimation: 'none', glowAnimation: 'none', sheenAnimation: 'none', loops: 0, inkOpacity: '1',
       })
 })
+
+// App adapter, not a new published kit component. Locate its real static story
+// through the existing index/lifecycle harness; do not mirror animation CSS.
+const statusMotionFixture: Manifest = {
+  component: 'AgentStatusIndicator',
+  stories: [{ file: 'src/components/chat/AgentStatusIndicator.stories.tsx', exports: ['ThinkingActive', 'ThinkingFallback', 'WorkingActive', 'WorkingFallback', 'WaitingNotice', 'LateIdentity', 'MotionTransitions'] }],
+  checks: [],
+}
+
+async function openStatusMotion(page: Page, story: string) {
+  await openStory(page, statusMotionFixture, { id: `status-motion-${story}`, kind: 'browser', story, applicable: true })
+  return page.getByTestId('reply-status-indicator')
+}
+
+async function statusMotionTiming(root: Locator) {
+  return root.evaluate((element) => {
+    const text = element.querySelector<HTMLElement>('.agent-status-text')
+    const ink = element.querySelector<HTMLElement>('[data-testid="agent-icon"] > [data-ink]')
+    if (!text || !ink) return null
+    const textAnimation = text.getAnimations().find((animation) => animation instanceof CSSAnimation)
+    const inkAnimation = ink.getAnimations().find((animation) => animation instanceof CSSAnimation)
+    if (!textAnimation?.effect || !inkAnimation?.effect || typeof textAnimation.startTime !== 'number' || typeof inkAnimation.startTime !== 'number') return null
+    return {
+      textDuration: textAnimation.effect.getTiming().duration,
+      inkDuration: inkAnimation.effect.getTiming().duration,
+      textEasing: getComputedStyle(text).animationTimingFunction,
+      inkEasing: getComputedStyle(ink).animationTimingFunction,
+      textStart: textAnimation.startTime,
+      inkStart: inkAnimation.startTime,
+      inkOpacity: getComputedStyle(ink).opacity,
+    }
+  })
+}
+
+async function paintedStatusOpacity(root: Locator, duration: number, peak: number) {
+  return root.locator('.agent-status-text').evaluate((element, { duration, peak }) => {
+    const animation = element.getAnimations().find((value) => value instanceof CSSAnimation)
+    if (!animation || typeof animation.startTime !== 'number') throw new Error('Missing running status animation')
+    const start = animation.startTime
+    try {
+      // Inspect painted output, not getKeyframes()'s variable substitution:
+      // WebKit reports 1 for var()-based opacity frames even while painting .9.
+      // Sampling the exact nominal peak also avoids treating Firefox's float32
+      // metadata offset for 74% as a change in actual rendered phase.
+      animation.pause()
+      return [0, peak, 1].map((offset) => {
+        animation.currentTime = duration * offset
+        return Number(getComputedStyle(element).opacity)
+      })
+    } finally {
+      animation.play()
+      animation.startTime = start // Keep the original clock for later phase/copy checks.
+    }
+  }, { duration, peak })
+}
+
+async function expectStatusTiming(root: Locator, duration: number, peak: number) {
+  await expect.poll(() => statusMotionTiming(root), 'both actual CSS animations must start').not.toBeNull()
+  const timing = (await statusMotionTiming(root))!
+  expect(timing.textDuration).toBe(duration)
+  expect(timing.inkDuration).toBe(duration)
+  expect(timing.textEasing).toBe(timing.inkEasing)
+  expect(timing.textEasing).toBe('ease-in-out')
+  expect(timing.textStart).toBe(timing.inkStart)
+  expect(await paintedStatusOpacity(root, duration, peak)).toEqual([0.9, 1, 0.9])
+  expect(timing.inkOpacity).toBe('1')
+}
+
+test.describe('AgentStatusIndicator synchronized text motion', () => {
+  for (const [story, phase, duration, peak, copy] of [
+    ['ThinkingActive', 'thinking', 2600, 0.5, 'Drafting the Q4 summary'],
+    ['ThinkingFallback', 'thinking', 2600, 0.5, null],
+    ['WorkingActive', 'working', 1600, 0.5, 'Drafting the Q4 summary'],
+    ['WorkingFallback', 'working', 1600, 0.5, null],
+    ['WaitingNotice', 'waiting', 3400, 0.74, 'Waiting for your input'],
+  ] as const) {
+    test(`${story} shares the icon timing, phase and readable opacity`, async ({ page }, testInfo) => {
+      await page.emulateMedia({ reducedMotion: 'no-preference', forcedColors: 'none' })
+      const root = await openStatusMotion(page, story)
+      await expect(root).toHaveAttribute('data-agent-status-motion', phase)
+      if (copy) await expect(root.locator('.agent-status-text')).toHaveText(copy)
+      else await expect(root.getByTestId('reply-status-fallback')).toBeVisible()
+      await expectStatusTiming(root, duration, peak)
+      await expect(root).not.toContainText(/Working on\s*:/)
+      await expect(root).not.toContainText(/Current checklist\s+unavailable/)
+      const sample = await root.locator('.agent-status-text').evaluate((element) => {
+        for (const animation of element.getAnimations()) { animation.pause(); animation.currentTime = 0 }
+        const style = getComputedStyle(element)
+        return { color: style.color, opacity: Number(style.opacity), background: getComputedStyle(document.body).backgroundColor }
+      })
+      expect(sample.opacity).toBe(0.9)
+      const channels = (value: string) => value.match(/\d+(?:\.\d+)?/g)!.slice(0, 3).map(Number)
+      const background = channels(sample.background)
+      const foreground = channels(sample.color).map((value, index) => value * sample.opacity + background[index] * (1 - sample.opacity))
+      const luminance = (values: number[]) => values.map((value) => value / 255).map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0)
+      const light = luminance(foreground)
+      const dark = luminance(background)
+      expect((Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05), 'actual dimmest text contrast on the canvas').toBeGreaterThanOrEqual(4.5)
+      await page.screenshot({ path: testInfo.outputPath(`status-${story}.png`), animations: 'allow' })
+    })
+  }
+
+  for (const story of ['ThinkingActive', 'ThinkingFallback'] as const) {
+    test(`${story} has no text pulse with reduced motion`, async ({ page }) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      const root = await openStatusMotion(page, story)
+      const state = await root.locator('.agent-status-text').evaluate((element) => ({ loops: element.getAnimations().length, opacity: getComputedStyle(element).opacity }))
+      expect(state).toEqual({ loops: 0, opacity: '1' })
+      await expect(root).toHaveAttribute('data-agent-status-motion', 'none')
+    })
+
+    test(`${story} has no text pulse in forced colors`, async ({ page }) => {
+      await page.emulateMedia({ reducedMotion: 'no-preference', forcedColors: 'active' })
+      expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches)).toBe(true)
+      const root = await openStatusMotion(page, story)
+      const state = await root.locator('.agent-status-text').evaluate((element) => ({ loops: element.getAnimations().length, opacity: getComputedStyle(element).opacity }))
+      expect(state).toEqual({ loops: 0, opacity: '1' })
+    })
+  }
+
+  test('motion/identity epochs restart both clocks but copy updates keep their phase', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'no-preference', forcedColors: 'none' })
+    const root = await openStatusMotion(page, 'MotionTransitions')
+    await expectStatusTiming(root, 2600, 0.5)
+    // Set a real CSS animation's time, not a guessed sleep. If only the icon
+    // restarts on the following phase change, the retained text clock differs.
+    await root.evaluate((element) => {
+      for (const target of [element.querySelector('.agent-status-text'), element.querySelector('[data-ink]')]) {
+        for (const animation of target!.getAnimations()) animation.currentTime = 1000
+      }
+    })
+    await page.getByRole('button', { name: /^Working$/ }).click()
+    await expect(root).toHaveAttribute('data-agent-status-motion', 'working')
+    await expectStatusTiming(root, 1600, 0.5)
+    await page.getByRole('button', { name: /^Waiting$/ }).click()
+    await expectStatusTiming(root, 3400, 0.74)
+    await page.getByRole('button', { name: /^Thinking$/ }).click()
+    await expectStatusTiming(root, 2600, 0.5)
+
+    await page.getByRole('button', { name: /^Hide agent$/ }).click()
+    await expect(root.getByTestId('agent-icon')).toHaveCount(0)
+    await root.locator('.agent-status-text').evaluate((element) => { for (const animation of element.getAnimations()) animation.currentTime = 1000 })
+    await page.getByRole('button', { name: /^Show agent$/ }).click()
+    await expectStatusTiming(root, 2600, 0.5)
+    const before = await statusMotionTiming(root)
+    await page.getByRole('button', { name: /^Update item$/ }).click()
+    await expect(root.getByTestId('reply-current-todo')).toHaveText('Reviewing the final notes')
+    const after = await statusMotionTiming(root)
+    expect(after!.textStart).toBe(before!.textStart)
+    expect(after!.inkStart).toBe(before!.inkStart)
+  })
+})

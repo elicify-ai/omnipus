@@ -26974,6 +26974,9 @@ type Task struct {
 
 	// Todos Lightweight `{text, done}` checklist items on this task (Tier 1 of the three-tier model). A todo is NOT a task — it has no agent, no status, no trigger. Distinct from a subtask (a full child Task with `parent_task_id`).
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskTodosStatus `json:"status"`
 
@@ -27264,6 +27267,9 @@ type TaskCreateRequest struct {
 
 	// Todos Optional initial checklist items.
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskCreateRequestTodosStatus `json:"status"`
 
@@ -27686,6 +27692,9 @@ type TaskUpdateRequest struct {
 
 	// Todos Replacement checklist (replaces the current `todos` atomically).
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskUpdateRequestTodosStatus `json:"status"`
 
@@ -27786,6 +27795,9 @@ type TaskUpdateRequestTriggerType string
 
 // Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need an independent agent/trigger. The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy boolean `done` so a checklist can express work-in-progress (§3 tasks-system refactor — the `set_todos` agent scratchpad rides this same array).
 type Todo struct {
+	// ActiveForm Optional phrasing for the item while it is in progress.
+	ActiveForm *string `json:"active_form,omitempty"`
+
 	// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 	Status TodoStatus `json:"status"`
 

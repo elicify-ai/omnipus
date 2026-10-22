@@ -29,6 +29,16 @@ For example: `write_file` is set to Ask. With Auto-approve off, every file write
 2. Open **Advanced / technical details**, then **Tool Access — Global Policies**. Choose Allow, Ask or Deny for each tool. This applies to every agent. Saving asks you to re-type your password.
 3. To tighten one agent, open that agent's **Tools & Permissions** panel. An agent's setting can only be stricter than the global one, never looser. See [tools](tools.md) for how the two combine.
 
+A global policy change must also be applied to running agents. If the save result
+says the settings were saved but could not be applied, the saved change has not
+been undone, but running agents may still use the previous permissions. Retry
+applying the change, or restart Omnipus before relying on it. The global-policy
+API returns HTTP 503 for this result, rather than reporting a successful update.
+
+The global policy auto-save indicator shows the server's recovery message for
+this result, not just a generic server-unavailable message. It remains an error,
+not a successful-save confirmation.
+
 On a new installation the shell tool, `bash`, is set to **Ask**.
 
 ### Turn Auto-approve on or off
