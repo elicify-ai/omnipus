@@ -359,6 +359,7 @@ export interface TokenFrame {
 
 export interface DoneStats {
   tokens?: number;
+  session_tokens_total?: number;
   cost?: number;
   duration_ms?: number;
   frames_emitted?: number;
@@ -501,7 +502,7 @@ export interface ToolCallResultFrame {
   tool: string;
   call_id: string;
   result: unknown;
-  status: "success" | "error";
+  status: "success" | "error" | "cancelled";
   duration_ms?: number;
   error?: string;
   parent_call_id?: string;
@@ -855,6 +856,7 @@ export interface SessionStateFrame {
   pending_approvals: Array<SessionStatePendingApproval>;
   pending_asks?: Array<AskUserQuestionCard>;
   session_id?: string;
+  session_tokens_total?: number;
   attention_bound?: number;
   auto_approve_modifier?: boolean | null;
   active_turn?: SessionStateActiveTurn;

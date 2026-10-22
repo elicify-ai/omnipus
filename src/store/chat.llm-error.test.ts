@@ -18,6 +18,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, getMessages, makeBucketMessages, type ChatMessage } from './chat'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import { useConnectionStore } from './connection'
 import { useChatPreferencesStore } from './chatPreferences'
 import { codeToDisplay } from '@/lib/llm-error'
@@ -87,6 +88,7 @@ function seedEmptyBucket(opts: { isReplaying?: boolean; isStreaming?: boolean } 
     useChatStore.setState({
       sessionsById: {
         [SID]: {
+          ...emptyHistoryFixture(),
           ...makeBucketMessages([]),
           toolCalls: {},
           toolCallOrder: [],
@@ -388,6 +390,7 @@ describe("ADR-051 'replay_error' — typed payload translation + coalesce", () =
     }
     act(() => {
       const bucket = {
+        ...emptyHistoryFixture(),
         ...makeBucketMessages([placeholder]),
         toolCalls: {},
         toolCallOrder: [],

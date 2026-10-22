@@ -10,13 +10,14 @@ import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
 import { pendingClearRefetches } from './runtime-state'
 import type { ServerFrame } from '@/lib/ws'
+import { clearHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
 
 const requestMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/api/http', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/lib/api/http')>()), request: requestMock }))
 
 const SID = 'sess-clear-held-seq'
 const raw = (id: string, role: string, content: string, ts: string) => ({ id, role, content, timestamp: ts, agent_id: 'jim', status: 'ok' })
-const POST_CLEAR = [raw('srv-marker', 'system', 'Conversation context cleared', '2026-10-10T00:00:00Z'), raw('srv-a', 'assistant', 'fresh start', '2026-10-10T00:00:01Z')]
+const POST_CLEAR = clearHistoryPage(SID, [raw('srv-marker', 'system', 'Conversation context cleared', '2026-10-10T00:00:00Z'), raw('srv-a', 'assistant', 'fresh start', '2026-10-10T00:00:01Z')], 2)
 
 let sent: Array<Record<string, unknown>> = []
 const feed = (frame: Record<string, unknown>) => useChatStore.getState().handleFrame({ session_id: SID, ...frame } as unknown as ServerFrame)

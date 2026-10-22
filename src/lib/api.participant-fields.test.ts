@@ -11,9 +11,11 @@
 // these tests too.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { wireHistoryPage } from '../../tests/chat-history-paging/legacy-wire'
+import { expectHistoryPage } from '../../tests/chat-history-paging/legacy-fixtures'
 
-function makeOkResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
+function makeOkResponse(sessionId: string, body: unknown[]): Response {
+  return new Response(JSON.stringify(wireHistoryPage(sessionId, body, body.length)), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
@@ -32,7 +34,7 @@ describe('fetchSessionMessages forwards the participant fields', () => {
   })
 
   it('a user row with a human participant carries participant on the mapped message', async () => {
-    fetchSpy.mockResolvedValueOnce(makeOkResponse([
+    fetchSpy.mockResolvedValueOnce(makeOkResponse('sess-participant', [
       {
         id: 'msg-tg-1',
         role: 'user',
@@ -44,7 +46,9 @@ describe('fetchSessionMessages forwards the participant fields', () => {
     ]))
 
     const { fetchSessionMessages } = await import('./api')
-    const messages = await fetchSessionMessages('sess-participant')
+    const decoded: unknown = await fetchSessionMessages('sess-participant')
+    expectHistoryPage(decoded)
+    const messages = decoded.entries
     expect(messages).toHaveLength(1)
     const msg = messages[0] as { role?: string; participant?: unknown }
     expect(msg.role).toBe('user')
@@ -52,7 +56,7 @@ describe('fetchSessionMessages forwards the participant fields', () => {
   })
 
   it('a user row WITHOUT a participant keeps today’s shape (field absent — F17 own message)', async () => {
-    fetchSpy.mockResolvedValueOnce(makeOkResponse([
+    fetchSpy.mockResolvedValueOnce(makeOkResponse('sess-participant', [
       {
         id: 'msg-own-1',
         role: 'user',
@@ -63,14 +67,16 @@ describe('fetchSessionMessages forwards the participant fields', () => {
     ]))
 
     const { fetchSessionMessages } = await import('./api')
-    const messages = await fetchSessionMessages('sess-participant')
+    const decoded: unknown = await fetchSessionMessages('sess-participant')
+    expectHistoryPage(decoded)
+    const messages = decoded.entries
     expect(messages).toHaveLength(1)
     const msg = messages[0] as { participant?: unknown }
     expect(msg.participant).toBeUndefined()
   })
 
   it('an assistant reply row carries replyToMessageId + replyToParticipant', async () => {
-    fetchSpy.mockResolvedValueOnce(makeOkResponse([
+    fetchSpy.mockResolvedValueOnce(makeOkResponse('sess-participant', [
       {
         id: 'msg-reply-1',
         role: 'assistant',
@@ -83,7 +89,9 @@ describe('fetchSessionMessages forwards the participant fields', () => {
     ]))
 
     const { fetchSessionMessages } = await import('./api')
-    const messages = await fetchSessionMessages('sess-participant')
+    const decoded: unknown = await fetchSessionMessages('sess-participant')
+    expectHistoryPage(decoded)
+    const messages = decoded.entries
     expect(messages).toHaveLength(1)
     const msg = messages[0] as { replyToMessageId?: string; replyToParticipant?: unknown }
     expect(msg.replyToMessageId).toBe('req-1')

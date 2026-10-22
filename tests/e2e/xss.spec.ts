@@ -1,5 +1,7 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
+import type { Message, Session } from '../../src/lib/api/generated/openapi-types';
+import { wireAvailableDetail, wireHistoryPage } from '../chat-history-paging/legacy-wire';
 
 // XSS DOM-rendering coverage for the chat markdown render path.
 //
@@ -137,45 +139,44 @@ test('chat message with XSS payload renders as escaped text, not live HTML', asy
   await page.goto('/');
   await page.waitForLoadState('networkidle');
 
-  // Intercept the sessions list and transcript endpoint to inject an XSS assistant
-  // message into the DOM via the chat store's rendering path.
-  // This simulates what happens when the gateway streams a malicious assistant message.
+  // Intercept the actual list, detail and messages paths. The retired
+  // /transcript route never supplied ChatScreen's real history query.
   const sessionId = `xss-test-session-${Date.now()}`;
+  const timestamp = new Date().toISOString();
+  const assistantId = 'xss-retained-assistant';
+  const session: Session = {
+    id: sessionId, agent_id: 'omnipus-system', title: 'XSS Test Session',
+    type: 'chat', status: 'active', created_at: timestamp, updated_at: timestamp,
+    channel: 'webchat', partitions: [],
+    stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 2 },
+  };
+  const entries: Message[] = [
+    { id: 'xss-retained-user', type: 'message', role: 'user', content: 'hi', agent_id: session.agent_id, timestamp },
+    { id: assistantId, type: 'message', role: 'assistant', content: xssContent, agent_id: session.agent_id, timestamp },
+  ];
+  const history = wireHistoryPage(sessionId, entries, 2);
   await page.route('**/api/v1/sessions', async (route) => {
     if (route.request().method() === 'GET') {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify([{
-          id: sessionId,
-          agent_id: 'omnipus-system',
-          title: 'XSS Test Session',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }]),
-      });
+      await route.fulfill({ status: 200, json: { sessions: [session] } });
     } else {
       await route.continue();
     }
   });
-
-  await page.route(`**/api/v1/sessions/${sessionId}/transcript`, async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify([
-        { role: 'user', content: 'hi', timestamp: new Date().toISOString() },
-        { role: 'assistant', content: xssContent, timestamp: new Date().toISOString() },
-      ]),
-    });
+  await page.route(`**/api/v1/sessions/${sessionId}`, async (route) => {
+    await route.fulfill({ status: 200, json: wireAvailableDetail(session, history) });
+  });
+  await page.route(`**/api/v1/sessions/${sessionId}/messages`, async (route) => {
+    await route.fulfill({ status: 200, json: history });
   });
 
   // Navigate to the injected session's URL so the chat store loads the transcript.
   await page.goto(`/#/sessions/${sessionId}`);
   await page.waitForLoadState('networkidle');
 
-  // Give React a moment to render the intercepted transcript.
-  await page.waitForTimeout(1000);
+  // Positive instrument control: neither an unrendered assistant nor a failed
+  // route/history load may prove that the hostile payload was rendered safely.
+  const retainedAssistant = page.locator(`[data-message-id="${assistantId}"]`);
+  await expect(retainedAssistant).toBeVisible();
 
   // Assert: the XSS did NOT execute (window.__xss_fired should be undefined/false).
   const xssFired = await page.evaluate(() => (window as unknown as Record<string, unknown>)['__xss_fired']);
@@ -185,9 +186,6 @@ test('chat message with XSS payload renders as escaped text, not live HTML', asy
   ).toBeFalsy();
 
   // Assert: no <script> element inside the messages area.
-  const msgArea = page.locator('[data-message-role="assistant"], .assistant-message, [class*="message"]').first();
-  if (await msgArea.count() > 0) {
-    const scriptInMsg = await msgArea.locator('script').count();
-    expect(scriptInMsg, 'Rendered assistant message must not contain live <script> elements').toBe(0);
-  }
+  const scriptInMsg = await retainedAssistant.locator('script').count();
+  expect(scriptInMsg, 'Rendered assistant message must not contain live <script> elements').toBe(0);
 });
