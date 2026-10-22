@@ -155,7 +155,7 @@ func TestCrashRecovery_TreeStopTraversesInterruptedHelper(t *testing.T) {
 	require.Equal(t, session.LifecycleState("interrupted"), ended.State)
 	require.Equal(t, session.LifecycleRunning, h.record(t, descendant.SessionID).State, "ceiling interruption must not failure-cascade-stop an independent active descendant")
 	require.NotNil(t, h.al.executionDispositionFor(h.al.executionClaimFor(descendant)), "active descendant remains independently owned until the explicit tree Stop")
-	result, err := h.al.StopSession(context.Background(), StopRequest{SessionID: parent.SessionID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "owner"}})
+	result, err := h.al.StopSession(context.Background(), StopRequest{SessionID: parent.SessionID, Tree: true, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "owner"}})
 	require.NoError(t, err)
 	require.Contains(t, result.Report.Reached, descendant.SessionID, "explicit tree Stop must cross the ended helper to reach active descendants")
 	crashAwaitDone(t, childOwner.done)

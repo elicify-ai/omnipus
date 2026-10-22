@@ -176,15 +176,19 @@ func TestCrashRecovery_RetirementSurvivesHumanReportTrimAndRecallEntries(t *test
 func TestCrashRecovery_RetirementPersistenceFailureBlocksNextModel(t *testing.T) {
 	f := crashConsumedRoomContext(t, true)
 	blocked := filepath.Join(f.h.al.GetSessionStore().BaseDir(), f.id, "room_retirements")
-	require.NoError(t, os.WriteFile(blocked, []byte("not a directory"), 0600))
 	snapshot := f.h.snapshot(t)
+	relative, err := filepath.Rel(f.h.home, blocked)
+	require.NoError(t, err)
+	// Fault only the crash image: the still-live producer must settle against
+	// its healthy home before the corrupted image is reopened under a new boot.
+	require.NoError(t, os.WriteFile(filepath.Join(snapshot, relative), []byte("not a directory"), 0600))
 	f.release()
 	require.NoError(t, crashAwait(t, f.done))
 	p := &crashScript{}
 	f.h.restore(t, snapshot, p)
 	r := &SteerBootRecovery{Lifecycle: f.h.al.GetSessionLifecycleStore(), Sessions: f.h.al.GetSessionStore(), Inbox: f.h.al.GetMessageInboxStore(), BootEpoch: f.h.boot, Classifier: NewSteerRecordClassifier(f.h.al.GetSessionLifecycleStore(), f.h.al.GetSessionStore()), Deliverer: f.h.al.getUpwardDeliverer()}
 	assert.Error(t, r.Run(context.Background()), "failed retirement is visible at real boot recovery")
-	_, err := f.h.human(t, f.id, "NEW_J_MUST_NOT_RUN")
+	_, err = f.h.human(t, f.id, "NEW_J_MUST_NOT_RUN")
 	assert.Error(t, err, "cannot assemble a later model request until exact retirement is durably established")
 	assert.Equal(t, 0, len(p.calls()))
 	bytes, err := os.ReadFile(f.path)
@@ -201,8 +205,14 @@ func TestCrashRecovery_MissingRoomCorrelationIsContextRepairNotGuessedRetirement
 	delete(fields, "model_execution")
 	data, err := json.Marshal(fields)
 	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(data, &capture))
-	require.NoError(t, f.h.al.RequestLedger().Put(capture))
+	var withoutCorrelation addressing.Capture
+	require.NoError(t, json.Unmarshal(data, &withoutCorrelation))
+	require.NoError(t, f.h.al.RequestLedger().Put(withoutCorrelation))
+	saved, found, err := f.h.al.RequestLedger().Get(f.id, f.request)
+	require.NoError(t, err)
+	require.True(t, found, "instrument: the corrupted request is still the real admitted request")
+	require.Nil(t, saved.ModelInput, "instrument: saved input correlation was actually removed")
+	require.Nil(t, saved.ModelExecution, "instrument: saved execution correlation was actually removed")
 	err = f.h.al.DiscardRequest(f.id, f.request)
 	assert.Error(t, err, "unknown correlation cannot erase a guessed span of independent history")
 	after, err := f.h.al.GetSessionStore().WindowView(context.Background(), f.id)
