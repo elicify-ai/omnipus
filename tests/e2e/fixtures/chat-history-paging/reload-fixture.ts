@@ -206,8 +206,12 @@ export const test = base.extend<{ reload: ReloadHarness }>({
         max_tool_iterations: 8 } satisfies AgentCreateRequestMain);
       expect(agentResult.ok, agentResult.raw).toBe(true);
       const agent = Agent.parse(agentResult.body);
-      expect(agent.tools_cfg?.builtin?.policies.bash,
-        'PREREQUISITE: the real custom agent explicitly grants native bash; the global ceiling alone cannot override its seeded deny').toBe('allow');
+      // Keep generated Agent validation above. Its generated policy-map type
+      // is {}, so assert the same exact grant on the actual API JSON instead
+      // of casting the map or weakening the expected policy.
+      expect(agentResult.body,
+        'PREREQUISITE: the real custom agent explicitly grants native bash; the global ceiling alone cannot override its seeded deny')
+        .toMatchObject({ tools_cfg: { builtin: { policies: { bash: 'allow' } } } });
       const workspaceResult = await gateway.apiFetch('POST', '/api/v1/workspaces', { name: 'Reload parity', core_team: [agent.id] } satisfies WorkspaceCreateRequest);
       expect(workspaceResult.ok, workspaceResult.raw).toBe(true);
       const workspace = Workspace.parse(workspaceResult.body);
