@@ -180,7 +180,7 @@ For reading, this matches the shell. Under Auto-approve, the shell command `cat 
 | Browser scripts and uploads | `browser_evaluate`, `browser_upload_file` |
 | Settings and diagnostics | `set_config`, `run_doctor` |
 | Providers | `configure_provider`, `test_provider` |
-| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `test_channel` |
+| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `test_channel` |
 | Connected servers | `add_mcp_server`, `remove_mcp_server` |
 | Agents and workspaces | `create_agent`, `update_agent`, `set_agent_permissions`, `update_workspace` |
 | Skills | `create_skill`, `edit_skill`, `remove_skill` |
@@ -507,6 +507,83 @@ An authorized `environment_setup` run can create and read new files directly ins
 - **Runtime paths are trusted.** The sandbox trusts toolchain and runtime folders by the path supplied to it. If that path is a shortcut (symbolic link), it does not recheck where the shortcut leads against the protected-file inventory, so only use locations you trust.
 - **External command-line workers are not covered.** A worker delegated to Claude Code, Codex or OpenCode runs outside Omnipus's sandbox and file policy entirely (see the God Mode section's external-worker note). Delegating to one is a decision to trust that tool with your account — Omnipus's internal-file protection does not follow it.
 
+## Entering a secret from a chat
+
+When an agent needs a provider key, an MCP server environment secret, or a channel credential, it can open a **secure secret card** in the web app. Type the value into that card, not into the chat. The card names the acting agent, explains why the secret is needed, and shows its destination. An Omnipus helper's card appears in Omnipus's main chat; other helpers must ask their parent.
+
+Each value must contain 4–16,384 bytes of UTF-8 text and no NUL character, and the complete submission is limited to 65,536 bytes. A card holds at most eight fields; the server chooses them, including Slack's required bot-token and app-token pair. Only one secret request may be pending in a chat session, and at most 64 may be pending across the installation; finish or cancel an existing request before asking for another when a limit is reached.
+
+While a secure card is waiting, the sidebar marks a main chat as needing attention: the chat where the card was raised when that is a main chat, otherwise the main chat above the helper that raised it, otherwise the asking agent's main chat in that workspace. Known limit: when that agent has no main chat in the workspace, no sidebar entry is marked; the card still shows in its own chat. When the server cannot read the waiting cards, the entry shows attention as unknown, not "nothing pending". Once the card is no longer waiting, it no longer counts toward the cue.
+
+| Action or state | What happens |
+|---|---|
+| Submit | All requested fields are saved together in the encrypted vault, under new versioned reference names. The agent continues with those names, never the values. |
+| Replace an integration secret | The replacement is saved as a new version. Saving the card alone does not switch the integration to it. |
+| Cancel the card, or Stop before submitting | Nothing is stored. |
+| Stop after submitting | The saved version remains in the vault. The stopped continuation does not restart on a later reload, explicit chat revival or gateway restart. This also applies when you press Stop after a restart has already interrupted the session. Stop does not undo an integration change already completed. |
+| Gateway restarts before submission | The request becomes unavailable. Ask the agent for a new card. |
+| The destination changes while the card is open | Submission is refused. Ask for a new card showing the current destination. |
+| Saving fails before anything is stored | The card says the request is still pending and what to check: that the credential store is unlocked, readable and writable, and that there is free disk space. Fix that, then submit again. The gateway log records the request, the failed step and a safe cause, never the value. |
+| Saving succeeds but the follow-up is not confirmed | The card says the secret is saved. Do not enter it again; reopen the chat to retry the continuation. |
+
+Each card transition is recorded in the audit log without the values. If the gateway stopped after saving a submission but before recording it, the restart finds the saved submission and records it as `secret.request.recovered_submitted`.
+
+The card does **not** ask you to re-type your account password: submitting that exact destination-bound card is consent for that write only. It cannot choose an arbitrary vault entry or delete one. Raw Credential Vault changes in Settings still require password confirmation where applicable.
+
+A turn that consumed a message from a channel person cannot open this card, even when that message arrived in an agent's main chat. The agent instead asks you to open the web app and ask it there. Unattended runs cannot open a card either.
+
+Submitted values are not included in card frames, the conversation, or the continuation message. Stored versions also join the sensitive-value filtering set, including versions an integration has not selected. A damaged, unrelated vault entry does not prevent a continuation from using its readable submitted references: readable versions remain in the filtering set, and previously registered values are retained when the complete scan reports damage. If the submitted references themselves cannot be read, the continuation waits for repair; do not submit their values again. Filtering remains best-effort and can be switched off; do not treat it as protection against a command you deliberately allow to reveal a secret.
+
+### Saving is separate from selecting
+
+The card saves a new version; it does not itself change a provider, connector or channel. The agent must use that integration's configuration tool, with the stored **reference name** and your approval. Those tools refuse secret values in their inputs. Plaintext entry remains available in Settings.
+
+| Integration | What the agent selects | What is checked before saving the change |
+|---|---|---|
+| Model provider | `configure_provider` with `api_key_ref` | The provider, effective endpoint, protocol and API-key field match the card's destination. An endpoint-only card is restricted to that exact endpoint. Every affected provider row is checked. |
+| MCP server | `add_mcp_server` with an `env_refs` map | The server name, transport, executable, ordered arguments, URL and specific environment-variable name match the card's destination. Only the named reference entries are attached. |
+| Channel connection | `configure_channel` or `connect_channel` with fields such as `token_ref`, `bot_token_ref` or `app_secret_ref` | The exact connection instance, its platform account and settings, and the credential field match the card's destination, checked against the connection as it will be saved. Which workspace and agent the connection answers for, and whether it is enabled, are not part of the card's destination: they are routing, which you approve on the `connect_channel` step itself. A change of account or settings that would redirect a retained credential is refused too. |
+
+A reference name alone is not permission to use a secret elsewhere. An unknown, unavailable, unbound or mismatched reference is refused without changing the integration or the stored value. If the destination changed, establish the new destination in Settings, then ask for a new card. Selecting a replacement leaves the earlier stored version intact.
+
+These are shared installation settings. The agent first reads the current entry and confirms the proposed change with you. If Settings or another agent changes that entry before the write, the tool refuses the stale revision. Re-read, review and confirm the new plan before retrying; do not replay the earlier approval blindly. Saving the card is not approval for this later configuration change.
+
+### Adding a new MCP server that needs a secret
+
+For a new stdio MCP server that needs an environment-variable secret, the non-secret server description must exist before it can be shown on a card. This environment-secret flow does not support HTTP or SSE servers:
+
+| Step | What you should expect |
+|---|---|
+| 1. Save the non-secret server description | Approve the stdio server's executable and arguments. The server entry is saved and a connection is attempted. A server that needs a secret may not connect yet: the entry remains saved, but credential setup is unfinished. |
+| 2. Submit the secure card | The agent requests the environment-variable secret for that saved server. Submit saves a version and returns only its reference name to the continuation. |
+| 3. Approve reference attachment | The agent re-reads the server's revision, confirms the attachment and calls `add_mcp_server` with the reference map. This attaches references to the unchanged server; it is not a general update command. |
+| 4. Read the connection result | Omnipus attempts live reconciliation and reports the connection status. A saved reference is not proof that the server connected or that its tools work. If live reconciliation fails, the result is **saved but not working** with the failure reason, even when the server is still connected with its previous configuration. Tools still require their normal assignments and policies. |
+
+Attaching references does not enable a disabled server, change the global MCP switch, replace omitted references, or alter its executable, arguments, URL or policies. Omitted description fields mean unchanged; supplied description fields must match the saved destination. A changed server revision requires a new confirmation, and a changed destination requires a new card.
+
+Cancelling the card leaves the non-secret server entry in place and stores no secret. Stopping after submission leaves the new version stored but does not attach it automatically. You can continue the setup later with a fresh confirmation or remove the server deliberately; Omnipus does not silently roll it back or remove and recreate it.
+
+### Private variables for one agent
+
+An agent can also ask for a **private variable**: a named secret, such as `WEATHER_TOKEN`, that only that agent's own commands receive. It belongs to one agent in one workspace. Mia's `WEATHER_TOKEN` in Sales is not visible to Ray in Sales, and not to Mia in Marketing (Marketing can have its own value).
+
+The card shows the owner as "Mia in Sales" and the variable name. Omnipus can request a private variable for another agent, but only for an agent that is a member of that workspace.
+
+| What you should know | Details |
+|---|---|
+| Promise | Never typed into the chat, never in tool arguments, hidden in output where possible; **a command you let the agent run can still reveal it**. Output filtering hides the exact value only: a transformed copy (for example base64) is not guaranteed to be hidden. |
+| Where it is available | Only as an environment variable in that agent's own commands in that workspace: `bash` (foreground and background) and `environment_setup`. It is added after Omnipus's own environment settings, so the document toolchain does not remove it. It is never placed in the gateway's own environment, and external-program workers do not receive it. |
+| Names | Uppercase letters, digits and `_`, 1 to 64 characters, starting with a letter. Names Omnipus sets for commands are refused, with the reason: for example `PATH`, `HOME`, `TMPDIR`, `HTTP_PROXY`, `PIP_CACHE_DIR`, `PYTHONPATH`, `NODE_PATH`, and any name starting with `LC_`, `XDG_`, `OMNIPUS_`, `LD_` or `DYLD_`. |
+| Replacing it | Submitting a new value on the owner's card takes effect at once for the next command, with no second approval. The previous version stays stored and listed as superseded. Only Omnipus can switch an agent's variable back to an older version (`select_secret_version`), and it asks for your approval first. |
+| Turns started by a channel person | Private variables are **not** added to commands in a turn that read a message from someone on a connected channel, unless you marked that variable "available in channel conversations". This is off by default; only a signed-in web user can change it, and each change is recorded in the audit log. |
+| If it cannot be read | The command still runs without it, and the result says which private variable could not be read. Replace it on a new card. |
+
+### Listing and removing secrets in chat
+
+Agents see stored secrets by **reference name**, never by value. `list_secrets` shows each entry's reference name, kind, version, destination, the integrations that use it, and whether it is in use; an ordinary agent sees only its own private variables in the current workspace, while Omnipus sees every stored reference. Entries saved through Settings (or by boot configuration) are listed too, with the kind **unbound** and the destination **Stored in Settings; no recipient recorded**: no recipient was recorded for them, which says nothing about whether they are used. Their consumer list shows which integrations use them; one with no consumers is shown as stored, not in use. Omnipus sees their names, never their values, and can remove them by name.
+
+Only Omnipus can remove a secret, with `remove_secret`, and you approve it first. The approval card lists every integration that uses the reference before anything is deleted. Removing a reference that is still in use is allowed: after removal the configuration is reloaded, the integrations that used it stop using it and show as degraded, and the next start keeps running with them degraded until you give them a new secret. The result reports three separate facts — whether the value was durably deleted, what changed for running connections, and whether the configuration still starts. Removing an older version that a replacement superseded leaves the current version working. Each removal is recorded in the audit log as `secret.removed`, without the value.
+
 ## How to manage saved secrets
 
 1. Open **Settings**, then select **Security**.
@@ -519,6 +596,8 @@ An authorized `environment_setup` run can create and read new files directly ins
 Omnipus stores credential values in an encrypted file. Settings refer to credentials by name instead of storing their plain values. On a fresh installation, Omnipus creates a master key and warns you to back it up. If you lose that key, existing credentials cannot be recovered.
 
 Rotation re-encrypts the whole vault with the new passphrase. Back up the new passphrase because Omnipus needs it to unlock the vault later.
+
+If one saved entry is damaged but another entry can still be decrypted, the gateway keeps running. This also applies when the damaged entry is used by a provider, mailbox or channel, during startup, configuration reload or a Settings update. The affected integration cannot use that entry; the server log names its reference at error level so you can repair or re-enter it. Other readable entries remain usable, and detecting damage does not rewrite the vault. A locked vault, an unreadable vault file, or a nonempty vault with no decryptable entry still stops startup or rejects the update. If the master key may be wrong, restore the correct key before re-entering secrets.
 
 Each stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open.
 

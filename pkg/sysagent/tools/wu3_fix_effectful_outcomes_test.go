@@ -5,7 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
@@ -31,7 +34,7 @@ func wu3Verdict(t *testing.T, result *tools.ToolResult, outcome, scope string, n
 func TestWU3ChannelSuccessfulWritesAreSavedButNotWorking(t *testing.T) {
 	const scope = "saved configuration read back"
 	notTested := []string{"authentication with the platform", "the live connection"}
-	deps, cfg := newTestDepsWithCredStore(t)
+	deps, cfg := wu3Deps(t)
 	cfg.Channels = map[string]config.ChannelInstanceConfig{}
 
 	enable := systools.NewChannelEnableTool(deps)
@@ -41,14 +44,15 @@ func TestWU3ChannelSuccessfulWritesAreSavedButNotWorking(t *testing.T) {
 	assert.Contains(t, body["reason"], "next config reload")
 	assert.True(t, cfg.Channels["telegram"].Enabled, "enable is durable")
 
+	ref := systools.IssueCardReferencesForTest(t, deps, secretrequest.Input{Instance: "telegram", Field: "token"}, "bot123:WU3FIXSECRET")[0]
 	configure := systools.NewChannelConfigureTool(deps)
 	res = configure.Execute(context.Background(), systools.WithCurrentRevisionForTest(configure,
-		map[string]any{"id": "telegram", "token": "bot123:WU3FIXSECRET"}))
+		map[string]any{"id": "telegram", "token_ref": ref}))
 	require.False(t, res.IsError, res.ForLLM)
 	body = wu3Verdict(t, res, "saved but not working", scope, notTested...)
 	assert.Contains(t, body["reason"], "next config reload")
 	assert.NotContains(t, res.ForLLM, "WU3FIXSECRET", "the secret is never echoed")
-	assert.Equal(t, "channel_telegram_token", cfg.Channels["telegram"].TokenRef, "configure is durable")
+	assert.Equal(t, ref, cfg.Channels["telegram"].TokenRef, "the prior card version is selected durably; plaintext is not a tool input")
 
 	disable := systools.NewChannelDisableTool(deps)
 	res = disable.Execute(context.Background(), systools.WithCurrentRevisionForTest(disable, map[string]any{"id": "telegram"}))
@@ -61,6 +65,9 @@ func TestWU3ChannelSuccessfulWritesAreSavedButNotWorking(t *testing.T) {
 // TC-05: add_mcp_server is "working" only when the live status is connected;
 // every other live state, or no live check at all, is "saved but not working".
 func TestWU3MCPAddOutcomeFollowsLiveStatus(t *testing.T) {
+	// Chief Q4-A: every nonworking secret-free CREATE gets this exact
+	// conditional setup explanation, followed by the unchanged actual failure.
+	const provisional = "server saved without credential references; credential setup is not finished if this server needs a secret. "
 	const scope = "live connection: the server's status after reconciliation and the number of tools it registered"
 	live := []string{"calling the server's tools", "tool policies (none are assigned yet)"}
 	cases := []struct {
@@ -74,13 +81,13 @@ func TestWU3MCPAddOutcomeFollowsLiveStatus(t *testing.T) {
 	}{
 		{name: "connected", status: "connected", outcome: "working", scope: scope, notTested: live},
 		{name: "error", status: "error", errMsg: "connection refused", outcome: "saved but not working", scope: scope,
-			reason: "connection failed: connection refused", notTested: live},
+			reason: provisional + "connection failed: connection refused", notTested: live},
 		{name: "disconnected", status: "disconnected", outcome: "saved but not working", scope: scope,
-			reason: "the server is not connected", notTested: live},
+			reason: provisional + "the server is not connected", notTested: live},
 		{name: "reconcile-failed", noStatus: true, reconcileErr: errors.New("boom"), outcome: "saved but not working",
-			reason: "live reconciliation failed: boom", notTested: []string{"the live connection"}},
+			reason: provisional + "live reconciliation failed: boom", notTested: []string{"the live connection"}},
 		{name: "unchecked", noStatus: true, noReconcile: true, outcome: "saved but not working",
-			reason: "not checked: live connection status is unavailable", notTested: []string{"the live connection"}},
+			reason: provisional + "not checked: live connection status is unavailable", notTested: []string{"the live connection"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -156,74 +163,61 @@ func TestWU3MCPRemoveOutcomeFollowsLiveDisconnect(t *testing.T) {
 	}
 }
 
-// code-reviewer IM-03 / silent-failure-hunter SF-02 / type-design T3: when one
-// env credential is stored and a later one fails, the add is "partly saved" —
-// the stored credential is a durable part — never "failed: nothing saved".
-func TestWU3MCPAddLaterCredentialFailureIsPartlySaved(t *testing.T) {
-	deps, cfg := newTestDepsWithCredStore(t)
-	systools.FailMCPCredentialWriteAfterForTest(t, 1)
-	add := systools.NewMCPAddTool(deps)
-	res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{
-		"name": "two-secrets", "command": "npx",
-		"env": map[string]any{"ALPHA": "wu3-first-value", "BETA": "wu3-second-value"},
-	}))
-	require.True(t, res.IsError, res.ForLLM)
-	body := wu3Outcome(t, res, "partly saved")
-	assert.Equal(t, []any{"env_credentials"}, body["changed_fields"], "the stored credential is a durable part")
-	stored, ok := body["stored_credentials"].([]any)
-	require.True(t, ok, "the stored credential references are named: %s", res.ForLLM)
-	require.Len(t, stored, 1)
-	ref, _ := stored[0].(string)
-	value, err := deps.CredStore.Get(ref)
-	require.NoError(t, err, "the named reference really is stored")
-	assert.Contains(t, []string{"wu3-first-value", "wu3-second-value"}, value)
-	assert.Contains(t, body["missing_parts"], "mcp server entry")
-	assert.NotContains(t, res.ForLLM, "wu3-first-value")
+// D2-A/Q1-A translation of the old later credential-write failure: a valid
+// first reference plus a recipient-mismatched later reference saves NOTHING.
+// add_mcp_server no longer owns a plaintext value-write/rollback path.
+func TestWU4B_MCPLaterRecipientFailureIsFailedNothingSaved(t *testing.T) {
+	f := newWU4BFixture(t)
+	tool, args, valid := wu4bMatchingSelection(t, f, "add_mcp_server")
+	wrong := f.bound(t, credentials.CardRecipient{Kind: "mcp_env", Server: "fixture", Transport: "stdio", Command: "fixture-command", Args: []string{"--read-only"}, Field: "OTHER"}, "wu3-second-value")
+	args["env_refs"] = map[string]any{"TOKEN": valid, "ZZZ_BAD": wrong}
+	before := f.snapshot(t)
+	res := tool.Execute(context.Background(), args)
+	f.unchanged(t, before)
+	wu4bRefusal(t, res, "recipient")
 	assert.NotContains(t, res.ForLLM, "wu3-second-value")
-	_, saved := cfg.Tools.MCP.Servers["two-secrets"]
-	assert.False(t, saved, "the server entry was not saved")
 }
 
-// Control for the partial-credential case: a first credential write failing
-// saves nothing, and is still "failed: nothing saved".
-func TestWU3MCPAddFirstCredentialFailureSavesNothing(t *testing.T) {
-	deps, cfg := newTestDepsWithCredStore(t)
-	systools.FailMCPCredentialWriteAfterForTest(t, 0)
-	add := systools.NewMCPAddTool(deps)
-	res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{
-		"name": "one-secret", "command": "npx", "env": map[string]any{"ALPHA": "wu3-only-value"},
-	}))
+// Q1-A translation of the first credential-write failure: the first missing
+// reference refuses before any config selection, value write or runtime call.
+func TestWU4B_MCPFirstMissingReferenceSavesNothing(t *testing.T) {
+	f := newWU4BFixture(t)
+	tool, args, _ := wu4bMatchingSelection(t, f, "add_mcp_server")
+	args["env_refs"] = map[string]any{"TOKEN": "missing-reference.v1"}
+	before := f.snapshot(t)
+	res := tool.Execute(context.Background(), args)
+	f.unchanged(t, before)
+	wu4bRefusal(t, res, "ref")
+}
+
+// Q1-A translation of rollback failure: Submit is a PRIOR successful storage
+// operation. A later config-save failure cannot delete its values/bindings or
+// claim this failed attachment partly saved credentials it never wrote.
+func TestWU4B_MCPConfigFailureAfterCardSubmitRetainsValuesWithoutSelection(t *testing.T) {
+	f := newWU4BFixture(t)
+	tool, args, _ := wu4bMatchingSelection(t, f, "add_mcp_server")
+	reg, sid, _ := wu4bCardRegistry(t, f)
+	card, err := reg.Create(context.Background(), sid, "omnipus", "wu4b-webchat", "", secretrequest.Input{Purpose: "MCP credential before failing selection", Server: "fixture", EnvKey: "TOKEN"})
+	require.NoError(t, err)
+	values := map[string]string{"value": "wu3-rollback-value"}
+	submitted, err := reg.Submit(card.Card.RequestId, "wu4b-owner", gen.SecretSubmitRequest{Values: &values})
+	require.NoError(t, err)
+	require.Len(t, submitted.Card.ReferenceNames, 1)
+	ref := submitted.Card.ReferenceNames[0]
+	args["env_refs"] = map[string]any{"TOKEN": ref}
+	before := f.snapshot(t)
+	attempts := 0
+	f.d.SaveConfigLocked = func(*config.Config) error { attempts++; return errors.New("injected config save failure") }
+	res := tool.Execute(context.Background(), args)
+	assert.Equal(t, 1, attempts, "instrument: valid selection reached the injected config-save failure")
+	f.unchanged(t, before)
 	require.True(t, res.IsError, res.ForLLM)
 	body := wu3Outcome(t, res, "failed: nothing saved")
 	assert.Equal(t, []any{}, body["changed_fields"])
-	_, err := deps.CredStore.Get("mcp_one-secret_ALPHA")
-	require.Error(t, err, "nothing was stored")
-	_, saved := cfg.Tools.MCP.Servers["one-secret"]
-	assert.False(t, saved)
-}
-
-// type-design T3: the config write fails after the env credential was stored
-// and the rollback cannot delete it — the result names the durable credential
-// in changed_fields/stored_credentials, not only inside the reason text.
-func TestWU3MCPAddRollbackFailureNamesDurableCredentials(t *testing.T) {
-	deps, cfg := newTestDepsWithCredStore(t)
-	// The config save fails, and the rollback's delete of the stored
-	// credential fails too (deterministic fault seams; no file permissions,
-	// so the test runs the same as root — CHECK R2-03).
-	deps.SaveConfigLocked = func(*config.Config) error { return errors.New("injected config save failure") }
-	systools.FailMCPCredentialRollbackForTest(t)
-	add := systools.NewMCPAddTool(deps)
-	res := add.Execute(context.Background(), systools.WithCurrentRevisionForTest(add, map[string]any{
-		"name": "rb", "command": "npx", "env": map[string]any{"TOKEN": "wu3-rollback-value"},
-	}))
-	require.True(t, res.IsError, res.ForLLM)
-	body := wu3Outcome(t, res, "partly saved")
-	assert.Equal(t, []any{"env_credentials"}, body["changed_fields"])
-	assert.Equal(t, []any{"mcp_rb_TOKEN"}, body["stored_credentials"])
-	value, err := deps.CredStore.Get("mcp_rb_TOKEN")
-	require.NoError(t, err, "the credential the result names really is still stored")
+	assert.Contains(t, res.ForLLM, "injected config save failure")
+	value, err := f.d.CredStore.Get(ref)
+	require.NoError(t, err)
 	assert.Equal(t, "wu3-rollback-value", value)
+	assert.Empty(t, f.cfg.Tools.MCP.Servers["fixture"].EnvRefs)
 	assert.NotContains(t, res.ForLLM, "wu3-rollback-value")
-	_, saved := cfg.Tools.MCP.Servers["rb"]
-	assert.False(t, saved)
 }

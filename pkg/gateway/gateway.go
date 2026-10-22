@@ -1220,8 +1220,9 @@ func (rc *runContextWithOptions) prepareSkillServices() {
 	// First-boot seed of the embedded default skill set (Spec-6 U3, FR-9.3).
 	// SeedDefaults is idempotent: it only fills in skills that are missing from
 	// the global skills dir and never overwrites existing (possibly user-edited)
-	// skills. A fresh install therefore ships with summarize, skill-authoring,
-	// plan, and daily-briefing without any external files.
+	// skills. A fresh install therefore ships with every package under
+	// pkg/skills/embedded (plan, interview, the Omnipus workflow skills, ...)
+	// without any external files.
 	if seedRes, seedErr := skills.SeedDefaults(skillsGlobalDir); seedErr != nil {
 		slog.Warn("gateway: failed to seed default skills from embed", "error", seedErr)
 	} else if len(seedRes.Seeded) > 0 {

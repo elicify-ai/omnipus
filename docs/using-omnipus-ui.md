@@ -130,6 +130,28 @@ When an agent asks you questions, a card docks above the message box with one ta
 - Each question except the last shows **Next**; the last is confirmed with **Answer**, which sends every answer at once and is available only when every question is answered. **Cancel** sends nothing.
 - No option is chosen for you in advance — the recommended one is only listed first and marked.
 
+### Providing a secret
+
+When an agent needs a key, token or password, its secret card appears above the message box in the chat the request belongs to. A helper's card appears in the original chat that started its helper chain. The card names the asking agent, explains why the value is needed, and shows the exact destination. Check that destination before entering anything; use the card's masked fields, never the chat message box.
+
+| Action or state | What happens |
+|---|---|
+| **Save secret** | Sends the values only to the request's authenticated submit endpoint. The fields clear immediately and the card says **Submitting…** until the server answers. **Saved** shows any stored reference names supplied by the server, never the values. |
+| **Cancel** | Cancels the request without storing a value. |
+| A refused submit | Shows the reason without claiming success. The fields are cleared; enter fresh values for another deliberate attempt. |
+| A lost submit response | Says **Submission unknown** and checks the request's state. It never automatically sends the values again. **Check again** retries only that state check. |
+| **Saved, but the agent's next step is not confirmed** | The server saved the secret, but could not confirm the next step. Stored reference names remain visible. Do not enter or send the secret again: reopen this chat to retry the saved continuation. The warning cannot be dismissed or replaced by a newer card while it remains unconfirmed. |
+| A resolved request | Shows **Saved**, **Cancelled**, **Stopped**, **Request unavailable**, or **Refused**, as reported by the server. A restart-interrupted request is unavailable, not saved. |
+| Reconnecting or reloading | Restores the request metadata and latest result supplied by the server, never typed values from the server. Reloading starts a pending card with empty fields; reconnecting never automatically resends them. |
+
+The saved-but-unconfirmed warning is restored after a page reload or in a fresh tab while the server still reports the follow-up as unconfirmed, and clears when delivery is confirmed, you stop the follow-up, or the request reaches another final state; reopen the chat to retry without re-entering or resending the secret.
+
+Secret cards are available independently of the agent profile's **Private secrets** list. For a non-worker, non-system agent, open its profile's **Tools** tab to review its private-variable versions, grouped by workspace. The list shows names, versions and use state, never values. **Available in channel conversations** controls whether that variable is added to commands in turns that consumed a channel person's message; it is off by default. To add or replace a value, ask the agent in chat and use its secure card. To remove one, ask Omnipus. See [security](security.md) for the limits of secret storage and use.
+
+### Where an approval came from
+
+The approval pop-up shows the request's origin when the server supplies it: **for group Sales**, **while answering Anna on Telegram**, or **asked by Jim**, for example. The label remains available after reconnecting, including on a request whose other details are unavailable. A web-origin request without such a label gets no guessed origin. Pending requests still appear one at a time over the app, including on Settings; showing the label does not approve the action.
+
 ### Who is replying
 
 Replies in the web app's chat show the agent's name above the text with a small portrait of that agent beside it — the same mark the sidebar and the @-mention menu use — including streaming replies, saved history, and another agent's replies in the same chat. The name and portrait are the whole label: no status word is printed next to them. When the reply records its author, the name follows that author rather than the current agent selection. Replies without a recorded author fall back to the chat's current agent. If an agent's details cannot be found, its stored ID can appear instead of a name, and the portrait falls back to the general Omnipus mark.

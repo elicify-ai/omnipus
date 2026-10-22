@@ -849,7 +849,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		var nextResp string
 		var nextErr error
 		_, contErr := al.continuePendingSteeringWithAgent(ctx, taskChatID, liveAgent,
-			func(_ *AgentInstance, steeringMsgs []providers.Message, _ []string, _ approvalOrigin) (string, error) {
+			func(_ *AgentInstance, steeringMsgs []providers.Message, _ []string, _ []inputOrigin) (string, error) {
 				resumed = true
 				out = taskExternalOutcome{}
 				nextResp, nextErr = al.runTaskExternalCLIOnce(ctx, liveAgent,

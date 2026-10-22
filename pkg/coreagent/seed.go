@@ -423,7 +423,13 @@ func coreAgentSkills(id CoreAgentID) []string {
 	case IDJim:
 		return []string{"interview", "orchestrate", "plan", "define-goal"}
 	case IDOmnipus:
-		return []string{"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team", "mcp-install", "provider-setup", "channel-setup", "doctor"}
+		// omnipus-system-agent FR-010/WU-9: the Omnipus workflow skills,
+		// granted to Omnipus only; interview stays shared with Mia and Jim.
+		return []string{"interview",
+			"create-agent", "change-agent", "remove-agent", "write-skill", "install-skill",
+			"team-delegation", "welcome-workspace", "add-connector", "remove-connector",
+			"add-provider", "provider-config", "connect-channel", "disable-channel",
+			"doctor-usage", "shell-diagnosis", "team-setup", "capability-plan", "dependency-check"}
 	case IDPlanner:
 		return []string{"plan", "define-goal"}
 	case IDResearcher:

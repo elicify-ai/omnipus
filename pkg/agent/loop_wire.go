@@ -70,6 +70,7 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry, cfg *config.Con
 		deps := tools.ExecToolDeps{
 			GodMode:         godMode,
 			AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
+			PrivateEnv:      al.privateEnvForTurn,
 		}
 		// Plumb the kernel-sandbox egress proxy into the bash tool so the
 		// hardened path (non-god-mode) injects HTTP_PROXY pointing at the
@@ -101,6 +102,12 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry, cfg *config.Con
 				map[string]any{"agent_id": agentID, "error": err.Error()})
 			agent.Tools.Unregister("bash")
 			continue
+		}
+		// ADR-090: the replacement must keep the document runtime the base
+		// instance wired (instance.go) — otherwise every live bash call loses
+		// the managed document toolchain layer.
+		if agent.DocumentRuntime != nil {
+			execTool.SetDocumentRuntime(*agent.DocumentRuntime)
 		}
 		agent.Tools.RegisterReplacing(execTool)
 	}
@@ -581,6 +588,17 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 	agent.Tools.RegisterReplacing(tools.NewAskUserQuestionTool(func() tools.AskUserQuestionRegistry {
 		return rw.rs.al.getAskUserRegistry()
 	}))
+	agent.Tools.RegisterReplacing(tools.NewRequestSecretTool(rw.rs.al.SecretRequests, func(id string) string {
+		for _, ac := range rw.rs.al.GetConfig().Agents.List {
+			if ac.ID == id {
+				return ac.Name
+			}
+		}
+		return id
+	}))
+	// list_secrets (FR-073): every native agent; an ordinary agent sees its
+	// own private variables in the current workspace, Omnipus sees all.
+	agent.Tools.RegisterReplacing(rw.rs.al.newListSecretsTool())
 
 	// set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004..FR-006):
 	// the validated write-path over this session's goal record.
@@ -2118,6 +2136,45 @@ func (al *AgentLoop) SetSysagentDeps(deps *systools.Deps) {
 // supply side; policy is the demand filter.
 func (al *AgentLoop) WireSysagentDeps(deps *systools.Deps) {
 	depsCopy := *deps
+	if depsCopy.ReloadAndWaitFallback == nil {
+		depsCopy.ReloadAndWaitFallback = al.reloadAndWait
+	}
+	if depsCopy.ChannelLiveStatus == nil {
+		depsCopy.ChannelLiveStatus = al.channelLiveStatus
+	}
+	if depsCopy.PairingAttempts == nil {
+		depsCopy.PairingAttempts = al.pairingAttempts
+	}
+	if depsCopy.PublishPairingProgress == nil {
+		depsCopy.PublishPairingProgress = al.PublishPairingProgress
+	}
+	if depsCopy.AdmitPairing == nil {
+		depsCopy.AdmitPairing = al.AdmitConnectPairing
+	}
+	if depsCopy.CommitPairing == nil {
+		depsCopy.CommitPairing = al.CommitPairing
+	}
+	if depsCopy.ReleasePairing == nil {
+		depsCopy.ReleasePairing = al.ReleasePairing
+	}
+	if depsCopy.RequestChannelRestart == nil {
+		depsCopy.RequestChannelRestart = al.requestChannelRestart
+	}
+	if depsCopy.LastStartError == nil {
+		depsCopy.LastStartError = al.lastStartError
+	}
+	if depsCopy.AdmitEnablePairing == nil {
+		depsCopy.AdmitEnablePairing = al.admitEnablePairingForTool
+	}
+	if depsCopy.SettlePairing == nil {
+		depsCopy.SettlePairing = al.SettlePairing
+	}
+	if depsCopy.RevokePairingForDisable == nil {
+		depsCopy.RevokePairingForDisable = al.RevokePairingForDisable
+	}
+	if depsCopy.PairingAttemptState == nil {
+		depsCopy.PairingAttemptState = al.PairingAttemptState
+	}
 	al.sysagentDeps = &depsCopy
 	al.wireSysagentDepsLocked(al.registry, &depsCopy)
 }

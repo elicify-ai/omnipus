@@ -32,7 +32,31 @@ const (
 	wecomRouteTTL          = 30 * time.Minute
 	wecomMediaTimeout      = 30 * time.Second
 	wecomRecentMessageMax  = 1000
+
+	// wecomFirstHandshakeWait is the fixed upper limit Start waits for the
+	// first subscribe answer (Train 2 gate r1, BDD-8.3). A rejection inside it
+	// fails Start ("saved but not working"); no answer inside it is NOT a
+	// rejection — the channel keeps connecting in the background as before.
+	// Documented in docs/connectors.md.
+	wecomFirstHandshakeWait = 10 * time.Second
 )
+
+// errWeComCredentialsRejected marks a subscribe that WeCom answered with a
+// non-zero errcode. The subscribe frame carries only bot_id and secret (it is
+// the long-connection authentication frame), so such an answer rejects them.
+var errWeComCredentialsRejected = errors.New("WeCom rejected the bot ID or secret")
+
+// wecomAckError is a non-zero errcode answer to a command. It keeps the
+// historical "wecom errcode=… errmsg=…" text and is wrapped with
+// channels.ErrTemporary by writeAndWaitAck, so existing classification holds.
+type wecomAckError struct {
+	code int
+	msg  string
+}
+
+func (e *wecomAckError) Error() string {
+	return fmt.Sprintf("wecom errcode=%d errmsg=%s", e.code, e.msg)
+}
 
 type WeComChannel struct {
 	*channels.BaseChannel
@@ -50,6 +74,11 @@ type WeComChannel struct {
 
 	turnsMu sync.Mutex
 	turns   map[string][]wecomTurn
+
+	// firstHandshake carries the outcome of the first subscribe after Start
+	// (nil = accepted, errWeComCredentialsRejected = rejected, other = not
+	// reached). Buffered 1; later outcomes are dropped.
+	firstHandshake chan error
 
 	recent      *recentMessageSet
 	routes      *reqIDStore
@@ -152,9 +181,43 @@ func NewChannel(
 func (c *WeComChannel) Start(ctx context.Context) error {
 	logger.InfoC("wecom", "Starting WeCom channel...")
 	c.ctx, c.cancel = context.WithCancel(ctx)
+	c.firstHandshake = make(chan error, 1)
 	c.SetRunning(true)
 	go c.connectLoop()
+	return c.awaitFirstHandshake()
+}
+
+// awaitFirstHandshake waits at most wecomFirstHandshakeWait for the first
+// subscribe outcome. Only an explicit rejection fails Start; an unreachable
+// server or no answer in time keeps today's background retry.
+func (c *WeComChannel) awaitFirstHandshake() error {
+	timer := time.NewTimer(wecomFirstHandshakeWait)
+	defer timer.Stop()
+	select {
+	case err := <-c.firstHandshake:
+		if errors.Is(err, errWeComCredentialsRejected) {
+			_ = c.Stop(context.Background())
+			return fmt.Errorf("wecom rejected the bot credentials: %w", err)
+		}
+		if err != nil {
+			logger.WarnCF("wecom", "Could not reach WeCom to check the bot credentials; retrying in the background",
+				map[string]any{"error": err.Error()})
+		}
+	case <-timer.C:
+		logger.WarnCF("wecom", "WeCom did not answer the first subscribe in time; still connecting in the background",
+			map[string]any{"waited": wecomFirstHandshakeWait.String()})
+	case <-c.ctx.Done():
+	}
 	return nil
+}
+
+// reportHandshake records a subscribe outcome for awaitFirstHandshake without
+// ever blocking the connection loop.
+func (c *WeComChannel) reportHandshake(err error) {
+	select {
+	case c.firstHandshake <- err:
+	default:
+	}
 }
 
 func (c *WeComChannel) Stop(_ context.Context) error {
@@ -406,6 +469,7 @@ func (c *WeComChannel) runConnection() error {
 		_ = resp.Body.Close()
 	}
 	if err != nil {
+		c.reportHandshake(err)
 		return fmt.Errorf("%w: %w", channels.ErrTemporary, err)
 	}
 
@@ -435,8 +499,15 @@ func (c *WeComChannel) runConnection() error {
 			"secret": c.secret,
 		},
 	}, wecomCommandTimeout); writeErr != nil {
+		var ackErr *wecomAckError
+		if errors.As(writeErr, &ackErr) {
+			c.reportHandshake(fmt.Errorf("%w: %w", errWeComCredentialsRejected, ackErr))
+		} else {
+			c.reportHandshake(writeErr)
+		}
 		return writeErr
 	}
+	c.reportHandshake(nil)
 
 	heartbeatDone := make(chan struct{})
 	go func() {
@@ -897,12 +968,8 @@ func (c *WeComChannel) writeAndWaitAck(
 	select {
 	case env := <-waitCh:
 		if env.ErrCode != 0 {
-			return wecomEnvelope{}, fmt.Errorf(
-				"%w: wecom errcode=%d errmsg=%s",
-				channels.ErrTemporary,
-				env.ErrCode,
-				env.ErrMsg,
-			)
+			return wecomEnvelope{}, fmt.Errorf("%w: %w", channels.ErrTemporary,
+				&wecomAckError{code: env.ErrCode, msg: env.ErrMsg})
 		}
 		return env, nil
 	case <-timer.C:

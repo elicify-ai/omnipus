@@ -25,14 +25,21 @@ import (
 // credential store, recording whether ReloadFunc was triggered.
 func newProviderTestDeps(t *testing.T, cfg *config.Config) (*Deps, *credentials.Store, *bool) {
 	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("OMNIPUS_HOME", home)
 	t.Setenv("OMNIPUS_MASTER_KEY", strings.Repeat("0", 64))
-	store := credentials.NewStore(filepath.Join(t.TempDir(), "credentials.json"))
+	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
 	require.NoError(t, credentials.Unlock(store))
+	t.Cleanup(store.Close)
+	path := filepath.Join(home, "config.json")
+	require.NoError(t, config.SaveConfig(path, cfg))
 	reloaded := false
 	deps := &Deps{
+		Home: home, ConfigPath: path,
 		GetCfg:           func() *config.Config { return cfg },
 		MutateConfig:     func(fn func(*config.Config) error) error { return fn(cfg) },
-		SaveConfigLocked: func(cfg *config.Config) error { return nil },
+		SaveConfigLocked: func(cfg *config.Config) error { return config.SaveConfig(path, cfg) },
 		CredStore:        store,
 		ReloadFunc:       func() error { reloaded = true; return nil },
 		// FR-031: configure_provider checks the saved entry with a model
@@ -56,9 +63,8 @@ func unmarshalProviderResult(t *testing.T, body string) map[string]any {
 	return m
 }
 
-// TestProviderConfigure_WiresAPIKeyRef is the core fix: storing a provider key
-// must also wire the config entry's APIKeyRef (canonical <provider>_API_KEY) so
-// the key is referenced, injected, and resolvable — not orphaned in the store.
+// D2-A adaptation: selecting a previously stored bound version must wire every
+// matching provider row so the reference is resolvable, not orphaned.
 func TestProviderConfigure_WiresAPIKeyRef(t *testing.T) {
 	cfg := &config.Config{Providers: []*config.ModelConfig{
 		{Provider: "openrouter", Model: "openrouter/auto"},            // seed, empty ref
@@ -66,41 +72,47 @@ func TestProviderConfigure_WiresAPIKeyRef(t *testing.T) {
 	}}
 	deps, store, reloaded := newProviderTestDeps(t, cfg)
 
+	ref := IssueProviderReferenceForTest(t, deps, "openrouter", "https://openrouter.ai/api/v1", "sk-or-test")
 	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-		"name":     "openrouter",
-		"api_key":  "sk-or-test",
-		"api_base": "https://openrouter.ai/api/v1",
+		"name":        "openrouter",
+		"api_key_ref": ref,
+		"api_base":    "https://openrouter.ai/api/v1",
 	}))
 	require.False(t, res.IsError, "configure should succeed: %s", res.ForLLM)
 
-	v, err := store.Get("openrouter_API_KEY")
+	v, err := store.Get(ref)
 	require.NoError(t, err)
-	require.Equal(t, "sk-or-test", v, "key stored under canonical ref")
+	require.Equal(t, "sk-or-test", v, "the selected prior card value remains readable")
 
 	for _, p := range cfg.Providers {
-		require.Equal(t, "openrouter_API_KEY", p.APIKeyRef, "every entry now references the key")
+		require.Equal(t, ref, p.APIKeyRef, "every entry now references the key")
 		require.Equal(t, "https://openrouter.ai/api/v1", p.APIBase, "api_base wired")
 	}
 	require.True(t, *reloaded, "reload triggered so the provider becomes live")
 }
 
-// TestProviderConfigure_ReusesExistingRef updates the key under the entry's
-// existing APIKeyRef rather than stranding it behind a new ref.
-func TestProviderConfigure_ReusesExistingRef(t *testing.T) {
+// Q1-A translation: replacement selects an explicit new bound version and keeps
+// the prior reference/value unchanged; selection never overwrites a value.
+func TestProviderConfigure_SelectsNewVersionWithoutOverwritingExistingRef(t *testing.T) {
 	cfg := &config.Config{Providers: []*config.ModelConfig{
 		{Provider: "anthropic", Model: "anthropic/claude", APIKeyRef: "ANTHROPIC_API_KEY"},
 	}}
 	deps, store, _ := newProviderTestDeps(t, cfg)
 	require.NoError(t, store.Set("ANTHROPIC_API_KEY", "old"))
 
+	ref := IssueProviderReferenceForTest(t, deps, "anthropic", "", "new-key")
 	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-		"name": "anthropic", "api_key": "new-key",
+		"name": "anthropic", "api_key_ref": ref,
 	}))
 	require.False(t, res.IsError)
 
-	v, _ := store.Get("ANTHROPIC_API_KEY")
-	require.Equal(t, "new-key", v, "updated under the existing ref")
-	require.Equal(t, "ANTHROPIC_API_KEY", cfg.Providers[0].APIKeyRef, "ref unchanged")
+	old, err := store.Get("ANTHROPIC_API_KEY")
+	require.NoError(t, err)
+	require.Equal(t, "old", old, "D2-A: old stored values are never overwritten by selection")
+	value, err := store.Get(ref)
+	require.NoError(t, err)
+	require.Equal(t, "new-key", value)
+	require.Equal(t, ref, cfg.Providers[0].APIKeyRef, "explicitly approved new bound version selected")
 }
 
 // TestProviderConfigure_AppendsEntryForNewProvider adds a referenced entry when
@@ -109,15 +121,17 @@ func TestProviderConfigure_AppendsEntryForNewProvider(t *testing.T) {
 	cfg := &config.Config{}
 	deps, store, _ := newProviderTestDeps(t, cfg)
 
+	ref := IssueProviderReferenceForTest(t, deps, "cohere", "", "sk-co")
 	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-		"name": "cohere", "api_key": "sk-co",
+		"name": "cohere", "api_key_ref": ref,
 	}))
 	require.False(t, res.IsError)
 
 	require.Len(t, cfg.Providers, 1)
 	require.Equal(t, "cohere", cfg.Providers[0].Provider)
-	require.Equal(t, "cohere_API_KEY", cfg.Providers[0].APIKeyRef)
-	v, _ := store.Get("cohere_API_KEY")
+	require.Equal(t, ref, cfg.Providers[0].APIKeyRef)
+	v, err := store.Get(ref)
+	require.NoError(t, err)
 	require.Equal(t, "sk-co", v)
 }
 
@@ -382,10 +396,11 @@ func TestProviderConfigure_APIBaseIsStored(t *testing.T) {
 	cfg := &config.Config{}
 	deps, _, _ := newProviderTestDeps(t, cfg)
 
+	ref := IssueProviderReferenceForTest(t, deps, "openai", "https://api.openai.com/v1", "sk-test")
 	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-		"name":     "openai",
-		"api_key":  "sk-test",
-		"api_base": "https://api.openai.com/v1",
+		"name":        "openai",
+		"api_key_ref": ref,
+		"api_base":    "https://api.openai.com/v1",
 	}))
 	require.False(t, res.IsError, "configure with valid api_base should succeed: %s", res.ForLLM)
 
@@ -396,19 +411,19 @@ func TestProviderConfigure_APIBaseIsStored(t *testing.T) {
 }
 
 // TestProviderConfigure_CloudProviderRequiresAPIKey verifies that configure_provider
-// rejects a cloud provider call with no api_key.
+// rejects a cloud provider call with no api_key_ref.
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.14
-func TestProviderConfigure_CloudProviderRequiresAPIKey(t *testing.T) {
+func TestProviderConfigure_CloudProviderRequiresAPIKeyReference(t *testing.T) {
 	cfg := &config.Config{}
 	deps, _, _ := newProviderTestDeps(t, cfg)
 
-	// anthropic is a cloud provider — api_key is required.
+	// anthropic is a cloud provider — a stored api_key_ref is required.
 	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 		"name": "anthropic",
-		// no api_key
+		// no api_key_ref
 	}))
-	require.True(t, res.IsError, "cloud provider without api_key should fail: %s", res.ForLLM)
+	require.True(t, res.IsError, "cloud provider without api_key_ref should fail: %s", res.ForLLM)
 
 	m := unmarshalProviderResult(t, res.ForLLM)
 	errBlock, _ := m["error"].(map[string]any)
@@ -477,8 +492,8 @@ func TestProviderConfigure_APIBaseValidation(t *testing.T) {
 			deps, _, _ := newProviderTestDeps(t, cfg)
 
 			args := map[string]any{
-				"name":    "openai",
-				"api_key": "sk-test",
+				"name":        "openai",
+				"api_key_ref": IssueProviderReferenceForTest(t, deps, "openai", tc.apiBase, "sk-test"),
 			}
 			if tc.apiBase != "" {
 				args["api_base"] = tc.apiBase
@@ -580,13 +595,14 @@ func TestProviderConfigure_WideCatalogProviderConfigures(t *testing.T) {
 			cfg := &config.Config{}
 			deps, store, _ := newProviderTestDeps(t, cfg)
 
+			ref := IssueProviderReferenceForTest(t, deps, name, "", "sk-test-"+name)
 			res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-				"name":    name,
-				"api_key": "sk-test-" + name,
+				"name":        name,
+				"api_key_ref": ref,
 			}))
 			require.False(t, res.IsError, "%s should be a known catalog provider and configure: %s", name, res.ForLLM)
 
-			v, err := store.Get(name + "_API_KEY")
+			v, err := store.Get(ref)
 			require.NoError(t, err)
 			require.Equal(t, "sk-test-"+name, v)
 
@@ -619,9 +635,13 @@ func TestProviderConfigure_LegacyAliasIdsRejected(t *testing.T) {
 			cfg := &config.Config{}
 			deps, _, _ := newProviderTestDeps(t, cfg)
 
+			ref := "unselected-control-ref"
+			if !tc.wantError {
+				ref = IssueProviderReferenceForTest(t, deps, tc.name, "https://catalogue.wu4b.invalid/v1", "sk-test")
+			}
 			res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-				"name":    tc.name,
-				"api_key": "sk-test",
+				"name":        tc.name,
+				"api_key_ref": ref, "api_base": "https://catalogue.wu4b.invalid/v1",
 			}))
 			if tc.wantError {
 				require.True(t, res.IsError, "%q is not a real catalog id and must be rejected: %s", tc.name, res.ForLLM)
@@ -642,8 +662,8 @@ func TestProviderConfigure_UnknownProviderRejected(t *testing.T) {
 	deps, _, _ := newProviderTestDeps(t, cfg)
 
 	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-		"name":    "totally-not-a-real-provider",
-		"api_key": "sk-test",
+		"name":        "totally-not-a-real-provider",
+		"api_key_ref": "unselected-control-ref",
 	}))
 	require.True(t, res.IsError)
 	m := unmarshalProviderResult(t, res.ForLLM)
@@ -662,8 +682,9 @@ func TestProviderConfigure_NoFakeStatusFields(t *testing.T) {
 	cfg := &config.Config{}
 	deps, _, _ := newProviderTestDeps(t, cfg)
 
+	ref := IssueProviderReferenceForTest(t, deps, "anthropic", "", "sk-ant-test")
 	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-		"name": "anthropic", "api_key": "sk-ant-test",
+		"name": "anthropic", "api_key_ref": ref,
 	}))
 	require.False(t, res.IsError, "%s", res.ForLLM)
 
@@ -674,7 +695,7 @@ func TestProviderConfigure_NoFakeStatusFields(t *testing.T) {
 	if _, present := m["models_available"]; present {
 		t.Errorf("configure_provider response still contains a fabricated 'models_available' field: %s", res.ForLLM)
 	}
-	require.Equal(t, true, m["api_key_stored"], "api_key_stored should reflect the key just stored")
+	require.Equal(t, true, m["api_key_stored"], "api_key_stored reflects the already stored selected reference")
 	require.Equal(t, "anthropic", m["name"])
 }
 
@@ -689,8 +710,9 @@ func TestProviderConfigure_PublishWarningOnReloadFailure(t *testing.T) {
 	deps, _, _ := newProviderTestDeps(t, cfg)
 	deps.ReloadFunc = func() error { return fmt.Errorf("reload boom") }
 
+	ref := IssueProviderReferenceForTest(t, deps, "anthropic", "", "sk-ant-test")
 	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-		"name": "anthropic", "api_key": "sk-ant-test",
+		"name": "anthropic", "api_key_ref": ref,
 	}))
 	require.False(t, res.IsError, "a reload failure must not turn a real success into a tool error: %s", res.ForLLM)
 
@@ -788,8 +810,9 @@ func TestProviderConfigureThenList_EndToEnd(t *testing.T) {
 	cfg := &config.Config{}
 	deps, _, _ := newProviderTestDeps(t, cfg)
 
+	ref := IssueProviderReferenceForTest(t, deps, "xai", "", "sk-xai-test")
 	configureRes := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-		"name": "xai", "api_key": "sk-xai-test",
+		"name": "xai", "api_key_ref": ref,
 	}))
 	require.False(t, configureRes.IsError, "%s", configureRes.ForLLM)
 
@@ -862,15 +885,17 @@ func TestProviderConfigure_NilCredStoreLocalProviderNoPanic(t *testing.T) {
 // CredStore with an api_key supplied — the Set call is guarded separately
 // from the Get-based api_key_stored resolution this fix targets, but the
 // whole call path must still not panic.
-func TestProviderConfigure_NilCredStoreWithAPIKeyNoPanic(t *testing.T) {
+func TestProviderConfigure_NilCredStoreWithReferenceRefusesWithoutPanic(t *testing.T) {
 	cfg := &config.Config{}
 	deps, _, _ := newProviderTestDeps(t, cfg)
 	deps.CredStore = nil
 
 	require.NotPanics(t, func() {
-		NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
-			"name": "ollama", "api_key": "does-not-matter-locally",
+		res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
+			"name": "ollama", "api_key_ref": "unavailable-reference.v1",
 		}))
+		require.True(t, res.IsError, "unavailable reference must refuse, not panic or claim selection")
+		require.Empty(t, cfg.Providers)
 	})
 }
 

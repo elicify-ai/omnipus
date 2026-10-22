@@ -3189,7 +3189,8 @@ type SecretNameEntry = {
     | "mcp_env"
     | "channel_credential"
     | "mailbox_password"
-    | "agent_private";
+    | "agent_private"
+    | "unbound";
   version: number;
   recipient: {
     kind:
@@ -3197,7 +3198,8 @@ type SecretNameEntry = {
       | "mcp_env"
       | "channel_credential"
       | "mailbox_password"
-      | "agent_private";
+      | "agent_private"
+      | "unbound";
     lines: Array<string>;
   };
   owner?: agent | undefined;
@@ -4658,6 +4660,14 @@ export const ChannelCreateResponse = z.object({
   type: z.string(),
   enabled: z.boolean(),
 });
+export const ChannelEnableRequest = z
+  .object({
+    pairing_retry: z.object({
+      request_id: z.string().min(1).max(128).regex(/\S/),
+      session_id: z.string().min(1).max(255).regex(/\S/),
+    }),
+  })
+  .partial();
 export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
   z.object({
     id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
@@ -6859,6 +6869,7 @@ export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
     "channel_credential",
     "mailbox_password",
     "agent_private",
+    "unbound",
   ]),
   version: z.number().int().gte(1),
   recipient: z.object({
@@ -6868,6 +6879,7 @@ export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
       "channel_credential",
       "mailbox_password",
       "agent_private",
+      "unbound",
     ]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
   }),
@@ -9103,9 +9115,15 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/channels/:id/enable",
     alias: "enableChannel",
-    description: `Sets the channel&#x27;s enabled flag to true in config.`,
+    description: `Sets the channel&#x27;s enabled flag to true in config. An absent body or {} is an ordinary enable that grants no chat ownership. A pairing_retry body is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the caller must own the session and the request/session pair must be the channel&#x27;s recorded pairing owner; the next pairing attempt is claimed for that chat before the channel is enabled. A refused Retry enables nothing and changes no ownership; a disable that already succeeded is not rolled back, so the channel stays disabled.
+`,
     requestFormat: "json",
     parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ChannelEnableRequest.optional(),
+      },
       {
         name: "id",
         type: "Path",
@@ -9115,13 +9133,40 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: ChannelEnabledResponse,
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 404,
         description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `code pairing_retry_conflict: this chat can no longer retry this pairing (missing, stale or mismatched ownership, or a competing attempt). Nothing was enabled and no ownership changed. code pairing_in_progress: an ordinary enable of a WhatsApp connector while another of its pairings is starting, running or stopping. Nothing was changed.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The enable could not be completed. The error text says which state is saved: the configuration could not be saved or reloaded; the connection is enabled but its restart could not be confirmed yet (a Retry&#x27;s pairing keeps its chat and can still start); or the connection is enabled but its reserved pairing was cancelled before it started (nothing else starts). Never a refusal before effects, which is 404 or 409.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
@@ -13173,13 +13218,19 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
+      {
+        status: 503,
+        description: `Saved request state is unavailable (the service is not ready, or saved state could not be read or reconciled). This is not absence and not success; retrying this read is safe.
+`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
     method: "post",
     path: "/secret-requests/:id/submit",
     alias: "submitSecretRequest",
-    description: `Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of &#x60;values&#x60; or &#x60;cancel: true&#x60;. All checks run before any write; any failure writes nothing. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
+    description: `Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of &#x60;values&#x60; or &#x60;cancel: true&#x60;. All trust and payload checks run before the atomic store publication; a refusal or failed save writes no values. After publication, a metadata or continuation-dispatch failure returns 503 with state submitted and the committed references. The submission IS saved; boot or chat attach retries an undelivered continuation. If the request service or its saved state is unavailable before this attempt reaches publication, 503 instead carries an ErrorResponse: this attempt stored no values and returns no authoritative state. It does not prove that no request or earlier submission exists; read the state, or retry the same request id once available, and never resend values automatically. A repeated submit is idempotent and returns 409 with the same committed state, without storing another version. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
 `,
     requestFormat: "json",
     parameters: [
@@ -13221,6 +13272,17 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
         description: `Body larger than 65,536 bytes.`,
         schema: ErrorResponse,
       },
+      {
+        status: 500,
+        description: `The save failed before publication. No submitted values were stored; the request remains pending. The error is value-free.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `One of two bodies. A SecretRequestState body means the submission IS committed, but post-commit metadata or continuation dispatch is not confirmed: it has state submitted and the committed reference_names. Boot or chat attach retries an undelivered continuation; re-submitting returns 409 with the same state and never stores another version. An ErrorResponse body means the service or saved request state was unavailable before this attempt reached publication: this attempt committed no values and no authoritative state is returned. A pending or earlier submitted request may still exist; retry the same request id once available and never resend values automatically.
+`,
+        schema: z.union([SecretRequestState, ErrorResponse]),
+      },
     ],
   },
   {
@@ -13235,6 +13297,11 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
@@ -13278,6 +13345,11 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
@@ -17141,7 +17213,7 @@ export const WorkflowStart = z
 
 export const SecretRecipientDisplay = z
   .object({
-    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private"]),
+    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private", "unbound"]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
   })
   .strict();
@@ -17191,6 +17263,7 @@ export const SessionStateSecretRequest = z
     session_id: z.string().min(1).max(255),
     root_session_id: z.string().min(1).max(255).optional(),
     state: z.enum(["pending", "submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    continuation_unconfirmed: z.boolean().optional(),
     acting_agent_id: z.string().min(1).max(128),
     acting_agent_name: z.string().min(1).max(128),
     origin_label: z.string().min(1).max(200).optional(),
@@ -18116,7 +18189,7 @@ export const WhatsAppPairingFrame = z
     session_id: z.string().min(1).max(255).optional(),
     type: z.literal("whatsapp_pairing"),
     channel_id: z.string().min(1),
-    status: z.enum(["waiting", "code", "linked", "timeout", "error"]),
+    status: z.enum(["waiting", "code", "linked", "timeout", "error", "stopped"]),
     qr: z.string().optional(),
     message: z.string().optional(),
   })

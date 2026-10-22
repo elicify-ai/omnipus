@@ -106,6 +106,24 @@ func KnownChannelTypes() []string {
 	return names
 }
 
+// CanonicalChannelInstance returns the representation the loader accepts for
+// one supported entry. Fingerprints and revision checks use this same view so
+// an omitted optional type is not mistaken for an unapplied write. It operates
+// on a value copy and never mutates a published configuration snapshot.
+func CanonicalChannelInstance(key string, inst ChannelInstanceConfig) (ChannelInstanceConfig, bool) {
+	effectiveType := strings.TrimSpace(inst.Type)
+	if effectiveType == "" {
+		effectiveType, _ = ParseInstanceKey(key)
+	}
+	if _, known := knownChannelTypes[effectiveType]; !known {
+		return inst, false
+	}
+	if inst.Type == "" {
+		inst.Type = effectiveType
+	}
+	return inst, true
+}
+
 // normalizeChannelMap fills in the Type field from the map key when absent
 // (so JSON-loaded entries without an explicit "type" field get a default),
 // and drops entries whose effective channel type is not in knownChannelTypes,
@@ -125,17 +143,13 @@ func normalizeChannelMap(channels map[string]ChannelInstanceConfig) map[string]C
 		if effectiveType == "" {
 			effectiveType, _ = ParseInstanceKey(key)
 		}
-		if _, ok := knownChannelTypes[effectiveType]; !ok {
+		canonical, known := CanonicalChannelInstance(key, inst)
+		if !known {
 			slog.Warn("config: unknown channel type in channels map — ignoring legacy or unsupported section",
 				"key", key, "effective_type", effectiveType)
 			continue
 		}
-		// Backfill the Type field to the effective type when absent so the
-		// on-disk instance is self-describing.
-		if inst.Type == "" {
-			inst.Type = effectiveType
-		}
-		out[key] = inst
+		out[key] = canonical
 	}
 	return out
 }

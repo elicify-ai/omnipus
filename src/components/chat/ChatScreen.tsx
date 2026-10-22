@@ -86,7 +86,7 @@ import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { SystemMessage, VirtualSystemMessageRow } from './SystemMessageRows'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import { MainChatAddParticipant } from './AddParticipant'
-import { AGENT_PRIVATE_SECRETS_ENABLED, INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED } from '@/lib/featureSwitches'
+import { INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
 import { RoomTrafficMessage } from './RoomTrafficEntry'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
@@ -3287,9 +3287,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           <AskUserQuestionThreadTail />
 
           {/* Secure secret card (omnipus-system-agent K1, FR-061/FR-074):
-              pending cards rooted in this chat, plus the latest result —
-              hidden until WU-4/5 (no secret-request server in stage 1). */}
-          {AGENT_PRIVATE_SECRETS_ENABLED && <SecretRequestThreadTail />}
+              pending cards rooted in this chat, plus the latest result.
+              WU-4 enables cards independently of WU-5's private-secrets list. */}
+          {SECRET_CARDS_ENABLED && <SecretRequestThreadTail />}
 
           {/* Inline tool approvals rooted in this chat (#1263, L1 amendment
               §1.2 R6) — hidden until WU-8 (stage 2): founder design = card in

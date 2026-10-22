@@ -29,7 +29,11 @@ func toChannelHashes(cfg *config.Config) map[string]string {
 		if !inst.Enabled {
 			continue
 		}
-		valueBytes, err := json.Marshal(inst)
+		// Canonicalize supported instance fields exactly like the loader. The
+		// manager's typed/factory callers retain their existing enabled set;
+		// filtering unsupported file sections remains the loader's job.
+		canonical, _ := config.CanonicalChannelInstance(instanceID, inst)
+		valueBytes, err := json.Marshal(canonical)
 		if err != nil {
 			logger.WarnCF("channels", "toChannelHashes: failed to marshal channel instance",
 				map[string]any{"instance_id": instanceID, "error": err.Error()})

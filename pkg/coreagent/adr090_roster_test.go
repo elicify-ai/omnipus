@@ -98,9 +98,10 @@ func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testin
 	wantSkills := map[string][]string{
 		"mia": {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
 		"jim": {"interview", "orchestrate", "plan", "define-goal"},
-		// Chief ruling 2026-10-14, FR-008: Omnipus receives the former setup
-		// skill union until WU-9 replaces it with dedicated workflows (FR-010).
-		"omnipus":        {"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team", "mcp-install", "provider-setup", "channel-setup", "doctor"},
+		// omnipus-system-agent FR-010 (WU-9): the Omnipus workflow skills,
+		// granted to Omnipus only; interview stays shared with Mia and Jim
+		// (pkg/coreagent/seed.go::coreAgentSkills).
+		"omnipus":        {"interview", "create-agent", "change-agent", "remove-agent", "write-skill", "install-skill", "team-delegation", "welcome-workspace", "add-connector", "remove-connector", "add-provider", "provider-config", "connect-channel", "disable-channel", "doctor-usage", "shell-diagnosis", "team-setup", "capability-plan", "dependency-check"},
 		"planner":        {"plan", "define-goal"},
 		"researcher":     {"deep-research"},
 		"worker":         {"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},

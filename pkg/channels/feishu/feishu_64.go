@@ -5,6 +5,7 @@ package feishu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
@@ -116,11 +118,12 @@ func (c *FeishuChannel) Start(ctx context.Context) error {
 		return fmt.Errorf("feishu: app_id is required")
 	}
 
-	// Fetch bot open_id via API for reliable @mention detection.
-	if err := c.fetchBotOpenID(ctx); err != nil {
-		logger.ErrorCF("feishu", "Failed to fetch bot open_id, @mention detection may not work", map[string]any{
-			"error": err.Error(),
-		})
+	// Fetch bot open_id via API for reliable @mention detection. The call
+	// mints a tenant token from app_id/app_secret, so it is also Start's one
+	// credential check (Train 2 gate r1, BDD-8.3): only a documented
+	// credential rejection fails Start; anything else keeps the old path.
+	if err := c.checkCredentials(ctx); err != nil {
+		return err
 	}
 
 	dispatcher := larkdispatcher.NewEventDispatcher(c.verificationToken, c.encryptKey).
@@ -588,6 +591,64 @@ func (c *FeishuChannel) handleMessageReceive(ctx context.Context, event *larkim.
 // --- Internal helpers ---
 
 // fetchBotOpenID calls the Feishu bot info API to retrieve and store the bot's open_id.
+// feishuCredentialCheckWait is the fixed upper limit Start waits for the
+// bot-info call that proves the app credentials (Train 2 gate r1). A timeout
+// is NOT a rejection: Start continues and the websocket keeps retrying, as
+// before. Documented in docs/connectors.md.
+const feishuCredentialCheckWait = 10 * time.Second
+
+// feishuCredentialRejectionCodes are the Feishu/Lark error codes documented as
+// rejecting the app identity or secret (general error codes page,
+// open.feishu.cn/document/ukTMukTMukTM/ugjM14COyUjL4ITN): 10005 app id
+// unauthorized, 10014 app unauthorized, 10015 wrong app secret, 20002
+// app_id and app_secret did not match, 50003 invalid app_id. Rate limits and
+// internal errors are deliberately absent: they are not rejections.
+var feishuCredentialRejectionCodes = map[int]bool{10005: true, 10014: true, 10015: true, 20002: true, 50003: true}
+
+// checkCredentials runs the bounded bot-info call. It returns an error only
+// when Feishu explicitly rejected the app credentials; any other failure is
+// logged (mention detection degrades) and Start continues.
+func (c *FeishuChannel) checkCredentials(ctx context.Context) error {
+	checkCtx, cancel := context.WithTimeout(ctx, feishuCredentialCheckWait)
+	defer cancel()
+	err := c.fetchBotOpenID(checkCtx)
+	if err == nil {
+		return nil
+	}
+	if code, ok := feishuErrorCode(err); ok && feishuCredentialRejectionCodes[code] {
+		return fmt.Errorf("feishu rejected the app credentials (code=%d): %w", code, err)
+	}
+	logger.ErrorCF("feishu", "Failed to fetch bot open_id, @mention detection may not work", map[string]any{
+		"error": err.Error(),
+	})
+	return nil
+}
+
+// feishuErrorCode extracts a Lark API error code from err (the SDK returns
+// larkcore.CodeError by value from its token fetch, by pointer elsewhere).
+func feishuErrorCode(err error) (int, bool) {
+	var byValue larkcore.CodeError
+	if errors.As(err, &byValue) {
+		return byValue.Code, true
+	}
+	var byPointer *larkcore.CodeError
+	if errors.As(err, &byPointer) && byPointer != nil {
+		return byPointer.Code, true
+	}
+	var apiCode *feishuAPICodeError
+	if errors.As(err, &apiCode) {
+		return apiCode.code, true
+	}
+	return 0, false
+}
+
+// feishuAPICodeError is a non-zero "code" in an API response body.
+type feishuAPICodeError struct{ code int }
+
+func (e *feishuAPICodeError) Error() string {
+	return fmt.Sprintf("bot info api error (code=%d)", e.code)
+}
+
 func (c *FeishuChannel) fetchBotOpenID(ctx context.Context) error {
 	resp, err := c.client.Do(ctx, &larkcore.ApiReq{
 		HttpMethod:                http.MethodGet,
@@ -609,7 +670,7 @@ func (c *FeishuChannel) fetchBotOpenID(ctx context.Context) error {
 	}
 	if result.Code != 0 {
 		c.invalidateTokenOnAuthError(result.Code)
-		return fmt.Errorf("bot info api error (code=%d)", result.Code)
+		return &feishuAPICodeError{code: result.Code}
 	}
 	if result.Bot.OpenID == "" {
 		return fmt.Errorf("bot info: empty open_id")

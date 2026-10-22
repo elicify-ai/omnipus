@@ -1218,7 +1218,7 @@ type RoomSnapshotFrame struct {
 	Type string `json:"type"`
 }
 
-// SecretRecipientDisplay — Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+// SecretRecipientDisplay — Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
 type SecretRecipientDisplay struct {
 	// Recipient kind.
 	Kind string `json:"kind"`
@@ -1384,10 +1384,12 @@ type SessionStatePendingApproval struct {
 
 // SessionStateSecretRequest — One entry of the `secret_requests` list on SessionStateFrame and SessionSnapshotFrame (spec omnipus-system-agent K4; FR-074, FR-079): a pending request, or a recent terminal one (value-free; at most the last 32 terminal entries per session, §6.2), so a reloaded card restores its true state. Absence of an entry is never success. Same card fields as SecretRequestFrame plus `state`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.SessionStateSecretRequest) — keep both copies in sync by hand.
 type SessionStateSecretRequest struct {
-	ActingAgentId   string               `json:"acting_agent_id"`
-	ActingAgentName string               `json:"acting_agent_name"`
-	Fields          []SecretRequestField `json:"fields"`
-	OriginLabel     *string              `json:"origin_label,omitempty"`
+	ActingAgentId   string `json:"acting_agent_id"`
+	ActingAgentName string `json:"acting_agent_name"`
+	// True only when state is `submitted` and the value-free continuation (the reference-only resume message) is not confirmed delivered: the latest ensure-delivery attempt failed or was revoked downstream. Absent once delivery is confirmed, the person stops the continuation, or the request reaches any non-submitted terminal state. Never carries or implies a secret value, cause, stage or reference name. (Train 2 M13, T2-SF-02; K4, FR-079.)
+	ContinuationUnconfirmed *bool                `json:"continuation_unconfirmed,omitempty"`
+	Fields                  []SecretRequestField `json:"fields"`
+	OriginLabel             *string              `json:"origin_label,omitempty"`
 	// Present only for the agent_private kind.
 	Owner *struct {
 		AgentId     string `json:"agent_id"`
@@ -1707,13 +1709,13 @@ type WhatsAppPairingFrame struct {
 	Type      string  `json:"type"`
 }
 
-// WhatsAppPairingSubscribeFrame — Client → server. Registers or clears this connection's interest in a channel's whatsapp_pairing frames so the QR is delivered only to the operator viewing that channel's pairing UI (#283).
+// WhatsAppPairingSubscribeFrame — Client → server. Registers or clears this connection's interest in a channel's whatsapp_pairing frames so the QR is delivered only to the operator viewing that channel's pairing UI (#283). Subscribing (including the automatic re-subscribe on reconnect) only observes pairing frames: it never restores chat ownership of a pairing and never restarts pairing. A chat Retry claims ownership through PUT /api/v1/channels/{id}/enable with pairing_retry.
 type WhatsAppPairingSubscribeFrame struct {
 	Active    bool   `json:"active"`
 	ChannelId string `json:"channel_id"`
-	// Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with the chat request that started it (QR pairing in chat, WU-7).
+	// Spec omnipus-system-agent K10 (FR-081). Correlation hint naming the chat request that started the pairing (QR pairing in chat, WU-7). It is not authority: subscribing never restores ownership.
 	RequestId *string `json:"request_id,omitempty"`
-	// Spec K10. The chat session the pairing belongs to, when it was started from a chat.
+	// Spec K10. Correlation hint naming the chat session the pairing belongs to, when it was started from a chat. It is not authority: subscribing never restores ownership.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
 }

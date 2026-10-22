@@ -2013,6 +2013,10 @@ func wireChannelManager(cm *channels.Manager, al *agent.AgentLoop) {
 			al.EmitWhatsAppPairing(channelID, status, qr, message)
 		},
 	)
+	// Gate r3 M8: channels that track pairing attempts report each event with
+	// its attempt id, so a late event of an older attempt never reaches a
+	// successor's frames.
+	cm.SetPairingAttemptObserver(al.EmitWhatsAppPairingAttempt)
 	// BDD-08.9 / N1: an answer the final egress check refused (instance rebound,
 	// unbound or deleted since the request arrived) must be visible to the
 	// responding side, not only counted and logged.

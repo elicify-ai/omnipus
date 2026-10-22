@@ -396,7 +396,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// (Partitions) marshal as [] not null — Zod requires type:array on the SPA.
 	lifecycleStore := a.agentLoop.GetSessionLifecycleStore()
 	genSessions := make([]gen.Session, 0, len(metas))
-	approvals := a.pendingApprovalMains()
+	approvals := a.withPendingSecretCards(a.pendingApprovalMains())
 	for _, m := range metas {
 		s := unifiedMetaToGenSession(a.withDisplayTitle(m))
 		stampNeedsAttention(&s, m, approvals)

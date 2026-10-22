@@ -5,10 +5,7 @@ package agent
 import (
 	"fmt"
 	"sync/atomic"
-	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
@@ -133,43 +130,6 @@ func (al *AgentLoop) emitEvent(kind EventKind, meta EventMeta, payload any) {
 	al.logEvent(evt)
 
 	al.eventBus.Emit(evt)
-}
-
-// EmitWhatsAppPairing publishes a WhatsApp native/QR pairing update (QR code or
-// status) onto the event bus so every connected SPA WebSocket client receives a
-// whatsapp_pairing frame (#283). Safe to call from a channel's own goroutine —
-// the bus drops to a full subscriber rather than blocking. Wired into the
-// WhatsApp native channel at gateway boot via SetPairingObserver.
-func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.PairingStatus, qr, message string) {
-	al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, WhatsAppPairingPayload{
-		ChannelID: channelID,
-		Status:    status,
-		QR:        qr,
-		Message:   message,
-	})
-	// FR-111 (#358): audit-log device-pairing lifecycle transitions so linking a new
-	// WhatsApp device leaves a tamper-evident trail. We deliberately do NOT log the
-	// `code`/`connecting` states (high-frequency, and the QR itself is a scannable
-	// secret that must never reach the audit file) — only the terminal outcomes.
-	// Decision uses the audit vocabulary (allow=linked, error=failed/expired); the
-	// exact pairing status rides in Details.
-	switch status {
-	case channels.PairingStatusLinked, channels.PairingStatusError, channels.PairingStatusTimeout:
-		decision := audit.DecisionAllow
-		if status != channels.PairingStatusLinked {
-			decision = audit.DecisionError
-		}
-		audit.EmitEntry(al.auditLogger, &audit.Entry{
-			Timestamp: time.Now().UTC(),
-			Event:     audit.EventChannelPairing,
-			Decision:  decision,
-			Details: map[string]any{
-				"channel": channelID,
-				"status":  string(status),
-				"message": message,
-			},
-		})
-	}
 }
 
 // EmitNotification publishes a user-facing notification onto the event bus so

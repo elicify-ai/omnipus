@@ -103,6 +103,11 @@ type turnState struct {
 	opts  processOptions
 	scope turnEventScope
 
+	// origin is the set of inputs this turn has consumed (§6.18, FR-240);
+	// steering inputs consumed mid-turn are added to it. Never nil for a
+	// turn built by newTurnState.
+	origin *tools.TurnOrigin
+
 	turnID     string
 	agentID    string
 	sessionKey string
@@ -890,6 +895,7 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		agent:          agent,
 		opts:           opts,
 		scope:          scope,
+		origin:         tools.NewTurnOrigin(),
 		turnID:         scope.turnID,
 		sessionKey:     opts.SessionKey,
 		channel:        opts.Channel,
