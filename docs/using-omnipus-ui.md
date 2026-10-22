@@ -111,7 +111,7 @@ For a very large history, an informational notice says **Saved history is large.
 
 When you quickly leave and reopen a main chat, Omnipus uses that visit's loaded history when marking results as seen, not an older load still waiting to appear.
 
-An answer that is still running continues to stream after the saved history appears. Pending tool approvals are restored for their chat; loading history does not approve them. Secret-entry cards are not available in chat in this release while that feature is disabled. If the connection drops before history finishes loading, Omnipus retries automatically. Brief drops stay quiet; the chat's connection notice appears after two minutes disconnected, or when automatic retries give up.
+An answer that is still running continues to stream after the saved history appears. Opening the same conversation in another tab keeps that reply matched to the same message in both views, even when tool activity arrives before the reply's text. Pending tool approvals are restored for their chat; loading history does not approve them. Secret-entry cards are not available in chat in this release while that feature is disabled. If the connection drops before history finishes loading, Omnipus retries automatically. Brief drops stay quiet; the chat's connection notice appears after two minutes disconnected, or when automatic retries give up.
 
 If you choose a connection **Retry**, Omnipus closes the previous connection first. If closing fails, it reports the failure instead of opening another connection.
 
