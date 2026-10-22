@@ -50,7 +50,9 @@ func (g *restartToolGroup) finish(omitted map[int]bool, cancelled map[restartCal
 	}
 	for index, id := range g.markers {
 		omitted[index] = true
-		cancelled[restartCallIdentity{assistantIndex: g.assistantIndex, toolCallID: id}] = true
+		if !g.calls[id] {
+			cancelled[restartCallIdentity{assistantIndex: g.assistantIndex, toolCallID: id}] = true
+		}
 	}
 }
 
@@ -99,7 +101,7 @@ func restartCancellations(count int, messageAt func(int) providers.Message) (map
 				continue
 			}
 			id := restartCancellationID(msg)
-			if seen, declared := group.calls[id]; id != "" && declared && !seen {
+			if _, declared := group.calls[id]; id != "" && declared {
 				group.markers[index] = id
 			}
 		}
@@ -113,7 +115,7 @@ func restartCancellations(count int, messageAt func(int) providers.Message) (map
 // lead-in an open group still owns before the retained window, so an evicted
 // assistant can still own its cancellation. Filter message/index pairs without renumbering or mutating
 // any archive record or captured metadata. Unrelated controls stay in place.
-func recoveryWindowHistory(snap session.WindowView) ([]providers.Message, []int) {
+func recoveryWindowHistory(snap session.WindowView, legacyObservations ...bool) ([]providers.Message, []int) {
 	history, lines := snap.History()
 	// Scan the evicted lead-in an open group still owns, then the retained
 	// window in archive order: a marker inside the window can belong to an
@@ -128,7 +130,10 @@ func recoveryWindowHistory(snap session.WindowView) ([]providers.Message, []int)
 		scan = append(scan, s.Message)
 		scanLine = append(scanLine, s.Ordinal)
 	}
-	omittedPos, _ := restartCancellations(len(scan), func(i int) providers.Message { return scan[i] })
+	omittedPos, cancelled := restartCancellations(len(scan), func(i int) providers.Message { return scan[i] })
+	if len(legacyObservations) == 0 || legacyObservations[0] {
+		return projectLegacyRecoveryMarkers(snap, history, lines, scan, scanLine, omittedPos, cancelled)
+	}
 	omitted := make(map[int]bool, len(omittedPos))
 	for pos := range omittedPos {
 		omitted[scanLine[pos]] = true

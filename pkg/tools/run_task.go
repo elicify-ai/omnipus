@@ -215,7 +215,7 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// disposition the executor already persisted for the dispatch error.
 	priorStatus := existing.Status
 	inProgress := task.StatusInProgress
-	if _, uerr := t.store.Update(taskID, task.Patch{Status: &inProgress}); uerr != nil {
+	if _, uerr := t.store.Update(taskID, task.Patch{Status: &inProgress, RetryInterrupted: true}); uerr != nil {
 		return ErrorResult(fmt.Sprintf("run_task failed: could not mark task in_progress: %v", uerr))
 	}
 

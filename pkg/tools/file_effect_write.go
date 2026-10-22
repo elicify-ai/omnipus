@@ -81,7 +81,7 @@ func mutateFileEffect(h *PathHandle, needsContent bool, transform func([]byte, b
 	if err != nil {
 		return err
 	}
-	if inv != nil && inv.identity.SessionID != "" {
+	if inv != nil && (inv.identity.SessionID != "" || inv.identity.Home != "") {
 		w := FileEffectWitness{Tool: inv.tool, Path: fileEffectStringArg(inv.args, "path"), Target: h.abs,
 			WorkspaceID: inv.identity.WorkspaceID, WorkDir: h.policy.WorkDir,
 			SessionID: inv.identity.SessionID, Assistant: inv.identity.Assistant,

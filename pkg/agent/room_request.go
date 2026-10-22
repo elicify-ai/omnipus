@@ -402,7 +402,7 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 	if err != nil {
 		return RoomAdmission{}, roomStorageRefusal("the member's main chat is not available", err)
 	}
-	held := al.receiverStopped(mainID) && !al.newHumanRoomCanRestart(a, mainID)
+	held := al.roomAcceptedStopPending(mainID) || (al.receiverStopped(mainID) && !al.newHumanRoomCanRestart(a, mainID))
 	now := time.Now().UTC()
 	humanRestartBoot := uint64(0)
 	if authenticatedHumanRoomSender(a.Sender) {

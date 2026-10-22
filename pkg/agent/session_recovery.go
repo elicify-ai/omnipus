@@ -33,6 +33,16 @@ func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, aud
 		}
 		slog.Error("tool recovery: observation was not saved; provider continuation is refused", "session_key", sessionKey, "error", err)
 	}
+	if opt.View == nil {
+		if checked, ok := store.(session.ContextWindowStore); ok {
+			view, err := checked.WindowView(context.Background(), sessionKey)
+			if err != nil {
+				report(err)
+				return nil
+			}
+			opt.View = &view
+		}
+	}
 	var err error
 	history, err = recoveryHistory(store, sessionKey, opt.View)
 	if err != nil {
@@ -40,7 +50,7 @@ func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, aud
 		return nil
 	}
 	for _, o := range findOrphanedToolCalls(history) {
-		ob := recoveryObservation{Disposition: tools.FileEffectUnknown, Reason: "the missing result has no checked recovery adapter"}
+		var ob recoveryObservation
 		if opt.Resolve != nil {
 			var err error
 			ob, err = opt.Resolve(o)
@@ -48,6 +58,8 @@ func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, aud
 				report(err)
 				break
 			}
+		} else {
+			ob = unprovedRecoveryObservation(opt.View, o)
 		}
 		message, err := ob.message(o.ToolCallID)
 		if err != nil {
@@ -76,7 +88,7 @@ func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, aud
 			decision = audit.DecisionError
 		}
 		audit.EmitEntry(auditLog, &audit.Entry{Event: event, Decision: decision, Tool: o.ToolName, Details: map[string]any{
-			"tool_call_id": o.ToolCallID, "assistant": ob.Assistant, "disposition": ob.Disposition,
+			"tool_call_id": o.ToolCallID, "assistant": ob.Assistant, "execution": ob.Execution, "disposition": ob.Disposition,
 			"reason": ob.Reason, "session_key": sessionKey, "original_result_recovered": false, "current_image": ob.Image,
 		}})
 	}

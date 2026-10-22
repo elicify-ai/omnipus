@@ -8,9 +8,9 @@ import (
 )
 
 func (ts *turnState) fileEffectExecutionContext(ctx context.Context, callID string) context.Context {
-	issuer, known := ts.callIssuer(callID)
-	if !known || ts.opts.NoHistory {
-		return ctx
+	issuer, _ := ts.callIssuer(callID)
+	if ts.opts.NoHistory {
+		issuer = session.ArchiveAddress{} // A native write cannot silently escape durable witnessing.
 	}
 	id := ts.transcriptSessionID
 	if id == "" {

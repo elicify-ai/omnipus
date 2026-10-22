@@ -2112,6 +2112,9 @@ func (a *restAPI) reconcileStuckTasks() {
 	}
 	reset := 0
 	for _, t := range tasks {
+		if a.preserveEndedTaskInterruption(t) {
+			continue
+		}
 		failed := task.StatusFailed
 		result := "interrupted: gateway restarted while task was running"
 		crashInterrupted := true

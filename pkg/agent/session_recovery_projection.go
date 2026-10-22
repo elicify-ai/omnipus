@@ -9,7 +9,7 @@ import (
 
 func recoveryHistory(store session.SessionStore, key string, view *session.WindowView) ([]providers.Message, error) {
 	if view != nil {
-		history, _ := recoveryWindowHistory(*view)
+		history, _ := recoveryWindowHistory(*view, false)
 		return history, nil
 	}
 	if checked, ok := store.(session.ContextWindowStore); ok {
@@ -17,7 +17,7 @@ func recoveryHistory(store session.SessionStore, key string, view *session.Windo
 		if err != nil {
 			return nil, err
 		}
-		history, _ := recoveryWindowHistory(snap)
+		history, _ := recoveryWindowHistory(snap, false)
 		return history, nil
 	}
 	return store.GetHistory(key), nil

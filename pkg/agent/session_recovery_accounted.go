@@ -32,7 +32,7 @@ func settleAccountedFileEffects(ctx context.Context, sessionID string, view sess
 			continue
 		}
 		issuer, found := issuers[slot.ToolResultFor.AssistantEntryID]
-		if !found || issuer.Source.Execution == nil {
+		if !found {
 			continue
 		}
 		if slot.Source.Kind == "recovery_observation" {
@@ -43,9 +43,28 @@ func settleAccountedFileEffects(ctx context.Context, sessionID string, view sess
 			if ob.Type != "tool_recovery_observation" || ob.OriginalResultRecovered || ob.Assistant != issuer.Addr {
 				return fmt.Errorf("file recovery: saved observation identity is corrupt")
 			}
-			if ob.Disposition != tools.FileEffectPresent && ob.Disposition != tools.FileEffectAbsent {
-				continue
+			if ob.Disposition == tools.FileEffectUnknown {
+				op := recoveryHeldOperation{CallID: slot.Message.ToolCallID}
+				for _, call := range issuer.Message.ToolCalls {
+					if call.ID == op.CallID {
+						op.Tool = call.Name
+						if op.Tool == "" && call.Function != nil {
+							op.Tool = call.Function.Name
+						}
+						break
+					}
+				}
+				if err := recordRecoveryHold(sessionID, tools.FileEffectKey(issuer.Addr, op.CallID), ob.Reason, op); err != nil {
+					return err
+				}
+				continue // A saved Unknown is never automatically redeemed by a later read.
 			}
+			if ob.Disposition != tools.FileEffectPresent && ob.Disposition != tools.FileEffectAbsent {
+				return fmt.Errorf("file recovery: saved observation disposition is invalid")
+			}
+		}
+		if issuer.Source.Execution == nil {
+			continue
 		}
 		w, err := tools.ReadFileEffectWitness(omnipusHome(), sessionID, issuer.Addr, slot.Message.ToolCallID)
 		if errors.Is(err, fs.ErrNotExist) {

@@ -37,6 +37,9 @@ func (d *executionDisposition) recordTurnOutcome(err error) {
 	if d == nil {
 		return
 	}
+	if _, interrupted := taskInterruptedResult(err); interrupted {
+		err = nil // The typed ended outcome is not an ordinary failure.
+	}
 	d.mu.Lock()
 	d.turnRan, d.turnErr = true, err
 	d.mu.Unlock()

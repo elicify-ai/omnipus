@@ -249,6 +249,12 @@ func (te *TaskExecutor) finishRunTurn(
 	state *taskRunState,
 ) (step runStep, nextPrompt, redispatchTaskID string) {
 	sessStore := te.agentLoop.GetSessionStore()
+	if interrupted, ok := taskInterruptedResult(turnErr); ok {
+		if err := te.endInterruptedTaskExecution(ctx, taskSessionID, interrupted); err != nil {
+			te.agentLoop.reportTaskInterruptionFailure(taskSessionID, err)
+		}
+		return runStepEnded, "", "" // No claim, try, task/plan ending or fresh-run retry.
+	}
 
 	var goalReadErr *goalRecordReadError
 	if errors.As(turnErr, &goalReadErr) {

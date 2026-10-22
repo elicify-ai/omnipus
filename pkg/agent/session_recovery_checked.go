@@ -51,7 +51,7 @@ func (al *AgentLoop) recoverSessionToolCalls(ctx context.Context, inst *AgentIns
 	if err := settleAccountedFileEffects(ctx, rec.SessionID, view); err != nil {
 		return nil, err
 	}
-	history, lines := recoveryWindowHistory(view)
+	history, lines := recoveryWindowHistory(view, false)
 	readCtx, contextErr := al.recoveryReadContext(ctx, rec, inst)
 	var recoveryErr error
 	orphans := findOrphanedToolCalls(history)
@@ -73,7 +73,7 @@ func (al *AgentLoop) recoverSessionToolCalls(ctx context.Context, inst *AgentIns
 		if !found {
 			return recoveryObservation{}, fmt.Errorf("tool recovery: exact issuing occurrence is missing")
 		}
-		ob := recoveryObservation{Disposition: tools.FileEffectUnknown, Reason: "no current-state proof adapter", Assistant: slot.Addr}
+		ob := recoveryObservation{Disposition: tools.FileEffectUnknown, Reason: "no current-state proof adapter", Assistant: slot.Addr, Execution: slot.Source.Execution}
 		tool, found := inst.Tools.GetIncludingHidden(o.ToolName)
 		if _, supported := tool.(tools.FileEffectReconciler); supported {
 			ob.Reason = "file-effect witness, issuing identity or current read context is not provable"
@@ -96,7 +96,8 @@ func (al *AgentLoop) recoverSessionToolCalls(ctx context.Context, inst *AgentIns
 				encoded, e := json.Marshal(args)
 				if e == nil && tools.FileEffectArgumentDigest(encoded) == w.ArgumentDigest {
 					checked := adapter.ReconcileFileEffect(readCtx, w)
-					ob.Disposition, ob.Reason, ob.Image = checked.Disposition, checked.Reason, checked.Image
+					ob.Disposition, ob.Reason = checked.Disposition, checked.Reason
+					ob.Image = &checked.Image
 				}
 			}
 		}

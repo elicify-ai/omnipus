@@ -693,10 +693,12 @@ func (s *LifecycleStore) Persist(rec *LifecycleRecord) error {
 // Lock(rec.SessionID); persistLocked does not take the lock itself (taking
 // it again would self-deadlock — sync.Mutex is not reentrant).
 func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
-	if err := validateLifecycleRecordForPersist(rec); err != nil {
+	if rec == nil {
+		return validateLifecycleRecordForPersist(rec)
+	}
+	if err := validateLifecycleSessionID(rec.SessionID); err != nil {
 		return err
 	}
-
 	prev, found, err := s.tail(rec.SessionID)
 	if err != nil {
 		return err
@@ -724,6 +726,9 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 			rec.CreatedAt = now
 		}
 	}
+	if err := validateLifecycleRecordForPersist(rec); err != nil {
+		return err
+	}
 	rec.UpdatedAt = now
 
 	if err := fileutil.AppendJSONL(s.path(rec.SessionID), rec); err != nil {
@@ -739,7 +744,7 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 	return nil
 }
 
-// validateLifecycleRecordForPersist validates and normalizes before the tail read.
+// validateLifecycleRecordForPersist validates and normalizes before an append.
 func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 	if rec == nil {
 		return fmt.Errorf("session: lifecycle: nil record")

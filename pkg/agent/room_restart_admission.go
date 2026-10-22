@@ -53,6 +53,21 @@ func (al *AgentLoop) newHumanRoomCanRestart(a RoomRequestAdmission, mainID strin
 	return err == nil && !acceptedStopSelectsExecution(rec, intents)
 }
 
+// A durable acceptance can precede its lifecycle fence. Room capture must hold
+// that request too; the ordinary dequeue fence remains the final race authority.
+func (al *AgentLoop) roomAcceptedStopPending(id string) bool {
+	lc := al.GetSessionLifecycleStore()
+	if lc == nil {
+		return false
+	}
+	rec, err := lc.Load(id)
+	if err != nil {
+		return al.receiverStopped(id)
+	}
+	intents, err := lc.UnfinishedStopIntents(id)
+	return err != nil || acceptedStopSelectsExecution(rec, intents)
+}
+
 func roomRestartContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, restartWakeRevivalKey{}, true)
 }

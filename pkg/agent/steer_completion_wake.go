@@ -109,6 +109,9 @@ func (al *AgentLoop) replayPostFinishWake(sessionID, messageID string) error {
 	if err != nil {
 		return fmt.Errorf("steer: post-finish wake: load recipient %q: %w", sessionID, err)
 	}
+	if rec.State == session.LifecycleInterrupted {
+		return nil // Keep the durable report unread; a wake is not an explicit continuation, even on a self-delegated tree.
+	}
 	if rec.Stopped() {
 		return fmt.Errorf("steer: post-finish wake %q: recipient %q was stopped; entry remains unacknowledged", messageID, sessionID)
 	}

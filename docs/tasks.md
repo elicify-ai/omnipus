@@ -98,6 +98,8 @@ The Board has one column per status; the List has a Status column.
 
 A task you stop shows as orange **Cancelled** rather than red **Failed**, inside the same Failed column.
 
+A task session that reaches its tool-call ceiling, or cannot establish an interrupted file operation's effects, shows **Interrupted** in that session. That ends the current execution, not the task, plan or goal: the task can still be **In Progress** and its run record stays open. Open its chat to read the cause. A new explicit continuation of a delegated task reuses that open run with a fresh execution; it does not consume a failed attempt or use crash Retry. A restart does not turn this already-ended execution into a new crash failure.
+
 An **In Progress** task shows a spinning-arrow indicator on its Board card, List row, and Graph node, including task nodes in a plan's graph. A running plan's tile in the Plans band uses the same indicator. These task and plan indicators show no token counts; Chat keeps its existing token counter. The arrow follows the item's reported status, not a separate measure of model activity. With reduced motion enabled, it stays visible but does not spin.
 
 ```mermaid

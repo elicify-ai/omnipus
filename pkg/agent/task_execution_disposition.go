@@ -81,6 +81,9 @@ func (te *TaskExecutor) admitTaskRun(ctx context.Context, taskSessionID string) 
 func (te *TaskExecutor) finishTaskRun(d *executionDisposition, taskID string, after func()) func() {
 	return func() {
 		if err := te.agentLoop.finishExecutionDisposition(d); err != nil {
+			if taskDispositionInterrupted(d) {
+				te.agentLoop.reportTaskInterruptionFailure(d.claim.SessionID, err)
+			}
 			logger.ErrorCF("task_executor", "task run: finishing its execution failed — a Stop may not have landed",
 				map[string]any{"task_id": taskID, "session_id": d.claim.SessionID, "run_id": d.claim.RunID, "error": err.Error()})
 		}

@@ -1971,7 +1971,7 @@ func (al *AgentLoop) runAgentLoopBody(
 			})
 	}
 
-	return result.finalContent, nil
+	return taskTurnResponse(result, opts.IsTaskRun)
 }
 
 func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {
