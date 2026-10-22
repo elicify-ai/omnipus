@@ -244,8 +244,14 @@ function performResendMessage(
   // A background Retry belongs to its target session, not the foreground
   // agent. If its owner is not loaded, keep the failed row retriable and
   // explain how to recover instead of guessing or minting another chat.
-  const targetAgentId = loadedOutboundSession(targetSid)?.agent_id
+  const targetSession = loadedOutboundSession(targetSid)
+  const targetAgentId = targetSession?.agent_id
   if (!targetAgentId?.trim()) {
+    logDiagnostic('chatResendBlockedOwnerUnavailable', {
+      sessionId: targetSid,
+      messageId,
+      reason: targetSession ? 'missing_or_blank_owner' : 'session_metadata_unavailable',
+    })
     useUiStore.getState().addToast({
       message: 'Could not retry this message — the conversation\'s agent is not loaded. Reopen the conversation and try again.',
       variant: 'error',
