@@ -162,4 +162,43 @@ describe('seam U — historical cached reader receives unsolicited unavailable h
     expect(input).not.toHaveFocus()
     expect(sentMessages(current.socket)).toStrictEqual([])
   })
+
+  it('direct Return while unavailable uses latest REST and its own failed-read Retry, never the recovery attach', async () => {
+    const { current, user, latest } = await openOlderReader()
+    const { failure: unavailableAlert, retry: recoveryRetry } = await unavailable(current, 200)
+    expect(screen.getByRole('button', latestName), 'D8/U direct Return remains callable BEFORE recovery').toBe(latest)
+    const responses = [deferred<Response>(), deferred<Response>()]
+    const queries: Record<string, string>[] = []
+    current.network.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, read => {
+      const index = queries.length
+      queries.push(Object.fromEntries(new URLSearchParams(read.query)))
+      if (!responses[index]) throw new Error('Fixture instrument: duplicate latest request escaped the pending guard')
+      return responses[index].promise
+    })
+    let action = latest
+    for (const attempt of [1, 2]) {
+      await user.click(action)
+      await user.keyboard('{Enter}')
+      await waitFor(() => expect(queries).toHaveLength(attempt))
+      expect(queries, 'Return/latest-read Retry reads latest, not older/window or recovery attach').toStrictEqual(Array.from({ length: attempt }, () => ({ limit: '40', min_rows: '20' })))
+      expect(action, 'D8 focused action remains mounted and guarded while pending').toHaveFocus()
+      expect(action).not.toBeDisabled()
+      expect(action).toHaveAttribute('aria-disabled', 'true')
+      expectCachedReader()
+      await act(async () => responses[attempt - 1].resolve(json({ error: 'latest read unavailable' }, 500)))
+      await waitFor(() => expect(useChatStore.getState().history.requests.latest.status).toBe('error'))
+      // Unavailable storage and failed explicit latest are different errors;
+      // scope each Retry by the spec's fixed message, never a single-alert guess.
+      const latestErrors = screen.getAllByRole('alert').filter(alert => alert.textContent?.includes('Could not load latest messages.'))
+      expect(latestErrors).toHaveLength(1)
+      expect(unavailableAlert).toHaveTextContent(UNAVAILABLE)
+      expect(within(unavailableAlert).getByRole('button', { name: /^Retry$/ })).toBe(recoveryRetry)
+      expect(latest).toBeVisible()
+      expect(action).toHaveFocus()
+      expectCachedReader()
+      expect(current.socket.sent.filter(frame => frame.type === 'attach_session' && !frame.ack_attention), 'direct Return and latest-error Retry do NOT send a recovery attach').toHaveLength(1)
+      expect(sentMessages(current.socket)).toStrictEqual([])
+      action = within(latestErrors[0]).getByRole('button', { name: /^Retry$/ })
+    }
+  })
 })
