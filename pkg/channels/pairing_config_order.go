@@ -120,7 +120,11 @@ func channelConfigFingerprint(cfg *config.Config, instance string) string {
 	if !exists {
 		return "absent"
 	}
-	raw, err := json.Marshal(inst)
+	canonical, supported := config.CanonicalChannelInstance(instance, inst)
+	if !supported {
+		return "absent" // the loader drops the same unsupported entry
+	}
+	raw, err := json.Marshal(canonical)
 	if err != nil {
 		panic("pairing config fingerprint: " + err.Error())
 	}
