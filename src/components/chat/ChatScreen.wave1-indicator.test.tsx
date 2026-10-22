@@ -19,7 +19,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { useOmnipusRuntime } from '@/lib/omnipus-runtime'
 import { useToolApprovalStore } from '@/store/toolApproval'
-import type { AskUserQuestionCard, GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import type { AskUserQuestionCard, GoalStatusFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { fetchAgents } from '@/lib/api'
 
@@ -740,6 +740,79 @@ describe('plain, replay, and idle bubbles', () => {
     } finally {
       if (height) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height)
       if (width) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width)
+    }
+  })
+
+  // Oracle: fix-round-1 dispatch item 3 / SFH F2. The fallback belongs to
+  // the continuous status episode, not to either renderer's component mount.
+  it('keeps the recovered historical fallback identical when the next token hands the same reply to live AssistantMessage', async () => {
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 800 })
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 800 })
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const sid = 'recovered-fallback-handoff'
+    const turnId = 'recovered-running-turn'
+    const messageId = 'recovered-text-answer'
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+    seedMessages(sid, [], { streaming: false, replaying: true })
+    const feed = (frame: ServerFrame) => act(() => useChatStore.getState().handleFrame(frame))
+    try {
+      act(() => {
+        useChatStore.getState().resetSessionForReplay(sid)
+        useChatStore.getState().setReplaying(true)
+      })
+      feed({ type: 'session_snapshot', session_id: sid, seq: 40, boot_id: 'handoff-boot', reason: 'unknown_position' })
+      feed({ type: 'session_state', session_id: sid, user_id: 'operator', pending_approvals: [], emitted_at: '2026-10-22T07:00:00Z', active_turn: { turn_id: turnId, agent_id: 'agent-1', started_at: '2026-10-22T06:59:00Z' } })
+      feed({ type: 'replay_message', session_id: sid, role: 'user', id: 'recovered-request', content: 'Continue the answer' })
+      feed({ type: 'replay_message', session_id: sid, role: 'assistant', id: messageId, content: 'Recovered answer', turn_id: turnId, agent_id: 'agent-1' })
+      feed({ type: 'done', session_id: sid, stats: { frames_emitted: 2 } })
+      feed({ type: 'catch_up_complete', session_id: sid, mode: 'snapshot', seq: 40, boot_id: 'handoff-boot' })
+      const recovered = useChatStore.getState().sessionsById[sid]
+      expect(recovered.activeTurnId).toBe(turnId)
+      expect(recovered.isStreaming).toBe(true)
+      expect(recovered.isReplaying).toBe(false)
+      // ChatMessage.isStreaming is optional; omitted and false are both
+      // historical. Only true selects the separate live renderer.
+      expect(recovered.messagesById[messageId].isStreaming ?? false).toBe(false)
+      expect(recovered.messagesById[messageId].status).toBe('done')
+      expect(recovered.messagesById[messageId].content).toBe('Recovered answer')
+
+      const container = await mount()
+      await waitFor(() => expect(container.querySelector(`[data-message-id="${messageId}"] [data-testid="reply-status-fallback"]`)).not.toBeNull())
+      const historical = container.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement
+      expect(historical.closest('[data-index]'), 'positive control: real historical virtualized row').not.toBeNull()
+      expect(historical.closest('[data-testid="streaming-message-anchor"]')).toBeNull()
+      const fallback = within(historical).getByTestId('reply-status-fallback').textContent
+      expect(fallback, 'initial RNG selects the published first fallback').toBe('Thinking…')
+      expectMarkMotion(historical, 'thinking')
+      expect(within(historical).getByText('Thinking', { exact: true })).toHaveClass('sr-only')
+      expect(within(historical).queryByTestId('reply-current-todo')).toBeNull()
+
+      // A second component-local selection must be observably different. The
+      // invariant is exact equality to the captured phrase, not a phrase regex.
+      random.mockReturnValue(0.6)
+      feed({ type: 'token', session_id: sid, message_id: messageId, turn_id: turnId, content: ' continued live' })
+      await waitFor(() => expect(container.querySelector(`[data-testid="streaming-message-anchor"] [data-message-id="${messageId}"]`)).not.toBeNull())
+      const live = container.querySelector(`[data-testid="streaming-message-anchor"] [data-message-id="${messageId}"]`) as HTMLElement
+      expect(live.closest('[data-index]'), 'positive control: historical row really yielded to live AssistantMessage').toBeNull()
+      expect(container.querySelectorAll(`[data-message-id="${messageId}"]`)).toHaveLength(1)
+      expect(historical.isConnected, 'the test must cross a renderer remount, not just update historical props').toBe(false)
+      const resumed = useChatStore.getState().sessionsById[sid]
+      expect(resumed.activeTurnId).toBe(turnId)
+      expect(resumed.messagesById[messageId].isStreaming).toBe(true)
+      expect(resumed.messagesById[messageId].content).toBe('Recovered answer continued live')
+      expectMarkMotion(live, 'thinking')
+      expect(within(live).getByText('Thinking', { exact: true })).toHaveClass('sr-only')
+      expect(within(live).getByTestId('reply-status-fallback').textContent, 'same continuous status must reuse its recovered fallback across historical → live handoff').toBe(fallback)
+    } finally {
+      cleanup()
+      random.mockRestore()
+      if (height) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'offsetHeight')
+      if (width) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'offsetWidth')
+      vi.stubGlobal('ResizeObserver', ResizeObserverStub)
     }
   })
 })
