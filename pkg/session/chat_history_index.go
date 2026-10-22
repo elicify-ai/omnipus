@@ -42,7 +42,8 @@ func (us *UnifiedStore) reconcileChatHistoryIndex(ctx context.Context, sessionID
 func (us *UnifiedStore) initEmptyChatHistoryIndexLocked(sessionID string) error {
 	dir := filepath.Join(us.baseDir, sessionID)
 	// This entry point is only called by the new-identity publication path.
-	// Never replace an old nonempty archive or a pre-existing derived baseline.
+	// Never replace content or a derived baseline. A verified empty baseline
+	// whose identity was never published can resume that same publication.
 	info, err := os.Stat(filepath.Join(dir, archiveCurrentFile))
 	if err == nil && info.Size() != 0 {
 		return errors.New("cannot initialize history over existing content")
@@ -50,10 +51,17 @@ func (us *UnifiedStore) initEmptyChatHistoryIndexLocked(sessionID string) error 
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if _, err = os.Stat(historyIndexPath(dir)); err == nil {
-		return errors.New("history baseline already exists")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+	if info, indexErr := os.Lstat(historyIndexPath(dir)); indexErr == nil {
+		if !info.IsDir() {
+			return errors.New("invalid existing history baseline")
+		}
+		cp, resumeErr := historyVerifyEmptyUnpublished(dir, sessionID)
+		if resumeErr != nil {
+			return resumeErr
+		}
+		return historyPublication(chatHistoryPublicationEvent{SessionID: sessionID, Operation: "create", Point: "empty_checkpoint_ready", IndexGeneration: cp.Generation})
+	} else if !errors.Is(indexErr, os.ErrNotExist) {
+		return indexErr
 	}
 	if err = fileutilHistoryEmptyTranscript(dir); err != nil {
 		return err
