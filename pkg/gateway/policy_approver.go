@@ -45,15 +45,24 @@ func newPolicyApproverAdapter(reg *approvalRegistryV2, ws *WSHandler) *policyApp
 // the entry is already in denied_saturated state and resultCh has a pre-delivered
 // outcome, so we skip the WS broadcast and unblock immediately.
 func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.PolicyApprovalReq) (bool, string, bool) {
-	entry, accepted := a.reg.requestApprovalWithOrigin(
+	// Keep room pre-admission cards tied to their room. For a member's own
+	// work, consumed channel input takes precedence; plain contexts retain
+	// the server-derived label supplied by the turn (FR-240 / K7).
+	originLabel, roomRef := req.OriginLabel, req.RoomRef
+	if origin := tools.ToolTurnOrigin(ctx); !req.RoomPreAdmission && origin != nil && (originLabel == "" || origin.ChannelTriggered()) {
+		originLabel = origin.Label()
+		if origin.ChannelTriggered() {
+			roomRef = nil
+		}
+	}
+	entry, accepted := a.reg.requestApproval(
 		req.ToolCallID,
 		req.ToolName,
 		req.Args,
 		req.AgentID,
 		req.SessionID,
 		req.TurnID,
-		// FR-240 / K7: the server-derived turn origin, never client input.
-		tools.ToolTurnOrigin(ctx).Label(),
+		approvalExtras{RoomRef: roomRef, OriginLabel: originLabel, RoomPreAdmission: req.RoomPreAdmission},
 	)
 	if entry == nil {
 		// Defensive: should never happen (requestApproval always returns non-nil).
@@ -64,6 +73,13 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 	if accepted {
 		// Broadcast the WS frame to connected clients scoped to the session owner (FR-073).
 		a.wsHandler.broadcastToolApprovalRequired(entry)
+		// A member's own approval while it works on a group-chat request shows
+		// the room "waiting for you in <Agent>'s main chat" (FR-169). A room's
+		// pre-admission card is not the member's work and does not count.
+		if !entry.RoomPreAdmission {
+			a.wsHandler.roomCard(entry.SessionID, entry.ApprovalID, true)
+			defer a.wsHandler.roomCard(entry.SessionID, entry.ApprovalID, false)
+		}
 	}
 	// accepted==false → saturated; no WS broadcast, outcome pre-delivered.
 

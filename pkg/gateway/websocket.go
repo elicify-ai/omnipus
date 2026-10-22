@@ -191,6 +191,10 @@ type WSHandler struct {
 	// tempdir cleanup races).
 	activeConns sync.WaitGroup
 
+	// rooms is the group-chat hub (rooms_runtime.go): attach_room frames and
+	// live room frames. Nil until boot wires it.
+	rooms *roomsHub
+
 	mu          sync.Mutex
 	sessions    map[string]*wsConn // chatID → connection
 	sessionIDs  map[string]string  // chatID → sessionID (for transcript recording)
@@ -675,6 +679,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(h.sessionIDs, chatID)
 		h.unbindConnHubLocked(wc)
 		h.mu.Unlock()
+		h.rooms.unsubscribeAll(wc) // the closed connection leaves every group chat
 		// w5-integration (US-2.3/MC-4): revoke this connection's Mail panel
 		// observers BEFORE the socket closes. This deferred block is the one
 		// choke point every disconnected socket passes through — explicit
@@ -1368,6 +1373,8 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 		}
 	case string(generated.WsFrameTypeSessionModeUpdate):
 		return wh.handleSessionModeUpdateFrame(data)
+	case string(generated.WsFrameTypeAttachRoom):
+		wh.h.handleAttachRoom(wh.wc, data)
 	case string(generated.WsFrameTypePing):
 		// Application-layer pong: the SPA's 60s "any frame received" liveness
 		// check needs a server-originated frame during idle. Gorilla WS-protocol
@@ -1477,10 +1484,8 @@ func wsFrameSchemaName(frameType string) string {
 		return "WhatsAppPairingSubscribeFrame"
 	case string(generated.WsFrameTypeAskUserAnswer):
 		return "AskUserAnswerFrame"
-	// Spec omnipus-system-agent K45: the room attach frame's shape is
-	// validated here from the contract onward; its handler arrives with
-	// WU-15, so until then a schema-valid attach_room falls through to
-	// dispatchFrame's "unknown frame type ignored" default.
+	// Spec omnipus-system-agent K45: the room attach frame
+	// (handleAttachRoom, ws_rooms.go).
 	case string(generated.WsFrameTypeAttachRoom):
 		return "AttachRoomFrame"
 	case string(generated.WsFrameTypePing):

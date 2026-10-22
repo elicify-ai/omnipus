@@ -603,32 +603,46 @@ func memberMainsWarning(deps *Deps, toolName, workspaceID string, team []string)
 	if w := provisionMemberMains(deps, toolName, workspaceID); w != "" {
 		parts = append(parts, w)
 	}
-	if inactive := inactiveNativeMembers(deps, team); len(inactive) > 0 {
+	inactive, err := inactiveNativeMembers(deps, team)
+	if len(inactive) > 0 {
 		parts = append(parts, fmt.Sprintf("Agent(s) %s are saved but not active, so their main chat could not be "+
 			"prepared; it is prepared when the agent is active and its chat is opened.", strings.Join(inactive, ", ")))
+	}
+	if err != nil {
+		slog.Error("sysagent: "+toolName+": member records could not be verified for main chats",
+			"workspace_id", workspaceID, "error", err)
+		parts = append(parts, fmt.Sprintf("The team was saved, but main-chat readiness in workspace %q could not be verified: %v. "+
+			"Repair the agent record or remove the member from the team, then retry.", workspaceID, err))
 	}
 	return strings.Join(parts, " ")
 }
 
 // inactiveNativeMembers lists the members that are saved native chat-target
-// agents but missing from the live roster. Nothing is listed when the live
-// roster cannot be read (nothing to compare against).
-func inactiveNativeMembers(deps *Deps, team []string) []string {
+// agents but missing from the live roster. Read failures are returned alongside
+// any verified inactive members, never treated as intentional ineligibility.
+// Nothing is listed when the live roster cannot be read (nothing to compare against).
+func inactiveNativeMembers(deps *Deps, team []string) ([]string, error) {
 	if !liveConfigAvailable(deps) || strings.TrimSpace(deps.Home) == "" || deps.EnsureWorkspaceMains == nil {
-		return nil
+		return nil, nil
 	}
 	live := configAgentPresenceSet(deps)
 	store := agentstore.New(deps.Home)
 	var out []string
+	var verificationErr error
 	for _, id := range team {
 		if live[id] {
 			continue
 		}
-		if a, err := store.Get(id); err == nil && a.IsChatTarget() {
+		a, err := store.Get(id)
+		if err != nil {
+			verificationErr = errors.Join(verificationErr, fmt.Errorf("agent %q could not be read: %w", id, err))
+			continue
+		}
+		if a.IsChatTarget() {
 			out = append(out, id)
 		}
 	}
-	return out
+	return out, verificationErr
 }
 
 // ---- system.workspace.update ----
@@ -1109,7 +1123,7 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 //     newTeam is caller-supplied (a workspace's stored core_team, or the
 //     tool's raw core_team argument) and is never itself validated against
 //     the roster, while coreagent.SeedDelegationEdges keys off a compiled
-//     constant ID string ("jim", "ava", "worker", ...) rather than looking
+//     constant ID string ("jim", "mia", ...) rather than looking
 //     the agent up in cfg — so without this check a core_team entry that
 //     names a deleted-but-still-seed-keyed agent (or a stale/typo'd ID that
 //     happens to collide with a seed key) would still produce a persisted
@@ -1334,7 +1348,7 @@ func withNewMemberSelfEdges(
 // caller-supplied newTeam (a workspace's core_team, which is never itself
 // validated against the roster), so without this presence check a stale or
 // typo'd core_team entry that happens to collide with a compiled
-// coreagent.SeedDelegationEdges key ("jim", "ava", "worker", ...) could still
+// coreagent.SeedDelegationEdges key ("jim", "mia", ...) could still
 // seed an edge naming an agent that no longer exists in config.
 //
 // A nil Deps/GetCfg/Config (test scaffolding without a wired config) yields
@@ -1534,9 +1548,20 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 	unlock := workspacepkg.LockID(id)
 
 	// Guard: verify the workspace exists before any irreversible mutations.
-	if _, err := workspacepkg.CheckRevisionLocked(t.deps.Home, id, revision); err != nil {
+	state, err := workspacepkg.CheckRevisionLocked(t.deps.Home, id, revision)
+	if err != nil {
 		unlock()
 		return workspaceRevisionError(id, err)
+	}
+	if refusal := workspacepkg.RefuseDefaultDeletion(state.Workspace.IsDefault); refusal != nil {
+		unlock()
+		return tools.ErrorResult(errorJSON("CONFLICT", refusal.Error(), ""))
+	}
+	changedChannels, cleanupErr := unbindWorkspaceChannels(t.deps, id)
+	if cleanupErr != nil {
+		unlock()
+		return workspaceDeleteChannelFailure(id, changedChannels,
+			"could not disable and unbind workspace channels; workspace was not deleted: "+cleanupErr.Error())
 	}
 
 	// Step 1: cascade-delete tasks
@@ -1544,7 +1569,7 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 	if err != nil {
 		unlock()
 		slog.Error("sysagent: workspace cascade delete: failed to list tasks", "workspace_id", id, "error", err)
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", "could not list tasks for cascade delete: "+err.Error(), ""))
+		return workspaceDeleteChannelFailure(id, changedChannels, "could not list tasks for cascade delete: "+err.Error())
 	}
 	tasksDeleted := 0
 	var cleanupFailures []string
@@ -1569,14 +1594,14 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 		unlock()
 		if tasksDeleted > 0 {
 			return changeErrorWithOutcome(map[string]any{
-				"success":       false,
-				"error":         map[string]any{"code": "SAVE_FAILED", "message": err.Error()},
-				"id":            id,
-				"tasks_deleted": tasksDeleted,
+				"success": false,
+				"error":   map[string]any{"code": "SAVE_FAILED", "message": err.Error()},
+				"id":      id, "tasks_deleted": tasksDeleted,
+				"channels_disabled_and_unbound": append([]string{}, changedChannels...),
 			}, partlySaved(fmt.Sprintf("%d task(s) were deleted but the workspace record was not: %v", tasksDeleted, err),
 				"", []string{"workspace record deletion"}))
 		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+		return workspaceDeleteChannelFailure(id, changedChannels, err.Error())
 	}
 
 	// The workspace file is gone — release the lock now. Step 3 below is
@@ -1617,11 +1642,17 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 		cleanupFailures = append(cleanupFailures, "workspace folder")
 	}
 
+	changedFields := []string{"workspace"}
+	scope := "workspace record deleted; its tasks, mount store, delegation store and folder removed"
+	if len(changedChannels) > 0 {
+		changedFields = append(changedFields, "channels")
+		scope += "; bound channel configuration disabled and unbound"
+	}
 	resp := map[string]any{
 		"id": id, "deleted": true, "tasks_deleted": tasksDeleted,
-		"changed_fields": []string{"workspace"},
+		"changed_fields":                changedFields,
+		"channels_disabled_and_unbound": append([]string{}, changedChannels...),
 	}
-	const scope = "workspace record deleted; its tasks, mount store, delegation store and folder removed"
 	if len(cleanupFailures) > 0 {
 		return changeSuccess(resp, partlySaved("the workspace is deleted but some of its data could not be removed",
 			scope, cleanupFailures))

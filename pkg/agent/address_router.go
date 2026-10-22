@@ -253,11 +253,19 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 // (final-gate SG-01). Not UserInitiated / OperatorPrompt either (fail closed
 // for /goal, /loop and the browser wheel; scripts/check-operator-prompt-sites.sh
 // counts this as one non-operator PublishInbound site).
-func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing.Pair, sender addressing.Sender, requestID, receiverSessionID, content string) error {
+//
+// extra adds metadata to the wake (a group-chat room request adds its no-join
+// marker and room id, room_request.go) - the same one publication site.
+func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing.Pair, sender addressing.Sender, requestID, receiverSessionID, content string, extra ...map[string]string) error {
 	meta := map[string]string{"agent_id": receiver.AgentID, "workspace_id": receiver.WorkspaceID, ownerWakeMetadataKey: "1"}
 	if sender.Agent.AgentID != "" {
 		// §6.18: the receiving turn's origin is this peer ("asked by <Agent>").
 		meta[requestSenderAgentMetadataKey] = sender.Agent.AgentID
+	}
+	for _, m := range extra {
+		for k, v := range m {
+			meta[k] = v
+		}
 	}
 	return al.bus.PublishInbound(ctx, bus.InboundMessage{
 		Channel:           "webchat",
@@ -475,6 +483,8 @@ func (r AddressRouter) Reply(ctx context.Context, req tools.ReplyRequest) (tools
 		receipt, err = al.replyViaConnector(ctx, capture, responder, req)
 	case addressing.SourceConversation:
 		receipt, err = al.replyIntoConversation(capture, responder, req)
+	case addressing.SourceRoom:
+		receipt, err = al.replyIntoRoom(ctx, capture, responder, req)
 	default:
 		return tools.ReplyReceipt{}, fmt.Errorf("%w", addressing.ErrUnusableCorrelation)
 	}

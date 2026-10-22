@@ -21,6 +21,9 @@ type inputOrigin struct {
 	channelPerson string // display name of a channel person
 	connection    string // the connection (channel instance) it arrived on
 	peerAgentID   string // the agent that sent a peer request
+	// approval retains the ranked room-aware approval provenance alongside
+	// the channel provenance used by secret policy. Private, never wire data.
+	approval approvalOrigin
 }
 
 // inboundInputOrigin derives an input's origin from the inbound message. A
@@ -80,4 +83,19 @@ func (al *AgentLoop) recordConsumedInputOrigins(scope string, items []steeringQu
 	for _, item := range items {
 		item.origin.recordInto(al, ts.origin)
 	}
+}
+
+// approvalFor preserves a captured room-aware origin, or derives the matching
+// channel/peer approval label for an input admitted through the inbound path.
+func (o inputOrigin) approvalFor(al *AgentLoop) approvalOrigin {
+	if o.approval.Label != "" {
+		return o.approval
+	}
+	origin := tools.NewTurnOrigin()
+	o.recordInto(al, origin)
+	class := originPeer
+	if origin.ChannelTriggered() {
+		class = originChannel
+	}
+	return approvalOrigin{Label: origin.Label(), Class: class}
 }

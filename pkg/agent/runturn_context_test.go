@@ -442,17 +442,17 @@ func TestRunTurn_MidTurnNeverAdvancesSkip(t *testing.T) {
 }
 
 // TestRunTurn_SmallWindowClamp — spec test 40, B-11b / B-11c / B-36 / ADR
-// §17.4b (SC-008): on an 8,192-token window a 200,000-char result enters
-// capped to at most half the budget (the D4 clamp), the floor is never
-// emptied, and the turn completes.
+// §17.4b (SC-008): at the founder's 16,384-token minimum (2026-10-21), a
+// 200,000-char result enters capped to at most half the budget (the D4 clamp),
+// the floor is never emptied, and the turn completes.
 func TestRunTurn_SmallWindowClamp(t *testing.T) {
 	provider := testutil.NewScenario().
 		WithToolCalls([]providers.ToolCall{toolCallFor("small-1", "sw")}).
 		WithText("done")
-	h := newCtxTurnHarness(t, provider, 8_192, 200_000)
+	h := newCtxTurnHarness(t, provider, 16_384, 200_000)
 
 	budget := agentContextBudget(h.agent)
-	require.Positive(t, budget, "8,192 window with 2,000 max_tokens leaves a real budget")
+	require.Positive(t, budget, "16,384 minimum window with 2,000 max_tokens leaves a real budget")
 
 	emptiesBefore := ContextEmptiesTotal()
 	reply, err := h.runScheduled(t, "small window")

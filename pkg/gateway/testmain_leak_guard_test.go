@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -21,16 +23,25 @@ func leakedPackageDirFiles() []string {
 	// committed those files. The current marker lives under tasks/; both
 	// shapes are leaks here.
 	for _, name := range []string{".milestones_migrated", ".planning_status_migrated"} {
-		info, err := os.Stat(name)
-		if err == nil && info != nil && !info.IsDir() {
+		// Lstat sees the directory entry itself. Stat would treat a dangling
+		// symlink as absent.
+		if _, err := os.Lstat(name); err == nil {
 			leaked = append(leaked, name)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			leaked = append(leaked, fmt.Sprintf("%s (inspection failed: %v)", name, err))
 		}
 	}
 	for _, rel := range []string{"entities", "sessions", "workspaces", "uploads", "tasks"} {
 		_ = filepath.Walk(rel, func(path string, info os.FileInfo, err error) error {
-			//nolint:nilerr // an unreadable entry must not abort the sweep: the
-			// assertion is "nothing leaked", and aborting would hide the rest.
-			if err != nil || info == nil || info.IsDir() {
+			if err != nil {
+				// A missing root is not a leak. Any other inspection failure
+				// means this sweep cannot certify the tree is clean.
+				if path != rel || !errors.Is(err, os.ErrNotExist) {
+					leaked = append(leaked, fmt.Sprintf("%s (inspection failed: %v)", path, err))
+				}
+				return nil
+			}
+			if info == nil || info.IsDir() {
 				return nil
 			}
 			leaked = append(leaked, path)

@@ -33,19 +33,11 @@ export type EligibleRosterEntry = { // not-wire-format: local pairing of a gener
   member: WorkspaceMemberConfig | undefined
 }
 
-export type EligibleAdminEntry = { // not-wire-format: the loaded Admin agent plus the seam-read Admin main id; never a membership entry
-  agent: Agent
-  mainSessionId: string | undefined
-}
-
 export type EligibleInput = { // not-wire-format: function arguments assembled from already-loaded SPA state for eligible mains; not a request or response body
   workspaceId: string
   isDefaultWorkspace: boolean
   rosterState: 'fresh' | 'failed-no-cache' | 'failed-stale-cache'
   roster: EligibleRosterEntry[]
-  /** Default-workspace Admin, even though Admin is not a member: the agent plus
-   *  the id the seam read from Workspace.admin_main_session_id (or undefined). */
-  adminDefault: EligibleAdminEntry | null
   sessions: Session[]
   cachedRows: EligibleRow[]
 }
@@ -53,16 +45,13 @@ export type EligibleInput = { // not-wire-format: function arguments assembled f
 /** Chat colleagues. Workers and hidden engines are not mains. */
 const COLLEAGUE_TYPES = new Set<Agent['type']>(['core', 'Main'])
 
-/** Built-in Admin. Shown only as the validated default-workspace main, never via membership. */
-const ADMIN_AGENT_ID = 'admin'
-
 /**
  * Omnipus is a hidden member of the default workspace: it is reached only
  * through its fixed sidebar entry, never as a workspace agent row
  * (omnipus-system-agent FR-004, BDD-1.5).
  */
 function isEligibleColleague(agent: Agent): boolean {
-  return agent.id !== ADMIN_AGENT_ID && !isOmnipusAgentId(agent.id) && COLLEAGUE_TYPES.has(agent.type)
+  return !isOmnipusAgentId(agent.id) && COLLEAGUE_TYPES.has(agent.type)
 }
 
 function validatedId(id: string | undefined): string | undefined {
@@ -89,7 +78,6 @@ function rowFor(workspaceId: string, agent: Agent, mainSessionId: string): Eligi
 function cachedRowStillEligible(row: EligibleRow, input: EligibleInput): boolean {
   if (row.workspaceId !== input.workspaceId) return false
   if (isOmnipusAgentId(row.agentId)) return false
-  if (row.agentId === ADMIN_AGENT_ID) return input.isDefaultWorkspace
   const known = input.roster.find((entry) => entry.agent.id === row.agentId)
   if (!known) return true
   return isEligibleColleague(known.agent)
@@ -127,15 +115,6 @@ export function eligibleMainAgents(input: EligibleInput): EligibleResult {
       continue
     }
     rows.push(rowFor(input.workspaceId, entry.agent, mainSessionId))
-  }
-
-  if (input.isDefaultWorkspace && input.adminDefault) {
-    const mainSessionId = validatedId(input.adminDefault.mainSessionId)
-    if (mainSessionId === undefined) {
-      missingMainAgentIds.push(input.adminDefault.agent.id)
-    } else {
-      rows.push(rowFor(input.workspaceId, input.adminDefault.agent, mainSessionId))
-    }
   }
 
   if (missingMainAgentIds.length > 0) {

@@ -184,6 +184,9 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 	if rec.SteeredBy != nil && len(rec.SteeredBy.ToolExclusions) > 0 {
 		turnAgent = agentInstanceWithToolExclusions(agentInst, rec.SteeredBy.ToolExclusions)
 	}
+	// #1263 R1/R5: a re-entered or revived session keeps its chain's
+	// attendance — rec.Unattended above, tightened by the root origin.
+	al.applyTurnAttendance(&opts)
 	ts := newTurnState(turnAgent, opts, al.newTurnEventScope(agentInst.ID, opts.SessionKey))
 	ts.generation = rec.Generation
 	if rec.SteeredBy != nil {

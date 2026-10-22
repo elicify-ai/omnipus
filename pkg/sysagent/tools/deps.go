@@ -270,6 +270,14 @@ type Deps struct {
 	// gateway wires it to restAPI.ensureWorkspaceMains.
 	EnsureWorkspaceMains func(workspaceID string) error
 
+	// UnbindWorkspaceChannels is the SAME hard channel-cleanup operation used
+	// by HTTP workspace deletion. Called under the workspace lock, before any
+	// deletion cascade. Returns the instance IDs whose disabled/unbound state
+	// was saved; a non-empty list with an error means persistence succeeded
+	// but live config refresh failed. The gateway owns its raw-JSON config
+	// transaction and config-lock -> agent-loop-lock ordering.
+	UnbindWorkspaceChannels func(workspaceID string) ([]string, error)
+
 	// DeleteSessionStore returns the loop's ONE live session store for the
 	// agent-delete cascade (DEL-10). It must not open a store: a nil return (or a
 	// nil field) fails the delete closed, and the same delete can be retried.

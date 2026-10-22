@@ -1363,6 +1363,12 @@ func (rc *runContextWithOptions) wireSystemTools() {
 			}
 			return rc.runningServices.restAPIRef.ensureWorkspaceMains(workspaceID)
 		},
+		UnbindWorkspaceChannels: func(workspaceID string) ([]string, error) {
+			if rc.runningServices == nil || rc.runningServices.restAPIRef == nil {
+				return nil, errors.New("workspace channel cleanup is not wired")
+			}
+			return unbindChannelInstancesForWorkspace(rc.runningServices.restAPIRef, workspaceID)
+		},
 		// DEL-10: the delete_agent cascade uses the loop's one live store and stops
 		// each session first.
 		DeleteSessionStore: func() systools.AgentSessionStore {

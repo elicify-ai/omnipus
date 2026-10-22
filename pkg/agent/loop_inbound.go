@@ -358,8 +358,11 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		if strings.EqualFold(explicitID, string(coreagent.IDOmnipus)) {
 			explicitID = string(coreagent.IDOmnipus)
 		}
+		lookupID := explicitID
 		if owner := al.existingSessionOwner(msg); owner != "" {
-			if !strings.EqualFold(owner, explicitID) {
+			// Only the WU-1 system owner keeps case-fold matching (#1330).
+			omnipusOwner := explicitID == string(coreagent.IDOmnipus) && strings.EqualFold(owner, explicitID)
+			if owner != explicitID && !omnipusOwner {
 				logger.WarnCF("agent", "Explicit agent_id conflicts with the session owner; refused",
 					map[string]any{"agent_id": explicitID, "owner": owner, "session_id": msg.SessionID})
 				return routing.ResolvedRoute{}, nil, fmt.Errorf(
@@ -368,7 +371,7 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 			// A matching id runs under the owner's stored spelling.
 			explicitID = owner
 		}
-		if agent, ok := registry.GetAgent(explicitID); ok {
+		if agent, ok := registry.GetAgent(lookupID); ok {
 			// A worker is a delegation-only labor tier — never a chat target,
 			// and there is no default agent to fall back to (FR-120): refuse.
 			if agent.IsWorker() {
@@ -820,7 +823,7 @@ func (al *AgentLoop) resolveSystemMessageWorkspaceID(msg bus.InboundMessage, tra
 // processSteeredSystemWake reconstructs a durable steering-session turn from
 // its lifecycle record. Ordinary inbox wakes use their consumed marker;
 // secret-only direct-bus wakes use the mandatory request-id claim instead.
-func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (string, error) {
+func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (resp string, runErr error) {
 	sessionID := msg.AsyncTranscriptSessionID
 	messageID := inboundMetadata(msg, "steer_message_id")
 	defer al.releaseWakePublication(sessionID, messageID)
@@ -982,6 +985,10 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		}
 		if admitted {
 			rootExecution = d
+			// The canonical consuming session owns the reminder on both worker
+			// and direct replay entry. Run after release/checked settlement.
+			defer al.remindUnansweredRequests(sessionID)
+			defer func() { runErr = errors.Join(runErr, al.finishRoomTurn(ts.opts.roomCost, runErr)) }()
 			release = func() { al.finishOrdinaryWakeExecution(msg, d) }
 		}
 	}
@@ -1117,6 +1124,7 @@ func (al *AgentLoop) admitOrdinaryRootWake(ctx context.Context, msg bus.InboundM
 		return nil, false, nil
 	}
 	ts.opts.executionDisposition = d
+	ts.opts.roomCost = preparation.roomCost
 	ts.generation = d.claim.Generation
 	if idErr := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); idErr != nil {
 		al.finishOrdinaryWakeExecution(msg, d)

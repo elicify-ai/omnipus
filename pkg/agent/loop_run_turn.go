@@ -1289,11 +1289,13 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 
 	if ri.rf.rt.iteration > 1 {
 		if steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringMessagesForScope(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+			ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 			ri.pendingMessages = append(ri.pendingMessages, steerMsgs...)
 			ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}
 	} else if !ri.rf.rt.ts.opts.SkipInitialSteeringPoll {
 		if steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringMessagesForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+			ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 			ri.pendingMessages = append(ri.pendingMessages, steerMsgs...)
 			ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}

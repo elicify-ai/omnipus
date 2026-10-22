@@ -69,7 +69,8 @@ func l1WU2OmnipusSupport() []string {
 		"read_file", "write_file", "edit_file", "append_file", "list_directory", "grep",
 		"list_mounts", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list",
 		"search_web", "fetch_url", "create_agent", "update_agent", "delete_agent",
-		"update_workspace", "create_skill", "edit_skill", "remove_skill", "install_skill",
+		// Founder 2026-10-18: create yes; delete deferred to #1363 (explicit Deny).
+		"create_workspace", "update_workspace", "create_skill", "edit_skill", "remove_skill", "install_skill",
 		"add_mcp_server", "remove_mcp_server", "configure_provider", "enable_channel",
 		"disable_channel", "configure_channel", "connect_channel", "connect_mailbox",
 		"set_agent_permissions", "request_secret", "select_secret_version", "remove_secret",

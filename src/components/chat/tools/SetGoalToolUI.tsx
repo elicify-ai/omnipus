@@ -67,11 +67,12 @@
 //
 // Visibility (review S4): this dedicated UI pre-empts GenericToolCall on
 // both paths, so it must honour the same verbose-chat contract itself —
-// with verbose chat ON it falls through to GenericToolCall (the raw call,
-// params and result expandable, failure included); with it OFF a FAILED
-// call renders a one-line quiet "Goal registration failed" trace (detail on
-// hover/expand) instead of vanishing, and a still-running call renders
-// nothing. `classifySetGoalCall` is the single decision table; ChatScreen's
+// with verbose chat ON a successful record keeps its GoalEchoCard first
+// and adds GenericToolCall below (raw params and result expandable); other
+// calls keep their raw rendering. With it OFF a FAILED call renders a
+// one-line quiet "Goal registration failed" trace (detail on hover/expand)
+// instead of vanishing, and a still-running call renders nothing.
+// `classifySetGoalCall` is the single decision table; ChatScreen's
 // `wouldToolCallBeVisible` consults it too, so "is there visible content"
 // and "what renders" can never disagree.
 
@@ -255,11 +256,13 @@ export function buildFrameFromSetGoalResult(result: SetGoalResult, pill: GoalSta
  *   - `hidden` — still running, or completed with no result at all.
  *   - `failed` — a failed call, verbose off: the quiet one-line trace.
  *   - `card`   — a parseable record: GoalEchoCard.
+ *   - `card-and-raw` — a parseable record in verbose chat: GoalEchoCard
+ *                first, then GenericToolCall with expandable raw details.
  *   - `chip`   — a completed call whose result is present but is not a
  *                record (e.g. the tool's plain-text fallback line when its
  *                own payload marshal failed): a minimal chip with the text,
  *                so a successful registration always leaves a trace. */
-export type SetGoalPresentation = 'raw' | 'hidden' | 'failed' | 'card' | 'chip'
+export type SetGoalPresentation = 'raw' | 'hidden' | 'failed' | 'card' | 'card-and-raw' | 'chip'
 
 export interface SetGoalCallInput {
   args?: unknown
@@ -289,6 +292,12 @@ export function isUnchangedSetGoalResult(result: unknown): boolean {
 export function classifySetGoalCall(input: SetGoalCallInput): SetGoalPresentation {
   const params = isRecord(input.args) ? input.args : undefined
   if (shouldRenderToolCall('set_goal', params, input.verboseChatEnabled, input.isError)) {
+    if (
+      !input.isRunning &&
+      !input.isError &&
+      !isUnchangedSetGoalResult(input.result) &&
+      parseSetGoalResult(input.result)
+    ) return 'card-and-raw'
     return 'raw'
   }
   if (input.isRunning) return 'hidden'
@@ -389,27 +398,29 @@ export function SetGoalCardBlock({
     isErrorProp ?? ((partStatus.type === 'incomplete' && partStatus.reason !== 'cancelled') || !!error)
   const presentation = classifySetGoalCall({ args, result, isRunning, isError, verboseChatEnabled })
   const parsed = useMemo(
-    () => (presentation === 'card' ? parseSetGoalResult(result) : null),
+    () => (presentation === 'card' || presentation === 'card-and-raw' ? parseSetGoalResult(result) : null),
     [presentation, result],
   )
   const pill = useChatStore((s) => (parsed && parsed.goal_id !== '' ? s.goalPills?.[parsed.goal_id] : undefined))
+
+  const rawCall = (
+    <GenericToolCall
+      toolName="set_goal"
+      args={args}
+      result={result}
+      status={isRunning ? { type: 'running' } : partStatus}
+      error={error}
+      isError={isError}
+      durationMs={durationMs}
+      sessionId={sessionId}
+    />
+  )
 
   switch (presentation) {
     case 'hidden':
       return null
     case 'raw':
-      return (
-        <GenericToolCall
-          toolName="set_goal"
-          args={args}
-          result={result}
-          status={isRunning ? { type: 'running' } : partStatus}
-          error={error}
-          isError={isError}
-          durationMs={durationMs}
-          sessionId={sessionId}
-        />
-      )
+      return rawCall
     case 'failed': {
       const detail = detailText(result, error)
       return (
@@ -447,10 +458,16 @@ export function SetGoalCardBlock({
         </div>
       )
     }
-    case 'card': {
+    case 'card':
+    case 'card-and-raw': {
       if (!parsed) return null
       const view = buildFrameFromSetGoalResult(parsed, pill)
-      return <GoalEchoCard frame={view.frame} showProgress={view.hasLiveProgress} />
+      return (
+        <>
+          <GoalEchoCard frame={view.frame} showProgress={view.hasLiveProgress} />
+          {presentation === 'card-and-raw' ? rawCall : null}
+        </>
+      )
     }
     default:
       return null

@@ -137,10 +137,3 @@ func (a *restAPI) secretsConfig(ctx context.Context) *config.Config {
 func (a *restAPI) secretsHome() string {
 	return config.OmnipusHomeDir()
 }
-
-func requestUsername(r *http.Request) string {
-	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && user != nil {
-		return user.Username
-	}
-	return ""
-}
