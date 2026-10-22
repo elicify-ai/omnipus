@@ -9,6 +9,12 @@ type ReplayBufferOptions = { maxBytes?: number; maxFrames?: number; onLimit?: (s
 export const MAX_REPLAY_BUFFER_BYTES = 8 * 1024 * 1024
 const MAX_REPLAY_BUFFER_FRAMES = 4096
 const supersededAttachFrames = new WeakSet<object>()
+const progressiveAttachFrames = new WeakSet<object>()
+
+/** Local delivery provenance, not a serialized field or a successful page claim. */
+export function isProgressiveAttachFrame(frame: unknown): boolean {
+  return typeof frame === 'object' && frame !== null && progressiveAttachFrames.has(frame)
+}
 
 /** Transport-local provenance: never serialized or added to generated frames. */
 export function isSupersededAttachFrame(frame: unknown): boolean {
@@ -75,11 +81,12 @@ export class AttachReplayBuffer {
   }
 
   private retain(sessionId: string, replay: PendingAttach, frame: ServerFrame): ServerFrame[] {
-    if (replay.progressive) return [frame]
+    if (replay.progressive) { progressiveAttachFrames.add(frame); return [frame] }
     const bytes = JSON.stringify(frame).length * 2
     if (this.retainedBytes + bytes > (this.options.maxBytes ?? MAX_REPLAY_BUFFER_BYTES) || this.retainedFrames + 1 > (this.options.maxFrames ?? MAX_REPLAY_BUFFER_FRAMES)) {
       replay.progressive = true
       const ready = this.release(replay)
+      for (const released of [...ready, frame]) progressiveAttachFrames.add(released)
       this.options.onLimit?.(sessionId)
       return [...ready, frame]
     }

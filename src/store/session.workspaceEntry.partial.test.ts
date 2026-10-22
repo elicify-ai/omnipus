@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session, Workspace, WorkspaceMemberConfig } from '@/lib/api'
 import { fetchSessionDetail, fetchSessions, fetchWorkspace, fetchAgents } from '@/lib/api'
 import { MIA } from '../../tests/omnipus-l1-ui-red/fixtures'
+import { availableHistoryDetail } from '../../tests/chat-history-paging/legacy-fixtures'
 import { ApiError } from '@/lib/api-error'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useConnectionStore } from './connection'
@@ -98,7 +99,7 @@ describe('workspace entry on a partial session list (M3)', () => {
   it('a remembered chat missing from an INCOMPLETE list is resolved directly and restored — never swapped for the main', async () => {
     useConnectionStore.setState({ connection: { send: vi.fn().mockReturnValue(true) } as never, isConnected: true })
     vi.mocked(fetchSessions).mockResolvedValue(partialList([otherSession()]))
-    vi.mocked(fetchSessionDetail).mockResolvedValue({ session: targetSession(), messages: [] })
+    vi.mocked(fetchSessionDetail).mockResolvedValue(availableHistoryDetail(targetSession()))
     rememberTargetPointer()
 
     await useSessionStore.getState().enterWorkspaceChat(TARGET_WS)

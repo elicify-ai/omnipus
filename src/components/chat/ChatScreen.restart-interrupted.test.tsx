@@ -27,9 +27,11 @@ vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ navigate: vi.fn() }), useNavigate: () => vi.fn(),
   useSearch: () => ({}), Link: ({ children }: { children: ReactNode }) => children,
 }))
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (original) => ({
   ...await original<typeof import('@/lib/api')>(),
-  fetchAgents: vi.fn().mockResolvedValue([]), fetchSessionMessages: vi.fn().mockResolvedValue([]),
+  fetchAgents: vi.fn().mockResolvedValue([]), fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
   fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }), fetchProviders: vi.fn().mockResolvedValue([]),
   fetchCommands: vi.fn().mockResolvedValue([]), fetchSkills: vi.fn().mockResolvedValue([]),
 }))

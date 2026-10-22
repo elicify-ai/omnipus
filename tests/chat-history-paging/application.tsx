@@ -22,6 +22,9 @@ const originalRect = HTMLElement.prototype.getBoundingClientRect
 
 export async function openHistory(initial: SessionHistoryResponse, options: { plain?: boolean; path?: string } = {}) {
   resetStage1App()
+  // The generic room fixture preselects MAIN_ID while disconnected. A fresh
+  // history opening must instead let the real route select/attach it once.
+  act(() => useSessionStore.setState({ activeSessionId: null }))
   if (options.plain !== false) {
     vi.stubGlobal('ResizeObserver', undefined)
     // D5 plain/manual REQUEST fixture only: supply an 800px browser viewport
@@ -41,8 +44,11 @@ export async function openHistory(initial: SessionHistoryResponse, options: { pl
   // this unrelated adapter failure to hide the shell would mask control tests.
   // The request is not treated as valid behavior or silently answered with [].
   network.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => initialRest.promise)
-  const mounted = await mountStage1App(options.path)
-  if (!options.path) await settledMainChat(mounted.socket)
+  // The socket opens with NO selected session, so it sends no bootstrap
+  // attach. One real member click then opens the session; its first response
+  // is the desired page below, never an empty success followed by a re-open.
+  const mounted = await mountStage1App(options.path, { initialAttachResponse: 'caller' })
+  if (!options.path) await settledMainChat(mounted.socket, { initialAttachResponse: 'caller' })
   const sessionId = useSessionStore.getState().activeSessionId
   if (sessionId !== MAIN_ID) throw new Error(`Fixture instrument: expected main session ${MAIN_ID}, got ${sessionId}`)
   await sendSnapshot(mounted.socket, { ...initial, session_id: MAIN_ID })

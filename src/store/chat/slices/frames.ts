@@ -322,7 +322,7 @@ function withoutIdleMark(marks: Record<string, true> | undefined, callId: string
 // baked tool_calls for this call_id and update it in place. Extracted from
 // handleFrame to keep it under its grandfathered line budget
 // (scripts/budgets/functions.txt) — no behaviour change.
-function applyToolCallResultFrame(
+export function applyToolCallResultFrame(
   b: SessionChatState,
   frame: ToolCallResultFrame,
   clampedResult: ReturnType<typeof clampToolResult>,
@@ -333,7 +333,9 @@ function applyToolCallResultFrame(
     // here, or it would later let an unrelated lone tool result blink Stop off
     // mid-turn (R2-S3-05).
     const idleArmedToolCalls = withoutIdleMark(b.idleArmedToolCalls, frame.call_id)
-    for (const id of b.messageOrder) {
+    // A detached reader's current-tail projection also contains cached owners
+    // outside its displayed order. Resolve this exact call, never the page edge.
+    for (const id of Object.keys(b.messagesById)) {
       const msg = b.messagesById[id]
       const idx = msg?.tool_calls?.findIndex((tc) => tc.id === frame.call_id) ?? -1
       if (idx === -1) continue

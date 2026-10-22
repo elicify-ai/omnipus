@@ -164,6 +164,9 @@ function handleSessionStateFrame(
   // ADR-082 review fix opens/marks the bubble first and this done
   // becomes a no-op for placeholder purposes.
   if (!targetSid) return
+  if (frame.session_id && frame.history_state) {
+    withBucket(targetSid, b => ({ history: { ...b.history, serverState: frame.history_state!, ...(frame.history_state!.status === 'unavailable' ? { historyLoaded: false } : {}) } }))
+  }
   // FR-047 (C-ATTENTION): the attach response's attention_bound lives on THIS
   // SessionStateFrame — per the contract it is "part of both the incremental
   // catch-up and the full snapshot, so either attach answer can carry the
@@ -708,7 +711,10 @@ function replayAlreadyApplied(
       (draft.mergedReplayMessageIds?.[messageId] ?? false) ||
       (tailAssistantId != null &&
         (draft.messagesById[tailAssistantId].mergedReplayIds?.includes(messageId) ?? false))
-    if (draft.messageOrder.includes(messageId) || alreadyMerged) {
+    // A source bucket may reserve its recorded ID for tools before its
+    // narration arrives. That one synthetic owner is not prose coverage.
+    const pendingNarration = role === 'assistant' && draft.historyPendingNarrationId === messageId
+    if ((draft.messageOrder.includes(messageId) && !pendingNarration) || alreadyMerged) {
       console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: alreadyMerged ? 'merged-id-match' : 'id-match' })
       logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: alreadyMerged ? 'merged-id-match' : 'id-match', sessionId: targetSid })
       return true

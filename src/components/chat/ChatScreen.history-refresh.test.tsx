@@ -73,7 +73,7 @@ describe('T34 retained range refresh and expiry — B26/B47/B48', () => {
     expect(useChatStore.getState().messages.map((m) => m.id), 'D7 distant tail must not be grafted below retained reader').toStrictEqual(oldIds)
     const region = screen.getByLabelText('Conversation history', { exact: true })
     expect(region).toHaveAttribute('aria-busy', 'true')
-    expect(screen.getByRole('status')).toHaveTextContent('Refreshing loaded messages…')
+    expect(within(region).getByRole('status')).toHaveTextContent('Refreshing loaded messages…')
     await act(async () => barrier.response.resolve(json({ error: 'refresh unavailable' }, 500)))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('Could not refresh loaded messages.')

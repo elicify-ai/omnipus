@@ -122,7 +122,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (Array.isArray(key) && key[0] === 'skills') {
         return { data: mockSkills, isError: false, refetch: vi.fn() }
       }
-      return { data: [], isError: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -138,12 +138,14 @@ vi.mock('@tanstack/react-router', () => ({
 // importOriginal: useSlashMenu calls useChatAgents unconditionally (the "@"
 // mention menu), which needs real `fetchWorkspaces`/`workspacesQueryKeys`/
 // `isWorker` even though this file doesn't exercise mentions.
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
