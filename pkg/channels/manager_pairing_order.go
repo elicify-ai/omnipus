@@ -82,7 +82,7 @@ func (mr *managerReload) publishStartedWorker(name string, channel Channel) {
 	order := mr.m.PairingAttempts().LockChannel(name)
 	if !order.MatchesConfig(mr.cfg) || mr.m.channels[name] != channel || mr.dispatchCtx.Err() != nil {
 		order.Unlock()
-		mr.disposeUnpublishedStart(name, channel, routes)
+		mr.disposeUnpublishedStart(name, channel)
 		return
 	}
 	mr.m.noteStartLocked(name, nil)
@@ -107,7 +107,7 @@ func (mr *managerReload) publishStartedWorker(name string, channel Channel) {
 // disposeUnpublishedStart owns the successfully started object, even after its
 // publication permission expires. No ordering guard spans Stop or an adapter
 // callback; the manager lock still protects the pointer-checked bookkeeping.
-func (mr *managerReload) disposeUnpublishedStart(name string, channel Channel, routes []channelHTTPRoute) {
+func (mr *managerReload) disposeUnpublishedStart(name string, channel Channel) {
 	if err := channel.Stop(mr.ctx); err != nil {
 		mr.startCleanupErr = errors.Join(mr.startCleanupErr,
 			fmt.Errorf("channel %q started after its configuration changed; cleanup unfinished: %w; reload configuration to retry cleanup", name, err))
@@ -128,11 +128,9 @@ func (mr *managerReload) disposeUnpublishedStart(name string, channel Channel, r
 		return
 	}
 	if mr.m.channels[name] == channel {
-		if mr.m.mux != nil {
-			for _, route := range routes {
-				mr.m.mux.Unhandle(route.path)
-			}
-		}
+		// initChannel registered only this object, not its HTTP routes. Those
+		// are installed by winning publication's deferred callback, so
+		// unhandling these paths here could remove somebody else's handler.
 		delete(mr.m.channels, name)
 		delete(mr.m.resourceConfigOrders, name)
 	}
