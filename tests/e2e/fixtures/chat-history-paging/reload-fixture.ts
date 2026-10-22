@@ -202,9 +202,12 @@ export const test = base.extend<{ reload: ReloadHarness }>({
       await gateway.restart();
       const agentResult = await gateway.apiFetch('POST', '/api/v1/agents', { type: 'Main', name: 'Reload parity',
         soul: 'Execute the requested harmless native command and answer the user.', provider: 'openrouter', model: E2E_MODEL,
+        tool_policy_changes: { set: { bash: 'allow' } },
         max_tool_iterations: 8 } satisfies AgentCreateRequestMain);
       expect(agentResult.ok, agentResult.raw).toBe(true);
       const agent = Agent.parse(agentResult.body);
+      expect(agent.tools_cfg?.builtin?.policies.bash,
+        'PREREQUISITE: the real custom agent explicitly grants native bash; the global ceiling alone cannot override its seeded deny').toBe('allow');
       const workspaceResult = await gateway.apiFetch('POST', '/api/v1/workspaces', { name: 'Reload parity', core_team: [agent.id] } satisfies WorkspaceCreateRequest);
       expect(workspaceResult.ok, workspaceResult.raw).toBe(true);
       const workspace = Workspace.parse(workspaceResult.body);

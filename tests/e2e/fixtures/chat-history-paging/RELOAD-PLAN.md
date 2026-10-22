@@ -4,7 +4,7 @@ Authority: chat-history-paging spec D16, FR-026/027, B52–B56, D-P3/D-U2, T40/T
 
 ## Boundary and independent oracles
 
-The built Go gateway, embedded SPA, native bash tool/Stop, canonical archives/accounting, actual REST/WS carriers, renderer and token footer are real. Only the external OpenAI-compatible HTTP provider is scripted. No intercepted gateway response, fabricated cancelled row, injected store/counter, new production test hook or runner modification is allowed.
+The built Go gateway, embedded SPA, native bash tool/Stop, canonical archives/accounting, actual REST/WS carriers, renderer and token footer are real. Only the external OpenAI-compatible HTTP provider is scripted. No intercepted gateway response, fabricated cancelled row, injected store/counter, new production test hook or runner modification is allowed. The isolated product test-home sets the global bash ceiling to allow while stopped, and the real custom-agent create request explicitly grants bash through generated tool_policy_changes; assert the stored agent grant before a turn. A global ceiling alone cannot override this checkout's custom-agent seeded deny.
 
 A first native bash call completes and a real provider-accounted final reply consumes1200 tokens. A second native bash process writes an execution-start receipt and blocks on a process event until actual UI Stop cancels it. The expected call IDs/commands come from this authored provider plan, not production output. The separately completed call must remain successful. Cancelled is confirmed live before an actual page.reload; the same named call/state must be reconstructed, with its original identity/parameters in real network/canonical evidence. Reload/paging never sends input or executes another tool.
 
