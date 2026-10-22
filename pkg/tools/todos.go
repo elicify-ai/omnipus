@@ -305,7 +305,7 @@ func parseTodosArg(raw []any) ([]task.Todo, error) {
 			if !ok {
 				return nil, fmt.Errorf("todos[%d]: active_form must be a string", i)
 			}
-			activeForm = strings.TrimSpace(activeFormRaw)
+			activeForm = task.NormalizeTodoActiveForm(activeFormRaw)
 			if len([]rune(activeForm)) > 500 {
 				return nil, fmt.Errorf("todos[%d]: active_form must be 500 characters or fewer", i)
 			}

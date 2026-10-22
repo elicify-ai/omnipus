@@ -92,7 +92,7 @@ import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
   feedMarkLabel,
-  pickThinkingPhrase,
+  ReplyStatusFallbackProvider,
   showsFeedMark,
   useReplySlotPhase,
 } from './AgentStatusIndicator'
@@ -514,17 +514,11 @@ function AssistantTextPart() {
   )
 }
 
-// Inline status for the live streaming bubble. Actual correlated tool status
-// selects Working; label rules stay the same (a goal phrase wins over hidden
-// tool copy). Only a model-response phase uses the rotating thinking phrases.
-// The mark replaces the bouncing dots. Not mounted for a settled row —
-// that row draws Idle itself. The mark suspends until the agent record
-// arrives so the figure is in the same paint as the phrase.
+// Motion follows correlated execution; all work renderers share the status
+// episode owned above their split, including the identity-loading fallback.
 function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
-  // The identity lookup may suspend. Choose outside that boundary so the
-  // already-visible fallback does not change when the figure first arrives.
-  const [fallbackPhrase] = React.useState(pickThinkingPhrase)
   const message = useMessage()
+  const turnId = useChatStore((state) => state.messagesById[message.id]?.turnId ?? null)
   const isRunning = message.status?.type === 'running'
   const storeToolCalls = useChatStore((s) => s.toolCalls)
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
@@ -556,9 +550,9 @@ function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
   const label = feedMarkLabel(phase)
   return (
     <React.Suspense
-      fallback={<AgentStatusIndicator phase={phase.kind} label={label} fallbackPhrase={fallbackPhrase} />}
+      fallback={<AgentStatusIndicator phase={phase.kind} label={label} turnId={turnId} />}
     >
-      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} fallbackPhrase={fallbackPhrase} />
+      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} turnId={turnId} />
     </React.Suspense>
   )
 }
@@ -567,12 +561,12 @@ function ResolvedAgentMark({
   agentId,
   phase,
   label,
-  fallbackPhrase,
+  turnId,
 }: {
   agentId: string | null
   phase: 'thinking' | 'working' | 'waiting' | 'unavailable'
   label: string | null
-  fallbackPhrase: string
+  turnId: string | null
 }) {
   const agents = useChatAgents()
   const agent = agents.find((item) => item.id === agentId)
@@ -580,7 +574,7 @@ function ResolvedAgentMark({
     <AgentStatusIndicator
       phase={phase}
       label={label}
-      fallbackPhrase={fallbackPhrase}
+      turnId={turnId}
       figure={agent?.figure}
       role={agent?.role}
       color={agent?.color}
@@ -1311,6 +1305,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             <AgentStatusIndicator
               phase={replyPhase.kind}
               label={feedMarkLabel(replyPhase)}
+              turnId={message.turnId}
               figure={agent?.figure}
               role={agent?.role}
               color={agent?.color}
@@ -3130,6 +3125,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
     // a test can type into the old surface and the message rides the stale
     // session binding — see openSessionByDeepLink in
     // tests/e2e/fixtures/session-setup.ts.
+    <ReplyStatusFallbackProvider>
     <div
       className="flex flex-col absolute inset-0 overflow-hidden"
       data-active-session-id={activeSessionId ?? ''}
@@ -3308,5 +3304,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         </ThreadPrimitive.Root>
       )}
     </div>
+    </ReplyStatusFallbackProvider>
   )
 }

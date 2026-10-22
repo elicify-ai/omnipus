@@ -89,7 +89,11 @@ With checklist guidance enabled, agents are instructed to use `set_todos` for ev
 
 Each item can optionally include `active_form`, a present-participle phrase describing work in progress: for example, `text: "Draft the Q4 summary"` and `active_form: "Drafting the Q4 summary"`. This phrase is stored separately; it does not replace the normal checklist text on the Board. Use `create_task` with dependencies for a durable multi-wave plan while keeping your current working checklist here.
 
-`set_todos` trims the phrase and treats empty or whitespace-only strings as absent. A supplied value must be a string of at most 500 characters. The phrase survives saved-task reloads and is included when the checklist is read back. Each call still replaces the entire checklist, so include `active_form` again on later updates if you want to keep it.
+The server applies the same phrase cleanup to `set_todos` and task checklist writes through the API. It removes bidirectional formatting controls (U+202A–U+202E, U+2066–U+2069, U+200E and U+200F), then trims surrounding Unicode whitespace. A result containing only whitespace or invisible Unicode format characters (category `Cf`), such as a zero-width space, counts as absent. Ordinary right-to-left text is unchanged, and joiners needed inside visible emoji, Indic or Arabic text are preserved. The limit is 500 Unicode code points **after** this cleanup.
+
+A supplied `active_form` must be a string: JSON `null`, numbers, booleans, arrays and objects are rejected before saving. This also applies to task creation, task updates and checklist replacement through the API. To omit the phrase, leave the field out or send an empty string; a rejected update leaves the previous task unchanged.
+
+The normalized phrase survives saved-task reloads and is included when the checklist is read back. Each call still replaces the entire checklist, so include `active_form` again on later updates if you want to keep it.
 
 ## Task statuses
 

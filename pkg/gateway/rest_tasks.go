@@ -779,7 +779,7 @@ func copyTaskCreateOrderingFields(t *task.Task, req *gen.TaskCreateRequest) {
 func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var req gen.TaskCreateRequest
-	if !decodeAndValidate(w, r, "TaskCreateRequest", &req, validateEnabled) {
+	if !decodeTaskTodoBody(w, r, "TaskCreateRequest", &req, validateEnabled) {
 		return
 	}
 
@@ -1040,7 +1040,7 @@ func (tp *taskPatch) validate() bool {
 	}
 	validateEnabled := tp.a.agentLoop.GetConfig().Gateway.ValidateInbound
 
-	if !decodeAndValidate(tp.w, tp.r, "TaskUpdateRequest", &tp.req, validateEnabled) {
+	if !decodeTaskTodoBody(tp.w, tp.r, "TaskUpdateRequest", &tp.req, validateEnabled) {
 		return true
 	}
 
@@ -1796,7 +1796,7 @@ func (a *restAPI) handleTaskTodos(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	var body gen.SetTaskTodosJSONRequestBody
-	if !decodeTaskJSONBody(w, r, &body) {
+	if !decodeTaskTodoBody(w, r, "", &body, false) {
 		return
 	}
 	todos := make([]task.Todo, 0, len(body))
