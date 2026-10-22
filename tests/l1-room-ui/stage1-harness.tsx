@@ -213,7 +213,8 @@ export async function mountStage1App(path = MAIN_PATH, options: { initialAttachR
   return { ...mounted, router, socket }
 }
 
-export async function settledMainChat(socket: TestSocket) {
+// not-wire-format: a caller may own the first response to this real click-open.
+export async function settledMainChat(socket: TestSocket, options: { initialAttachResponse?: 'empty' | 'caller' } = {}) {
   // Select the member through the REAL sidebar after connection-open. The
   // provider's reattach resets attachedSessionType; a seeded id alone would
   // never exercise the main-only Add participant branch (false-green risk).
@@ -227,7 +228,11 @@ export async function settledMainChat(socket: TestSocket) {
       throw new Error('Positive socket control: main chat has not attached')
     }
   })
-  await completeSetupAttaches(socket)
+  if (options.initialAttachResponse === 'caller') {
+    answeredAttachCount.set(socket, socket.sent.filter((frame) => frame.type === 'attach_session').length)
+  } else {
+    await completeSetupAttaches(socket)
+  }
 }
 
 export function approval(overrides: Partial<ToolApprovalRequiredFrame> = {}): ToolApprovalRequiredFrame {
