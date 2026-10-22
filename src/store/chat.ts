@@ -3,6 +3,7 @@
 import { syncChatForeground, useChatStore } from './chat/store'
 
 import {
+  useSessionStore,
   registerChatSetReplaying,
   registerChatResetForReplay,
   registerGetSessionCursor,
@@ -20,7 +21,13 @@ registerChatSetReplaying((value) => useChatStore.getState().setReplaying(value))
 
 registerChatResetForReplay((sessionId) => useChatStore.getState().resetSessionForReplay(sessionId))
 
-registerSyncChatForeground(syncChatForeground)
+let previousHistorySession = useSessionStore.getState().activeSessionId
+registerSyncChatForeground(() => {
+  const current = useSessionStore.getState().activeSessionId
+  if (previousHistorySession && previousHistorySession !== '__pending' && previousHistorySession !== current) useChatStore.getState().releaseSessionHistory(previousHistorySession)
+  previousHistorySession = current
+  syncChatForeground()
+})
 
 // omnipus-system-agent K8: the Omnipus entry's workflow-start message goes
 // out through the ordinary send (src/store/omnipusChat.ts).
@@ -32,7 +39,10 @@ registerIsSessionReplaying((sessionId) => useChatStore.getState().sessionsById[s
 // attachToSession read a bucket's cursor without importing the chat store
 // directly (same circular-import-break pattern as the three registrations
 // above).
-registerGetSessionCursor((sessionId) => useChatStore.getState().sessionsById[sessionId]?.cursor ?? null)
+registerGetSessionCursor((sessionId) => {
+  const bucket = useChatStore.getState().sessionsById[sessionId]
+  return bucket?.historyNeedsSnapshot ? null : bucket?.cursor ?? null
+})
 
 // ADR-092 UX fix: see session.ts's registerChatClearPendingAutoApprove doc
 // comment for why this is not folded into setReplaying/resetForReplay.
@@ -69,6 +79,8 @@ registerReadPendingFirstSend(() => {
 export * from './chat/frames'
 export * from './chat/messages'
 export * from './chat/store'
+export { selectSessionHistory, emptyHistoryState } from './chat/history'
+export type { SessionHistoryState, HistoryActionKind, HistoryPageSizing, HistoryRequestState, SessionHistoryRange, HistorySlice } from './chat/types'
 export type { ChatMessage, ClientTruncatedResult, MediaAttachment, OutboundQueueItem, PositionedToolCall, QueuedOutboundMessage, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from './chat/types'
 
 // F-S8: removed flat→bucket bidirectional sync subscriber.

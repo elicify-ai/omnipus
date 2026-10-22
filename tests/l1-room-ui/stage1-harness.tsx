@@ -29,6 +29,7 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { resetTokenValidationCache } from '@/routes/authValidation'
 import { json, MAIN_ID, Network, NOW, resetRealStores, TestSocket, WS } from './harness'
 import { availableDetail, page } from '../chat-history-paging/fixtures'
+import { wireHistorySnapshot } from '../chat-history-paging/legacy-wire'
 
 export const MAIN_PATH = `/workspaces/${WS}/chat`
 export const SETTINGS_PATH = '/settings?tab=chat'
@@ -169,8 +170,12 @@ async function completeSetupAttaches(socket: TestSocket) {
   answeredAttachCount.set(socket, requests.length)
   await act(async () => {
     for (const request of unanswered) {
-      socket.receive({ type: 'session_snapshot', session_id: request.session_id, seq: 1, boot_id: 'stage1-fixture', reason: 'unknown_position' })
-      socket.receive({ type: 'session_state', session_id: request.session_id, user_id: 'stage1-tester', emitted_at: NOW, pending_approvals: [] })
+      // Setup has no selected historical carriers. Session state/completion
+      // below are live controls, not archive rows or source groups (D3/D4).
+      socket.receive(wireHistorySnapshot(page([], { sessionId: request.session_id }), {
+        seq: 1, boot_id: 'stage1-fixture', reason: 'unknown_position',
+      }))
+      socket.receive({ type: 'session_state', session_id: request.session_id, user_id: 'stage1-tester', emitted_at: NOW, pending_approvals: [], history_state: { status: 'available' } })
       socket.receive({ type: 'catch_up_complete', session_id: request.session_id, seq: 1, boot_id: 'stage1-fixture', mode: 'snapshot' })
     }
   })
@@ -183,7 +188,8 @@ async function completeSetupAttaches(socket: TestSocket) {
   })
 }
 
-export async function mountStage1App(path = MAIN_PATH) {
+// not-wire-format: test-server reply ownership, not a gateway request option.
+export async function mountStage1App(path = MAIN_PATH, options: { initialAttachResponse?: 'empty' | 'caller' } = {}) {
   const history = createMemoryHistory({ initialEntries: [path] })
   const router = createRouter({ routeTree, history, defaultPendingMinMs: 0 })
   await act(async () => { await router.load() })
@@ -196,11 +202,19 @@ export async function mountStage1App(path = MAIN_PATH) {
   })
   const socket = TestSocket.instances[0]!
   await act(async () => { socket.open() })
-  await completeSetupAttaches(socket)
+  if (options.initialAttachResponse === 'caller') {
+    // These actual requests belong to the caller's server fixture, not the
+    // default empty bootstrap. Claim them only for fixture bookkeeping: no
+    // completion/readiness is fabricated; the caller must send the real reply.
+    answeredAttachCount.set(socket, socket.sent.filter((frame) => frame.type === 'attach_session').length)
+  } else {
+    await completeSetupAttaches(socket)
+  }
   return { ...mounted, router, socket }
 }
 
-export async function settledMainChat(socket: TestSocket) {
+// not-wire-format: a caller may own the first response to this real click-open.
+export async function settledMainChat(socket: TestSocket, options: { initialAttachResponse?: 'empty' | 'caller' } = {}) {
   // Select the member through the REAL sidebar after connection-open. The
   // provider's reattach resets attachedSessionType; a seeded id alone would
   // never exercise the main-only Add participant branch (false-green risk).
@@ -214,7 +228,11 @@ export async function settledMainChat(socket: TestSocket) {
       throw new Error('Positive socket control: main chat has not attached')
     }
   })
-  await completeSetupAttaches(socket)
+  if (options.initialAttachResponse === 'caller') {
+    answeredAttachCount.set(socket, socket.sent.filter((frame) => frame.type === 'attach_session').length)
+  } else {
+    await completeSetupAttaches(socket)
+  }
 }
 
 export function approval(overrides: Partial<ToolApprovalRequiredFrame> = {}): ToolApprovalRequiredFrame {

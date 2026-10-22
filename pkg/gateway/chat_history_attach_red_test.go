@@ -179,8 +179,8 @@ func pagingUnindexedSession(t *testing.T, target *session.UnifiedStore) string {
 	to := filepath.Join(target.BaseDir(), meta.ID)
 	require.NoError(t, os.MkdirAll(to, 0o700))
 	for _, name := range []string{"meta.json", "stats.json", "transcript.jsonl", "transcript.day"} {
-		b, err := os.ReadFile(filepath.Join(from, name))
-		require.NoError(t, err, "donor canonical fixture %s", name)
+		b, readErr := os.ReadFile(filepath.Join(from, name))
+		require.NoError(t, readErr, "donor canonical fixture %s", name)
 		require.NoError(t, os.WriteFile(filepath.Join(to, name), b, 0o600))
 	}
 	_, err = target.GetMeta(meta.ID)

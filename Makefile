@@ -167,6 +167,14 @@ build: spa-embed generate
 	@echo "Build complete: $(BINARY_PATH)"
 	@ln -sf $(BINARY_NAME)-$(PLATFORM)-$(ARCH) $(BUILD_DIR)/$(BINARY_NAME)
 
+# Operator-only tooling. Deliberately not a dependency of build, install,
+# release-build or any installer/package target.
+.PHONY: history-index-repair
+HISTORY_TOOL_SUFFIX=$(if $(filter Windows_NT,$(OS)),.exe,)
+history-index-repair:
+	@mkdir -p $(BUILD_DIR)/tools
+	@CGO_ENABLED=0 go build -tags goolm,stdjson -o $(BUILD_DIR)/tools/chat-history-index-repair$(HISTORY_TOOL_SUFFIX) ./cmd/chat-history-index-repair
+
 ## build-launcher: Build the omnipus-launcher (web console) binary
 build-launcher:
 	@echo "Building omnipus-launcher for $(PLATFORM)/$(ARCH)..."

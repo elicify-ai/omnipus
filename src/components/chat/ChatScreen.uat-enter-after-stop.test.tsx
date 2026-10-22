@@ -18,6 +18,7 @@ import { useToolApprovalStore } from '@/store/toolApproval'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { ChatScreen } from './ChatScreen'
+import { emptyHistoryPage } from '../../../tests/chat-history-paging/legacy-fixtures'
 
 // Oracle: release-UAT dispatch D3, validator/report-v.md V5/V5b / D5.
 // Enter after Stop must SEND "continue and say what you did" in the selected
@@ -74,9 +75,10 @@ beforeEach(() => {
   client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: Infinity } },
   })
-  for (const key of [['commands', 'web'], ['agents'], ['skills'], ['providers'], ['workspaces'], ['messages', PARENT]]) {
+  for (const key of [['commands', 'web'], ['agents'], ['skills'], ['providers'], ['workspaces']]) {
     client.setQueryData(key, [])
   }
+  client.setQueryData(['messages', PARENT], emptyHistoryPage(PARENT))
   // Optional picker HTTP requests are outside D3; fail only at fetch so their
   // real query/error handling stays intact. No API module/hook is mocked.
   vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new Error('D3 fixture: optional HTTP is offline.')))

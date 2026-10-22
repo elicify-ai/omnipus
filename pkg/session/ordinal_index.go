@@ -460,6 +460,14 @@ func (r ArchiveRecord) holdsModelSlot() bool {
 // slot without content). It returns the record address and, for a model slot,
 // its published row (nil otherwise).
 func (s *ArchiveDayStore) AppendIndexed(rec ArchiveRecord) (ArchiveAddress, *ordinalRow, error) {
+	addr, row, err := s.appendIndexed(rec)
+	if addr.EntryID != "" && s.historyAccepted != nil {
+		s.historyAccepted(addr, rec)
+	}
+	return addr, row, err
+}
+
+func (s *ArchiveDayStore) appendIndexed(rec ArchiveRecord) (ArchiveAddress, *ordinalRow, error) {
 	var src *ArchiveRecord
 	if rec.ModelRef != nil {
 		ref, ok := rec.ReferenceAddress()

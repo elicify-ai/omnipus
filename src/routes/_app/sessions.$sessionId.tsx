@@ -8,7 +8,6 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatStore } from '@/store/chat'
-import { recordSessionHasEarlier } from '@/store/chat/has-earlier'
 
 // A just-deleted session (confirmed 404, not merely still loading) previously
 // fell through to a bare <ChatScreen /> — the loader caught the 404 and
@@ -57,7 +56,7 @@ function SessionRoute() {
   const { data: detail, isError: detailIsError, error: detailError } = useQuery({
     queryKey: ['session-detail', sessionId],
     initialData: loaderData ?? undefined,
-    queryFn: () => fetchSessionDetail(sessionId),
+    queryFn: ({ signal }) => fetchSessionDetail(sessionId, { signal }),
     enabled: !!sessionId,
     retry: false,
     staleTime: 10_000,
@@ -96,10 +95,9 @@ function SessionRoute() {
     if (redirectedRef.current) return
 
     const { session } = detail
-    // Founder ruling 2026-10-11: the detail read is one of the three
-    // has_earlier_messages carriers — record it for the quiet line above the
-    // clear divider before any redirect/attach branch.
-    recordSessionHasEarlier(session.id, detail.has_earlier_messages === true)
+    // Detail proves identity even when history is unavailable. Only the
+    // page/snapshot owner commits continuation; this metadata read cannot
+    // overwrite a newer reader frontier or turn unavailable into empty.
     const { connection } = useConnectionStore.getState()
     const headerAgentId = session.active_agent_id ?? session.agent_id
 
@@ -268,7 +266,7 @@ function SessionRoute() {
 
 export const Route = createFileRoute('/_app/sessions/$sessionId')({
   component: SessionRoute,
-  loader: async ({ params }) => {
+  loader: async ({ params, abortController }) => {
     // Pre-fetch session detail ONLY — as `initialData` for the component's
     // useQuery — so the query doesn't waterfall behind mount.
     //
@@ -286,7 +284,7 @@ export const Route = createFileRoute('/_app/sessions/$sessionId')({
     // do not reintroduce the store write here.
     try {
       const { fetchSessionDetail } = await import('@/lib/api')
-      const detail = await fetchSessionDetail(params.sessionId)
+      const detail = await fetchSessionDetail(params.sessionId, { signal: abortController.signal })
       return detail ?? null
     } catch (err) {
       if (isApiError(err) && err.status === 404) {

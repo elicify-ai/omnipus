@@ -1,6 +1,8 @@
 // types.ts: Chat, attachment, subagent-span, rate-limit, and per-session state contracts
 
 import type { Message, ToolCall } from '@/lib/api'
+import type { StoreApi } from 'zustand'
+import type { SessionHistoryQuery, SessionHistoryMetadata, SessionHistoryEntry, HistoryPosition } from '@/lib/api/history-types'
 import type { WsConnection } from '@/lib/ws'
 import type {
   GoalStatusFrame,
@@ -439,6 +441,15 @@ export interface ProviderRetryEventData {
 
 /** All per-session chat state for one concurrent session. */
 export interface SessionChatState {
+  history: SessionHistoryState
+  historyNotice?: string
+  /** Release retains the live cursor, but the next visible attach needs a fresh page. */
+  historyNeedsSnapshot?: boolean
+  /** Body-free source/display aliases and hidden current-tail order, released on leave. */
+  historySourceAliases?: Record<string, string>
+  historyLiveOrder?: string[]
+  /** Private source hydration only: a synthetic tool owner is not yet narration coverage. */
+  historyPendingNarrationId?: string
   // Map-indexed ring buffer. Use getMessages(bucket) to get the ordered array.
   messagesById: Record<string, ChatMessage>
   messageOrder: string[]
@@ -846,7 +857,48 @@ export function evictSpanIndexEntries<T extends { messageId: string }>(
   return next
 }
 
-export interface ChatStore {
+export type HistoryActionKind = 'older' | 'newer' | 'latest' | 'refresh'
+export type HistoryPageSizing = Required<Pick<SessionHistoryQuery, 'limit' | 'min_rows'>>
+export type SessionHistoryRange = Required<Pick<SessionHistoryQuery, 'window_start' | 'window_end'>>
+export type HistoryRequestState = { status: 'idle' | 'loading' | 'error'; error: string | null; attempt: number }
+export type SessionHistoryState = {
+  viewGeneration: number
+  viewMode: 'latest' | 'historical'
+  serverState: import('@/lib/api/generated/openapi-types').SessionDetail['history_state'] | null
+  historyLoaded: boolean
+  liveControlsReady: boolean
+  pageMetadata: SessionHistoryMetadata | null
+  readerRange: SessionHistoryRange | null
+  readerPositions: HistoryPosition[]
+  tailEntries: SessionHistoryEntry[]
+  openedClearPositions: HistoryPosition[]
+  hasEarlier: boolean | null
+  hasLater: boolean | null
+  olderBoundary: HistoryPosition | null
+  newerBoundary: HistoryPosition | null
+  requests: Record<HistoryActionKind, HistoryRequestState>
+}
+export interface HistorySlice {
+  loadLatestHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  loadOlderHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  loadNewerHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  showEarlierHistory(sessionId: string, clearPosition: HistoryPosition, sizing?: HistoryPageSizing): Promise<void>
+  returnToLatestHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  refreshLoadedHistory(sessionId: string): Promise<void>
+  retryHistory(sessionId: string, action: HistoryActionKind): Promise<void>
+  enterHistoryReading(sessionId: string): void
+  releaseSessionHistory(sessionId: string): void
+}
+export type HistorySliceContext = {
+  get: StoreApi<import('@/store/chat/types').ChatStore>['getState']
+  set: StoreApi<import('@/store/chat/types').ChatStore>['setState']
+  withBucket: (sessionId: string | null, updater: (bucket: import('@/store/chat/types').SessionChatState) => Partial<import('@/store/chat/types').SessionChatState>) => void
+}
+
+export interface ChatStore extends HistorySlice {
+  acceptHistoryFallback(sessionId: string, page: import('@/lib/api/sessions').SessionHistoryPage, generation: number, baseline?: Record<string, ChatMessage>): void
+  history: SessionHistoryState
+  historyNotice?: string
   /** Per-session state buckets keyed by session_id. */
   sessionsById: Record<string, SessionChatState>
 

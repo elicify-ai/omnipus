@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Room } from '@/lib/api/generated/openapi-types'
+import { wireHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import {
@@ -119,8 +120,8 @@ describe('Add participant — agents only, one workspace, no main-chat conversio
 
   it('[FR-207/208; BDD-17.24/25] the real ChatScreen header shows Add participant in a main chat and removes it for Omnipus', async () => {
     await requiredExport('/src/components/chat/AddParticipant.tsx', 'AddParticipant', 'FR-207/208; row 138 header reachability')
-    net.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json([]))
-    net.respond('GET', '/api/v1/sessions/main-omnipus/messages', () => json([]))
+    net.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json(wireHistoryPage(MAIN_ID, [], 0)))
+    net.respond('GET', '/api/v1/sessions/main-omnipus/messages', () => json(wireHistoryPage('main-omnipus', [], 0)))
     net.respond('GET', '/api/v1/skills', () => json([]))
     net.respond('GET', '/api/v1/commands', () => json([]))
     net.respond('GET', '/api/v1/providers', () => json([]))

@@ -139,7 +139,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       // 'workspaces' (and anything else) — no active workspace is set in
       // these tests, so core_team scoping never engages; that scoping path
       // is covered separately (useChatAgents.test.ts).
-      return { data: [], isError: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -156,12 +156,14 @@ vi.mock('@tanstack/react-router', () => ({
 // `isWorker` (this file's worker-exclusion assertions depend on it) plus
 // `fetchWorkspaces`/`workspacesQueryKeys` to exist so the module loads —
 // useQuery is fully mocked above and never actually invokes these queryFns.
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),

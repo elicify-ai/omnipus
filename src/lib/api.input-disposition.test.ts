@@ -14,9 +14,11 @@
 // generated-schema silent-strip of `input_disposition` fails these tests too.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { wireHistoryPage } from '../../tests/chat-history-paging/legacy-wire'
+import { expectHistoryPage } from '../../tests/chat-history-paging/legacy-fixtures'
 
-function makeOkResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
+function makeOkResponse(sessionId: string, body: unknown[]): Response {
+  return new Response(JSON.stringify(wireHistoryPage(sessionId, body, body.length)), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
@@ -35,7 +37,7 @@ describe('FR-024 — fetchSessionMessages maps input_disposition onto the SPA de
   })
 
   it('a history row discarded by Stop carries deliveryStatus "discarded" and keeps its text', async () => {
-    fetchSpy.mockResolvedValueOnce(makeOkResponse([
+    fetchSpy.mockResolvedValueOnce(makeOkResponse('sess-discarded', [
       {
         id: 'msg-discarded-1',
         role: 'user',
@@ -51,7 +53,9 @@ describe('FR-024 — fetchSessionMessages maps input_disposition onto the SPA de
     ]))
 
     const { fetchSessionMessages } = await import('./api')
-    const messages = await fetchSessionMessages('sess-discarded')
+    const decoded: unknown = await fetchSessionMessages('sess-discarded')
+    expectHistoryPage(decoded)
+    const messages = decoded.entries
 
     expect(messages).toHaveLength(1)
     const msg = messages[0] as { role?: string; content?: string; deliveryStatus?: string }
@@ -64,7 +68,7 @@ describe('FR-024 — fetchSessionMessages maps input_disposition onto the SPA de
   })
 
   it('a row without input_disposition keeps today’s rendering — no deliveryStatus stamped', async () => {
-    fetchSpy.mockResolvedValueOnce(makeOkResponse([
+    fetchSpy.mockResolvedValueOnce(makeOkResponse('sess-plain', [
       {
         id: 'msg-plain-1',
         role: 'user',
@@ -75,7 +79,9 @@ describe('FR-024 — fetchSessionMessages maps input_disposition onto the SPA de
     ]))
 
     const { fetchSessionMessages } = await import('./api')
-    const messages = await fetchSessionMessages('sess-plain')
+    const decoded: unknown = await fetchSessionMessages('sess-plain')
+    expectHistoryPage(decoded)
+    const messages = decoded.entries
 
     expect(messages).toHaveLength(1)
     const msg = messages[0] as { content?: string; deliveryStatus?: string }

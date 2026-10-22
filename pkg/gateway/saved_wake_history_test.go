@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -68,15 +67,13 @@ func TestSavedWakeInput_HistoryAndReplayKeepOnlyVisibleRows(t *testing.T) {
 			w := httptest.NewRecorder()
 			api.HandleSessions(w, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sid+"/messages", nil))
 			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-			var messages []generated.Message
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &messages))
-			ids := make([]string, 0, len(messages))
-			for _, message := range messages {
+			page := historyMigrationPage(t, sid, w.Body.Bytes(), "latest", false, false)
+			ids := make([]string, 0, len(page.Entries))
+			for _, message := range page.Entries {
 				ids = append(ids, message.Id)
 			}
 			assert.Equal(t, wantIDs, ids, "REST messages must not expose saved wake inputs")
-			var rawMessages []any
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rawMessages))
+			rawMessages := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 			schema := loadMessageSchema(t)
 			for _, message := range rawMessages {
 				require.NoError(t, schema.Validate(message), "private archive kinds must never cross the public Message contract")
@@ -85,10 +82,9 @@ func TestSavedWakeInput_HistoryAndReplayKeepOnlyVisibleRows(t *testing.T) {
 			w = httptest.NewRecorder()
 			api.HandleSessions(w, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sid, nil))
 			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-			var detail generated.SessionDetail
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
+			detail := historyMigrationDetail(t, sid, w.Body.Bytes(), false)
 			ids = ids[:0]
-			for _, message := range detail.Messages {
+			for _, message := range *detail.Messages {
 				ids = append(ids, message.Id)
 			}
 			assert.Equal(t, wantIDs, ids, "REST session detail must use the same visible history")
