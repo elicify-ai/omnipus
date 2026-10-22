@@ -67,7 +67,10 @@ func (al *AgentLoop) pauseGoalReminders(sessionID string, rec *goal.Goal) error 
 	work.mu.Lock()
 	accepted, err := al.commitGoalReminderPause(sessionID, current.GoalID, assessedTurn, noticeID, work)
 	work.mu.Unlock()
-	if err != nil || accepted == nil {
+	if errors.Is(err, errGoalReminderObsolete) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 	return al.finishGoalReminderPauseDelivery(sessionID, accepted)
@@ -114,7 +117,7 @@ func (al *AgentLoop) commitGoalReminderPause(sessionID, goalID, assessedTurn, no
 	}
 	if current == nil || current.GoalID != goalID || current.ActiveSessionID != sessionID || !goalReminderBrakePaused(current) ||
 		work.lastAssessedTurn != assessedTurn || work.pending != nil {
-		return nil, nil
+		return nil, errGoalReminderObsolete
 	}
 	al.goalSetWaitingOnUser(goalID, true)
 	store := al.ResolveSessionStore(sessionID)
