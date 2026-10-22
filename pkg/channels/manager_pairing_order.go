@@ -118,6 +118,9 @@ func (mr *managerReload) disposeUnpublishedStart(name string, channel Channel) {
 		delete(mr.list, name)
 		return
 	}
+	if mr.m.pendingDisposals[name] == channel {
+		delete(mr.m.pendingDisposals, name)
+	}
 	if mr.m.channels[name] == channel {
 		// initChannel registered only this object, not its HTTP routes. Those
 		// are installed by winning publication's deferred callback, so
@@ -130,17 +133,18 @@ func (mr *managerReload) disposeUnpublishedStart(name string, channel Channel) {
 
 // retainFailedDisposal carries every failed Stop into this reload's outcome.
 // The manager lock is held; only the captured object's bookkeeping is retained.
-// A later reload may retry it, but cannot overwrite it with a new construction.
+// Every later reload retries that object, even if its original restart
+// trigger disappeared; no new construction can overwrite unfinished cleanup.
 func (mr *managerReload) retainFailedDisposal(name string, channel Channel, err error) {
 	mr.startCleanupErr = errors.Join(mr.startCleanupErr,
 		fmt.Errorf("channel %q cleanup unfinished: %w; reload configuration to retry cleanup", name, err))
 	if mr.m.channels[name] != channel {
 		return // never change a successor's registration or applied hash
 	}
-	if mr.failedDisposals == nil {
-		mr.failedDisposals = make(map[string]bool)
+	if mr.m.pendingDisposals == nil {
+		mr.m.pendingDisposals = make(map[string]Channel)
 	}
-	mr.failedDisposals[name] = true
+	mr.m.pendingDisposals[name] = channel
 	if mr.m.channelHashes == nil {
 		mr.m.channelHashes = make(map[string]string)
 	}
@@ -188,16 +192,21 @@ func (mr *managerReload) commitAppliedHashes() {
 	if mr.m.channelHashes == nil {
 		mr.m.channelHashes = make(map[string]string)
 	}
+	if mr.m.credSigs == nil {
+		mr.m.credSigs = make(map[string]string)
+	}
 	for id := range ids {
-		if mr.failedDisposals[id] {
+		if mr.m.pendingDisposals[id] != nil {
 			continue // retain the exact failed resource's removal/retry bookkeeping
 		}
 		order := mr.m.PairingAttempts().LockChannel(id)
 		if order.MatchesConfig(mr.cfg) {
 			if hash, exists := mr.list[id]; exists {
 				mr.m.channelHashes[id] = hash
+				mr.m.credSigs[id] = mr.credSigs[id]
 			} else {
 				delete(mr.m.channelHashes, id)
+				delete(mr.m.credSigs, id)
 			}
 		}
 		order.Unlock()

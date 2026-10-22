@@ -151,6 +151,9 @@ type Manager struct {
 	streamActive          sync.Map          // "channel:chatID" → streamEntry (set when streamer.Finalize sent the message)
 	channelHashes         map[string]string // channel name → config hash
 	resourceConfigOrders  map[string]uint64 // originating snapshot carried by each constructed resource
+	// pendingDisposals pins failed cleanup across reloads until that exact
+	// resource stops. It is independent of config hashes and restart intents.
+	pendingDisposals map[string]Channel
 	// credSigs mirrors channelHashes with a credential-availability signature
 	// per enabled instance (#1277): which of the instance's configured refs
 	// were present in the bundle when the hash was committed. Reload diffs it
@@ -2121,6 +2124,7 @@ type managerReload struct {
 	oldConfig   *config.Config
 	oldSecrets  credentials.SecretBundle
 	oldCredSigs map[string]string
+	credSigs    map[string]string
 	list        map[string]string
 	added       []string
 	removed     []string
@@ -2134,7 +2138,6 @@ type managerReload struct {
 	removedInstances map[string]Channel
 	cc               map[string]config.ChannelInstanceConfig
 	startCleanupErr  error
-	failedDisposals  map[string]bool
 }
 
 // Reload applies configuration changes to the channel manager. It compares
@@ -2157,7 +2160,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	mr.removeChannels()
 	// An unfinished captured resource cannot be overwritten by construction of
 	// its replacement. Retain the old hash/order until a later Stop succeeds.
-	mr.added = slices.DeleteFunc(mr.added, func(id string) bool { return mr.failedDisposals[id] })
+	mr.added = slices.DeleteFunc(mr.added, func(id string) bool { return mr.m.pendingDisposals[id] != nil })
 	if r0, stop := mr.initializeAdded(); stop {
 		return errors.Join(mr.startCleanupErr, r0)
 	}
@@ -2179,8 +2182,9 @@ func (mr *managerReload) prepareDispatch() {
 	// its stale in-process secret forever. Force the same removed+added pair a
 	// config change produces so removeChannels stops the stale instance and
 	// initializeAdded re-attempts the factory against the new bundle.
-	mr.m.credSigs = credentialSignatures(mr.cfg, mr.secrets)
-	for id, sig := range mr.m.credSigs {
+	// Stage availability; only commit it with the applied resource hash.
+	mr.credSigs = credentialSignatures(mr.cfg, mr.secrets)
+	for id, sig := range mr.credSigs {
 		if _, stillEnabled := mr.list[id]; !stillEnabled {
 			continue
 		}
@@ -2210,6 +2214,18 @@ func (mr *managerReload) prepareDispatch() {
 		}
 		delete(mr.m.forcedRestarts, id)
 		order.Unlock()
+	}
+
+	// Failed teardown belongs to the captured resource, not the reason that
+	// first selected its restart. Retry even when settings/credentials are now
+	// identical or an unconditional restart intent has already been consumed.
+	for id := range mr.m.pendingDisposals {
+		if !slices.Contains(mr.removed, id) {
+			mr.removed = append(mr.removed, id)
+		}
+		if _, enabled := mr.list[id]; enabled && !slices.Contains(mr.added, id) {
+			mr.added = append(mr.added, id)
+		}
 	}
 
 	// Fix 16: cancel the existing dispatcher before creating a new one to prevent context leak.
@@ -2297,6 +2313,9 @@ func (mr *managerReload) removeChannels() {
 			continue
 		}
 		channel := mr.m.channels[n]
+		if pending := mr.m.pendingDisposals[n]; pending != nil {
+			channel = pending // retry the captured object, never a successor by name
+		}
 		order.Unlock()
 		// #1277: remember the stale instance pointer. The unregister is
 		// deferred to restartExisting, so until then m.channels[n] still
@@ -2329,11 +2348,17 @@ func (mr *managerReload) removeChannels() {
 			mr.retainFailedDisposal(n, channel, err)
 			continue // unfinished cleanup must not schedule unregister
 		}
+		if mr.m.pendingDisposals[n] == channel {
+			delete(mr.m.pendingDisposals, n)
+		}
 		// Tear down exactly the instance and worker being removed. When the
 		// same name is also added (a forced or credential-driven restart),
 		// startAdded has already published the new instance and worker under
 		// that name; they must survive this deferred removal (gate r3 M10).
 		oldWorker := mr.m.workers[n]
+		if oldWorker != nil && oldWorker.ch != channel {
+			oldWorker = nil // the successor worker does not belong to this disposal
+		}
 		mr.deferFuncs = append(mr.deferFuncs, func() {
 			mr.m.unregisterInstanceLocked(n, channel, oldWorker)
 		})
@@ -2541,7 +2566,7 @@ func (mr *managerReload) restartExisting() error {
 		addedSet[n] = struct{}{}
 	}
 	for name, w := range mr.m.workers {
-		if mr.failedDisposals[name] {
+		if pending := mr.m.pendingDisposals[name]; pending != nil && pending == w.ch {
 			continue // do not resume dispatch over unfinished captured cleanup
 		}
 		if _, isNew := addedSet[name]; isNew {
