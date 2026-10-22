@@ -1,5 +1,7 @@
 // Oracle: founder decision / Chief dispatch, 2026-10-21. Real ChatScreen,
 // frame reducer, session buckets and generated Todo validation stay unmocked.
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
@@ -38,6 +40,8 @@ import { ChatScreen } from './ChatScreen'
 
 const SID = 'working-on-current'
 const OTHER = 'working-on-other'
+// not-wire-format: independent Q10 fixture expectations, not gateway types.
+const q10Fixture: { source: string; cases: { name: string; input: string; expected: string; reject: boolean }[] } = JSON.parse(readFileSync(resolve('tests/fixtures/q10-active-form-normalization.json'), 'utf8'))
 let callNumber = 0
 
 function feed(frame: ServerFrame) {
@@ -561,6 +565,47 @@ describe('checklist recovery error isolation — round 2', () => {
     expect(queryClient.getQueryState(['messages', SID])?.error).toBe(failure)
     expect(screen.getByRole('button', { name: /^Retry$/ })).toBeEnabled()
     expect(screen.queryByTestId('composer-card')).not.toBeInTheDocument()
+  })
+})
+
+// Founder Q10=A / security F1: real accepted frames → private selector →
+// mounted chat indicator. Copy normalization must not erase legitimate RTL or
+// joiners, and unusable forms must keep the already-chosen fallback unchanged.
+describe('Q10 normalized active-form copy in the rendered chat line', () => {
+  it('loads all 38 founder cases, including every listed bidi control', () => {
+    expect(q10Fixture.source).toBe('Founder Q10=A, PR #1406 round 2; security F1')
+    expect(q10Fixture.cases).toHaveLength(38)
+    expect(new Set(q10Fixture.cases.map((item) => item.name)).size).toBe(38)
+  })
+
+  it.each(q10Fixture.cases)('$name', async (tc) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await renderChat()
+    const initialFallback = screen.getByTestId('reply-status-fallback').textContent
+    expect(initialFallback).toBe('Processing your request…')
+    const todos = activeItem(tc.input)
+    const original = structuredClone(todos)
+    const callId = setList(todos)
+    expect(useChatStore.getState().sessionsById[SID].toolCalls[callId].params.todos, 'display normalization must not mutate recorded raw tool arguments').toEqual(original)
+    if (tc.reject || tc.expected === '') {
+      expect(screen.queryByTestId('reply-current-todo'), 'unusable active_form must not render a visually blank checklist line').not.toBeInTheDocument()
+      const fallback = screen.getByTestId('reply-status-fallback')
+      expect(fallback.textContent, 'normalization must preserve the fixed fallback selected before the tool call').toBe(initialFallback)
+      expect(fallback).toHaveAttribute('aria-hidden', 'true')
+      expect(within(screen.getByTestId('reply-status-indicator')).getByText('Thinking', { exact: true })).toHaveClass('sr-only')
+    } else {
+      const line = expectLine(tc.expected)
+      expect(line.querySelector('[title]')).toHaveAttribute('title', tc.expected)
+      expect(screen.queryByTestId('reply-status-fallback')).not.toBeInTheDocument()
+      expect(within(screen.getByTestId('reply-status-indicator')).getByText('Working on a checklist item')).toHaveClass('sr-only')
+    }
+    if (tc.reject) {
+      expect(warn).toHaveBeenCalledExactlyOnceWith('chat.current_todo_validation_failed', {
+        sessionId: SID, callId, issues: [{ code: 'too_big', path: '0.active_form' }],
+      })
+    } else {
+      expect(warn, 'valid normalized forms must not produce an over-limit/invalid-form warning').not.toHaveBeenCalled()
+    }
   })
 })
 
