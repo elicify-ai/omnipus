@@ -18,8 +18,6 @@ func TestL1WU2DefaultCeiling_OmnipusAskListAndPrivateSecretAllows(t *testing.T) 
 		"delete_agent", "remove_skill", "add_mcp_server", "configure_provider", "enable_channel", "configure_channel",
 		"remove_mcp_server", "connect_channel", "connect_mailbox", "set_agent_permissions", "remove_secret",
 		"select_secret_version", "environment_setup", "bash",
-		// SPEC.md Global ceiling changes (2026-10-22): skill authoring is now Ask, not Allow.
-		"create_skill", "edit_skill",
 	} {
 		t.Run(name, func(t *testing.T) {
 			value, present := cfg.Sandbox.ToolPolicies[name]
@@ -34,7 +32,8 @@ func TestL1WU2DefaultCeiling_OmnipusAskListAndPrivateSecretAllows(t *testing.T) 
 			assert.Equal(t, "allow", value)
 		})
 	}
-	for _, name := range []string{"create_agent", "update_agent", "update_workspace", "install_skill", "disable_channel"} {
+	// SPEC.md Q22=B: create_skill/edit_skill stay globally Allow so exempt Omnipus can ride the ceiling.
+	for _, name := range []string{"create_agent", "update_agent", "update_workspace", "create_skill", "edit_skill", "install_skill", "disable_channel"} {
 		t.Run(name, func(t *testing.T) {
 			assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies[name], "OSA-3: summary-gated changes retain allow")
 		})

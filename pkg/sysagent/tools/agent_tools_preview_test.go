@@ -26,8 +26,8 @@ func TestAgentToolsCreationPreviewIsReadOnlyAndHonorsCeiling(t *testing.T) {
 				t.Fatalf("read-only preview failed: %s", result.ForLLM)
 			}
 			policies := defaultToolsParsePreview(t, result.ForLLM, kind, names)
-			// SPEC.md Table: write_file and browser_* are Allow; compact output uses strictest-wins, including ToolSearch.
-			for name, want := range map[string]string{"read_file": "ask", "bash": "deny", "write_file": "allow", "ToolSearch": "deny", "browser_handover": "allow"} {
+			// SPEC.md compact effective-policy contract / CR-03: discovery's runtime floor is Allow; ordinary tools still merge strictest-wins.
+			for name, want := range map[string]string{"read_file": "ask", "bash": "deny", "write_file": "allow", "ToolSearch": "allow", "browser_handover": "allow"} {
 				if policies[name] != want {
 					t.Errorf("%s=%v want %s", name, policies[name], want)
 				}

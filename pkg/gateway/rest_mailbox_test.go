@@ -317,6 +317,10 @@ func TestSetAgentMailbox_GrantsEmailToolAllowsForDenyDefaultAgent(t *testing.T) 
 	for k, v := range seedPolicies {
 		policies[k] = v
 	}
+	// SPEC.md Table/Definitions: defaults now allow/ask mail; make the operator-Deny fixture explicit without weakening preservation assertions.
+	for _, name := range []string{"read_inbox", "search_email", "read_message", "reply"} {
+		policies[name] = config.ToolPolicyDeny
+	}
 	policies["create_task"] = config.ToolPolicyAllow
 	policies["send_email"] = config.ToolPolicyAsk // explicit operator intent — must survive
 
@@ -408,6 +412,10 @@ func TestSetAgentMailbox_AlreadyEnabledEditDoesNotReGrantExplicitDeny(t *testing
 	policies := make(map[string]config.ToolPolicy, len(seedPolicies))
 	for k, v := range seedPolicies {
 		policies[k] = v
+	}
+	// SPEC.md Definitions: explicit operator Deny must survive both mailbox enable and a later edit.
+	for _, name := range []string{"send_email", "read_inbox", "search_email", "read_message", "reply"} {
+		policies[name] = config.ToolPolicyDeny
 	}
 	store := agentstore.New(api.homePath)
 	require.NoError(t, store.Create("mia", &config.AgentConfig{

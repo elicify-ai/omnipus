@@ -71,13 +71,20 @@ func defaultToolsParseCompact(t *testing.T, raw, header string, catalog []tools.
 	var names []string
 	for _, line := range lines[1:] {
 		parts := strings.SplitN(line, " | ", 3)
-		require.Len(t, parts, 3, "SPEC.md tool row is name | policy | short: %q", line)
+		require.GreaterOrEqual(t, len(parts), 2, "SPEC.md Q21=D tool row must contain name and policy: %q", line)
 		require.NotEmpty(t, parts[0], "tool names cannot disappear")
 		_, duplicate := policies[parts[0]]
 		assert.False(t, duplicate, "each tool appears once: %s", parts[0])
 		assert.Contains(t, []string{"allow", "ask", "deny"}, parts[1], "policy is an exact enum value")
-		assert.Equal(t, strings.Join(strings.Fields(parts[2]), " "), parts[2], "description whitespace must collapse")
-		assert.LessOrEqual(t, utf8.RuneCountInString(parts[2]), 80, "SPEC.md caps descriptions at 80 characters")
+		if parts[1] == "deny" {
+			// SPEC.md Q21=D: Deny rows contain name and policy only, not even an empty description field.
+			require.Len(t, parts, 2, "denied tool %s must not include a description", parts[0])
+		} else {
+			// SPEC.md Q21=D: Allow/Ask keep a normalized first-sentence description, capped at 40 characters.
+			require.Len(t, parts, 3, "permitted tool %s must include its short description", parts[0])
+			assert.Equal(t, strings.Join(strings.Fields(parts[2]), " "), parts[2], "description whitespace must collapse")
+			assert.LessOrEqual(t, utf8.RuneCountInString(parts[2]), 40, "Q21=D caps Allow/Ask descriptions at 40 characters")
+		}
 		policies[parts[0]] = parts[1]
 		names = append(names, parts[0])
 	}
@@ -85,8 +92,11 @@ func defaultToolsParseCompact(t *testing.T, raw, header string, catalog []tools.
 	maxRunes := utf8.RuneCountInString(header) + 1
 	for _, tool := range catalog {
 		expectedNames = append(expectedNames, tool.Name())
-		// Two ' | ' separators, longest policy 'allow', 80 description characters, newline.
-		maxRunes += utf8.RuneCountInString(tool.Name()) + len(" | ")*2 + len("allow") + 80 + 1
+		// SPEC.md Q21=D: one separator for Deny; otherwise two separators and at most 40 description characters.
+		maxRunes += utf8.RuneCountInString(tool.Name()) + len(" | ") + len("allow") + 1
+		if policies[tool.Name()] != "deny" {
+			maxRunes += len(" | ") + 40
+		}
 	}
 	sort.Strings(expectedNames)
 	assert.Equal(t, expectedNames, names, "all catalog tools, including Deny entries, appear in byte-sorted order")

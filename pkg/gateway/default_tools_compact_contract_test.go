@@ -18,7 +18,7 @@ import (
 func defaultToolsAssertCompactContract(t *testing.T) {
 	t.Helper()
 	// All phrases are derived from SPEC.md compact output, not formatter output.
-	// 79/80/81 are max-1/max/max+1 at the 80-character limit.
+	// SPEC.md Q21=D: 39/40/41 are max-1/max/max+1 at the 40-character limit.
 	cases := []struct{ name, input, want string }{
 		{"empty", "", ""},
 		{"one_character", "A", "A"},
@@ -27,22 +27,35 @@ func defaultToolsAssertCompactContract(t *testing.T) {
 		{"question", "What now? Private second sentence.", "What now?"},
 		{"no_sentence_boundary", "Read v1.2 data!now?yes", "Read v1.2 data!now?yes"},
 		{"unicode_whitespace", "Read this.\nPrivate second sentence.", "Read this."},
-		{"79_characters", strings.Repeat("x", 78) + ".", strings.Repeat("x", 78) + "."},
-		{"80_characters", strings.Repeat("x", 79) + ".", strings.Repeat("x", 79) + "."},
-		{"81_characters_word_boundary", strings.Repeat("a", 77) + " end", strings.Repeat("a", 77) + "…"},
-		{"boundary_at_79", strings.Repeat("a", 79) + " tail", strings.Repeat("a", 79) + "…"},
-		{"multiple_words", strings.Repeat("word ", 16) + "end.", strings.TrimSpace(strings.Repeat("word ", 16)) + "…"},
-		{"characters_not_bytes", strings.Repeat("é", 79) + " fin", strings.Repeat("é", 79) + "…"},
+		{"39_characters", strings.Repeat("x", 38) + ".", strings.Repeat("x", 38) + "."},
+		{"40_characters", strings.Repeat("x", 39) + ".", strings.Repeat("x", 39) + "."},
+		{"41_characters_word_boundary", strings.Repeat("a", 37) + " end", strings.Repeat("a", 37) + "…"},
+		{"boundary_at_39", strings.Repeat("a", 39) + " tail", strings.Repeat("a", 39) + "…"},
+		{"multiple_words", strings.Repeat("word ", 8) + "end.", strings.TrimSpace(strings.Repeat("word ", 8)) + "…"},
+		{"characters_not_bytes", strings.Repeat("é", 39) + " fin", strings.Repeat("é", 39) + "…"},
 		// With no word boundary before the cap, the only safe boundary is the start.
-		{"single_oversized_word", strings.Repeat("x", 81), "…"},
+		{"single_oversized_word", strings.Repeat("x", 41), "…"},
 	}
-	for _, row := range cases {
-		t.Run("short_description/"+row.name, func(t *testing.T) {
+	for _, permission := range []struct{ name, policy string }{{"read_file", "allow"}, {"request_mount", "ask"}} {
+		for _, row := range cases {
+			t.Run(permission.policy+"/short_description/"+row.name, func(t *testing.T) {
+				cfg := config.DefaultConfig()
+				metadata := []tools.Tool{defaultToolsMetadata{name: permission.name, description: row.input}}
+				raw := defaultToolsInventory(t, t.TempDir(), cfg, metadata, map[string]any{"new_agent_type": "Main"})
+				want := "preview: Main | kind: main\n" + permission.name + " | " + permission.policy + " | " + row.want
+				// SPEC.md Q21=D: both Allow and Ask use the exact first-sentence/40-character contract.
+				assert.Equal(t, want, strings.TrimSuffix(raw, "\n"), "Q21=D first-sentence, whitespace and 40-character rules")
+			})
+		}
+	}
+	for _, description := range []string{"", "Never expose this denied description.", strings.Repeat("private ", 20)} {
+		t.Run("deny_has_no_description/"+fmt.Sprint(len(description)), func(t *testing.T) {
 			cfg := config.DefaultConfig()
-			metadata := []tools.Tool{defaultToolsMetadata{name: "read_file", description: row.input}}
+			cfg.Sandbox.ToolPolicies["read_file"] = "deny"
+			metadata := []tools.Tool{defaultToolsMetadata{name: "read_file", description: description}}
 			raw := defaultToolsInventory(t, t.TempDir(), cfg, metadata, map[string]any{"new_agent_type": "Main"})
-			want := "preview: Main | kind: main\nread_file | allow | " + row.want
-			assert.Equal(t, want, strings.TrimSuffix(raw, "\n"), "SPEC.md first-sentence, whitespace and 80-character rules")
+			// SPEC.md Q21=D: Deny is exactly name + policy, without a description separator or text.
+			assert.Equal(t, "preview: Main | kind: main\nread_file | deny", strings.TrimSuffix(raw, "\n"))
 		})
 	}
 	t.Run("assigned_mcp_only_including_deny", defaultToolsAssertCompactMCP)
@@ -76,7 +89,7 @@ func defaultToolsAssertCompactMCP(t *testing.T) {
 	included := []tools.Tool{read, write, metadata[2]}
 	policies := defaultToolsParseCompact(t, raw, header, included)
 	assert.Equal(t, map[string]string{read.Name(): "ask", write.Name(): "deny", "read_file": "allow"}, policies)
-	rows := []string{read.Name() + " | ask | Read a document.", write.Name() + " | deny | Write a document.", "read_file | allow | Read a file."}
+	rows := []string{read.Name() + " | ask | Read a document.", write.Name() + " | deny", "read_file | allow | Read a file."}
 	sort.Strings(rows)
 	assert.Equal(t, header+"\n"+strings.Join(rows, "\n"), strings.TrimSuffix(raw, "\n"), "SPEC.md exact sorted rows; no parameters or verbose metadata")
 }
