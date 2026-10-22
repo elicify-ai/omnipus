@@ -120,6 +120,31 @@ func (o *PairingOrder) MarkReady(attemptID, revision string) bool {
 	return o.store.markReadyOrdered(o, attemptID, revision)
 }
 
+// CommittedStart reports whether this exact accepted write has already been
+// consumed. Phase advancement is not cancellation and must never rearm/restart
+// the same resource. A Stop fence, replacement or absent token still refuses it.
+func (o *PairingOrder) CommittedStart(attemptID string) bool {
+	o.store.mu.Lock()
+	defer o.store.mu.Unlock()
+	c := o.connector
+	rec := c.attempts[attemptID]
+	if c.retired || c.deleting || rec == nil || rec != c.latest || rec.startFenced || rec.retryRetired || rec.Generation != c.generation || rec.Generation != c.configGeneration || rec.StopGeneration != 0 || rec.Revision == "" {
+		return false
+	}
+	if rec.Phase == PairingPhaseActive {
+		return true
+	}
+	if rec.Phase != PairingPhaseTerminal {
+		return false
+	}
+	switch rec.Outcome {
+	case PairingOutcomeLinked, PairingOutcomeNoPairing, PairingOutcomeStartFailed, PairingOutcomeError, PairingOutcomeTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
 func (o *PairingOrder) Release(attemptID string, outcome PairingOutcome) bool {
 	return o.store.releaseOrdered(o, attemptID, outcome)
 }

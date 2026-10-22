@@ -97,6 +97,10 @@ func (al *AgentLoop) CommitPairing(channelID, attemptID string) bool {
 	}
 	store := mgr.PairingAttempts()
 	order := store.LockChannel(channelID)
+	if order.CommittedStart(attemptID) {
+		order.Unlock()
+		return true // the same committed operation already ran; never restart it
+	}
 	ready := store.IsReady(channelID, attemptID)
 	if !ready {
 		// Direct admissions (including the internal caller controls) commit the
