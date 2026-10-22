@@ -134,9 +134,9 @@ func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testin
 func TestADR090_RolePolicyRequiredExclusionsAndOutboundAsk(t *testing.T) {
 	want := map[string]map[string]config.ToolPolicy{
 		"mia": {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
-		"jim": {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "bash": config.ToolPolicyDeny, "serve_web": config.ToolPolicyDeny, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
-		// omnipus-system-agent §6.5: add_mcp_server rides the FR-020 ask
-		// ceiling; plan control and browser tools are outside its supporting set.
+		// SPEC.md Table (2026-10-22): serve_web is Main core Allow; Jim's bash Deny stays.
+		"jim": {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "bash": config.ToolPolicyDeny, "serve_web": config.ToolPolicyAllow, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
+		// SPEC.md Founder exclusion (2026-10-22): Omnipus keeps its existing system policy inventory.
 		"omnipus":    {"add_mcp_server": config.ToolPolicyAsk, "create_plan": config.ToolPolicyDeny, "browser_evaluate": config.ToolPolicyDeny},
 		"planner":    {"send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk},
 		"researcher": {"bash": config.ToolPolicyDeny, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk},

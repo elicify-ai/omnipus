@@ -3,7 +3,7 @@ package config
 // RED pack (w4 spec §9.1 row 11): the shipped attachment-tool ceiling
 // entries and the additive reconciliation contract (US-3.AC-5; Hard
 // Constraint #6; §12.1 points 1-2). Expected values are the spec's literals:
-// allow / allow / ask. The allStaticToolNames boot-panic guard lives in
+// allow / allow / allow (SPEC.md Global ceiling changes, 2026-10-22). The allStaticToolNames boot-panic guard lives in
 // pkg/coreagent (Go packages cannot span the two trees from one file; the
 // oracle is unchanged).
 
@@ -14,7 +14,7 @@ func TestShippedCeilingAttachmentTools(t *testing.T) {
 	for name, want := range map[string]string{
 		"list_email_attachments":    "allow",
 		"read_email_attachment":     "allow",
-		"download_email_attachment": "ask",
+		"download_email_attachment": "allow", // SPEC.md Global ceiling changes (2026-10-22): received downloads become Allow.
 	} {
 		got, ok := ceiling[name]
 		if !ok {
@@ -39,12 +39,12 @@ func TestReconcileToolPolicyCeilingSelfHealsOldInstallAdditively(t *testing.T) {
 	}
 	added := ReconcileToolPolicyCeiling(cfg, known)
 	if len(added) != 3 {
-		t.Fatalf("reconcile added %v, want exactly the three attachment entries (US-3.AC-5: old config gains the literal allow/allow/ask entries additively)", added)
+		t.Fatalf("reconcile added %v, want exactly the three attachment entries (US-3.AC-5: old config gains the literal allow/allow/allow entries additively)", added)
 	}
 	for name, want := range map[string]string{
 		"list_email_attachments":    "allow",
 		"read_email_attachment":     "allow",
-		"download_email_attachment": "ask",
+		"download_email_attachment": "allow", // SPEC.md Global ceiling changes (2026-10-22): received downloads become Allow.
 	} {
 		if got := cfg.Sandbox.ToolPolicies[name]; got != want {
 			t.Fatalf("after reconcile ceiling[%q] = %q, want %q", name, got, want)
