@@ -453,12 +453,13 @@ func (t *DownloadEmailAttachmentTool) Execute(ctx context.Context, args map[stri
 		}
 	}
 	// One explicit save, through the same cap/naming/marker/audit service.
-	// A unique operation token also prevents separate saves from coalescing.
+	// The mutation budget path waits for Save to settle, even if the caller
+	// cancels after it starts. Only then may the destination be closed.
 	token := fmt.Sprintf("agent-%s-%d", ToolAgentID(ctx), time.Now().UnixNano())
 	var closeErr error
 	receipt, err := func() (*mailattachment.SaveReceipt, error) {
 		defer func() { closeErr = closeService() }()
-		return gateMailDial(ctx, t.budget, t.budgetAgentID, toolName, t.tps.mustResolve(ctx, toolName),
+		return gateMailMutation(ctx, t.budget, t.budgetAgentID, toolName, t.tps.mustResolve(ctx, toolName),
 			map[string]any{"folder": folder, "ref": ref, "idx": idx, "save_operation_token": token},
 			func(c context.Context) (*mailattachment.SaveReceipt, error) {
 				return service.Save(c, mailattachment.SaveRequest{Slug: folder, Ref: ref, PartIndex: idx, Token: token})
