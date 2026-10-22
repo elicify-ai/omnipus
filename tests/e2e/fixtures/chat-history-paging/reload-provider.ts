@@ -22,7 +22,8 @@ const blockedPython = [
   'import json, os, threading',
   `with Path("${CANCELLED_MARKER}").open("a", encoding="utf8") as receipt:`,
   '    receipt.write("once\\n")',
-  `Path("${RUNNING_MARKER}").write_text(json.dumps({"pid": os.getpid(), "cwd": os.getcwd()}), encoding="utf8")`,
+  `Path("${RUNNING_MARKER}.tmp").write_text(json.dumps({"pid": os.getpid(), "cwd": os.getcwd()}), encoding="utf8")`,
+  `os.replace("${RUNNING_MARKER}.tmp", "${RUNNING_MARKER}")`, // Publish a complete receipt atomically.
   'threading.Event().wait()', // Event barrier, not a sleep or elapsed-time oracle.
 ].join('\n');
 export const CANCELLED_COMMAND = `python3 -I -u -c '${blockedPython.replaceAll("'", "'\\''")}'`;
