@@ -48,17 +48,6 @@ func (g *restartToolGroup) finish(omitted map[int]bool, cancelled map[restartCal
 	if g == nil || !g.valid || len(g.markers) == 0 {
 		return
 	}
-	incomplete := false
-	for _, seen := range g.calls {
-		incomplete = incomplete || !seen
-	}
-	if !incomplete {
-		return // Completed or malformed groups are never recovery-filtered.
-	}
-	omitted[g.assistantIndex] = true
-	for _, index := range g.results {
-		omitted[index] = true
-	}
 	for index, id := range g.markers {
 		omitted[index] = true
 		cancelled[restartCallIdentity{assistantIndex: g.assistantIndex, toolCallID: id}] = true

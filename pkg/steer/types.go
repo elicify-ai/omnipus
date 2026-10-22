@@ -145,10 +145,12 @@ func (c Class) Runnable() bool {
 type Outcome string
 
 const (
-	OutcomeFinalAnswer    Outcome = "final_answer"
-	OutcomeEmptyAnswer    Outcome = "empty_answer"
-	OutcomeParkedQuestion Outcome = "parked_question"
-	OutcomeInterrupted    Outcome = "interrupted"
+	OutcomeFinalAnswer            Outcome = "final_answer"
+	OutcomeEmptyAnswer            Outcome = "empty_answer"
+	OutcomeParkedQuestion         Outcome = "parked_question"
+	OutcomeInterrupted            Outcome = "interrupted"
+	OutcomeToolLimit              Outcome = "tool_limit"
+	OutcomeReconciliationRequired Outcome = "reconciliation_required"
 	// OutcomeTimedOut is historical: only boot recovery of a record stopped
 	// by the retired lifetime budget (issue #1306) still produces it.
 	OutcomeTimedOut        Outcome = "timed_out"

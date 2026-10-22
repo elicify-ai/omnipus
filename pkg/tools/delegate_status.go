@@ -653,6 +653,10 @@ func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *To
 		SessionId: sessionID,
 		State:     generated.DelegatePeekResponseState(state),
 	}
+	if rec.InterruptionReason != "" {
+		reason := generated.DelegatePeekResponseInterruptionReason(rec.InterruptionReason)
+		resp.InterruptionReason = &reason
+	}
 	if snap.HasCheckpoint {
 		summary := snap.LatestCheckpointSummary
 		resp.LatestCheckpointSummary = &summary

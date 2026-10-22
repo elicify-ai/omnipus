@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io/fs"
 	"regexp"
@@ -116,6 +115,7 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}
 	defer handle.Close()
+	bindFileEffect(ctx, handle, t.Name(), args)
 
 	if err := editFile(handle, oldText, newText); err != nil {
 		return ErrorResult(err.Error())
@@ -215,6 +215,7 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}
 	defer handle.Close()
+	bindFileEffect(ctx, handle, t.Name(), args)
 
 	if err := appendFile(handle, content); err != nil {
 		return ErrorResult(err.Error())
@@ -225,29 +226,20 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 // editFile reads the file via handle, performs the replacement, and writes
 // back through the same handle.
 func editFile(handle *PathHandle, oldText, newText string) error {
-	content, err := handle.ReadFile()
-	if err != nil {
-		return err
-	}
-
-	newContent, err := replaceEditContent(content, oldText, newText)
-	if err != nil {
-		return err
-	}
-
-	return handle.WriteFile(newContent)
+	return mutateFileEffect(handle, true, func(content []byte, exists bool) ([]byte, error) {
+		if !exists {
+			return nil, fs.ErrNotExist
+		}
+		return replaceEditContent(content, oldText, newText)
+	})
 }
 
 // appendFile reads the existing content (if any) via handle, appends new
 // content, and writes back through the same handle.
 func appendFile(handle *PathHandle, appendContent string) error {
-	content, err := handle.ReadFile()
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-
-	newContent := append(content, []byte(appendContent)...)
-	return handle.WriteFile(newContent)
+	return mutateFileEffect(handle, true, func(content []byte, _ bool) ([]byte, error) {
+		return append(content, []byte(appendContent)...), nil
+	})
 }
 
 // replaceEditContent handles the core logic of finding and replacing a single occurrence of oldText.

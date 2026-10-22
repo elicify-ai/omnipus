@@ -176,6 +176,9 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	if !proceed {
 		return "", agent, nil
 	}
+	if isRoomRequestWake(msg) {
+		opts.RoomRequestID = msg.TranscriptEntryID
+	}
 	opts.roomCost = al.newTurnRoomMeter(msg)
 	defer func() { runErr = errors.Join(runErr, al.finishRoomTurn(opts.roomCost, runErr)) }()
 	preparation, prepErr := al.prepareOrdinaryExecution(ctx, msg, opts)

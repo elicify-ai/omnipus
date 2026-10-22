@@ -72,6 +72,10 @@ type ordinaryExecutionPreparation struct {
 // FIFO admission. Only an actual human message may revive a saved session.
 func (al *AgentLoop) prepareOrdinaryExecution(ctx context.Context, msg bus.InboundMessage, opts processOptions) (ordinaryExecutionPreparation, error) {
 	if msg.Metadata[ownerWakeMetadataKey] != "" {
+		if principal, allowed := al.roomRestartPrincipal(msg); allowed {
+			opts.roomRestartOnly = true
+			return al.prepareOrdinarySessionExecution(roomRestartContext(ctx), msg.SessionID, opts, &principal, msg.TranscriptEntryID)
+		}
 		return al.prepareOrdinarySessionExecution(ctx, msg.SessionID, opts, &ownerWakeRevivalPrincipal, msg.TranscriptEntryID)
 	}
 	if !reviveInboundIsHumanTurn(msg) {
@@ -160,6 +164,12 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 	if err != nil {
 		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: read saved session: %w", err)
 	}
+	if err := al.retireCutRoomWork(rec); err != nil {
+		return ordinaryExecutionPreparation{}, err
+	}
+	if opts.roomRestartOnly && rec.Stopped() && !restartStoppedStandingRoot(rec) {
+		return ordinaryExecutionPreparation{}, errOwnerWakeRetained
+	}
 	if fenceErr := al.inboundStopFenceInFlight(sessionID); fenceErr != nil {
 		return ordinaryExecutionPreparation{}, fenceErr
 	}
@@ -171,6 +181,9 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 		rec.State == session.LifecycleStopped {
 		return ordinaryExecutionPreparation{}, errOwnerWakeRetained
 	}
+	if rec.State == session.LifecycleInterrupted && (opts.roomRestartOnly || revival == nil || revival.Kind != steer.PrincipalKindHuman) {
+		return ordinaryExecutionPreparation{}, errOwnerWakeRetained
+	}
 	identity := session.ExecutionIdentity{RunID: freshRunID(), BootSeq: bootSeq}
 	stampedByRevival := false
 	// A person continues any landed stop. A normal scheduled trigger continues
@@ -179,6 +192,9 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 		(revival.Kind == steer.PrincipalKindHuman ||
 			(revival.Kind == scheduledRevivalPrincipal.Kind && revival.ID == scheduledRevivalPrincipal.ID && restartStoppedStandingRoot(rec))))) {
 		if reviveErr := al.reviveOrdinaryRecordWithExecution(ctx, rec, identity, *revival); reviveErr != nil {
+			if opts.roomRestartOnly && (errors.Is(reviveErr, steer.ErrStaleGeneration) || errors.Is(reviveErr, session.ErrStopIntentSuperseded)) {
+				return ordinaryExecutionPreparation{}, errOwnerWakeRetained
+			}
 			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: explicit revival failed: %w", reviveErr)
 		}
 		rec, err = store.Load(sessionID)

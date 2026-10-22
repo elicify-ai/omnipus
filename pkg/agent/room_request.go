@@ -402,10 +402,15 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 	if err != nil {
 		return RoomAdmission{}, roomStorageRefusal("the member's main chat is not available", err)
 	}
-	held := al.receiverStopped(mainID)
+	held := al.receiverStopped(mainID) && !al.newHumanRoomCanRestart(a, mainID)
 	now := time.Now().UTC()
+	humanRestartBoot := uint64(0)
+	if authenticatedHumanRoomSender(a.Sender) {
+		humanRestartBoot = al.bootEpochFor()
+	}
 	capture := addressing.Capture{
 		RequestID:         a.DeliveryID,
+		HumanRestartBoot:  humanRestartBoot,
 		ReceiverSessionID: mainID,
 		Receiver:          a.Receiver,
 		Sender:            a.Sender,
@@ -604,7 +609,7 @@ func (al *AgentLoop) gateRoomRequest(msg bus.InboundMessage) (*roomGate, bool) {
 	}
 	g := &roomGate{rt: rt, roomID: msg.Metadata[roomIDMetadataKey], requestID: msg.TranscriptEntryID}
 	al.roomRequests.Store(g.requestID, g.roomID)
-	if al.receiverStopped(msg.SessionID) {
+	if al.receiverStopped(msg.SessionID) && !al.roomWakeCanRestart(msg) {
 		// A wake that meets a stopped member is dropped; the request stays
 		// held in the member's ledger and is delivered when the member runs
 		// again (FR-252). It never shows "working" in between.

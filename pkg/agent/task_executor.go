@@ -1303,6 +1303,9 @@ func newSteeringRefusalError(err error) error {
 // already-authorized initiator (nil = a person or the scheduler) onto the
 // launch request, so the child's record carries InitiatedBy.
 func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.Task, initiatedBy *session.InitiatedBy) (string, error) {
+	if err := te.agentLoop.checkTaskRecovery(ctx, t); err != nil {
+		return "", err
+	}
 	if t.SessionID != "" {
 		// S1: an already-bound session is dispatched again only when its
 		// durable record exists and the task is not Failed; otherwise refuse

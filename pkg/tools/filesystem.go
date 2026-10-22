@@ -1102,7 +1102,16 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		}
 	}
 
-	if err := handle.WriteFile([]byte(content)); err != nil {
+	bindFileEffect(ctx, handle, t.Name(), args)
+	if err := mutateFileEffect(handle, false, func(_ []byte, exists bool) ([]byte, error) {
+		if exists && !overwrite {
+			return nil, fs.ErrExist
+		}
+		return []byte(content), nil
+	}); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return FileExistsRefusalResult(t.Name(), path, fmt.Sprintf("file: %s already exists. Set overwrite=true to replace.", path))
+		}
 		return ErrorResult(err.Error())
 	}
 

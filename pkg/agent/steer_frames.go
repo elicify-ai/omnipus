@@ -146,7 +146,7 @@ func (al *AgentLoop) deliverSubagentEnd(parentSessionID string, childRec *sessio
 	switch outcome {
 	case steer.OutcomeFinalAnswer:
 		status = SubTurnStatusSuccess
-	case steer.OutcomeInterrupted:
+	case steer.OutcomeInterrupted, steer.OutcomeToolLimit, steer.OutcomeReconciliationRequired:
 		status = SubTurnStatusInterrupted
 	case steer.OutcomeTimedOut:
 		status = SubTurnStatusTimeout
@@ -162,6 +162,10 @@ func (al *AgentLoop) deliverSubagentEnd(parentSessionID string, childRec *sessio
 		SessionId: parentSessionID,
 		SpanId:    spanID,
 		Status:    string(status),
+	}
+	if reason := interruptionReasonForOutcome(outcome); reason != "" {
+		value := string(reason)
+		frame.Reason = &value
 	}
 	parentCallID := callID
 	frame.ParentCallId = &parentCallID
@@ -348,6 +352,10 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		SpanId:         SubagentSpanID(originCallID, childRec.Generation),
 		State:          state,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+	}
+	if state == string(session.LifecycleInterrupted) && childRec.InterruptionReason != "" {
+		reason := string(childRec.InterruptionReason)
+		frame.InterruptionReason = &reason
 	}
 	if receipt != nil && receipt.correlationID != "" {
 		// Absent, never null (SubagentStateFrame.yaml's own comment): this

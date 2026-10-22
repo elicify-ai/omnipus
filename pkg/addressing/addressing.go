@@ -31,6 +31,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // MaxComponentLen is the bound on a workspace or agent id (existing contract).
@@ -113,6 +115,9 @@ type Source struct {
 
 // Capture is one admitted, answerable request.
 type Capture struct {
+	ModelInput       *session.ArchiveAddress    `json:"model_input,omitempty"`
+	ModelExecution   *session.ExecutionIdentity `json:"model_execution,omitempty"`
+	HumanRestartBoot uint64                     `json:"human_restart_boot,omitempty"`
 	// RequestID is the admitted message id — the id the receiver replies to.
 	RequestID string `json:"request_id"`
 	// ReceiverSessionID is the session the request was admitted to.

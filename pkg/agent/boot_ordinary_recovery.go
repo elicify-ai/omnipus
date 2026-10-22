@@ -55,6 +55,12 @@ func (r *SteerBootRecovery) recoverOrdinaryRoot(id string, notice func(string, s
 	if r.BootEpoch != nil && r.BootEpoch.Current() != 0 && rec.ExecutionID.BootSeq >= r.BootEpoch.Current() {
 		return nil // Same-boot and future-boot work is not this restart's victim.
 	}
+	if al, runtimeErr := r.noticeLoop(); runtimeErr == nil {
+		if err := al.retireCutRoomWork(rec); err != nil {
+			notice("room-retirement:"+id, err.Error())
+			return err
+		}
+	}
 	if err := r.failInterrupted(rec); err != nil {
 		notice("interrupted-write:"+id, fmt.Sprintf("session %s restart stop refused at boot: %v", id, err))
 		return err

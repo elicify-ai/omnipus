@@ -37,6 +37,8 @@ type processOptions struct {
 	// instruction). When it is also the newest line of the model window, the turn
 	// keeps using the text (routing, goal claim, external CLI) but neither adds it
 	// to the window a second time nor archives it again (turnState.userInputInWindow).
+	RoomRequestID           string
+	roomRestartOnly         bool
 	InputAlreadyArchived    bool
 	ForcedSkills            []string            // Skills explicitly requested for this message
 	Media                   []string            // media:// refs from inbound message

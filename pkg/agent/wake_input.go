@@ -249,7 +249,11 @@ func (al *AgentLoop) admitSteeringInput(ts *turnState, msg providers.Message, co
 		}
 		return include, err
 	}
-	_, err := ts.appendWindowMessage(msg, al.inputProducer(ts))
+	roomRequestID, _ := strings.CutPrefix(correlationID, roomSteerCorrelationPrefix)
+	if roomRequestID == correlationID {
+		roomRequestID = ""
+	}
+	_, err := ts.appendWindowMessage(msg, al.inputProducer(ts), roomRequestID)
 	return err == nil, err
 }
 

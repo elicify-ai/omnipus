@@ -26,8 +26,9 @@ type executionDisposition struct {
 	// turnRan/turnErr record the outcome of the ordinary turn this
 	// disposition admitted (recordTurnOutcome); the owner settles an
 	// ordinary root's lifecycle from it (settleOrdinaryRoot).
-	turnRan bool
-	turnErr error
+	turnRan            bool
+	turnErr            error
+	interruptionReason session.InterruptionReason
 }
 
 // recordTurnOutcome notes how the admitted ordinary turn ended. The last
@@ -221,7 +222,7 @@ func (al *AgentLoop) settleSelectedStop(selected session.StopSelection, afterLan
 // boot recovery. A later message or scheduled run starts the next round.
 func (al *AgentLoop) settleOrdinaryRoot(d *executionDisposition) error {
 	d.mu.Lock()
-	ran, turnErr := d.turnRan, d.turnErr
+	ran, turnErr, interrupted := d.turnRan, d.turnErr, d.interruptionReason
 	d.mu.Unlock()
 	lifecycle := al.GetSessionLifecycleStore()
 	if !ran || lifecycle == nil || d.claim.SessionID == "" || errors.Is(turnErr, context.Canceled) {
@@ -230,6 +231,9 @@ func (al *AgentLoop) settleOrdinaryRoot(d *executionDisposition) error {
 	next, failedReason := session.LifecycleCompleted, ""
 	if turnErr != nil {
 		next, failedReason = session.LifecycleFailed, turnErr.Error()
+	}
+	if interrupted != "" && turnErr == nil {
+		next = session.LifecycleInterrupted
 	}
 	err := lifecycle.Mutate(d.claim.SessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
@@ -242,6 +246,9 @@ func (al *AgentLoop) settleOrdinaryRoot(d *executionDisposition) error {
 			return errOrdinaryRootNotSettled
 		}
 		cur.State, cur.FailedReason = next, failedReason
+		if next == session.LifecycleInterrupted {
+			cur.InterruptionReason, cur.NeedsInput = interrupted, nil
+		}
 		return nil
 	})
 	if errors.Is(err, errOrdinaryRootNotSettled) {

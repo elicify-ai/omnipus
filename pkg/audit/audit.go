@@ -42,17 +42,19 @@ type EventName string
 // Event types for audit logging. Values are EventName-compatible (untyped
 // strings — see EventName type docs).
 const (
-	EventToolCall          = "tool_call"
-	EventExec              = "exec"
-	EventFileOp            = "file_op"
-	EventLLMCall           = "llm_call"
-	EventPolicyEval        = "policy_eval"
-	EventRateLimit         = "rate_limit"
-	EventSSRF              = "ssrf"
-	EventStartup           = "startup"
-	EventShutdown          = "shutdown"
-	EventBootAbort         = "boot.abort"
-	EventProcessKillFailed = "process_kill_failed"
+	EventToolCall                = "tool_call"
+	EventToolRecoveryInterrupted = "tool.recovery.interrupted"
+	EventToolRecoveryObservation = "tool.recovery.observation"
+	EventExec                    = "exec"
+	EventFileOp                  = "file_op"
+	EventLLMCall                 = "llm_call"
+	EventPolicyEval              = "policy_eval"
+	EventRateLimit               = "rate_limit"
+	EventSSRF                    = "ssrf"
+	EventStartup                 = "startup"
+	EventShutdown                = "shutdown"
+	EventBootAbort               = "boot.abort"
+	EventProcessKillFailed       = "process_kill_failed"
 	// EventChannelPairing records device-pairing lifecycle transitions for
 	// channels with an interactive pairing flow (WhatsApp linked-device QR, #358).
 	// The pairing status rides in Details; Decision is allow (linked) or error
@@ -148,13 +150,15 @@ func IsValidDecision(d Decision) bool {
 // rejecting the audit row — losing audit data is worse than logging a weird
 // event name.
 var validEventNames = map[EventName]struct{}{
-	EventToolCall:   {},
-	EventExec:       {},
-	EventFileOp:     {},
-	EventLLMCall:    {},
-	EventPolicyEval: {},
-	EventRateLimit:  {},
-	EventSSRF:       {},
+	EventToolCall:                {},
+	EventToolRecoveryInterrupted: {},
+	EventToolRecoveryObservation: {},
+	EventExec:                    {},
+	EventFileOp:                  {},
+	EventLLMCall:                 {},
+	EventPolicyEval:              {},
+	EventRateLimit:               {},
+	EventSSRF:                    {},
 	// SECURITY events emitted as BARE LITERALS with no Event* constant, so
 	// events_exhaustive_test.go (which walks the constants) never saw them
 	// and IsValidEventName rejected every one — meaning each landed via the

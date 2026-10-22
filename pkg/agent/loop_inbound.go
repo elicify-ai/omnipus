@@ -838,6 +838,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if err != nil {
 		return "", fmt.Errorf("steer: wake: load %q: %w", sessionID, err)
 	}
+	if rec.State == session.LifecycleInterrupted {
+		return "", nil
+	}
 	if al.steering != nil && !rec.Terminal() {
 		al.steering.reopenScopeForGeneration(sessionID, generation)
 	}

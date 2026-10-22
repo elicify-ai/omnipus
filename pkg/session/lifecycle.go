@@ -58,7 +58,7 @@ var ErrLifecycleTerminalImmutable = errors.New("session: lifecycle: terminal rec
 // S4 interlock state machine's authority).
 type LifecycleState string
 
-// The six canonical lifecycle states. These are the ONLY valid values.
+// The seven canonical lifecycle states. These are the ONLY valid values.
 const (
 	LifecycleQueued     LifecycleState = "queued"
 	LifecycleRunning    LifecycleState = "running"
@@ -67,19 +67,21 @@ const (
 	// idling while its plan is durably awaiting_supervision. It is non-terminal
 	// so the session can continue. The plan phase itself lives on the Plan
 	// record, resolved by callers through OwnsPlanID.
-	LifecycleStopped   LifecycleState = "stopped"
-	LifecycleCompleted LifecycleState = "completed"
-	LifecycleFailed    LifecycleState = "failed"
+	LifecycleStopped     LifecycleState = "stopped"
+	LifecycleCompleted   LifecycleState = "completed"
+	LifecycleFailed      LifecycleState = "failed"
+	LifecycleInterrupted LifecycleState = "interrupted"
 )
 
 // validLifecycleStates is the set of allowed LifecycleState values.
 var validLifecycleStates = map[LifecycleState]bool{
-	LifecycleQueued:     true,
-	LifecycleRunning:    true,
-	LifecycleNeedsInput: true,
-	LifecycleStopped:    true,
-	LifecycleCompleted:  true,
-	LifecycleFailed:     true,
+	LifecycleQueued:      true,
+	LifecycleRunning:     true,
+	LifecycleNeedsInput:  true,
+	LifecycleStopped:     true,
+	LifecycleCompleted:   true,
+	LifecycleFailed:      true,
+	LifecycleInterrupted: true,
 }
 
 // IsValidLifecycleState reports whether s is one of the six canonical
@@ -89,8 +91,9 @@ func IsValidLifecycleState(s LifecycleState) bool { return validLifecycleStates[
 // terminalLifecycleStates is the set of states after which a record is
 // frozen (immutable-terminal invariant, L-3).
 var terminalLifecycleStates = map[LifecycleState]bool{
-	LifecycleCompleted: true,
-	LifecycleFailed:    true,
+	LifecycleCompleted:   true,
+	LifecycleFailed:      true,
+	LifecycleInterrupted: true,
 }
 
 // IsTerminalLifecycleState reports whether s is one of the two terminal
@@ -204,9 +207,11 @@ type LifecycleRecord struct {
 	// on an ordinary re-entry. persistLocked's terminal-immutability guard
 	// below is exactly why both cases must bump Generation before writing
 	// again.
-	Generation  int            `json:"generation"`
-	ResumedFrom string         `json:"resumed_from,omitempty"`
-	State       LifecycleState `json:"state"`
+	Generation         int                `json:"generation"`
+	ResumedFrom        string             `json:"resumed_from,omitempty"`
+	State              LifecycleState     `json:"state"`
+	InterruptionReason InterruptionReason `json:"interruption_reason,omitempty"`
+	RecoveryConsent    *RecoveryConsent   `json:"recovery_consent,omitempty"`
 
 	// Origin names what created this record and, for a delegate/task
 	// origin, the originating tool-call id (ADR-091 I-1).
@@ -216,6 +221,8 @@ type LifecycleRecord struct {
 	// one. See lifecycle_edge.go for the type and for why it (and
 	// SteeredBy, Stop below) live in this package rather than pkg/steer.
 	Origin *Origin `json:"origin,omitempty"`
+	// RoomScope is content-free private causality, never copied to lifecycle wire types.
+	RoomScope *RoomScopeRef `json:"room_scope,omitempty"`
 	// SteeredBy is the durable edge naming who steers this session (I-1);
 	// nil for a session nobody steers (an ordinary_root). See Origin's own
 	// doc comment for how the two combine under I-8's classifier.
@@ -739,6 +746,9 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 	}
 	if !IsValidLifecycleState(rec.State) {
 		return fmt.Errorf("session: lifecycle: invalid state %q", rec.State)
+	}
+	if err := validateLifecycleInterruption(rec); err != nil {
+		return err
 	}
 	if rec.State == LifecycleNeedsInput && rec.NeedsInput == nil {
 		return fmt.Errorf("session: lifecycle: state needs_input requires NeedsInput to be set")

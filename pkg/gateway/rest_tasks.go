@@ -1399,6 +1399,7 @@ func (tp *taskPatch) applyRunFields() {
 
 // capturePriorStatus records the status before the update and refuses re-running a repeating task via PATCH.
 func (tp *taskPatch) capturePriorStatus() bool {
+	tp.patch.RetryInterrupted = tp.req.Status != nil
 	// Capture the pre-update status to detect the in_progress transition below.
 
 	if tp.req.Status != nil {
@@ -1478,6 +1479,9 @@ func (tp *taskPatch) applyUpdate() bool {
 		slog.Error("rest: task update failed", "id", tp.id, "error", err)
 		jsonErr(tp.w, http.StatusInternalServerError, "could not update task")
 		return true
+	}
+	if tp.req.Status != nil && tp.priorForUpdate != nil {
+		tp.preUpdateStatus = tp.priorForUpdate.Status
 	}
 	if tp.req.Trigger != nil && tp.priorForUpdate != nil {
 		tp.priorTriggerForAudit = tp.priorForUpdate.Trigger
@@ -2110,11 +2114,13 @@ func (a *restAPI) reconcileStuckTasks() {
 	for _, t := range tasks {
 		failed := task.StatusFailed
 		result := "interrupted: gateway restarted while task was running"
+		crashInterrupted := true
 		now := time.Now().UTC().Format(time.RFC3339)
 		if _, uErr := a.taskStore.Update(t.ID, task.Patch{
-			Status:      &failed,
-			Result:      &result,
-			CompletedAt: &now,
+			Status:           &failed,
+			Result:           &result,
+			CompletedAt:      &now,
+			CrashInterrupted: &crashInterrupted,
 		}); uErr != nil {
 			slog.Error("rest: reconcile stuck tasks: reset failed", "id", t.ID, "error", uErr)
 			continue

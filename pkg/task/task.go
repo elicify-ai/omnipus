@@ -266,8 +266,11 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// OriginCallID is the creating tool call. It is disk-only launch metadata
 	// and is deliberately absent from the REST contract.
 	OriginCallID string `json:"origin_call_id,omitempty"`
-	Action       Action `json:"action"`
-	Status       Status `json:"status"`
+	// Crash retry and inherited effect fences are private run bookkeeping.
+	CrashInterrupted   bool     `json:"crash_interrupted,omitempty"`
+	RecoverySessionIDs []string `json:"recovery_session_ids,omitempty"`
+	Action             Action   `json:"action"`
+	Status             Status   `json:"status"`
 	// CancelReason is set on a Status=failed task cancelled via a user Stop
 	// (ADR-052 FR-028); empty for a genuine failure (e.g. attempt-limit
 	// exhaustion) and for every non-failed status. Cleared on restart/re-run.

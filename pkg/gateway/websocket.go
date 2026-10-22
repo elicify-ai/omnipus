@@ -1697,16 +1697,17 @@ type wsStreamer struct {
 	// statsPromptTokens/statsCompletionTokens/statsCacheRead/statsCacheWrite
 	// carry the provider's token split so Finalize can stamp it onto the
 	// TranscriptEntry it writes. Guarded by statsMu like the fields below.
-	statsPromptTokens     int
-	statsCompletionTokens int
-	statsCacheRead        int
-	statsCacheWrite       int
-	callAccounting        []session.TranscriptEntry
-	callAccountingSet     bool
-	statsTokens           int64
-	statsCostUSD          float64
-	statsDuration         time.Duration
-	statsTurnFailed       bool // set by SetTurnFailed when the engine used a synthetic fallback
+	statsPromptTokens       int
+	statsCompletionTokens   int
+	statsCacheRead          int
+	statsCacheWrite         int
+	callAccounting          []session.TranscriptEntry
+	callAccountingSet       bool
+	statsTokens             int64
+	statsCostUSD            float64
+	statsDuration           time.Duration
+	statsTurnFailed         bool // set by SetTurnFailed when the engine used a synthetic fallback
+	statsInterruptionReason string
 
 	// transcriptPersisted records that the agent loop already wrote this
 	// streamer's narration to the transcript via

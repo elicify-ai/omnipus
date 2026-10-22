@@ -1393,6 +1393,11 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		execCtx = tools.WithAutoApproved(execCtx, tools.AutoPinForVerdict(ex.toolName, ex.autoPin))
 		ex.rx.rr.rq.ri.rf.rt.al.emitToolAutoApprovedAudit(execCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.autoPin)
 	}
+	if err := ex.rx.rr.rq.ri.rf.rt.al.enforceRecoveryWriteFence(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName); err != nil {
+		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.recoveryInterruptedResult(ex.rx.rr.rq.ri.rf.rt.ts, err)
+		return agentLoopRunTurnToolsExecuteReturn
+	}
+	execCtx = ex.rx.rr.rq.ri.rf.rt.ts.fileEffectExecutionContext(execCtx, ex.toolCallID)
 	ex.toolResult = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.ExecuteWithContext(
 		execCtx,
 		ex.toolName,

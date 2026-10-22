@@ -52,6 +52,8 @@ type ArchiveAddress = memory.RecordAddress
 // check still owns egress). Credentials and connector authority are never
 // inserted here.
 type EntrySource struct {
+	RoomRequest *RoomRequestRef `json:"room_request,omitempty"`
+	RoomScope   *RoomScopeRef   `json:"room_scope,omitempty"`
 	// Kind names the intake class the server minted: "user", "connector",
 	// "parent", "agent" or "anonymous". An empty principal with kind
 	// "anonymous" is a genuinely anonymous/shared source, not permission to

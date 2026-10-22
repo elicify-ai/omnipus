@@ -458,6 +458,7 @@ func (b *archiveBackend) placeSavedInput(ctx context.Context, key string, source
 // receives the slot and the LITERAL stored model_message JSON. A slot whose
 // record cannot be resolved is an error, never a silently short range.
 func (b *archiveBackend) ReadModelSlots(ctx context.Context, key string, from, to int, fn func(ModelSlot, []byte) error) error {
+	projection := newRoomProjection(b.baseDir)
 	if from < 0 || to < from {
 		return fmt.Errorf("archive_backend: archive_range must have 0 <= from <= to, got [%d,%d]", from, to)
 	}
@@ -482,9 +483,12 @@ func (b *archiveBackend) ReadModelSlots(ctx context.Context, key string, from, t
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		slot, raw, err := loadSlot(store, row)
+		slot, raw, err := loadSlot(store, row, projection)
 		if err != nil {
 			return err
+		}
+		if slot.OmitFromContext {
+			continue
 		}
 		if err := fn(slot, raw); err != nil {
 			return err
@@ -502,6 +506,7 @@ const scanChunk = 128
 // explicit recall read: it walks the index in chunks and loads one slot at a
 // time, never materializing the archive.
 func (b *archiveBackend) ScanArchive(ctx context.Context, key string, fn func(idx int, msg memory.ArchivedMessage) bool) error {
+	projection := newRoomProjection(b.baseDir)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	store, err := b.store(key)
@@ -521,9 +526,12 @@ func (b *archiveBackend) ScanArchive(ctx context.Context, key string, fn func(id
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			slot, _, err := loadSlot(store, row)
+			slot, _, err := loadSlot(store, row, projection)
 			if err != nil {
 				return err
+			}
+			if slot.OmitFromContext {
+				continue
 			}
 			if !fn(slot.Ordinal, memory.ArchivedMessage{Message: slot.Message, TS: slot.TS}) {
 				return nil
@@ -653,6 +661,7 @@ func (b *archiveBackend) appendModelLocked(key string, in ModelAppend) (ModelSlo
 
 // viewLocked builds the bounded WindowView. b.mu must be held.
 func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
+	projection := newRoomProjection(b.baseDir)
 	store, err := b.store(key)
 	if err != nil {
 		return WindowView{}, err
@@ -699,11 +708,13 @@ func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
 		if retractedOrdinal(meta.Retracted, row.Ordinal) {
 			continue
 		}
-		slot, _, err := loadSlot(store, row)
+		slot, _, err := loadSlot(store, row, projection)
 		if err != nil {
 			return WindowView{}, err
 		}
-		view.Live = append(view.Live, slot)
+		if !slot.OmitFromContext {
+			view.Live = append(view.Live, slot)
+		}
 	}
 	if meta.Skip > 0 {
 		lead, err := b.leadLocked(store, meta.Skip)
@@ -717,11 +728,13 @@ func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
 		if err != nil {
 			return WindowView{}, err
 		}
-		slot, _, err := loadSlot(store, arows[0])
+		slot, _, err := loadSlot(store, arows[0], projection)
 		if err != nil {
 			return WindowView{}, err
 		}
-		view.Anchor = &slot
+		if !slot.OmitFromContext {
+			view.Anchor = &slot
+		}
 	}
 	return view, nil
 }
@@ -731,6 +744,7 @@ func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
 // (at most leadLimit). The walk uses index rows only; only the slots it keeps are
 // loaded.
 func (b *archiveBackend) leadLocked(store *ArchiveDayStore, skip int) ([]ModelSlot, error) {
+	projection := newRoomProjection(b.baseDir)
 	lo := max(0, skip-leadLimit)
 	rows, err := store.readOrdinalRows(lo, skip)
 	if err != nil {
@@ -756,11 +770,13 @@ func (b *archiveBackend) leadLocked(store *ArchiveDayStore, skip int) ([]ModelSl
 		if !ok {
 			continue
 		}
-		slot, _, err := loadSlot(store, row)
+		slot, _, err := loadSlot(store, row, projection)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, slot)
+		if !slot.OmitFromContext {
+			out = append(out, slot)
+		}
 	}
 	return out, nil
 }
@@ -799,7 +815,7 @@ func (b *archiveBackend) payloadLinesLocked(key string) ([]payloadLine, error) {
 
 // loadSlot reads one slot's record (following a model_ref to its source) and
 // decodes its message. raw is the literal stored model_message JSON.
-func loadSlot(store *ArchiveDayStore, row ordinalRow) (ModelSlot, []byte, error) {
+func loadSlot(store *ArchiveDayStore, row ordinalRow, projectors ...*roomProjection) (ModelSlot, []byte, error) {
 	raw, rec, err := store.ReadAtRaw(row.content())
 	if err != nil {
 		return ModelSlot{}, nil, fmt.Errorf("window: read model slot %d: %w", row.Ordinal, err)
@@ -811,8 +827,19 @@ func loadSlot(store *ArchiveDayStore, row ordinalRow) (ModelSlot, []byte, error)
 	if err != nil {
 		return ModelSlot{}, nil, fmt.Errorf("window: decode model slot %d: %w", row.Ordinal, err)
 	}
-	return ModelSlot{Ordinal: row.Ordinal, Addr: row.Slot, Message: msg, TS: row.TS, UserTurn: row.UserTurn,
-		Origin: rec.ModelOrigin}, literalModelMessage(raw), nil
+	slot := ModelSlot{Ordinal: row.Ordinal, Addr: row.Slot, Message: msg, TS: row.TS, UserTurn: row.UserTurn, Origin: rec.ModelOrigin}
+	if rec.Source != nil {
+		slot.Source = *rec.Source
+	}
+	projection := newRoomProjection(store.baseDir)
+	if len(projectors) > 0 && projectors[0] != nil {
+		projection = projectors[0]
+	}
+	slot, err = projection.apply(slot)
+	if err != nil {
+		return ModelSlot{}, nil, err
+	}
+	return slot, literalModelMessage(raw), nil
 }
 
 func clampSkip(skip, n int) int {

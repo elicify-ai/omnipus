@@ -712,6 +712,16 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	if err != nil {
 		return false, err
 	}
+	if rec.SteeredBy != nil {
+		if err := al.refuseRetiredRoomWork(rec); err != nil {
+			return false, err
+		}
+	}
+	if rec.State == session.LifecycleInterrupted {
+		if err := al.steerCanceller().authorizeInterruptedRevival(rec, by); err != nil {
+			return false, err
+		}
+	}
 	// [2026-10-04, in-flight fence] Stopped() is true for TWO shapes: a
 	// landed LifecycleStopped record, OR a stop fence still stamped for the
 	// record's CURRENT generation while the state is still live

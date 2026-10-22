@@ -346,8 +346,12 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 		// appendAssistantTranscriptTruncated (ADR-087 D4a/D4b) so a
 		// non-streaming truncated turn's Truncated flag lands in this same
 		// write, never via a follow-up rewrite of transcript.jsonl.
-		Truncated:        truncated,
-		TruncationReason: truncationReason,
+		Truncated:          truncated,
+		TruncationReason:   truncationReason,
+		InterruptionReason: string(ts.interruptedReason()),
+	}
+	if entry.InterruptionReason != "" {
+		entry.Status = "interrupted"
 	}
 	if err := ts.persistAssistantAccounting(entry); err != nil {
 		transcriptWriteFailures.Add(1)

@@ -238,7 +238,7 @@ func classifyEnvelope(peek envelopePeek) SessionMessageDeliveryClass {
 	case "error":
 		// A stopped_child prefix authenticates neither the cause nor a wake.
 		// Only the landed stop transition can authorize restart/timeout wakes.
-		class.WakeEligible = peek.Fatal || strings.HasPrefix(peek.Text, LifecycleNoticeReasonPrefixToolIterations)
+		class.WakeEligible = peek.Fatal || strings.HasPrefix(peek.Text, LifecycleNoticeReasonPrefixToolIterations) || strings.HasPrefix(peek.Text, "reconciliation_required:")
 		// Lifecycle notices retain their admission exemption, independently
 		// of whether this event is allowed to wake (PW-D4 / PW-D13).
 		class.CapExempt = peek.Fatal || isSteeringLifecycleNoticeText(peek.Text)
@@ -287,6 +287,7 @@ const LifecycleNoticePrefixStoppedChild = "stopped_child:"
 // matches inside this same generic `error` envelope).
 var steeringLifecycleNoticeTextPrefixes = []string{
 	LifecycleNoticeReasonPrefixToolIterations,
+	"reconciliation_required:",
 	LifecycleNoticePrefixStoppedChild,
 }
 

@@ -87,7 +87,7 @@ func (al *AgentLoop) inputProducer(ts *turnState) windowProducer {
 // checked archive path as results, before they enter the ongoing request. It
 // returns the exact slot the archive assigned, so the turn keeps the address of
 // an assistant message and hands it to that step's tool results.
-func (ts *turnState) appendWindowMessage(msg providers.Message, producer windowProducer) (session.ModelSlot, error) {
+func (ts *turnState) appendWindowMessage(msg providers.Message, producer windowProducer, requestIDs ...string) (session.ModelSlot, error) {
 	if ts.opts.NoHistory {
 		return session.ModelSlot{}, nil
 	}
@@ -102,13 +102,26 @@ func (ts *turnState) appendWindowMessage(msg providers.Message, producer windowP
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	slot, _, err := store.AppendModelMessage(ctx, ts.sessionKey, producer.modelAppend(msg, ts.agent.ID))
+	requestID := ""
+	if len(requestIDs) > 0 {
+		requestID = requestIDs[0]
+	}
+	in, sourceErr := ts.roomContextSource(producer.modelAppend(msg, ts.agent.ID), requestID)
+	if sourceErr != nil {
+		ts.setContextWindowError(sourceErr)
+		return session.ModelSlot{}, sourceErr
+	}
+	slot, _, err := store.AppendModelMessage(ctx, ts.sessionKey, in)
 	if err != nil {
 		ts.setContextWindowError(err)
 		if msg.Role == "user" {
 			return session.ModelSlot{}, &messageNotSavedError{role: msg.Role, cause: err}
 		}
 		return session.ModelSlot{}, fmt.Errorf("context admission: append %s message: %w", msg.Role, err)
+	}
+	if err := ts.bindRoomInput(requestID, slot); err != nil {
+		ts.setContextWindowError(err)
+		return session.ModelSlot{}, err
 	}
 	if msg.Role == "assistant" {
 		ts.recordCallIssuers(msg, slot.Addr)

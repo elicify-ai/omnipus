@@ -359,6 +359,17 @@ func computeSessionLifecycle(ls *session.LifecycleStore, id string, currentBootS
 func attachSessionRuntimeFields(s *gen.Session, ls *session.LifecycleStore, id string, currentBootSeq ...uint64) error {
 	var err error
 	s.LifecycleState, s.StopNote, s.Execution, err = computeSessionLifecycle(ls, id, currentBootSeq...)
+	if err == nil && s.LifecycleState != nil && *s.LifecycleState == gen.SessionLifecycleStateInterrupted && ls != nil {
+		rec, readErr := ls.Load(id)
+		if readErr != nil {
+			return readErr
+		}
+		reason := gen.SessionInterruptionReason(rec.InterruptionReason)
+		if reason == "" {
+			reason = gen.SessionInterruptionReasonRestart
+		}
+		s.InterruptionReason = &reason
+	}
 	if sm := tools.GetSharedSessionManager(); sm != nil {
 		n := sm.CountRunningBackgroundCommands(id)
 		s.BackgroundCommandCount = &n

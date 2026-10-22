@@ -130,7 +130,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 	// hash are computed BEFORE the commit: they are part of the protected
 	// tuple the single mutation stores, so the published bytes can never
 	// drift from the committed ones.
-	publishable := nextState == session.LifecycleCompleted || nextState == session.LifecycleFailed
+	publishable := session.IsTerminalLifecycleState(nextState)
 	var payload []byte
 	var payloadHash string
 	var message generated.SessionMessage
@@ -277,6 +277,8 @@ func (al *AgentLoop) commitSteeredCompletion(
 		// already checked against the locked tail. It never borrows a
 		// replacement's ID to publish this producer's bytes.
 		cur.State = nextState
+		cur.InterruptionReason = interruptionReasonForOutcome(outcome)
+		cur.FailedReason = ""
 		cur.NeedsInput = nil
 		if nextState == session.LifecycleFailed {
 			cur.FailedReason = failureReason

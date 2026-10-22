@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -45,10 +46,9 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 			// stays "" and the write choke points below persist a zero-content
 			// entry for the former post-hoc truncation rewrite to find.
 		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() >= rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations && rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations > 0 {
-			// Genuine failure: tool-iteration ceiling hit without a final response.
-			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
+			// A ceiling ends this execution, not a generic failure.
 			rz.rc.rx.finalContent = toolLimitResponse
-			rz.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+			rz.rc.rx.rr.rq.ri.rf.rt.ts.markInterrupted(session.InterruptionToolLimit)
 		} else {
 			// The engine fell through without an LLM response and uses the
 			// caller-supplied DefaultResponse as the content.  Only mark as
@@ -163,12 +163,13 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseCompleted)
 	return turnResult{
-		finalContent: rz.rc.rx.finalContent,
-		status:       rz.rc.rx.rr.rq.ri.turnStatus,
-		followUps:    append([]bus.InboundMessage(nil), rz.rc.rx.rr.rq.ri.rf.rt.ts.followUps...),
-		turnFailed:   rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed,
-		stopped:      rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load(),
-		turnID:       rz.rc.rx.rr.rq.ri.rf.rt.ts.turnID,
+		finalContent:       rz.rc.rx.finalContent,
+		status:             rz.rc.rx.rr.rq.ri.turnStatus,
+		followUps:          append([]bus.InboundMessage(nil), rz.rc.rx.rr.rq.ri.rf.rt.ts.followUps...),
+		turnFailed:         rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed,
+		interruptionReason: rz.rc.rx.rr.rq.ri.rf.rt.ts.interruptedReason(),
+		stopped:            rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load(),
+		turnID:             rz.rc.rx.rr.rq.ri.rf.rt.ts.turnID,
 	}, nil
 }
 
@@ -570,7 +571,12 @@ func (rp *agentLoopRunTurnPrepare) assembleInitialContext() (agentLoopRunTurnCon
 		// synthetic turn_canceled_restart entry already exists. The on-disk
 		// transcript is preserved; only the LLM-context slice (history) is
 		// cleaned so the LLM does not see dangling unanswered tool_call entries.
-		history = RecoverOrphanedToolCalls(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions, rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, rp.rc.rx.rr.rq.ri.rf.rt.al.auditLogger)
+		var recoveryErr error
+		history, recoveryErr = rp.rc.rx.rr.rq.ri.rf.rt.al.prepareTurnRecovery(rp.rc.rx.rr.rq.ri.rf.rt.turnCtx, rp.rc.rx.rr.rq.ri.rf.rt.ts)
+		if recoveryErr != nil {
+			rp.rc.ret0, rp.rc.ret1 = rp.rc.rx.rr.rq.ri.rf.rt.al.recoveryInterruptedResult(rp.rc.rx.rr.rq.ri.rf.rt.ts, recoveryErr)
+			return agentLoopRunTurnConductorReturn, true
+		}
 	}
 
 	// Site-1: initial assembly (CRITICAL 2 — error handled inside assembleMessages).
@@ -763,7 +769,7 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 			Content: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,
 			Media:   append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.media...),
 		}
-		if _, err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg, rp.rc.rx.rr.rq.ri.rf.rt.al.inputProducer(rp.rc.rx.rr.rq.ri.rf.rt.ts)); err != nil {
+		if _, err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendStartingRoomInput(rootMsg, rp.rc.rx.rr.rq.ri.rf.rt.al.inputProducer(rp.rc.rx.rr.rq.ri.rf.rt.ts)); err != nil {
 			rt := rp.rc.rx.rr.rq.ri.rf.rt
 			var status TurnEndStatus
 			rp.rc.ret0, status, rp.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)

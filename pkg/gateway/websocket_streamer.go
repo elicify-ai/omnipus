@@ -678,6 +678,7 @@ type wsStreamerFinalize struct {
 	transcriptAlreadyPersisted bool
 	producedModel              string
 	turnFailed                 bool
+	interruptionReason         string
 	// persistFailed records the LATE streamed-transcript write failure
 	// (#1178, amendment §4.1): the turn was healthy when prepareFinalize
 	// snapshotted turnFailed, but the terminal AppendTranscriptStrict failed
@@ -786,6 +787,10 @@ func (wsf *wsStreamerFinalize) publishDone() {
 		if failed := wsf.turnFailed || wsf.persistFailed; failed {
 			stats.TurnFailed = &failed
 		}
+		if wsf.interruptionReason != "" && !wsf.turnFailed && !wsf.persistFailed {
+			reason := wsf.interruptionReason
+			stats.InterruptionReason = &reason
+		}
 		// ADR-087 D2 (finding #10): mirror the truncation annotation onto the
 		// live done frame too, so a turn cut off while the user is watching
 		// renders the "(cut off at the output limit)" notice immediately.
@@ -863,6 +868,7 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	wsf.transcriptAlreadyPersisted = wsf.s.transcriptPersisted
 	wsf.producedModel = wsf.s.producedModel
 	wsf.turnFailed = wsf.s.statsTurnFailed
+	wsf.interruptionReason = wsf.s.statsInterruptionReason
 	wsf.continuationContent = wsf.s.continuationContent
 	wsf.hasContinuation = wsf.s.hasContinuation
 	// ADR-087 D2/D4a/D4b, WP C: read under statsMu, same pattern as
@@ -1064,6 +1070,10 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 					}
 					session.SetEntryCallAccounting(&entry, wsf.callAccounting[len(wsf.callAccounting)-1])
 				}
+			}
+			if wsf.interruptionReason != "" {
+				entry.Status = "interrupted"
+				entry.InterruptionReason = wsf.interruptionReason
 			}
 			if wsf.truncationReason != "" {
 				entry.Truncated = true

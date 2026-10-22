@@ -659,6 +659,21 @@ func (c *SteerCanceller) reviveWithExecution(ctx context.Context, sessionID stri
 	if execution != nil && (selected == nil || selected.SessionID != sessionID || execution.RunID == "" || execution.BootSeq == 0) {
 		return 0, fmt.Errorf("steer: ordinary revival requires a selected record and nonzero execution identity")
 	}
+	var consentKeys []string
+	selectedForConsent, loadErr := c.Lifecycle.Load(sessionID)
+	if loadErr != nil {
+		return 0, loadErr
+	}
+	if selectedForConsent.State == session.LifecycleInterrupted {
+		if err := c.authorizeInterruptedRevival(selectedForConsent, by); err != nil {
+			return 0, err
+		}
+		var err error
+		consentKeys, err = recoveryConsentKeys(sessionID)
+		if err != nil {
+			return 0, err
+		}
+	}
 	var generation int
 	var revived bool
 	err := c.Lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
@@ -680,6 +695,11 @@ func (c *SteerCanceller) reviveWithExecution(ctx context.Context, sessionID stri
 			rec.ResumedFrom = rec.SessionID
 			rec.State = session.LifecycleRunning
 			rec.FailedReason = ""
+			rec.InterruptionReason = ""
+			rec.RecoveryConsent = nil
+			if len(consentKeys) > 0 {
+				rec.RecoveryConsent = &session.RecoveryConsent{Generation: rec.Generation, OccurrenceKeys: consentKeys, ExecutionID: copyRevivalExecution(execution)}
+			}
 			rec.NeedsInput = nil
 			// The prior generation's committed final outbox is never carried
 			// forward: explicit RESUME of a committed done/failed G creating

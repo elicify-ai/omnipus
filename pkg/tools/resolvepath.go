@@ -625,10 +625,11 @@ func EmitSkillWriteAudit(shelf, toolName, agentID, sessionID, workspaceID, resol
 // closes that TOCTOU gap for the confined case, and IsCarveOut was already
 // checked unconditionally by ResolvePath before the handle was constructed.
 type PathHandle struct {
-	root   *os.Root
-	rel    string
-	abs    string
-	policy fspolicy.FSPolicy
+	root       *os.Root
+	rel        string
+	abs        string
+	policy     fspolicy.FSPolicy
+	fileEffect *fileEffectInvocation
 
 	// skillsWriteAudit is non-nil exactly when ResolvePath classified this
 	// handle's target as a recognised skills-directory path (D10) AND the

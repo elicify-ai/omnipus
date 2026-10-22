@@ -34,7 +34,9 @@ type ModelSlot struct {
 	// Origin is the record's CONV provenance marker (ModelOriginConvArchive /
 	// ModelOriginConvRebuilt); empty for a record written live. A rebuilt record
 	// has no provable original tool-result bytes.
-	Origin string
+	Origin          string
+	Source          EntrySource
+	OmitFromContext bool
 }
 
 // WindowView is the bounded snapshot of one session's model window.

@@ -69,6 +69,8 @@ func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 		return StatusArchived, true
 	case LifecycleFailed:
 		return StatusFailed, true
+	case LifecycleInterrupted:
+		return StatusInterrupted, true
 	default: // LifecycleStopped, LifecycleQueued, LifecycleRunning, LifecycleNeedsInput
 		return "", false
 	}
@@ -153,6 +155,8 @@ func LifecycleStateToDisplay(s LifecycleState) LifecycleDisplayState {
 		return LifecycleDisplayFailed
 	case LifecycleStopped:
 		return LifecycleDisplayStopped
+	case LifecycleInterrupted:
+		return LifecycleDisplayInterrupted
 	default:
 		// Unreached for any record that passed validateLifecycleRecordForPersist
 		// (IsValidLifecycleState gates every write), but fall back to the

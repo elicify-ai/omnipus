@@ -29,6 +29,9 @@ func (r *SteerBootRecovery) resumeRestartHelper(ctx context.Context, stopped *se
 	}
 	al, err := r.noticeLoop()
 	if err == nil {
+		err = al.refuseRetiredRoomWork(stopped)
+	}
+	if err == nil {
 		var pending bool
 		pending, err = r.acceptedStopPending(stopped)
 		if pending {

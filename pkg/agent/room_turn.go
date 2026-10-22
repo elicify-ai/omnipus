@@ -17,7 +17,18 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, agent *AgentInstance, opt
 	if opts.roomCost == nil {
 		opts.roomCost = al.newRoomMeterForOptions(opts)
 	}
-	defer func() { runErr = errors.Join(runErr, al.finishRoomTurn(opts.roomCost, runErr)) }()
+	defer func() {
+		settleErr := runErr
+		if d := opts.executionDisposition; d != nil {
+			d.mu.Lock()
+			interrupted := d.interruptionReason != ""
+			d.mu.Unlock()
+			if interrupted {
+				settleErr = context.Canceled
+			}
+		}
+		runErr = errors.Join(runErr, al.finishRoomTurn(opts.roomCost, settleErr))
+	}()
 	return al.runAgentLoopBody(ctx, agent, opts)
 }
 
@@ -30,7 +41,7 @@ func (al *AgentLoop) runSteeredTurnBody(ctx context.Context, rec *session.Lifecy
 	}
 	defer func() {
 		settleErr := runErr
-		if ts.hardAbortRequested() || result.status == TurnEndStatusAborted {
+		if ts.hardAbortRequested() || result.status == TurnEndStatusAborted || result.interruptionReason != "" {
 			settleErr = context.Canceled
 		}
 		runErr = errors.Join(runErr, al.finishRoomTurn(ts.opts.roomCost, settleErr))

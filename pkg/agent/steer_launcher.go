@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -543,7 +544,7 @@ func (l *SteerLauncher) launchSteered(
 			if _, err := sessions.CreateSessionWithID(childID, req.SteeringSessionID, sessionType, "", req.TargetAgentID); err != nil {
 				return nil, fmt.Errorf("steer: launch: %w: identity: %w", steer.ErrStoreWrite, err)
 			}
-			if err := l.writeChildMetaAndHistory(sessions, childID, title, workspaceID, "", req.SteeringSessionID, req); err != nil {
+			if err := l.writeChildMetaAndHistory(sessions, childID, title, workspaceID, "", req.SteeringSessionID, req, inheritedRoomScope(req.Origin, parentRec)); err != nil {
 				_ = sessions.DeleteSession(childID)
 				return nil, err
 			}
@@ -571,6 +572,7 @@ func (l *SteerLauncher) launchSteered(
 				SteeredBy:      steeredBy,
 				Unattended:     unattended,
 				InitiatedBy:    cloneInitiatedBy(req.Initiator),
+				RoomScope:      inheritedRoomScope(req.Origin, parentRec),
 				// Stamped from the target's resolved executor kind — the
 				// durable identity every 3P refusal and lifecycle projection
 				// reads, fixed for this child across reload, queued
@@ -749,6 +751,7 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 	sessions *session.UnifiedStore,
 	childID, title, workspaceID, owner, steeringSessionID string,
 	req steer.LaunchRequest,
+	roomScopes ...*session.RoomScopeRef,
 ) error {
 	patch := session.MetaPatch{Title: &title}
 	if req.Origin.TaskID != "" {
@@ -773,7 +776,11 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 		// #1178 (amendment §4.2): the mandatory first message must reach the
 		// model history or the launch is refused — a child whose first
 		// instruction is missing must never start.
-		if addErr := sessions.AddMessage(childID, "user", firstMessage); addErr != nil {
+		in := session.ModelAppend{Message: providers.Message{Role: "user", Content: firstMessage}, ViewMembership: session.ViewMembershipModel, Source: session.EntrySource{Kind: "parent"}, AgentID: req.TargetAgentID}
+		if len(roomScopes) > 0 {
+			in.Source.RoomScope = roomScopes[0]
+		}
+		if _, _, addErr := sessions.AppendModelMessage(context.Background(), childID, in); addErr != nil {
 			return fmt.Errorf("steer: launch: %w: task history: %w", steer.ErrStoreWrite, addErr)
 		}
 		taskEntry := session.TranscriptEntry{

@@ -708,6 +708,17 @@ func (al *AgentLoop) DiscardRequest(receiverSessionID, requestID string) error {
 	if ledger == nil {
 		return errors.New("session store unavailable")
 	}
+	if c, found, err := ledger.Get(receiverSessionID, requestID); err != nil {
+		return err
+	} else if found && c.Source.Kind == addressing.SourceRoom {
+		if c.ModelInput != nil && c.ModelExecution != nil {
+			if err := al.retireRoomCapture(c); err != nil {
+				return err
+			}
+		} else if c.Delivered {
+			return fmt.Errorf("context_repair_required: consumed room input correlation is missing")
+		}
+	}
 	al.settleRequest(requestID) // discarded: it can no longer be answered
 	return ledger.Discard(receiverSessionID, requestID)
 }

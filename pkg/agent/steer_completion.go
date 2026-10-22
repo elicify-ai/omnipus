@@ -712,38 +712,15 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 	switch {
 	case errors.Is(runErr, context.Canceled), result.status == TurnEndStatusAborted:
 		return steer.OutcomeInterrupted, session.LifecycleStopped, "interrupted: the session was cancelled"
+	case result.interruptionReason == session.InterruptionToolLimit:
+		return steer.OutcomeToolLimit, session.LifecycleInterrupted, session.LifecycleNoticeReasonPrefixToolIterations + " the session reached its tool-iteration limit without a final answer"
+	case result.interruptionReason == session.InterruptionReconciliationRequired:
+		return steer.OutcomeReconciliationRequired, session.LifecycleInterrupted, "reconciliation_required: file effects could not be established"
 	case runErr != nil:
 		// Every untrusted failure can echo request data, including an unknown
 		// stream code with no HTTP facts. Only curated Omnipus text bypasses
 		// translation, through userVisibleTurnError's existing exception.
 		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + userVisibleTurnError(runErr)
-	case result.finalContent == toolLimitResponse:
-		// The turn hit the tool-iteration ceiling with no final response
-		// (loop_run_turn.go::finalizeTurn sets finalContent to the
-		// toolLimitResponse sentinel and marks the turn failed). This is a
-		// non-fatal lifecycle notice — the child stopped early, it did not
-		// crash — so the parent gets an `error` (fatal: false) inbox entry;
-		// the record stays running so the child remains resumable rather
-		// than terminal-failed.
-		//
-		// ADR-091 fix lane RX-HANG: this outcome used to ALSO be non-wake-
-		// eligible (I-5's blanket "fatal: false never wakes" rule), which
-		// meant the parent was never told anything happened at all — it
-		// could not "nudge the child" because it never learned the child
-		// had stopped. hasRunningOrQueuedDescendant then saw this child
-		// stuck at `running` forever and refused to let the PARENT complete
-		// either, hanging the whole ancestor chain silently up to the
-		// user's chat, recoverable only by a gateway restart
-		// (boot_sweep.go::recoverSteered). The failureReason text below
-		// carries the message_inbox.go::LifecycleNoticeReasonPrefixToolIterations
-		// prefix that classifyEnvelope now recognizes as wake-eligible even
-		// though Fatal stays false, so the parent IS woken — see that
-		// constant's doc comment for the full reasoning. Pairs with
-		// hasRunningOrQueuedDescendant's own idle-check below, which stops
-		// treating a `running`-but-no-live-turn child (exactly this
-		// outcome) as blocking its parent's own completion forever.
-		return steer.OutcomeLifecycleNotice, session.LifecycleRunning,
-			session.LifecycleNoticeReasonPrefixToolIterations + " the session reached its tool-iteration limit without a final answer"
 	case result.turnFailed || result.status == TurnEndStatusError:
 		return steer.OutcomeFailed, session.LifecycleFailed, "failed: the turn ended with an error"
 	case result.status == TurnEndStatusParked:
@@ -867,7 +844,7 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 	// re-nudged child that hits the limit again must not collide on
 	// rec.SessionID and get silently deduplicated.
 	messageID := rec.SessionID
-	fatal := outcome != steer.OutcomeLifecycleNotice
+	fatal := outcome != steer.OutcomeLifecycleNotice && !endedInterruption(outcome)
 	if outcome == steer.OutcomeLifecycleNotice {
 		messageID = uuid.NewString()
 	}
@@ -1013,7 +990,7 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 				// 24-hour limit lands a visible failure. Unconditional — a
 				// parked session has no live turn by definition.
 				return true, nil
-			case session.LifecycleStopped:
+			case session.LifecycleStopped, session.LifecycleInterrupted:
 				// D6 Q2=B / D8.6: a stopped descendant does not block, and it
 				// CUTS the traversal — its subtree is invisible to this
 				// frontier. D8.6 routes the telling to the D6 stopped-child

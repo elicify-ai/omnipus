@@ -892,10 +892,12 @@ func (s *Store) CreateByAgent(t *Task, agentID string) error {
 // set once at creation and is not reassignable, so no update path can move a
 // task into another agent's roster.
 type Patch struct {
-	Title       *string
-	Description *string
-	Prompt      *string
-	Status      *Status
+	CrashInterrupted *bool // server-only boot outcome
+	RetryInterrupted bool  // explicit manual admission; never decoded from JSON
+	Title            *string
+	Description      *string
+	Prompt           *string
+	Status           *Status
 	// CancelReason is the write path for Task.CancelReason (ADR-052 FR-028).
 	// nil = unchanged; pointing at "" clears it; pointing at a valid
 	// CancelReason value sets it (mirrors plan.Patch.FailedReason,
@@ -1145,6 +1147,7 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, bool, error) {
 		return nil, true, err
 	}
 
+	su.prepareCrashRetry()
 	if su.patch.Title != nil {
 		// Trim before validating (S2 UAT finding B sibling — see normalize()'s
 		// matching comment): a whitespace-only patch title is rejected as

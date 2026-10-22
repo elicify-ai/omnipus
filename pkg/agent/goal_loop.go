@@ -685,6 +685,9 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 ) {
 	gl := &agentLoopCheckGoalLoopAfterTurn{al: al, ctx: ctx, agentInst: agentInst, opts: opts, result: result}
 
+	if result != nil && result.interruptionReason != "" {
+		return
+	}
 	if gl.checkEligibility() {
 		return
 	}

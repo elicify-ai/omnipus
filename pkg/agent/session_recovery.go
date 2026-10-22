@@ -1,147 +1,87 @@
-// Omnipus — Session recovery after ungraceful shutdown (SIGKILL / OOM)
-// License: MIT
-// Copyright (c) 2026 Omnipus contributors
-
-// Package agent — RecoverOrphanedToolCalls implements FR-069 (SIGKILL / OOM
-// recovery) and FR-088 (LLM context hygiene on resume).
-//
-// On every session resume / next gateway boot the loop inspects the tail of the
-// session's message history. If the last entry is an "assistant" message
-// containing tool_calls without a matching "tool" result, the orphaned call
-// is considered left-over from a gateway kill while awaiting approval.
-//
-// Recovery:
-//  1. A synthetic entry {role: "system", content: "..."} is appended to the
-//     session transcript as a turn_canceled_restart record (FR-069).
-//  2. The history presented to the LLM on resume is rebuilt WITHOUT the orphaned
-//     assistant tool_call message (FR-088), preventing hallucinated results.
-//  3. An audit event tool.policy.ask.denied with reason="restart" is emitted
-//     for each orphaned tool call (FR-069).
-//
-// The function is safe to call on every session load; it is a no-op when the
-// transcript is clean.
-
 package agent
 
 import (
-	"fmt"
+	"context"
 	"log/slog"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// orphanedToolCall describes a tool call that has no matching tool result.
 type orphanedToolCall struct {
 	ToolCallID     string
 	ToolName       string
 	assistantIndex int
 }
 
-// RecoverOrphanedToolCalls inspects the tail of the session's message history.
-// If orphaned tool calls are found (assistant message with tool_calls but no
-// subsequent tool result), it:
-//  1. Appends a synthetic system message to the transcript documenting the
-//     ungraceful shutdown recovery (FR-069).
-//  2. Returns the rebuilt history with the orphaned assistant message removed
-//     (FR-088), so the next LLM call does not observe the half-completed turn.
-//  3. Emits audit events for each orphaned tool call.
-//
-// Parameters:
-//   - store: the session store for the agent.
-//   - sessionKey: the session whose history to inspect and repair.
-//   - auditLog: optional audit logger; if nil, events are skipped.
-//
-// Returns the history with locally bound restart-canceled groups and their
-// records removed. Users and unrelated controls remain, including after an
-// orphan. History without a recorded cancellation is otherwise unchanged.
-//
-// Safe to call on every session load — it is idempotent: orphans that already
-// have a synthetic turn_canceled_restart system message are skipped.
-func RecoverOrphanedToolCalls(
-	store session.SessionStore,
-	sessionKey string,
-	auditLog *audit.Logger,
-) []providers.Message {
+// RecoverOrphanedToolCalls preserves completed siblings and records only missing
+// occurrences as recovery observations. An absent return is never policy Deny.
+// Native callers supply checked current-state reconciliation and an error fence.
+func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, auditLog *audit.Logger, options ...orphanRecoveryOptions) []providers.Message {
 	history := store.GetHistory(sessionKey)
-	if len(history) == 0 {
+	var opt orphanRecoveryOptions
+	if len(options) > 0 {
+		opt = options[0]
+	}
+	failed := false
+	report := func(err error) {
+		failed = true
+		if opt.OnError != nil {
+			opt.OnError(err)
+		}
+		slog.Error("tool recovery: observation was not saved; provider continuation is refused", "session_key", sessionKey, "error", err)
+	}
+	for _, o := range findOrphanedToolCalls(history) {
+		ob := recoveryObservation{Disposition: tools.FileEffectUnknown, Reason: "the missing result has no checked recovery adapter"}
+		if opt.Resolve != nil {
+			var err error
+			ob, err = opt.Resolve(o)
+			if err != nil {
+				report(err)
+				break
+			}
+		}
+		message, err := ob.message(o.ToolCallID)
+		if err != nil {
+			report(err)
+			break
+		}
+		if checked, ok := store.(session.ContextWindowStore); ok && ob.Assistant.EntryID != "" {
+			_, _, err = checked.AppendModelMessage(context.Background(), sessionKey, session.ModelAppend{
+				Message: message, ViewMembership: session.ViewMembershipModel,
+				Source: session.EntrySource{Kind: "tool"}, ToolResultFor: &ob.Assistant,
+			})
+		} else {
+			err = store.AddFullMessage(sessionKey, message)
+		}
+		if err == nil {
+			err = store.Save(sessionKey)
+		}
+		if err != nil {
+			report(recoveryObservationError(o.ToolCallID, err))
+			break
+		}
+		event := audit.EventToolRecoveryObservation
+		decision := ""
+		if ob.Disposition == tools.FileEffectUnknown {
+			event = audit.EventToolRecoveryInterrupted
+			decision = audit.DecisionError
+		}
+		audit.EmitEntry(auditLog, &audit.Entry{Event: event, Decision: decision, Tool: o.ToolName, Details: map[string]any{
+			"tool_call_id": o.ToolCallID, "assistant": ob.Assistant, "disposition": ob.Disposition,
+			"reason": ob.Reason, "session_key": sessionKey, "original_result_recovered": false, "current_image": ob.Image,
+		}})
+	}
+	if failed {
 		return history
 	}
-
-	orphans := findOrphanedToolCalls(history)
-
-	// Use the same position-scoped marker binding as snapshot reconstruction.
-	// A canceled call in an earlier assistant cannot suppress a later reused id.
-	_, alreadyCancelled := restartCancellations(len(history), func(i int) providers.Message {
-		return history[i]
-	})
-
-	// Append a synthetic system message to the transcript for audit/replay.
-	// We do NOT remove the orphaned entry from the on-disk transcript — the
-	// transcript is an immutable audit record. We only strip it from the
-	// reconstructed history we pass to the LLM (FR-088).
-	for _, o := range orphans {
-		// Idempotency belongs to this assistant position and declared call only.
-		identity := restartCallIdentity{assistantIndex: o.assistantIndex, toolCallID: o.ToolCallID}
-		if alreadyCancelled[identity] {
-			slog.Debug("agent: SIGKILL recovery — synthetic entry already present, skipping",
-				"session_key", sessionKey, "tool_call_id", o.ToolCallID)
-			continue
-		}
-		syntheticContent := fmt.Sprintf(
-			`{"type":"turn_canceled_restart","tool_call_id":%q,"reason":"ungraceful_shutdown_recovery"}`,
-			o.ToolCallID,
-		)
-		// #1178 (amendment §4.2): the recovery report must be truthful — a
-		// failed marker write is logged with the session_key and the error,
-		// and is never reported as written/appended; the audit deny event and
-		// the success log fire only when the marker actually landed. The
-		// returned history still contains the orphan: an attempted marker is
-		// not a committed cancellation.
-		if addErr := store.AddMessage(sessionKey, "system", syntheticContent); addErr != nil {
-			slog.Error("agent: SIGKILL recovery — failed to write turn_canceled_restart marker",
-				"session_key", sessionKey, "tool_call_id", o.ToolCallID, "error", addErr)
-			continue
-		}
-		if err := store.Save(sessionKey); err != nil {
-			slog.Error("agent: failed to persist turn_canceled_restart entry",
-				"session_key", sessionKey, "tool_call_id", o.ToolCallID, "error", err)
-			continue
-		}
-
-		// Emit audit event (FR-069).
-		// CRIT-6 + typed-Decision/Event migration: route through audit.EmitEntry
-		// so Log failure bumps the audit-skipped counter (/health audit_degraded),
-		// and use typed EventToolPolicyAskDenied + DecisionDeny constants in
-		// place of raw string literals.
-		audit.EmitEntry(auditLog, &audit.Entry{
-			Event:    audit.EventToolPolicyAskDenied,
-			Decision: audit.DecisionDeny,
-			Tool:     o.ToolName,
-			Details: map[string]any{
-				"tool_call_id": o.ToolCallID,
-				"reason":       "restart",
-				"recovery":     "ungraceful_shutdown_recovery",
-				"session_key":  sessionKey,
-			},
-		})
-
-		slog.Warn("agent: SIGKILL recovery — orphaned tool call detected and synthetic deny appended",
-			"session_key", sessionKey, "tool_call_id", o.ToolCallID, "tool_name", o.ToolName)
-	}
-
-	// Re-read the recorded history: an attempted marker write is not evidence
-	// that it reached the store. Apply the same local binding as window rebuilds
-	// to every recorded cancellation, not just the last assistant's whole tail.
 	history = store.GetHistory(sessionKey)
-	omitted, _ := restartCancellations(len(history), func(i int) providers.Message {
-		return history[i]
-	})
 	cleaned := make([]providers.Message, 0, len(history))
-	for i, msg := range history {
-		if !omitted[i] {
-			cleaned = append(cleaned, msg)
+	for _, m := range history {
+		if restartCancellationID(m) == "" {
+			cleaned = append(cleaned, m)
 		}
 	}
 	return cleaned

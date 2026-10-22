@@ -390,6 +390,9 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 		if iosetter, ok := s.(streamerIOStatsSetter); ok {
 			iosetter.SetTurnIOStats(promptTokens, completionTokens, cacheRead, cacheWrite)
 		}
+		if setter, ok := s.(interface{ SetInterruptionReason(string) }); ok {
+			setter.SetInterruptionReason(string(ts.interruptedReason()))
+		}
 		if fsetter, ok := s.(streamerFailedSetter); ok {
 			fsetter.SetTurnFailed(failed || accountingErr != nil)
 		}

@@ -257,6 +257,17 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	if !pendingStop && !rec.Terminal() && rec.State != session.LifecycleNeedsInput &&
 		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued) &&
 		(rec.Stop == nil || rec.Stop.Generation != rec.Generation) {
+		if !rec.Is3P && (rec.Origin == nil || rec.Origin.Kind != session.OriginKindTask) {
+			if al, runtimeErr := r.noticeLoop(); runtimeErr == nil {
+				if err := al.reconcileBootHelper(ctx, rec); err != nil {
+					notice("reconciliation:"+id, err.Error())
+					if errors.Is(err, errRecoveryReconciliationHeld) {
+						return nil
+					}
+					return err
+				}
+			}
+		}
 		if err := r.failInterrupted(rec); err != nil {
 			interruptedErr = err
 			notice("interrupted-write:"+id, fmt.Sprintf("session %s restart stop refused at boot: %v", id, err))

@@ -80,6 +80,10 @@ func (al *AgentLoop) WakeSession(ctx context.Context, recipientSessionID, reason
 		}
 	}
 	result.Disposition = "saved_not_placed"
+	if rec.State == session.LifecycleInterrupted {
+		result.Disposition = "suppressed_by_stop"
+		return result, nil
+	}
 	consumed, err := al.wakeInputConsumed(recipientSessionID, outcomeID)
 	if err != nil {
 		return result, err

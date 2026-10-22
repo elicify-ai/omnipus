@@ -107,7 +107,13 @@ func stampAdmissionExecution(lifecycle *session.LifecycleStore, sessionID string
 			(previous != nil && *rec.ExecutionID != *previous) {
 			return steer.ErrStaleGeneration
 		}
+		if rec.SteeredBy == nil {
+			rec.RoomScope = nil
+		}
 		rec.ExecutionID = &session.ExecutionIdentity{RunID: runID, BootSeq: bootSeq}
+		if consent := rec.RecoveryConsent; consent != nil && consent.Generation == gen && consent.ExecutionID == nil {
+			consent.ExecutionID = &session.ExecutionIdentity{RunID: runID, BootSeq: bootSeq}
+		}
 		return nil
 	})
 	if err != nil {

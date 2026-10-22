@@ -426,7 +426,8 @@ type TranscriptEntry struct {
 	// limit cut the answer off). Absent on a Truncated entry means
 	// "cancelled" (legacy — every entry written before this field existed).
 	// See ADR-087 D2.
-	TruncationReason string `json:"truncation_reason,omitempty"`
+	TruncationReason   string `json:"truncation_reason,omitempty"`
+	InterruptionReason string `json:"interruption_reason,omitempty"`
 
 	// TurnID preserves the producing turn for cancellations and classified
 	// context-window diagnostics.

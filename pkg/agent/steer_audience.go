@@ -96,7 +96,7 @@ func NewSteerUpwardDeliverer() *SteerUpwardDeliverer { return &SteerUpwardDelive
 func isTerminalOutcome(o steer.Outcome) bool {
 	switch o {
 	case steer.OutcomeFinalAnswer, steer.OutcomeEmptyAnswer,
-		steer.OutcomeInterrupted, steer.OutcomeTimedOut, steer.OutcomeFailed:
+		steer.OutcomeInterrupted, steer.OutcomeTimedOut, steer.OutcomeFailed, steer.OutcomeToolLimit, steer.OutcomeReconciliationRequired:
 		return true
 	default:
 		return false
@@ -116,17 +116,19 @@ func isTerminalOutcome(o steer.Outcome) bool {
 //     a pause is never stamped final (boot_sweep.go::bootOutcome maps it to
 //     OutcomeBlocker too); validateOutcomeMessage enforces the mode.
 var outcomeAllowedKinds = map[steer.Outcome][]string{ //nolint:gochecknoglobals
-	steer.OutcomeFinalAnswer:     {"handback"},
-	steer.OutcomeEmptyAnswer:     {"error"},
-	steer.OutcomeInterrupted:     {"error"},
-	steer.OutcomeTimedOut:        {"error"},
-	steer.OutcomeFailed:          {"error"},
-	steer.OutcomeParkedQuestion:  {"question"},
-	steer.OutcomeBlocker:         {"blocker", "handback"},
-	steer.OutcomeGoalVerdict:     {"goal_status"},
-	steer.OutcomeProgress:        {"progress"},
-	steer.OutcomeCheckpoint:      {"checkpoint", "artifact"},
-	steer.OutcomeLifecycleNotice: {"error"},
+	steer.OutcomeFinalAnswer:            {"handback"},
+	steer.OutcomeEmptyAnswer:            {"error"},
+	steer.OutcomeInterrupted:            {"error"},
+	steer.OutcomeTimedOut:               {"error"},
+	steer.OutcomeFailed:                 {"error"},
+	steer.OutcomeParkedQuestion:         {"question"},
+	steer.OutcomeBlocker:                {"blocker", "handback"},
+	steer.OutcomeGoalVerdict:            {"goal_status"},
+	steer.OutcomeProgress:               {"progress"},
+	steer.OutcomeCheckpoint:             {"checkpoint", "artifact"},
+	steer.OutcomeLifecycleNotice:        {"error"},
+	steer.OutcomeToolLimit:              {"error"},
+	steer.OutcomeReconciliationRequired: {"error"},
 }
 
 // validateOutcomeMessage rejects an UpwardEvent whose Outcome and message
@@ -145,7 +147,7 @@ func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageD
 	}
 	switch class.Kind {
 	case "error":
-		if class.Fatal != (outcome != steer.OutcomeLifecycleNotice) {
+		if class.Fatal != (outcome != steer.OutcomeLifecycleNotice && !endedInterruption(outcome)) {
 			return mismatch
 		}
 	case "handback":
@@ -238,6 +240,8 @@ func subagentStateForOutcome(o steer.Outcome) string {
 		return string(session.LifecycleFailed)
 	case steer.OutcomeInterrupted, steer.OutcomeTimedOut:
 		return string(session.LifecycleStopped)
+	case steer.OutcomeToolLimit, steer.OutcomeReconciliationRequired:
+		return string(session.LifecycleInterrupted)
 	default:
 		return ""
 	}

@@ -68,7 +68,8 @@ type turnResult struct {
 	// turnFailed mirrors turnState.turnFailed so callers of runTurn can observe
 	// whether the turn ended via the engine's error/limit fallback without holding
 	// a reference to the turnState.  Populated by runTurn before it returns.
-	turnFailed bool
+	turnFailed         bool
+	interruptionReason session.InterruptionReason
 	// stopped prevents a graceful Stop from advancing or adjudicating a goal.
 	stopped bool
 	// goalDeferredAdjudication is JUDGE-FR-098's deferred-dispatch payload
@@ -395,19 +396,9 @@ type turnState struct {
 	turnCompletionTokens int
 	turnCacheWrite       int
 
-	// turnFailed is set to true when the turn ended via the engine's error/limit
-	// fallback rather than a real model response.  Three conditions trigger it:
-	//   1. The LLM returned an empty response after all retries and the engine
-	//      substituted the package-level defaultResponse sentinel.
-	//   2. The tool-iteration limit (MaxIterations) was reached without a final
-	//      response.
-	//   3. The generic empty-content exhaustion path (finalContent=="" at the
-	//      bottom of runTurn) resolved to the defaultResponse sentinel — but NOT
-	//      when the caller supplied a custom success DefaultResponse (e.g.
-	//      "Background task completed." on the heartbeat/system path).
-	// Threaded into the DoneStats.TurnFailed field on the done frame so
-	// CLI/automation clients can detect failure without parsing message content.
-	turnFailed bool
+	// Engine failures and ended interruptions are distinct outcomes.
+	turnFailed         bool
+	interruptionReason session.InterruptionReason
 
 	// goalNarrowMisses is ADR-088 D3's bounded-escape counter (the D3
 	// amendment, 2026-09-08): the number of CONSECUTIVE LLM requests this
