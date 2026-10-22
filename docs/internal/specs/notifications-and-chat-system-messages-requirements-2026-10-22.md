@@ -224,7 +224,7 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 | R-SEC-3 | External messages carry only the notification title and, when a public address is configured, a link into the app — never chat content, file names, technical details or error payloads. | D27, D53 |
 | R-SEC-4 | External delivery (later) is opt-in per kind, rate-limited and batched. | D27 |
 
-### 5.10 External delivery (requirements; delivery timing per D11 — see open question)
+### 5.10 External delivery (built as a second step, after the in-app part — D62)
 
 | ID | Requirement | Decisions |
 |---|---|---|
@@ -340,6 +340,7 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 | D59 | Replies to a notification channel | Fixed short reply, no AI | No token cost; leaves room for D52 | Interview | 2026-10-22 |
 | D60 | External delivery failures | One grouped, self-resolving centre entry per channel; always logged | Lost alerts must not be silent | Interview | 2026-10-22 |
 | D61 | “Notification System” workspace | Not a real workspace — a presentation in the screens only | Founder: “not a real workspace just a UI trick” | Interview | 2026-10-22 |
+| D62 | Build order | Part 1 (in-app: centre, pop-ups, chat lines, wording) is built first; Part 2 (external delivery, 5.10) follows as a second step. The specification covers both | Part 1 is already large; a smaller first step is safer. Founder: “q1 a” | Interview | 2026-10-22 |
 
 ## Dependency Graph & Implementation Order
 
