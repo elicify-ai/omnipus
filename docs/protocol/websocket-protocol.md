@@ -262,6 +262,8 @@ Ownership applies to replay messages, tool starts/results, replay errors, provid
 
 Attach's session-scoped `session_state` includes generated `history_state`. `status=available` omits reason/message. `status=unavailable` requires both: reason is `index_missing`, `index_inconsistent`, `catchup_limit`, `storage_error` or `projection_error`, and message is fixed sanitized copy, never the storage cause. The unscoped connection-open state does not claim history readiness. Readiness is not proof that this client has loaded a page; only actual successful history application clears that client-side error.
 
+Session-scoped attach state can also carry optional generated `session_tokens_total`, the nonnegative absolute recorded session consumption, including during `live_only`. It has the same meaning as `SessionStats.tokens_total` and the REST history envelope's field. The unscoped connection-open state supplies no session usage baseline. A missing value is unknown, not a zero or a reason to erase a known total.
+
 ### `session_mode_updated`
 
 **Direction**: Server → client. Acknowledges a valid `session_mode_update` request with the resulting Auto-approve setting for that session, including when the request cleared the per-chat choice.
@@ -334,6 +336,8 @@ Signals that a streaming response has completed. The partial buffer is finalized
 | stats.frames_emitted | number | no | Replay-only count of prepared content frames, excluding the terminator; not tokens or lifetime history |
 | stats.cost | number | no | Estimated cost in USD |
 | stats.duration_ms | number | no | Wall-clock duration of the turn in milliseconds |
+
+The footer uses the absolute session observation, not that value plus `stats.tokens`. Merge known observations for the addressed session without decreasing a newer total. A replay-terminating `done` carries replay diagnostics, not an absolute usage baseline; duplicate/live/replay overlap and stale pages must not add the same turn twice. A recorded zero is distinct from missing usage.
 
 **Producer**: Agent loop turn completion in `pkg/agent/`
 **Consumer**: Chat message component — removes cursor, renders markdown, shows stats below message
@@ -426,6 +430,9 @@ A confirmed cancelled native call retains its original call identity, parameters
 
 **Consumer**: Tool call badge component — consumes success/error/cancelled state, expandable for available detail
 
+For a cancelled call, required `result` can be null when no result is available; it is not fake successful output. The original call ID, tool and owning source remain intact through REST paging and snapshots. Replaying those facts does not execute the tool again or cancel an unrelated call.
+
+
 ---
 
 ### `task_status_changed`
@@ -493,7 +500,7 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | C→S | `session_mode_update` | Set or clear an existing session's Auto-approve choice |
 | C→S | `cancel` | Cancel in-progress turn |
 | C→S | `ping` | Keep-alive |
-| C→S | `attach_session` | Attach to an existing session and replay its transcript (with optional `since` for incremental replay) |
+| C→S | `attach_session` | Attach to an authorized session. Use `since_seq` and `boot_id` for servable incremental catch-up; otherwise receive a bounded recent snapshot or an unavailable-history live/control result. |
 | C→S | `device_pairing_response` | Admin approval/rejection of a pending device pairing request |
 | C→S | `whatsapp_pairing_subscribe` | Start/stop receiving WhatsApp pairing frames on this connection (#283) |
 | S→C | `session_started` | New session ID minted by the server (response to a `message` without `session_id`) |

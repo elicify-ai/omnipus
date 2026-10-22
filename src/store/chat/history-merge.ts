@@ -3,6 +3,7 @@ import type { SessionHistoryPage, SessionHistoryEntry } from '@/lib/api/history-
 import type { ChatMessage, SessionChatState } from './types'
 import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
 import { isClearContextMarker } from '@/lib/clearMarker'
+import { mergeRecordedSessionTokens } from './session-usage'
 
 // DOM/measurement protection is ephemeral and never serialized into chat state.
 const protection = new Map<string, ReadonlySet<string>>()
@@ -70,6 +71,7 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   const hasLater = action === 'newer' || action === 'latest' ? page.has_later : (trimmed || history.hasLater === true)
   return {
     ...patch, historyNotice: undefined, historyNeedsSnapshot: false, hasEarlierMessages: hasEarlier,
+    sessionTokens: mergeRecordedSessionTokens(bucket.sessionTokens, page.session_tokens_total),
     history: {
       ...patch.history!, historyLoaded: true, serverState: { status: 'available' }, pageMetadata: historyMetadata(page),
       viewMode: action === 'latest' ? 'latest' : history.viewMode, hasEarlier, hasLater,

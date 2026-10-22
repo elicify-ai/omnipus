@@ -27,10 +27,12 @@ export function HistoryBoundary({ action, average = 80 }: { action: HistoryActio
     if (ref.current) scroller.current = ref.current.closest<HTMLElement>('[aria-label="Conversation history"]')
   })
   const run = () => {
-    if (!sid || request.status === 'loading') return
+    if (!sid) return
     const state = useChatStore.getState()
-    if (action === 'latest' && history.serverState?.status === 'unavailable') { void state.retryHistory(sid, action); return }
-    if (request.error) { void state.retryHistory(sid, action); return }
+    const current = state.sessionsById[sid]?.history.requests[action]
+    if (current?.status === 'loading') return
+    // Return is an explicit latest read, even while history recovery is unavailable.
+    if (action !== 'latest' && current?.error) { void state.retryHistory(sid, action); return }
     const region = ref.current?.closest<HTMLElement>('[aria-label="Conversation history"]')
     const size = historyPageSizing(region?.clientHeight || 800, average)
     if (action === 'older') {
@@ -42,22 +44,35 @@ export function HistoryBoundary({ action, average = 80 }: { action: HistoryActio
     else if (action === 'latest') void state.returnToLatestHistory(sid, { ...size, limit: Math.min(100, Math.max(20, Math.ceil(4 * (region?.clientHeight || 800) / average))) })
     else void state.refreshLoadedHistory(sid)
   }
+  const recover = () => {
+    if (!sid) return
+    const state = useChatStore.getState()
+    const current = state.sessionsById[sid]?.history
+    if (current?.serverState?.status !== 'unavailable' || current.requests.latest.status === 'loading') return
+    // Recovery requests a snapshot; it does not request leaving the older reader.
+    void state.retryHistory(sid, 'latest')
+  }
   const unavailable = action === 'latest' && history.serverState?.status === 'unavailable'
+  const unavailableMessage = unavailable ? history.serverState?.message : undefined
   const visible = action === 'older' ? history.hasEarlier : action === 'newer' ? history.hasLater : action === 'latest' ? history.viewMode === 'historical' || unavailable : request.status !== 'idle'
   if (!visible && !request.error && request.status !== 'loading') return null
-  const error = unavailable ? history.serverState!.message : request.error
   return (
     <div ref={ref} className="flex flex-col items-center gap-[var(--space-2)] py-[var(--space-2)]" onFocusCapture={event => { focused.current = event.target }} onBlurCapture={event => {
       if (event.relatedTarget && !ref.current?.contains(event.relatedTarget)) focused.current = null
     }} onClickCapture={event => {
       if (request.status === 'loading') { event.preventDefault(); event.stopPropagation() }
     }}>
-      {action !== 'refresh' && !unavailable && (
+      {action !== 'refresh' && (!unavailable || history.viewMode === 'historical') && (
         <Button variant="ghost" size="sm" aria-disabled={request.status === 'loading' || undefined} onClick={run}>
           {action === 'older' ? 'Show earlier messages' : action === 'newer' ? 'Show newer messages' : 'Return to latest'}
         </Button>
       )}
-      {error && <ErrorState message={`${error}${request.status === 'error' && request.attempt > 1 ? ` Retry ${request.attempt} failed.` : ''}`} onRetry={run} retryDisabled={request.status === 'loading'} className="py-[var(--space-1)]" />}
+      {unavailableMessage && <div key="history-recovery" role="group" aria-label="History recovery">
+        <ErrorState message={unavailableMessage} onRetry={recover} retryDisabled={request.status === 'loading'} className="py-[var(--space-1)]" />
+      </div>}
+      {request.error && <div key="history-read-error" role="group" aria-label={action === 'latest' ? 'Latest messages read' : 'History read'}>
+        <ErrorState message={`${request.error}${request.status === 'error' && request.attempt > 1 ? ` Retry ${request.attempt} failed.` : ''}`} onRetry={run} retryDisabled={request.status === 'loading'} className="py-[var(--space-1)]" />
+      </div>}
       {request.status === 'loading' && <>
         <Skeleton className="h-4 w-32" />
         <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{loading[action]}</p>

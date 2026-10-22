@@ -561,7 +561,7 @@ export interface SessionChatState {
   restartNoticeDismissed?: boolean
   /** Narrow recovery flag: unknown_position alone does not mean interrupted. */
   recoveredFirstSend?: { clientMessageId: string; attemptGeneration: number; reconciled: boolean }
-  sessionTokens: number
+  sessionTokens: number | undefined
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
   /**
@@ -963,7 +963,7 @@ export interface ChatStore extends HistorySlice {
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>
-  sessionTokens: number
+  sessionTokens: number | undefined
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
   /** provider-messages spec §8 — foreground projection of the session's `provider_retry` slot. Optional — see the SessionChatState field's doc comment. */
@@ -1057,12 +1057,10 @@ export interface ChatStore extends HistorySlice {
   cancelToolCall: (callId: string) => void
 
   updateSessionStats: (tokens: number, cost: number) => void
-  /**
-   * Seed sessionTokens from the persisted total_tokens on a historic session
-   * attach. Only sets the value when the bucket is fresh (sessionTokens === 0)
-   * so live deltas from the `done` frame are never double-counted.
+  /** Merge recorded absolute usage without lowering a newer observation.
+   * Explicit session IDs keep metadata hydration out of unrelated foregrounds.
    */
-  seedSessionTokens: (total: number) => void
+  seedSessionTokens: (total: number | undefined, sessionId?: string) => void
   setRateLimitEvent: (event: RateLimitEventData) => void
   clearRateLimitEvent: () => void
 

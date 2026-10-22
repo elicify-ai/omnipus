@@ -62,6 +62,12 @@ function SessionRoute() {
     staleTime: 10_000,
   })
 
+  useEffect(() => {
+    if (detail?.session.id === sessionId) {
+      useChatStore.getState().seedSessionTokens(detail.session.total_tokens, sessionId)
+    }
+  }, [sessionId, detail?.session.id, detail?.session.total_tokens])
+
   // Fetch active workspaces to verify the session's workspace_id.
   const { data: workspaces = [] } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
