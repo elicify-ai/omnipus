@@ -11,6 +11,7 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
 
 // Oracles: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/receipts/combo-silent.md,
 // COMBO-SF-1; /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
@@ -161,6 +162,7 @@ function beginKnownChatCheck() {
 }
 
 function completeAuthoritativeCheck() {
+  seedCanonicalSession(SESSION_ID, 'mia', WORKSPACE)
   // A successful later response is a separate network-edge control. It is NOT
   // a claim that a deleted chat can be recreated by Retry. Only authoritative
   // replay of the original permits the waiting queue to resume.

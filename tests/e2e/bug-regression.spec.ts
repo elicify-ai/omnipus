@@ -28,6 +28,7 @@ import {
 } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
 import { assistantReplyChallenge, assertHansReplyPersisted } from './fixtures/assistant-reply-acceptance'
+import { assertHansSessionUnfiled, provisionHansWorkspaceTeam } from './fixtures/hans-workspace'
 
 // ─── Bug-1: Skip onboarding button must be gone ───────────────────────────────
 
@@ -743,6 +744,7 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     })
     expect(agentResp.ok(), `POST /agents failed: ${agentResp.status()} ${await agentResp.text()}`).toBe(true)
     const agent = (await agentResp.json()) as { id: string; name: string }
+    await provisionHansWorkspaceTeam(page, BUG_BASE_URL, agent.id, authHeaders)
 
     // 3. Create a session owned by that custom agent and seed its transcript -
     //    what the task scheduler leaves behind when it schedules work to a
@@ -760,6 +762,7 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     })
     expect(sessionResp.ok(), `POST /sessions failed: ${sessionResp.status()} ${await sessionResp.text()}`).toBe(true)
     const sessionID = ((await sessionResp.json()) as { id: string }).id
+    await assertHansSessionUnfiled(page, BUG_BASE_URL, sessionID)
     const sessionDir = path.join(BUG_OMNIPUS_HOME, 'sessions', sessionID)
     expect(fs.existsSync(sessionDir), `session dir ${sessionDir} must exist after POST /sessions`).toBe(true)
     const nowISO = new Date().toISOString()
@@ -917,5 +920,6 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
       .toContain('Hello from the regression test.')
     // Addendum 5: the case's "follow-up succeeds" intent requires a completed saved answer, not only accepted input.
     await assertHansReplyPersisted(page, receivedFrames, sessionID, agent.id, challenge.nonce, transcriptPath)
+    await assertHansSessionUnfiled(page, BUG_BASE_URL, sessionID)
   })
 })
