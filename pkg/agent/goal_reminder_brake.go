@@ -119,6 +119,7 @@ func (al *AgentLoop) commitGoalReminderPause(sessionID, goalID, assessedTurn, no
 		work.lastAssessedTurn != assessedTurn || work.pending != nil {
 		return nil, errGoalReminderObsolete
 	}
+	goalReminderPauseFreshReadCheckpoint(sessionID, goalID)
 	al.goalSetWaitingOnUser(goalID, true)
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {

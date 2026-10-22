@@ -186,6 +186,7 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 		if err != nil {
 			return ordinaryExecutionPreparation{}, err
 		}
+		goalReminderAfterGoalValidationCheckpoint(sessionID)
 	}
 	identity := session.ExecutionIdentity{RunID: freshRunID(), BootSeq: bootSeq}
 	stampedByRevival := false

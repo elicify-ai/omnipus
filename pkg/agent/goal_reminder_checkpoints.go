@@ -8,8 +8,10 @@ import "sync/atomic"
 // Tests scope their callbacks to their own session and join the producer before
 // restoring the pointer; the atomic load also keeps unrelated readers race-free.
 type goalReminderPassiveSeams struct {
-	ordinaryPreRevival     func(sessionID string)
-	goalPauseBeforeWaiting func(sessionID, goalID string)
+	ordinaryPreRevival          func(sessionID string)
+	ordinaryAfterGoalValidation func(sessionID string)
+	goalPauseBeforeWaiting      func(sessionID, goalID string)
+	goalPauseAfterFreshRead     func(sessionID, goalID string)
 }
 
 var goalReminderSeams atomic.Pointer[goalReminderPassiveSeams]
@@ -25,5 +27,19 @@ func goalReminderPauseCheckpoint(sessionID, goalID string) {
 	seams := goalReminderSeams.Load()
 	if seams != nil && seams.goalPauseBeforeWaiting != nil {
 		seams.goalPauseBeforeWaiting(sessionID, goalID)
+	}
+}
+
+func goalReminderAfterGoalValidationCheckpoint(sessionID string) {
+	seams := goalReminderSeams.Load()
+	if seams != nil && seams.ordinaryAfterGoalValidation != nil {
+		seams.ordinaryAfterGoalValidation(sessionID)
+	}
+}
+
+func goalReminderPauseFreshReadCheckpoint(sessionID, goalID string) {
+	seams := goalReminderSeams.Load()
+	if seams != nil && seams.goalPauseAfterFreshRead != nil {
+		seams.goalPauseAfterFreshRead(sessionID, goalID)
 	}
 }
