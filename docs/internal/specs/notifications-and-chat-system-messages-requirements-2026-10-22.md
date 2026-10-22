@@ -309,9 +309,9 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 | D45 | Line types | Five types; “in progress” is an animated state of any type | Founder: retry example should be an amber warning | Interview | 2026-10-22 |
 | D46 | Own-action pop-up removal condition | Remove only where the page shows the outcome; otherwise add a page indicator first, with Retry for failed saves; audit every call site with a finer category list | Founder: “validate that there is another indicator in the page itself … maybe with a retry” | Interview | 2026-10-22 |
 | D47 | Message voice | In a chat: replace “Omnipus” as the actor with “I” (agent's perspective), changing only those words. Elsewhere: neutral (“Image could not be sent”) | Founder: “if it is an in chat message it must be I could not …”; correction: “do not rephrase everything only where you put Omnipus” | Interview | 2026-10-22 |
-| D48 | Bug-report exception | “Please report it to the Omnipus.ai team” is the one allowed product-name use | Founder's own edit of `provider_request_rejected`; team-lead's reading that it is intended — confirm | Interview | 2026-10-22 |
+| D48 | Bug-report exception | “Please report it to the Omnipus.ai team” is the one allowed product-name use | Founder's own edit of `provider_request_rejected`; confirmed by the founder (Q1 yes) | Interview | 2026-10-22 |
 | D49 | Message review result | Founder ratings and edits adopted; unrated proposals count as agreed; voice rule applied over all of them | Founder: “in most cases I agreed to your proposal, assume that for the remaining ones” | Interview | 2026-10-22 |
-| D50 | “We / our / us” | In a chat they become “I / my / me”; elsewhere neutral | Founder: “not we our us it must be I from the agent perspective when it is shown in a chat” (replaces team-lead's earlier blanket ban) | Interview | 2026-10-22 |
+| D50 | “We / our / us” | In a chat they become “I / my / me”; elsewhere neutral | Founder: “not we our us it must be I from the agent perspective when it is shown in a chat” (replaces team-lead's earlier blanket ban; confirmed by the founder (Q2 yes)) | Interview | 2026-10-22 |
 
 ## Dependency Graph & Implementation Order
 
