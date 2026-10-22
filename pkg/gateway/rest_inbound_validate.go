@@ -239,26 +239,40 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, schemaName string
 		return false
 	}
 
-	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		jsonErr(w, http.StatusBadRequest, "request body is required")
-		return false
-	}
+	return decodeAndValidateBytes(w, raw, schemaName, dst, true, "")
+}
 
-	if errMsg, serverErr := validateBodyAgainstSchema(schemaName, raw); errMsg != "" {
-		if serverErr {
-			jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
-		} else {
-			jsonErr(
-				w,
-				http.StatusBadRequest,
-				fmt.Sprintf("request body does not match schema %s: %s", schemaName, errMsg),
-			)
+// decodeAndValidateBytes decodes bytes whose incoming wire size was already
+// bounded by the caller. Do not re-limit a normalized representation: JSON
+// escaping can expand it beyond the original request's byte count. fieldContext
+// is controlled validation copy, never request contents or a parser error.
+func decodeAndValidateBytes(w http.ResponseWriter, raw []byte, schemaName string, dst any, validateEnabled bool, fieldContext string) bool {
+	if validateEnabled {
+		if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			jsonErr(w, http.StatusBadRequest, "request body is required")
+			return false
 		}
-		return false
+
+		if errMsg, serverErr := validateBodyAgainstSchema(schemaName, raw); errMsg != "" {
+			if serverErr {
+				jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
+			} else {
+				message := fmt.Sprintf("request body does not match schema %s: %s", schemaName, errMsg)
+				if fieldContext != "" {
+					message = fieldContext + ": " + message
+				}
+				jsonErr(w, http.StatusBadRequest, message)
+			}
+			return false
+		}
 	}
 
 	if err := json.Unmarshal(raw, dst); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		message := "invalid JSON body"
+		if fieldContext != "" {
+			message = fieldContext
+		}
+		jsonErr(w, http.StatusBadRequest, message)
 		return false
 	}
 	return true
