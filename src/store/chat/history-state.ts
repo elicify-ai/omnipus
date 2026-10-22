@@ -26,7 +26,7 @@ export function mergeHistoryEntry(entry: SessionHistoryEntry, current: ChatMessa
     const calls = new Map((entry.tool_calls ?? []).map(call => [call.id, call]))
     for (const call of current.tool_calls ?? []) {
       const incoming = calls.get(call.id)
-      if (liveWins || (call.status !== 'running' && (!incoming || incoming.status === 'running'))) calls.set(call.id, call)
+      if (call.status === 'cancelled' || liveWins || (call.status !== 'running' && (!incoming || incoming.status === 'running'))) calls.set(call.id, call)
     }
     merged.tool_calls = [...calls.values()]
   }

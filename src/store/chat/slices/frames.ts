@@ -328,6 +328,8 @@ export function applyToolCallResultFrame(
   frame: ToolCallResultFrame,
   clampedResult: ReturnType<typeof clampToolResult>,
 ): Partial<SessionChatState> {
+  // A confirmed per-call cancellation is terminal; a late result cannot revive it.
+  if (b.toolCalls[frame.call_id]?.status === 'cancelled' && frame.status !== 'cancelled') return {}
   if (!b.toolCalls[frame.call_id]) {
     // This call no longer has a live entry (baked or unmatched), so its idle
     // mark - if it had one - can never be released by a live result. Drop it
@@ -340,6 +342,7 @@ export function applyToolCallResultFrame(
       const msg = b.messagesById[id]
       const idx = msg?.tool_calls?.findIndex((tc) => tc.id === frame.call_id) ?? -1
       if (idx === -1) continue
+      if (msg.tool_calls![idx].status === 'cancelled' && frame.status !== 'cancelled') return { idleArmedToolCalls }
       return {
         ...(produce(b, (draft) => {
           const tc = draft.messagesById[id].tool_calls![idx]
