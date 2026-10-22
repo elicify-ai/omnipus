@@ -323,13 +323,12 @@ var allStaticToolNames = []string{
 	// implementation. Shipped at the
 	// global ceiling as "ask": the existing tool-approval mechanism IS the
 	// approval. Founder ruling (2026-09-18): setup permission is set at BOTH
-	// levels — the ceiling asks, AND every agent permitted to set up
-	// environments carries an explicit stored "ask" of its own (Mia, General
-	// Purpose, Admin via the deliberate-posture list in
-	// adr090SparseRolePolicies; new custom native agents via the constructor
-	// below), so a later ceiling raise loosens none of them. Jim, Ava,
-	// Planner and Researcher persist an explicit deny; Judge and Plan
-	// Supervisor stay locked deny via systemAgentSeed. Same one-commit rule
+	// levels — the ceiling asks, AND the Main/Worker defaults carry a stored
+	// "ask" of their own, so a later ceiling raise does not remove that
+	// posture. The 2026-10-22 default table extends Ask to every ordinary
+	// Main/Worker role; Omnipus keeps its no-per-agent-Ask exception and
+	// rides the ceiling. Judge and Plan Supervisor stay locked deny via
+	// systemAgentSeed. Same one-commit rule
 	// as every block above — the ceiling entry (pkg/config/defaults.go's
 	// defaultToolPoliciesGeneral), the per-agent seeds and this literal land
 	// together.

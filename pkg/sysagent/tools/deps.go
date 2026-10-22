@@ -29,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // Deps bundles all shared dependencies for system tools.
@@ -249,6 +250,10 @@ type Deps struct {
 	// inventory is unavailable (explicit skill IDs are rejected). A wired
 	// listing that returns no skills is a known-empty set, not a skip.
 	AgentConfigInventory func() AgentConfigInventory
+	// ToolCatalog snapshots real builtin and live MCP metadata for compact
+	// tool readback. Metadata is never executed; the reader applies the
+	// target agent's connector assignments and effective policies.
+	ToolCatalog func() []tools.Tool
 	// AgentIsLive reports whether id is present in the live agent registry.
 	// Registry membership alone does not prove which persisted revision is
 	// active; get_agent therefore uses AgentActiveRevision below.

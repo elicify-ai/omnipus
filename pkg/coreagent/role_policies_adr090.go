@@ -26,22 +26,16 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		}
 		return result
 	}
-	// create_email_draft (email-mail-view-spec §2.7 point 3): drafting is
-	// the safe mail path — it writes only a Drafts copy and can never
-	// send — so every role carries allow, including Admin, whose five
-	// other mail tools stay deny. The inventory's unlisted-tool default is
-	// deny, which would leave the draft tool unreachable for every seeded
-	// role (and would seed an explicit deny the D19 fill may never
-	// overwrite) without this grant.
+	// Drafting writes only a Drafts copy and can never send. Keep its
+	// existing Allow grant explicit; mailbox setup may not overwrite a
+	// saved Deny to recover an accidentally omitted creation default.
 	grant(allow, "create_email_draft")
 	grant(allow, "ToolSearch", "Skill")
 
-	// list_email_attachments / read_email_attachment join commonWork with
-	// the same grants as read_message (w4 F3: freely list and read received
-	// attachments); download_email_attachment is granted ask to the
-	// mail-reading roles alongside send_email/reply — the ordinary ask
-	// posture, never a loosening. Admin/hidden roles keep their narrower
-	// mail authority (no commonWork mail reads).
+	// Keep each role's existing work and knowledge grants. The shared
+	// Main/Worker core below then adds the positive defaults from the
+	// 2026-10-22 table, including received-attachment downloads at Allow.
+	// Sending mail remains Ask. Hidden system roles use a separate seed.
 	commonWork := []string{"read_file", "list_directory", "grep", "list_mounts", "library_list", "library_read", "remember", "recall_memory", "run_retrospective", "recall_conversation", "send_message", "answer_request", "message_parent", "goal_claim", "read_inbox", "search_email", "read_message", "list_email_attachments", "read_email_attachment", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
 	switch id {
 	case IDMia:
@@ -50,8 +44,8 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		// Ask — and the sparse seed RETAINS it as an explicit stored entry
 		// (deliberate posture list in adr090SparseRolePolicies) even though
 		// it equals the ceiling, so a later ceiling raise leaves Mia at Ask.
-		// Jim/Ava/Planner/Researcher get no grant and classify explicit
-		// Deny in this inventory.
+		// The other ordinary roles receive the same Ask through the
+		// shared Main/Worker core below.
 		//
 		// bash (re-pointed 2026-09-24, ADR-092): the global ceiling shipped
 		// "ask" for bash (pkg/config/defaults.go) so the D1 Ask/Auto/God
@@ -89,12 +83,29 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 	if id == IDMia || id == IDJim || id == IDWorker {
 		grant(ask, "knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create")
 	}
-	// Spec §6.5 (FR-007): the two chat-target main agents may ask for, list
-	// and read their own secrets and conversations; the worker tier may not.
+	// The chat-target agents may request secrets and read their own
+	// conversations. The shared Worker core below also permits listing
+	// secrets, but not requesting one or reading other conversations.
 	if id == IDMia || id == IDJim {
 		grant(allow, "request_secret", "list_secrets", "read_conversation")
 		grant(allow, "browser_navigate", "browser_click", "browser_type", "browser_screenshot", "browser_get_text", "browser_wait", "browser_evaluate", "browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab", "browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot", "browser_handle_dialog", "browser_handover")
 		grant(ask, "browser_upload_file")
+	}
+	// Ordinary built-ins get at least the positive core set of their kind.
+	// Apply this only while constructing defaults, never on saved operator
+	// policies. Skip the core's denies so role-specific extras, knowledge
+	// grants and deliberate shell postures remain unchanged.
+	switch id {
+	case IDMia, IDJim, IDPlanner, IDResearcher, IDWorker:
+		core := NewCustomAgentToolsCfg()
+		if IsSubagentTierID(id) {
+			RestrictForWorkerTier(core)
+		}
+		for name, policy := range core.Builtin.Policies {
+			if policy != deny {
+				grant(policy, name)
+			}
+		}
 	}
 	return result
 }
@@ -113,8 +124,8 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 	}
 	// These entries communicate deliberate workflow posture even where it
 	// currently equals the ceiling. environment_setup (ADR-090 ES-FR-01,
-	// founder ruling 2026-09-18) rides this list so Mia and General Purpose
-	// PERSIST an explicit "ask" of their own — setup permission
+	// founder ruling 2026-09-18) rides this list so ordinary Main/Worker
+	// roles PERSIST an explicit "ask" of their own — setup permission
 	// is set at both levels, so a later ceiling raise to allow leaves
 	// their stored ask (until the operator explicitly changes or removes
 	// it via the normal tool_policy edit paths). The deny roles are

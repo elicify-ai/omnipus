@@ -1462,6 +1462,9 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		AgentConfigInventory: func() systools.AgentConfigInventory {
 			return sysagentAgentConfigInventory(rc)
 		},
+		ToolCatalog: func() []tools.Tool {
+			return sysagentToolCatalog(rc)
+		},
 		AgentIsLive: func(id string) bool {
 			return sysagentAgentIsLive(rc, id)
 		},
