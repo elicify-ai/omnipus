@@ -18,6 +18,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useChatStore } from '../chat/store'
+import { __resetFinishedTurnIdsForTests } from '../chat/frames'
 import { useSessionStore } from '../session'
 import { useConnectionStore } from '../connection'
 import type { ServerFrame } from '@/lib/ws'
@@ -126,10 +127,17 @@ function userMessages(sessionId: string) {
   return b.messageOrder.map((id) => b.messagesById[id]).filter((m) => m.role === 'user')
 }
 
-beforeEach(() => {
-  useSessionStore.setState({ activeSessionId: null })
-  useChatStore.setState({ sessionsById: {} } as never)
-})
+function resetSimulatedBrowserRuntime(): void {
+  // Independent recordings deliberately reuse sess-1/turn-1. A production
+  // reconnect must KEEP this anti-zombie tracker; a new simulated browser must
+  // not inherit it or foreground/session/connection state from an earlier case.
+  __resetFinishedTurnIdsForTests()
+  useSessionStore.setState(useSessionStore.getInitialState(), true)
+  useConnectionStore.setState(useConnectionStore.getInitialState(), true)
+  useChatStore.setState(useChatStore.getInitialState(), true)
+}
+
+beforeEach(resetSimulatedBrowserRuntime)
 
 describe('F1 — live turn, one tab, no reconnect (baseline shape)', () => {
   it('produces exactly the transcript the scenario defines', () => {
