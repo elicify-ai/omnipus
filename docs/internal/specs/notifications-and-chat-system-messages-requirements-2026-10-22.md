@@ -42,7 +42,22 @@ Goal of this work: **one coherent model** for (a) which event notifies the user 
 | The browser has no way to report client-side events to the server log | no such endpoint in `contracts/openapi.yaml` |
 | Provider failures are classified for fallback (`auth`, `rate_limit`, `billing`, `timeout`, `format`, `bad_model`, `context_overflow`, `overloaded`, `unknown`); transport failures (`connection refused`, `no such host`, `dial tcp`, `tls handshake` …) are matched as transient | `pkg/providers/types.go::FailoverReason`, `pkg/providers/error_classifier.go` |
 | No reason value separates “provider unreachable (network)” from “provider answered with an error (API)” | same — 🔶 inferred (medium): transport failures fold into a transient/timeout class |
-| Whether provider retries/refusals are logged at default level | ❓ unknown — to verify in the spec phase (R-LOG-1) |
+| Provider retries/refusals logging | 🔶 partial: several retry paths log at warning level (`pkg/agent/loop_run_turn_response.go` — stream reset, timeout, transport drop; `translate_error.go::defaultUserMessage` — unrecognised code), but there is no consistent per-attempt record and no network-vs-API field |
+| ADR-051's founding rule is “raw provider text never reaches the wire” | `pkg/agent/translate_error.go` file header; catalogue of 29 fixed sentences in `contracts/components/schemas/LLMError.yaml` (`x-user-messages`), only 7 with a provider/model template |
+| One code (`network`) covers both unreachable provider and HTTP 408/5xx | `translate_error.go` — `CodeNetwork` comment “408 / 5xx / timeout / connection drop” |
+
+### 2.1 Pop-up audit (2026-10-22, all 322 call sites)
+
+Source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/notification-review-20261022/toast-audit/result-w1..w4.jsonl` (one record per call site; counts re-verified by team-lead per file group; 8/8 sampled “page already shows it” claims confirmed — `teamlead-spotchecks.md`).
+
+| Measure | Result |
+|---|---|
+| Origin | 291 own-action results · 16 connection · 11 system · 2 agent · 2 developer-only |
+| Page already shows the same outcome | yes 98 · partial 50 · no 174 |
+| Recommendation | remove (page shows it) 98 · remove + add page indicator 107 · remove + add indicator with Retry 87 · keep as event pop-up 10 · move to chat line 8 · founder decision 7 · delete 3 · developer-only 2 |
+| Wording | raw error passthrough 57 · missing next step 34 · technical 22 · vague 12 · other 28 |
+| Reusable page patterns | `src/components/ui/AutoSaveIndicator.tsx`; agent-profile “Save not confirmed + Retry”; error cards with Retry (`ChatImage`, `IframePreview::ErrorBlock`); `AppShell` connection banner with Retry |
+| Pop-ups that hold the only copy of a function | Undo on a moved calendar event / added card; the shared-preview-link exposure warning; the cross-tab “Switch” button |
 
 ## 3. Goals and non-goals
 
@@ -210,7 +225,8 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 
 | ID | Requirement | Decisions |
 |---|---|---|
-| R-RM-1 | Own-action pop-ups are removed and replaced by on-screen results (R-PU-5). Scope: the 322 call sites in 101 files are triaged — each becomes an on-screen result, an event-kind pop-up, or is removed. | D31 |
+| R-RM-1 | Own-action pop-ups are removed and replaced by on-screen results (R-PU-5). A pop-up may only be removed where the page shows the same outcome; where it does not, the page first gains an indicator — with Retry for failed saves. Sized by the audit (2.1): 98 removable now, 194 need a new page indicator (87 with Retry). | D31, D46 |
+| R-RM-1a | A pop-up that holds the only copy of a function (Undo, an exposure warning, a Switch button) is not removed until that function has a home on the page. | D46 |
 | R-RM-2 | Any event-raised full-screen modal is removed (R-PU-6). | D17, D37 |
 | R-RM-3 | Any badges in the top-right corner are removed. None were found in the code; the message review page sweep confirms. | D34 |
 
@@ -227,7 +243,9 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 |---|---|---|
 | F1 | **Message review page** — every system-generated and hard-coded message (frontend and backend), with rating and suggestion fields | D35; input to R-WD-4 |
 | F2 | ADR revising ADR-051 (provider error translation → provider message on the main line) | D36 |
-| F3 | Verify whether provider retries/refusals are logged at default level today | R-LOG-1; currently ❓ unknown |
+| F3 | Provider-failure logging is partial (2.) — make it consistent per attempt with a network/API field | R-LOG-1, R-LOG-2 |
+| F7 | Founder review of every system message: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/notification-review-20261022/messages/` (ADR-051 catalogue with proposed rewrites; 363 analysed chat/app messages; 322 pop-ups) | D35, R-WD-4 |
+| F8 | Extend the pop-up category list with the audit's proposals (test result, mail sent/failed, sign-out, opened in another tab, placement failed, download/media failed, consequence warning, outside change) | D46 |
 | F4 | Close or re-scope #645 against this document | superseded question |
 | F5 | Check #177 (mobile notification-prefs) against R-PREF | compatibility |
 | F6 | Spec (`plan-spec`) once the founder approves these requirements, then two `grill-spec` rounds | feature-size flow |
@@ -281,6 +299,7 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 | D43 | Failure payload | Verbose shows masked failure payload (collapsed); other raw payloads Debug-only | Reconciles table L3 comment with L11 | Interview | 2026-10-22 |
 | D44 | Browser outage logging | Browser reports the outage on reconnect; server logs it then | Server cannot log what it cannot see | Interview | 2026-10-22 |
 | D45 | Line types | Five types; “in progress” is an animated state of any type | Founder: retry example should be an amber warning | Interview | 2026-10-22 |
+| D46 | Own-action pop-up removal condition | Remove only where the page shows the outcome; otherwise add a page indicator first, with Retry for failed saves; audit every call site with a finer category list | Founder: “validate that there is another indicator in the page itself … maybe with a retry” | Interview | 2026-10-22 |
 
 ## Dependency Graph & Implementation Order
 
