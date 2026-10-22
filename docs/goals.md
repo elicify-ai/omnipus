@@ -78,7 +78,7 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 
 ### Automatic reminders
 
-When an automatic reminder starts another work turn for a goal in your own chat—not a helper or task run—the web app shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line is saved in that chat's history and remains after you reload it.
+When an automatic reminder starts another work turn for a goal in your own chat—not a helper or task run—the web app shows **Goal reminder: continuing work toward the goal** as a system event line, not a message from you. The line is saved in that chat's history and remains after you reload it. If that line cannot be saved, the chat shows an error instead, the reminder does not count as a finished outcome, and a later reminder can continue the same goal once saving works again.
 
 The same system line also appears when the Judge sends the agent back to keep working in that chat. Those Judge follow-ups are not automatic idle reminders and do not add to the no-progress count.
 
@@ -87,6 +87,8 @@ There is no lifetime limit on reminders. Instead, Omnipus counts consecutive aut
 | Counts as progress | Does not count by itself |
 |---|---|
 | New goal evidence; a new saved change snapshot (commit) in the goal's workspace since the last check; an executed tool call other than `set_todos` or a claim-only `goal_claim` call; activity in a delegated helper; output or completion from background work owned by the goal session | A text-only answer, a prose completion claim, a claim-only message, or a turn that only updates `set_todos` |
+
+A saved task check counts only when its recorded time sits strictly inside one run that belongs to this goal: after the clock second that run started and, if the run has finished, before the clock second it finished. A check written after the run closed, a check from a run started outside this goal, a check with no saved run, and a check whose time could belong to more than one run do not count. Those times are stored only to the second, so a check that lands in the same second a run starts or finishes is left out on purpose. An executed tool, helper output, background work, and a finished run still count on their own.
 
 The file-change check reads committed workspace history, not uncommitted edits. Another chat's commit in the same workspace can count too. A file-writing tool that actually runs still counts under the tool-call rule, without needing a commit.
 
@@ -98,7 +100,7 @@ The pause message is a goal status reason, not a Judge verdict. A normal reply c
 
 Send a normal reply to resume the goal and reset that count. This is a pause, not a failed or ended goal. The same rule applies before and after the agent writes its working goal record; there is no separate two-nudge fallback.
 
-Omnipus does not send another reminder or advance this count while the goal session's background commands, dispatched tasks or plans, or delegated helpers are still working. Their output or completion counts as progress. A Stop, an unanswered question or a blocked claim also holds automatic reminders; an ended goal receives none.
+Omnipus does not send another reminder or advance this count while the goal session's background commands, dispatched tasks or plans, or delegated helpers are still working. Their output or completion counts as progress. A Stop, an unanswered question or a blocked claim also holds automatic reminders. If a Stop is accepted before a waiting reminder is admitted, that reminder does not start. An ended goal receives none.
 
 ## What controls a goal
 

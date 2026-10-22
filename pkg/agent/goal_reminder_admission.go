@@ -64,22 +64,22 @@ func (al *AgentLoop) ordinaryGoalFollowUpMetadata(sessionID, goalID, agentID str
 
 func (al *AgentLoop) runOrdinaryGoalFollowUp(ctx context.Context, agent *AgentInstance, msg bus.InboundMessage, opts processOptions) (string, error) {
 	generation, err := strconv.Atoi(inboundMetadata(msg, "steer_generation"))
-	if err != nil || generation < 1 || inboundMetadata(msg, "steer_message_id") == "" || inboundMetadata(msg, "goal_id") == "" {
-		return "", errors.New("goal reminder: missing or invalid wake identity")
+	opts.goalWake = &ordinaryGoalWake{
+		messageID: inboundMetadata(msg, "steer_message_id"), goalID: inboundMetadata(msg, "goal_id"), generation: generation,
+		runID: inboundMetadata(msg, "goal_parent_run_id"), reminder: inboundMetadata(msg, "goal_reminder") == "true",
+	}
+	if err != nil || generation < 1 || opts.goalWake.messageID == "" || opts.goalWake.goalID == "" {
+		return al.failOrdinaryGoalPreTurn(opts, errors.New("goal reminder: missing or invalid wake identity"))
 	}
 	if al.GetSessionLifecycleStore() == nil || opts.TranscriptStore == nil || opts.TranscriptSessionID == "" {
-		return "", errors.New("goal reminder: no store-backed ordinary session")
+		return al.failOrdinaryGoalPreTurn(opts, errors.New("goal reminder: no store-backed ordinary session"))
 	}
 	bootSeq, bootErr := strconv.ParseUint(inboundMetadata(msg, "goal_parent_boot_seq"), 10, 64)
 	if bootErr != nil {
-		return "", fmt.Errorf("goal reminder: invalid parent boot identity: %w", bootErr)
+		return al.failOrdinaryGoalPreTurn(opts, fmt.Errorf("goal reminder: invalid parent boot identity: %w", bootErr))
 	}
-	opts.goalWake = &ordinaryGoalWake{
-		messageID: inboundMetadata(msg, "steer_message_id"), goalID: inboundMetadata(msg, "goal_id"), generation: generation,
-		runID: inboundMetadata(msg, "goal_parent_run_id"), bootSeq: bootSeq,
-		reminder: inboundMetadata(msg, "goal_reminder") == "true",
-	}
-	if inboundMetadata(msg, "goal_reminder") == "true" {
+	opts.goalWake.bootSeq = bootSeq
+	if opts.goalWake.reminder {
 		opts.goalReminderGoalID = opts.goalWake.goalID
 	}
 	msg.SessionID, msg.SessionKey = opts.TranscriptSessionID, opts.SessionKey
@@ -87,6 +87,10 @@ func (al *AgentLoop) runOrdinaryGoalFollowUp(ctx context.Context, agent *AgentIn
 	if errors.Is(runErr, errOrdinaryGoalWakeIgnored) {
 		al.goalMarkIdleSettling(opts.goalWake.goalID, false)
 		return "", nil
+	}
+	var preTurn *ordinaryGoalPreTurnError
+	if errors.As(runErr, &preTurn) {
+		al.surfaceOrdinaryGoalPreTurnError(opts.TranscriptSessionID, opts.goalWake, runErr)
 	}
 	if runErr != nil {
 		al.goalMarkIdleSettling(opts.goalWake.goalID, false)
@@ -159,7 +163,7 @@ func (al *AgentLoop) recordOrdinaryGoalReminder(ts *turnState) (*generated.Repla
 	}
 	written, err := ts.transcriptStore.AppendTranscriptOnce(ts.transcriptSessionID, entry)
 	if err != nil {
-		return nil, fmt.Errorf("goal reminder: save chat event: %w", err)
+		return nil, &goalReminderChatSaveError{cause: err}
 	}
 	if !written {
 		return nil, errOrdinaryGoalWakeIgnored
@@ -169,4 +173,20 @@ func (al *AgentLoop) recordOrdinaryGoalReminder(ts *turnState) (*generated.Repla
 		Type: string(generated.WsFrameTypeReplayMessage), SessionId: ts.transcriptSessionID,
 		Id: &entry.ID, Role: entry.Role, Content: entry.Content, AgentId: &entry.AgentID, GoalId: &entry.GoalID, Timestamp: &stamp,
 	}, nil
+}
+
+// recheckOrdinaryGoalWake reloads the lifecycle record under the caller's
+// cascade cut and repeats the wake, hold and in-flight Stop-fence checks.
+func (al *AgentLoop) recheckOrdinaryGoalWake(store *session.LifecycleStore, sessionID string, wake *ordinaryGoalWake) (*session.LifecycleRecord, error) {
+	rec, err := store.Load(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("ordinary admission: read saved session: %w", err)
+	}
+	if wakeErr := al.checkOrdinaryGoalWake(rec, wake); wakeErr != nil {
+		return nil, wakeErr
+	}
+	if fenceErr := al.inboundStopFenceInFlight(sessionID); fenceErr != nil {
+		return nil, fenceErr
+	}
+	return rec, nil
 }

@@ -103,6 +103,9 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	if err == nil && preparation.execution != nil {
 		al.deliverHeldRequests(sessionID, admittingEntryID...)
 	}
+	if opts.goalWake != nil {
+		err = markOrdinaryGoalPreTurn(err)
+	}
 	return preparation, err
 }
 
@@ -173,6 +176,16 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 	}
 	if opts.goalWake != nil {
 		goalReminderPreRevivalCheckpoint(sessionID)
+		// Final ordinary goal-wake cut. It shares the canceller mutex Stop uses
+		// for acceptance, and it stays after the passive seam above. Live Stop
+		// effects still run only after that mutex is released.
+		cascade := al.steerCanceller().cascadeLock(sessionID)
+		cascade.Lock()
+		defer cascade.Unlock()
+		rec, err = al.recheckOrdinaryGoalWake(store, sessionID, opts.goalWake)
+		if err != nil {
+			return ordinaryExecutionPreparation{}, err
+		}
 	}
 	identity := session.ExecutionIdentity{RunID: freshRunID(), BootSeq: bootSeq}
 	stampedByRevival := false
@@ -221,30 +234,30 @@ func (al *AgentLoop) newTurnStateForAdmission(agent *AgentInstance, opts process
 	defer gate.entryMu.Unlock()
 	rec, err := al.GetSessionLifecycleStore().Load(d.claim.SessionID)
 	if err != nil {
-		return nil, fmt.Errorf("ordinary admission: validate producing identity: %w", err)
+		return nil, withOrdinaryGoalPreTurn(opts, fmt.Errorf("ordinary admission: validate producing identity: %w", err))
 	}
 	if !d.claim.matches(rec) || al.executionDispositionFor(d.claim) != d {
-		return nil, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: selected owner changed", steer.ErrStaleGeneration))
+		return nil, withOrdinaryGoalPreTurn(opts, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: selected owner changed", steer.ErrStaleGeneration)))
 	}
 	if ok, reason := reserveDispatch(rec, d.claim.Generation); !ok {
-		return nil, refuseOrdinaryIfStale(dispatchRefusalError(reason))
+		return nil, withOrdinaryGoalPreTurn(opts, refuseOrdinaryIfStale(dispatchRefusalError(reason)))
 	}
 	ts.generation = d.claim.Generation
 	if err := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); err != nil {
-		return nil, err
+		return nil, withOrdinaryGoalPreTurn(opts, err)
 	}
 	if !al.registerTurnIfAbsent(ts) {
-		return nil, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: registration was already claimed", steer.ErrStaleGeneration))
+		return nil, withOrdinaryGoalPreTurn(opts, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: registration was already claimed", steer.ErrStaleGeneration)))
 	}
 	if _, err := commitSteeredExecutionState(al.GetSessionLifecycleStore(), d.claim, session.LifecycleRunning, ""); err != nil {
 		al.activeTurnStates.CompareAndDelete(ts.sessionKey, ts)
-		return nil, refuseOrdinaryIfStale(err)
+		return nil, withOrdinaryGoalPreTurn(opts, refuseOrdinaryIfStale(err))
 	}
 	if opts.goalWake != nil {
 		frame, err := al.recordOrdinaryGoalReminder(ts)
 		if err != nil {
 			al.finishRefusedSteeredTurnBody(ts)
-			return nil, err
+			return nil, withOrdinaryGoalPreTurn(opts, err)
 		}
 		ts.opts.goalReminderFrame = frame
 	}

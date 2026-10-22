@@ -45,51 +45,99 @@ func goalReminderBrakePaused(rec *goal.Goal) bool {
 
 // pauseGoalReminders uses the existing waiting status and generated replay
 // carrier. The goal remains active; no claim, verdict or execution is invented.
+// The passive seam stays before the acceptance lock. Human resume uses that
+// same lock, so a reply that already cleared the streak publishes nothing.
 func (al *AgentLoop) pauseGoalReminders(sessionID string, rec *goal.Goal) error {
 	current, err := activeGoalForSession(sessionID)
 	if err != nil {
 		return err
 	}
-	if current == nil || current.GoalID != rec.GoalID || !goalReminderBrakePaused(current) {
+	if current == nil || rec == nil || current.GoalID != rec.GoalID || !goalReminderBrakePaused(current) {
 		return nil
 	}
-	rec = current
-	goalReminderPauseCheckpoint(sessionID, rec.GoalID)
-	al.goalSetWaitingOnUser(rec.GoalID, true)
+	work := goalReminderWorkFor(current.GoalID)
+	work.mu.Lock()
+	assessedTurn := work.lastAssessedTurn
+	noticeID, err := al.goalReminderPauseNoticeID(sessionID, current.GoalID, assessedTurn)
+	work.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	goalReminderPauseCheckpoint(sessionID, current.GoalID)
+	work.mu.Lock()
+	accepted, err := al.commitGoalReminderPause(sessionID, current.GoalID, assessedTurn, noticeID, work)
+	work.mu.Unlock()
+	if err != nil || accepted == nil {
+		return err
+	}
+	return al.finishGoalReminderPauseDelivery(sessionID, accepted)
+}
+
+// goalReminderPauseAcceptance is the pause that won the work lock. Delivery
+// tails run only after that lock is released.
+type goalReminderPauseAcceptance struct {
+	goalID   string
+	noticeID string
+	written  bool
+}
+
+// goalReminderPauseNoticeID binds the notice to the already assessed producing
+// turn before the passive seam. After a process-local reset only, recover the
+// existing transcript identity here, never from a later human turn after the seam.
+func (al *AgentLoop) goalReminderPauseNoticeID(sessionID, goalID, assessedTurn string) (string, error) {
+	entryID := "goal-no-progress-" + goalID
+	if assessedTurn != "" {
+		return entryID + "-" + assessedTurn, nil
+	}
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {
-		return fmt.Errorf("goal reminder pause: transcript store for %q is unavailable", sessionID)
-	}
-	agentID, err := goalWorkingAgentID(sessionID, store)
-	if err != nil {
-		return fmt.Errorf("goal reminder pause: resolve working agent: %w", err)
+		return "", fmt.Errorf("goal reminder pause: transcript store for %q is unavailable", sessionID)
 	}
 	entries, err := store.ReadTranscript(sessionID)
 	if err != nil {
-		return fmt.Errorf("goal reminder pause: read completed outcome identity: %w", err)
+		return "", fmt.Errorf("goal reminder pause: read completed outcome identity: %w", err)
 	}
-	// Derive idempotency from the real producing turn, not the mutable idle
-	// clock. A later pause after a human reply has a new completed turn.
-	entryID := "goal-no-progress-" + rec.GoalID
 	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].GoalID == rec.GoalID && entries[i].TurnID != "" {
-			entryID += "-" + entries[i].TurnID
-			break
+		if entries[i].GoalID == goalID && entries[i].Role == "assistant" && entries[i].TurnID != "" {
+			return entryID + "-" + entries[i].TurnID, nil
 		}
 	}
+	return entryID, nil
+}
+
+// commitGoalReminderPause and human resume share work.mu through their durable
+// update and synchronous status/replay publication. No connector tail runs here.
+func (al *AgentLoop) commitGoalReminderPause(sessionID, goalID, assessedTurn, noticeID string, work *goalReminderWork) (*goalReminderPauseAcceptance, error) {
+	current, err := activeGoalForSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil || current.GoalID != goalID || current.ActiveSessionID != sessionID || !goalReminderBrakePaused(current) ||
+		work.lastAssessedTurn != assessedTurn || work.pending != nil {
+		return nil, nil
+	}
+	al.goalSetWaitingOnUser(goalID, true)
+	store := al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return nil, fmt.Errorf("goal reminder pause: transcript store for %q is unavailable", sessionID)
+	}
+	agentID, err := goalWorkingAgentID(sessionID, store)
+	if err != nil {
+		return nil, fmt.Errorf("goal reminder pause: resolve working agent: %w", err)
+	}
 	entry := session.TranscriptEntry{
-		ID:   entryID,
+		ID:   noticeID,
 		Type: session.EntryTypeSystem, Role: "system", Content: goalReminderPauseNotice,
-		AgentID: agentID, GoalID: rec.GoalID, Timestamp: time.Now().UTC(),
+		AgentID: agentID, GoalID: goalID, Timestamp: time.Now().UTC(),
 	}
 	written, err := store.AppendTranscriptOnce(sessionID, entry)
 	if err != nil {
-		return fmt.Errorf("goal reminder pause: persist visible system notice: %w", err)
+		return nil, fmt.Errorf("goal reminder pause: persist visible system notice: %w", err)
 	}
 	active, capN := al.activeLoopsSnapshot("goal")
 	payload := GoalStatusChangedPayload{
-		SessionID: sessionID, GoalID: rec.GoalID, Condition: rec.Prompt,
-		Round: rec.Round, MaxRounds: rec.MaxRounds, LatestReason: goalReminderPauseNotice,
+		SessionID: sessionID, GoalID: goalID, Condition: current.Prompt,
+		Round: current.Round, MaxRounds: current.MaxRounds, LatestReason: goalReminderPauseNotice,
 		ActiveLoops: active, Cap: capN, State: goalPillWaitingOnUser,
 	}
 	if written {
@@ -101,8 +149,15 @@ func (al *AgentLoop) pauseGoalReminders(sessionID string, rec *goal.Goal) error 
 		}
 	}
 	al.EmitGoalStatusChanged(payload)
+	return &goalReminderPauseAcceptance{goalID: goalID, noticeID: entry.ID, written: written}, nil
+}
+
+// finishGoalReminderPauseDelivery sends connector and upward copies after the
+// acceptance lock. It does not take that lock itself and does not decide the
+// pause again. enqueueGoalReminderPause takes the lock on its own.
+func (al *AgentLoop) finishGoalReminderPauseDelivery(sessionID string, accepted *goalReminderPauseAcceptance) error {
 	if al.audienceFor(context.Background(), steer.BoundaryFinalReply, sessionID) != steer.AudienceUser {
-		if written {
+		if accepted.written {
 			al.deliverGoalParkUpward(sessionID, false, goalReminderPauseNotice)
 		}
 		return nil
@@ -112,7 +167,7 @@ func (al *AgentLoop) pauseGoalReminders(sessionID string, rec *goal.Goal) error 
 		return fmt.Errorf("goal reminder pause: resolve channel: %w", err)
 	}
 	if route.channel != "" && route.channel != "webchat" && route.chatID != "" {
-		return al.enqueueGoalReminderPause(sessionID, rec.GoalID, entry.ID, route.channel, route.chatID)
+		return al.enqueueGoalReminderPause(sessionID, accepted.goalID, accepted.noticeID, route.channel, route.chatID)
 	}
 	return nil
 }
@@ -136,10 +191,20 @@ func (al *AgentLoop) resumeGoalRemindersForHuman(opts processOptions) {
 	if rec == nil {
 		return
 	}
-	wasPaused := goalReminderBrakePaused(rec)
 	work := goalReminderWorkFor(rec.GoalID)
 	work.mu.Lock()
-	_, err = resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
+	fresh, err := activeGoalForSession(opts.TranscriptSessionID)
+	if err != nil {
+		work.mu.Unlock()
+		al.reportGoalReadError(opts.TranscriptSessionID, "resume goal reminders", err)
+		return
+	}
+	if fresh == nil || fresh.GoalID != rec.GoalID {
+		work.mu.Unlock()
+		return
+	}
+	wasPaused := goalReminderBrakePaused(fresh)
+	_, err = resolveGoalRecordStore().Update(fresh.GoalID, func(cur *goal.Goal) error {
 		if cur.State != generated.GoalStateActive || cur.ActiveSessionID != opts.TranscriptSessionID {
 			return errGoalReminderObsolete
 		}
@@ -157,13 +222,13 @@ func (al *AgentLoop) resumeGoalRemindersForHuman(opts processOptions) {
 		return
 	}
 	work.pending = nil
-	consumeGoalReminderProgress(rec.GoalID, work, time.Now().UTC())
-	work.mu.Unlock()
-	al.goalMarkIdleSettling(rec.GoalID, false)
+	consumeGoalReminderProgress(fresh.GoalID, work, time.Now().UTC())
+	al.goalMarkIdleSettling(fresh.GoalID, false)
 	if wasPaused {
-		al.goalSetWaitingOnUser(rec.GoalID, false)
+		al.goalSetWaitingOnUser(fresh.GoalID, false)
 		al.EmitGoalStatusRehydrate(opts.TranscriptSessionID)
 	}
+	work.mu.Unlock()
 }
 
 // savedGoalWakeHeld keeps a paused automatic input unconsumed, just like an

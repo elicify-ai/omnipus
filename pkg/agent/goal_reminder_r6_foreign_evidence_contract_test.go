@@ -54,6 +54,15 @@ func r6GateForeignEvidenceOracle(t *testing.T) {
 	// its own nil-occurrence run. Two open nil-occurrence runs cannot exist.
 	require.NoError(t, store.CloseRun(tk.ID, ownedRun.RunID, task.StatusDone, "owned check window closed"))
 
+	// Closing the owned run is independently productive. Assess and consume
+	// that real completion before establishing the foreign-only window; a
+	// correct evidence filter must not suppress required completion credit.
+	grSetStreak(t, h, 1)
+	h.age(t)
+	fresh := h.reminder(t)
+	require.Equal(t, 0, goalRecordForSession(t, h.id).ZeroOutputPushes, "SETUP: the genuine owned completion must reset and be assessed before the foreign-only outcome")
+	grTextReminder(t, h, fresh)
+
 	foreignInitiator := newTestSteeringSession(t, h.al, testHarnessWorkspaceMembershipID)
 	foreignSession := newTestSteeringSession(t, h.al, testHarnessWorkspaceMembershipID)
 	require.NotEqual(t, h.id, foreignInitiator)

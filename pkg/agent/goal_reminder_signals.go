@@ -109,6 +109,19 @@ func (al *AgentLoop) reminderEvidence(rec *goal.Goal, scope *goalReminderScope, 
 		if files != len(records) {
 			return false, errors.New("goal reminder: check evidence is partially unreadable")
 		}
+		if len(records) == 0 {
+			continue
+		}
+		// Read every retained run before any record can latch progress.
+		// Task id alone does not say which execution wrote the check.
+		store := GetTaskStore(al)
+		if store == nil {
+			return false, errors.New("goal reminder: check evidence run store is unavailable")
+		}
+		runs, err := reminderTaskRuns(store, taskID)
+		if err != nil {
+			return false, fmt.Errorf("goal reminder: read check execution ownership: %w", err)
+		}
 		for _, record := range records {
 			if record.ID == "" || record.TaskID != taskID || record.PolicyDenied || record.TimedOut || record.ExitCode < 0 {
 				continue
@@ -116,6 +129,13 @@ func (al *AgentLoop) reminderEvidence(rec *goal.Goal, scope *goalReminderScope, 
 			at, err := parseReminderTime(record.RecordedAt)
 			if err != nil {
 				return false, err
+			}
+			owned, err := reminderEvidenceOwned(scope, taskID, runs, at)
+			if err != nil {
+				return false, fmt.Errorf("goal reminder: resolve check execution window: %w", err)
+			}
+			if !owned {
+				continue
 			}
 			progress = reminderEvent(work, "evidence:"+record.ID, at, since) || progress
 		}
