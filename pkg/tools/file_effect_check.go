@@ -14,6 +14,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
+// fileEffectAfterHashReadTestHook is passive and nil in production. It lets a
+// test change the real target before the existing identity/stability checks.
+var fileEffectAfterHashReadTestHook func(target string)
+
 func readFileEffectImage(h *PathHandle) (FileImage, error) {
 	f, err := h.OpenRegularNonBlocking()
 	if errors.Is(err, fs.ErrNotExist) {
@@ -31,6 +35,9 @@ func readFileEffectImage(h *PathHandle) (FileImage, error) {
 	n, err := io.CopyBuffer(hash, f, make([]byte, 32*1024))
 	if err != nil {
 		return FileImage{}, err
+	}
+	if hook := fileEffectAfterHashReadTestHook; hook != nil {
+		hook(h.abs)
 	}
 	after, err := f.Stat()
 	if err != nil {
