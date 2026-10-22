@@ -61,31 +61,13 @@ func (c *WhatsAppNativeChannel) beginNativeStart(ctx context.Context) (*nativeLi
 // so both disconnects and the join run in the retained finalizer, not the caller.
 func (c *WhatsAppNativeChannel) stopNative(ctx context.Context, resource *nativeLifecycle, interrupt bool) error {
 	resource.once.Do(func() {
-		c.reconnectMu.Lock()
-		c.mu.Lock()
-		attemptID, store, instance := resource.attemptID, c.attempts, c.instance
-		if c.lifecycle == resource {
-			c.stopping.Store(true)
-			if attemptID == "" {
-				attemptID = c.attemptID
-				resource.attemptID = attemptID
-			}
-			if attemptID != "" {
-				if c.unfinishedTeardowns == nil {
-					c.unfinishedTeardowns = make(map[string]*nativeLifecycle)
-				}
-				c.unfinishedTeardowns[attemptID] = resource
-			}
-			if c.attemptID == attemptID {
-				c.attemptID = ""
-			}
-		}
-		c.mu.Unlock()
-		c.reconnectMu.Unlock()
+		// This captured context is immutable and needs no native/order lock.
+		// A reconnect may hold those locks while waiting for a config writer,
+		// so even one-time bookkeeping belongs off the caller's deadline path.
 		if resource.cancel != nil {
 			resource.cancel()
 		}
-		go c.disposeNative(resource, store, instance, attemptID, interrupt)
+		go c.beginNativeStop(resource, interrupt)
 	})
 	select {
 	case <-resource.done:
@@ -93,6 +75,34 @@ func (c *WhatsAppNativeChannel) stopNative(ctx context.Context, resource *native
 	case <-ctx.Done():
 		return fmt.Errorf("the WhatsApp client did not finish stopping: %w", ctx.Err())
 	}
+}
+
+// beginNativeStop retains the existing Add/Wait synchronization: stopping is
+// set under reconnectMu before disposeNative joins work. Only this once-owned
+// goroutine may wait for native locks or the channel order during setup.
+func (c *WhatsAppNativeChannel) beginNativeStop(resource *nativeLifecycle, interrupt bool) {
+	c.reconnectMu.Lock()
+	c.mu.Lock()
+	attemptID, store, instance := resource.attemptID, c.attempts, c.instance
+	if c.lifecycle == resource {
+		c.stopping.Store(true)
+		if attemptID == "" {
+			attemptID = c.attemptID
+			resource.attemptID = attemptID
+		}
+		if attemptID != "" {
+			if c.unfinishedTeardowns == nil {
+				c.unfinishedTeardowns = make(map[string]*nativeLifecycle)
+			}
+			c.unfinishedTeardowns[attemptID] = resource
+		}
+		if c.attemptID == attemptID {
+			c.attemptID = ""
+		}
+	}
+	c.mu.Unlock()
+	c.reconnectMu.Unlock()
+	c.disposeNative(resource, store, instance, attemptID, interrupt)
 }
 
 func (c *WhatsAppNativeChannel) disposeNative(resource *nativeLifecycle, store *channels.PairingAttempts, instance, attemptID string, interrupt bool) {
