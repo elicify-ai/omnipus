@@ -26,6 +26,7 @@ import {
 } from '@/lib/llm-error'
 import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, endTurnState, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
+import { mergeRecordedSessionTokens } from '../session-usage'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { flushHeldClearProjection, forgetClearRefreshForSend, settleClearRefetchAfterTurn } from '../clear-refetch'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
@@ -1696,10 +1697,10 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   draft.textAtToolCallStart = {}
                   draft.toolCallOwnerMessageId = {}
                 }
-                const tokenDelta = frame.stats?.tokens ?? 0
                 const costDelta = frame.stats?.cost ?? 0
                 draft.isStreaming = false
-                draft.sessionTokens = draft.sessionTokens + tokenDelta
+                // Recorded session usage only; replay terminators returned above.
+                draft.sessionTokens = mergeRecordedSessionTokens(draft.sessionTokens, frame.stats?.session_tokens_total)
                 draft.sessionCost = draft.sessionCost + costDelta
                 draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
                 draft.cancelStage = null

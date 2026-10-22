@@ -22,7 +22,7 @@ export function emptySessionState(): SessionChatState {
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: null,
-    sessionTokens: 0,
+    sessionTokens: undefined,
     sessionCost: 0,
     rateLimitEvent: null,
     providerRetryEvent: null,

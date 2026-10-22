@@ -21,6 +21,7 @@ import { createFrameSlice } from './slices/frames'
 import { createHistorySlice, emptyHistoryState } from './history'
 import { createHistoryFrameOwner } from './history-replay'
 import { applyHistoryPageToBucket } from './history-merge'
+import { mergeRecordedSessionTokens } from './session-usage'
 import { currentHistoryState, liveProjectionBucket, withLiveHistoryBucket } from './history-live'
 
 // HIGH-2: consecutive unknown frame counter. Reset on any known-good frame.
@@ -672,19 +673,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const sid = getActiveSid()
       if (!sid) return
       withBucket(sid, (b) => ({
-        sessionTokens: b.sessionTokens + tokens,
+        sessionTokens: b.sessionTokens === undefined ? undefined : b.sessionTokens + tokens,
         sessionCost: b.sessionCost + cost,
       }))
     },
 
-    seedSessionTokens: (total) => {
-      const sid = getActiveSid()
-      if (!sid) return
-      withBucket(sid, (b) => {
-        // Only seed when bucket is fresh — don't overwrite live-accumulated totals.
-        if (b.sessionTokens !== 0) return {}
-        return { sessionTokens: total }
-      })
+    seedSessionTokens: (total, sessionId) => {
+      const sid = sessionId ?? getActiveSid()
+      if (!sid || total === undefined) return
+      withBucket(sid, b => ({ sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, total) }))
     },
 
     setRateLimitEvent: (event) => {

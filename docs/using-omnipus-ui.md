@@ -113,6 +113,10 @@ An answer that is still running continues to stream after the saved history appe
 
 If you choose a connection **Retry**, Omnipus closes the previous connection first. If closing fails, it reports the failure instead of opening another connection.
 
+Saved tool calls keep their recorded identities and outcomes when you reopen a chat. A call recorded as **Cancelled** shows that tool outcome separately from the interrupted assistant reply. Completed calls keep their recorded outcome when another call is stopped. Reloading does not run those tools again. If an older history never recorded a tool call, an interrupted reply alone cannot recreate it.
+
+The token counter reports the recorded consumption for the whole session, not just the latest reply, the messages on screen, or the model's context window. Opening an older page or seeing the same completion twice does not add those tokens again. A recorded unused session shows **0 tokens**. Until a recorded total is known, it shows **Usage unavailable** rather than guessing zero; an already-known total is kept if a later response omits usage. Different sessions keep separate counters.
+
 ### Reading earlier messages
 
 A conversation opens at its recent end, with roughly four screens of messages rather than its entire saved history. As you scroll within two screens of the loaded beginning, Omnipus requests roughly two more screens. Message and tool heights change the amount fetched; a finished tool's start and result stay together. **Show earlier messages** also works in a short conversation or the simpler list used when your browser cannot measure virtual rows. Use **Tab** to reach it, then **Enter** or **Space**.
