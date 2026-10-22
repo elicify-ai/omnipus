@@ -95,9 +95,15 @@ func TestDisableChannel_RevokesAnUnstartedAdmission(t *testing.T) {
 	ch := cfg.Channels["whatsapp"]
 	ch.Enabled = true
 	cfg.Channels["whatsapp"] = ch
+	store := channels.NewPairingAttempts()
+	_, err := store.Admit("whatsapp", channels.PairingAdmissionConnect, &channels.PairingOwner{SessionID: "chat-a", RequestID: "req-a"})
+	require.NoError(t, err)
+	connect.deps.PairingAttempts = func() *channels.PairingAttempts { return store }
 	var revoked []string
-	connect.deps.RevokePairingForDisable = func(id string) {
-		revoked = append(revoked, id+" enabled="+boolText(cfg.Channels[id].Enabled))
+	connect.deps.PublishPairingProgress = func(progress []channels.PairingProgress) {
+		for _, p := range progress {
+			revoked = append(revoked, p.Attempt.Instance+" enabled="+boolText(cfg.Channels[p.Attempt.Instance].Enabled))
+		}
 	}
 	res := NewChannelDisableTool(connect.deps).Execute(context.Background(),
 		map[string]any{"id": "whatsapp", "expected_revision": channelRevision(cfg, "whatsapp")})
@@ -167,11 +173,12 @@ func TestDisableChannel_ARefusedStaleDisableHasNoPairingEffect(t *testing.T) {
 	winner, err := store.Admit("whatsapp", channels.PairingAdmissionConnect, &channels.PairingOwner{SessionID: "chat-a", RequestID: "req-a"})
 	require.NoError(t, err)
 	require.True(t, store.MarkReady("whatsapp", winner.AttemptID, "rev"))
+	// This direct fixture admission belongs to this exact live snapshot.
+	cfg.SetChannelOrderGeneration("whatsapp", winner.Generation)
+	connect.deps.PairingAttempts = func() *channels.PairingAttempts { return store }
 	published := 0
-	connect.deps.RevokePairingForDisable = func(id string) {
-		if _, revoked := store.RevokeForDisable(id); revoked {
-			published++ // the agent publishes the interruption of a revoked attempt
-		}
+	connect.deps.PublishPairingProgress = func(progress []channels.PairingProgress) {
+		published += len(progress) // observe real committed transitions; do not revoke again
 	}
 
 	stale := NewChannelDisableTool(connect.deps).Execute(context.Background(),
@@ -188,6 +195,8 @@ func TestDisableChannel_ARefusedStaleDisableHasNoPairingEffect(t *testing.T) {
 
 	// Control: an accepted disable revokes an unstarted admission.
 	next := NewPairingFixtureAdmission(t, store)
+	current, _ := store.Attempt("whatsapp", next)
+	cfg.SetChannelOrderGeneration("whatsapp", current.Generation)
 	accepted := NewChannelDisableTool(connect.deps).Execute(context.Background(),
 		map[string]any{"id": "whatsapp", "expected_revision": channelRevision(cfg, "whatsapp")})
 	require.False(t, accepted.IsError, accepted.ForLLM)
