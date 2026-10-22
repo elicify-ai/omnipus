@@ -136,8 +136,8 @@ func TestTaskTodosActiveFormHTTPNormalization(t *testing.T) {
 						var failure gen.ErrorResponse
 						require.NoError(t, json.Unmarshal(response.Body.Bytes(), &failure))
 						assert.Equal(t, tc.wantError, failure.Error, "specific validation response")
-						after, err := api.taskStore.List(task.Filter{})
-						require.NoError(t, err)
+						after, listErr := api.taskStore.List(task.Filter{})
+						require.NoError(t, listErr)
 						require.Equal(t, before, after, "rejected create must add no task; rejected replacement must preserve the entire old task")
 						if id != "" {
 							assertTaskActiveFormReadbacks(t, api, id, `[{"text":"Keep this checklist","status":"in_progress","active_form":"Keeping this checklist"}]`)
