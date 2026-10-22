@@ -2483,7 +2483,7 @@ type NotificationList = {
 };
 type Notification = {
   id: string;
-  type: "schedule_failed" | "knowledge_drift";
+  type: "schedule_failed" | "knowledge_drift" | "stop_notice";
   title: string;
   body?: string | undefined;
   severity: "info" | "warning" | "error";
@@ -5540,7 +5540,7 @@ export const ScheduleRunResult = z.object({
 });
 export const Notification: z.ZodType<Notification> = z.object({
   id: z.string(),
-  type: z.enum(["schedule_failed", "knowledge_drift"]),
+  type: z.enum(["schedule_failed", "knowledge_drift", "stop_notice"]),
   title: z.string().min(1),
   body: z.string().optional(),
   severity: z.enum(["info", "warning", "error"]),
@@ -18135,7 +18135,7 @@ export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
     id: z.string().min(1),
-    notification_type: z.enum(["schedule_failed", "knowledge_drift"]),
+    notification_type: z.enum(["schedule_failed", "knowledge_drift", "stop_notice"]),
     title: z.string().min(1),
     body: z.string().optional(),
     severity: z.enum(["info", "warning", "error"]),

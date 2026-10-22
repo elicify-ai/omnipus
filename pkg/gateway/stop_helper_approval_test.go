@@ -18,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -224,6 +225,8 @@ func newStopHelperApprovalFixture(t *testing.T) *stopHelperApprovalFixture {
 	wc, _ := makeForwarderTestConn(256)
 	wc.userID = "stop-helper-owner"
 	h.sessions[wc.userID] = wc
+	h.notifStore = notifications.NewStore(t.TempDir())
+	al.SetEventSyncTap(func(event agent.Event) { forwardStopTestEvent(h, wc, event) })
 	reg := newApprovalRegistryV2(64, 10*time.Minute)
 	// Keep resolved entries for exact-state assertions; cleanup removes timers.
 	reg.terminalRetention = time.Hour

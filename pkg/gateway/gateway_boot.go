@@ -681,6 +681,7 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	stg.wsHandler = newWSHandler(stg.msgBus, stg.agentLoop, stg.allowedOrigin)
 	stg.wsHandler.home = stg.homePath
+	stg.wsHandler.notifStore = stg.runningServices.notifStore
 	// w5-integration (US-2/MC-4): bind W1's ONE Mail panel presence registry
 	// to the WS lifecycle (frames dispatch, teardown revokes), and flip the
 	// pool's retention gate — the production activation the conservative

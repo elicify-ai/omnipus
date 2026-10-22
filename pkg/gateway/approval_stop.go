@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
-	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
@@ -79,10 +79,8 @@ func (h *WSHandler) publishStopApprovedOutcome(wc *wsConn, root string, result s
 	if result.AlreadyApproved == 0 {
 		return
 	}
-	h.hubPublishFrame(root, string(generated.WsFrameTypeError), generated.ErrorFrame{
-		Type: string(generated.WsFrameTypeError), SessionId: &root,
-		Message: fmt.Sprintf("Stop did not withdraw %d already-approved tool request(s). Those actions may already have run.", result.AlreadyApproved),
-	}, wc)
+	h.publishStopNotice(wc, root, "approved", "Some requests were already approved",
+		fmt.Sprintf("Stop did not withdraw %d already-approved tool request(s). Those actions may already have run.", result.AlreadyApproved), notifications.SeverityWarning)
 }
 
 // retainStopApprovalFailure preserves the original error for the caller and

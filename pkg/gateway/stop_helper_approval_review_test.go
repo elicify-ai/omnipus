@@ -186,7 +186,7 @@ func reviewApprovalRace(t *testing.T, approveWins bool) {
 	entry := f.awaitApproval(t, child)
 	var executions atomic.Int32
 	f.al.SetEventSyncTap(func(event agent.Event) {
-		f.h.hubSyncTap(event)
+		forwardStopTestEvent(f.h, f.wc, event)
 		if payload, ok := event.Payload.(agent.ToolExecStartPayload); ok && payload.SessionID == child && payload.Tool == "write_file" {
 			executions.Add(1)
 		}
@@ -333,15 +333,25 @@ func reviewIdleParentApproval(t *testing.T, stopped bool) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func reviewDrainErrors(t *testing.T, f *stopHelperApprovalFixture) []generated.ErrorFrame {
+// not-wire-format: reader output for operational notice text, not an app frame.
+type reviewStopNotice struct{ Message string }
+
+func forwardStopTestEvent(h *WSHandler, wc *wsConn, event agent.Event) {
+	h.hubSyncTap(event)
+	if event.Kind == agent.EventKindNotification {
+		(&eventForwardState{h: h, wc: wc}).onNotification(event)
+	}
+}
+
+func reviewDrainErrors(t *testing.T, f *stopHelperApprovalFixture) []reviewStopNotice {
 	t.Helper()
 	notices, _ := reviewDrainStopFrames(t, f)
 	return notices
 }
 
-func reviewDrainStopFrames(t *testing.T, f *stopHelperApprovalFixture) ([]generated.ErrorFrame, []generated.ToolApprovalResolvedFrame) {
+func reviewDrainStopFrames(t *testing.T, f *stopHelperApprovalFixture) ([]reviewStopNotice, []generated.ToolApprovalResolvedFrame) {
 	t.Helper()
-	var notices []generated.ErrorFrame
+	var notices []reviewStopNotice
 	var resolutions []generated.ToolApprovalResolvedFrame
 	for {
 		select {
@@ -350,7 +360,13 @@ func reviewDrainStopFrames(t *testing.T, f *stopHelperApprovalFixture) ([]genera
 			require.NoError(t, json.Unmarshal(raw, &frame))
 			switch frame.Type {
 			case "error":
-				notices = append(notices, frame)
+				notices = append(notices, reviewStopNotice{Message: frame.Message})
+			case "notification":
+				var notice generated.NotificationFrame
+				require.NoError(t, json.Unmarshal(raw, &notice))
+				require.Equal(t, "stop_notice", notice.NotificationType)
+				require.NotNil(t, notice.Body)
+				notices = append(notices, reviewStopNotice{Message: *notice.Body})
 			case "tool_approval_resolved":
 				var resolved generated.ToolApprovalResolvedFrame
 				require.NoError(t, json.Unmarshal(raw, &resolved))

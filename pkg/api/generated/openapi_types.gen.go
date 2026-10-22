@@ -7032,6 +7032,7 @@ func (e NotificationSeverity) Valid() bool {
 const (
 	NotificationTypeKnowledgeDrift NotificationType = "knowledge_drift"
 	NotificationTypeScheduleFailed NotificationType = "schedule_failed"
+	NotificationTypeStopNotice     NotificationType = "stop_notice"
 )
 
 // Valid indicates whether the value is a known member of the NotificationType enum.
@@ -7040,6 +7041,8 @@ func (e NotificationType) Valid() bool {
 	case NotificationTypeKnowledgeDrift:
 		return true
 	case NotificationTypeScheduleFailed:
+		return true
+	case NotificationTypeStopNotice:
 		return true
 	default:
 		return false
@@ -7071,6 +7074,7 @@ func (e NotificationListNotificationsSeverity) Valid() bool {
 const (
 	NotificationListNotificationsTypeKnowledgeDrift NotificationListNotificationsType = "knowledge_drift"
 	NotificationListNotificationsTypeScheduleFailed NotificationListNotificationsType = "schedule_failed"
+	NotificationListNotificationsTypeStopNotice     NotificationListNotificationsType = "stop_notice"
 )
 
 // Valid indicates whether the value is a known member of the NotificationListNotificationsType enum.
@@ -7079,6 +7083,8 @@ func (e NotificationListNotificationsType) Valid() bool {
 	case NotificationListNotificationsTypeKnowledgeDrift:
 		return true
 	case NotificationListNotificationsTypeScheduleFailed:
+		return true
+	case NotificationListNotificationsTypeStopNotice:
 		return true
 	default:
 		return false
@@ -21877,7 +21883,7 @@ type ModelTokens struct {
 	Total int `json:"total"`
 }
 
-// Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+// Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures, knowledge-base drift repair (ADR-067 FR-038a), and operational Stop outcomes; the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
 type Notification struct {
 	// AgentId The agent the notification concerns.
 	AgentId *string `json:"agent_id,omitempty"`
@@ -21901,6 +21907,7 @@ type Notification struct {
 	// Type The event class. Extensible; consumers must tolerate unknown values.
 	//
 	// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+	// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 	Type NotificationType `json:"type"`
 
 	// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -21913,6 +21920,7 @@ type NotificationSeverity string
 // NotificationType The event class. Extensible; consumers must tolerate unknown values.
 //
 // "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 type NotificationType string
 
 // NotificationList The authenticated user's notifications plus the unread count (#264).
@@ -21941,6 +21949,7 @@ type NotificationList struct {
 		// Type The event class. Extensible; consumers must tolerate unknown values.
 		//
 		// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+		// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 		Type NotificationListNotificationsType `json:"type"`
 
 		// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -21957,6 +21966,7 @@ type NotificationListNotificationsSeverity string
 // NotificationListNotificationsType The event class. Extensible; consumers must tolerate unknown values.
 //
 // "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 type NotificationListNotificationsType string
 
 // OnboardingCompleteRequest Body for POST /onboarding/complete. WP5 (ADR-0010) composes this by auth mode: in local mode (open-source edition) the route runs BEFORE any session exists and mints the instance's first account — `admin` is REQUIRED, upstream's behaviour restored. In platform mode (hosted/desktop) the caller is ALREADY signed in (ADR-0008 rulings 1 and 2: the omnipus.ai account is the login) — `admin` is REFUSED (400) because no local credential is ever minted on that edition. `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014). `preferences` is optional in both modes.
