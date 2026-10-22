@@ -378,7 +378,7 @@ func (t *DownloadEmailAttachmentTool) Name() string           { return "download
 func (t *DownloadEmailAttachmentTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *DownloadEmailAttachmentTool) Category() ToolCategory { return CategoryCommunication }
 func (t *DownloadEmailAttachmentTool) Description() string {
-	return "Save one email attachment into your workspace's Library under mail/<mailbox>/<year-month>/ (the same place, name rules, 25 MiB cap and audit entry as the panel's Save to Library). Provide folder (inbox, sent, drafts), message_ref (issued by read_message/list output) and part_index (from list_email_attachments). The destination is chosen for you — there is no path parameter. Returns the saved file's workspace-relative path, absolute path and size; your normal file tools can then read that exact path. Saving a file is a normal permission-gated action: it asks under the ordinary permission settings and Auto-approve treats it like any other workspace write."
+	return "Save one email attachment into your workspace's Library. Files go under mail/<mailbox>/<year-month>/ (the same place, name rules, 25 MiB cap and audit entry as the panel's Save to Library). Provide folder (inbox, sent, drafts), message_ref (issued by read_message/list output) and part_index (from list_email_attachments). The destination is chosen for you — there is no path parameter. Returns the saved file's workspace-relative path, absolute path and size; your normal file tools can then read that exact path. Saving may ask for approval depending on your permissions and Auto-approve settings."
 }
 
 func (t *DownloadEmailAttachmentTool) Parameters() map[string]any {
