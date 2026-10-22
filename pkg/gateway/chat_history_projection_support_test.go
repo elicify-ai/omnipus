@@ -70,7 +70,9 @@ func pagingProjectionProbe(t *testing.T, mode string) {
 			pagingSeedTools(t, s, sid, 21, 200*1024)
 		} else {
 			for i := 1; i <= 21; i++ {
-				require.NoError(t, s.AppendTranscriptStrict(sid, session.TranscriptEntry{ID: fmt.Sprintf("special-%03d", i), Type: session.EntryTypeProviderFallback, AgentID: "mia", UnavailableModel: "unavailable-model", Model: "used-model", UnavailableCode: "rate_limit", Timestamp: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}))
+				// D10/section Q: a positive special-note fixture needs its saved
+				// text and valid rate_limited code; rate_limit is not an alias.
+				require.NoError(t, s.AppendTranscriptStrict(sid, session.TranscriptEntry{ID: fmt.Sprintf("special-%03d", i), Type: session.EntryTypeProviderFallback, Role: "system", Content: "Answered by the Fallback model (used-model) because unavailable-model was unavailable.", AgentID: "mia", ViewMembership: session.ViewMembershipChat, UnavailableModel: "unavailable-model", Model: "used-model", UnavailableCode: "rate_limited", Timestamp: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}))
 			}
 		}
 		require.NoError(t, s.FlushSessionStats(sid))
