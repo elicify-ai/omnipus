@@ -202,9 +202,9 @@ func (t *ChannelConnectTool) Execute(ctx context.Context, args map[string]any) (
 }
 
 // pairingResult reports what this connect's own admitted pairing attempt
-// actually did after the reload (gate r4 R4-A05): a running pairing needs the
-// QR scanned; an already-linked device connected without pairing; a failed,
-// stopped or interrupted attempt is saved but not working. It does not decide
+// actually did after the reload: active pairing, prior link, a fresh link,
+// expiry and pairing failure are distinct. A completed link still requires a
+// confirmed running connection before a working claim. It does not decide
 // while the attempt has not started yet.
 func (t *ChannelConnectTool) pairingResult(id, attemptID string, running bool, fields map[string]any,
 	scope string, notTested []string,
@@ -222,6 +222,24 @@ func (t *ChannelConnectTool) pairingResult(id, attemptID string, running bool, f
 		fields["pairing"] = "the WhatsApp device was already linked; no QR code was needed"
 		fields["proven"] = []string{"the channel connected after the reload with its existing linked device"}
 		return changeSuccess(fields, working(scope, notTested...)), true
+	case rec.Outcome == channels.PairingOutcomeLinked:
+		fields["pairing"] = "the WhatsApp device was linked by this pairing"
+		fields["proven"] = []string{"the device completed this pairing"}
+		if !running {
+			return changeSuccess(fields, savedNotWorking("the WhatsApp device linked, but its live connection is not confirmed running; "+
+				"check Connectors before connecting again", scope, notTested...)), true
+		}
+		fields["proven"] = []string{"the device completed this pairing", "the channel is running with the saved configuration"}
+		return changeSuccess(fields, working(scope, notTested...)), true
+	case rec.Outcome == channels.PairingOutcomeTimeout:
+		fields["pairing"] = "the WhatsApp QR code expired before pairing finished"
+		return changeSuccess(fields, savedNotWorking("the WhatsApp QR code expired before pairing finished; "+
+			"use Retry in this chat to request a new code", scope, append([]string{"device pairing"}, notTested...)...)), true
+	case rec.Outcome == channels.PairingOutcomeError:
+		fields["pairing"] = "the WhatsApp pairing failed"
+		return changeSuccess(fields, savedNotWorking("the WhatsApp pairing ended with an error; "+
+			"check the live pairing status or server log, resolve the reported problem, then use Retry in this chat", scope,
+			append([]string{"device pairing"}, notTested...)...)), true
 	case rec.Outcome == channels.PairingOutcomeStartFailed:
 		var cause error
 		if t.deps.LastStartError != nil {
@@ -330,7 +348,7 @@ func (t *ChannelConnectTool) liveResult(id, ws, agentID, chType, savedRevision, 
 			scope, notTested...)), true
 	}
 	if whatsappChannel(chType) && attemptID != "" && t.deps.PairingAttemptState != nil {
-		if res, decided := t.pairingResult(id, attemptID, running, fields, scope, notTested); decided {
+		if res, decided := t.pairingResult(id, attemptID, running && known, fields, scope, notTested); decided {
 			return res, true
 		}
 	}
