@@ -107,11 +107,13 @@ func TestTaskTodosActiveFormHTTPNormalization(t *testing.T) {
 		{name: "trim_before_500_point_limit", input: " \t" + strings.Repeat("𝑥", 500) + "\n ", wantForm: strings.Repeat("𝑥", 500)},
 		{name: "501_code_points_rejected", input: strings.Repeat("a", 501), wantError: "todo[0]: active_form must be 500 characters or fewer"},
 		{name: "501_supplementary_code_points_rejected", input: strings.Repeat("𝑥", 501), wantError: "todo[0]: active_form must be 500 characters or fewer"},
-		{name: "number_rejected", input: 42, wantError: "invalid JSON body"},
-		{name: "boolean_rejected", input: true, wantError: "invalid JSON body"},
-		{name: "object_rejected", input: map[string]any{"form": "Drafting"}, wantError: "invalid JSON body"},
-		{name: "array_rejected", input: []string{"Drafting"}, wantError: "invalid JSON body"},
-		{name: "null_rejected", input: nil, wantError: "invalid JSON body"},
+		// RR1 fix brief explicitly replaces generic semantic-error copy with
+		// a safe indexed field diagnostic. The 400/no-write oracles stay intact.
+		{name: "number_rejected", input: 42, wantError: "todos[0].active_form"},
+		{name: "boolean_rejected", input: true, wantError: "todos[0].active_form"},
+		{name: "object_rejected", input: map[string]any{"form": "Drafting"}, wantError: "todos[0].active_form"},
+		{name: "array_rejected", input: []string{"Drafting"}, wantError: "todos[0].active_form"},
+		{name: "null_rejected", input: nil, wantError: "todos[0].active_form"},
 	}
 	for _, operation := range []string{"create", "patch", "put"} {
 		t.Run(operation, func(t *testing.T) {
@@ -135,7 +137,11 @@ func TestTaskTodosActiveFormHTTPNormalization(t *testing.T) {
 						assert.Equal(t, http.StatusBadRequest, response.Code, "invalid active_form must be rejected before writing: %s", response.Body.String())
 						var failure gen.ErrorResponse
 						require.NoError(t, json.Unmarshal(response.Body.Bytes(), &failure))
-						assert.Equal(t, tc.wantError, failure.Error, "specific validation response")
+						if strings.HasSuffix(tc.wantError, ".active_form") {
+							assertSafeTodoFieldError(t, failure.Error, 0, "Draft the Q4 summary", "Quarter plan")
+						} else {
+							assert.Equal(t, tc.wantError, failure.Error, "specific validation response")
+						}
 						after, listErr := api.taskStore.List(task.Filter{})
 						require.NoError(t, listErr)
 						require.Equal(t, before, after, "rejected create must add no task; rejected replacement must preserve the entire old task")
