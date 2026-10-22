@@ -26,6 +26,8 @@ Email works differently. An email mailbox belongs to one agent in one workspace.
 5. Select **Save & Enable**. On success, the connected account appears with an **Enabled** status. For WhatsApp, keep the panel open for pairing: **Enabled** is the gateway's currently loaded setting, not proof that a code is ready, the phone is linked, or messages can be delivered. See the recovery details below if enabling reports an error.
 6. To connect another account on the same platform, select **Add another…** beside its group.
 
+If a connection finishes starting after a newer settings change has cancelled that start, Omnipus stops that older connection instead of leaving it active without a worker. If its cleanup cannot finish, the reload reports the error; resolve the reported problem and reload the configuration to retry cleanup. This cleanup belongs to that older connection, not a replacement with the same name.
+
 ### Connecting from chat
 
 You can also ask Omnipus in chat to connect a platform. First it confirms the proposed connection with you. For a new connection, it saves the non-secret settings before requesting credentials, so the secure card can name an existing destination. Under the shipped policy, that initial configuration save asks for approval; it does not enable a new connection. You then enter the credentials on the secure card, never in the conversation. A separate final connect approval selects the saved references, binds the connection to the named workspace and main agent, enables it and starts it. Cancelling the secret card stores no secret values, but leaves any non-secret settings already saved.

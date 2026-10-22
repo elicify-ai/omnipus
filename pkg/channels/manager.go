@@ -2133,6 +2133,8 @@ type managerReload struct {
 	// (#1277 — see removeChannels/startAdded).
 	removedInstances map[string]Channel
 	cc               map[string]config.ChannelInstanceConfig
+	startCleanupErr  error
+	failedDisposals  map[string]bool
 }
 
 // Reload applies configuration changes to the channel manager. It compares
@@ -2565,7 +2567,7 @@ func (mr *managerReload) restartExisting() error {
 	for _, f := range mr.deferFuncs {
 		f()
 	}
-	return nil
+	return mr.startCleanupErr
 }
 
 func (m *Manager) RegisterChannel(name string, channel Channel) {

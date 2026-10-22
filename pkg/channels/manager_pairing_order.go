@@ -5,6 +5,8 @@
 package channels
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 
@@ -80,6 +82,7 @@ func (mr *managerReload) publishStartedWorker(name string, channel Channel) {
 	order := mr.m.PairingAttempts().LockChannel(name)
 	if !order.MatchesConfig(mr.cfg) || mr.m.channels[name] != channel || mr.dispatchCtx.Err() != nil {
 		order.Unlock()
+		mr.disposeUnpublishedStart(name, channel, routes)
 		return
 	}
 	mr.m.noteStartLocked(name, nil)
@@ -99,6 +102,41 @@ func (mr *managerReload) publishStartedWorker(name string, channel Channel) {
 			mr.m.mux.Handle(route.path, route.handler)
 		}
 	})
+}
+
+// disposeUnpublishedStart owns the successfully started object, even after its
+// publication permission expires. No ordering guard spans Stop or an adapter
+// callback; the manager lock still protects the pointer-checked bookkeeping.
+func (mr *managerReload) disposeUnpublishedStart(name string, channel Channel, routes []channelHTTPRoute) {
+	if err := channel.Stop(mr.ctx); err != nil {
+		mr.startCleanupErr = errors.Join(mr.startCleanupErr,
+			fmt.Errorf("channel %q started after its configuration changed; cleanup unfinished: %w; reload configuration to retry cleanup", name, err))
+		if mr.m.channels[name] == channel {
+			// Without an applied hash a subsequent disabled snapshot sees
+			// absent -> absent and never retries this still-live resource.
+			if mr.failedDisposals == nil {
+				mr.failedDisposals = make(map[string]bool)
+			}
+			mr.failedDisposals[name] = true
+			if mr.m.channelHashes == nil {
+				mr.m.channelHashes = make(map[string]string)
+			}
+			mr.m.channelHashes[name] = mr.list[name]
+			mr.m.recordResourceConfigOrder(name, mr.cfg)
+		}
+		delete(mr.list, name)
+		return
+	}
+	if mr.m.channels[name] == channel {
+		if mr.m.mux != nil {
+			for _, route := range routes {
+				mr.m.mux.Unhandle(route.path)
+			}
+		}
+		delete(mr.m.channels, name)
+		delete(mr.m.resourceConfigOrders, name)
+	}
+	delete(mr.list, name)
 }
 
 func (mr *managerReload) recordStartFailure(name string, channel Channel, err error) {
@@ -137,6 +175,9 @@ func (mr *managerReload) commitAppliedHashes() {
 		mr.m.channelHashes = make(map[string]string)
 	}
 	for id := range ids {
+		if mr.failedDisposals[id] {
+			continue // retain the exact failed resource's removal/retry bookkeeping
+		}
 		order := mr.m.PairingAttempts().LockChannel(id)
 		if order.MatchesConfig(mr.cfg) {
 			if hash, exists := mr.list[id]; exists {
