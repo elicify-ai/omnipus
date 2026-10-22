@@ -92,6 +92,7 @@ import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
   feedMarkLabel,
+  ReplyStatusFallbackProvider,
   showsFeedMark,
   useReplySlotPhase,
 } from './AgentStatusIndicator'
@@ -513,14 +514,11 @@ function AssistantTextPart() {
   )
 }
 
-// Inline status for the live streaming bubble. Actual correlated tool status
-// selects Working; label rules stay the same (a goal phrase wins over hidden
-// tool copy). Only a model-response phase uses the rotating thinking phrases.
-// The mark replaces the bouncing dots. Not mounted for a settled row —
-// that row draws Idle itself. The mark suspends until the agent record
-// arrives so the figure is in the same paint as the phrase.
+// Motion follows correlated execution; all work renderers share the status
+// episode owned above their split, including the identity-loading fallback.
 function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
   const message = useMessage()
+  const turnId = useChatStore((state) => state.messagesById[message.id]?.turnId ?? null)
   const isRunning = message.status?.type === 'running'
   const storeToolCalls = useChatStore((s) => s.toolCalls)
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
@@ -552,9 +550,9 @@ function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
   const label = feedMarkLabel(phase)
   return (
     <React.Suspense
-      fallback={<AgentStatusIndicator phase={phase.kind} label={label} />}
+      fallback={<AgentStatusIndicator phase={phase.kind} label={label} turnId={turnId} />}
     >
-      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} />
+      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} turnId={turnId} />
     </React.Suspense>
   )
 }
@@ -563,10 +561,12 @@ function ResolvedAgentMark({
   agentId,
   phase,
   label,
+  turnId,
 }: {
   agentId: string | null
   phase: 'thinking' | 'working' | 'waiting' | 'unavailable'
   label: string | null
+  turnId: string | null
 }) {
   const agents = useChatAgents()
   const agent = agents.find((item) => item.id === agentId)
@@ -574,6 +574,7 @@ function ResolvedAgentMark({
     <AgentStatusIndicator
       phase={phase}
       label={label}
+      turnId={turnId}
       figure={agent?.figure}
       role={agent?.role}
       color={agent?.color}
@@ -1079,6 +1080,16 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     return false
   })
 
+  // Replay finalizes saved bubbles even when their producing turn is still
+  // running. Keep the existing indicator on the last confirmed active reply,
+  // without waiting for another token or marking older replies as running.
+  const recoveredRunning = useChatStore((state) => {
+    if (!isLastAssistant || !activeSessionId || !message.turnId) return false
+    const bucket = state.sessionsById[activeSessionId]
+    return bucket?.isStreaming === true && !bucket.isReplaying && bucket.activeTurnId === message.turnId
+  })
+  const replyStreaming = !!message.isStreaming || recoveredRunning
+
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
   const agentDisplayName = agent?.name ?? (messageAgentId || null)
@@ -1182,11 +1193,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     : null
   const positionedToolLabel = derivePositionedHiddenRunningLabel(positionedToolCalls, verboseChatEnabled)
   const replyPhase = useReplySlotPhase({
-    streaming: !!message.isStreaming,
+    streaming: replyStreaming,
     hasRunningTool: runningToolNames.length > 0,
     toolLabel: positionedToolLabel,
     goalLabel: emptyPlaceholderLabel,
-    idleEligible: isLastAssistant && !message.isStreaming,
+    idleEligible: isLastAssistant && !replyStreaming,
   })
   // 1b (founder UI feedback 2026-10-11): while THIS reply is streaming, the
   // inline indicator never disappears — streamed text, a visible tool card,
@@ -1197,7 +1208,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // no "Idle" word and no "Unavailable/reconnecting" word on a finished
   // reply — connection state has its own surfaces
   // (ChatConnectionStatusLine / UnavailableChatNotice).
-  const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || !!message.isStreaming)
+  const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || replyStreaming)
 
   return (
     <div
@@ -1294,6 +1305,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             <AgentStatusIndicator
               phase={replyPhase.kind}
               label={feedMarkLabel(replyPhase)}
+              turnId={message.turnId}
               figure={agent?.figure}
               role={agent?.role}
               color={agent?.color}
@@ -1795,16 +1807,7 @@ function AssistantMessage() {
           <AgentReplyLabel agent={agent} name={agentDisplayName} header={null} />
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-          {showEmptyPlaceholder ? (
-            // Nothing has streamed in yet — show only the status mark,
-            // not an empty text bubble + Copy affordance (D-fix).
-            <InlineThinkingIndicator agentId={messageAgentId ?? null} />
-          ) : isTerminalEmpty ? (
-            // Terminal-empty variant (D-fix): the turn is over and there is
-            // still nothing to show. Render nothing rather than an empty
-            // Copy-only bubble — see isTerminalEmpty's doc comment above.
-            null
-          ) : (
+          {!showEmptyPlaceholder && !isTerminalEmpty && (
             <>
               {/* Media (screenshots, files) renders BEFORE the parts so the image
                   shows directly under the tool-call pill that produced it, with
@@ -1825,14 +1828,12 @@ function AssistantMessage() {
                   },
                 }}
               />
-              {/* Trailing status mark — sits at the bottom of the bubble
-                  while the turn is running so the user always sees a "still
-                  working" cue at the position where the next text/tool will
-                  appear. Once a token streams in, the streamed text renders
-                  above the indicator and pushes it further down. */}
-              <InlineThinkingIndicator agentId={messageAgentId ?? null} />
             </>
           )}
+          {/* One mount point before and after the first visible token/tool.
+              Text can appear above it without reselecting the fixed phrase
+              or restarting the synchronized icon/text animation clocks. */}
+          {!isTerminalEmpty && <InlineThinkingIndicator agentId={messageAgentId ?? null} />}
         </div>
 
         {/* Action bar — Copy + Retry buttons, always visible at reduced opacity.
@@ -3124,6 +3125,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
     // a test can type into the old surface and the message rides the stale
     // session binding — see openSessionByDeepLink in
     // tests/e2e/fixtures/session-setup.ts.
+    <ReplyStatusFallbackProvider>
     <div
       className="flex flex-col absolute inset-0 overflow-hidden"
       data-active-session-id={activeSessionId ?? ''}
@@ -3302,5 +3304,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         </ThreadPrimitive.Root>
       )}
     </div>
+    </ReplyStatusFallbackProvider>
   )
 }

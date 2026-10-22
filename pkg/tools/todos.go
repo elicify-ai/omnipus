@@ -41,14 +41,16 @@ func (t *SetTodosTool) Scope() ToolScope       { return ScopeCore }
 func (t *SetTodosTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *SetTodosTool) Description() string {
-	return "Set your working scratchpad: a flat checklist of steps for the outcome you're currently focused on. " +
-		"Pass the FULL list every call (replace-semantics — no item IDs). " +
-		"Use this for the throwaway checklist of what you're doing this turn; " +
-		"use create_task + dependencies for a durable multi-wave plan. " +
-		"Your checklist is shown on the board and re-shown to you each turn. " +
-		"You have ONE active checklist at a time: calling this with a different `outcome` closes the " +
-		"previous checklist card as done and starts a fresh one, so reuse the exact same `outcome` string " +
-		"for every update to the same unit of work."
+	return "Use set_todos for every request, including one-line answers, before your first reply or other tool call. " +
+		"Keep your own checklist: mark the current item `in_progress`, future items `pending`, and finished items " +
+		"`completed`; update it as work advances and before your final reply. Pass `outcome` and the FULL `todos` " +
+		"list on every call; each call replaces the list, with no item IDs. Reuse the exact same `outcome` for " +
+		"the same unit of work. You have one active checklist in this session: changing `outcome` closes the " +
+		"previous checklist card as done and starts a new one. Your checklist is shown on the board and re-shown " +
+		"to you each turn. Optionally give each item an `active_form`: a present-participle phrase such as " +
+		"\"Drafting the Q4 summary\", up to 500 characters, used for the chat's working-on line while that item is " +
+		"`in_progress`. Use create_task with dependencies for a durable multi-wave plan, while tracking your own " +
+		"current work here."
 }
 
 func (t *SetTodosTool) Parameters() map[string]any {
@@ -67,6 +69,10 @@ func (t *SetTodosTool) Parameters() map[string]any {
 						"text": map[string]any{
 							"type":        "string",
 							"description": "Checklist item text (1-500 chars)",
+						},
+						"active_form": map[string]any{
+							"type":      "string",
+							"maxLength": 500,
 						},
 						"status": map[string]any{
 							"type":        "string",
@@ -280,7 +286,8 @@ func (t *SetTodosTool) resolveWorkspaceID(ctx context.Context) (string, error) {
 
 // parseTodosArg converts the raw []any slice from LLM args into []task.Todo.
 // Each element must be a map with "text" (string, non-empty) and optional
-// "status" (one of pending/in_progress/completed; default "pending").
+// "status" (one of pending/in_progress/completed; default "pending"), and
+// "active_form" (trimmed, optional, up to 500 characters).
 func parseTodosArg(raw []any) ([]task.Todo, error) {
 	todos := make([]task.Todo, 0, len(raw))
 	for i, item := range raw {
@@ -291,6 +298,17 @@ func parseTodosArg(raw []any) ([]task.Todo, error) {
 		text, _ := m["text"].(string)
 		if text == "" {
 			return nil, fmt.Errorf("todos[%d]: text must not be empty", i)
+		}
+		activeForm := ""
+		if value, exists := m["active_form"]; exists {
+			activeFormRaw, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("todos[%d]: active_form must be a string", i)
+			}
+			activeForm = task.NormalizeTodoActiveForm(activeFormRaw)
+			if len([]rune(activeForm)) > 500 {
+				return nil, fmt.Errorf("todos[%d]: active_form must be 500 characters or fewer", i)
+			}
 		}
 		statusRaw, _ := m["status"].(string)
 		if statusRaw == "" {
@@ -304,7 +322,7 @@ func parseTodosArg(raw []any) ([]task.Todo, error) {
 				statusRaw,
 			)
 		}
-		todos = append(todos, task.Todo{Text: text, Status: st})
+		todos = append(todos, task.Todo{Text: text, Status: st, ActiveForm: activeForm})
 	}
 	return todos, nil
 }
@@ -320,7 +338,7 @@ func renderChecklist(goal string, todos []task.Todo) string {
 		sb.WriteString("- [")
 		sb.WriteString(string(td.Status))
 		sb.WriteString("] ")
-		sb.WriteString(td.Text)
+		sb.WriteString(td.ScratchpadText())
 		sb.WriteByte('\n')
 	}
 	if len(todos) == 0 {

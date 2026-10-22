@@ -1940,6 +1940,7 @@ type Task = {
 };
 type Todo = {
   text: string;
+  active_form?: string | undefined;
   status: "pending" | "in_progress" | "completed";
 };
 type AcceptanceCriterion = {
@@ -5120,6 +5121,17 @@ export const DevicesResponse: z.ZodType<DevicesResponse> = z.object({
 });
 export const Todo: z.ZodType<Todo> = z.object({
   text: z.string().min(1).max(500),
+  active_form: z.string().superRefine((value, ctx) => {
+    if (Array.from(value).length > 500) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_big,
+        maximum: 500,
+        type: "string",
+        inclusive: true,
+        exact: false,
+      });
+    }
+  }).optional(),
   status: z.enum(["pending", "in_progress", "completed"]),
 });
 export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
@@ -13728,7 +13740,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/security/tool-policies",
     alias: "updateGlobalToolPolicies",
-    description: `Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15).
+    description: `Persists new global tool policies to config.json under the sandbox key and waits until the running-agent reload has finished. Changes are audit-logged (SEC-15). HTTP 200 means the policies were saved and the reload completed and was confirmed, so running agents are enforcing the saved policies. A reload that fails, or that does not confirm, does not roll the save back and is not HTTP 200: the response is 503 with ErrorResponse. This operation is not the dev_mode_bypass guard.
 `,
     requestFormat: "json",
     parameters: [
@@ -13752,7 +13764,8 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       },
       {
         status: 503,
-        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        description: `The policies were saved and were not rolled back, but they could not be applied to running agents because the reload failed or did not confirm. Retrying the same update, or restarting Omnipus, is the recovery. This 503 is not 503BypassActive and does not mean dev_mode_bypass refused the write. The error field is exactly &quot;The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus.&quot; No other field is required. The response must not say the write was undone.
+`,
         schema: ErrorResponse,
       },
     ],
