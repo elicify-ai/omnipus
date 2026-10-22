@@ -77,7 +77,7 @@ async function openGlobalPolicies() {
   expect(category.textContent, 'positive control: persisted map A was hydrated').toBe('Allow')
   fireEvent.click(category)
   const row = await screen.findByTestId('tool-row-bash')
-  expect(within(row).getByRole('button', { name: 'Deny', exact: true })).toBeEnabled()
+  expect(within(row).getByRole('button', { name: /^Deny$/ })).toBeEnabled()
   expect(fetchMock, 'hydration must not send a PUT').not.toHaveBeenCalled()
   return { ...rendered, row }
 }
@@ -94,11 +94,11 @@ async function queueAWhileBIsPending() {
   fetchMock.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise)
   const rendered = await openGlobalPolicies()
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-  fireEvent.click(within(rendered.row).getByRole('button', { name: 'Deny', exact: true }))
+  fireEvent.click(within(rendered.row).getByRole('button', { name: /^Deny$/ }))
   await act(async () => { await vi.advanceTimersByTimeAsync(500) })
   expect(fetchMock).toHaveBeenCalledTimes(1)
   expectPut(1, B)
-  fireEvent.click(within(rendered.row).getByRole('button', { name: 'Allow', exact: true }))
+  fireEvent.click(within(rendered.row).getByRole('button', { name: /^Allow$/ }))
   await act(async () => { await vi.advanceTimersByTimeAsync(500) })
   expect(fetchMock, 'queue latest A without overlapping the held B request').toHaveBeenCalledTimes(1)
   // Both debounce callbacks have run. Use real timers for actual network-body
@@ -113,7 +113,7 @@ describe('global policy recovery through the real settings consumer', () => {
     expect(JSON.stringify(body)).toContain(INTERNAL) // Non-vacuous leak control.
     fetchMock.mockResolvedValueOnce(jsonResponse(body))
     const { row, container } = await openGlobalPolicies()
-    fireEvent.click(within(row).getByRole('button', { name: 'Deny', exact: true }))
+    fireEvent.click(within(row).getByRole('button', { name: /^Deny$/ }))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toBe(RECOVERY)
     expect(container.innerHTML).not.toContain(INTERNAL)
