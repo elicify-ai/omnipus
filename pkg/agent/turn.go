@@ -94,6 +94,8 @@ type turnState struct {
 	approvalOrigin   approvalOrigin
 
 	mu sync.RWMutex
+	// startedTool is installed only at actual dispatch; guarded by mu.
+	startedTool *startedToolOutcome
 
 	// userInputInWindow is set by assembleMessages when this turn's re-read
 	// instruction is already the newest line of the model window.
