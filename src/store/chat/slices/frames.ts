@@ -617,6 +617,26 @@ function scheduleReplayingClear(
   return clearReplayingNow
 }
 
+/** Adopt a wire identity in place; tool/span references move only for step 2. */
+function rekeyAssistantPlaceholder(draft: SessionChatState, localId: string, messageId: string, remapOwnedReferences = false): void {
+  const placeholder = draft.messagesById[localId]
+  delete draft.messagesById[localId]
+  draft.messagesById[messageId] = { ...placeholder, id: messageId }
+  const idx = draft.messageOrder.indexOf(localId)
+  if (idx !== -1) draft.messageOrder[idx] = messageId
+  else draft.messageOrder.push(messageId)
+  if (!remapOwnedReferences) return
+  const owners = draft.toolCallOwnerMessageId
+  if (owners) {
+    for (const callId of Object.keys(owners)) {
+      if (owners[callId] === localId) owners[callId] = messageId
+    }
+  }
+  for (const entry of Object.values(draft.spanBySpanId ?? {})) {
+    if (entry.messageId === localId) entry.messageId = messageId
+  }
+}
+
 function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: TokenFrameType): void {
   const m = draft.messagesById[bubbleId]
   if (frame.replace) {
@@ -774,6 +794,13 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       const m = draft.messagesById[turnBubbleId]
       if (m.turnId === undefined) m.turnId = turnId // now that a token has named the turn
       m.closedBySteer = false
+      // Empty local placeholders adopt the wire key without replacing a real entry.
+      const rekeyable = !m.content && (m.isStreaming || m.status === 'streaming') && !m.mergedReplayIds?.length && !draft.messagesById[messageId]
+      if (rekeyable) {
+        rekeyAssistantPlaceholder(draft, turnBubbleId, messageId, true)
+        applyTokenContentTo(draft, messageId, frame)
+        return
+      }
       m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
       draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
       applyTokenContentTo(draft, turnBubbleId, frame)
@@ -823,19 +850,12 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       !prevMsg.media?.length &&
       !prevMsg.spans?.length
     if (isEmptyPlaceholder) {
-      delete draft.messagesById[prevOpenId]
-      const idx = draft.messageOrder.indexOf(prevOpenId)
-      const bubble: ChatMessage = {
-        ...prevMsg,
-        id: messageId,
-        content: frame.content,
-        agentId: frame.agent_id ?? prevMsg.agentId,
-        turnId: turnId ?? prevMsg.turnId,
-        ...(frame.room_ref ? { roomRef: frame.room_ref } : {}),
-      }
-      draft.messagesById[messageId] = bubble
-      if (idx !== -1) draft.messageOrder[idx] = messageId
-      else draft.messageOrder.push(messageId)
+      rekeyAssistantPlaceholder(draft, prevOpenId, messageId)
+      const bubble = draft.messagesById[messageId]
+      bubble.content = frame.content
+      bubble.agentId = frame.agent_id ?? prevMsg.agentId
+      bubble.turnId = turnId ?? prevMsg.turnId
+      if (frame.room_ref) bubble.roomRef = frame.room_ref
       draft.isStreaming = true
       return
     }
