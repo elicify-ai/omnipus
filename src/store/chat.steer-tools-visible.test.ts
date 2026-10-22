@@ -125,8 +125,8 @@ describe('mid-turn steer keeps the closing bubble’s tool rows visible (founder
   it('first reply keeps all 3 rows after a mid-turn send; the next tool_call_start lands ONLY on the second reply', () => {
     connectWithSendSpy()
 
-    // Turn 1 opens: the first token registers the server's message_id onto
-    // the optimistic placeholder bubble (the bubble keeps its client id).
+    // Turn 1 opens: the first token replaces the optimistic local key with
+    // the canonical server message_id; later reads use that wire identity.
     act(() => { useChatStore.getState().sendMessage('list the dir, read two files, summarise') })
     f({ type: 'token', content: 'Let me look.', message_id: 'm1', turn_id: TURN, seq: 1 })
     f({ type: 'tool_call_start', call_id: 'tc1', tool: 'list_directory', params: { path: '.' }, seq: 2 })
@@ -189,11 +189,15 @@ describe('mid-turn steer keeps the closing bubble’s tool rows visible (founder
     // -- Turn end: done re-bakes by owner and wipes the live maps ----------
     f({ type: 'tool_call_result', call_id: 'tc9', tool: 'bash', result: 'ok', status: 'success', seq: 9 })
     f({ type: 'token', content: 'Sure - sizes:', message_id: 'm2', turn_id: TURN, seq: 10 })
+    const afterToken = useChatStore.getState().sessionsById[SID]!
+    expect(afterToken.messagesById['m2']?.id).toBe('m2')
+    expect(afterToken.messagesById[m2Id]).toBeUndefined()
+    expect(afterToken.toolCallOwnerMessageId?.['tc9']).toBe('m2')
     f({ type: 'done', message_id: 'm2', turn_id: TURN, seq: 11, stats: { tokens: 1, cost: 0 } })
 
     const afterDone = useChatStore.getState().sessionsById[SID]!
     expect((afterDone.messagesById[m1Id]!.tool_calls ?? []).map((tc) => tc.id)).toEqual(['tc1', 'tc2', 'tc3'])
-    expect((afterDone.messagesById[m2Id]!.tool_calls ?? []).map((tc) => tc.id)).toEqual(['tc9'])
+    expect((afterDone.messagesById['m2']!.tool_calls ?? []).map((tc) => tc.id)).toEqual(['tc9'])
     expect(afterDone.toolCallOrder).toEqual([])
     expect(useChatStore.getState().isStreaming).toBe(false)
     // No duplicate ids across bubbles after the turn-end re-bake.
