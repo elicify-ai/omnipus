@@ -117,6 +117,9 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 	intended := ADR090RolePolicyInventory(id)
 	ceiling := config.DefaultConfig().Sandbox.ToolPolicies
 	result := make(map[string]config.ToolPolicy)
+	// Q22=B: the ordinary core's create_skill/edit_skill Ask differs from
+	// the Allow ceiling, so this delta persists both local Ask entries.
+	// Omnipus returned above and keeps no local entry for either tool.
 	for _, name := range allStaticToolNames {
 		if intended[name] != config.ToolPolicy(ceiling[name]) {
 			result[name] = intended[name]

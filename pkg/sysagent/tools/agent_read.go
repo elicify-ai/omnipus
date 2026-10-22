@@ -69,6 +69,8 @@ func (t *AgentGetTool) Execute(_ context.Context, args map[string]any) *tools.To
 	return tools.NewToolResult(successJSON(resp))
 }
 
+const agentToolsRecovery = "Retry once. If it persists, report this error code and the requested agent or preview type to the operator. No settings were changed."
+
 type AgentGetToolsTool struct{ deps *Deps }
 
 func NewAgentGetToolsTool(d *Deps) *AgentGetToolsTool { return &AgentGetToolsTool{deps: d} }
@@ -102,7 +104,7 @@ func (t *AgentGetToolsTool) Execute(_ context.Context, args map[string]any) *too
 			"Supply exactly one of: an existing agent's id, its exact name, or new_agent_type Main/Subagent/subagent_3p", ""))
 	}
 	if t.deps == nil {
-		return tools.ErrorResult(errorJSON("CATALOG_UNAVAILABLE", "Tool metadata catalog is unavailable", ""))
+		return tools.ErrorResult(errorJSON("CATALOG_UNAVAILABLE", "Tool metadata catalog is unavailable", agentToolsRecovery))
 	}
 	var state *agentstore.State
 	var id string
@@ -140,22 +142,22 @@ func (t *AgentGetToolsTool) Execute(_ context.Context, args map[string]any) *too
 	}
 
 	if t.deps.GetCfg == nil {
-		return tools.ErrorResult(errorJSON("CONFIG_UNAVAILABLE", "Global tool policies are unavailable", ""))
+		return tools.ErrorResult(errorJSON("CONFIG_UNAVAILABLE", "Global tool policies are unavailable", agentToolsRecovery))
 	}
 	cfg := t.deps.GetCfg()
 	if cfg == nil {
-		return tools.ErrorResult(errorJSON("CONFIG_UNAVAILABLE", "Global tool policies are unavailable", ""))
+		return tools.ErrorResult(errorJSON("CONFIG_UNAVAILABLE", "Global tool policies are unavailable", agentToolsRecovery))
 	}
 	global := make(map[string]string, len(cfg.Sandbox.ToolPolicies))
 	for name, policy := range cfg.Sandbox.ToolPolicies {
 		global[name] = policy
 	}
 	if t.deps.ToolCatalog == nil {
-		return tools.ErrorResult(errorJSON("CATALOG_UNAVAILABLE", "Tool metadata catalog is unavailable", ""))
+		return tools.ErrorResult(errorJSON("CATALOG_UNAVAILABLE", "Tool metadata catalog is unavailable", agentToolsRecovery))
 	}
 	catalog := t.deps.ToolCatalog()
 	if len(catalog) == 0 {
-		return tools.ErrorResult(errorJSON("CATALOG_UNAVAILABLE", "Tool metadata catalog is unavailable", ""))
+		return tools.ErrorResult(errorJSON("CATALOG_UNAVAILABLE", "Tool metadata catalog is unavailable", agentToolsRecovery))
 	}
 	resolver := runtimePolicyResolver(global, storedOverrides(state.Agent), t.deps.godModeActive())
 	resolver.MCPServers = tools.CloneMCPBindings(storedMCPBindings(state.Agent))
@@ -165,7 +167,7 @@ func (t *AgentGetToolsTool) Execute(_ context.Context, args map[string]any) *too
 	}
 	text, err := compactAgentTools(state, resolver, catalog, previewKind)
 	if err != nil {
-		return tools.ErrorResult(errorJSON("CATALOG_UNAVAILABLE", err.Error(), ""))
+		return tools.ErrorResult(errorJSON("CATALOG_UNAVAILABLE", err.Error(), agentToolsRecovery))
 	}
 	return tools.NewToolResult(text)
 }
