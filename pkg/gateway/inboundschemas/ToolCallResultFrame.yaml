@@ -2,7 +2,7 @@ title: ToolCallResultFrame
 description: >
   Server → client. Emitted at the end of a tool execution with the result and
   final status. The SPA updates the corresponding tool call badge from "running"
-  to "success" or "error".
+  to "success", "error", or "cancelled".
 type: object
 required:
   - type
@@ -36,8 +36,9 @@ properties:
     description: >
       The tool's return value. May be any non-sentinel JSON value (object, array,
       string, number, boolean, or null). null is the documented contract for
-      error-status frames (status="error") — the SPA handles result as unknown
-      and does not crash on null. When the result exceeded 1 MiB the value is a
+      error-status frames (status="error") and cancelled calls with no admitted
+      result — the SPA handles result as unknown and does not crash on null.
+      When the result exceeded 1 MiB the value is a
       TruncatedResult sentinel. When marshaling the result failed the value is a
       MarshalErrorResult sentinel.
 
@@ -72,6 +73,7 @@ properties:
     enum:
       - success
       - error
+      - cancelled
     description: Final execution status. Normalised from empty to "success" by the server.
   duration_ms:
     type: integer
