@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -24,7 +25,7 @@ func updateGoalReminderStreak(sessionID, goalID string, progress, completed bool
 		if cur.State != generated.GoalStateActive || cur.ActiveSessionID != sessionID {
 			return errGoalReminderObsolete
 		}
-		if cur.ZeroOutputPushes >= goalZeroOutputPushMax {
+		if goalReminderBrakePaused(cur) {
 			return nil // only a genuine human input resumes the paused brake
 		}
 		if progress {
@@ -40,7 +41,8 @@ func updateGoalReminderStreak(sessionID, goalID string, progress, completed bool
 }
 
 func goalReminderBrakePaused(rec *goal.Goal) bool {
-	return rec != nil && rec.State == generated.GoalStateActive && rec.ZeroOutputPushes >= goalZeroOutputPushMax
+	return rec != nil && rec.State == generated.GoalStateActive &&
+		(rec.ZeroOutputPushes >= goalZeroOutputPushMax || rec.LatestReason == goalReminderFailedTurnNotice)
 }
 
 // pauseGoalReminders uses the existing waiting status and generated replay
@@ -58,7 +60,7 @@ func (al *AgentLoop) pauseGoalReminders(sessionID string, rec *goal.Goal) error 
 	work := goalReminderWorkFor(current.GoalID)
 	work.mu.Lock()
 	assessedTurn := work.lastAssessedTurn
-	noticeID, err := al.goalReminderPauseNoticeID(sessionID, current.GoalID, assessedTurn)
+	noticeID, err := al.goalReminderPauseNoticeID(sessionID, current.GoalID, assessedTurn, goalReminderPauseContent(current))
 	work.mu.Unlock()
 	if err != nil {
 		return err
@@ -81,13 +83,14 @@ func (al *AgentLoop) pauseGoalReminders(sessionID string, rec *goal.Goal) error 
 type goalReminderPauseAcceptance struct {
 	goalID   string
 	noticeID string
+	content  string
 	written  bool
 }
 
 // goalReminderPauseNoticeID binds the notice to the already assessed producing
 // turn before the passive seam. After a process-local reset only, recover the
 // existing transcript identity here, never from a later human turn after the seam.
-func (al *AgentLoop) goalReminderPauseNoticeID(sessionID, goalID, assessedTurn string) (string, error) {
+func (al *AgentLoop) goalReminderPauseNoticeID(sessionID, goalID, assessedTurn, content string) (string, error) {
 	entryID := "goal-no-progress-" + goalID
 	if assessedTurn != "" {
 		return entryID + "-" + assessedTurn, nil
@@ -99,6 +102,18 @@ func (al *AgentLoop) goalReminderPauseNoticeID(sessionID, goalID, assessedTurn s
 	entries, err := store.ReadTranscript(sessionID)
 	if err != nil {
 		return "", fmt.Errorf("goal reminder pause: read completed outcome identity: %w", err)
+	}
+	if content == goalReminderFailedTurnNotice {
+		for i := len(entries) - 1; i >= 0; i-- {
+			entry := &entries[i]
+			if entry.Role == "user" {
+				break // a genuine reply starts a new failure-pause cycle
+			}
+			if entry.GoalID == goalID && entry.Role == "system" && entry.Content == content && strings.HasPrefix(entry.ID, entryID) {
+				return entry.ID, nil
+			}
+		}
+		return al.goalReminderFailurePauseID(sessionID, entryID)
 	}
 	for i := len(entries) - 1; i >= 0; i-- {
 		if entries[i].GoalID == goalID && entries[i].Role == "assistant" && entries[i].TurnID != "" {
@@ -120,6 +135,7 @@ func (al *AgentLoop) commitGoalReminderPause(sessionID, goalID, assessedTurn, no
 		return nil, errGoalReminderObsolete
 	}
 	goalReminderPauseFreshReadCheckpoint(sessionID, goalID)
+	content := goalReminderPauseContent(current)
 	al.goalSetWaitingOnUser(goalID, true)
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {
@@ -131,7 +147,7 @@ func (al *AgentLoop) commitGoalReminderPause(sessionID, goalID, assessedTurn, no
 	}
 	entry := session.TranscriptEntry{
 		ID:   noticeID,
-		Type: session.EntryTypeSystem, Role: "system", Content: goalReminderPauseNotice,
+		Type: session.EntryTypeSystem, Role: "system", Content: content,
 		AgentID: agentID, GoalID: goalID, Timestamp: time.Now().UTC(),
 	}
 	written, err := store.AppendTranscriptOnce(sessionID, entry)
@@ -141,7 +157,7 @@ func (al *AgentLoop) commitGoalReminderPause(sessionID, goalID, assessedTurn, no
 	active, capN := al.activeLoopsSnapshot("goal")
 	payload := GoalStatusChangedPayload{
 		SessionID: sessionID, GoalID: goalID, Condition: current.Prompt,
-		Round: current.Round, MaxRounds: current.MaxRounds, LatestReason: goalReminderPauseNotice,
+		Round: current.Round, MaxRounds: current.MaxRounds, LatestReason: content,
 		ActiveLoops: active, Cap: capN, State: goalPillWaitingOnUser,
 	}
 	if written {
@@ -153,7 +169,7 @@ func (al *AgentLoop) commitGoalReminderPause(sessionID, goalID, assessedTurn, no
 		}
 	}
 	al.EmitGoalStatusChanged(payload)
-	return &goalReminderPauseAcceptance{goalID: goalID, noticeID: entry.ID, written: written}, nil
+	return &goalReminderPauseAcceptance{goalID: goalID, noticeID: entry.ID, content: content, written: written}, nil
 }
 
 // finishGoalReminderPauseDelivery sends connector and upward copies after the
@@ -162,7 +178,7 @@ func (al *AgentLoop) commitGoalReminderPause(sessionID, goalID, assessedTurn, no
 func (al *AgentLoop) finishGoalReminderPauseDelivery(sessionID string, accepted *goalReminderPauseAcceptance) error {
 	if al.audienceFor(context.Background(), steer.BoundaryFinalReply, sessionID) != steer.AudienceUser {
 		if accepted.written {
-			al.deliverGoalParkUpward(sessionID, false, goalReminderPauseNotice)
+			al.deliverGoalParkUpward(sessionID, false, accepted.content)
 		}
 		return nil
 	}
@@ -171,7 +187,7 @@ func (al *AgentLoop) finishGoalReminderPauseDelivery(sessionID string, accepted 
 		return fmt.Errorf("goal reminder pause: resolve channel: %w", err)
 	}
 	if route.channel != "" && route.channel != "webchat" && route.chatID != "" {
-		return al.enqueueGoalReminderPause(sessionID, accepted.goalID, accepted.noticeID, route.channel, route.chatID)
+		return al.enqueueGoalReminderPause(sessionID, accepted.goalID, accepted.noticeID, route.channel, route.chatID, accepted.content)
 	}
 	return nil
 }
@@ -213,7 +229,7 @@ func (al *AgentLoop) resumeGoalRemindersForHuman(opts processOptions) {
 			return errGoalReminderObsolete
 		}
 		cur.ZeroOutputPushes = 0
-		if cur.LatestReason == goalReminderPauseNotice {
+		if cur.LatestReason == goalReminderPauseNotice || cur.LatestReason == goalReminderFailedTurnNotice {
 			cur.LatestReason = ""
 		}
 		return nil
@@ -226,6 +242,7 @@ func (al *AgentLoop) resumeGoalRemindersForHuman(opts processOptions) {
 		return
 	}
 	work.pending = nil
+	work.failedReminders = 0
 	consumeGoalReminderProgress(fresh.GoalID, work, time.Now().UTC())
 	al.goalMarkIdleSettling(fresh.GoalID, false)
 	if wasPaused {

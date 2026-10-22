@@ -41,16 +41,19 @@ func noteGoalExecutedTool(ts *turnState, name string, result *tools.ToolResult) 
 type goalReminderOutcome struct {
 	turnID    string
 	execution *executionDisposition
+	failed    bool
 }
 
 // goalReminderWork is process-local observation state, not a second durable
-// counter or jobs registry. The only persisted streak is Goal.ZeroOutputPushes.
+// counter or jobs registry. The only persisted streak is Goal.ZeroOutputPushes;
+// failedReminders stays in RAM, with only a committed pause reason saved.
 // Retained process references preserve a real finish timestamp if the existing
 // manager removes a long-running job before the next observation.
 type goalReminderWork struct {
 	mu                  sync.Mutex
 	pending             *goalReminderOutcome
 	lastAssessedTurn    string
+	failedReminders     int
 	pauseNoticeEnqueued string
 	toolActivityAt      time.Time
 	observedProgress    bool

@@ -100,6 +100,10 @@ After **five consecutive completed reminders without progress**, automatic remin
 
 The pause message is a goal status reason, not a Judge verdict. A normal reply clears it.
 
+After three failed automatic reminder turns in a row, the same active goal also pauses; a successful reminder resets this failure count, failed turns never add to the separate five-reminder no-progress count, and a normal reply resumes it.
+
+A reply on its own is no progress: if an automatic reminder completes without a real tool call (other than `set_todos` or `goal_claim`), helper or background activity, new evidence, or a goal-scoped committed file change, five such turns in a row pause the goal.
+
 Send a normal reply to resume the goal and reset that count. This is a pause, not a failed or ended goal. The same rule applies before and after the agent writes its working goal record; there is no separate two-nudge fallback.
 
 Omnipus does not send another reminder or advance this count while the goal session's background commands, dispatched tasks or plans, or delegated helpers are still working. Their output or completion counts as progress. A Stop, an unanswered question or a blocked claim also holds automatic reminders. If a Stop is accepted before a waiting reminder is admitted, that reminder does not start. An ended goal receives none.
@@ -113,7 +117,7 @@ These numbers shape a goal's life:
 | Tries per goal | 20 by default | Settings, Performance, "Goal completion budget" |
 | Task attempts | 3 by default | On the task |
 | Question rounds | 1 per goal | Fixed |
-| Automatic-reminder pause | 5 consecutive completed reminders without progress; no lifetime reminder limit | Fixed |
+| Automatic-reminder pause | 5 consecutive completed reminders without progress, or 3 consecutive failed reminder turns; no lifetime reminder limit | Fixed |
 | Idle expiry | 7 days, never while work is running | Server setting |
 | Active chat goals | 16 at a time | Server setting; tasks count separately |
 

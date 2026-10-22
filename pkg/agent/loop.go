@@ -1863,12 +1863,9 @@ func (al *AgentLoop) runAgentLoop(
 	al.lastTurnResultMu.Lock()
 	al.lastTurnResult = result
 	al.lastTurnResultMu.Unlock()
-	// MERGE NOTE 2026-09-15: integrate's F2 fix called
-	// al.rearmGoalAfterAbnormalTurn(opts) here (a goal-bearing session whose
-	// turn died on this path never re-armed its idle quiet window and stayed
-	// `active` forever). The helper lived in integrate's goal_triggers.go;
-	// goal logic comes from release (#683) by founder ruling, so the call is
-	// dropped and the fix is recorded as a follow-up candidate.
+	// A failed automatic reminder returns before the natural goal hook below.
+	// Retain its real outcome through the existing abnormal-reminder path.
+	al.rearmAbnormalGoalReminder(ts, &result, err)
 	if err != nil {
 		return "", err
 	}

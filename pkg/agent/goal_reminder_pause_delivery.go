@@ -11,7 +11,7 @@ import (
 // remembered only in the existing process-local goal state. A rejected enqueue
 // leaves that marker unset: the next paused-goal observation retries the same
 // durable notice without counting another reminder or duplicating its chat row.
-func (al *AgentLoop) enqueueGoalReminderPause(sessionID, goalID, noticeID, channel, chatID string) error {
+func (al *AgentLoop) enqueueGoalReminderPause(sessionID, goalID, noticeID, channel, chatID, content string) error {
 	work := goalReminderWorkFor(goalID)
 	work.mu.Lock()
 	defer work.mu.Unlock()
@@ -19,7 +19,7 @@ func (al *AgentLoop) enqueueGoalReminderPause(sessionID, goalID, noticeID, chann
 		return nil
 	}
 	if !al.bus.TryPublishOutbound(bus.OutboundMessage{
-		Channel: channel, ChatID: chatID, SessionID: sessionID, Content: goalReminderPauseNotice,
+		Channel: channel, ChatID: chatID, SessionID: sessionID, Content: content,
 	}) {
 		return errors.New("goal reminder pause: outbound queue is full or closed; notice remains pending")
 	}

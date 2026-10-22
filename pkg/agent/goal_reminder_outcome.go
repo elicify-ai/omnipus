@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -8,15 +9,17 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/goal"
 )
 
-// finishGoalReminderOutcome records a natural completion for the existing
-// keeper to assess. Keep registry/diff collection off the reply delivery path.
-// A publication, failed/stopped/parked turn or unrelated input is not an outcome.
+// finishGoalReminderOutcome retains real automatic reminder completions and
+// failures for the existing keeper. Keep collection off the reply delivery path.
+// Publications, stopped/parked turns and unrelated inputs are not outcomes.
 func (al *AgentLoop) finishGoalReminderOutcome(opts processOptions, result *turnResult) {
 	goalID := goalReminderForTurn(opts, result)
 	if goalID == "" || result == nil || result.turnID == "" || result.goalID != goalID {
 		return
 	}
-	if result.stopped || result.turnFailed || result.status != TurnEndStatusCompleted {
+	failed := result.turnFailed || result.status == TurnEndStatusError
+	if result.stopped || result.status == TurnEndStatusAborted || result.status == TurnEndStatusParked ||
+		(!failed && result.status != TurnEndStatusCompleted) {
 		al.goalMarkIdleSettling(goalID, false)
 		return
 	}
@@ -26,7 +29,7 @@ func (al *AgentLoop) finishGoalReminderOutcome(opts processOptions, result *turn
 		work := goalReminderWorkFor(goalID)
 		work.mu.Lock()
 		if work.lastAssessedTurn != result.turnID && work.pending == nil {
-			work.pending = &goalReminderOutcome{turnID: result.turnID, execution: opts.executionDisposition}
+			work.pending = &goalReminderOutcome{turnID: result.turnID, execution: opts.executionDisposition, failed: failed}
 		}
 		work.mu.Unlock()
 		al.reportGoalReadError(sessionID, "read completed goal reminder (assessment retained for retry)", err)
@@ -42,7 +45,7 @@ func (al *AgentLoop) finishGoalReminderOutcome(opts processOptions, result *turn
 		return
 	}
 	if work.pending == nil {
-		work.pending = &goalReminderOutcome{turnID: result.turnID, execution: opts.executionDisposition}
+		work.pending = &goalReminderOutcome{turnID: result.turnID, execution: opts.executionDisposition, failed: failed}
 	}
 	work.mu.Unlock()
 	al.goalMarkIdleSettling(goalID, false)
@@ -75,11 +78,17 @@ func (al *AgentLoop) retryGoalReminderOutcome(sessionID string, rec *goal.Goal) 
 	return err == nil && !busy && !goalReminderBrakePaused(updated)
 }
 
-// assessGoalReminderLocked consumes only an actual completed reminder. The
-// latch keeps work seen during a busy interval until the final assessment.
+// assessGoalReminderLocked consumes only a settled actual reminder outcome.
+// Successful and failed turns have separate streaks; busy progress stays latched.
 func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, work *goalReminderWork) (*goal.Goal, bool, error) {
 	if work.pending != nil {
-		settled, err := goalReminderExecutionSettled(work.pending.execution)
+		settled, err := goalReminderPendingSettled(work.pending)
+		if errors.Is(err, context.Canceled) {
+			work.lastAssessedTurn = work.pending.turnID
+			work.pending = nil
+			al.goalMarkIdleSettling(rec.GoalID, false)
+			return rec, false, nil
+		}
 		if err != nil || !settled {
 			return rec, !settled, err
 		}
@@ -97,7 +106,15 @@ func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, 
 		return rec, false, nil
 	}
 	progress.background = progress.background || work.observedProgress
-	updated, err := updateGoalReminderStreak(sessionID, rec.GoalID, goalReminderMadeProgress(progress), true)
+	var updated *goal.Goal
+	if work.pending.failed {
+		updated, err = updateFailedGoalReminder(sessionID, rec, work, goalReminderMadeProgress(progress))
+	} else {
+		updated, err = updateGoalReminderStreak(sessionID, rec.GoalID, goalReminderMadeProgress(progress), true)
+		if err == nil {
+			work.failedReminders = 0
+		}
+	}
 	if err != nil {
 		return rec, false, err
 	}
@@ -194,8 +211,8 @@ func (al *AgentLoop) prepareGoalReminderDispatch(sessionID string, rec *goal.Goa
 	return reserved
 }
 
-// rearmAbnormalGoalReminder releases only reminder bookkeeping when the
-// steered completion path exits before the shared natural-completion hook.
+// rearmAbnormalGoalReminder retains actual failed reminder turns from ordinary
+// or steered exits that bypass the shared natural-completion hook.
 func (al *AgentLoop) rearmAbnormalGoalReminder(ts *turnState, result *turnResult, runErr error) {
 	if ts == nil || result == nil || (runErr == nil && !result.stopped && !result.turnFailed && result.status == TurnEndStatusCompleted) {
 		return
@@ -204,9 +221,26 @@ func (al *AgentLoop) rearmAbnormalGoalReminder(ts *turnState, result *turnResult
 	if goalID == "" {
 		goalID = goalReminderForTurn(ts.opts, &turnResult{goalID: ts.goalID})
 	}
-	if goalID != "" {
-		al.goalMarkIdleSettling(goalID, false)
+	if goalID == "" {
+		return
 	}
+	al.goalMarkIdleSettling(goalID, false)
+	if result.stopped || ts.stopRequested.Load() || result.status == TurnEndStatusAborted ||
+		result.status == TurnEndStatusParked || errors.Is(runErr, context.Canceled) ||
+		(runErr == nil && !result.turnFailed && result.status != TurnEndStatusError) {
+		return
+	}
+	failed := *result
+	if failed.turnID == "" {
+		failed.turnID = ts.turnID
+	}
+	if failed.goalID == "" {
+		failed.goalID = ts.goalID
+	}
+	failed.turnFailed = true
+	opts := ts.opts
+	opts.goalReminderGoalID = goalID
+	al.finishGoalReminderOutcome(opts, &failed)
 }
 
 // A busy observation can reset on NEW productive activity, but can neither
