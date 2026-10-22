@@ -13,4 +13,20 @@
 | Spec | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/docs/internal/specs/chat-history-paging-spec.md::D1a inconsistent/missing baseline, D7a/B21/B31; explicit gate0/user F1 requirement. |
 | Log | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/squad-1266/gate0-red-20261023/F1-checkpoint-root.log |
 
-This is an implementation defect for GREEN-BE, not a fixture/compile/timeout failure. No production edit, skip, weakened assertion, full suite, Fly or author mutation. GREEN/mutation/Proof-of-failability and formal CHECK remain deferred to separate owners. Remaining queued defects are planned, not claimed authored/executed by this receipt.
+This is an implementation defect for GREEN-BE, not a fixture/compile/timeout failure. No production edit, skip, weakened assertion, full suite, Fly or author mutation. GREEN/mutation/Proof-of-failability and formal CHECK remain deferred to separate owners.
+
+## F2 — interrupted empty main creation cannot resume
+
+Parent production/test source5736ff0d5 (F1 tests only above unchanged feature implementation). Exact TestChatHistoryCreation_InterruptedMainCreationResumes runs in the real session package. Before each retry, the actual empty durable checkpoint has root0/rank0, empty archive/covered ends, nil anchor and ABSENT meta.json. The computed MainSessionID is unchanged. Two error-return cases and two actual child-process exit86/reaped cases cover empty_checkpoint_ready and before_identity_publish. Each fresh reopened GetOrCreateMainSession should resume ONLY this verified empty unpublished baseline; current code instead returns history baseline already exists. Failing assert.NoError is source line33 in /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_creation_retry_red_test.go::TestChatHistoryCreation_InterruptedMainCreationResumes. Real crash/helper source /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_creation_retry_fixture_test.go.
+
+| Subcase family | Actual result |
+|---|---|
+| empty_checkpoint_ready, injected failure and real crash | Both named FAIL: unexpected history baseline already exists on same-main retry |
+| before_identity_publish, injected failure and real crash | Both named FAIL: same unexpected refusal |
+| Nonempty unpublished archive | PASS: retry refuses, no tree overwrite |
+| Inconsistent unpublished checkpoint | PASS: retry refuses, no tree overwrite |
+| Conflicting published main owner | PASS: retry refuses, no adoption/rewrite |
+
+Exact command `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -v -p 1 -run '^TestChatHistoryCreation_InterruptedMainCreationResumes$' github.com/elicify-ai/omnipus/pkg/session`, serial under the same slot wrapper. Saved /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/squad-1266/gate0-red-20261023/F2-creation-retry.log: raw1,4 named FAIL/3 named PASS; actual child Wait exit86 twice. No build/setup/control failure. Spec D1a durable creation/restart, creation publication before identity and explicit user/gate F2. Successful-resume reader/type/owner/repeat assertions remain conditional on resume succeeding; they are NOT falsely claimed reached in RED.
+
+Incidental existing warning observed in this failure fixture: the constructor labels no-meta directories safe to delete even when a durable empty baseline exists. Not fixed or used as an exemption by QA; routed as a note with the RED. Remaining queued defects are planned/in progress, not silently declared tested.
