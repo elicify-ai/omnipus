@@ -177,11 +177,10 @@ func wu15Delivery(t *testing.T, entry gen.RoomEntry, agentID string) gen.RoomDel
 
 func (h *wu15RoomHarness) messages(agentID string) []gen.Message {
 	h.t.Helper()
-	status, body := h.http(http.MethodGet, "/api/v1/sessions/"+h.main(agentID)+"/messages", nil)
-	require.Equal(h.t, http.StatusOK, status, "K33: main history: %s", body)
-	var msgs []gen.Message
-	require.NoError(h.t, json.Unmarshal(body, &msgs))
-	return msgs
+	sid := h.main(agentID)
+	return historyMigrationAllPages(h.t, sid, func(query string) (int, []byte) {
+		return h.http(http.MethodGet, "/api/v1/sessions/"+sid+"/messages"+query, nil)
+	})
 }
 
 func (h *wu15RoomHarness) waitState(roomID, requestID, state string) gen.RoomSnapshotFrame {
