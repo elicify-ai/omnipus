@@ -819,9 +819,27 @@ func (r *approvalRegistryV2) cancelAllPendingForAgent(agentID, reason string) in
 // listener once per entry. match runs under r.mu and must not call back into
 // the registry. Returns the number of entries transitioned.
 func (r *approvalRegistryV2) cancelPendingMatching(match func(e *approvalEntry) bool, reason string) int {
+	return r.cancelMatchingApprovals(match, reason, false, nil).Canceled
+}
+
+// cancelMatchingApprovals keeps Stop's already-approved count in the same
+// critical section as pending -> denied_cancel. Legacy callers count only
+// cancellations and never inspect or match terminal entries.
+func (r *approvalRegistryV2) cancelMatchingApprovals(match func(e *approvalEntry) bool, reason string, countApproved bool, selected map[string]*approvalEntry) stopApprovalResult {
 	r.mu.Lock()
+	var result stopApprovalResult
 	var toDeliver []*approvalEntry
-	for _, e := range r.entries {
+	entries := r.entries
+	if countApproved {
+		// Keep selected terminal entries observable even if their registry
+		// retention expires while this Stop is paused. Entry state is still
+		// guarded by this mutex; a replacement has a distinct approval ID.
+		entries = selected
+	}
+	for _, e := range entries {
+		if countApproved && e.state == ApprovalStateApproved && match(e) {
+			result.AlreadyApproved++
+		}
 		if e.state != ApprovalStatePending || !match(e) {
 			continue
 		}
@@ -845,7 +863,8 @@ func (r *approvalRegistryV2) cancelPendingMatching(match func(e *approvalEntry) 
 			listener(e, ApprovalStateDeniedCancel)
 		}
 	}
-	return len(toDeliver)
+	result.Canceled = len(toDeliver)
+	return result
 }
 
 // cancelAllPendingForSession is the single-id convenience form of

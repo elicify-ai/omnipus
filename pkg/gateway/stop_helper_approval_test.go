@@ -140,14 +140,22 @@ type stopHelperApprovalProvider struct {
 func (*stopHelperApprovalProvider) GetDefaultModel() string { return "stop-helper-approval" }
 
 func (p *stopHelperApprovalProvider) Chat(ctx context.Context, msgs []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
-	for _, msg := range msgs {
+	// A real Resume retains earlier tool history. Only a tool result after
+	// the latest scripted instruction completes this request, not an old run.
+	instruction := -1
+	for i, msg := range msgs {
+		if msg.Role == "user" && (strings.Contains(msg.Content, "ASK:") || strings.Contains(msg.Content, "WAIT:")) {
+			instruction = i
+		}
+	}
+	for _, msg := range msgs[instruction+1:] {
 		if msg.Role == "tool" {
 			return &providers.LLMResponse{Content: "Finished after the tool result."}, nil
 		}
 	}
-	for _, name := range []string{"child.txt", "grandchild.txt", "sibling.txt", "denied.txt"} {
-		for _, msg := range msgs {
-			if msg.Role == "user" && strings.Contains(msg.Content, "ASK:"+name) {
+	for _, name := range []string{"child.txt", "grandchild.txt", "sibling.txt", "denied.txt", "parent.txt"} {
+		if instruction >= 0 {
+			if msg := msgs[instruction]; strings.Contains(msg.Content, "ASK:"+name) {
 				return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
 					ID: "write-" + name, Type: "function", Name: "write_file",
 					Arguments: map[string]any{"path": name, "content": "approved helper content\n"},
