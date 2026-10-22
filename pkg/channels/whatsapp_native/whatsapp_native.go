@@ -10,6 +10,7 @@ package whatsapp
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,11 +81,10 @@ type WhatsAppNativeChannel struct {
 	resourceGeneration uint64
 	originConfig       *config.Config // immutable snapshot used by this factory
 	attemptObserver    func(attemptID string, status channels.PairingStatus, qr, message string)
-	// unfinishedTeardowns pins each captured attempt's known teardown before
-	// clearing its active id. Stop/replacement handles join that exact work,
-	// never treating an empty active id as completion. This does not establish
-	// the separate late-connected client's final disposal (T6). Guarded by mu.
-	unfinishedTeardowns map[string]<-chan struct{}
+	// lifecycle owns this exact client until cancellation, all known work and
+	// final disconnect/store disposal finish. Both fields are guarded by mu.
+	lifecycle           *nativeLifecycle
+	unfinishedTeardowns map[string]*nativeLifecycle
 
 	// pairingObserver, if set, receives linked-device pairing updates (QR code +
 	// status) so the gateway can surface them in the SPA (#283). Wired at boot
@@ -253,13 +253,20 @@ func (c *WhatsAppNativeChannel) activate(
 	}
 	// Holding mu across the activation keeps a Stop that selects the new
 	// attempt from observing this channel before its attempt id is recorded.
+	resource := c.lifecycle
 	rec, err := start(store, instance, func(attemptID string) func(context.Context) error {
+		if resource != nil {
+			return func(ctx context.Context) error { return c.stopNative(ctx, resource, false) }
+		}
 		return func(ctx context.Context) error { return c.stopAttempt(ctx, attemptID) }
 	})
 	if err != nil {
 		return "", err
 	}
 	c.attemptID, c.resourceGeneration = rec.AttemptID, rec.Generation
+	if c.lifecycle != nil {
+		c.lifecycle.attemptID = rec.AttemptID
+	}
 	return rec.AttemptID, nil
 }
 
@@ -286,7 +293,10 @@ func (c *WhatsAppNativeChannel) stopAttempt(ctx context.Context, attemptID strin
 	// An earlier teardown of this attempt timed out with its work still
 	// running: this retry joins that same work (gate r5 R5-A02, M6, M7).
 	select {
-	case <-unfinished:
+	case <-unfinished.done:
+		if unfinished.err != nil {
+			return unfinished.err
+		}
 		c.mu.Lock()
 		delete(c.unfinishedTeardowns, attemptID)
 		c.mu.Unlock()
@@ -343,19 +353,33 @@ func NewWhatsAppNativeChannel(
 	return c, nil
 }
 
-func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
+func (c *WhatsAppNativeChannel) Start(ctx context.Context) (startErr error) {
 	if err := c.pinStart(ctx); err != nil {
 		return err
 	}
+	resource, err := c.beginNativeStart(ctx)
+	if err != nil {
+		return err
+	}
+	token, boot := channels.PairingStartFrom(ctx)
+	startOK, linked := false, false
+	defer func() {
+		c.wg.Done() // the error cleanup must not wait on its own Start frame
+		if startOK {
+			return
+		}
+		cleanupErr := c.stopNative(context.Background(), resource, false)
+		startErr = errors.Join(startErr, cleanupErr)
+		if token != "" && startErr != nil {
+			if linked && cleanupErr == nil {
+				c.restoreUnconnectedStart(token)
+			} else if !linked {
+				c.failAttempt(token, startErr)
+			}
+		}
+	}()
+	ctx = resource.ctx
 	logger.InfoCF("whatsapp", "Starting WhatsApp native channel (whatsmeow)", map[string]any{"store": c.storePath})
-
-	// Reset lifecycle state from any previous Stop() so a restarted channel
-	// behaves correctly.  Use reconnectMu to be consistent with eventHandler
-	// and Stop() which coordinate under the same lock.
-	c.reconnectMu.Lock()
-	c.stopping.Store(false)
-	c.reconnecting = false
-	c.reconnectMu.Unlock()
 
 	if err := os.MkdirAll(c.storePath, 0o700); err != nil {
 		return fmt.Errorf("create session store dir: %w: %w", channels.ErrLocalState, err)
@@ -389,41 +413,14 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 	}
 
 	client := whatsmeow.NewClient(deviceStore, waLogger)
+	c.mu.Lock()
+	resource.client, resource.container = client, container
+	c.container, c.client = container, client
+	c.mu.Unlock()
 	if nativeClientHook != nil {
 		nativeClientHook(client)
 	}
-
-	// Create runCtx/runCancel BEFORE registering event handler and starting
-	// goroutines so that Stop() can cancel them at any time, including during
-	// the QR-login flow.
-	c.runCtx, c.runCancel = context.WithCancel(ctx)
-
 	client.AddEventHandler(c.eventHandler)
-
-	c.mu.Lock()
-	c.container = container
-	c.client = client
-	c.mu.Unlock()
-
-	// cleanupOnError clears struct references and releases resources when
-	// Start() fails after fields are already assigned.  This prevents
-	// Stop() from operating on stale references (double-close, disconnect
-	// of a partially-initialized client, or stray event handler callbacks).
-	startOK := false
-	defer func() {
-		if startOK {
-			return
-		}
-		c.runCancel()
-		client.Disconnect()
-		c.mu.Lock()
-		c.client = nil
-		c.container = nil
-		c.mu.Unlock()
-		_ = container.Close()
-	}()
-
-	token, boot := channels.PairingStartFrom(ctx)
 	if client.Store.ID == nil {
 		started, err := c.startPairing(client, token, boot)
 		if err != nil || !started {
@@ -431,12 +428,17 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 		}
 	} else if stamp, _ := channels.PairingStartStampFrom(ctx); stamp.Cancelled {
 		return nil // enabled but idle: Stop revoked this dispatch, even if linked
-	} else if err := c.connectLinked(client, token); err != nil {
-		return err
+	} else {
+		linked = true
+		if err := c.connectLinked(client, token); err != nil {
+			return err
+		}
 	}
 
+	if !c.publishNativeRunning(client) {
+		return channels.ErrPairingConflict
+	}
 	startOK = true
-	c.SetRunning(true)
 	logger.InfoC("whatsapp", "WhatsApp native channel connected")
 	return nil
 }
@@ -473,11 +475,9 @@ func (c *WhatsAppNativeChannel) startPairing(client *whatsmeow.Client, token str
 	}
 	qrChan, err := client.GetQRChannel(c.runCtx)
 	if err != nil {
-		c.failAttempt(attemptID, err)
 		return false, fmt.Errorf("get QR channel: %w", err)
 	}
-	if err := client.Connect(); err != nil {
-		c.failAttempt(attemptID, err)
+	if err := c.connectNative(client); err != nil {
 		return false, fmt.Errorf("connect: %w", err)
 	}
 	// Handle QR events in a background goroutine so Start() returns
@@ -488,9 +488,7 @@ func (c *WhatsAppNativeChannel) startPairing(client *whatsmeow.Client, token str
 	c.reconnectMu.Lock()
 	if c.stopping.Load() {
 		c.reconnectMu.Unlock()
-		stopErr := fmt.Errorf("channel stopped during QR setup")
-		c.failAttempt(attemptID, stopErr)
-		return false, stopErr
+		return false, fmt.Errorf("channel stopped during QR setup")
 	}
 	c.wg.Add(1)
 	c.reconnectMu.Unlock()
@@ -505,7 +503,14 @@ func (c *WhatsAppNativeChannel) startPairing(client *whatsmeow.Client, token str
 // pairing, so its admission closes and its chat is told the device is already
 // linked once the client connected (gate r4 R4-A05, M14).
 func (c *WhatsAppNativeChannel) connectLinked(client *whatsmeow.Client, token string) error {
-	if err := client.Connect(); err != nil {
+	if token != "" {
+		// Connecting an already-linked device is still owned native work.
+		// Pin its cancellation handle BEFORE a possibly late first connect.
+		if _, err := c.beginAttempt(token); err != nil {
+			return fmt.Errorf("begin linked start: %w", err)
+		}
+	}
+	if err := c.connectNative(client); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
 	c.mu.Lock()
@@ -513,7 +518,10 @@ func (c *WhatsAppNativeChannel) connectLinked(client *whatsmeow.Client, token st
 	c.mu.Unlock()
 	if token != "" && store != nil {
 		if rec, closed := store.CloseNoPairing(instance, token); closed {
+			c.clearAttempt(token)
 			c.emitAttempt(rec.AttemptID, channels.PairingStatusLinked, "", channels.PairingAlreadyLinkedMessage)
+		} else {
+			return channels.ErrPairingConflict
 		}
 	}
 	return nil
@@ -577,99 +585,16 @@ func (c *WhatsAppNativeChannel) Stop(ctx context.Context) error {
 func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error {
 	logger.InfoC("whatsapp", "Stopping WhatsApp native channel")
 	c.mu.Lock()
-	attemptID, store, instance := c.attemptID, c.attempts, c.instance
-	resourceDone := make(chan struct{})
-	if attemptID != "" {
-		// Publish the captured resource's join before clearing its active id.
-		// A concurrent retained handle must join this cleanup, not infer that
-		// an empty active id means it already finished.
-		if c.unfinishedTeardowns == nil {
-			c.unfinishedTeardowns = make(map[string]<-chan struct{})
-		}
-		c.unfinishedTeardowns[attemptID] = resourceDone
+	resource := c.lifecycle
+	if resource == nil {
+		// Directly wired lifecycle consumers use these same tracked fields.
+		// Capture once so repeated Stop calls join one final disposal.
+		resource = &nativeLifecycle{ctx: c.runCtx, cancel: c.runCancel,
+			client: c.client, container: c.container, attemptID: c.attemptID, done: make(chan struct{})}
+		c.lifecycle = resource
 	}
-	c.attemptID = ""
 	c.mu.Unlock()
-	var replacement channels.PairingAttempt
-	if interrupt && store != nil && attemptID != "" {
-		// Capture this resource's existing cleanup barrier. A later config
-		// write cannot make it somebody else's teardown or release a Stop.
-		if captured, applied := store.BeginResourceTeardown(instance, attemptID); applied {
-			replacement = captured
-			c.emitAttempt(attemptID, channels.PairingStatusError, "", channels.PairingStopPendingMessage)
-		}
-	}
-	var teardownErr error
-
-	// Mark as stopping under reconnectMu so the flag is visible to
-	// eventHandler atomically with respect to its wg.Add(1) call.
-	// This closes the TOCTOU window where eventHandler could check
-	// stopping (false), then Stop sets it true + enters wg.Wait,
-	// then eventHandler calls wg.Add(1) — causing a panic.
-	c.reconnectMu.Lock()
-	c.stopping.Store(true)
-	c.reconnectMu.Unlock()
-
-	if c.runCancel != nil {
-		c.runCancel()
-	}
-
-	// Disconnect the client first so any blocking Connect()/reconnect loops
-	// can be interrupted before we wait on the goroutines.
-	c.mu.Lock()
-	client := c.client
-	container := c.container
-	c.mu.Unlock()
-
-	if client != nil {
-		client.Disconnect()
-	}
-
-	// Wait for background goroutines (QR handler, reconnect) to finish in a
-	// context-aware way so Stop can be bounded by ctx.
-	done := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// All goroutines have finished.
-	case <-ctx.Done():
-		// Context canceled or timed out; log and proceed with best-effort cleanup.
-		logger.WarnC("whatsapp", fmt.Sprintf("Stop context canceled before all goroutines finished: %v", ctx.Err()))
-		teardownErr = fmt.Errorf("the WhatsApp client did not finish stopping: %w", ctx.Err())
-	}
-
-	// Now it is safe to clear and close resources.
-	c.mu.Lock()
-	c.client = nil
-	c.container = nil
-	c.mu.Unlock()
-
-	if container != nil {
-		_ = container.Close()
-	}
-	c.SetRunning(false)
-	if teardownErr == nil {
-		close(resourceDone)
-	} else {
-		go func() { <-done; close(resourceDone) }()
-	}
-	if replacement.AttemptID != "" {
-		if teardownErr == nil {
-			c.finishReplacement(store, replacement)
-		} else {
-			// Release only this captured replacement barrier after its known
-			// native work joins. Late-client final disposal is the separate T6.
-			go func() {
-				<-done
-				c.finishReplacement(store, replacement)
-			}()
-		}
-	}
-	return teardownErr
+	return c.stopNative(ctx, resource, interrupt)
 }
 
 func (c *WhatsAppNativeChannel) eventHandler(evt any) {
@@ -744,7 +669,7 @@ func (c *WhatsAppNativeChannel) reconnectWithBackoff() {
 		}
 
 		logger.InfoCF("whatsapp", "WhatsApp reconnecting", map[string]any{"backoff": backoff.String()})
-		err := client.Connect()
+		err := c.connectNative(client)
 		if err == nil {
 			logger.InfoC("whatsapp", "WhatsApp reconnected")
 			return
@@ -924,7 +849,7 @@ func (c *WhatsAppNativeChannel) handleLoggedOut() {
 		logger.ErrorCF("whatsapp", "Failed to get QR channel for re-pairing", map[string]any{"error": err.Error()})
 		return
 	}
-	if err := client.Connect(); err != nil {
+	if err := c.connectNative(client); err != nil {
 		c.failAttempt(attemptID, err)
 		logger.ErrorCF("whatsapp", "Failed to connect for re-pairing", map[string]any{"error": err.Error()})
 		return

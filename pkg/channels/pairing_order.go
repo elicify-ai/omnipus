@@ -165,6 +165,25 @@ func (o *PairingOrder) Release(attemptID string, outcome PairingOutcome) bool {
 	return o.store.releaseOrdered(o, attemptID, outcome)
 }
 
+// AcceptsResource checks an already-captured native resource at its local
+// connect/publication boundary. It cannot admit, rebind or revive an attempt.
+func (o *PairingOrder) AcceptsResource(generation uint64, attemptID string) bool {
+	o.store.mu.Lock()
+	defer o.store.mu.Unlock()
+	c := o.connector
+	if c.retired || c.deleting || c.generation != generation {
+		return false
+	}
+	if attemptID == "" {
+		return c.latest == nil || !inFlight(c.latest.Phase)
+	}
+	rec := c.attempts[attemptID]
+	if rec == nil || rec != c.latest || rec.Generation != generation || rec.startFenced || rec.StopGeneration != 0 {
+		return false
+	}
+	return rec.Phase == PairingPhaseActive || rec.Phase == PairingPhaseTerminal && (rec.Outcome == PairingOutcomeLinked || rec.Outcome == PairingOutcomeNoPairing)
+}
+
 // FenceStarts records cancellation of the exact operations selected by Stop.
 // It does not wait for a config-writing guard or change ownership/generation;
 // BeginStop admits the actual stopping effect under that guard afterwards.

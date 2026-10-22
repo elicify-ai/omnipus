@@ -523,7 +523,7 @@ func (s *PairingAttempts) Complete(instance, attemptID string, outcome PairingOu
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.connectors[instance]
-	if c == nil || c.retired || c.latest == nil || c.latest.Generation != c.generation || c.latest.AttemptID != attemptID || c.latest.Phase != PairingPhaseActive {
+	if c == nil || c.retired || c.latest == nil || c.latest.startFenced || c.latest.Generation != c.generation || c.latest.AttemptID != attemptID || c.latest.Phase != PairingPhaseActive {
 		return PairingAttempt{}, false
 	}
 	c.latest.Phase, c.latest.Outcome, c.latest.cancel = PairingPhaseTerminal, outcome, nil
@@ -539,11 +539,28 @@ func (s *PairingAttempts) CloseNoPairing(instance, token string) (PairingAttempt
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.connectors[instance]
-	if c == nil || c.retired || c.latest == nil || c.latest.Generation != c.generation || c.latest.AttemptID != token || c.latest.Phase != PairingPhaseReady {
+	if c == nil || c.retired || c.deleting || c.latest == nil || c.latest.startFenced || c.latest.Generation != c.generation || c.latest.AttemptID != token || (c.latest.Phase != PairingPhaseReady && c.latest.Phase != PairingPhaseActive) {
 		return PairingAttempt{}, false
 	}
-	c.latest.Phase, c.latest.Outcome = PairingPhaseTerminal, PairingOutcomeNoPairing
+	c.latest.Phase, c.latest.Outcome, c.latest.cancel = PairingPhaseTerminal, PairingOutcomeNoPairing, nil
 	return copyAttempt(c.latest), true
+}
+
+// RestoreUnconnectedStart returns an unsuccessfully connected linked-device
+// start to its manager-owned disposition ONLY after its native resource was
+// disposed. A Stop fence, replacement or consumed successor cannot be undone.
+func (s *PairingAttempts) RestoreUnconnectedStart(instance, token string) bool {
+	order := s.LockChannel(instance)
+	defer order.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := order.connector
+	rec := c.attempts[token]
+	if c.retired || c.deleting || rec == nil || rec != c.latest || rec.startFenced || rec.Generation != c.generation || rec.StopGeneration != 0 || rec.Phase != PairingPhaseActive {
+		return false
+	}
+	rec.Phase, rec.cancel = PairingPhaseReady, nil
+	return true
 }
 
 // OwnedBy returns every in-flight attempt sessionID owns — the selection a

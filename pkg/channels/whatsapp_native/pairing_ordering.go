@@ -10,11 +10,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 )
 
-// finishReplacement advertises Retry only after this captured resource's
-// cleanup completed. A later writer/Stop cannot have its barrier released here.
-func (c *WhatsAppNativeChannel) finishReplacement(store *channels.PairingAttempts, captured channels.PairingAttempt) {
-	if done, finished := store.FinishReplacement(captured.Instance, captured.AttemptID, captured.StopGeneration, nil); finished {
-		c.emitAttempt(done.AttemptID, channels.PairingStatusError, "", channels.PairingInterruptedMessage)
+// restoreUnconnectedStart runs after the failed linked client's final disposal;
+// only the same unfenced admission can await the manager's failed-start result.
+func (c *WhatsAppNativeChannel) restoreUnconnectedStart(token string) {
+	c.mu.Lock()
+	store, instance := c.attempts, c.instance
+	c.mu.Unlock()
+	if store != nil {
+		store.RestoreUnconnectedStart(instance, token)
 	}
 }
 
