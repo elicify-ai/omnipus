@@ -1,6 +1,6 @@
 // Inline reply status for the chat feed. The mark is the published AgentIcon;
 // work copy is an active form or one fixed fallback. The icon fetches nothing.
-import { useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 
 import '@/styles/agent-icon-motion.css'
 import '@/styles/agent-status-motion.css'
@@ -78,6 +78,69 @@ export function feedMarkLabel(phase: ReplyPhase): string | null {
 
 export function pickThinkingPhrase(): string {
   return THINKING_PHRASES[Math.floor(Math.random() * THINKING_PHRASES.length)]
+}
+
+// not-wire-format: transient chat presentation state, never persisted or sent.
+type ReplyStatusFallbackLookup = (sessionId: string, turnId: string | null) => string
+
+const ReplyStatusFallbackContext = createContext<ReplyStatusFallbackLookup | null>(null)
+
+/** Own one phrase above historical/live/Suspense renderer lifetimes. */
+export function ReplyStatusFallbackProvider({ children }: { children: ReactNode }) {
+  const episodes = useRef(new Map<string, { turnId: string | null; phrase: string }>())
+  const phraseFor = useCallback<ReplyStatusFallbackLookup>((sessionId, turnId) => {
+    let episode = episodes.current.get(sessionId)
+    if (!episode || (turnId && episode.turnId && turnId !== episode.turnId)) {
+      episode = { turnId, phrase: pickThinkingPhrase() }
+      episodes.current.set(sessionId, episode)
+    } else if (turnId && !episode.turnId) {
+      // The optimistic status can appear before its confirmed turn id. Adopt
+      // that id without choosing again for the same continuous appearance.
+      episode.turnId = turnId
+    }
+    return episode.phrase
+  }, [])
+
+  useEffect(() => {
+    const releaseEndedEpisodes = () => {
+      const state = useChatStore.getState()
+      const connection = useConnectionStore.getState()
+      const approvals = useToolApprovalStore.getState().queue
+      const activeSession = useSessionStore.getState().activeSessionId
+      const recovering = !connection.isConnected || !!connection.connectionError ||
+        connection.reconnectPhase === 'reconnecting' || connection.reconnectPhase === 'slow' || connection.reconnectPhase === 'gave_up'
+      for (const sessionId of episodes.current.keys()) {
+        const bucket = state.sessionsById[sessionId] ?? (sessionId === activeSession ? state : undefined)
+        if (!bucket) {
+          episodes.current.delete(sessionId)
+          continue
+        }
+        const ask = bucket.pendingAsk ?? (sessionId === activeSession ? state.pendingAsk : null)
+        const awaitingDecision = approvals.some((item) => item.sessionId === sessionId) ||
+          (ask?.status === 'pending' && (ask.session_id === sessionId || ask.session_id === ''))
+        if (bucket.isStreaming || bucket.isReplaying || bucket.awaitingCatchUp || recovering || awaitingDecision) continue
+        // A disconnect can clear bucket activity while deliberately leaving
+        // the reply open; that visible status still belongs to this episode.
+        if (Object.values(bucket.messagesById).some((message) => message.role === 'assistant' && (message.isStreaming || message.status === 'streaming'))) continue
+        episodes.current.delete(sessionId)
+      }
+    }
+    // Store transitions, not renderer unmounts, end an episode. Replay resets
+    // explicitly remain replaying; disconnect/catch-up and notices retain it.
+    const unsubscribeChat = useChatStore.subscribe(releaseEndedEpisodes)
+    const unsubscribeConnection = useConnectionStore.subscribe(releaseEndedEpisodes)
+    const unsubscribeApprovals = useToolApprovalStore.subscribe(releaseEndedEpisodes)
+    releaseEndedEpisodes()
+    return () => {
+      unsubscribeChat()
+      unsubscribeConnection()
+      unsubscribeApprovals()
+      // The ref is discarded with this provider. Do not clear it during an
+      // effect replay (StrictMode), which is not a status-episode boundary.
+    }
+  }, [])
+
+  return <ReplyStatusFallbackContext.Provider value={phraseFor}>{children}</ReplyStatusFallbackContext.Provider>
 }
 
 function readReducedMotion(): boolean {
@@ -185,6 +248,7 @@ export function AgentStatusIndicator({
   color,
   name,
   fallbackPhrase,
+  turnId,
 }: {
   phase: MarkPhase
   label: string | null
@@ -193,15 +257,21 @@ export function AgentStatusIndicator({
   color?: string
   /** The agent's display name. Monogram draws its initial from this. */
   name?: string
-  /** Shared across the live identity-loading Suspense boundary. */
+  /** Optional standalone adapter override; ChatScreen uses its shared episode owner. */
   fallbackPhrase?: string
+  turnId?: string | null
 }) {
+  const sharedFallback = useContext(ReplyStatusFallbackContext)
+  const sessionId = useSessionStore((state) => state.activeSessionId)
+  const activeTurnId = useChatStore((state) => sessionId ? state.sessionsById[sessionId]?.activeTurnId ?? null : null)
+  const episodeFallback = sharedFallback && sessionId ? sharedFallback(sessionId, turnId ?? activeTurnId) : undefined
   const reduced = usePrefersReducedMotion()
   // Connection/approval/question copy keeps its existing priority over work copy.
   const workPhase = phase === 'thinking' || phase === 'working'
   const todo = useCurrentTodo(workPhase)
   const activeForm = workPhase ? todo.activeForm : null
-  const [fallback] = useState(() => fallbackPhrase ?? pickThinkingPhrase())
+  const [standaloneFallback] = useState(() => episodeFallback ?? fallbackPhrase ?? pickThinkingPhrase())
+  const fallback = episodeFallback ?? fallbackPhrase ?? standaloneFallback
   const drawnFigure = isFigure(figure) ? figure : null
   const drawnRole = isRole(role) ? role : null
   const drawnColor = isPaletteColor(color) ? color : null
