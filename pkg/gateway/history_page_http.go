@@ -93,6 +93,7 @@ func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id
 	attempt.requested = requested
 	if err != nil {
 		attempt.err = err
+		attempt.preparationComplete()
 		historyHTTPFailure(w, id, err)
 		return
 	}
@@ -100,16 +101,19 @@ func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id
 	request, err := newHistoryPageRequest(id, opts, a.historyProjectionDeps(store, id))
 	if err != nil {
 		attempt.err = err
+		attempt.preparationComplete()
 		historyHTTPFailure(w, id, err)
 		return
 	}
 	prepared, err := request.Read(attempt.context(r.Context()), store)
 	attempt.err = err
 	if err != nil {
+		attempt.preparationComplete()
 		historyHTTPFailure(w, id, err)
 		return
 	}
 	attempt.page = &prepared.Page
+	attempt.preparationComplete()
 	// Reuse exactly the generated Message encodings prepared by the meter.
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -142,6 +146,7 @@ func (a *restAPI) writePagedSessionDetail(w http.ResponseWriter, r *http.Request
 	metadata.Protected = computeSessionProtected(meta)
 	if failure := attachSessionRuntimeFields(&metadata, a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch()); failure != nil {
 		attempt.err = failure
+		attempt.preparationComplete()
 		jsonErr(w, 500, "session lifecycle unavailable")
 		return
 	}
@@ -151,6 +156,7 @@ func (a *restAPI) writePagedSessionDetail(w http.ResponseWriter, r *http.Request
 	}
 	if failure != nil {
 		attempt.err = failure
+		attempt.preparationComplete()
 		jsonSessionStorageError(w, "read", meta.ID, failure)
 		return
 	}
@@ -171,13 +177,16 @@ func (a *restAPI) writePagedSessionDetail(w http.ResponseWriter, r *http.Request
 	raw, failure = json.Marshal(detail)
 	if failure != nil {
 		attempt.err = failure
+		attempt.preparationComplete()
 		jsonSessionStorageError(w, "read", meta.ID, failure)
 		return
 	}
 	if message, _ := validateBodyAgainstSchema("SessionDetail", raw); message != "" {
 		attempt.err = errHistoryPageProtocol
+		attempt.preparationComplete()
 		jsonSessionStorageError(w, "read", meta.ID, errHistoryPageProtocol)
 		return
 	}
+	attempt.preparationComplete()
 	jsonOK(w, detail)
 }

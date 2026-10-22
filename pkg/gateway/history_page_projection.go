@@ -29,6 +29,7 @@ type historyPreparedGroup struct {
 	message            generated.Message
 	encoded            []byte
 	frames             [][]byte
+	media              map[int]*historyPreparedMedia
 	emitted            map[string]bool
 	terminalAskEmitted bool
 }
@@ -156,6 +157,7 @@ func (r *historyPageRequest) prepare(ctx context.Context, p session.ChatHistoryP
 		return out, err
 	}
 	out.Response.PageInfo = info
+	seenMedia := make(map[string]struct{})
 	for _, entry := range p.Entries {
 		if err = ctx.Err(); err != nil {
 			return out, err
@@ -169,14 +171,20 @@ func (r *historyPageRequest) prepare(ctx context.Context, p session.ChatHistoryP
 			r.memo[entry.Position] = group
 		}
 		out.Response.Entries = append(out.Response.Entries, group.message)
-		out.ReplayFrames = append(out.ReplayFrames, group.frames...)
+		out.ReplayFrames, err = group.appendFrames(out.ReplayFrames, seenMedia)
+		if err != nil {
+			return out, err
+		}
 		for id := range group.emitted {
 			out.emitted[id] = true
 		}
 		out.terminalAskEmitted = out.terminalAskEmitted || group.terminalAskEmitted
 	}
 	// Historical completion overhead is emitted/metered once, not per owner.
-	done := generated.DoneFrame{Type: string(generated.WsFrameTypeDone), SessionId: p.SessionID}
+	// Count the actual prepared content frames, excluding this terminator, just
+	// as full replay does. This distinguishes replay completion from turn done.
+	framesEmitted := float64(len(out.ReplayFrames))
+	done := generated.DoneFrame{Type: string(generated.WsFrameTypeDone), SessionId: p.SessionID, Stats: &generated.DoneStats{FramesEmitted: &framesEmitted}}
 	b, err := json.Marshal(done)
 	if err != nil {
 		return out, err

@@ -342,6 +342,11 @@ func historyProjectEntry(t *chatHistoryIndexTree, dir string, cp historyCheckpoi
 	if entry.Content != "" || rows == 0 {
 		rows++
 	}
+	// Cancellation is retained replay metadata, not another drawn bubble.
+	// Its source/position still participates in ordering and the source cap.
+	if entry.Type == EntryTypeTurnCancelled {
+		rows = 0
+	}
 	position, err := historyPositionForAddress(cp.SessionID, r.Address)
 	if err != nil || position != r.Position {
 		return ChatHistoryEntry{}, errors.New("history occurrence position disagrees with canonical address")

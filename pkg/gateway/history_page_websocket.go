@@ -141,6 +141,7 @@ func (wh *wsHandlerHandleAttachSession) sendPreparedHistorySnapshot() {
 		prepared, err = request.Read(attempt.context(wh.ctx), wh.store)
 	}
 	attempt.err = err
+	attempt.preparationComplete()
 	if err != nil {
 		if wh.ctx.Err() != nil {
 			wh.historyDeliveryFailed(wh.ctx.Err())
