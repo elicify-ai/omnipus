@@ -159,7 +159,8 @@
         "tests/e2e/onboarding.spec.ts",
         "tests/e2e/profile-fontsize.spec.ts",
         "tests/e2e/providers.spec.ts",
-        "tests/e2e/chat-history-paging.reconnect-retention-retry.spec.ts"
+        "tests/e2e/chat-history-paging.reconnect-retention-retry.spec.ts",
+        "tests/e2e/chat-history-paging.cancelled-tool-reload.spec.ts"
       ]
     },
     {
@@ -171,7 +172,8 @@
         "tests/e2e/version-drift.spec.ts",
         "tests/e2e/web-serve-canonical.spec.ts",
         "tests/e2e/web-serve-malformed.spec.ts",
-        "tests/e2e/chat-history-paging.soft-budget-screen-coverage.spec.ts"
+        "tests/e2e/chat-history-paging.soft-budget-screen-coverage.spec.ts",
+        "tests/e2e/chat-history-paging.usage-reload.spec.ts"
       ]
     },
     {
