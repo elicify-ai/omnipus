@@ -43,7 +43,12 @@ func compactAgentTools(state *agentstore.State, resolver *tools.ToolPolicyCfg, c
 			continue
 		}
 		policy := tools.ResolveEffectivePolicy(resolver, tool.Name())
-		fmt.Fprintf(&out, "%s | %s | %s\n", tool.Name(), policy, shortAgentToolDescription(tool.Description()))
+		description := tool.Description()
+		if source, ok := tool.(tools.MCPSource); ok {
+			server, _ := source.MCPSource()
+			description = strings.TrimPrefix(description, "[MCP:"+server+"] ")
+		}
+		fmt.Fprintf(&out, "%s | %s | %s\n", tool.Name(), policy, shortAgentToolDescription(description))
 	}
 	return out.String(), nil
 }
