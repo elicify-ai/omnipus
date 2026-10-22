@@ -96,8 +96,8 @@ func TestTaskTodosActiveFormQ10HTTPNormalization(t *testing.T) {
 						} else {
 							require.Equal(t, "todo[0]: active_form must be 500 characters or fewer", failure.Error)
 						}
-						after, err := api.taskStore.List(task.Filter{})
-						require.NoError(t, err)
+						after, listErr := api.taskStore.List(task.Filter{})
+						require.NoError(t, listErr)
 						require.Equal(t, before, after, "rejected write must preserve every saved task")
 						if id != "" {
 							assertTaskActiveFormReadbacks(t, api, id, oldTodos)
