@@ -135,7 +135,7 @@ func channelRevisionProperty() map[string]any {
 
 // channelLiveNote describes a saved write with no pairing interruption. Each
 // write's captured progress supplies any immediate pairing effect separately.
-const channelLiveNote = "new settings take effect on the next config reload; no pending or active pairing was interrupted by this write; the live connection was not tested"
+const channelLiveNote = "new settings take effect on the next config reload; no pending or active pairing was interrupted by this write; the live connection was not changed or tested by this write"
 
 // ---- system.channel.enable ----
 
