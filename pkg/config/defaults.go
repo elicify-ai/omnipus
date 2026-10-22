@@ -425,10 +425,10 @@ func defaultToolPoliciesSysagent() map[string]string {
 		// list_mcp_servers is read-only and reports name/transport/enabled/
 		// command/url only — never args or env — so it leaks no credential.
 		"list_mcp_servers": "allow",
-		// Skill authoring is available to Main agents and Workers, with
-		// Ask at both levels (founder ruling, 2026-10-22).
-		"create_skill":      "ask",
-		"edit_skill":        "ask",
+		// Q22=B (2026-10-22): ordinary Main/Worker seeds keep a local Ask,
+		// while Omnipus rides this Allow ceiling without a local entry.
+		"create_skill":      "allow",
+		"edit_skill":        "allow",
 		"remove_skill":      "ask", // FR-020
 		"list_skills":       "allow",
 		"enable_channel":    "ask",   // FR-020

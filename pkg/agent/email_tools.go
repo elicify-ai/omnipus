@@ -204,6 +204,13 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 				setter.SetMailBudget(b, agentID)
 			}
 		}
+		// Attachment saves resolve and authorize the current turn's workspace
+		// on every call; never pin one mailbox's destination across turns.
+		if setter, ok := t.(interface {
+			SetTransferServiceFactory(agentID, agentHome string, restrict bool)
+		}); ok {
+			setter.SetTransferServiceFactory(agentID, agent.Home, cfg.Agents.Defaults.RestrictToWorkspace)
+		}
 		// registerSharedTools re-runs during config reload and fast agent
 		// upsert. Replacing this first-party toolset is expected: each fresh
 		// instance carries the current workspace-to-mailbox map. Keep strict

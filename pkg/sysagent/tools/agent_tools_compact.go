@@ -42,7 +42,11 @@ func compactAgentTools(state *agentstore.State, resolver *tools.ToolPolicyCfg, c
 		if !tools.MCPAssignmentAllows(tool, resolver) {
 			continue
 		}
-		policy := tools.ResolveEffectivePolicy(resolver, tool.Name())
+		policy := effectivePolicy(resolver, tool.Name())
+		if policy == "deny" {
+			fmt.Fprintf(&out, "%s | %s\n", tool.Name(), policy)
+			continue
+		}
 		description := tool.Description()
 		if source, ok := tool.(tools.MCPSource); ok {
 			server, _ := source.MCPSource()
@@ -65,10 +69,10 @@ func shortAgentToolDescription(description string) string {
 	}
 	text = text[:end]
 	characters := []rune(text)
-	if len(characters) <= 80 {
+	if len(characters) <= 40 {
 		return text
 	}
-	cut := 79
+	cut := 39
 	for cut > 0 && !unicode.IsSpace(characters[cut]) {
 		cut--
 	}
