@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,15 +12,32 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
+var errTodoActiveFormType = errors.New("active_form must be a string or omitted")
+
+// todoInputValidationError is controlled validation metadata, not a wire type.
+// not-wire-format: only its safe message is placed in the generated error envelope.
+type todoInputValidationError struct {
+	index int
+}
+
+func (e *todoInputValidationError) Error() string {
+	return fmt.Sprintf("todos[%d].active_form must be a string or omitted", e.index)
+}
+
 // decodeTaskTodoBody checks supplied active forms before generated *string
-// decoding can collapse null into omission. Normalization precedes optional
-// schema validation, whose length bound must see the normalized phrase.
+// decoding can collapse null into omission. Limit incoming bytes once, then
+// validate/decode all normalized bytes even when JSON escaping expands them.
 func decodeTaskTodoBody(w http.ResponseWriter, r *http.Request, schemaName string, dst any, validateEnabled bool) bool {
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "could not read request body")
 		return false
 	}
+	if !json.Valid(raw) {
+		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		return false
+	}
+	validateSchema := schemaName != "" && validateEnabled
 	var normalized []byte
 	if schemaName == "" {
 		normalized, err = normalizeTaskTodoArray(raw)
@@ -27,15 +45,20 @@ func decodeTaskTodoBody(w http.ResponseWriter, r *http.Request, schemaName strin
 		normalized, err = rewriteTaskTodoJSONField(raw, "todos", normalizeTaskTodoArray)
 	}
 	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		var inputErr *todoInputValidationError
+		if errors.As(err, &inputErr) {
+			// Preserve the detailed schema diagnostic when it rejects the raw
+			// input. Even if it accepts a duplicate-key echo, retain our refusal.
+			if validateSchema && !decodeAndValidateBytes(w, raw, schemaName, dst, true, inputErr.Error()) {
+				return false
+			}
+			jsonErr(w, http.StatusBadRequest, inputErr.Error())
+		} else {
+			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		}
 		return false
 	}
-	request := r.Clone(r.Context())
-	request.Body = io.NopCloser(bytes.NewReader(normalized))
-	if schemaName == "" {
-		return decodeTaskJSONBody(w, request, dst)
-	}
-	return decodeAndValidate(w, request, schemaName, dst, validateEnabled)
+	return decodeAndValidateBytes(w, normalized, schemaName, dst, validateSchema, "")
 }
 
 func normalizeTaskTodoArray(raw []byte) ([]byte, error) {
@@ -46,6 +69,9 @@ func normalizeTaskTodoArray(raw []byte) ([]byte, error) {
 	for i, item := range items {
 		normalized, err := rewriteTaskTodoJSONField(item, "active_form", normalizeTaskTodoActiveFormJSON)
 		if err != nil {
+			if errors.Is(err, errTodoActiveFormType) {
+				return nil, &todoInputValidationError{index: i}
+			}
 			return nil, err
 		}
 		items[i] = normalized
@@ -55,10 +81,14 @@ func normalizeTaskTodoArray(raw []byte) ([]byte, error) {
 
 func normalizeTaskTodoActiveFormJSON(raw []byte) ([]byte, error) {
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return nil, fmt.Errorf("active_form must be a string")
+		return nil, errTodoActiveFormType
 	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return nil, errTodoActiveFormType
+		}
 		return nil, err
 	}
 	return json.Marshal(task.NormalizeTodoActiveForm(value))
@@ -88,8 +118,8 @@ func rewriteTaskTodoJSONField(raw []byte, field string, normalize func([]byte) (
 			return nil, fmt.Errorf("object key must be a string")
 		}
 		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return nil, err
+		if decodeErr := decoder.Decode(&value); decodeErr != nil {
+			return nil, decodeErr
 		}
 		if !strings.EqualFold(key, field) {
 			continue
