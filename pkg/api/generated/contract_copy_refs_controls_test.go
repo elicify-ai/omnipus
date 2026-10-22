@@ -39,6 +39,8 @@ func TestContractCopies_C85ReferenceAwareNegativeControls(t *testing.T) {
 		// bound, unresolved reference and unrelated generator annotation.
 		{"origin_position_minLength_drift", []string{"properties", "position"}, "minLength", 46, false, "origin", ""},
 		{"missing_history_origin_member", []string{"properties"}, "history_origin", nil, true, "component", ""},
+		{"member_named_title_is_wire_drift", []string{"properties"}, "title", map[string]any{"type": "string"}, false, "component", ""},
+		{"member_named_description_is_wire_drift", []string{"properties"}, "description", map[string]any{"type": "string"}, false, "component", ""},
 		{"frame_text_maxLength_drift", []string{"properties", "text"}, "maxLength", 2001, false, "component", ""},
 		{"unresolved_external_reference", []string{"properties", "history_origin"}, "$ref", "./missing-origin.yaml", false, "component", "C-85 unresolved document reference"},
 		{"unrelated_generator_annotation", []string{"properties", "history_origin"}, "x-go-type", "UnrelatedType", false, "component", "C-85 unexpected generator annotation"},

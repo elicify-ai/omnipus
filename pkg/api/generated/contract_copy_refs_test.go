@@ -145,7 +145,10 @@ func (s c85SchemaSet) resolve(node any, doc, pointer string, active map[string]b
 			}
 		}
 		for key, child := range value {
-			if yamlNoiseKeys[key] || key == "$ref" {
+			// At a properties container, title/description/example are wire
+			// member names, not schema annotations. Never erase member drift.
+			propertyMap := strings.HasSuffix(pointer, "/properties") || strings.HasSuffix(pointer, "/patternProperties")
+			if (yamlNoiseKeys[key] && !propertyMap) || key == "$ref" {
 				continue
 			}
 			// Only this checked annotation on this resolved reference is metadata.
