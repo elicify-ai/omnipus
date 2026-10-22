@@ -123,10 +123,13 @@ func historyLoadCheckpoint(ctx context.Context, dir, sid string) (historyCheckpo
 		}
 		return cp, historyUnavailable(reason, err)
 	}
+	// Root is mandatory. Missing/null must not inherit the valid empty-tree
+	// sentinel zero when decoding this private checkpoint.
+	cp.Root = -1
 	if err = json.Unmarshal(b, &cp); err != nil {
 		return cp, historyUnavailable("index_inconsistent", err)
 	}
-	if cp.FormatVersion != 1 || cp.SessionID != sid || cp.Generation == "" || cp.RetentionGeneration == "" || cp.ArchiveEnds == nil || cp.Root < 0 || cp.MutationEnd < 0 || cp.File == "" || filepath.Base(cp.File) != cp.File || cp.File == "." || cp.File == ".." {
+	if cp.FormatVersion != 1 || cp.SessionID != sid || cp.Generation == "" || cp.RetentionGeneration == "" || cp.ArchiveEnds == nil || cp.Root < 0 || cp.Root == 0 && cp.Rank != 0 || cp.MutationEnd < 0 || cp.File == "" || filepath.Base(cp.File) != cp.File || cp.File == "." || cp.File == ".." {
 		return cp, historyUnavailable("index_inconsistent", errors.New("invalid checkpoint"))
 	}
 	return cp, nil

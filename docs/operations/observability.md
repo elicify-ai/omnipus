@@ -82,7 +82,7 @@ Consumers merge known totals for the addressed session without lowering a newer 
 
 ### Derived paging index and recovery
 
-Paged history keeps content in the canonical archive. Its separate, content-free index stores occurrence locations and correction references, not another copy of messages or tool results. Fresh sessions publish a durable empty baseline before their identity becomes readable. Each accepted archive or discarded-input record is saved before the derived checkpoint advances. A derived write failure does not make an already saved message unsaved.
+Paged history keeps content in the canonical archive. Its separate, content-free index stores occurrence locations and correction references, not another copy of messages or tool results. Fresh sessions publish a durable empty baseline before their identity becomes readable. Each accepted archive or discarded-input record is saved before the derived checkpoint advances. A derived write failure does not make an already saved message unsaved. A checkpoint with a missing/null root, or a zero root despite nonempty occurrence coverage, is inconsistent and produces unavailable history—not a successful empty page or snapshot. A genuinely empty, valid checkpoint may use root zero.
 
 Startup, open and Retry may reconcile **at most 64** combined records after a valid checkpoint: archive records (including private model records), discarded-input records, and confirmed missing rolled partitions. Zero pending records is a no-op. A gap of 65 or more records is not repaired in repeated batches. Missing, incompatible or inconsistent baselines require the separate offline operator repair; ordinary sending does not build a newest-only replacement index.
 
