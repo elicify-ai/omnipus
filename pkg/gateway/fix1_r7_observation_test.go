@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 
@@ -17,6 +18,7 @@ func TestPairingObservation_InactiveAbsentSubscriptionsRetainNoEntries(t *testin
 	t.Run("absent inactive IDs and close do not grow the store", func(t *testing.T) {
 		s := newT3Delivery(t)
 		before := s.store.ConfigOrderInstances()
+		sort.Strings(before)
 		// 64 distinct valid instance ids are test input, not a performance bound.
 		for i := 0; i < 64; i++ {
 			id := fmt.Sprintf("whatsapp.passive-%04d", i)
@@ -26,6 +28,7 @@ func TestPairingObservation_InactiveAbsentSubscriptionsRetainNoEntries(t *testin
 		}
 		s.wc.close()
 		after := s.store.ConfigOrderInstances()
+		sort.Strings(after) // Enumeration order is not part of the store contract.
 		assert.Equal(t, before, after, "observer-only inactive requests must retain no new global entries after close")
 		require.Empty(t, s.wc.pairingSubs)
 		require.Empty(t, t3Drain(t, s.frames))
