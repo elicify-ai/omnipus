@@ -157,9 +157,11 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
     // runtime phase. Even an unexpected diagnostic failure cannot replace it.
     try {
       await attachStandaloneTaskFailureDiagnostic(page, test.info(), taskId, BASE_URL)
-    } finally {
-      throw originalFailure
+    } catch {
+      // Diagnostics are best-effort; an unexpected collection or attachment
+      // error must not replace the original failed assertion.
     }
+    throw originalFailure
   }
 
   // Differentiation test: a successful ladder ends in "done", a bounced

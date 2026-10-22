@@ -168,7 +168,7 @@ describe('diagnostic collection failure remains redacted', () => {
   it('attaches only the projected snapshot after two successful native reads', async () => {
     const input = fixture([call()])
     const reads: unknown[] = [input.task, input.detail]
-    const native = vi.fn(async (_url: unknown, _init: unknown) => ({ ok: true, json: async () => reads.shift() }))
+    const native = vi.fn(async () => ({ ok: true, json: async () => reads.shift() }))
     vi.stubGlobal('fetch', native)
     const bodies: string[] = []
     const info = {

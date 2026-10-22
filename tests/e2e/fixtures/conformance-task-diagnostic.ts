@@ -1,9 +1,14 @@
 import type { Page, TestInfo } from '@playwright/test'
-import {
-  SessionDetail,
-  Task,
-  type ToolCall,
-} from '../../../src/lib/api/generated/schemas'
+import { SessionDetail, Task } from '../../../src/lib/api/generated/schemas'
+import type {
+  SessionDetail as SessionDetailWire,
+  Task as TaskWire,
+  ToolCall,
+} from '../../../src/lib/api/generated/openapi-types'
+
+// The runtime schema defaults content_state but its generated output alias
+// permits omission. Derive that read-side optionality from the real wire type.
+type ParsedToolCall = Omit<ToolCall, 'content_state'> & Partial<Pick<ToolCall, 'content_state'>>
 
 // not-wire-format: test-only, positively allowlisted failure attachment.
 // Never a gateway request/response type. Raw data uses generated schemas only.
@@ -24,10 +29,10 @@ type SafeCall = {
 type SafeDiagnostic = {
   classification: Classification
   taskId: string | null
-  taskStatus: Task['status'] | 'unknown'
+  taskStatus: TaskWire['status'] | 'unknown'
   sessionId: string | null
-  sessionStatus: SessionDetail['session']['status'] | 'unknown'
-  lifecycleStatus: NonNullable<SessionDetail['session']['lifecycle_state']> | 'unknown'
+  sessionStatus: SessionDetailWire['session']['status'] | 'unknown'
+  lifecycleStatus: NonNullable<SessionDetailWire['session']['lifecycle_state']> | 'unknown'
   calls: SafeCall[]
 }
 
@@ -39,7 +44,7 @@ const TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,95}$/
 const MAX_CALLS = 256
 // Go strings.TrimSpace uses unicode.White_Space (not JavaScript trim's set).
 // In particular U+0085 is empty evidence, while U+FEFF is not.
-const GO_EMPTY_EVIDENCE = /^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/
+const GO_EMPTY_EVIDENCE = /^\p{White_Space}*$/u
 
 function unavailable(): SafeDiagnostic {
   return {
@@ -58,7 +63,7 @@ function validToken(value: string, pattern: RegExp): boolean {
   return match !== null && match[0] === value
 }
 
-function classifyCall(call: ToolCall): Classification {
+function classifyCall(call: ParsedToolCall): Classification {
   if (call.status === 'denied') return 'refused_tool'
   if (call.tool !== 'goal_claim' || call.status !== 'success') return 'unknown'
   if (call.content_state !== 'full') return 'unknown'
@@ -127,7 +132,7 @@ export function projectStandaloneTaskDiagnostic(taskRaw: unknown, sessionRaw: un
 export async function attachStandaloneTaskFailureDiagnostic(
   page: Page, info: TestInfo, taskId: string, baseURL: string,
 ): Promise<void> {
-  let diagnostic = unavailable()
+  let diagnostic: SafeDiagnostic
   try {
     const base = new URL(baseURL)
     if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || !validToken(taskId, UUID)) {
