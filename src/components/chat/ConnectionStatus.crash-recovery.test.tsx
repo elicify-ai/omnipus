@@ -18,7 +18,7 @@ const SID = 'crash-recovery-notice'
 const NOW = '2026-10-22T00:00:00Z'
 function row(reason: string, lifecycle_state: Session['lifecycle_state'] = 'interrupted'): Session {
   return Object.assign({ id: SID, type: 'delegate' as const, agent_id: 'mia', title: 'Helper', status: 'active' as const,
-    created_at: NOW, updated_at: NOW, channel: 'webchat', partitions: [],
+    created_at: NOW, updated_at: NOW, channel: 'webchat', partitions: [], message_count: 0,
     stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 0 }, lifecycle_state,
   }, { interruption_reason: reason })
 }
