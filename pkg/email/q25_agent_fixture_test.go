@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -80,6 +81,7 @@ func q25StartMailbox(t *testing.T) (string, int) {
 
 type q25AgentFixture struct {
 	workA, workB string
+	auditPath    string // constructor-derived physical audit file, not the transfer service home
 	ctx          context.Context
 	instance     *agent.AgentInstance
 }
@@ -117,7 +119,8 @@ func q25RegisteredMain(t *testing.T) q25AgentFixture {
 	ctx = tools.WithAgentID(ctx, main.ID)
 	ctx = tools.WithTurnWorkspaceDir(ctx, workspace.WorkDir(home, "workspace-a"))
 	t.Logf("Q25 normal registry ready: agent=%s workspace=workspace-a mailbox=%s", main.ID, q25Mailbox)
-	return q25AgentFixture{workA: workspace.WorkDir(home, "workspace-a"), workB: workspace.WorkDir(home, "workspace-b"), ctx: ctx, instance: instance}
+	// initializeAudit derives its home from the parent of AgentHomeBasePath.
+	return q25AgentFixture{workA: workspace.WorkDir(home, "workspace-a"), workB: workspace.WorkDir(home, "workspace-b"), auditPath: filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "system", "audit.jsonl"), ctx: ctx, instance: instance}
 }
 
 func q25AttachmentArgs(t *testing.T, fixture q25AgentFixture) map[string]any {
