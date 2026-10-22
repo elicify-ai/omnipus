@@ -52,6 +52,12 @@ You can also ask Omnipus in its chat to change an agent's permissions. Outside G
 
 The installation-wide setting lives in **Settings → Security**, under **Advanced / technical details**, in **Tool Access — Global Policies**. What you set there applies to every agent at once. Saving a change there asks you to re-type your password.
 
+Saving a global policy and applying it to running agents are separate steps. If
+Omnipus reports that the settings were saved but could not be applied to running
+agents, the saved change has **not** been rolled back. Running agents may still
+use the previous policies. Retry applying the change, or restart Omnipus before
+relying on the new permissions.
+
 ## Replacing tool policies through the API
 
 When creating an agent or replacing its built-in tool policy map through the API,
@@ -67,6 +73,14 @@ The replacement does not invent a policy for a reserved name that was never save
 Supplying the reserved name explicitly follows the normal replacement rules;
 on the dedicated tool-settings endpoint, `override_names` controls which supplied
 values are saved as per-agent overrides.
+
+For the global-policy endpoint, `PUT /api/v1/security/tool-policies`, check the
+save result before assuming the new permissions are active:
+
+| Response | Meaning and recovery |
+|---|---|
+| HTTP 200 | The policies were saved and the running-agent reload completed successfully. |
+| HTTP 503 with an `error` saying the settings were saved but could not be applied | The save remains in place, but the reload failed or could not be confirmed. Retry the same update, or restart Omnipus. Do not assume running agents are using the saved policies yet. |
 
 ## Allow, ask and deny
 
