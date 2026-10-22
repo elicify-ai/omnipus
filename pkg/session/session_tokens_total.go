@@ -14,6 +14,17 @@ func (us *UnifiedStore) ReadSessionTokensTotal(sessionID string) *int {
 	if us == nil || validateSessionID(sessionID) != nil {
 		return nil
 	}
+	// Copy only the scalar on the ordinary cache path. Cloning all per-model
+	// and partition metadata would make another lifetime-sized allocation
+	// merely to publish an existing aggregate on a bounded page.
+	us.cacheMu.RLock()
+	if cached := us.metaCache[sessionID]; cached != nil && cached.Stats.TokensTotal >= 0 &&
+		(cached.Stats.TokensTotal != 0 || cached.Stats.MessageCount != 0) {
+		total := cached.Stats.TokensTotal
+		us.cacheMu.RUnlock()
+		return &total
+	}
+	us.cacheMu.RUnlock()
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
 	meta, err := us.readMetaLocked(sessionID)
