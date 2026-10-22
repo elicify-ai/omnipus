@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/stretchr/testify/assert"
@@ -75,14 +76,18 @@ func TestWU3PermissionWriteReportsGlobalCeilingClamp(t *testing.T) {
 	before := wu3AgentRead(t, d, id)
 	result := systools.NewAgentPermissionsTool(d).Execute(context.Background(), map[string]any{"id": id, "revision": before["revision"], "tool_policy_changes": map[string]any{"set": map[string]any{"read_file": "allow"}}})
 	body := wu3Success(t, result)
-	read := wu3Success(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"id": id}))
-	assert.Equal(t, "allow", wu3Object(t, read["stored_tool_overrides"])["read_file"])
-	assert.Equal(t, "ask", wu3Object(t, read["effective_policies"])["read_file"])
+	// SPEC.md compact output: stored overrides leave the response; preserve the persistence check against the real store.
+	_, read := defaultToolsExistingBody(t, d, id, map[string]any{"id": id})
+	stored, err := agentstore.New(d.Home).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, "allow", string(stored.Tools.Builtin.Policies["read_file"]))
+	assert.Equal(t, "ask", read["read_file"])
 	// Chief's binding carrier A: an exact, resource-specific clamp row in
 	// both the mutation response and its public tool-policy read-back.
 	want := []any{map[string]any{"tool": "read_file", "requested": "allow", "effective": "ask"}}
 	assert.Equal(t, want, body["clamped"], "mutation must report exactly the policy the ceiling clamped")
-	assert.Equal(t, want, read["clamped"], "read-back must report the same persisted/effective distinction")
+	// SPEC.md compact output: compare the read-back policy to the unchanged mutation clamp row.
+	assert.Equal(t, wu3Object(t, want[0])["effective"], read["read_file"])
 	assert.NotEmpty(t, strings.TrimSpace(wu3String(t, body["message"])), "structured clamp data keeps a human-readable sentence")
 }
 
@@ -95,9 +100,13 @@ func TestWU3PermissionWriteWithoutCeilingClampReturnsEmptyArray(t *testing.T) {
 	before := wu3AgentRead(t, d, id)
 	result := systools.NewAgentPermissionsTool(d).Execute(context.Background(), map[string]any{"id": id, "revision": before["revision"], "tool_policy_changes": map[string]any{"set": map[string]any{"read_file": "allow"}}})
 	body := wu3Success(t, result)
-	read := wu3Success(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"id": id}))
-	assert.Equal(t, "allow", wu3Object(t, read["stored_tool_overrides"])["read_file"])
-	assert.Equal(t, "allow", wu3Object(t, read["effective_policies"])["read_file"])
+	// SPEC.md compact output: keep stored/effective distinction coverage without obsolete JSON metadata blocks.
+	_, read := defaultToolsExistingBody(t, d, id, map[string]any{"id": id})
+	stored, err := agentstore.New(d.Home).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, "allow", string(stored.Tools.Builtin.Policies["read_file"]))
+	assert.Equal(t, "allow", read["read_file"])
 	assert.Equal(t, []any{}, body["clamped"], "no ceiling clamp means an empty array, never null or omitted")
-	assert.Equal(t, []any{}, read["clamped"], "unclamped read-back has the same exact empty-array shape")
+	// SPEC.md compact output: read-back must contain tool rows only, never a clamped metadata section.
+	assert.NotContains(t, read, "clamped")
 }

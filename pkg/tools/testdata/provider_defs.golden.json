@@ -85,7 +85,7 @@
   },
   {
     "name": "get_agent_tools",
-    "description": "Read tool inventory and effective policies. Supply either id for an existing agent or new_agent_type (Main or Subagent) to preview native creation defaults before proposing a new agent. Preview is read-only, has no persisted id/revision, and includes no connector assignments. In preview, stored_tool_overrides contains creation defaults before proposed changes, not user-applied overrides. Main and Subagent share these defaults. Sparse creation patches modify only named policies; omitted policies retain their defaults. This does not grant or execute target tools.",
+    "description": "List tools and effective policies. For an existing agent or new-agent preview, allow/ask lines show name, effective policy, and a description of at most 40 characters; deny lines show only name and deny. Previews use main or worker defaults. ToolSearch reports allow. Existing agents use the effective policy, not only the stored override.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"

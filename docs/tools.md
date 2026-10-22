@@ -52,6 +52,55 @@ You can also ask Omnipus in its chat to change an agent's permissions. Outside G
 
 The installation-wide setting lives in **Settings → Security**, under **Advanced / technical details**, in **Tool Access — Global Policies**. What you set there applies to every agent at once. Saving a change there asks you to re-type your password.
 
+## Default tool sets for main agents and workers
+
+A **Main** agent talks with you in chats and rooms. A **Worker** runs delegated work: a native **Subagent** or an external **subagent_3p**. New agents start with the following tool settings whether you create them in the app or through `create_agent`. These are editable starting points, not locked permissions; an agent's own setting can only tighten the global ceiling.
+
+**Allow** means no tool-policy approval is needed. **Ask** uses the normal approval rules, including Auto-approve. **Off** means Deny. Having permission does not remove a tool's other requirements: a mailbox, a workspace delegation link or the right kind of session may still be needed.
+
+A saved policy also does not add an unimplemented tool. This build reserves `list_secrets`, `request_secret` and `read_conversation` in its permission settings, but they are not yet in the real tool catalog and cannot be called. They will appear in the compact inventory only when their implementations are available.
+
+| Tool or group | Main | Worker |
+|---|---|---|
+| Ask the user and communicate upward: `AskUserQuestion`, `send_message`, `message_parent` | Allow | Allow |
+| Answer requests and read conversations: `answer_request`, `read_conversation` | Allow | Off |
+| Track current work and report completion: `set_todos`, `goal_claim` | Allow | Allow |
+| Define a goal: `set_goal` | Allow | Off |
+| Save and recall memory: `remember`, `recall_memory`, `recall_conversation` | Allow | Allow |
+| Write a retrospective: `run_retrospective` | Allow | Off |
+| Delegate and inspect work: `delegate`, `list_agents`, `get_agent`, `get_agent_tools`, `inspect_session`, `list_jobs` | Allow | Allow |
+| Create, run, stop or correct plans: `create_plan`, `execute_plan`, `stop_plan`, `plan_correct` | Allow | Off |
+| List and update tasks: `list_tasks`, `update_task` | Allow | Allow |
+| Create tasks: `create_task` | Allow | Off |
+| Delete tasks: `delete_task` | Ask | Ask |
+| Find and load skills and tools: `Skill`, `ToolSearch`, `find_skills`, `list_skills` | Allow | Allow |
+| Create or edit a skill: `create_skill`, `edit_skill` | Ask | Ask |
+| Search and open the web: `search_web`, `fetch_url` | Allow | Allow |
+| Browser tools, except file upload | Allow | Allow |
+| Upload a file to a website: `browser_upload_file` | Ask | Ask |
+| Read and find files: `read_file`, `list_directory`, `grep`, `list_mounts`, `library_list`, `library_read` | Allow | Allow |
+| Write and send files: `write_file`, `edit_file`, `append_file`, `send_file` | Allow | Allow |
+| Request access to a folder: `request_mount` | Ask | Ask |
+| Serve a web preview: `serve_web` | Allow | Allow |
+| Read mail, draft messages and read or download received attachments: `read_inbox`, `search_email`, `read_message`, `create_email_draft`, `list_email_attachments`, `read_email_attachment`, `download_email_attachment` | Allow | Allow |
+| Send mail or reply: `send_email`, `reply` | Ask | Ask |
+| List secrets: `list_secrets` | Allow | Allow |
+| Ask you for a secret: `request_secret` | Allow | Off — the main agent requests it on the worker's behalf |
+| List and read workspace details: `list_workspaces`, `get_workspace` | Allow | Allow |
+| Set up an execution environment: `environment_setup` | Ask | Ask |
+
+**Shell access is unchanged.** A new custom Main or Worker starts with `bash` Off; the shipped global ceiling is Ask. Built-in agents retain their deliberate shell settings, including Jim's Deny. External command-line workers still use their own tool and safety settings internally; this table controls Omnipus tools, not the external program.
+
+The five ordinary built-in agents receive at least their kind's positive defaults: Mia and Jim use the Main core; Planner, Researcher and General Purpose use the Worker core. They retain their role-specific extras, including the specialists' existing task or memory tools. Omnipus, Judge and Plan Supervisor are excluded from these role changes and keep their existing per-agent tool sets. Global policies still apply to them.
+
+Other administration tools stay Off for new agents: creating, changing or deleting agents and workspaces; reading agent metadata or configuration (`get_config`); changing permissions or configuration; managing providers, channels and connected servers; running diagnostics or checking usage; removing or installing skills; removing or selecting secret versions; and connecting or listing mailboxes. Skill creation and editing are the explicit Ask exceptions above. Their global ceiling remains Allow: ordinary Main and Worker defaults store a per-agent Ask, while Omnipus has no per-agent entry and may create or edit skills without asking. Judge and Plan Supervisor keep Deny.
+
+**Email sending now asks by default.** The shipped global settings for both `send_email` and `reply` are Ask, as are the Main and Worker seeds. They keep asking in a chat even with Auto-approve on. Reading mail, creating a draft and downloading a received attachment are Allow; downloading does not send a message and still follows the normal destination-path checks. Email tools require an enabled mailbox assigned to the agent and workspace. An active attachment save finishes or fails before its destination closes, even if its caller is canceled; its result reflects the actual save outcome. Cancellation while waiting for a mail-operation slot prevents the save from starting. The attachment-save audit record identifies the destination workspace and the mailbox-owning agent. In a task or plan run, a call that still needs human approval is refused rather than opening an approval card — see [unattended runs](security.md#task-plan-scheduled-and-other-unattended-runs).
+
+Use `get_agent_tools` to inspect any existing agent by id or exact name, or to preview a new agent with `new_agent_type` set to `Main`, `Subagent` or `subagent_3p`. Both worker kinds use the Worker column. The response is compact plain text: an identity header, then one name-sorted line per catalog tool. Allowed and Ask tools show their name, effective policy (`allow` or `ask`) and a description of at most 40 characters. Denied tools show only their name and `deny`, with no description. Registered discovery (`ToolSearch`) reports `allow`, matching its intentional runtime availability; that does not grant access to any discovered target tool. It lists the real built-in catalog and the existing agent's assigned live connector tools; it does not include parameter definitions or long descriptions. A preview creates nothing and has no saved id, revision or connector assignments. For an existing agent's full configuration and the revision needed to change permissions, use `get_agent`.
+
+These defaults apply when agents are created. They do not replace saved operator permissions on an existing agent or overwrite an existing global policy. Use the Tools tab to inspect the effective settings for your installation.
+
 ## Replacing tool policies through the API
 
 When creating an agent or replacing its built-in tool policy map through the API,
@@ -76,7 +125,7 @@ What each setting does, and what you see when it fires:
 |---|---|---|
 | Allow | Runs the tool without checking | The call runs and shows in the chat |
 | Ask | Stops and waits for your approval, unless Auto-approve lets the call through | An approval card with Approve Once, Deny and Always Allow |
-| Deny | Cannot run the tool | The tool disappears from the agent's view |
+| Deny | Cannot run the tool | Not offered for execution; still listed by `get_agent_tools` |
 
 On the approval card, **Approve Once** runs the call and remembers nothing. **Always Allow** remembers that exact call for the rest of the chat, so an identical one does not ask again. For a shell command, Always Allow can instead remember a whole family of similar commands. See [security](security.md) for the exact wording and when that choice is offered.
 
@@ -165,7 +214,7 @@ Providers, connected servers and channels are shared by the whole installation, 
 - **The shell can touch files directly.** Denying `write_file` does not stop an agent with `bash` from changing files with a command. To block file access, deny `bash`.
 - **Denying `read_file` alone does not stop reading.** `grep` returns the matching lines of any file it can reach, whatever `read_file` is set to. To keep a custom agent from reading files, deny `read_file`, `grep` and `bash` for it.
 - **Auto-approve no longer needs a kernel sandbox (changed 2026-09-24).** On Windows, or with the process sandbox not set to Enforce, Auto-approve still runs — the composer **Auto** button stays pressed, and its tooltip adds the no-sandbox caution. There is no separate badge. Every tool except the shell behaves exactly the same either way. For the shell, without a kernel sandbox Omnipus has no operating-system check behind its own text-based one, so *(changed again 2026-09-24)* shell commands ask first, except a read-only command (listing files, printing a file's contents, `git status`/`log`/`diff`/`show`, and similar) or one an operator's `command_rules` allow rule explicitly covers — even one that only touches files inside the workspace. A deliberately disguised command can still slip past the read-only check either way. See [security](security.md#auto-approve-and-the-kernel-sandbox-changed-2026-09-24) for the concrete risk and how to avoid it.
-- **Email tools need a mailbox.** They exist only for an agent that owns an enabled mailbox, configured on the [Connectors](connectors.md) screen — one mailbox per agent and workspace.
+- **Email tools need a mailbox.** They are registered for every agent, so you can set permissions before any mailbox exists. A call is refused unless that agent has an enabled mailbox for the current workspace, configured on the [Connectors](connectors.md) screen — one mailbox per agent and workspace.
 - **Web search works without setup**, on a default provider that needs no key. To use another provider, add its key under **Settings → Integrations**.
 
 ## Related pages

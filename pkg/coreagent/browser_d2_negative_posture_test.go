@@ -36,14 +36,15 @@ func TestCoreAgentSeed_UploadIsDenyForNonBrowsingAgents(t *testing.T) {
 	}
 }
 
-// ADR-090 General Purpose has no browser capability by default.
+// SPEC.md Table (2026-10-22): General Purpose gets Worker browser Allows, with upload Ask; historical test name retained.
 func TestCoreAgentSeed_WorkerExplicitlyDeniesBrowserSurface(t *testing.T) {
 	for _, tool := range d2BrowserVerbs {
-		if got := d2Resolve(t, coreagent.IDWorker, tool); got != "deny" {
-			t.Errorf("(Worker, %s) resolves %q, want deny under ADR-090", tool, got)
+		if got := d2Resolve(t, coreagent.IDWorker, tool); got != "allow" {
+			t.Errorf("(Worker, %s) resolves %q, want allow under SPEC.md Worker column", tool, got)
 		}
 	}
-	if got := d2Resolve(t, coreagent.IDWorker, "browser_upload_file"); got != "deny" {
-		t.Errorf("(Worker, browser_upload_file) resolves %q, want deny", got)
+	// SPEC.md Table (2026-10-22): upload is the explicit Ask exception for Worker.
+	if got := d2Resolve(t, coreagent.IDWorker, "browser_upload_file"); got != "ask" {
+		t.Errorf("(Worker, browser_upload_file) resolves %q, want ask", got)
 	}
 }

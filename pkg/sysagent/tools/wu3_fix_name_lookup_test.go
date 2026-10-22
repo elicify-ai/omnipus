@@ -26,8 +26,9 @@ func TestWU3GetAgentToolsNameLookupIsCaseExact(t *testing.T) {
 	wu3Error(t, tool.Execute(context.Background(), map[string]any{"name": "GENERAL PURPOSE FIXTURE"}), "AGENT_NOT_FOUND")
 
 	for name, id := range map[string]string{"Case Twin": upper, "case twin": lower} {
-		byName := wu3Success(t, tool.Execute(context.Background(), map[string]any{"name": name}))
-		byID := wu3Success(t, tool.Execute(context.Background(), map[string]any{"id": id}))
+		// SPEC.md compact output: compare exact compact inventories, not obsolete JSON envelopes.
+		byName, _ := defaultToolsExistingBody(t, d, id, map[string]any{"name": name})
+		byID, _ := defaultToolsExistingBody(t, d, id, map[string]any{"id": id})
 		assert.Equal(t, byID, byName, "%q resolves to its own agent only", name)
 	}
 }
@@ -40,7 +41,8 @@ func TestWU3GetAgentToolsNameLookupRefusesIncompleteInventory(t *testing.T) {
 	d, cfg := wu3Deps(t)
 	id := wu3CreateAgent(t, d, cfg, "Readable fixture")
 	tool := systools.NewAgentGetToolsTool(d)
-	wu3Success(t, tool.Execute(context.Background(), map[string]any{"name": "Readable fixture"}))
+	// SPEC.md compact output: the successful read-only control now has plain-text shape.
+	defaultToolsExistingBody(t, d, id, map[string]any{"name": "Readable fixture"})
 
 	broken := filepath.Join(d.Home, "entities", "agents", "broken-record.json")
 	require.NoError(t, os.WriteFile(broken, []byte("{not json"), 0o600))
@@ -49,5 +51,5 @@ func TestWU3GetAgentToolsNameLookupRefusesIncompleteInventory(t *testing.T) {
 		body := wu3Error(t, tool.Execute(context.Background(), map[string]any{"name": name}), "READ_FAILED")
 		assert.Contains(t, body["message"], "broken-record", "the unreadable record is named")
 	}
-	wu3Success(t, tool.Execute(context.Background(), map[string]any{"id": id}))
+	defaultToolsExistingBody(t, d, id, map[string]any{"id": id})
 }

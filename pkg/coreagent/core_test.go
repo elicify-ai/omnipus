@@ -598,8 +598,12 @@ func TestSeed_NonBrowserRolesResolveDenyForBrowserHandover(t *testing.T) {
 	for _, id := range []coreagent.CoreAgentID{coreagent.IDOmnipus, coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker} {
 		_, ok := byID[string(id)]
 		require.True(t, ok, "agent %q must be seeded", id)
-		assert.Equal(t, "deny", resolveFor(t, cfg, string(id), "browser_handover", nil),
-			"agent %q must resolve browser_handover deny", id)
+		// SPEC.md Table + Founder exclusion (2026-10-22): Worker browser core is Allow; Omnipus keeps its system Deny.
+		want := "allow"
+		if id == coreagent.IDOmnipus {
+			want = "deny"
+		}
+		assert.Equal(t, want, resolveFor(t, cfg, string(id), "browser_handover", nil), "agent %q browser_handover", id)
 	}
 }
 
