@@ -31,12 +31,14 @@ attach → access/parameter checks → bind and hold live frames at W
   snapshot: session_snapshot(page metadata) → current session_state
             → source-owned history frames → replay done
             → uncovered active projection → catch_up_complete(W)
-  history unavailable: session_state(history_state=unavailable)
+  snapshot history unavailable: session_state(history_state=unavailable)
             → current projection → catch_up_complete(W, live_only)
+  servable journal with unavailable history: session_state(history_state=unavailable)
+            → full journal tail → catch_up_complete(W, incremental)
 then held live frames after W, in order
 ```
 
-Replay `done` and `catch_up_complete` are distinct: current projection can arrive after replay done. The web client applies its render-once historical batch through complete, never treats a live done as attach completion, and discards incomplete history on refusal/replay failure/disconnect. An incomplete socket/control delivery cannot complete catch-up or advance a successful cursor.
+Replay `done` and `catch_up_complete` are distinct: current projection can arrive after replay done. Below the local attach-buffer cap, the web client holds the historical batch through successful complete and commits it once. If the buffer exceeds 8 MiB of retained serialized UTF-16 data or 4,096 frames, it shows the large-history notice and an initially blank reader can display saved frames progressively before completion; a cached reader stays in place. Partial display is not history-success proof. The client never treats a live done as attach completion and discards incomplete history on refusal/replay failure/disconnect, restoring prior cached history and preserving genuinely pending input. An incomplete socket/control delivery cannot complete catch-up or advance a successful cursor.
 
 A person reading older history keeps that reader window, opened clear boundaries, focus and scroll anchor through a replacement snapshot. The new recent page goes into a separate bounded tail cache. After completed catch-up, the browser revalidates only the kept closed interval through REST window-refresh pages. A failed interval check leaves cached, explicitly out-of-date rows and range-only Retry; it does not roll back a completed live cursor or return the reader to latest.
 
@@ -50,16 +52,16 @@ Attach names the authorized session. Optional `since_seq` / `boot_id` request jo
 
 | Branch | Ordered output | What completion proves |
 |---|---|---|
-| Servable incremental cursor | Current `session_state`, the complete journal tail, `catch_up_complete(mode=incremental)`, then held live frames. | Live/control catch-up to the announced sequence. History limits never cut the journal tail. |
+| Servable incremental cursor | Current `session_state`, the complete journal tail, `catch_up_complete(mode=incremental)`, then held live frames. The state can still report `history_state=unavailable`. | Live/control catch-up to the announced sequence. History limits never cut the journal tail. Unavailable history stays unavailable; this is not reconstructed-history proof and does not clear its error. |
 | Latest-page snapshot | Prepare the bounded page first; then `session_snapshot`, current `session_state`, selected source-derived historical frames, one replay `done`, uncovered active projection, `catch_up_complete(mode=snapshot)`, then held live frames. | The selected historical page and current live/control catch-up completed. It does not claim lifetime replay. |
-| Authorized history unavailable, controls deliverable | No snapshot/wipe. Send typed unavailable `history_state` in current `session_state`, current active projection, `catch_up_complete(mode=live_only)`, then held live frames. | Current live/control catch-up only. It does not reconstruct history, clear the history error or acknowledge attention as seen. |
+| Snapshot history unavailable, authorized controls deliverable | No snapshot/wipe. Send typed unavailable `history_state` in current `session_state`, current active projection, `catch_up_complete(mode=live_only)`, then held live frames. | Current live/control catch-up only. It does not reconstruct history, clear the history error or acknowledge attention as seen. A servable journal instead follows the incremental branch above, even while history remains unavailable. |
 | Control, socket or cancellation failure | Existing failed-attach recovery; no successful completion over an incomplete catch-up. | No new completed cursor or history proof. |
 
 A missing/inconsistent index or suffix above 64 records is not a reason to stop a turn or to silently build partial history. The unavailable history area can show Retry while the composer, Stop, approvals, questions and other current controls remain independently usable. Explicit history Retry attaches **without** `since_seq`, attempts bounded recovery once, and never resends user input. A later journal-only catch-up is still not proof that history loaded.
 
 `session_snapshot` carries canonical `page_info`, `has_earlier` / `has_later`, optional `next_before` / `next_after`, and the actual selected source range/context. It has no second messages array or ordinal ownership manifest. A historical reader keeps its loaded window, anchor and focus, stages the recent page into its separate tail cache, and revalidates only its already loaded closed interval through REST. A snapshot reason such as `boot_mismatch` or `retention_exceeded` does not authorize a passive jump to latest.
 
-Replay `done` and `catch_up_complete` are different boundaries: active projection can follow replay done. Replay done's `stats.frames_emitted` counts the actual prepared content frames, excluding the done terminator; it is not a lifetime-history count. Matching clients stage historical replay through successful catch-up completion and commit the batch once, not once per content frame. The completion mode must be handled explicitly; `live_only` releases live/control attach locks but never sets history-loaded or replay-completed state. Deploy the matching server and client together and reload old tabs.
+Replay `done` and `catch_up_complete` are different boundaries: active projection can follow replay done. Replay done's `stats.frames_emitted` counts the actual prepared content frames, excluding the done terminator; it is not a lifetime-history count. Below the local attach-buffer cap, matching clients stage historical replay through successful catch-up completion and commit the batch once, not once per content frame; the progressive exception is described above. The completion mode must be handled explicitly; `live_only` releases live/control attach locks but never sets history-loaded or replay-completed state. Deploy the matching server and client together and reload old tabs.
 
 ### `auth`
 
