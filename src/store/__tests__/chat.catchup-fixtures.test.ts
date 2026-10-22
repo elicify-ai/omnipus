@@ -10,18 +10,20 @@
 // `1889e1aa5`, SQUAD-REPORT-BEA.md's "Opus pass") — not hand-derived. Each
 // file's `tabs[]` holds every frame (both directions) one simulated
 // connection saw, in order, plus `note` events marking what the test did
-// between frames (drop, reload, chat switch). This driver only feeds the
-// `server→client` frames into handleFrame — the `client→server` frames
-// (attach_session, message) describe what the SPA itself sends, which the
-// dedicated session.attach-cursor.test.ts / ws.reattach.test.ts already
-// cover directly.
+// between frames (drop, reload, chat switch). The plain driver feeds server
+// frames directly. The recorded-context driver executes selection/attach/switch
+// through the real session actions and WsConnection, and calls the same inactive
+// history cleanup as ChatThread. Message-send/cursor construction itself remains
+// covered by the dedicated transport suites.
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useChatStore } from '../chat/store'
 import { __resetFinishedTurnIdsForTests } from '../chat/frames'
 import { useSessionStore } from '../session'
 import { useConnectionStore } from '../connection'
 import type { ServerFrame } from '@/lib/ws'
+import { AttachSessionFrame as AttachSchema } from '@/lib/api/generated/ws-schemas'
+import { historyTransport } from '../../../tests/chat-history-paging/transport'
 import f1 from '../__fixtures__/catchup/F1.json'
 import f2 from '../__fixtures__/catchup/F2.json'
 import f3 from '../__fixtures__/catchup/F3.json'
@@ -127,6 +129,31 @@ function userMessages(sessionId: string) {
   return b.messageOrder.map((id) => b.messagesById[id]).filter((m) => m.role === 'user')
 }
 
+let recordedTransport: ReturnType<typeof historyTransport> | undefined
+
+/** A new recorded tab owns its selection, client attach and real WS buffer.
+ * The plain frame driver remains for F4's intentional warm-cache overlap. */
+function driveRecordedContext(events: FixtureEvent[]): void {
+  resetSimulatedBrowserRuntime()
+  recordedTransport = historyTransport()
+  for (const event of events) {
+    if (event.dir === 'client→server' && event.frame?.type === 'attach_session') {
+      const request = AttachSchema.parse(event.frame)
+      if (!request.ack_attention) {
+        const previous = useSessionStore.getState().activeSessionId
+        useSessionStore.getState().setActiveSession(request.session_id)
+        // Execute ChatThread's real inactive cleanup at the recorded switch;
+        // do not clear arrays by hand or erase a still-running A execution.
+        if (previous && previous !== request.session_id) useChatStore.getState().releaseSessionHistory(previous)
+        useChatStore.getState().setReplaying(true)
+      }
+      if (!recordedTransport.connection.send(request)) throw new Error('Recorded attach was not sent by the real test transport')
+    } else if (event.dir === 'server→client' && event.frame) {
+      recordedTransport.deliver(event.frame as unknown as ServerFrame)
+    }
+  }
+}
+
 function resetSimulatedBrowserRuntime(): void {
   // Independent recordings deliberately reuse sess-1/turn-1. A production
   // reconnect must KEEP this anti-zombie tracker; a new simulated browser must
@@ -138,6 +165,11 @@ function resetSimulatedBrowserRuntime(): void {
 }
 
 beforeEach(resetSimulatedBrowserRuntime)
+afterEach(() => {
+  recordedTransport?.connection.disconnect()
+  recordedTransport = undefined
+  vi.unstubAllGlobals()
+})
 
 describe('F1 — live turn, one tab, no reconnect (baseline shape)', () => {
   it('produces exactly the transcript the scenario defines', () => {
@@ -231,7 +263,7 @@ describe('F5 — two tabs on one chat', () => {
     const tabAContent = assistantMessages(SID).map((m) => m.content)
     const tabACursor = bucket(SID)?.cursor
 
-    driveFrames(framesFor(tabB))
+    driveRecordedContext(tabB.events)
     const tabBContent = assistantMessages(SID).map((m) => m.content)
     const tabBCursor = bucket(SID)?.cursor
 
@@ -244,7 +276,7 @@ describe('F5 — two tabs on one chat', () => {
 describe('F6 — switch to another chat while the answer finishes, then switch back', () => {
   it('the original chat reassembles into ONE bubble across the switch-away, and the other chat is never touched by it', () => {
     const fixture = f6 as Fixture
-    driveFrames(allServerFrames(fixture))
+    driveRecordedContext(fixture.tabs.flatMap((tab) => tab.events))
     const SID_A = 'sess-1'
     const SID_B = 'sess-2'
 
@@ -253,9 +285,14 @@ describe('F6 — switch to another chat while the answer finishes, then switch b
     expect(asstA).toHaveLength(1) // never split by the switch-away/back
     expect(bucket(SID_A)?.isStreaming).toBe(false)
 
-    // The other chat's own snapshot/replay never touched session A's bucket.
+    // Team-lead D9 ruling: returning A→B→A releases B's inactive settled
+    // bodies/reader/tail, not A's still-running execution. The former >0
+    // retention oracle contradicted spec D9's explicit release requirement.
     const bB = bucket(SID_B)!
-    expect(bB.messageOrder.length).toBeGreaterThan(0)
+    expect(bB.messageOrder).toEqual([])
+    expect(bB.messagesById).toEqual({})
+    expect(bB.history.readerPositions).toEqual([])
+    expect(bB.history.tailEntries).toEqual([])
     expect(assistantMessages(SID_A).map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
   })
 })
@@ -263,7 +300,9 @@ describe('F6 — switch to another chat while the answer finishes, then switch b
 describe('F7 — gateway restart: the cursor\'s boot id no longer matches', () => {
   it('boot_mismatch forces a snapshot; no turn is left announced as active', () => {
     const fixture = f7 as Fixture
-    driveFrames(allServerFrames(fixture))
+    // This recording has no session_started: its client attach is the actual
+    // selected/reloaded-chat context and must precede the snapshot.
+    driveRecordedContext(fixture.tabs.flatMap((tab) => tab.events))
     const SID = 'sess-1'
 
     expect(bucket(SID)?.activeTurnId).toBeNull()
