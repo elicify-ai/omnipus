@@ -136,7 +136,9 @@ export class ReloadHarness {
       native_process_receipt: this.nativeProcess(), native_still_running: this.nativeRunning(),
       counter: hasCounter ? await this.page.getByTestId('session-token-counter').getAttribute('aria-label') : null,
       formatted: hasCounter ? await this.page.getByTestId('session-token-value').textContent() : null };
-    await this.info.attach(stage, { contentType: 'application/json', body: JSON.stringify(evidence, null, 2) });
+    const evidencePath = this.info.outputPath(`${stage}.json`);
+    fs.writeFileSync(evidencePath, JSON.stringify(evidence, null, 2));
+    await this.info.attach(stage, { contentType: 'application/json', path: evidencePath });
     await this.info.attach(`${stage}-screenshot`, { contentType: 'image/png', body: await this.page.screenshot({ fullPage: true }) });
   }
   async seedOrdinary(label: string, count: number) {

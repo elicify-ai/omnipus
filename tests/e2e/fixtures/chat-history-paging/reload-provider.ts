@@ -69,9 +69,14 @@ export async function startReloadProvider(): Promise<ReloadProvider> {
         return;
       }
       const messages = Array.isArray(body.messages) ? body.messages as Record<string, unknown>[] : [];
-      const user = [...messages].reverse().find(message => message.role === 'user');
-      const input = typeof user?.content === 'string' ? user.content : Array.isArray(user?.content)
-        ? (user.content as { text?: string }[]).map(part => part.text ?? '').join('') : '';
+      const userInputs = messages.filter(message => message.role === 'user').map(message =>
+        typeof message.content === 'string' ? message.content : Array.isArray(message.content)
+          ? (message.content as { text?: string }[]).map(part => part.text ?? '').join('') : '');
+      // The real engine appends a Current Time USER-role trailer. Route on the
+      // last exact authored instruction, not that framework metadata. Browser
+      // outbound input and every expected tool/token assertion remain exact.
+      const instructions = [BASELINE_INPUT, USAGE_INPUT, NEXT_INPUT, CANCEL_INPUT];
+      const input = [...userInputs].reverse().find(value => instructions.includes(value)) ?? userInputs.at(-1) ?? '';
       const names = new Set((Array.isArray(body.tools) ? body.tools as { function?: { name?: string } }[] : [])
         .map(tool => tool.function?.name));
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
