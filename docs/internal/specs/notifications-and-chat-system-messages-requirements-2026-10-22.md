@@ -5,7 +5,8 @@
 **Author:** team-lead, from a founder interview and a founder review page
 **Captured at commit:** `c90310f1f` (`release/v0.1.1`)
 **Sources:** interview rounds 1–7 (2026-10-22); founder review page
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/notification-review-20261022/review.json` (saved 2026-10-22 08:50Z)
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/notification-review-20261022/review.json` (saved 2026-10-22 08:50Z); founder message review
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/notification-review-20261022/messages-review.json` (saved 2026-10-22 11:34Z)
 **Related issues:** #645 (notification centre hardening: unify with toasts) — this document supersedes its open question; #177 (notification-prefs for omnipus-mobile) — R-PREF requirements must stay compatible.
 
 Requirement IDs (`R-…`) are stable; decision IDs (`D…`) refer to the Decisions Log at the end.
@@ -190,10 +191,15 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 
 | ID | Requirement | Decisions |
 |---|---|---|
-| R-WD-1 | High-level rule for every system message: what happened (plain words) · why, if known · what the user can do or what Omnipus is already doing. | D26 |
+| R-WD-1 | High-level rule for every system message: what happened (plain words) · why, if known · what the user can do or what is already being done (for example, retrying). | D26, D47 |
 | R-WD-2 | Messages contain dynamic parts. A provider's own error message (e.g. “Insufficient balance”) is shown on the main line, quoted and well presented — never hidden, and not force-classified into a custom text. | D26, D28 |
 | R-WD-3 | Our own short sentence accompanies the provider's message; ADR-051's custom texts are kept only where they add a useful action (e.g. Switch model). The ADR-051 messages are the ones to revise. | D28, D36 |
 | R-WD-4 | All system-message wording is reviewed through a dedicated review page (see 7. Follow-ups) listing every generated and hard-coded message with a rating and a suggestion field; the rewrite follows that review. | D7, D35 |
+| R-WD-5 | **Voice in a chat.** A message shown inside a chat — the Omnipus chat or a channel chat such as WhatsApp — never names Omnipus. When the line speaks for the agent, it uses the first person: “I couldn't resume this chat”, not “Omnipus couldn't resume this chat”. When it does not speak for the agent (a status line, the user's own action), it is neutral: “Goal cleared.”, “You stopped this reply.” | D47 |
+| R-WD-6 | **Voice everywhere else.** Pop-ups, banners, panels, settings screens, the notification centre and external notifications are neutral: “Image could not be sent”, not “Omnipus could not send the image”. | D47 |
+| R-WD-7 | No message uses “we”, “our” or “us” — they hide who is speaking. Third parties may be named as actors (“OpenRouter rejected the API key”). The only allowed use of the product name is the Omnipus.ai team as the place to report a bug (“please report it to the Omnipus.ai team”). | D48, D50 |
+| R-WD-8 | A message that can appear both inside and outside a chat has a neutral form for the outside surface (for example, a task-failed notification: “{agent}'s working folder could not be opened”). | D47 |
+| R-WD-9 | The agreed wording baseline is the founder's message review with R-WD-5…8 applied: `notifications-and-chat-system-messages-wording-2026-10-22.md` (ADR-051 catalogue in full, plus every message the voice rule or a founder edit changed). Unrated proposals count as agreed. Messages with no proposal yet are rewritten under R-WD-1…8 during the spec. | D49 |
 
 ### 5.8 Connection handling and logging
 
@@ -245,6 +251,8 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 | F2 | ADR revising ADR-051 (provider error translation → provider message on the main line) | D36 |
 | F3 | Provider-failure logging is partial (2.) — make it consistent per attempt with a network/API field | R-LOG-1, R-LOG-2 |
 | F7 | Founder review of every system message: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/notification-review-20261022/messages/` (ADR-051 catalogue with proposed rewrites; 363 analysed chat/app messages; 322 pop-ups) | D35, R-WD-4 |
+| F9 | Withdrawn proposals: BE-097, BE-099, BE-101, BE-102, BE-104 are fragments inserted into the knowledge-drift notification (BE-096), not standalone messages; the review page's proposals for them were worker filler | correction, D49 |
+| F10 | Check whether a user can reach an agent that is on no workspace team (`agent_not_configured`): the code path exists (`create_agent` outside a workspace makes a “metadata only” agent; `pkg/agent/workspace_reroot.go::resolveTurnWorkDirAndWorkspaceOrRefuse` refuses its turns), but whether the UI lets a chat or task reach it is not yet checked | founder question |
 | F8 | Extend the pop-up category list with the audit's proposals (test result, mail sent/failed, sign-out, opened in another tab, placement failed, download/media failed, consequence warning, outside change) | D46 |
 | F4 | Close or re-scope #645 against this document | superseded question |
 | F5 | Check #177 (mobile notification-prefs) against R-PREF | compatibility |
@@ -300,6 +308,10 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 | D44 | Browser outage logging | Browser reports the outage on reconnect; server logs it then | Server cannot log what it cannot see | Interview | 2026-10-22 |
 | D45 | Line types | Five types; “in progress” is an animated state of any type | Founder: retry example should be an amber warning | Interview | 2026-10-22 |
 | D46 | Own-action pop-up removal condition | Remove only where the page shows the outcome; otherwise add a page indicator first, with Retry for failed saves; audit every call site with a finer category list | Founder: “validate that there is another indicator in the page itself … maybe with a retry” | Interview | 2026-10-22 |
+| D47 | Message voice | In a chat: never name Omnipus; “I” when the line speaks for the agent, otherwise neutral. Elsewhere: neutral (“Image could not be sent”) | Founder: “if it is an in chat message it must be I could not … if it is not a message in the chat but elsewhere it must be neutral” | Interview | 2026-10-22 |
+| D48 | Bug-report exception | “Please report it to the Omnipus.ai team” is the one allowed product-name use | Founder's own edit of `provider_request_rejected`; team-lead's reading that it is intended — confirm | Interview | 2026-10-22 |
+| D49 | Message review result | Founder ratings and edits adopted; unrated proposals count as agreed; voice rule applied over all of them | Founder: “in most cases I agreed to your proposal, assume that for the remaining ones” | Interview | 2026-10-22 |
+| D50 | No “we / our / us” | Extends D47: plural first person is not used either | team-lead extension of D47 (the old ADR-051 texts say “We built…”); awaiting founder confirmation | Interview | 2026-10-22 |
 
 ## Dependency Graph & Implementation Order
 
