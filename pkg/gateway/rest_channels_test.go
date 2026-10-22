@@ -863,10 +863,9 @@ func TestHandleChannels_BadSlug_Returns400_NothingWritten(t *testing.T) {
 
 // ── Fix 2: bound→unbound transition clears WorkspaceID and Identity ──────────
 
-// TestSetChannelRouting_Bound_RestampsExistingSessions verifies that binding
-// an UNBOUND channel to a workspace re-stamps sessions that already existed
-// on that channel before the bind, not only sessions created afterward.
-func TestSetChannelRouting_Bound_RestampsExistingSessions(t *testing.T) {
+// Founder Q1 B: binding an unfiled connector selects a destination conversation,
+// never relabels the connector's already-used, unfiled conversation.
+func TestSetChannelRouting_Bound_PreservesExistingUnfiledSession(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
 		{ID: "mia"},
@@ -878,6 +877,7 @@ func TestSetChannelRouting_Bound_RestampsExistingSessions(t *testing.T) {
 	// A conversation that already exists BEFORE the channel is ever bound.
 	existing := seedExistingChannelSession(t, api, "whatsapp.eu", "peer-1", "mia", "")
 	require.Empty(t, existing.WorkspaceID, "precondition: session starts with no workspace")
+	unchanged := round3ChannelUnchanged(t, api, existing.ID)
 
 	w := setChannelRoutingReq(t, api, "whatsapp.eu",
 		`{"workspace_id":"sales","default_agent_id":"ray"}`)
@@ -886,14 +886,15 @@ func TestSetChannelRouting_Bound_RestampsExistingSessions(t *testing.T) {
 	store := api.agentLoop.GetSessionStore()
 	after, err := store.GetMeta(existing.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "sales", after.WorkspaceID,
-		"binding the channel to a workspace must re-stamp an already-existing session's workspace_id")
+	assert.Empty(t, after.WorkspaceID, "binding must preserve the old unfiled conversation")
+	unchanged()
+	round3RequireChannelPair(t, api, "whatsapp.eu", "sales", "ray")
 }
 
-// TestSetChannelRouting_Rebind_UpdatesExistingSessions verifies that MOVING
-// a channel from workspace W1 to W2 re-stamps sessions off W1 onto W2 —
-// not just newly-bound state that only affects future sessions.
-func TestSetChannelRouting_Rebind_UpdatesExistingSessions(t *testing.T) {
+// Founder Q1 B: rebind changes the destination pair, not an old conversation.
+// Actual connector-input destination selection is covered by
+// TestMemoryRound3ConnectorDestination in the agent package.
+func TestSetChannelRouting_Rebind_PreservesExistingSession(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
 		{ID: "mia"},
@@ -911,6 +912,7 @@ func TestSetChannelRouting_Rebind_UpdatesExistingSessions(t *testing.T) {
 	// A conversation created while w1 was bound.
 	existing := seedExistingChannelSession(t, api, "whatsapp.eu", "peer-2", "ray", "w1")
 	require.Equal(t, "w1", existing.WorkspaceID)
+	unchanged := round3ChannelUnchanged(t, api, existing.ID)
 
 	// Re-bind the SAME instance to w2.
 	w2 := setChannelRoutingReq(t, api, "whatsapp.eu",
@@ -920,8 +922,9 @@ func TestSetChannelRouting_Rebind_UpdatesExistingSessions(t *testing.T) {
 	store := api.agentLoop.GetSessionStore()
 	after, err := store.GetMeta(existing.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "w2", after.WorkspaceID,
-		"re-binding a channel to a different workspace must move existing sessions off the stale workspace")
+	assert.Equal(t, "w1", after.WorkspaceID, "rebind must preserve the old workspace identity")
+	unchanged()
+	round3RequireChannelPair(t, api, "whatsapp.eu", "w2", "ray")
 }
 
 // TestSetChannelRouting_Bound_UnboundChannelSessionsUnaffected verifies that
@@ -953,19 +956,8 @@ func TestSetChannelRouting_Bound_UnboundChannelSessionsUnaffected(t *testing.T) 
 		"an unrelated, never-bound channel's existing sessions must be unaffected by another channel's bind")
 }
 
-// TestSetChannelRouting_SiblingInstanceIsUntouched is the defect this fix
-// exists to prevent, and the reason the session record needed an instance key.
-//
-// An install can hold a hundred WhatsApp numbers, each bound to its own
-// (workspace, agent) pair under ADR-029. Every one of their sessions records
-// Channel=="whatsapp". A restamp that matched on the bare TYPE would relabel
-// all hundred when an operator re-bound one of them — inflicting on the other
-// ninety-nine exactly the stale-workspace bug the restamp was written to fix,
-// and silently moving their delegation trust, memory rooms and task placement
-// to the wrong workspace.
-//
-// The first version of this fix did match by type. It only became visible
-// because someone asked whether that was acceptable behaviour.
+// Founder Q1 B: neither the changed instance's old conversation nor a sibling
+// instance's conversation is relabelled. Retain the multi-instance safety check.
 func TestSetChannelRouting_SiblingInstanceIsUntouched(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
@@ -978,6 +970,8 @@ func TestSetChannelRouting_SiblingInstanceIsUntouched(t *testing.T) {
 
 	eu := seedExistingChannelSession(t, api, "whatsapp.eu", "peer-eu", "mia", "")
 	us := seedExistingChannelSession(t, api, "whatsapp.us", "peer-us", "ray", "americas")
+	unchangedEU := round3ChannelUnchanged(t, api, eu.ID)
+	unchangedUS := round3ChannelUnchanged(t, api, us.ID)
 
 	w := setChannelRoutingReq(t, api, "whatsapp.eu",
 		`{"workspace_id":"emea","default_agent_id":"mia"}`)
@@ -987,7 +981,10 @@ func TestSetChannelRouting_SiblingInstanceIsUntouched(t *testing.T) {
 
 	afterEU, err := store.GetMeta(eu.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "emea", afterEU.WorkspaceID, "the bound instance's own session must be restamped")
+	assert.Empty(t, afterEU.WorkspaceID, "the changed instance's old unfiled conversation stays unfiled")
+	unchangedEU()
+	unchangedUS()
+	round3RequireChannelPair(t, api, "whatsapp.eu", "emea", "mia")
 
 	afterUS, err := store.GetMeta(us.ID)
 	require.NoError(t, err)

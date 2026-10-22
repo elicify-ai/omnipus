@@ -131,7 +131,7 @@ func TestMemory_MinHash_DedupOnWrite(t *testing.T) {
 }
 
 // TestMemory_PrivateRoom_RoutingByWorkspace verifies private vs shared room
-// routing via SetWorkspaceID (FR-7.1 / TDD #1).
+// routing via immutable MemoryScope (FR-7.1 / TDD #1).
 func TestMemory_PrivateRoom_RoutingByWorkspace(t *testing.T) {
 	ms, home := newTestMemoryStore(t)
 	defer ms.Close()
@@ -141,9 +141,8 @@ func TestMemory_PrivateRoom_RoutingByWorkspace(t *testing.T) {
 		t.Fatalf("AppendLongTerm private: %v", err)
 	}
 
-	// Wire a workspace.
-	ms.SetWorkspaceID("ws-acme")
-	if err := ms.AppendLongTermToScope("Shared fact", "reference", memrooms.RoomScopeShared); err != nil {
+	// Pass this operation's workspace by value.
+	if err := ms.AppendLongTermToScope("Shared fact", "reference", memrooms.RoomScopeShared, ms.scopeForWorkspace("ws-acme")); err != nil {
 		t.Fatalf("AppendLongTermToScope shared: %v", err)
 	}
 

@@ -39,10 +39,11 @@ type d2bProviderObservation struct {
 }
 
 type d2bProvider struct {
-	al           *AgentLoop
-	id           string
-	mu           sync.Mutex
-	observations []d2bProviderObservation
+	al              *AgentLoop
+	id              string
+	registrationKey string // optional no-ID channel route scope, fixed before execution
+	mu              sync.Mutex
+	observations    []d2bProviderObservation
 }
 
 func (p *d2bProvider) GetDefaultModel() string { return "d2b-provider-seam" }
@@ -53,7 +54,10 @@ func (p *d2bProvider) Chat(ctx context.Context, messages []providers.Message, _ 
 	o.record, o.readErr = session.NewLifecycleStore(p.al.GetSessionLifecycleStore().Dir()).Load(p.id)
 	// Ordinary turns register under the owner-qualified session key, not the
 	// raw session ID used by steered dispatch.
-	key := fmt.Sprintf("agent:%s:session:%s", testDefaultAgentID, p.id)
+	key := p.registrationKey
+	if key == "" {
+		key = fmt.Sprintf("agent:%s:session:%s", testDefaultAgentID, p.id)
+	}
 	if ts := p.al.getActiveTurnState(key); ts != nil {
 		ts.mu.RLock()
 		o.registered = true

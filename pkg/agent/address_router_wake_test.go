@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/require"
 )
 
 // U8 open point (b) - FR-027 / ADR D7: an answer wakes the eligible idle OWNER of
@@ -140,27 +143,58 @@ func TestReply_UnreadableLifecycle_NoWake(t *testing.T) {
 	answerRetained(t, f, src)
 }
 
-// F3: a source chat moved to another workspace keeping the agent id is no
-// longer the conversation the request came from.
-func TestReply_SourceMovedToAnotherWorkspaceSameAgentRefuses(t *testing.T) {
-	f := newAddrFixture(t)
-	recv, src := conversationSetup(t, f, addressing.Pair{})
-	other := "ws-elsewhere"
-	if err := f.al.GetSessionStore().SetMeta(src, session.MetaPatch{WorkspaceID: &other}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.r.Reply(context.Background(), f.replyReq(recv, "q7")); err == nil {
-		t.Fatal("a reply into a chat that moved to another workspace must refuse")
-	}
-	if entries, _ := f.al.GetSessionStore().ReadTranscript(src); len(entries) != 0 {
-		t.Fatalf("nothing may be appended to the moved chat: %v", entries)
-	}
-	if len(f.deps.published) != 0 {
-		t.Fatal("nothing may be published")
-	}
-	if _, woke := addrDrainInbound(t, f.bus); woke {
-		t.Fatal("no wake after a refusal")
-	}
+// Founder Q1 B forbids ordinary workspace moves. Keep the older reply safety
+// scenario separately by explicitly damaging persisted identity, not by asking
+// the production setter to perform a forbidden move.
+func TestReply_SourceWorkspaceChangeRefuses(t *testing.T) {
+	t.Run("SetMetaRefuses", func(t *testing.T) {
+		f := newAddrFixture(t)
+		_, src := conversationSetup(t, f, addressing.Pair{})
+		store := f.al.GetSessionStore()
+		before, err := store.GetMeta(src)
+		require.NoError(t, err)
+		other := "ws-elsewhere"
+		err = store.SetMeta(src, session.MetaPatch{WorkspaceID: &other})
+		require.True(t, errors.Is(err, session.ErrWorkspaceImmutable), "ordinary workspace change must be refused")
+		after, err := store.GetMeta(src)
+		require.NoError(t, err)
+		require.Equal(t, before, after)
+	})
+	t.Run("DamagedPersistedSource", func(t *testing.T) {
+		f := newAddrFixture(t)
+		recv, src := conversationSetup(t, f, addressing.Pair{})
+		store := f.al.GetSessionStore()
+		path := filepath.Join(store.BaseDir(), src, "meta.json")
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var damaged map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(raw, &damaged))
+		damaged["workspace_id"] = json.RawMessage(`"ws-elsewhere"`)
+		raw, err = json.Marshal(damaged)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, raw, 0o600))
+		// A new reader observes the real damaged file, not a mocked GetMeta or
+		// an old cached identity that would make this negative test meaningless.
+		reopened, err := session.NewUnifiedStore(store.BaseDir())
+		require.NoError(t, err)
+		f.al.sharedSessionStore = reopened
+		meta, err := reopened.GetMeta(src)
+		require.NoError(t, err)
+		require.Equal(t, "ws-elsewhere", meta.WorkspaceID)
+		before, err := reopened.ReadTranscript(src)
+		require.NoError(t, err)
+		_, err = f.r.Reply(context.Background(), f.replyReq(recv, "q7"))
+		require.EqualError(t, err, "the conversation this request came from no longer belongs to the agent that sent it")
+		after, err := reopened.ReadTranscript(src)
+		require.NoError(t, err)
+		require.Equal(t, before, after, "nothing may be appended after defensive refusal")
+		require.Empty(t, f.deps.published, "nothing may be published")
+		select {
+		case in := <-f.bus.InboundChan():
+			t.Fatalf("no wake after refusal: %+v", in)
+		default:
+		}
+	})
 }
 
 // T18: a silent owner (no text to give) leaves no empty bubble: nothing is

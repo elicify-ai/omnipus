@@ -379,7 +379,7 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	// report surfaced memories and the loop can emit op:cited counter events
 	// when the LLM references them by ID/title. Nil for the main gateway agent
 	// (no memory store); WithCitationTracker is a no-op in that case.
-	rc.rx.rr.citationTracker = newCitationTracker(rc.rx.rr.rq.ri.rf.rt.ts.agent.ContextBuilder.Memory())
+	rc.rx.rr.citationTracker = newCitationTracker(rc.rx.rr.rq.ri.rf.rt.ts.agent.ContextBuilder.Memory(), rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID)
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithCitationTracker(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.citationTracker)
 
 	rc.rx.rr.rq.ri.rf.rt.al.registerActiveTurn(rc.rx.rr.rq.ri.rf.rt.ts)

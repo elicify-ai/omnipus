@@ -130,7 +130,8 @@ type Retro struct {
 // MemoryStore manages persistent memory for the agent using the two-room topology.
 //
 // The private room is always available (agents/<id>/.omnipus/).
-// The shared room is set at run-time per turn (workspaces/<id>/.omnipus/).
+// The shared room is resolved from an immutable MemoryScope on each operation
+// (workspaces/<id>/.omnipus/), never stored as agent-wide current-room state.
 //
 // Thread safety: AppendLongTerm / AppendRetro use per-file flocks via
 // fileutil.WriteFileAtomic + pkg/fileutil.AppendJSONL (which is POSIX-safe).
@@ -152,13 +153,6 @@ type MemoryStore struct {
 
 	// omnipusHome is the resolved $OMNIPUS_HOME used to build workspace room paths.
 	omnipusHome string
-
-	// sharedMu guards sharedRoom. SetWorkspaceID (writer, called per turn) races
-	// concurrent readers (rooms / resolveWriteRoom / SearchEntriesInScope /
-	// SharedRoom); an unsynchronised write here could leak one workspace's shared
-	// room into another's reads. All access to sharedRoom MUST hold sharedMu.
-	sharedMu   sync.RWMutex
-	sharedRoom *memrooms.Room
 
 	// indexMu protects indexCache and sigCache maps.
 	indexMu sync.Mutex
@@ -262,7 +256,7 @@ func memoriesDirMtime(memoriesDir string) time.Time {
 //     because that fallback only fires when the cached index is nil), and
 //   - drops this room's sigCache so the next dedup check rescans the .md sources.
 //
-// It then records the observed directory mtime as the new sync baseline.
+// Only a successful rebuild records the observed directory mtime as the sync baseline.
 //
 // Crucially, when nothing changed (mtime equals the recorded baseline) it is a
 // no-op and does NOT touch the sigCache — so the append path, which records the
@@ -273,22 +267,23 @@ func memoriesDirMtime(memoriesDir string) time.Time {
 //
 // MUST be called with ms.indexMu held. ri may be nil (index unavailable); the
 // sigCache drop still happens so dedup stays correct.
-func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.RoomIndex) {
+func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.RoomIndex) error {
 	current := memoriesDirMtime(room.MemoriesDir)
 	baseline, seen := ms.indexedDirMtime[room.MemoriesDir]
 	if seen && current.Equal(baseline) {
-		return // in sync; nothing to do
+		return nil // in sync; nothing to do
 	}
 
 	// Directory changed (or first sync). Rebuild the bleve index from the .md
 	// sources so externally written memories become searchable.
 	if ri != nil {
 		if err := ri.Rebuild(); err != nil {
-			logger.WarnCF(
-				"agent.memory",
-				"syncRoomToDisk: bleve rebuild failed; recall may miss new files until next open",
-				map[string]any{"room_root": room.Root, "error": err.Error()},
-			)
+			delete(ms.indexedDirMtime, room.MemoriesDir)
+			delete(ms.sigCache, room.Root)
+			delete(ms.sigIDs, room.Root)
+			logger.WarnCF("agent.memory", "saved-note index rebuild failed; retry will rebuild; using scan for this read",
+				map[string]any{"room_root": room.Root, "error": err.Error()})
+			return fmt.Errorf("memory: rebuild saved-note index in %q: %w", room.Root, err)
 		}
 	}
 
@@ -298,6 +293,7 @@ func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.Roo
 	delete(ms.sigIDs, room.Root)
 
 	ms.indexedDirMtime[room.MemoriesDir] = current
+	return nil
 }
 
 // roomIndex returns the bleve RoomIndex for room, lazily opening it.
@@ -310,12 +306,24 @@ func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.Roo
 func (ms *MemoryStore) roomIndexLocked(room memrooms.Room) *memindex.RoomIndex {
 	ri, ok := ms.indexCache[room.Root]
 	if ok {
-		ms.syncRoomToDiskLocked(room, ri)
+		if err := ms.syncRoomToDiskLocked(room, ri); err != nil {
+			return nil
+		}
 		return ri
 	}
+	current := memoriesDirMtime(room.MemoriesDir)
 	var openErr error
 	ri, openErr = memindex.OpenOrCreate(room)
+	if openErr == nil {
+		// OpenOrCreate may reuse a process-shared handle whose refresh failed
+		// in another store. Validate sources once on this store's acquisition
+		// before calling the current directory timestamp synchronized.
+		if rebuildErr := ri.Rebuild(); rebuildErr != nil {
+			openErr = errors.Join(rebuildErr, ri.Close())
+		}
+	}
 	if openErr != nil {
+		delete(ms.indexedDirMtime, room.MemoriesDir)
 		// Say what the operator loses, not which algorithm stops. Until ADR-068
 		// D21.1 this line read "BM25 disabled for room", which was untrue twice
 		// over: bleve was scoring TF-IDF, and "disabled" implied a ranked search
@@ -327,10 +335,9 @@ func (ms *MemoryStore) roomIndexLocked(room memrooms.Room) *memindex.RoomIndex {
 		return nil
 	}
 	ms.indexCache[room.Root] = ri
-	// OpenOrCreate already built the index from the current .md sources, so seed
-	// the sync baseline to the current directory mtime to avoid an immediate
-	// redundant rebuild on the very next access.
-	ms.indexedDirMtime[room.MemoriesDir] = memoriesDirMtime(room.MemoriesDir)
+	// Record only the source timestamp observed before successful validation.
+	// A peer write during rebuilding must still trigger the next refresh.
+	ms.indexedDirMtime[room.MemoriesDir] = current
 	return ri
 }
 
@@ -343,7 +350,12 @@ func (ms *MemoryStore) ensureSigCacheLocked(room memrooms.Room) {
 	// Reconcile with disk first: if the memories dir changed since the last
 	// sync, this drops a stale sigCache so we rescan below. Pass the cached
 	// bleve index (if any) so it is rebuilt in the same pass. nil is fine.
-	ms.syncRoomToDiskLocked(room, ms.indexCache[room.Root])
+	if err := ms.syncRoomToDiskLocked(room, ms.indexCache[room.Root]); err != nil {
+		// A failed derived-index refresh stays dirty, but dedup can still
+		// recover its own signatures from the source files below.
+		delete(ms.sigCache, room.Root)
+		delete(ms.sigIDs, room.Root)
+	}
 	if _, ok := ms.sigCache[room.Root]; ok {
 		return
 	}
@@ -481,83 +493,58 @@ func (ms *MemoryStore) registerSigLocked(room memrooms.Room, id string, sig minh
 	ms.sigIDs[room.Root] = append(ms.sigIDs[room.Root], id)
 }
 
-// SetWorkspaceID wires the shared workspace room for the active turn.
-// Called by the adapter when workspace_id is available in tool context.
-// workspaceID must be a valid entity ID (no path traversal).
-// Passing "" clears the shared room (reverts to private-only).
-func (ms *MemoryStore) SetWorkspaceID(workspaceID string) {
-	if workspaceID == "" {
-		ms.sharedMu.Lock()
-		ms.sharedRoom = nil
-		ms.sharedMu.Unlock()
-		return
-	}
-	// Guard against path-traversal via crafted workspace IDs.
-	if err := validation.EntityID(workspaceID); err != nil {
-		logger.WarnCF("agent.memory", "SetWorkspaceID: invalid workspace ID; ignoring",
-			map[string]any{"workspace_id": workspaceID, "error": err.Error()})
-		ms.sharedMu.Lock()
-		ms.sharedRoom = nil
-		ms.sharedMu.Unlock()
-		return
-	}
-	// MustEnsureRoom touches the filesystem; do it before taking the lock to keep
-	// the critical section to the pointer swap only.
-	room := memrooms.MustEnsureRoom(
-		memrooms.ResolveWorkspaceSharedRoom(ms.omnipusHome, workspaceID),
-		"workspace:"+workspaceID,
-	)
-	ms.sharedMu.Lock()
-	ms.sharedRoom = &room
-	ms.sharedMu.Unlock()
+// MemoryScope is the immutable (agent, workspace) identity for one memory
+// operation, following CarryForwardScope's scope-by-value model. The agent's
+// private room never changes; only this operation's shared room varies.
+type MemoryScope struct {
+	AgentID     string
+	WorkspaceID string
 }
 
-// currentSharedRoom returns a snapshot of the active shared room pointer under
-// the read lock. The returned pointer is stable (SetWorkspaceID swaps the
-// pointer rather than mutating the pointee), so callers may use it lock-free.
-func (ms *MemoryStore) currentSharedRoom() *memrooms.Room {
-	ms.sharedMu.RLock()
-	defer ms.sharedMu.RUnlock()
-	return ms.sharedRoom
+func (ms *MemoryStore) scopeForWorkspace(workspaceID string) MemoryScope {
+	return MemoryScope{AgentID: ms.resolveAuthor(), WorkspaceID: workspaceID}
 }
 
-// rooms returns the Rooms value for the current state.
-func (ms *MemoryStore) rooms() memrooms.Rooms {
+// rooms resolves both locations for this operation, without changing the store.
+func (ms *MemoryStore) rooms(identity MemoryScope) memrooms.Rooms {
 	return memrooms.Rooms{
 		Private: ms.privateRoom,
-		Shared:  ms.currentSharedRoom(),
+		Shared:  ms.SharedRoom(identity),
 	}
 }
 
-// resolveWriteRoom returns the target room for a write operation given a scope.
-// When scope is "shared" but no shared room is set, falls back to private and logs WARN.
-func (ms *MemoryStore) resolveWriteRoom(scope memrooms.RoomScope) memrooms.Room {
-	switch scope {
-	case memrooms.RoomScopeShared:
-		if shared := ms.currentSharedRoom(); shared != nil {
+// resolveWriteRoom resolves the target from this operation's immutable identity.
+// An explicitly shared write without a workspace retains the documented private
+// fallback. Invalid workspace IDs are rejected by AppendLongTermToScope.
+func (ms *MemoryStore) resolveWriteRoom(scope memrooms.RoomScope, identity MemoryScope) memrooms.Room {
+	if scope == memrooms.RoomScopeShared {
+		if shared := ms.SharedRoom(identity); shared != nil {
 			return *shared
 		}
-		logger.WarnCF("agent.memory", "write requested shared room but no workspace_id set; falling back to private",
-			map[string]any{"private_root": ms.privateRoom.Root})
-		return ms.privateRoom
-	default:
-		return ms.privateRoom
 	}
+	return ms.privateRoom
 }
 
 // AppendLongTerm appends a new per-memory .md file to the target room.
 // content must be non-empty, ≤ 4096 runes, no NUL bytes.
 // category must be one of key_decision | reference | lesson_learned.
 //
-// The scope follows the session: if a shared room is active (workspace session),
-// writes to shared; otherwise private. Callers can override via the room param
-// in the tool (handled by the adapter layer).
+// With no turn identity this writes only to the agent's private room. Workspace
+// callers pass their own MemoryScope to AppendLongTermToScope instead.
 func (ms *MemoryStore) AppendLongTerm(content, category string) error {
-	return ms.AppendLongTermToScope(content, category, ms.rooms().DefaultRoomScope())
+	return ms.AppendLongTermToScope(content, category, memrooms.RoomScopePrivate, ms.scopeForWorkspace(""))
 }
 
-// AppendLongTermToScope writes to the specified room scope.
-func (ms *MemoryStore) AppendLongTermToScope(content, category string, scope memrooms.RoomScope) error {
+// AppendLongTermToScope writes to the selected room of this operation's identity.
+func (ms *MemoryStore) AppendLongTermToScope(content, category string, scope memrooms.RoomScope, identity MemoryScope) error {
+	if identity.AgentID != ms.resolveAuthor() {
+		return fmt.Errorf("memory: scope agent does not match store")
+	}
+	if scope == memrooms.RoomScopeShared && identity.WorkspaceID != "" {
+		if err := validation.EntityID(identity.WorkspaceID); err != nil {
+			return fmt.Errorf("memory: invalid workspace ID: %w", err)
+		}
+	}
 	cat, err := ParseMemoryCategory(category)
 	if err != nil {
 		return err
@@ -575,7 +562,7 @@ func (ms *MemoryStore) AppendLongTermToScope(content, category string, scope mem
 		return fmt.Errorf("content must not contain HTML comment markers")
 	}
 
-	room := ms.resolveWriteRoom(scope)
+	room := ms.resolveWriteRoom(scope, identity)
 
 	// Generate a new memory ID. We use a UUID-based ID so no external dep is needed.
 	// The brief does not mandate ULIDs; a UUID is fine for v0.1.0.
@@ -628,9 +615,8 @@ func (ms *MemoryStore) AppendLongTermToScope(content, category string, scope mem
 	return nil
 }
 
-// SearchEntries performs a case-insensitive literal substring search across
-// the in-scope room(s). scope defaults to RoomScopeBoth when a shared room
-// is available, private otherwise.
+// SearchEntries searches only this agent's private room. Workspace callers pass
+// the turn's immutable identity to SearchEntriesInScope instead.
 func (ms *MemoryStore) SearchEntries(query string, limit int) ([]LongTermEntry, error) {
 	if limit <= 0 {
 		limit = 20
@@ -638,7 +624,7 @@ func (ms *MemoryStore) SearchEntries(query string, limit int) ([]LongTermEntry, 
 	if limit > 50 {
 		limit = 50
 	}
-	return ms.SearchEntriesInScope(query, limit, memrooms.RoomScopeBoth)
+	return ms.SearchEntriesInScope(query, limit, memrooms.RoomScopePrivate, ms.scopeForWorkspace(""))
 }
 
 // SearchEntriesInScope searches the specified room scope for query using the
@@ -651,7 +637,11 @@ func (ms *MemoryStore) SearchEntriesInScope(
 	query string,
 	limit int,
 	scope memrooms.RoomScope,
+	identity MemoryScope,
 ) ([]LongTermEntry, error) {
+	if identity.AgentID != ms.resolveAuthor() {
+		return nil, fmt.Errorf("memory: scope agent does not match store")
+	}
 	if limit <= 0 {
 		limit = 20
 	}
@@ -666,27 +656,36 @@ func (ms *MemoryStore) SearchEntriesInScope(
 	}
 	var targets []roomAndIndex
 
-	// Snapshot the shared room once under its read lock so the scope branches below
-	// observe a consistent value (a concurrent SetWorkspaceID must not swap it mid-read).
-	shared := ms.currentSharedRoom()
+	// The shared room is local to this operation. Another session cannot change
+	// it between resolution and use, regardless of index-lock interleaving.
+	var shared *memrooms.Room
+	if scope != memrooms.RoomScopePrivate {
+		shared = ms.SharedRoom(identity)
+	}
 
-	ms.indexMu.Lock()
 	switch scope {
 	case memrooms.RoomScopePrivate:
-		targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
+		targets = []roomAndIndex{{room: ms.privateRoom}}
 	case memrooms.RoomScopeShared:
 		if shared != nil {
-			targets = []roomAndIndex{{room: *shared, ri: ms.roomIndexLocked(*shared)}}
+			targets = []roomAndIndex{{room: *shared}}
 		} else {
-			targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
+			targets = []roomAndIndex{{room: ms.privateRoom}}
 		}
 	default: // RoomScopeBoth
-		targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
+		targets = []roomAndIndex{{room: ms.privateRoom}}
 		if shared != nil {
-			targets = append(targets, roomAndIndex{room: *shared, ri: ms.roomIndexLocked(*shared)})
+			targets = append(targets, roomAndIndex{room: *shared})
 		}
 	}
-	ms.indexMu.Unlock()
+	for i := range targets {
+		if _, readErr := os.ReadDir(targets[i].room.MemoriesDir); readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("memory: could not read saved notes in %q; check storage access and retry: %w", targets[i].room.Root, readErr)
+		}
+		ms.indexMu.Lock()
+		targets[i].ri = ms.roomIndexLocked(targets[i].room)
+		ms.indexMu.Unlock()
+	}
 
 	// Collect results: bleve hits when index available, else substring scan.
 	type scoredMemory struct {
@@ -695,6 +694,7 @@ func (ms *MemoryStore) SearchEntriesInScope(
 	}
 	var scored []scoredMemory
 	seenIDs := make(map[string]bool)
+	var readFailures []error
 
 	for _, t := range targets {
 		if t.ri != nil {
@@ -719,9 +719,12 @@ func (ms *MemoryStore) SearchEntriesInScope(
 					}
 					mf, readErr := readMemoryByID(t.room.MemoriesDir, hit.ID)
 					if readErr != nil {
-						// File may have been deleted externally; skip.
+						if errors.Is(readErr, memrooms.MemoryNotFoundError("")) {
+							continue
+						}
 						logger.WarnCF("agent.memory", "SearchEntriesInScope: read memory file failed",
 							map[string]any{"id": hit.ID, "error": readErr.Error()})
+						readFailures = append(readFailures, fmt.Errorf("read saved note %q in %q: %w", hit.ID, t.room.Root, readErr))
 						continue
 					}
 					seenIDs[hit.ID] = true
@@ -747,9 +750,11 @@ func (ms *MemoryStore) SearchEntriesInScope(
 		// Substring-scan fallback (when bleve index is nil or errored).
 		found, scanErr := memrooms.SearchMemories(t.room.MemoriesDir, query)
 		if scanErr != nil {
-			logger.WarnCF("agent.memory", "SearchEntriesInScope: scan failed",
-				map[string]any{"dir": t.room.MemoriesDir, "error": scanErr.Error()})
-			continue
+			var partial *memrooms.PartialReadError
+			if !errors.As(scanErr, &partial) {
+				return nil, fmt.Errorf("memory: could not read saved notes in %q; check storage access and retry: %w", t.room.Root, scanErr)
+			}
+			readFailures = append(readFailures, scanErr)
 		}
 		agentIDScan := ms.resolveAuthor()
 		for _, mf := range found {
@@ -824,6 +829,9 @@ func (ms *MemoryStore) SearchEntriesInScope(
 		}
 		results = append(results, memoryFileToEntry(s.mf, ts))
 	}
+	if len(readFailures) > 0 {
+		return results, &memrooms.PartialReadError{Err: errors.Join(readFailures...)}
+	}
 	return results, nil
 }
 
@@ -840,16 +848,19 @@ func readMemoryByID(memoriesDir, id string) (memrooms.MemoryFile, error) {
 	if err == nil {
 		return mf, nil
 	}
-	// Filename ≠ frontmatter ID: locate by scanning. ScanMemories tolerates
-	// individual unreadable files, so one bad .md does not abort the lookup.
-	memories, scanErr := memrooms.ScanMemories(memoriesDir)
-	if scanErr != nil {
-		return memrooms.MemoryFile{}, err // surface the original read error
+	if !errors.Is(err, memrooms.MemoryNotFoundError("")) {
+		return memrooms.MemoryFile{}, err
 	}
+	// Only confirmed canonical absence permits alternate-name lookup. Keep
+	// scan failures distinct from proof that the requested note was deleted.
+	memories, scanErr := memrooms.ScanMemoriesWithErrors(memoriesDir)
 	for _, candidate := range memories {
 		if candidate.Frontmatter.ID == id {
 			return candidate, nil
 		}
+	}
+	if scanErr != nil {
+		return memrooms.MemoryFile{}, scanErr
 	}
 	return memrooms.MemoryFile{}, err
 }
@@ -945,7 +956,7 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 // CarryForwardScope is the immutable (agent, workspace) identity a recap
 // summary is stored under (WU-21 / #1197, amendment §3.2(1)). It is carried as
 // a value so a scope resolved from one session's meta can never be retargeted
-// by the MemoryStore's mutable shared-room pointer. An empty WorkspaceID means
+// by a concurrent session. An empty WorkspaceID means
 // "no carry-forward" — nothing is read, written or tracked for it; there is no
 // agent-wide fallback.
 type CarryForwardScope struct {
@@ -1026,10 +1037,26 @@ const maxMemoryContextChars = 8000
 // rendered by buildSystemPromptForShelf from the turn's own carry-forward pair
 // file, so a no-workspace prompt build correctly gets no block at all.
 func (ms *MemoryStore) GetMemoryContext() string {
+	return ms.GetMemoryContextForScope(ms.scopeForWorkspace(""))
+}
+
+// GetMemoryContextForScope renders the turn's own private/shared notes. Callers
+// compare these actual bytes when caching, so teammate writes cannot leave a
+// workspace's prompt stale even when no local tool has run there.
+func (ms *MemoryStore) GetMemoryContextForScope(identity MemoryScope) string {
 	var sb strings.Builder
 
-	entries, err := ms.SearchEntries("", 20)
-	if err == nil && len(entries) > 0 {
+	entries, err := ms.SearchEntriesInScope("", 20, memrooms.RoomScopeBoth, identity)
+	if err != nil {
+		logger.WarnCF("agent.memory", "memory context could not be loaded",
+			map[string]any{"agent_id": identity.AgentID, "workspace_id": identity.WorkspaceID, "error": err.Error()})
+		var partial *memrooms.PartialReadError
+		if !errors.As(err, &partial) {
+			return fmt.Sprintf("## Long-term memory\n\nError: %v", err)
+		}
+		fmt.Fprintf(&sb, "Warning: partial saved-note results. Check file access or format and retry: %v\n\n", err)
+	}
+	if len(entries) > 0 {
 		if sb.Len() > 0 {
 			sb.WriteString("\n\n")
 		}
@@ -1099,9 +1126,26 @@ func (ms *MemoryStore) PrivateRoom() memrooms.Room {
 	return ms.privateRoom
 }
 
-// SharedRoom returns the shared room, or nil if no workspace_id is set.
-func (ms *MemoryStore) SharedRoom() *memrooms.Room {
-	return ms.currentSharedRoom()
+// SharedRoom is the single shared-note room resolver for prompts, tools and
+// citation tracking. It never remembers a previous operation's workspace.
+func (ms *MemoryStore) SharedRoom(identity MemoryScope) *memrooms.Room {
+	if identity.WorkspaceID == "" {
+		logger.WarnCF("agent.memory", "shared memory omitted: no workspace for this turn",
+			map[string]any{"agent_id": identity.AgentID, "workspace_id": "", "reason": "no_workspace"})
+		return nil
+	}
+	if err := validation.EntityID(identity.WorkspaceID); err != nil {
+		logger.WarnCF("agent.memory", "shared memory omitted: invalid workspace ID",
+			map[string]any{"agent_id": identity.AgentID, "workspace_id": identity.WorkspaceID, "reason": "invalid_workspace", "error": err.Error()})
+		return nil
+	}
+	if identity.AgentID != ms.resolveAuthor() {
+		logger.WarnCF("agent.memory", "shared memory omitted: scope agent does not match store",
+			map[string]any{"agent_id": identity.AgentID, "workspace_id": identity.WorkspaceID, "reason": "invalid_agent"})
+		return nil
+	}
+	room := memrooms.ResolveWorkspaceSharedRoom(ms.omnipusHome, identity.WorkspaceID)
+	return &room
 }
 
 // --- helpers ---------------------------------------------------------------

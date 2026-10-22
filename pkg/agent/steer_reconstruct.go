@@ -67,6 +67,10 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		return nil, fmt.Errorf("steer: reconstruct %q: load child address: %w", rec.SessionID, err)
 	}
 
+	if rec.WorkspaceID != meta.WorkspaceID {
+		return nil, fmt.Errorf("%w: %w", session.ErrWorkspaceImmutable, &curatedTurnError{text: session.ErrWorkspaceImmutable.Error()})
+	}
+
 	// FIX (live-view gap, 2026-09-27): a steered child's own UnifiedMeta is
 	// minted with an empty Channel by design (steer_launcher.go's
 	// reportingTargetFor doc comment: "a steered session's OWN UnifiedMeta

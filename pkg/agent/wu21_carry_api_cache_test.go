@@ -83,7 +83,7 @@ func wu21Read(t *testing.T, ms *MemoryStore, agent, ws string) (string, error) {
 func TestWU21_CarryForwardAPIExactLocationScopeAndMode(t *testing.T) {
 	f := wu21New(t)
 	ms := f.ag.ContextBuilder.Memory()
-	ms.SetWorkspaceID("beta")
+	ms.SharedRoom(ms.scopeForWorkspace("beta"))
 	if err := wu21Write(t, ms, "self", "alpha", "alpha bytes"); err != nil {
 		t.Fatal(err)
 	}
