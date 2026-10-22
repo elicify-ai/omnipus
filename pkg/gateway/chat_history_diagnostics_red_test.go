@@ -81,9 +81,14 @@ func pagingCounter(t *testing.T, row map[string]any, key string) float64 {
 // disjoint; a missing counter cannot be defaulted to0 and called measured work.
 func pagingAssertSummary(t *testing.T, row map[string]any, outcome, mode string, success, optionsKnown bool, canaries []string) {
 	t.Helper()
+	pagingAssertSummaryCarrier(t, row, "rest_messages", outcome, mode, success, optionsKnown, canaries)
+}
+
+func pagingAssertSummaryCarrier(t *testing.T, row map[string]any, carrier, outcome, mode string, success, optionsKnown bool, canaries []string) {
+	t.Helper()
 	require.Equal(t, "history_page", row["message"])
 	require.Equal(t, "history_page", row["event"])
-	require.Equal(t, "rest_messages", row["carrier"])
+	require.Equal(t, carrier, row["carrier"])
 	require.Equal(t, mode, row["mode"])
 	require.Equal(t, outcome, row["outcome"])
 	duration, ok := row["duration_ms"].(float64)

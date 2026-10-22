@@ -555,22 +555,27 @@ func drainWire(t *testing.T, wc *wsConn) []wireFrame {
 // TestAttach_N4_UnreadableHistory_NeverWipesTheClient pins the gateway half
 // of final-review N4: session_snapshot tells the client to wipe its history
 // for the session, so it must only be sent once the history it is about to
-// be rebuilt from has actually been read. A read failure is answered with
-// the error alone and the client's current view is left untouched.
+// be rebuilt from has actually been read. D7a/D10 preserves the no-wipe
+// invariant while independently completing authorized live-only controls.
 func TestAttach_N4_UnreadableHistory_NeverWipesTheClient(t *testing.T) {
 	f := newAttachFixture(t, "turn-n4", "msg-n4")
-	orig := attachReadTranscript
-	attachReadTranscript = func(*session.UnifiedStore, string) (session.TranscriptView, error) {
-		return session.TranscriptView{}, assert.AnError
-	}
-	t.Cleanup(func() { attachReadTranscript = orig })
+	restore := historyMigrationUnreadable(t, f.store, f.sid)
 	wc := f.newConn("chat-n4")
 	f.h.handleAttachSession(context.Background(), "chat-n4", f.sid, nil, wc)
-	frames := drainWire(t, wc)
+	frames := pagingDrain(t, wc)
 	assert.Equal(t, -1, indexOfType(frames, "session_snapshot"),
 		"a history read failure must never send the wipe: %v", typesOf(frames))
-	assert.Equal(t, -1, indexOfType(frames, "catch_up_complete"))
-	assert.GreaterOrEqual(t, indexOfType(frames, "error"), 0)
+	assert.Equal(t, -1, indexOfType(frames, "error"), "D7a uses typed history_state, not a turn-ending error frame")
+	historyMigrationAssertLiveOnly(t, f.sid, frames)
+	require.True(t, f.h.connBoundToSession(wc, f.sid), "failed history does not detach current controls")
+
+	restore()
+	f.h.handleAttachSession(context.Background(), "chat-n4", f.sid, nil, wc)
+	retried := pagingDrain(t, wc)
+	snapshot := indexOfType(retried, "session_snapshot")
+	require.GreaterOrEqual(t, snapshot, 0, "positive instrument: restoring the actual storage permits a real Retry snapshot")
+	historyMigrationSnapshot(t, f.sid, retried[snapshot].raw, false, 1, 1)
+	require.Equal(t, -1, indexOfType(retried, "error"))
 }
 
 // TestAttach_SeededTranscriptFreshHub_ReportsNoRunningTurn answers the
