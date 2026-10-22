@@ -323,6 +323,9 @@ func (s *Service) roomContext(r *room, ws WorkspaceInfo, d *deliveryRecord, idx 
 	var lines []string
 	size := 0
 	for i := idx - 1; i >= start; i-- {
+		if retiredRoomContextEntry(r, d.AgentID, r.entries[i]) {
+			continue
+		}
 		line := fmt.Sprintf("[%s] %s", authorName(r.entries[i], ws), r.entries[i].Entry.Text)
 		if size+len(line) > maxContextBytes {
 			break

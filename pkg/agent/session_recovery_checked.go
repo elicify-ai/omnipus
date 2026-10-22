@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -47,12 +48,15 @@ func (al *AgentLoop) recoverSessionToolCalls(ctx context.Context, inst *AgentIns
 	if err != nil {
 		return nil, err
 	}
-	history, lines := view.History()
+	if err := settleAccountedFileEffects(ctx, rec.SessionID, view); err != nil {
+		return nil, err
+	}
+	history, lines := recoveryWindowHistory(view)
 	readCtx, contextErr := al.recoveryReadContext(ctx, rec, inst)
 	var recoveryErr error
 	orphans := findOrphanedToolCalls(history)
 	unresolvedTargets := map[string]int{}
-	witnesses := map[string]tools.FileEffectWitness{}
+	witnesses := map[restartCallIdentity]tools.FileEffectWitness{}
 	for _, o := range orphans {
 		slot, found := view.Slot(lines[o.assistantIndex])
 		if !found {
@@ -60,7 +64,7 @@ func (al *AgentLoop) recoverSessionToolCalls(ctx context.Context, inst *AgentIns
 		}
 		w, e := tools.ReadFileEffectWitness(omnipusHome(), rec.SessionID, slot.Addr, o.ToolCallID)
 		if e == nil {
-			witnesses[o.ToolCallID] = w
+			witnesses[restartCallIdentity{assistantIndex: o.assistantIndex, toolCallID: o.ToolCallID}] = w
 			unresolvedTargets[w.Target]++
 		}
 	}
@@ -71,11 +75,14 @@ func (al *AgentLoop) recoverSessionToolCalls(ctx context.Context, inst *AgentIns
 		}
 		ob := recoveryObservation{Disposition: tools.FileEffectUnknown, Reason: "no current-state proof adapter", Assistant: slot.Addr}
 		tool, found := inst.Tools.GetIncludingHidden(o.ToolName)
+		if _, supported := tool.(tools.FileEffectReconciler); supported {
+			ob.Reason = "file-effect witness, issuing identity or current read context is not provable"
+		}
 		if found && recoveryReadOnly(tool) {
 			ob.Disposition = tools.FileEffectAbsent
 			ob.Reason = "read-only call interrupted; no mutation proof required"
 		} else if adapter, ok := tool.(tools.FileEffectReconciler); ok && contextErr == nil {
-			if w, found := witnesses[o.ToolCallID]; found && unresolvedTargets[w.Target] == 1 {
+			if w, found := witnesses[restartCallIdentity{assistantIndex: o.assistantIndex, toolCallID: o.ToolCallID}]; found && unresolvedTargets[w.Target] == 1 && slot.Source.Execution != nil && *slot.Source.Execution == w.Execution {
 				var args map[string]any
 				for _, call := range slot.Message.ToolCalls {
 					if call.ID == o.ToolCallID {
@@ -94,15 +101,22 @@ func (al *AgentLoop) recoverSessionToolCalls(ctx context.Context, inst *AgentIns
 			}
 		}
 		if ob.Disposition == tools.FileEffectUnknown {
-			if err := recordRecoveryHold(rec.SessionID, tools.FileEffectKey(slot.Addr, o.ToolCallID), ob.Reason); err != nil {
+			if err := recordRecoveryHold(rec.SessionID, tools.FileEffectKey(slot.Addr, o.ToolCallID), ob.Reason, recoveryHeldOperation{Tool: o.ToolName, CallID: o.ToolCallID}); err != nil {
 				return ob, err
 			}
 		}
 		return ob, nil
 	}
-	result := RecoverOrphanedToolCalls(inst.Sessions, key, al.auditLogger, orphanRecoveryOptions{Resolve: resolve, OnError: func(err error) { recoveryErr = err }})
+	result := RecoverOrphanedToolCalls(inst.Sessions, key, al.auditLogger, orphanRecoveryOptions{Resolve: resolve, OnError: func(err error) { recoveryErr = err }, View: &view})
 	if recoveryErr != nil {
 		return nil, recoveryErr
+	}
+	saved, err := store.WindowView(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if err := settleAccountedFileEffects(ctx, rec.SessionID, saved); err != nil {
+		return nil, err
 	}
 	held, err := loadRecoveryHold(rec.SessionID)
 	if err != nil {
@@ -118,6 +132,24 @@ func (al *AgentLoop) enforceRecoveryWriteFence(ts *turnState, toolName string) e
 	tool, ok := ts.agent.Tools.GetIncludingHidden(toolName)
 	if ok && recoveryReadOnly(tool) {
 		return nil
+	}
+	if err := al.enforceInheritedTaskRecovery(ts); err != nil {
+		return err
+	}
+	if lc := al.GetSessionLifecycleStore(); lc != nil {
+		id := ts.transcriptSessionID
+		if id == "" {
+			id = ts.sessionKey
+		}
+		rec, err := lc.Load(id)
+		if err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
+			return err
+		}
+		if err == nil && rec.SteeredBy != nil {
+			if err := al.refuseRetiredRoomWork(rec); err != nil {
+				return err
+			}
+		}
 	}
 	id := ts.transcriptSessionID
 	if id == "" {

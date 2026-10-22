@@ -22,7 +22,7 @@ func (ts *turnState) resultTranscriptSnapshot(tc session.ToolCall, line int) (se
 	if !ok {
 		return nil, session.WindowView{}, fmt.Errorf("context transcript: session store does not support atomic context checkpoints")
 	}
-	snap, err := store.WindowView(context.Background(), ts.sessionKey)
+	snap, err := store.WindowView(context.Background(), ts.contextKey())
 	if err != nil {
 		return nil, snap, err
 	}
@@ -40,7 +40,7 @@ func (ts *turnState) persistResultTranscriptAddr(store session.ContextWindowStor
 	after := snap.State.Clone()
 	key := memory.ProjectionKey{ToolCallID: string(tc.ID), ArchiveLine: archiveLine}
 	after.Projection.TranscriptAddr[key] = transcriptAddr
-	if err := store.CommitWindow(context.Background(), ts.sessionKey, snap.State, after); err != nil {
+	if err := store.CommitWindow(context.Background(), ts.contextKey(), snap.State, after); err != nil {
 		return fmt.Errorf("context transcript: persist exact result identity: %w", err)
 	}
 	return nil

@@ -22,6 +22,7 @@ type recoveryObservation struct {
 type orphanRecoveryOptions struct {
 	Resolve func(orphanedToolCall) (recoveryObservation, error)
 	OnError func(error)
+	View    *session.WindowView
 }
 
 func (ob recoveryObservation) message(callID string) (providers.Message, error) {

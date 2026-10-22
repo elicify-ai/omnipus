@@ -667,6 +667,8 @@ func runRootExecute(cmd *cobra.Command, args []string, flagModel string, flagYes
 		fmt.Fprintln(os.Stderr, run.ErrTimeout.Error())
 	case errors.Is(runErr, run.ErrTurnFailed):
 		fmt.Fprintln(os.Stderr, run.ErrTurnFailed.Error())
+	case errors.Is(runErr, run.ErrTurnInterrupted):
+		fmt.Fprintln(os.Stderr, runErr.Error())
 	default:
 		fmt.Fprintln(os.Stderr, "error:", runErr)
 	}

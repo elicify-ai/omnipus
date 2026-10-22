@@ -16,8 +16,9 @@ import (
 
 // not-wire-format: private durable continuation fence.
 type recoveryHold struct {
-	Occurrences map[string]string `json:"occurrences"`
-	Reported    bool              `json:"reported"`
+	Occurrences map[string]string                `json:"occurrences"`
+	Reported    bool                             `json:"reported"`
+	Operations  map[string]recoveryHeldOperation `json:"operations,omitempty"`
 }
 
 func recoveryHoldPath(id string) (string, error) {
@@ -49,7 +50,7 @@ func loadRecoveryHold(id string) (recoveryHold, error) {
 	return held, nil
 }
 
-func recordRecoveryHold(id, key, reason string) error {
+func recordRecoveryHold(id, key, reason string, operation ...recoveryHeldOperation) error {
 	p, err := recoveryHoldPath(id)
 	if err != nil {
 		return err
@@ -68,6 +69,12 @@ func recordRecoveryHold(id, key, reason string) error {
 		held.Reported = false
 	}
 	held.Occurrences[key] = reason
+	if len(operation) > 0 {
+		if held.Operations == nil {
+			held.Operations = map[string]recoveryHeldOperation{}
+		}
+		held.Operations[key] = operation[0]
+	}
 	data, err := json.Marshal(held)
 	if err != nil {
 		return err
@@ -112,15 +119,20 @@ func recoveryConsentKeys(id string) ([]string, error) {
 }
 
 func recoveryConsentAllows(rec *session.LifecycleRecord, claim executionClaim, held recoveryHold) bool {
+	if !claim.matches(rec) {
+		return false
+	}
 	consent := rec.RecoveryConsent
 	if consent == nil || consent.Generation != claim.Generation || consent.ExecutionID == nil ||
 		consent.ExecutionID.RunID != claim.RunID || consent.ExecutionID.BootSeq != claim.BootSeq || len(consent.OccurrenceKeys) != len(held.Occurrences) {
 		return false
 	}
+	seen := make(map[string]bool, len(consent.OccurrenceKeys))
 	for _, key := range consent.OccurrenceKeys {
-		if _, ok := held.Occurrences[key]; !ok {
+		if _, ok := held.Occurrences[key]; !ok || seen[key] {
 			return false
 		}
+		seen[key] = true
 	}
 	return true
 }

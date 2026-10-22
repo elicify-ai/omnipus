@@ -96,13 +96,13 @@ func (al *AgentLoop) commitWindowProjections(ctx context.Context, p *windowCheck
 	if err != nil {
 		return nil, err
 	}
-	if err := store.CommitWindow(ctx, p.ts.sessionKey, p.snapshot.State, p.state); err != nil {
+	if err := store.CommitWindow(ctx, p.ts.contextKey(), p.snapshot.State, p.state); err != nil {
 		return nil, err
 	}
 	if err := recordWindowProjections(p.ts, changes); err != nil {
 		// No slice, notice or frame has been installed. Undo this staged metadata
 		// commit; a failed transcript rewrite did not modify its on-disk bytes.
-		restoreErr := store.RestoreWindow(context.Background(), p.ts.sessionKey, p.state, p.snapshot.State)
+		restoreErr := store.RestoreWindow(context.Background(), p.ts.contextKey(), p.state, p.snapshot.State)
 		return nil, errors.Join(err, restoreErr)
 	}
 	return changes, nil

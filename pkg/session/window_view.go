@@ -36,7 +36,10 @@ type ModelSlot struct {
 	// has no provable original tool-result bytes.
 	Origin          string
 	Source          EntrySource
+	ToolResultFor   *ToolResultFor
 	OmitFromContext bool
+	// RedactedForContext keeps raw recall from bypassing retired-work projection.
+	RedactedForContext bool
 }
 
 // WindowView is the bounded snapshot of one session's model window.

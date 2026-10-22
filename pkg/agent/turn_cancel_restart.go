@@ -20,12 +20,12 @@ import (
 // "written"; only a session whose marker actually landed gets the success
 // log. The caller keeps going for the remaining sessions either way.
 func (al *AgentLoop) writeTurnCancelledRestartMarker(ts *turnState, sessionKey, syntheticContent string) {
-	if addErr := ts.agent.Sessions.AddMessage(sessionKey, "system", syntheticContent); addErr != nil {
+	if addErr := ts.agent.Sessions.AddMessage(ts.contextKey(), "system", syntheticContent); addErr != nil {
 		logger.WarnCF("agent", "FR-048: failed to write turn_canceled_restart on graceful shutdown",
 			map[string]any{"session_key": sessionKey, "error": addErr.Error()})
 		return
 	}
-	if err := ts.agent.Sessions.Save(sessionKey); err != nil {
+	if err := ts.agent.Sessions.Save(ts.contextKey()); err != nil {
 		logger.WarnCF("agent", "FR-048: failed to persist turn_canceled_restart on shutdown",
 			map[string]any{"session_key": sessionKey, "error": err.Error()})
 		return

@@ -72,6 +72,7 @@ func (p *roomProjection) apply(slot ModelSlot) (ModelSlot, error) {
 			break
 		}
 		slot.Message = providers.Message{Role: "assistant", ToolCalls: slot.Message.ToolCalls}
+		slot.RedactedForContext = true
 	default:
 		slot.OmitFromContext = true
 	}

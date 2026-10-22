@@ -53,11 +53,11 @@ func newWindowCheckpoint(ctx context.Context, ts *turnState, msgs []providers.Me
 	if !ok {
 		return nil, nil, fmt.Errorf("context checkpoint: session store does not support atomic context checkpoints")
 	}
-	snap, err := store.WindowView(ctx, ts.sessionKey)
+	snap, err := store.WindowView(ctx, ts.contextKey())
 	if err != nil {
 		return nil, nil, err
 	}
-	p := &windowCheckpoint{ts: ts, snapshot: snap, slots: storeSlots{store: store, key: ts.sessionKey}, state: snap.State.Clone(), policy: capPolicyFor(cs, agentContextBudget(ts.agent)), anchor: -1}
+	p := &windowCheckpoint{ts: ts, snapshot: snap, slots: storeSlots{store: store, key: ts.contextKey()}, state: snap.State.Clone(), policy: capPolicyFor(cs, agentContextBudget(ts.agent)), anchor: -1}
 	ts.mu.RLock()
 	p.notice = ts.windowNotice.clone()
 	ts.mu.RUnlock()

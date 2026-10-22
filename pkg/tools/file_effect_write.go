@@ -65,7 +65,7 @@ func mutateFileEffect(h *PathHandle, needsContent bool, transform func([]byte, b
 		before = FileImage{}
 		readErr = nil
 	}
-	exists := before.Exists
+	exists := false
 	if info, statErr := h.Stat(); statErr == nil {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("file effect: target is not a regular file")
@@ -73,6 +73,9 @@ func mutateFileEffect(h *PathHandle, needsContent bool, transform func([]byte, b
 		exists = true
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		return statErr
+	}
+	if readErr == nil && before.Exists != exists {
+		return fmt.Errorf("file effect: target changed before mutation")
 	}
 	after, err := transform(data, exists)
 	if err != nil {
@@ -83,7 +86,7 @@ func mutateFileEffect(h *PathHandle, needsContent bool, transform func([]byte, b
 			WorkspaceID: inv.identity.WorkspaceID, WorkDir: h.policy.WorkDir,
 			SessionID: inv.identity.SessionID, Assistant: inv.identity.Assistant,
 			ToolCallID: inv.identity.ToolCallID, Execution: inv.identity.Execution,
-			Before: before, After: fileImage(after, true)}
+			Before: before, After: fileImage(after, true), ReadConfined: h.policy.ReadConfined}
 		encoded, err := json.Marshal(inv.args)
 		if err != nil {
 			return err
@@ -112,16 +115,34 @@ func mutateFileEffect(h *PathHandle, needsContent bool, transform func([]byte, b
 		if err := saveFileEffectWitness(inv.identity.Home, w); err != nil {
 			return fmt.Errorf("file effect: witness was not saved; target was not written: %w", err)
 		}
+		if err := registerPendingFileEffect(inv.identity.Home, w); err != nil {
+			return fmt.Errorf("file effect: unresolved-writer index was not saved; target was not written: %w", err)
+		}
 		if err := fileEffectBeforeWrite(w); err != nil {
 			return err
+		}
+		if w.AnchorIdentity != "" {
+			identity, err := fileEffectDirectoryIdentity(w.Anchor)
+			if err != nil || identity != w.AnchorIdentity {
+				return fmt.Errorf("file effect: target anchor changed before mutation")
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if readErr == nil && read != nil {
+		current, err := readFileEffectImage(read)
+		if err != nil || current != before {
+			return fmt.Errorf("file effect: pre-image changed before mutation")
 		}
 	}
 	return h.WriteFile(after)
 }
 
 func fileEffectAnchor(h *PathHandle) string {
-	anchor := h.policy.WorkDir
-	for _, root := range h.policy.AllowedRoots {
+	anchor := ""
+	for _, root := range append([]string{h.policy.WorkDir}, h.policy.AllowedRoots...) {
 		rel, err := filepath.Rel(root, h.abs)
 		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && len(root) > len(anchor) {
 			anchor = root

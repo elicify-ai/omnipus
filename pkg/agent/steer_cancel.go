@@ -685,6 +685,11 @@ func (c *SteerCanceller) reviveWithExecution(ctx context.Context, sessionID stri
 			(selected.ExecutionID != nil && *rec.ExecutionID != *selected.ExecutionID)) {
 			return steer.ErrStaleGeneration
 		}
+		if rec.State == session.LifecycleInterrupted && (selectedForConsent.State != session.LifecycleInterrupted ||
+			rec.Generation != selectedForConsent.Generation || (rec.ExecutionID == nil) != (selectedForConsent.ExecutionID == nil) ||
+			(rec.ExecutionID != nil && *rec.ExecutionID != *selectedForConsent.ExecutionID)) {
+			return steer.ErrStaleGeneration
+		}
 		if err := restartWakeRevivalAllowed(ctx, c.Lifecycle, rec, selected); err != nil {
 			return err
 		}

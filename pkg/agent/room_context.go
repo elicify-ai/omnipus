@@ -9,6 +9,9 @@ import (
 )
 
 func (ts *turnState) roomContextSource(in session.ModelAppend, requestID string) (session.ModelAppend, error) {
+	if d := ts.opts.executionDisposition; d != nil {
+		in.Source.Execution = &session.ExecutionIdentity{RunID: d.claim.RunID, BootSeq: d.claim.BootSeq}
+	}
 	id := ts.transcriptSessionID
 	if id == "" {
 		id = ts.sessionKey

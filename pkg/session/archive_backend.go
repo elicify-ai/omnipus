@@ -177,18 +177,13 @@ func (b *archiveBackend) GetHistory(key string) []providers.Message {
 
 // ReadArchive returns the full model archive from ordinal 0, ignoring Skip. It
 // is an explicit full read (recall, CONV, tests) — never a per-step read.
-func (b *archiveBackend) ReadArchive(_ context.Context, key string) ([]memory.ArchivedMessage, error) {
-	lines, err := b.payloadLines(key)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]memory.ArchivedMessage, len(lines))
-	for i, l := range lines {
-		if out[i], err = archivedMessage(l); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
+func (b *archiveBackend) ReadArchive(ctx context.Context, key string) ([]memory.ArchivedMessage, error) {
+	var out []memory.ArchivedMessage
+	err := b.ScanArchive(ctx, key, func(_ int, msg memory.ArchivedMessage) bool {
+		out = append(out, msg)
+		return true
+	})
+	return out, err
 }
 
 // Projection returns the persisted projection state.
@@ -455,7 +450,8 @@ func (b *archiveBackend) placeSavedInput(ctx context.Context, key string, source
 
 // ReadModelSlots streams the slots with ordinals in [from, to] through the
 // ordinal index: the work is the width of the range, never the lifetime. fn
-// receives the slot and the LITERAL stored model_message JSON. A slot whose
+// receives the slot and the LITERAL stored model_message JSON, except raw is nil
+// for retired-work redaction. Omitted room inputs are not yielded. A slot whose
 // record cannot be resolved is an error, never a silently short range.
 func (b *archiveBackend) ReadModelSlots(ctx context.Context, key string, from, to int, fn func(ModelSlot, []byte) error) error {
 	projection := newRoomProjection(b.baseDir)
@@ -546,6 +542,9 @@ func (b *archiveBackend) ScanArchive(ctx context.Context, key string, fn func(id
 // envelope, so source/route/mark fields never leak into recall output.
 func (b *archiveBackend) ScanArchiveRange(ctx context.Context, key string, from, to int, fn func(int, []byte, memory.ArchivedMessage) error) error {
 	return b.ReadModelSlots(ctx, key, from, to, func(slot ModelSlot, raw []byte) error {
+		if slot.RedactedForContext {
+			return fmt.Errorf("archive_range: retired room narrative is historical only; recall its settled tool effects instead")
+		}
 		return fn(slot.Ordinal, raw, memory.ArchivedMessage{Message: slot.Message, TS: slot.TS})
 	})
 }
@@ -827,7 +826,7 @@ func loadSlot(store *ArchiveDayStore, row ordinalRow, projectors ...*roomProject
 	if err != nil {
 		return ModelSlot{}, nil, fmt.Errorf("window: decode model slot %d: %w", row.Ordinal, err)
 	}
-	slot := ModelSlot{Ordinal: row.Ordinal, Addr: row.Slot, Message: msg, TS: row.TS, UserTurn: row.UserTurn, Origin: rec.ModelOrigin}
+	slot := ModelSlot{Ordinal: row.Ordinal, Addr: row.Slot, Message: msg, TS: row.TS, UserTurn: row.UserTurn, Origin: rec.ModelOrigin, ToolResultFor: rec.ToolResultFor}
 	if rec.Source != nil {
 		slot.Source = *rec.Source
 	}
@@ -838,6 +837,9 @@ func loadSlot(store *ArchiveDayStore, row ordinalRow, projectors ...*roomProject
 	slot, err = projection.apply(slot)
 	if err != nil {
 		return ModelSlot{}, nil, err
+	}
+	if slot.RedactedForContext {
+		return slot, nil, nil // Stored bytes remain intact; raw recall cannot reintroduce the retired narrative.
 	}
 	return slot, literalModelMessage(raw), nil
 }

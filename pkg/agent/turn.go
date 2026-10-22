@@ -916,7 +916,7 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 			if !ok {
 				ts.windowError = fmt.Errorf("context checkpoint: session store does not support atomic context checkpoints")
 			} else {
-				snap, err := store.WindowView(context.Background(), opts.SessionKey)
+				snap, err := store.WindowView(context.Background(), ts.contextKey())
 				ts.windowError = err
 				if err == nil {
 					start := snap.State.Clone()

@@ -41,6 +41,7 @@ type FileEffectWitness struct {
 	Before         FileImage                 `json:"before"`
 	After          FileImage                 `json:"after"`
 	Unreconcilable string                    `json:"unreconcilable,omitempty"`
+	ReadConfined   bool                      `json:"read_confined,omitempty"`
 }
 
 // FileEffectObservation proves current bytes, never a lost historical return.

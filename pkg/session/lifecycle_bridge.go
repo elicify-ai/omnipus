@@ -57,11 +57,12 @@ func lifecycleMutatorIsNil(ls LifecycleMutator) bool {
 // `stopped` (and waiting/working) stay coarse-active, so it joins
 // queued/running/needs_input in the no-mirror bucket below — exact helper
 // display now lives on Session.lifecycle_state (SessionLifecycleState), not
-// on this coarse status. StatusInterrupted is never returned here: only the
-// boot sweep writes it (pkg/agent/boot_sweep.go::reconcileUnifiedMetaStatus).
+// on this coarse status. An ended Interrupted round mirrors StatusInterrupted;
+// boot also uses that coarse projection for an ordinary restart interruption.
 //
 //   - LifecycleCompleted → StatusArchived
 //   - LifecycleFailed    → StatusFailed
+//   - LifecycleInterrupted → StatusInterrupted
 //   - LifecycleStopped/Queued/Running/NeedsInput → (no mirror; chat stays Active)
 func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 	switch to {
@@ -93,11 +94,11 @@ const (
 	LifecycleDisplayDone             LifecycleDisplayState = "done"
 	LifecycleDisplayFailed           LifecycleDisplayState = "failed"
 	LifecycleDisplayStopped          LifecycleDisplayState = "stopped"
-	// LifecycleDisplayInterrupted is a session a gateway restart cut off
-	// (founder ruling 2026-10-06: a session does not fail because of a
-	// restart). It is not a 7th LifecycleState: it is the display of a
-	// legacy `failed` record whose FailedReason is FailedReasonInterrupted,
-	// or a root's nonterminal `stopped` record whose StopNote cause is restart.
+	// LifecycleDisplayInterrupted covers an ended Interrupted round and a
+	// gateway restart cut (founder ruling 2026-10-06: restart is not failure).
+	// Restart projections include legacy failed(interrupted) and an ordinary
+	// root's nonterminal stopped record whose StopNote cause is restart.
+	// InterruptionReason distinguishes an ended limit/reconciliation outcome.
 	LifecycleDisplayInterrupted LifecycleDisplayState = "interrupted"
 )
 
@@ -230,6 +231,11 @@ func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to Lif
 			}
 			rec.State = to
 			rec.FailedReason = reason
+			rec.InterruptionReason = ""
+			if to == LifecycleInterrupted {
+				rec.InterruptionReason = InterruptionReason(reason)
+				rec.FailedReason = ""
+			}
 			if to != LifecycleNeedsInput {
 				rec.NeedsInput = nil
 			}

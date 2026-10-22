@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -83,6 +84,9 @@ func reconcileFileEffect(ctx context.Context, agentHome string, restrict bool, t
 	if ToolWorkspaceID(ctx) != w.WorkspaceID {
 		return unknown("original workspace is no longer selected")
 	}
+	if w.ReadConfined {
+		ctx = WithReadConfined(ctx, true) // Retain an original restriction, never a grant.
+	}
 	policy, err := ResolveTurnFSPolicy(ctx, agentHome, restrict)
 	if err != nil || policy.WorkDir != w.WorkDir {
 		return unknown("original workspace identity changed")
@@ -102,6 +106,9 @@ func reconcileFileEffect(ctx context.Context, agentHome string, restrict bool, t
 	lock := task.TaskFileLock.Get(fileEffectLockKey(h.abs))
 	lock.Lock()
 	defer lock.Unlock()
+	if competing, err := otherPendingFileEffects(config.OmnipusHomeDir(), w); err != nil || competing {
+		return unknown("unresolved-writer identity is missing, corrupt or competing")
+	}
 	image, err := readFileEffectImage(h)
 	if err != nil {
 		return unknown("target is unreadable, non-regular or unstable")

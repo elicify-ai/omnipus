@@ -242,6 +242,9 @@ func (l *Ledger) MarkDeliveredFirst(sessionID, requestID string) (prior Capture,
 	if err != nil || !ok || c.Delivered {
 		return c, false, err
 	}
+	if c.Source.Kind == SourceRoom && c.ModelInput == nil {
+		return c, false, nil // the addressed room-input bind is the delivery commit
+	}
 	prior = c
 	c.Delivered = true
 	if err := repairTornTail(p); err != nil {

@@ -71,10 +71,12 @@ var (
 	ErrApprovalFailed = errors.New("failed to resolve tool approval via REST")
 
 	// ErrTurnFailed is returned when the done frame carries stats.turn_failed=true,
-	// meaning the engine used its error/limit fallback path rather than completing
+	// meaning the engine used its error fallback path rather than completing
 	// the turn cleanly. The fallback content has already been flushed to stdout so
 	// the user sees the message, but the process exits non-zero.
 	ErrTurnFailed = errors.New("the agent run did not complete successfully")
+	// ErrTurnInterrupted distinguishes an ended, incomplete run from success or failure.
+	ErrTurnInterrupted = errors.New("the agent run was interrupted before completing")
 )
 
 const defaultTimeout = 300 * time.Second
@@ -413,6 +415,10 @@ func (rn *run) handleFrame(raw []byte) runFlow {
 			f.Stats.TurnFailed != nil &&
 			*f.Stats.TurnFailed {
 			rn.ret0 = ErrTurnFailed
+			return runReturn
+		}
+		if f.Stats != nil && f.Stats.InterruptionReason != nil && *f.Stats.InterruptionReason != "" {
+			rn.ret0 = fmt.Errorf("%w (%s); open the chat to inspect or explicitly continue it", ErrTurnInterrupted, *f.Stats.InterruptionReason)
 			return runReturn
 		}
 		rn.ret0 = nil

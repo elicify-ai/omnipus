@@ -224,6 +224,13 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
 		return nil
 	}
+	if rec.State == session.LifecycleInterrupted && rec.InterruptionReason == session.InterruptionReconciliationRequired {
+		if al, runtimeErr := r.noticeLoop(); runtimeErr != nil {
+			return runtimeErr
+		} else if err := al.ensureRecoveryInterruptionReport(rec); err != nil {
+			return err
+		}
+	}
 	// C5 (ADR-20260928 Correction, 2026-10-04) pass one — the CURRENT RUN's
 	// recovery, before any parent wake: a steered record mid-flight at boot
 	// (queued or running, no accepted stop fence) is stopped NOW, whatever

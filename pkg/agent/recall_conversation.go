@@ -338,7 +338,7 @@ func (rct *recallConversationToolExecute) validateRequest() (*tools.ToolResult, 
 func (rct *recallConversationToolExecute) loadTurns() (*tools.ToolResult, bool) {
 	// --- 1. Read the full archive (FR-013 / FR-016) -------------------
 	var err error
-	rct.archived, err = rct.t.archive.ReadArchive(rct.ctx, rct.sessionKey)
+	rct.archived, err = rct.t.archive.ReadArchive(rct.ctx, rct.t.archiveKey(rct.ctx, rct.sessionKey))
 	if err != nil {
 		slog.Warn("recall_conversation: ReadArchive failed",
 			"session_key", rct.sessionKey, "error", err)
@@ -1145,6 +1145,7 @@ func locatedToolResult(ctx context.Context, loc toolResultLocator, sessionKey, i
 func (t *RecallConversationTool) scanForToolResult(
 	ctx context.Context, sessionKey, id string, wantLine int,
 ) (toolResultHit, error) {
+	sessionKey = t.archiveKey(ctx, sessionKey)
 	if loc, ok := t.archive.(toolResultLocator); ok {
 		return locatedToolResult(ctx, loc, sessionKey, id, wantLine)
 	}

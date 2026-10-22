@@ -129,7 +129,9 @@ Click or tap a card or List row and the task detail panel slides in. The separat
 
 ## Limits and things to watch
 
-A settings reload is not a gateway restart. A task that is already running keeps its run and conversation through the reload; crash recovery does not mark that live run interrupted. If the gateway process actually restarts during a task, the interrupted run ends Failed and does not resume automatically. Retry starts a fresh run.
+A settings reload is not a gateway restart. A task that is already running keeps its run and conversation through the reload; crash recovery does not mark that live run interrupted. If the gateway process actually restarts during a task, the interrupted run ends Failed and does not resume automatically. **Retry creates a fresh run and conversation**, keeping the old run and its chat in Run history. Repeated or concurrent Retry requests do not create two executions. A full worker queue can delay execution, but changing a card to In Progress alone is not a successful launch: admission failures are returned as errors, and the task is not left with only a running timer.
+
+A new run does not bypass uncertainty about the old run's file changes. Before writing again, recovery checks unresolved operations from the prior run. If their effects cannot be established, automatic writes stop and the report uses `reconciliation_required`. Open the prior run's chat from Run history, inspect the recorded operation and actual files, then explicitly continue after that report. A new task conversation, a settings reload or another restart is not permission to repeat an uncertain write. This does not change the separate plan Stop/Restart controls or the task's attempt budget. Task and plan statuses remain separate from a helper execution's **Interrupted** status.
 
 An agent's `set_todos` scratchpad is a separate checklist card, not another execution of the task it is working on. If the agent uses the task's title for its scratchpad, two cards can have the same title: the assigned task and its working checklist. Creating the checklist does not start another task run.
 

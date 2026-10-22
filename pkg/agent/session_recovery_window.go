@@ -140,5 +140,5 @@ func recoveryWindowHistory(snap session.WindowView) ([]providers.Message, []int)
 			keptLines = append(keptLines, lines[i])
 		}
 	}
-	return kept, keptLines
+	return bindRecoveryToolResults(snap, kept, keptLines)
 }

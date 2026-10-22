@@ -38,7 +38,7 @@ func admitResultWindow(ts *turnState, adm toolResultAdmission, archived provider
 		if !known {
 			return providers.Message{}, -1, "", fmt.Errorf("context admission: tool result %q has no recorded issuing assistant", adm.ToolCallID)
 		}
-		slot, appended, err := store.AppendModelMessage(ctx, ts.sessionKey, session.ModelAppend{
+		slot, appended, err := store.AppendModelMessage(ctx, ts.contextKey(), session.ModelAppend{
 			Message: archived, ViewMembership: session.ViewMembershipModel,
 			Source: session.EntrySource{Kind: "tool"}, ToolResultFor: &issuer, AgentID: ts.agent.ID,
 		})
@@ -85,7 +85,7 @@ func admitResultWindow(ts *turnState, adm toolResultAdmission, archived provider
 	key := memory.ProjectionKey{ToolCallID: adm.ToolCallID, ArchiveLine: line}
 	after.Projection.Entries[key] = state
 	after.Projection.SourceRunes[key] = kept
-	if err := store.CommitWindow(ctx, ts.sessionKey, view.State, after); err != nil {
+	if err := store.CommitWindow(ctx, ts.contextKey(), view.State, after); err != nil {
 		return providers.Message{}, line, "", fmt.Errorf("context admission: persist exact tool-result projection: %w", err)
 	}
 	return window, line, state, nil

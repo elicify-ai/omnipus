@@ -485,7 +485,7 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 						},
 					)
 					// Site-3: post-timeout-trim assembly.
-					newHistory := cr.rr.rq.ri.rf.rt.ts.agent.Sessions.GetHistory(cr.rr.rq.ri.rf.rt.ts.sessionKey)
+					newHistory := cr.rr.rq.ri.rf.rt.ts.agent.Sessions.GetHistory(cr.rr.rq.ri.rf.rt.ts.contextKey())
 					cr.rr.rq.ri.messages = cr.rr.rq.ri.rf.rt.al.assembleMessages(cr.rr.rq.ri.rf.rt.turnCtx, cr.rr.rq.ri.rf.rt.ts, newHistory, "", nil, activeSkillNames(cr.rr.rq.ri.rf.rt.ts.agent, cr.rr.rq.ri.rf.rt.ts.opts))
 					cr.rr.continuationChain = nil
 					if cr.rr.rq.ri.rf.rt.ts.continuationUnresolved() {

@@ -43,6 +43,7 @@ func (l *Ledger) BindRoomInput(sessionID, requestID string, input session.Archiv
 	}
 	c.ModelInput = &input
 	c.ModelExecution = &execution
+	c.Delivered = true
 	if err := repairTornTail(path); err != nil {
 		return err
 	}

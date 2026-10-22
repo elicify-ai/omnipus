@@ -111,7 +111,7 @@ func (ts *turnState) appendWindowMessage(msg providers.Message, producer windowP
 		ts.setContextWindowError(sourceErr)
 		return session.ModelSlot{}, sourceErr
 	}
-	slot, _, err := store.AppendModelMessage(ctx, ts.sessionKey, in)
+	slot, _, err := store.AppendModelMessage(ctx, ts.contextKey(), in)
 	if err != nil {
 		ts.setContextWindowError(err)
 		if msg.Role == "user" {

@@ -1822,6 +1822,9 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	if ex.admitted.Err != nil {
 		return ex.admitted.Err
 	}
+	if err := tools.SettleFileEffectWitness(ex.rx.rr.rq.ri.rf.rt.ts.fileEffectExecutionContext(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.toolCallID)); err != nil {
+		return fmt.Errorf("tool recovery: could not settle the archived result's witness: %w", err)
+	}
 	// contentForLLM from here on is the FILTERED full content the
 	// archive holds — what the event sinks and the transcript error
 	// field always carried (the gateway tool_results/ store keeps it
@@ -2143,7 +2146,7 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 				// result is never installed for the next request, and the
 				// turn is marked failed before the exit reports it.
 				if !ex.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory {
-					if addErr := ex.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey, msg); addErr != nil {
+					if addErr := ex.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(ex.rx.rr.rq.ri.rf.rt.ts.contextKey(), msg); addErr != nil {
 						ex.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
 						return ex.contextWindowExit(&messageNotSavedError{role: msg.Role, cause: addErr})
 					}

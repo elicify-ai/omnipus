@@ -120,7 +120,7 @@ func (t *RecallConversationTool) executeArchiveRange(ctx context.Context, key st
 		pageLimit = min(pageLimit, req.length)
 	}
 	page := archiveRangePage{offset: req.offset, limit: pageLimit}
-	err = reader.ScanArchiveRange(ctx, key, req.from, req.to, func(_ int, raw []byte, _ memory.ArchivedMessage) error {
+	err = reader.ScanArchiveRange(ctx, t.archiveKey(ctx, key), req.from, req.to, func(_ int, raw []byte, _ memory.ArchivedMessage) error {
 		return page.collect(ctx, raw)
 	})
 	if err != nil {

@@ -77,7 +77,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
 			return turnResult{}, notSaved
 		}
-		if err := rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.Save(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); err != nil {
+		if err := rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.Save(rz.rc.rx.rr.rq.ri.rf.rt.ts.contextKey()); err != nil {
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
 			// Wave 1: never surface raw err.Error() (session-save is a
 			// local I/O error, not a provider error, but the same
@@ -744,7 +744,7 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 				)
 			}
 			// Site-2: post-proactive-trim assembly.
-			newHistory := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.GetHistory(rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey)
+			newHistory := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.GetHistory(rp.rc.rx.rr.rq.ri.rf.rt.ts.contextKey())
 			rp.rc.rx.rr.rq.ri.messages = rp.rc.rx.rr.rq.ri.rf.rt.al.assembleMessages(
 				rp.rc.rx.rr.rq.ri.rf.rt.turnCtx,
 				rp.rc.rx.rr.rq.ri.rf.rt.ts,
@@ -886,7 +886,7 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 			// the denial never reached the archive, so reporting it as a
 			// persisted denial would be a second false statement. Same
 			// messageNotSavedError wrap, markTurnFailed and existing exit.
-			if addErr := rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rq.ri.rf.rt.ts.sessionKey, syntheticDenyMsg); addErr != nil {
+			if addErr := rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rq.ri.rf.rt.ts.contextKey(), syntheticDenyMsg); addErr != nil {
 				notSaved := &messageNotSavedError{role: syntheticDenyMsg.Role, cause: addErr}
 				rq.ri.rf.rt.al.reportSessionSaveFailure(rq.ri.rf.rt.ts, notSaved)
 				rq.ri.turnStatus = TurnEndStatusError

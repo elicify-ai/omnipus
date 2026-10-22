@@ -484,7 +484,7 @@ func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationCha
 	defer restoreAccounting()
 	ts.appendIntermediateAssistantTranscript(pending)
 	if !ts.opts.NoHistory && ts.agent != nil && ts.agent.Sessions != nil {
-		if err := ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", pending); err != nil {
+		if err := ts.agent.Sessions.AddMessage(ts.contextKey(), "assistant", pending); err != nil {
 			return err
 		}
 	}

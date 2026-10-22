@@ -53,15 +53,6 @@ func (al *AgentLoop) markRequestDelivered(sessionID, transcriptEntryID string) {
 	if _, tracked := al.pendingRequests.Load(transcriptEntryID); !tracked {
 		return
 	}
-	if ledger := al.RequestLedger(); ledger != nil {
-		capture, found, err := ledger.Get(sessionID, transcriptEntryID)
-		if err != nil {
-			return
-		}
-		if found && capture.Source.Kind == addressing.SourceRoom && capture.ModelInput == nil {
-			return
-		}
-	}
 	al.deliveredRequests.Store(transcriptEntryID, struct{}{})
 	al.heldRepublished.Delete(transcriptEntryID)
 	if sessionID == "" {

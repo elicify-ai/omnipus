@@ -63,7 +63,7 @@ func (ex *agentLoopRunTurnToolsExecute) checkpointRecordedResult() (err error) {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		snap, readErr := store.WindowView(ctx, ts.sessionKey)
+		snap, readErr := store.WindowView(ctx, ts.contextKey())
 		if readErr != nil {
 			return readErr
 		}

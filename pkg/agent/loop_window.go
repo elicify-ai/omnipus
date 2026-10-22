@@ -72,7 +72,7 @@ func (al *AgentLoop) assembleMessages(
 			ts.setContextWindowError(&messageNotSavedError{role: "user", cause: err})
 			return history
 		}
-		snap, err := store.WindowView(ctx, ts.sessionKey)
+		snap, err := store.WindowView(ctx, ts.contextKey())
 		if err != nil {
 			ts.setContextWindowError(err)
 			return history
@@ -91,7 +91,7 @@ func (al *AgentLoop) assembleMessages(
 			ts.setContextWindowError(err)
 			return history
 		}
-		breadcrumb, err = breadcrumbForWindow(ctx, storeSlots{store: store, key: ts.sessionKey}, snap.State.ClearFloor, snap.State.Skip)
+		breadcrumb, err = breadcrumbForWindow(ctx, storeSlots{store: store, key: ts.contextKey()}, snap.State.ClearFloor, snap.State.Skip)
 		if err != nil {
 			ts.setContextWindowError(err)
 			return history
@@ -389,7 +389,7 @@ func (al *AgentLoop) handleModelSwitch(
 		return agent, nil
 	}
 
-	history := agent.Sessions.GetHistory(sessionKey)
+	history := agent.Sessions.GetHistory(al.modelContextKey(sessionKey))
 	currentConvTokens := estimateHistoryTokens(history)
 
 	// ADR-066 D2: the new model's window comes from the ONE resolver, keyed

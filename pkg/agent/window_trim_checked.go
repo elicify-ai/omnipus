@@ -20,7 +20,8 @@ func (al *AgentLoop) trimWindowChecked(ctx context.Context, agent *AgentInstance
 	if !ok {
 		return compressionResult{Err: fmt.Errorf("context trim: session store does not support atomic context checkpoints")}, false
 	}
-	snap, err := store.WindowView(ctx, key)
+	modelKey := al.modelContextKey(key)
+	snap, err := store.WindowView(ctx, modelKey)
 	if err != nil {
 		return compressionResult{Err: err}, false
 	}
@@ -33,7 +34,7 @@ func (al *AgentLoop) trimWindowChecked(ctx context.Context, agent *AgentInstance
 	if cfg := al.GetConfig(); cfg != nil {
 		cs = cfg.Context
 	}
-	p := &windowCheckpoint{ts: ts, snapshot: snap, slots: storeSlots{store: store, key: key}, state: snap.State.Clone(), lines: lines,
+	p := &windowCheckpoint{ts: ts, snapshot: snap, slots: storeSlots{store: store, key: modelKey}, state: snap.State.Clone(), lines: lines,
 		policy: capPolicyFor(cs, agentContextBudget(agent)), anchor: -1}
 	ts.mu.RLock()
 	p.notice = ts.windowNotice.clone()
@@ -171,6 +172,9 @@ func (p *windowCheckpoint) trimWholeTurns(fits func([]providers.Message) bool, f
 
 func (p *windowCheckpoint) canTrimPrefix(end int) bool {
 	for i, m := range p.messages[:end] {
+		if end < len(p.lines) && p.lines[i] >= p.lines[end] {
+			return false // A late repaired result must be evicted with its declaration, never alone.
+		}
 		if p.lines[i] == p.anchor {
 			continue
 		}

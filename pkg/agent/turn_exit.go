@@ -169,7 +169,7 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	// span as a retained-but-excluded effect — the aborted bytes stay on disk
 	// for recall, while every provider request built from the window omits them
 	// (pkg/memory/window.go::RollbackWindow).
-	if err := store.RollbackWindow(context.Background(), ts.sessionKey, start.Clone()); err != nil {
+	if err := store.RollbackWindow(context.Background(), ts.contextKey(), start.Clone()); err != nil {
 		return err
 	}
 	// Re-read so a failed rollback surfaces as a real error instead of
@@ -177,7 +177,7 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	// the aborted bytes (FR-006), so the invariant to verify is the MODEL VIEW:
 	// the window a provider request is built from must hold exactly the
 	// messages visible at turn start, with the aborted span excluded.
-	snap, err := store.WindowView(context.Background(), ts.sessionKey)
+	snap, err := store.WindowView(context.Background(), ts.contextKey())
 	if err != nil {
 		return fmt.Errorf("context rollback: verify window after rollback: %w", err)
 	}
@@ -188,7 +188,7 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	if err := ts.revertEmptiedTranscript(); err != nil {
 		return err
 	}
-	return agent.Sessions.Save(ts.sessionKey)
+	return agent.Sessions.Save(ts.contextKey())
 }
 
 func (ts *turnState) interruptHintMessage() providers.Message {

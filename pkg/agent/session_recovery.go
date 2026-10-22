@@ -20,7 +20,7 @@ type orphanedToolCall struct {
 // occurrences as recovery observations. An absent return is never policy Deny.
 // Native callers supply checked current-state reconciliation and an error fence.
 func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, auditLog *audit.Logger, options ...orphanRecoveryOptions) []providers.Message {
-	history := store.GetHistory(sessionKey)
+	var history []providers.Message
 	var opt orphanRecoveryOptions
 	if len(options) > 0 {
 		opt = options[0]
@@ -32,6 +32,12 @@ func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, aud
 			opt.OnError(err)
 		}
 		slog.Error("tool recovery: observation was not saved; provider continuation is refused", "session_key", sessionKey, "error", err)
+	}
+	var err error
+	history, err = recoveryHistory(store, sessionKey, opt.View)
+	if err != nil {
+		report(err)
+		return nil
 	}
 	for _, o := range findOrphanedToolCalls(history) {
 		ob := recoveryObservation{Disposition: tools.FileEffectUnknown, Reason: "the missing result has no checked recovery adapter"}
@@ -51,7 +57,7 @@ func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, aud
 		if checked, ok := store.(session.ContextWindowStore); ok && ob.Assistant.EntryID != "" {
 			_, _, err = checked.AppendModelMessage(context.Background(), sessionKey, session.ModelAppend{
 				Message: message, ViewMembership: session.ViewMembershipModel,
-				Source: session.EntrySource{Kind: "tool"}, ToolResultFor: &ob.Assistant,
+				Source: session.EntrySource{Kind: "recovery_observation"}, ToolResultFor: &ob.Assistant,
 			})
 		} else {
 			err = store.AddFullMessage(sessionKey, message)
@@ -77,7 +83,11 @@ func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, aud
 	if failed {
 		return history
 	}
-	history = store.GetHistory(sessionKey)
+	history, err = recoveryHistory(store, sessionKey, nil)
+	if err != nil {
+		report(err)
+		return nil
+	}
 	cleaned := make([]providers.Message, 0, len(history))
 	for _, m := range history {
 		if restartCancellationID(m) == "" {
@@ -87,56 +97,33 @@ func RecoverOrphanedToolCalls(store session.SessionStore, sessionKey string, aud
 	return cleaned
 }
 
-// findOrphanedToolCalls scans the message history from the end and returns any
-// tool calls in the last assistant message that lack a corresponding tool result.
-// Only the last assistant turn is inspected — earlier turns are assumed to have
-// been resolved normally.
+// findOrphanedToolCalls examines each declaration independently. A later reuse
+// of a provider call id never settles an earlier occurrence.
 func findOrphanedToolCalls(history []providers.Message) []orphanedToolCall {
-	if len(history) == 0 {
-		return nil
-	}
-
-	// Walk backward to find the last assistant message.
-	var lastAssistantIdx = -1
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role == "assistant" {
-			lastAssistantIdx = i
-			break
-		}
-	}
-
-	if lastAssistantIdx < 0 {
-		return nil
-	}
-
-	lastAssistant := history[lastAssistantIdx]
-	if len(lastAssistant.ToolCalls) == 0 {
-		return nil
-	}
-
-	// Build a set of tool_call_ids that have a corresponding tool result in
-	// messages after the assistant turn.
-	resolvedIDs := make(map[string]struct{})
-	for i := lastAssistantIdx + 1; i < len(history); i++ {
-		msg := history[i]
-		if msg.Role == "tool" && msg.ToolCallID != "" {
-			resolvedIDs[msg.ToolCallID] = struct{}{}
-		}
-	}
-
-	// Collect tool calls without a result.
 	var orphans []orphanedToolCall
-	for _, tc := range lastAssistant.ToolCalls {
-		if _, resolved := resolvedIDs[tc.ID]; !resolved {
-			name := tc.Name
-			if name == "" && tc.Function != nil {
-				name = tc.Function.Name
+	for i, msg := range history {
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		resolved := map[string]bool{}
+		for j := i + 1; j < len(history); j++ {
+			next := history[j]
+			if next.Role == "assistant" || next.Role == "user" {
+				break
 			}
-			orphans = append(orphans, orphanedToolCall{
-				ToolCallID:     tc.ID,
-				ToolName:       name,
-				assistantIndex: lastAssistantIdx,
-			})
+			if next.Role == "tool" {
+				resolved[next.ToolCallID] = true
+			}
+		}
+		for _, call := range msg.ToolCalls {
+			if resolved[call.ID] {
+				continue
+			}
+			name := call.Name
+			if name == "" && call.Function != nil {
+				name = call.Function.Name
+			}
+			orphans = append(orphans, orphanedToolCall{ToolCallID: call.ID, ToolName: name, assistantIndex: i})
 		}
 	}
 	return orphans

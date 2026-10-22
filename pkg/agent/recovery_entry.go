@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -19,7 +20,7 @@ func (al *AgentLoop) prepareTurnRecovery(ctx context.Context, ts *turnState) ([]
 	}
 	lc := al.GetSessionLifecycleStore()
 	if lc == nil {
-		history := ts.agent.Sessions.GetHistory(ts.sessionKey)
+		history := ts.agent.Sessions.GetHistory(ts.contextKey())
 		if len(findOrphanedToolCalls(history)) > 0 {
 			return nil, fmt.Errorf("reconciliation_required: recovery execution identity is unavailable")
 		}
@@ -27,17 +28,18 @@ func (al *AgentLoop) prepareTurnRecovery(ctx context.Context, ts *turnState) ([]
 	}
 	rec, err := lc.Load(id)
 	if errors.Is(err, session.ErrLifecycleNotFound) {
-		return ts.agent.Sessions.GetHistory(ts.sessionKey), nil
+		return ts.agent.Sessions.GetHistory(ts.contextKey()), nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return al.recoverSessionToolCalls(ctx, ts.agent, rec, ts.sessionKey)
+	return al.recoverSessionToolCalls(ctx, ts.agent, rec, ts.contextKey())
 }
 
 func (al *AgentLoop) recoveryInterruptedResult(ts *turnState, cause error) (turnResult, error) {
 	ts.markInterrupted(session.InterruptionReconciliationRequired)
-	text := "reconciliation_required: " + cause.Error()
+	slog.Warn("recovery: automatic continuation refused", "session_id", ts.transcriptSessionID, "error", cause)
+	text := recoveryInterruptionNotice(ts.transcriptSessionID)
 	ts.setFinalContent(text)
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
 		return turnResult{}, fmt.Errorf("recovery: interruption report store is missing")
@@ -65,22 +67,33 @@ func (al *AgentLoop) reconcileBootHelper(ctx context.Context, rec *session.Lifec
 		return errors.Join(err, readErr)
 	}
 	// The selected old execution owns the same completion/outbox commit as a real turn.
-	if commitErr := al.reportSteeredSessionTerminalUpward(ctx, rec.SessionID, rec.Generation, session.LifecycleInterrupted, steer.OutcomeReconciliationRequired, err.Error()); commitErr != nil {
-		return errors.Join(err, commitErr)
+	slog.Warn("recovery: helper continuation refused", "session_id", rec.SessionID, "error", err)
+	commitErr := al.reportSteeredSessionTerminalUpward(ctx, rec.SessionID, rec.Generation, session.LifecycleInterrupted, steer.OutcomeReconciliationRequired, recoveryInterruptionNotice(rec.SessionID))
+	fresh, loadErr := al.GetSessionLifecycleStore().Load(rec.SessionID)
+	if loadErr != nil || fresh.State != session.LifecycleInterrupted || fresh.Generation != rec.Generation ||
+		fresh.ExecutionID == nil || rec.ExecutionID == nil || *fresh.ExecutionID != *rec.ExecutionID {
+		return errors.Join(err, commitErr, loadErr)
 	}
-	if rec.ExecutionID == nil {
-		return fmt.Errorf("recovery: producing execution is missing")
+	// A failed publication can follow a successful terminal commit. Still save
+	// the local report and leave the committed parent notice pending for replay.
+	if reportErr := al.ensureRecoveryInterruptionReport(fresh); reportErr != nil {
+		return errors.Join(err, commitErr, reportErr)
 	}
-	entry := session.TranscriptEntry{ID: "reconciliation-required:" + rec.ExecutionID.RunID,
-		Type: session.EntryTypeSystem, Role: "system", Content: err.Error(), Timestamp: time.Now().UTC(),
+	return fmt.Errorf("%w: %w", errRecoveryReconciliationHeld, errors.Join(err, commitErr))
+}
+
+func (al *AgentLoop) ensureRecoveryInterruptionReport(rec *session.LifecycleRecord) error {
+	if rec.ExecutionID == nil || al.GetSessionStore() == nil {
+		return fmt.Errorf("recovery: interruption report identity or store is missing")
+	}
+	id := uuid.NewSHA1(uuid.NameSpaceOID, []byte("reconciliation-report:"+rec.SessionID+":"+rec.ExecutionID.RunID)).String()
+	entry := session.TranscriptEntry{ID: id, Type: session.EntryTypeSystem, Role: "system",
+		Content: recoveryInterruptionNotice(rec.SessionID), Timestamp: rec.UpdatedAt,
 		AgentID: rec.AgentID, Status: "interrupted", InterruptionReason: string(session.InterruptionReconciliationRequired)}
-	if _, appendErr := al.GetSessionStore().AppendTranscriptOnce(rec.SessionID, entry); appendErr != nil {
-		return errors.Join(err, appendErr)
+	if _, err := al.GetSessionStore().AppendTranscriptOnce(rec.SessionID, entry); err != nil {
+		return err
 	}
-	if reportErr := markRecoveryReported(rec.SessionID); reportErr != nil {
-		return errors.Join(err, reportErr)
-	}
-	return fmt.Errorf("%w: %v", errRecoveryReconciliationHeld, err)
+	return markRecoveryReported(rec.SessionID)
 }
 
 var errRecoveryReconciliationHeld = errors.New("recovery: unresolved effects reported; execution is Interrupted")

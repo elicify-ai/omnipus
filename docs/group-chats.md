@@ -66,6 +66,12 @@ No agent works inside a group chat. Each agent's main chat is its one-to-one cha
 
 The same one-reminder rule applies when a background update started the turn. Stop in the member's main chat interrupts its active group requests, including a request that started the turn. A later message or Retry does not automatically repeat interrupted work.
 
+**After a crash, a fresh message from you can start the member again.** A new, authenticated human group request can restart a main chat stopped by the gateway restart; you do not also have to send a message in that agent's main chat. Its usual permissions, approval and group checks still apply. An intentional Stop still holds, including a Stop accepted while the new request is arriving. Agent messages, synthetic notifications and old delivery IDs cannot claim this human restart authority.
+
+The interrupted request's work is retired from active model input, not deleted. Its chat history, files and completed tool results remain. A later main-chat turn, helper outcome or reload does not restore its pending instruction, unfinished narration or reminder. A helper continuation derived from that old request is not automatically resumed; ask for new work with a new request or delegation. Unrelated tasks, schedules and independently admitted inputs are not cleared. If the server cannot establish the exact old-input correlation, it stops the affected continuation with a context-repair report rather than guessing which history to remove.
+
+**Ask again is new work, not Resume.** It prefills the member's @-name and starts nothing until you send. Send a new message with a new ID. Retrying the old ID repairs an unconfirmed delivery where possible; it does not revive an interrupted request that a turn already consumed. A fresh group request also cannot accept an uncertain file operation on your behalf: `reconciliation_required` still needs explicit continuation after its report in the affected chat or an authorized parent action.
+
 **In the main chat.** The request and the answer each appear in the agent's main chat as a collapsed entry, "From group <name>: <first line>". Expanding one shows the full text, its author and a link to the group.
 
 ### Approvals and questions
@@ -111,7 +117,7 @@ The group shows one state per member: its most recent request. The labels in thi
 | answered | The answer is in the group |
 | refused | The agent's permission refused the request |
 | failed: turn failed, or failed: no answer (`failed`) | The turn failed (`turn failed`), or ended with no answer after the reminder (`no answer`) |
-| interrupted | The turn was stopped, or Omnipus restarted while it ran. Interrupted work is never re-run. The member shows **Ask again**, which puts "@<Agent> " in the composer so you can write and send a new message to that agent; it does not resume the interrupted work |
+| interrupted | The request's execution ended incomplete, was stopped, or was cut off by a restart. Its old work stays historical rather than becoming pending work again. **Ask again** puts "@<Agent> " in the composer so you can send a new request; it does not resume the old one. A fresh authenticated human request can restart a crash-stopped main, but cannot override intentional Stop or a reconciliation hold |
 | unavailable (`unavailable`) | Not delivered. The reason is shown, for example "rate limit", "not a member" or "storage" |
 | cancelled, or cancelled — removed (`cancelled`) | Cancelled by `/pause` or deleting the group (`cancelled`). Removing the member shows `cancelled — removed` |
 | unknown | After a restart, Omnipus could not prove what happened |
