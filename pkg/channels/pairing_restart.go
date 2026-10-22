@@ -87,6 +87,10 @@ func (s *PairingAttempts) ReadyForSnapshot(instance string, cfg *config.Config) 
 		return "", stamp, false
 	}
 	rec := c.latest
+	if rec != nil && rec.Generation == c.configGeneration && rec.Generation == c.generation && rec.startFenced && inFlight(rec.Phase) {
+		stamp.Cancelled, stamp.AttemptID = true, rec.AttemptID
+		return "", stamp, true // early Stop fence is expressly idle, never anonymous permission
+	}
 	if c.configGeneration != 0 && c.generation != c.configGeneration {
 		if rec != nil && rec.Generation == c.configGeneration && rec.Phase == PairingPhaseTerminal && rec.Outcome == PairingOutcomeStopped {
 			stamp.Cancelled, stamp.AttemptID = true, rec.AttemptID // idle only, never a late connection/pairing
@@ -97,6 +101,9 @@ func (s *PairingAttempts) ReadyForSnapshot(instance string, cfg *config.Config) 
 	if rec != nil && rec.Generation == c.generation && rec.Phase == PairingPhaseReady && !rec.startFenced && rec.Revision == revision {
 		stamp.AttemptID = rec.AttemptID
 		return rec.AttemptID, stamp, true
+	}
+	if rec != nil && inFlight(rec.Phase) {
+		return "", stamp, false // refusing an own token never authorizes a tokenless start
 	}
 	return "", stamp, true // legitimate linked-device/idle start, not a fallback admission
 }
@@ -123,10 +130,19 @@ func (o *PairingOrder) AcceptsStartStamp(token string, stamp PairingStartStamp) 
 	}
 	rec := c.attempts[stamp.AttemptID]
 	if stamp.Cancelled {
-		return token == "" && rec != nil && rec == c.latest && rec.Generation == stamp.Generation && rec.Phase == PairingPhaseTerminal && rec.Outcome == PairingOutcomeStopped && effectivePairingGeneration(rec) == c.generation
+		if token != "" || rec == nil || rec != c.latest || rec.Generation != stamp.Generation {
+			return false
+		}
+		if rec.startFenced && inFlight(rec.Phase) && rec.Generation == c.generation {
+			return true // cancelled idle construction only, before deferred BeginStop
+		}
+		return rec.Phase == PairingPhaseTerminal && rec.Outcome == PairingOutcomeStopped && effectivePairingGeneration(rec) == c.generation
 	}
 	if token != "" {
 		return token == stamp.AttemptID && rec != nil && rec == c.latest && rec.Generation == c.generation && rec.Phase == PairingPhaseReady && !rec.startFenced && rec.Revision == stamp.Revision
 	}
-	return stamp.AttemptID == "" && (c.generation == stamp.Generation || c.configGeneration == 0 && (c.latest == nil || !inFlight(c.latest.Phase)))
+	if c.latest != nil && inFlight(c.latest.Phase) {
+		return false
+	}
+	return stamp.AttemptID == "" && (c.generation == stamp.Generation || c.configGeneration == 0)
 }
