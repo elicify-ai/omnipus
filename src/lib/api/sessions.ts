@@ -87,10 +87,9 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // status 'active', lifecycle_state 'stopped').
   lifecycle_state?: WireSessionShape['lifecycle_state']
   // Server cause of the current interruption. Omitted rather than null.
-  // Absent on every lifecycle other than interrupted, and on an interrupted
-  // session whose projection did not record one (the restart notice then
-  // keeps the restart sentence).
-  interruption_reason?: WireSessionShape['interruption_reason']
+  // Kept as a string at this adapter: the generated schema is the validator,
+  // and a caller may pass the recorded cause through before that check.
+  interruption_reason?: string
   // ADR-20260928 MAJ-009 — the durable, lasting stop reason, present only
   // when lifecycle_state is 'stopped'. The stopped sidebar row shows its
   // cause alongside the Stopped label.
@@ -134,7 +133,7 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   child_count?: number
   // ADR-20260928 MAJ-009 — wire pass-through (see public Session above).
   lifecycle_state?: WireSessionShape['lifecycle_state']
-  interruption_reason?: WireSessionShape['interruption_reason']
+  interruption_reason?: string
   stop_note?: WireSessionShape['stop_note']
   execution?: WireSessionShape['execution']
   background_command_count?: WireSessionShape['background_command_count']

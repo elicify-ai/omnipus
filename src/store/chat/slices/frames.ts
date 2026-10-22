@@ -93,6 +93,11 @@ function closeFinishedTurn(
       listVersion: queryClient.getQueryState(['sessions'])?.dataUpdateCount ?? 0,
     }
     draft.restartNoticeDismissed = false
+    draft.restartNoticeSettled = false
+  } else if (draft.restartNoticeDismissed) {
+    // A finished turn that is not itself a new interruption must not let a
+    // stale Interrupted list bring the notice back.
+    draft.restartNoticeSettled = true
   }
   // The announced turn is finalized: record its id as finished BEFORE
   // clearing, so a stale session_state.active_turn that re-announces this

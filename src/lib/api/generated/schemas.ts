@@ -3529,7 +3529,11 @@ export const Session: z.ZodType<Session> = z.object({
   compaction_summaries: z.record(z.string()).optional(),
   parent_session_id: z.string().optional(),
   child_count: z.number().int().gte(0).optional(),
-});
+})
+  .refine(
+  (session) => session.lifecycle_state !== "interrupted" || session.execution === undefined,
+  { message: "an interrupted session exposes no execution", path: ["execution"] },
+);
 export const SessionPage: z.ZodType<SessionPage> = z.object({
   sessions: z.array(Session),
   next_cursor: z.string().optional(),
@@ -7600,7 +7604,15 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
           .partial(),
       })
       .optional(),
-  });
+  })
+  .refine(
+  (record) => record.state !== "interrupted" || record.interruption_reason !== undefined,
+  { message: "a newly recorded interrupted lifecycle requires interruption_reason", path: ["interruption_reason"] },
+)
+.refine(
+  (record) => record.state === "interrupted" || record.interruption_reason === undefined,
+  { message: "interruption_reason is only valid when state is interrupted", path: ["interruption_reason"] },
+);
 export const Goal: z.ZodType<Goal> = z.object({
   goal_id: z.string().min(1),
   owner_kind: z.enum(["session", "task"]),

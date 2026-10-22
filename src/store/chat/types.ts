@@ -562,6 +562,13 @@ export interface SessionChatState {
    * list read never passed through another lifecycle value.
    */
   restartNoticeDismissedAt?: string
+  /** Sessions-query update count when the notice was dismissed. A later update re-arms it. */
+  restartNoticeDismissedVersion?: number
+  /**
+   * True after a finished turn that was not a new interruption. Holds the
+   * dismissal against a refetch that still says interrupted.
+   */
+  restartNoticeSettled?: boolean
   /**
    * Live `done` stats named an ended interruption before the session list
    * refetch landed. `listVersion` is the sessions-query update count at

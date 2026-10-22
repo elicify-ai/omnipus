@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchSessions } from '@/lib/api'
 import { interruptionNoticeDetail } from '@/lib/subagentStatus'
@@ -90,12 +90,18 @@ function setDismissed(sessionId: string, value: boolean, clearObserved = false, 
     const nextEnded = clearObserved || clearEnded ? undefined : bucket.endedInterruption
     const nextBoot = clearObserved ? undefined : bucket.restartInterruptedBootId
     const nextVersion = clearObserved ? undefined : bucket.restartInterruptedListVersion
+    const nextDismissedVersion = value
+      ? (queryClient.getQueryState(['sessions'])?.dataUpdateCount ?? bucket.restartNoticeDismissedVersion)
+      : undefined
+    const nextSettled = value ? bucket.restartNoticeSettled : false
     if (
       !!bucket.restartNoticeDismissed === value
       && bucket.restartNoticeDismissedAt === nextAt
       && bucket.endedInterruption === nextEnded
       && bucket.restartInterruptedBootId === nextBoot
       && bucket.restartInterruptedListVersion === nextVersion
+      && bucket.restartNoticeDismissedVersion === nextDismissedVersion
+      && !!bucket.restartNoticeSettled === !!nextSettled
     ) return state
     return { sessionsById: { ...state.sessionsById, [sessionId]: {
       ...bucket,
@@ -104,6 +110,8 @@ function setDismissed(sessionId: string, value: boolean, clearObserved = false, 
       endedInterruption: nextEnded,
       restartInterruptedBootId: nextBoot,
       restartInterruptedListVersion: nextVersion,
+      restartNoticeDismissedVersion: nextDismissedVersion,
+      restartNoticeSettled: nextSettled,
     } } }
   })
 }
@@ -130,12 +138,27 @@ export function useRestartNoticeDismissal(): void {
   const ended = useChatStore((s) => (sessionId != null ? s.sessionsById[sessionId]?.endedInterruption : undefined))
   const dismissed = useChatStore((s) => (sessionId != null && !!s.sessionsById[sessionId]?.restartNoticeDismissed))
   const dismissedAt = useChatStore((s) => (sessionId != null ? s.sessionsById[sessionId]?.restartNoticeDismissedAt : undefined))
+  const dismissedVersion = useChatStore((s) => (sessionId != null ? s.sessionsById[sessionId]?.restartNoticeDismissedVersion : undefined))
+  const settledNotice = useChatStore((s) => (sessionId != null && !!s.sessionsById[sessionId]?.restartNoticeSettled))
+  // An equal session list write (a second ceiling with the same fields) does
+  // not change the selected row, so useQuery will not re-render. Subscribe to
+  // the cache itself so that write can re-arm the notice.
+  const [, setListTick] = useState(0)
+  useEffect(() => {
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type === 'updated' && event.query.queryKey[0] === 'sessions') setListTick((tick) => tick + 1)
+    })
+  }, [])
   useEffect(() => {
     if (!sessionId) return
     const listStillPrevious = ended != null && (!saved.settled || saved.version <= ended.listVersion)
     if (oldBoot || progressed) setDismissed(sessionId, false, true)
     else if (running && (observed || saved.state === 'interrupted' || ended != null)) setDismissed(sessionId, true, false, saved.updatedAt, true)
     else if (!observed && saved.state !== undefined && saved.state !== 'interrupted' && !listStillPrevious) setDismissed(sessionId, false, false, undefined, true)
+    else if (
+      !running && saved.state === 'interrupted' && dismissed && !settledNotice
+      && dismissedVersion != null && saved.version > dismissedVersion
+    ) setDismissed(sessionId, false)
     else if (!running && saved.state === 'interrupted' && dismissed && dismissedAt && saved.updatedAt && saved.updatedAt > dismissedAt) setDismissed(sessionId, false)
-  }, [sessionId, saved.state, saved.settled, saved.updatedAt, saved.version, running, observed, progressed, oldBoot, ended, dismissed, dismissedAt])
+  }, [sessionId, saved.state, saved.settled, saved.updatedAt, saved.version, running, observed, progressed, oldBoot, ended, dismissed, dismissedAt, dismissedVersion, settledNotice])
 }
