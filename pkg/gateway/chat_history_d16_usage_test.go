@@ -109,6 +109,7 @@ func historyD16AssertAttachUsage(t *testing.T, sid string, frames [][]byte, want
 				replayEnds++
 				assert.Nil(t, done.Stats.SessionTokensTotal, "D16: replay diagnostics are never a fresh absolute usage observation")
 				assert.Nil(t, done.Stats.Tokens, "D16: replay terminator is not a per-turn debit")
+				historyD16ReplayUsageOmitted(t, raw)
 			}
 		}
 	}

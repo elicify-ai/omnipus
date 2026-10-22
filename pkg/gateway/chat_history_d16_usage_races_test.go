@@ -144,6 +144,7 @@ func historyD16UsageZeroUnknown(t *testing.T) {
 			if state.SessionId != nil && *state.SessionId == unknown {
 				states++
 				assert.Nil(t, state.SessionTokensTotal, "unknown usage does not reset a previously known client total")
+				historyD16RequireOmitted(t, raw, "session_tokens_total", "unknown-usage scoped state")
 			}
 		}
 	}

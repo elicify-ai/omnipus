@@ -127,6 +127,7 @@ func (h *historyD16Harness) connect() *websocket.Conn {
 	require.NoError(h.t, json.Unmarshal(initial[len(initial)-1], &state))
 	require.Nil(h.t, state.SessionId, "connection-open state is unscoped")
 	require.Nil(h.t, state.SessionTokensTotal, "D16 unscoped state cannot claim another session's usage")
+	historyD16RequireOmitted(h.t, initial[len(initial)-1], "session_tokens_total", "unscoped connection state")
 	return peer
 }
 

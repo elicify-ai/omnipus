@@ -6,7 +6,9 @@ Preserve actually cancelled tool identity/state and restore authoritative record
 
 Real: native AgentLoop, ordinary gateway message ingress, tool dispatch/start, public Stop/Stop-all, actual cancellation timers/fences, canonical/addressed writers and effects, stored provider accounting, bounded history preparation, generated carriers, actual session hub and reopen. Controlled process edges only: model responses/usage and a registered external-tool boundary whose completion/cancellation can be released. Do not manually emit a successful/cancelled engine event or seed a UI object as writer proof. A separate writer-created saved-cancelled fixture tests projection only and is explicitly NOT the engine durability proof.
 
-The old reconciliation CI window remains pinned to bfd63fecfa9d5edb4a95c379b0a1fc0b21fc5ba0. Its outputs do not cover this merge or these new tests. No new Fly window is started for RED; local execution stays one exact tagged test process at a time through /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/omnipus-l1/slotrun.sh. Native CI/kernel/UAT are not inferred from a local run.
+T37 uses the existing supported eager tool-manifest mode for its registered external probe, so the real request actually offers that tool. Policy filtering and the exact offered-tool execution gate remain real; this does not change shipped defaults or test compressed/lazy discovery. Actual native start, arguments, owner and completed-tool positive controls are required before any cancellation-durability claim. All history requests retain D3's valid limit20..100; a closed retained interval may truthfully underfill that target.
+
+The old reconciliation CI window remains pinned to bfd63fecfa9d5edb4a95c379b0a1fc0b21fc5ba0. Its outputs do not cover this merge or these new tests. No new Fly window is started for RED; local execution stays one exact tagged test process at a time through /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/omnipus-l1/slotrun.sh. Native CI/kernel/UAT are not inferred from a local run. The founder's later full-CI ruling is binding: full gates only on the integration draft PR at bundle time; Fly is targeted-only. The old detached window was collected/stopped and DONE RED-BE recorded; no further Fly work by this lane.
 
 ## T37 — TestCancelledTool_ReloadPageSnapshotParity
 
@@ -38,6 +40,18 @@ Frozen provider receipts are1200 then45123, yielding exactly46323; third genuine
 | Hold a real prepared REST response while a genuine newer done completes; release stale page, Retry/older/replay repeats | Stale absolute page observation cannot mutate the server's newer accounting; total stays47023, provider calls/tool/input counts unchanged; another session remains0 | B56; frontend application fencing separately belongs to T39 |
 
 No hand-written wire structs: use generated MessageFrame/AuthFrame/SessionHistoryResponse/SessionDetail/SessionStateFrame/DoneFrame/ToolCallResultFrame and actual raw bytes for schema/omission checks. Do not weaken structural optionality: new producers' presence rules are semantic assertions on known authoritative fixtures.
+
+## Planned fresh CHECK mutation probes — not executed by RED author
+
+| Mutant in the independent scratch checkout | Critical test expected to die |
+|---|---|
+| Drop the cancelled display receipt on the real after-tool hard-abort/abandonment path | T37 actual Stop/Stop-all canonical presence plus fresh REST/detail/snapshot |
+| Allow a late successful return/effect to replace confirmed cancelled, or admit its result into model context | T37 abandoned-execution/late-success and actual target model-window checks |
+| Clamp a saved cancelled result back to error | T37 saved-cancelled generated ToolCallResultFrame.status, including page-edge/Retry |
+| Omit a known absolute usage baseline, replace46323 with the selected-page45123, or manufacture0 for absent aggregate evidence | T38 real saved-accounting/reopen/page/attach/zero-versus-unknown |
+| Replace a live per-turn delta with lifetime usage, debit held/replayed observations again, or put usage on a replay terminator/unscoped state | T38 exact1200/45123/700 deltas,47023 stored authority, replay/unscoped omission |
+
+These are intended CHECK probes, not claimed mutation kills. GREEN, mutation restoration and Proof-of-failability remain deferred to the separate instance.
 
 ## Proof order and limits
 
