@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -20,6 +21,7 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 	// Publish an immutable report atomically; never race a timer with appends.
 	var stageReport atomic.Pointer[steer.CancelReport]
 	var stageSent atomic.Bool
+	approvals := h.prepareStopApprovals(sessionID)
 	var stopper agent.StopTurnsCanceller
 	if c, ok := gatewaySteerCanceller(h.agentLoop).(agent.StopTurnsCanceller); ok {
 		stopper = c
@@ -33,10 +35,12 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 		// FR-024: tell the session's tabs which queued messages Stop discarded.
 		OnInputDiscarded: h.announceDiscardedInput,
 		HooksFor: func(id string) agent.CancelHooks {
+			hooks := h.webStopHooks(wc, nil, stopAll)
+			hooks.CancelPendingApprovals = func(_ string, reason string) { approvals.cancel(reason) }
 			if id != sessionID {
-				return h.webStopHooks(wc, nil, stopAll)
+				return hooks
 			}
-			hooks := h.webStopHooks(wc, &stageReport, stopAll)
+			hooks.SendStageFrame = h.stopHooks(wc, &stageReport).SendStageFrame
 			send := hooks.SendStageFrame
 			hooks.SendStageFrame = func(id, stage string) {
 				stageSent.Store(true)
@@ -45,8 +49,20 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 			return hooks
 		},
 	})
+	// Completed/stopped roots may have no callback at all. Their pending
+	// helper approvals still belong to this explicit Stop request.
+	approvalResult := approvals.cancel("session canceled")
+	h.publishStopApprovedOutcome(wc, sessionID, approvalResult)
+	res.Root.Fired = res.Root.Fired || approvalResult.Canceled > 0
+	if approvals.walkErr != nil {
+		approvals.retainFailure(sessionID, &res.Report)
+		res.Root.DescendantWalkIncomplete = true
+		res.RootErr = errors.Join(res.RootErr, approvals.walkErr)
+		res.Durable = true // publish the existing partial-failure report
+	}
+	stageReport.Store(&res.Report)
 	if err != nil {
-		return steer.CancelReport{}, false, agent.CancelOutcome{}, false, err
+		return res.Report, res.Durable, res.Root, stageSent.Load(), errors.Join(err, res.RootErr)
 	}
 	if !res.Durable {
 		return res.Report, false, res.Root, stageSent.Load(), res.RootErr
@@ -61,13 +77,8 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 // stopHooks are the web transport hooks for one reached session.
 func (h *WSHandler) stopHooks(wc *wsConn, report *atomic.Pointer[steer.CancelReport]) agent.CancelHooks {
 	hooks := h.buildCancelHooks(wc)
-	// Each reached session receives its own RequestCancel. Do not let a
-	// transport hook silently expand a this-turn Stop back into a subtree.
-	hooks.CancelPendingApprovals = func(id, reason string) {
-		if h.approvalRegV2 != nil {
-			h.approvalRegV2.cancelAllPendingForSession(id, reason)
-		}
-	}
+	// requestScopedStop replaces approval cleanup with its immutable request
+	// selection. Stage reporting remains per reached session.
 	if report != nil {
 		hooks.SendStageFrame = func(id, stage string) {
 			if stage == "detached" {

@@ -474,7 +474,8 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 			return CancelOutcome{}, err, true
 		}
 		// Parked/queued sessions have no live turn, but their approvals still
-		// belong to this Stop. The gateway hook matches only this exact ID.
+		// belong to this Stop. The gateway also withdraws pending helper
+		// approvals owned by this chat; already-running helpers stay untouched.
 		if rc.hooks.CancelPendingApprovals != nil {
 			rc.hooks.CancelPendingApprovals(rc.sessionID, "session canceled")
 		}

@@ -932,7 +932,7 @@ type NotificationFrame struct {
 	Body        *string `json:"body,omitempty"`
 	CreatedAtMs int64   `json:"created_at_ms"`
 	Id          string  `json:"id"`
-	// The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a) means the drift check found a knowledge base's search index out of step with the folder on disk and the index is being rebuilt; it is never emitted for a healthy check.
+	// The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a) means the drift check found a knowledge base's search index out of step with the folder on disk and the index is being rebuilt; it is never emitted for a healthy check. "stop_notice" is an operational Stop outcome (already-approved request, partial cleanup, or Stop did not complete). It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 	NotificationType string  `json:"notification_type"`
 	Read             bool    `json:"read"`
 	ScheduleId       *string `json:"schedule_id,omitempty"`

@@ -6386,14 +6386,18 @@ components:
           minLength: 1
         notification_type:
           type: string
-          description: 'The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a)
-            means the drift check found a knowledge base''s search index out of step with the folder on disk and the index
-            is being rebuilt; it is never emitted for a healthy check.
-
-            '
+          description: >
+            The event class. Mirrors Notification.type in openapi.yaml.
+            "knowledge_drift" (ADR-067 FR-038a) means the drift check found a
+            knowledge base's search index out of step with the folder on disk
+            and the index is being rebuilt; it is never emitted for a healthy check.
+            "stop_notice" is an operational Stop outcome (already-approved request,
+            partial cleanup, or Stop did not complete). It is a non-terminal
+            header notification and must not be sent as a chat ErrorFrame.
           enum:
           - schedule_failed
           - knowledge_drift
+          - stop_notice
         title:
           type: string
           minLength: 1

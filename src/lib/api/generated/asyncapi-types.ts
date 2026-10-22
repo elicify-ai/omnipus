@@ -912,7 +912,7 @@ export interface WhatsAppPairingSubscribeFrame {
 export interface NotificationFrame {
   type: "notification";
   id: string;
-  notification_type: "schedule_failed" | "knowledge_drift";
+  notification_type: "schedule_failed" | "knowledge_drift" | "stop_notice";
   title: string;
   body?: string;
   severity: "info" | "warning" | "error";

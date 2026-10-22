@@ -29,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/pairing"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -227,6 +228,10 @@ type WSHandler struct {
 	// approvalRegV2 is the Central Tool Registry approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
+
+	// notifStore is the same per-user store used by the header notification
+	// REST endpoint. Injected at boot; Stop notices persist before live push.
+	notifStore *notifications.Store
 
 	// askUserReg is the AskUserQuestion pending registry (askuserquestion-
 	// tool-spec v3; pkg/askuser). Injected at boot alongside approvalRegV2.
