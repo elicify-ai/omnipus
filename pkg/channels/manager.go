@@ -2155,8 +2155,11 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	mr.quiesceDispatch()
 
 	mr.removeChannels()
+	// An unfinished captured resource cannot be overwritten by construction of
+	// its replacement. Retain the old hash/order until a later Stop succeeds.
+	mr.added = slices.DeleteFunc(mr.added, func(id string) bool { return mr.failedDisposals[id] })
 	if r0, stop := mr.initializeAdded(); stop {
-		return r0
+		return errors.Join(mr.startCleanupErr, r0)
 	}
 	mr.startAdded()
 
@@ -2323,6 +2326,8 @@ func (mr *managerReload) removeChannels() {
 				"channel": n,
 				"error":   err.Error(),
 			})
+			mr.retainFailedDisposal(n, channel, err)
+			continue // unfinished cleanup must not schedule unregister
 		}
 		// Tear down exactly the instance and worker being removed. When the
 		// same name is also added (a forced or credential-driven restart),
@@ -2536,6 +2541,9 @@ func (mr *managerReload) restartExisting() error {
 		addedSet[n] = struct{}{}
 	}
 	for name, w := range mr.m.workers {
+		if mr.failedDisposals[name] {
+			continue // do not resume dispatch over unfinished captured cleanup
+		}
 		if _, isNew := addedSet[name]; isNew {
 			continue // already started above
 		}

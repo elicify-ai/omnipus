@@ -50,6 +50,8 @@ func TestManager_FailedPairingStartIsReportedToItsAttempt(t *testing.T) {
 	admitted, err := store.Admit("gate-r4-failstart", PairingAdmissionConnect, &PairingOwner{SessionID: "chat-a", RequestID: "req-a"})
 	require.NoError(t, err)
 	require.True(t, store.MarkReady("gate-r4-failstart", admitted.AttemptID, ChannelRevision(cfg, "gate-r4-failstart")))
+	// Fixture: the direct ready admission must carry its accepted config identity.
+	finalManagerAcceptedSnapshot(t, store, cfg, "gate-r4-failstart", admitted.AttemptID)
 	m.RequestRestart("gate-r4-failstart", admitted.AttemptID)
 	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
 
@@ -110,15 +112,25 @@ func TestManager_AnOlderReloadNeverInterruptsANewerAttempt(t *testing.T) {
 	a, err := store.Admit("gate-r5-older", PairingAdmissionConnect, &PairingOwner{SessionID: "chat-a", RequestID: "req-a"})
 	require.NoError(t, err)
 	require.True(t, store.MarkReady("gate-r5-older", a.AttemptID, ChannelRevision(cfgA, "gate-r5-older")))
+	// Fixture: A's direct accepted write belongs to A's snapshot, never B's.
+	finalManagerAcceptedSnapshot(t, store, cfgA, "gate-r5-older", a.AttemptID)
 	_, revoked := store.BeginStop(a)
 	require.True(t, revoked, "Stop revoked A")
+	// Fixture: start A's valid cancelled/idle predecessor before B is accepted;
+	// an obsolete reload can then preserve that real idle trace without starting.
+	m.RequestRestart("gate-r5-older", "")
+	require.NoError(t, m.Reload(context.Background(), cfgA, credentials.SecretBundle{}))
+	idleCount := len(built())
 	b, err := store.Admit("gate-r5-older", PairingAdmissionConnect, &PairingOwner{SessionID: "chat-b", RequestID: "req-b"})
 	require.NoError(t, err)
 	require.True(t, store.MarkReady("gate-r5-older", b.AttemptID, ChannelRevision(cfgB, "gate-r5-older")))
+	// Fixture: B's distinct accepted write is carried only by B's snapshot.
+	finalManagerAcceptedSnapshot(t, store, cfgB, "gate-r5-older", b.AttemptID)
 
 	m.RequestRestart("gate-r5-older", "") // the older operation's restart
 	require.NoError(t, m.Reload(context.Background(), cfgA, credentials.SecretBundle{}))
 	all := built()
+	require.Len(t, all, idleCount, "the obsolete snapshot creates no resource over the accepted winner")
 	require.Equal(t, []startIntent{{}}, all[len(all)-1].startIntents(), "the older reload starts without a token")
 	require.True(t, store.IsReady("gate-r5-older", b.AttemptID), "B is neither consumed nor interrupted")
 	mu.Lock()
