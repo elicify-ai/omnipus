@@ -4434,8 +4434,7 @@ func TestContractCopies_AllHandSyncedCopiesAgree_Recursive(t *testing.T) {
 	})
 
 	t.Run("BrowserHandoverNoticeFrame.yaml vs asyncapi.yaml inline BrowserHandoverNoticeFrame (C-85)", func(t *testing.T) {
-		handSync := stripYAMLNoise(componentYAMLPath(t, "BrowserHandoverNoticeFrame"))
-		canonical := stripYAMLNoise(asyncapiYAMLPath(t, "BrowserHandoverNoticeFrame"))
+		canonical, handSync := c85ResolvedCopies(t)
 		assert.Equal(t, canonical, handSync,
 			"contracts/components/schemas/BrowserHandoverNoticeFrame.yaml and asyncapi.yaml's inline (generating) copy must agree structurally — F1's new comparator row per C-85")
 	})
