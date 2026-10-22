@@ -701,8 +701,8 @@ test(
 
     // ── Step 2: open session and send a long-form prompt on page1 ──
     // The expected nonce concatenates two separate inputs and never appears in
-    // the user prompt. The 600-word prefix keeps the response streaming for several seconds
-    // (typically 4-12s on the earlier pick; the central e2e model is
+    // the user prompt. A roughly 600-word chat answer keeps the response streaming
+    // without requiring a file or a word-count tool (the central e2e model is
     // tests/e2e/e2e-model.json) so page2 can attach mid-turn.
     await openSession(page, sessionId)
     await waitForReplayDone(page)
@@ -710,7 +710,10 @@ test(
     const challenge = assistantReplyChallenge('attach-during-turn')
     const nonce = challenge.nonce
     const prompt =
-      `Write exactly 600 words about renewable energy. Vary your wording — do not repeat sentences. ` +
+      `Answer directly in this chat with roughly 600 words about renewable energy, using only your existing knowledge. ` +
+      `This is a plain-text chat answer, not a document or file task. Do not use tools, shell commands, scripts, ` +
+      `external research or filesystem access, and do not verify an exact word count. ` +
+      `Vary your wording and do not repeat sentences. ` +
       `At the very end of your reply, on its own line: ${challenge.instruction}`
     expect(prompt, 'the expected assistant nonce must not appear in the user prompt').not.toContain(nonce)
 
