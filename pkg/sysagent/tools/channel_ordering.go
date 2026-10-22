@@ -23,6 +23,23 @@ type channelWrite struct {
 	progress     []channels.PairingProgress
 }
 
+// channelWriteLiveNote uses immutable effects from this commit, not a later
+// latest-attempt lookup that could describe a different writer or resource.
+func channelWriteLiveNote(id string, progress []channels.PairingProgress) string {
+	for _, p := range progress {
+		if p.Attempt.Instance != id || p.Attempt.Outcome != channels.PairingOutcomeInterrupted {
+			continue
+		}
+		if p.Attempt.Phase == channels.PairingPhaseStopping {
+			return "this saved change interrupted the existing pairing and requested cleanup of its captured client; " +
+				"cleanup is not confirmed complete; new settings take effect on the next config reload; the live connection was not tested"
+		}
+		return "this saved change interrupted the existing pairing; " +
+			"new settings take effect on the next config reload; the live connection was not tested"
+	}
+	return channelLiveNote
+}
+
 func (d *Deps) pairingStore() *channels.PairingAttempts {
 	if d.PairingAttempts != nil {
 		return d.PairingAttempts()

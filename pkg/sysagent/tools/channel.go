@@ -133,9 +133,9 @@ func channelRevisionProperty() map[string]any {
 	}
 }
 
-// channelLiveNote is what a channel write does not do: the tool path changes
-// config only; the connection changes on the next config reload.
-const channelLiveNote = "takes effect on the next config reload; the live connection was not changed or tested"
+// channelLiveNote describes a saved write with no pairing interruption. Each
+// write's captured progress supplies any immediate pairing effect separately.
+const channelLiveNote = "new settings take effect on the next config reload; no pending or active pairing was interrupted by this write; the live connection was not tested"
 
 // ---- system.channel.enable ----
 
@@ -249,12 +249,10 @@ func (t *ChannelEnableTool) admitPairing(ctx context.Context, write *channelWrit
 	return attemptID, nil
 }
 
-// channelWriteResult reads the saved entry back and renders a channel write's
-// FR-030 verdict. A read-back mismatch is "saved but not working"; a matching
-// read-back is still "saved but not working" with the reload reason, because
-// the tool path never applies a channel change live (channelLiveNote).
+// channelWriteResult separates the saved-entry readback, this exact write's
+// immediate pairing effect and the still-unproven connection/authentication.
 func channelWriteResult(cfg *config.Config, id string, fields map[string]any, changed []string,
-	readBack func(config.ChannelInstanceConfig) bool,
+	readBack func(config.ChannelInstanceConfig) bool, progress ...channels.PairingProgress,
 ) *tools.ToolResult {
 	const scope = "saved configuration read back"
 	fields["id"] = id
@@ -266,11 +264,12 @@ func channelWriteResult(cfg *config.Config, id string, fields map[string]any, ch
 	if cfg != nil {
 		ch, ok = cfg.Channels[id]
 	}
+	note := channelWriteLiveNote(id, progress)
 	if !ok || !readBack(ch) {
-		return changeSuccess(fields, savedNotWorking("the saved channel entry did not read back as written", scope,
+		return changeSuccess(fields, savedNotWorking("the saved channel entry did not read back as written; "+note, scope,
 			notTested...))
 	}
-	return changeSuccess(fields, savedNotWorking(channelLiveNote, scope, notTested...))
+	return changeSuccess(fields, savedNotWorking(note, scope, notTested...))
 }
 
 // ---- system.channel.configure ----
@@ -293,7 +292,8 @@ func (t *ChannelConfigureTool) Description() string {
 		"change the destination in Settings first, then request a new card. Slack's paired card supplies bot_token and app_token; " +
 		"pass both as bot_token_ref and app_token_ref, not token_ref. Omitted references stay unchanged. " +
 		"Read list_channels and pass expected_revision (\"absent\" for a new entry); stale writes are refused. " +
-		"This does not enable or live-test the channel: call enable_channel separately; changes take effect on the next config reload. " +
+		"This does not enable or live-test the channel: call enable_channel separately; new settings take effect on the next config reload. " +
+		"Saving changed settings can interrupt an existing pairing immediately; the result states whether this happened. " +
 		"Report committed settings as \"saved but not working\" with the reason, never working or nothing saved. " +
 		"WhatsApp pairs by QR code under Connectors > WhatsApp, not with credentials here."
 }
@@ -356,8 +356,9 @@ func (t *ChannelConfigureTool) Execute(ctx context.Context, args map[string]any)
 		return missing
 	}
 	var selected config.ChannelInstanceConfig
+	var progress []channels.PairingProgress
 	writeErr := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
-		return write.withConfig(func(cfg *config.Config) error {
+		err := write.withConfig(func(cfg *config.Config) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -377,6 +378,8 @@ func (t *ChannelConfigureTool) Execute(ctx context.Context, args map[string]any)
 			cfg.Channels[id] = selected
 			return nil
 		})
+		progress = append(progress, write.progress...)
+		return err
 	})
 	if r, ok := revisionConflictResult(writeErr, "list_channels"); ok {
 		return r
@@ -402,7 +405,7 @@ func (t *ChannelConfigureTool) Execute(ctx context.Context, args map[string]any)
 	}
 	t.selected(ctx, t.Name(), id, refs)
 	return channelWriteResult(t.deps.GetCfg(), id, map[string]any{"status": "configured"}, changed,
-		func(ch config.ChannelInstanceConfig) bool { return reflect.DeepEqual(ch, selected) })
+		func(ch config.ChannelInstanceConfig) bool { return reflect.DeepEqual(ch, selected) }, progress...)
 }
 
 // ---- system.channel.disable ----
@@ -413,7 +416,7 @@ func NewChannelDisableTool(d *Deps) *ChannelDisableTool { return &ChannelDisable
 func (t *ChannelDisableTool) Name() string              { return "disable_channel" }
 func (t *ChannelDisableTool) Scope() tools.ToolScope    { return tools.ScopeCore }
 func (t *ChannelDisableTool) Description() string {
-	return "Disable a channel connection. The channel will stop on the next config reload. A channel that has never been configured cannot be disabled — it is already inactive. " +
+	return "Disable a channel connection. Saving the change can interrupt an existing pairing immediately; other live connection changes take effect on the next config reload. The result states whether a pairing was interrupted. A channel that has never been configured cannot be disabled — it is already inactive. " +
 		"expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, the channel type e.g. 'telegram', 'discord'), expected_revision (required)."
 }
 
@@ -441,10 +444,11 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (re
 	if missing != nil {
 		return missing
 	}
+	var progress []channels.PairingProgress
 	if err := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
 		// Empty token means a revoking intent, not a new pairing reservation.
 		write.reservations[id] = ""
-		return write.withConfig(func(cfg *config.Config) error {
+		err := write.withConfig(func(cfg *config.Config) error {
 			ch, ok := cfg.Channels[id]
 			if !ok {
 				return fmt.Errorf("channel %q is not configured", id)
@@ -453,6 +457,8 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (re
 			cfg.Channels[id] = ch
 			return nil
 		})
+		progress = append(progress, write.progress...)
+		return err
 	}); err != nil {
 		if r, ok := revisionConflictResult(err, "list_channels"); ok {
 			return r
@@ -461,8 +467,8 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (re
 	}
 	return channelWriteResult(t.deps.GetCfg(), id, map[string]any{
 		"enabled": false,
-		"message": "Channel disabled. It will disconnect on the next config reload.",
-	}, []string{"enabled"}, func(ch config.ChannelInstanceConfig) bool { return !ch.Enabled })
+		"message": "Channel disabled in saved configuration.",
+	}, []string{"enabled"}, func(ch config.ChannelInstanceConfig) bool { return !ch.Enabled }, progress...)
 }
 
 // ---- system.channel.list ----
