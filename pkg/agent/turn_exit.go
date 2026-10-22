@@ -21,6 +21,10 @@ func (ts *turnState) ClaimCancel() bool {
 // turn goroutine that ignored hard abort. Callers include the gateway cancel
 // watchdog and the delegated-turn timeout detach path.
 func (ts *turnState) MarkAbandoned() {
+	// The controller, not the abandoned goroutine, preserves the started
+	// call's terminal display evidence before the late-write fence closes.
+	ts.cancelStartedTool()
+	ts.persistCancelOutcome("hard")
 	ts.abandoned.Store(true)
 }
 
@@ -109,6 +113,7 @@ func (ts *turnState) requestHardAbort() bool {
 	providerCancel := ts.providerCancel
 	ts.mu.Unlock()
 
+	ts.cancelStartedTool()
 	if providerCancel != nil {
 		providerCancel()
 	}
