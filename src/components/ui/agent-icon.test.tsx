@@ -566,12 +566,26 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
   })
 })
 
+function localArtworkUseTarget(use: Element): SVGSVGElement {
+  const reference = use.getAttribute('href') ?? ''
+  expect(reference, 'stencil use must reference a local SVG, never an external asset').toMatch(/^#[^#\s]+$/)
+  const targets = Array.from(use.ownerDocument.querySelectorAll('[id]')).filter((node) => node.id === reference.slice(1))
+  expect(targets, 'the local use ID resolves exactly once, including with simultaneous icons').toHaveLength(1)
+  expect(targets[0].tagName.toLowerCase(), 'the referenced viewport is an SVG').toBe('svg')
+  return targets[0] as SVGSVGElement
+}
+
 // The sheen must follow the mark that is actually painted, including its eye,
 // badge and letter cutouts. Normalize only local resource IDs, not geometry or
 // mask bindings; a rectangle, lost cutout or other figure must compare unequal.
 function artworkShapeOf(root: Element) {
-  const ids = new Map(Array.from(root.querySelectorAll('[id]'), (node, index) => [node.id, `resource-${index}`]))
-  return Array.from(root.querySelectorAll('path, rect, circle, ellipse, polygon, polyline, line, text, g[mask]'), (node) => ({
+  const expanded = root.cloneNode(true) as Element
+  for (const use of Array.from(expanded.querySelectorAll('use'))) {
+    const referenced = localArtworkUseTarget(use).cloneNode(true) as Element
+    use.replaceWith(...Array.from(referenced.childNodes))
+  }
+  const ids = new Map(Array.from(expanded.querySelectorAll('[id]'), (node, index) => [node.id, `resource-${index}`]))
+  return Array.from(expanded.querySelectorAll('path, rect, circle, ellipse, polygon, polyline, line, text, g[mask]'), (node) => ({
     tag: node.tagName.toLowerCase(),
     attributes: Array.from(node.attributes)
       .filter((attribute) => attribute.name !== 'id' && !attribute.name.startsWith('data-'))
@@ -606,6 +620,13 @@ function workingArtworkMaskOf(icon: HTMLElement): string {
     const mode = resource!.getAttribute('mask-type') || (resource as SVGElement).style.getPropertyValue('mask-type')
     expect(mode, 'the mark alpha, not its colour brightness, defines the sheen silhouette').toBe('alpha')
   }
+  const uses = resource!.querySelectorAll('use')
+  expect(uses, 'stencil reuses the actual painted ink SVG rather than a separately laid-out copy').toHaveLength(1)
+  expect(inkSvg.id, 'the referenced ink SVG has an explicit local identity').not.toBe('')
+  expect(uses[0]).toHaveAttribute('href', `#${inkSvg.id}`)
+  const referencedInk = localArtworkUseTarget(uses[0])
+  expect(referencedInk, 'use resolves to exactly this icon ink SVG, not another mark or a lookalike').toBe(inkSvg)
+  expect(icon, 'the referenced ink stays local to its own icon').toContainElement(referencedInk)
   expect(artworkShapeOf(resource!), 'sheen shape and cutouts equal this icon artwork, not the rectangular viewport')
     .toEqual(artworkShapeOf(inkSvg))
 
