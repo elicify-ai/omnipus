@@ -1609,12 +1609,7 @@ func (pe *PlanEngine) planWorkInFlight(planID string) (bool, string) {
 	if err != nil {
 		return true, "member tasks could not be read: " + err.Error()
 	}
-	for _, m := range members {
-		if m.Status == task.StatusInProgress || m.Status == task.StatusNext {
-			return true, "member task " + m.ID + " is " + string(m.Status)
-		}
-	}
-	return false, ""
+	return pe.planMemberWorkInFlight(planID, members)
 }
 
 // goalAndLoopIdleExpirySweep drives the /goal and /loop idle-expiry calendar

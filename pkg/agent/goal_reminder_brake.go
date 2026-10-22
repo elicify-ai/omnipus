@@ -7,7 +7,6 @@ import (
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -101,11 +100,10 @@ func (al *AgentLoop) pauseGoalReminders(sessionID string, rec *goal.Goal) error 
 		}
 	}
 	al.EmitGoalStatusChanged(payload)
-	if !written {
-		return nil
-	}
 	if al.audienceFor(context.Background(), steer.BoundaryFinalReply, sessionID) != steer.AudienceUser {
-		al.deliverGoalParkUpward(sessionID, false, goalReminderPauseNotice)
+		if written {
+			al.deliverGoalParkUpward(sessionID, false, goalReminderPauseNotice)
+		}
 		return nil
 	}
 	route, err := goalTriggers().routeFor(sessionID)
@@ -113,11 +111,7 @@ func (al *AgentLoop) pauseGoalReminders(sessionID string, rec *goal.Goal) error 
 		return fmt.Errorf("goal reminder pause: resolve channel: %w", err)
 	}
 	if route.channel != "" && route.channel != "webchat" && route.chatID != "" {
-		if err := al.bus.PublishOutbound(context.Background(), bus.OutboundMessage{
-			Channel: route.channel, ChatID: route.chatID, SessionID: sessionID, Content: goalReminderPauseNotice,
-		}); err != nil {
-			return fmt.Errorf("goal reminder pause: publish channel notice: %w", err)
-		}
+		return al.enqueueGoalReminderPause(sessionID, rec.GoalID, entry.ID, route.channel, route.chatID)
 	}
 	return nil
 }

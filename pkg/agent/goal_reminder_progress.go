@@ -48,14 +48,15 @@ type goalReminderOutcome struct {
 // Retained process references preserve a real finish timestamp if the existing
 // manager removes a long-running job before the next observation.
 type goalReminderWork struct {
-	mu               sync.Mutex
-	pending          *goalReminderOutcome
-	lastAssessedTurn string
-	toolActivityAt   time.Time
-	observedProgress bool
-	events           map[string]time.Time
-	processes        map[string]*tools.ProcessSession
-	reminderRuns     map[string]bool
+	mu                  sync.Mutex
+	pending             *goalReminderOutcome
+	lastAssessedTurn    string
+	pauseNoticeEnqueued string
+	toolActivityAt      time.Time
+	observedProgress    bool
+	events              map[string]time.Time
+	processes           map[string]*tools.ProcessSession
+	reminderRuns        map[string]bool
 }
 
 func goalReminderWorkFor(goalID string) *goalReminderWork {
