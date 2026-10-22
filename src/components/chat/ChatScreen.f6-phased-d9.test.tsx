@@ -3,7 +3,7 @@
 // owners; only HTTP/WebSocket/browser layout are doubled. No manual release.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, screen, waitFor } from '@testing-library/react'
-import type { Message, SessionHistoryResponse, SessionPage } from '@/lib/api/generated/openapi-types'
+import type { Message, Session, SessionHistoryResponse, SessionPage } from '@/lib/api/generated/openapi-types'
 import type { ServerFrame, ClientFrame } from '@/lib/api/generated/asyncapi-types'
 import { AttachSessionFrame as AttachSchema } from '@/lib/api/generated/ws-schemas'
 import { fetchSessionDetail, fetchSessionMessages } from '@/lib/api'
@@ -13,8 +13,8 @@ import { getMessages, useChatStore } from '@/store/chat'
 import { __resetFinishedTurnIdsForTests } from '@/store/chat/frames'
 import { useSessionStore } from '@/store/session'
 import f6 from '@/store/__fixtures__/catchup/F6.json'
-import { json, TestSocket } from '../../../tests/l1-room-ui/harness'
-import { mountStage1App, resetStage1App, Stage1Network, stopStage1App } from '../../../tests/l1-room-ui/stage1-harness'
+import { json, MAIN_ID } from '../../../tests/l1-room-ui/harness'
+import { mountStage1App, resetStage1App, settledMainChat, Stage1Network, stopStage1App } from '../../../tests/l1-room-ui/stage1-harness'
 import { availableDetail, entry, expectValidPage, page, pos, replay, session, snapshot, STAMP } from '../../../tests/chat-history-paging/fixtures'
 import { sendFrames } from '../../../tests/chat-history-paging/application'
 
@@ -61,6 +61,7 @@ let phase: Phase
 let bReads: Read[]
 let freshSnapshotRequests: Attach[]
 let navigation: Attach[]
+let aCreated: boolean
 
 function recordedFrames(part: typeof events): ServerFrame[] {
   return part.filter(event => event.dir === 'server→client').map(event => {
@@ -92,14 +93,14 @@ function carriers(entries: Message[], sid: string, media = false): ServerFrame[]
   return frames
 }
 
-function packet(entries: Message[], sid: string, rows: number, options: { range?: boolean; media?: boolean; limit?: number; min?: number } = {}): SessionHistoryResponse {
+function packet(entries: Message[], sid: string, rows: number, options: { range?: boolean; media?: boolean; limit?: number; min?: number; cut?: number } = {}): SessionHistoryResponse {
   const result = page(entries, { sessionId: sid, rows, info: { mode: options.range ? 'window_refresh' : 'latest', limit: options.limit ?? (options.range ? 100 : 40), min_rows: options.min ?? 20, ...(options.range ? { stop_reason: 'range_end' } : {}) } })
   // D4a independent UTF-8 carrier arithmetic, including actual tool/media
   // frames. No production weigher and no normalized1-as-measured-byte claim.
   const { projected_bytes, soft_byte_budget, byte_budget_exceeded, budget_override, ...info } = result.page_info
   void projected_bytes; void soft_byte_budget; void byte_budget_exceeded; void budget_override
   const rest = { ...result, page_info: info }
-  const cut = sid === A ? (phase === 'A-start' ? 1 : 13) : phase === 'B-reentry' ? 12 : 8
+  const cut = options.cut ?? (sid === A ? (phase === 'A-start' ? 1 : 13) : phase === 'B-reentry' ? 12 : 8)
   const header = { ...snapshot(result), boot_id: 'boot-1', seq: cut, page_info: info }
   result.page_info.projected_bytes = Math.max(Buffer.byteLength(JSON.stringify(rest)), Buffer.byteLength(JSON.stringify([header, ...carriers(entries, sid, options.media)])))
   expectValidPage(result, entries.map(source => source.history_position!), rows)
@@ -120,7 +121,7 @@ function bucket(sid: string) { return useChatStore.getState().sessionsById[sid] 
 function server() { if (!app) throw new Error('Fixture instrument: no real application'); return app.socket }
 function attachRequests() { return server().sent.filter((frame): frame is Attach => frame.type === 'attach_session' && !frame.ack_attention) }
 function note(label: string) {
-  console.info('F6 phased proof', JSON.stringify({ phase: label, selected: useSessionStore.getState().activeSessionId, A: bucket(A)?.messageOrder, B: bucket(B)?.messageOrder, B_reader: bucket(B)?.history.readerPositions, B_tail: bucket(B)?.history.tailEntries.map(row => row.id), B_media: bucket(B)?.messagesById['b-media-owner']?.media?.map(part => part.url) }))
+  console.info('F6 phased proof', JSON.stringify({ phase: label, selected: useSessionStore.getState().activeSessionId, A: bucket(A)?.messageOrder, B: bucket(B)?.messageOrder, B_reader: bucket(B)?.history.readerPositions, B_tail: bucket(B)?.history.tailEntries.map(row => row.id), B_media: bucket(B)?.messagesById['b-media-owner']?.media?.map(part => part.url), attaches: navigation.map(frame => ({ session_id: frame.session_id, boot_id: frame.boot_id, since_seq: frame.since_seq, history_limit: frame.history_limit, history_min_rows: frame.history_min_rows })) }))
 }
 
 async function navigate(sid: string): Promise<Attach> {
@@ -138,12 +139,15 @@ beforeEach(() => {
   resetStage1App()
   __resetFinishedTurnIdsForTests()
   vi.stubGlobal('ResizeObserver', undefined) // real plain fallback, no geometry claim
-  phase = 'A-start'; bReads = []; freshSnapshotRequests = []; navigation = []
+  phase = 'A-start'; bReads = []; freshSnapshotRequests = []; navigation = []; aCreated = false
   network = new Stage1Network()
   const a = { ...session(A), title: 'F6 first chat' }
   const b = { ...session(B), title: 'F6 independent other chat' }
-  const listing: SessionPage = { sessions: [a, b] }
-  network.respond('GET', '/api/v1/sessions', () => json(listing))
+  const main: Session = { ...session(MAIN_ID), type: 'main', title: 'Mia main chat', protected: true }
+  network.respond('GET', '/api/v1/sessions', () => {
+    const listing: SessionPage = { sessions: [main, b, ...(aCreated ? [a] : [])] }
+    return json(listing)
+  })
   network.respond('GET', `/api/v1/sessions/${A}`, () => json(availableDetail(phase === 'A-start' ? packet([], A, 0) : packet(aSources, A, 2), a)))
   network.respond('GET', `/api/v1/sessions/${B}`, () => json(availableDetail(packet(bSources, B, 3), b)))
   network.respond('GET', `/api/v1/sessions/${A}/messages`, () => json(phase === 'A-start' ? packet([], A, 0) : packet(aSources, A, 2)))
@@ -153,7 +157,7 @@ beforeEach(() => {
     bReads.push({ phase, query: Object.fromEntries(query), mode: range ? 'window_refresh' : 'latest' })
     return json(packet(phase === 'B-reentry' ? bFreshSources : bSources, B, phase === 'B-reentry' ? 5 : 3, { range }))
   })
-  act(() => useSessionStore.getState().setActiveSession(null, 'mia'))
+  act(() => useSessionStore.getState().setActiveSession(MAIN_ID, 'mia'))
 })
 afterEach(async () => {
   // Teardown after assertions only; navigation helpers never invoke release.
@@ -164,17 +168,25 @@ afterEach(async () => {
 })
 
 async function activeB() {
-  app = await mountStage1App(`/sessions/${A}`, { initialAttachResponse: 'caller' })
-  await waitFor(() => expect(useSessionStore.getState().activeSessionId).toBe(A))
-  await sendFrames(server(), snapshotReply(packet([], A, 0), 1))
-  await waitFor(() => expect(bucket(A).cursor).toStrictEqual({ bootId: 'boot-1', seq: 1 }))
+  app = await mountStage1App(undefined, { initialAttachResponse: 'caller' })
+  await settledMainChat(server(), { initialAttachResponse: 'caller' })
+  await sendFrames(server(), snapshotReply(packet([], MAIN_ID, 0, { cut: 1 }), 1))
+  await waitFor(() => expect(bucket(MAIN_ID).cursor).toStrictEqual({ bootId: 'boot-1', seq: 1 }))
+  // Bootstrap is a DIFFERENT chat. A must not already own seq1 before the
+  // recording's first-send/session_started acknowledgement is delivered.
+  await act(async () => expect(useSessionStore.getState().startNewSession('mia', 'core')).toBe('started'))
+  expect(useSessionStore.getState().activeSessionId).toBeNull()
+  expect(bucket(A), 'instrument: A has no pre-consumed bootstrap cursor').toBeUndefined()
   const head = events.slice(0, awayIndex)
   await sendFrames(server(), recordedFrames(head.slice(0, 1)))
   await act(async () => useChatStore.getState().sendMessage(f6.expect.user_message, { clientMessageId: 'client-1' }))
   const first = server().sent.filter(frame => frame.type === 'message')
   expect(first).toHaveLength(1)
   expect(first[0]).toMatchObject({ type: 'message', agent_id: 'mia', client_message_id: 'client-1', content: f6.expect.user_message })
+  expect(first[0], 'recorded first send is not an already-bound A message').not.toHaveProperty('session_id')
+  aCreated = true // test-server creation at the recorded acknowledgement, not a seeded UI bucket
   await sendFrames(server(), recordedFrames(head.slice(2)))
+  await waitFor(() => expect(useSessionStore.getState().activeSessionId).toBe(A))
   await waitFor(() => expect(bucket(A).cursor).toStrictEqual({ bootId: 'boot-1', seq: 7 }))
   expect(getMessages(bucket(A)).filter(row => row.role === 'assistant').map(row => row.content)).toStrictEqual(['x0 x1 x2 '])
   expect(bucket(A).isStreaming).toBe(true)
