@@ -58,6 +58,8 @@ A **Main** agent talks with you in chats and rooms. A **Worker** runs delegated 
 
 **Allow** means no tool-policy approval is needed. **Ask** uses the normal approval rules, including Auto-approve. **Off** means Deny. Having permission does not remove a tool's other requirements: a mailbox, a workspace delegation link or the right kind of session may still be needed.
 
+A saved policy also does not add an unimplemented tool. This build reserves `list_secrets`, `request_secret` and `read_conversation` in its permission settings, but they are not yet in the real tool catalog and cannot be called. They will appear in the compact inventory only when their implementations are available.
+
 | Tool or group | Main | Worker |
 |---|---|---|
 | Ask the user and communicate upward: `AskUserQuestion`, `send_message`, `message_parent` | Allow | Allow |

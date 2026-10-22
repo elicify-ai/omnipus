@@ -6,7 +6,7 @@ metadata:
 ---
 # Agent Authoring
 ## Prerequisites
-Discover needed tool schemas with `tool:ToolSearch` before using them. Read available models with `tool:list_models`. For updates, read the current agent with `tool:get_agent` and its permissions with `tool:get_agent_tools` using its existing `id`. For native creation, inspect `tool:create_agent` and call `tool:get_agent_tools` with `new_agent_type: Main` or `new_agent_type: Subagent` before drafting; do not invent an existing ID or create a temporary agent to inspect defaults. External CLI creation does not support this native preview.
+Discover needed tool schemas with `tool:ToolSearch` before using them. Read available models with `tool:list_models`. For updates, read the current agent with `tool:get_agent` and its permissions with `tool:get_agent_tools` using its existing `id`. For creation, inspect `tool:create_agent` and call `tool:get_agent_tools` with `new_agent_type: Main`, `new_agent_type: Subagent`, or `new_agent_type: subagent_3p` before drafting; do not invent an existing ID or create a temporary agent to inspect defaults. `Main` previews main defaults; `Subagent` and `subagent_3p` preview worker defaults.
 
 Base the proposal's permissions on that readback plus the requested changes, constrained by global restrictions. A sparse policy patch changes only named tools; it is not an exclusive allowlist. Skills describe procedures and grant no tools or connector access. Inspect assigned skills through `tool:list_skills` management scope; identify missing prerequisites as unavailable rather than listing them as effective tools.
 ## Steps
