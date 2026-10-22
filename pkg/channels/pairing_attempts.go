@@ -523,8 +523,11 @@ func (s *PairingAttempts) Complete(instance, attemptID string, outcome PairingOu
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.connectors[instance]
-	if c == nil || c.retired || c.latest == nil || c.latest.startFenced || c.latest.Generation != c.generation || c.latest.AttemptID != attemptID || c.latest.Phase != PairingPhaseActive {
+	if c == nil || c.retired || c.latest == nil || c.latest.Generation != c.generation || c.latest.AttemptID != attemptID || c.latest.Phase != PairingPhaseActive {
 		return PairingAttempt{}, false
+	}
+	if c.latest.startFenced && outcome == PairingOutcomeStartFailed {
+		return PairingAttempt{}, false // cancelled connect must not overwrite the selected Stop
 	}
 	c.latest.Phase, c.latest.Outcome, c.latest.cancel = PairingPhaseTerminal, outcome, nil
 	return copyAttempt(c.latest), true
