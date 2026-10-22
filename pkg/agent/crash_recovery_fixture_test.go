@@ -208,6 +208,36 @@ func crashCopyTree(src, dst string) error {
 		return os.WriteFile(target, b, 0600)
 	})
 }
+
+// Restore file bytes while keeping the existing directory identities. A real
+// process restart does not replace the workspace directory: removing/recreating
+// it would manufacture a changed-anchor Unknown in every valid-witness probe.
+func crashRestoreTree(src, dst string) error {
+	if err := filepath.WalkDir(dst, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(dst, path)
+		if err != nil || rel == "." {
+			return err
+		}
+		original, statErr := os.Lstat(filepath.Join(src, rel))
+		if os.IsNotExist(statErr) || (statErr == nil && original.IsDir() != d.IsDir()) {
+			if err := os.RemoveAll(path); err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		return statErr
+	}); err != nil {
+		return err
+	}
+	return crashCopyTree(src, dst)
+}
+
 func (h *crashHarness) snapshot(t *testing.T) string {
 	t.Helper()
 	dst := t.TempDir()
@@ -217,7 +247,6 @@ func (h *crashHarness) snapshot(t *testing.T) string {
 func (h *crashHarness) restore(t *testing.T, snapshot string, p *crashScript) {
 	t.Helper()
 	h.al.Close()
-	require.NoError(t, os.RemoveAll(h.home))
-	require.NoError(t, crashCopyTree(snapshot, h.home))
+	require.NoError(t, crashRestoreTree(snapshot, h.home))
 	h.open(t, p)
 }
