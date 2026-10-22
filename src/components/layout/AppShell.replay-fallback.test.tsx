@@ -89,7 +89,11 @@ describe('SF-2 — informational history fallback through the real shell', () =>
 
     act(() => useSessionStore.getState().setActiveSession('another-chat'))
     expect(screen.queryByText(NOTICE, { exact: true })).toBeNull()
-    act(() => useSessionStore.getState().setActiveSession(MAIN_ID))
+    // D6/D9: A1 completes while B owns the view; it cannot resurrect abandoned
+    // A1 bodies. From B, request/receive a REAL fresh A2 before selecting its
+    // notice. Original Dismiss/socket/final-content assertions remain intact.
+    await emitFromGateway(socket, completion())
+    await startLargeReplay(socket)
     const notice = screen.getByText(NOTICE, { exact: true }).closest('[role="status"]')!
     await userEvent.setup().click(within(notice as HTMLElement).getByRole('button', { name: 'Dismiss' }))
     expect(screen.queryByText(NOTICE, { exact: true })).toBeNull()
