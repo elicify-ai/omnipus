@@ -31,13 +31,13 @@ import { historyTransport } from '../../tests/chat-history-paging/transport'
 // Three narration sources plus three logical tool rows => D4 row_count6.
 const sources: Message[] = [
   entry(301, { id: 'saved-completed', role: 'assistant', turn_id: 'completed-turn', content: 'Completed saved reply.', tool_calls: [
-    { id: 'completed-call', tool: 'bash', status: 'success', parameters: { command: 'printf completed-control' }, result: { stdout: 'completed-control' }, duration_ms: 17 },
+    { id: 'completed-call', tool: 'bash', status: 'success', content_state: 'full', parameters: { command: 'printf completed-control' }, result: { stdout: 'completed-control' }, duration_ms: 17 },
   ] }),
   entry(302, { id: 'saved-cancelled', role: 'assistant', turn_id: 'cancelled-turn', content: 'Interrupted saved reply.', tool_calls: [
-    { id: 'cancelled-call', tool: 'bash', status: 'cancelled', parameters: { command: 'printf cancellation-fixture' }, duration_ms: 731 },
+    { id: 'cancelled-call', tool: 'bash', status: 'cancelled', content_state: 'full', parameters: { command: 'printf cancellation-fixture' }, duration_ms: 731 },
   ] }),
   entry(303, { id: 'saved-pending', role: 'assistant', turn_id: 'different-pending-turn', content: 'A separate unstarted request.', tool_calls: [
-    { id: 'pending-call', tool: 'bash', status: 'pending', parameters: { command: 'printf must-not-execute' } },
+    { id: 'pending-call', tool: 'bash', status: 'pending', content_state: 'full', parameters: { command: 'printf must-not-execute' } },
   ] }),
 ]
 const frozenPage = page(sources, { sessionId: MAIN_ID, rows: 6 })
