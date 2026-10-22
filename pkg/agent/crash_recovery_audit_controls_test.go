@@ -41,7 +41,7 @@ func TestCrashRecovery_ActualDeniedApprovalRemainsDeny(t *testing.T) {
 		}
 		return &providers.LLMResponse{Content: "reported the actual denial", FinishReason: "stop"}, nil
 	}
-	_, owner := crashChild(t, h, p)
+	record, owner := crashChild(t, h, p)
 	close(gate)
 	crashAwaitDone(t, owner.done)
 	approver.mu.Lock()
@@ -51,14 +51,19 @@ func TestCrashRecovery_ActualDeniedApprovalRemainsDeny(t *testing.T) {
 	require.NoError(t, h.al.auditLogger.Close())
 	entries, err := readAuditEntries(filepath.Join(h.home, "system", "audit.jsonl"))
 	require.NoError(t, err)
-	var denies int
+	// Tool Registry approval events use audit.Record, not the legacy Entry:
+	// Record's documented payload is fields.tool_name / fields.reason. Require
+	// the actual user-denial evidence rather than inventing a top-level decision.
+	var denies []map[string]any
 	for _, entry := range entries {
-		if entry["event"] == "tool.policy.ask.denied" && entry["tool"] == "append_file" {
-			denies++
-			assert.Equal(t, "deny", entry["decision"], "actual approval denial remains a policy Deny")
+		fields, ok := entry["fields"].(map[string]any)
+		if ok && entry["event"] == audit.EventToolPolicyAskDenied && fields["tool_name"] == "append_file" {
+			denies = append(denies, fields)
 		}
 	}
-	assert.Equal(t, 1, denies)
+	require.Len(t, denies, 1, "exactly one actual approval-denial event")
+	assert.Equal(t, string(audit.AskDenyReasonUser), denies[0]["reason"], "real user refusal remains Deny, not missing-result recovery")
+	assert.Equal(t, record.SessionID, denies[0]["session_id"], "the denial belongs to the actual issuing helper")
 	_, err = os.Stat(path)
 	assert.True(t, os.IsNotExist(err), "denied approval performed no mutation")
 }

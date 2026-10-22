@@ -59,7 +59,9 @@ func TestCrashRecovery_IndependentHeldPeerInputSurvivesRoomRetirement(t *testing
 	gatewayCrashAssertRetired(t, input)
 	var independent int
 	for _, m := range input {
-		if m.Role == "user" && strings.Contains(m.Content, "INDEPENDENT_HELD_PEER") {
+		// The provider may fold independently addressed inputs into a system
+		// envelope. DESIGN requires retention, not a particular transport role.
+		if strings.Contains(m.Content, "INDEPENDENT_HELD_PEER") {
 			independent++
 		}
 	}

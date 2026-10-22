@@ -4,7 +4,9 @@ Follow-up scope: close the open control rows from `/Users/danielpiatkowski/AI-Ag
 
 ## Boundaries and execution
 
-Real stores, locked admission, native tools/turns/completion/outbox, boot sweeps, Board PATCH, room service, request retirement, model assembly/trim/recall, REST/replay and generated validators. Fake only external provider, clock and held I/O edges. Existing real fixtures are reused. No sleeps or elapsed-time oracle; guard deadlines only identify fixture failure. Each narrow named Go command runs serially through shared slotrun, CGO_ENABLED=0, tags goolm,stdjson, -p 1, -count=1, -v. Frontend tests are single-file, --maxWorkers=2, via npm run test. No production edits or local full suites. GREEN and scratch-clone mutation proof are deferred to independent CHECK.
+Real stores, locked admission, native tools/turns/completion/outbox, boot sweeps, Board PATCH, room service, request retirement, model assembly/trim/recall, REST/replay and generated validators. Fake only external provider, clock and held I/O edges. Existing real fixtures are reused. No sleeps or elapsed-time oracle; guard deadlines only identify fixture failure. Each narrow named Go command runs serially through shared slotrun, CGO_ENABLED=0, tags goolm,stdjson, -p 1, -count=1, -v. Frontend tests are single-file, --maxWorkers=2, via the installed runner identified in package.json. No production edits or local full suites. GREEN and scratch-clone mutation proof are deferred to independent CHECK.
+
+Founder CI ruling, 2026-10-22: this lane runs only its own exact-name tests and minimal regressions with a clear impact. Targeted Fly tests are permitted; full CI is not a lane gate and must not be requested or awaited here. Chief runs full CI on the bundle integration branch through a draft PR after the gated feature SHA is integrated. No lane PR is created. The baseline has no npm test script, so frontend commands derive the installed runner from package.json and use npm exec, one file and at most two workers at a time.
 
 ## Cases / independent expected values
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { z } from 'zod'
-import { Session, Message, SessionLifecycleRecord } from '@/lib/api/generated/schemas'
+import { Session, Message, SessionLifecycleRecord, DelegateSessionResponse, DelegatePeekResponse } from '@/lib/api/generated/schemas'
 import { DoneStats, ReplayMessageFrame, SubagentStateFrame, SubagentEndFrame } from '@/lib/api/generated/ws-schemas'
 
 // DESIGN Decision 1's exact contract inventory. All schemas are generated;
@@ -37,6 +37,19 @@ describe('crash-recovery generated wire reason parity', () => {
   it.each(['tool_limit', 'reconciliation_required'])('accepts ended lifecycle %s, including terminal=true', (reason) => preserved(SessionLifecycleRecord, lifecycle(reason), reason))
   it.each(['tool_limit', 'reconciliation_required'])('accepts live state %s', (reason) => preserved(SubagentStateFrame,
     { type: 'subagent_state', session_id: 'parent', child_session_id: 'helper', span_id: 'span', state: 'interrupted', created_at: NOW, interruption_reason: reason }, reason))
+  // The DESIGN contract inventory also names the real delegate responses.
+  // An ended projection must not rewrite the admission's queued/running result.
+  it.each(['tool_limit', 'reconciliation_required'])('preserves %s in delegate session response', (reason) => preserved(DelegateSessionResponse,
+    { session_id: 'helper', generation: 1, is_3p: false, state: 'interrupted', interruption_reason: reason }, reason))
+  it.each(['tool_limit', 'reconciliation_required'])('preserves %s in delegate peek response', (reason) => preserved(DelegatePeekResponse,
+    { session_id: 'helper', state: 'interrupted', interruption_reason: reason }, reason))
+  it.each(['queued', 'running'])('keeps actual %s delegate admission valid without a reason', (state) => {
+    const parsed = DelegateSessionResponse.safeParse({ session_id: 'helper', generation: 1, is_3p: false, state })
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) throw new Error('generated validator rejected a real admission state')
+    expect(parsed.data.state).toBe(state)
+    expect(Object.hasOwn(parsed.data, 'interruption_reason')).toBe(false)
+  })
   it.each(['tool_limit', 'reconciliation_required'])('accepts truthful live end cause %s', (reason) => {
     const value = { type: 'subagent_end', session_id: 'parent', span_id: 'span', status: 'interrupted', reason }
     expect(SubagentEndFrame.safeParse(value).success).toBe(true)
