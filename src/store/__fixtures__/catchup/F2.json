@@ -152,6 +152,9 @@
             },
             "boot_id": "boot-1",
             "emitted_at": "2026-01-01T00:00:05Z",
+            "history_state": {
+              "status": "available"
+            },
             "pending_approvals": [],
             "session_id": "sess-1",
             "type": "session_state",
