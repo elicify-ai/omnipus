@@ -110,6 +110,11 @@ func (mr *managerReload) publishStartedWorker(name string, channel Channel) {
 func (mr *managerReload) disposeUnpublishedStart(name string, channel Channel) {
 	if err := channel.Stop(mr.ctx); err != nil {
 		mr.retainFailedDisposal(name, channel, err)
+		if mr.m.channels[name] == channel {
+			// This is the first failed disposal of the newly constructed
+			// resource, so replace any predecessor hash with its own snapshot.
+			mr.m.channelHashes[name] = mr.list[name]
+		}
 		delete(mr.list, name)
 		return
 	}
