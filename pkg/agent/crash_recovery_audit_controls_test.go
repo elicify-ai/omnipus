@@ -51,18 +51,21 @@ func TestCrashRecovery_ActualDeniedApprovalRemainsDeny(t *testing.T) {
 	require.NoError(t, h.al.auditLogger.Close())
 	entries, err := readAuditEntries(filepath.Join(h.home, "system", "audit.jsonl"))
 	require.NoError(t, err)
-	// Tool Registry approval events use audit.Record, not the legacy Entry:
-	// Record's documented payload is fields.tool_name / fields.reason. Require
-	// the actual user-denial evidence rather than inventing a top-level decision.
+	// DESIGN D requires actual denial evidence. This native boundary owns the
+	// policy-deny-attempted Entry; the gateway owns the separate ask.denied
+	// Record. Only the external person's answer is doubled, never the audit row.
 	var denies []map[string]any
 	for _, entry := range entries {
-		fields, ok := entry["fields"].(map[string]any)
-		if ok && entry["event"] == audit.EventToolPolicyAskDenied && fields["tool_name"] == "append_file" {
-			denies = append(denies, fields)
+		if entry["event"] == audit.EventToolPolicyDenyAttempted && entry["tool"] == "append_file" {
+			denies = append(denies, entry)
 		}
 	}
-	require.Len(t, denies, 1, "exactly one actual approval-denial event")
-	assert.Equal(t, string(audit.AskDenyReasonUser), denies[0]["reason"], "real user refusal remains Deny, not missing-result recovery")
+	require.Len(t, denies, 1, "exactly one actual approval-denial event from the native engine")
+	assert.Equal(t, audit.DecisionDeny, denies[0]["decision"], "real user refusal remains Deny, not missing-result recovery")
+	details, ok := denies[0]["details"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, string(audit.AskDenyReasonUser), details["context"], "the decision carries the actual approver refusal")
+	assert.Equal(t, "ask", details["resolved_policy"])
 	assert.Equal(t, record.SessionID, denies[0]["session_id"], "the denial belongs to the actual issuing helper")
 	_, err = os.Stat(path)
 	assert.True(t, os.IsNotExist(err), "denied approval performed no mutation")

@@ -57,15 +57,32 @@ func TestCrashRecovery_IndependentHeldPeerInputSurvivesRoomRetirement(t *testing
 	defer func() { p.open(); gatewayCrashStopLoop(t, cancel, done) }()
 	input := gatewayCrashAwait(t, p.entered)
 	gatewayCrashAssertRetired(t, input)
+	// Held requests enter through a real owner wake. That wake may be steered
+	// into J after its first provider call, or start the following turn. Observe
+	// its actual model entry, not a race with the first J request. The script
+	// has at most two J calls (one tool then final) and one peer call (final).
+	p.open()
 	var independent int
-	for _, m := range input {
-		// The provider may fold independently addressed inputs into a system
-		// envelope. DESIGN requires retention, not a particular transport role.
-		if strings.Contains(m.Content, "INDEPENDENT_HELD_PEER") {
-			independent++
+	for call := 0; call < 3; call++ {
+		independent = 0
+		for _, m := range input {
+			// Provider preparation may put this input in a system envelope.
+			if strings.Contains(m.Content, "INDEPENDENT_HELD_PEER") {
+				independent++
+			}
 		}
+		if independent != 0 || call == 2 {
+			break
+		}
+		input = gatewayCrashAwait(t, p.entered)
+		gatewayCrashAssertRetired(t, input)
 	}
 	assert.Equal(t, 1, independent, "selective retirement cannot erase an unrelated independently addressed held request")
+	after, found, err := rh.api.agentLoop.RequestLedger().Get(mainID, pending[0].RequestID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.False(t, after.Discarded, "the independent request was not retired with G")
+	assert.True(t, after.Delivered, "instrument: the exact held request was consumed, not merely copied into a fake prompt")
 }
 
 func TestCrashRecovery_InFlightStopCannotGainHumanRoomRevival(t *testing.T) {
