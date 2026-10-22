@@ -565,3 +565,81 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
     expect(letter.getAttribute('dy')).toBe('0.35em')
   })
 })
+
+// The sheen must follow the mark that is actually painted, including its eye,
+// badge and letter cutouts. Normalize only local resource IDs, not geometry or
+// mask bindings; a rectangle, lost cutout or other figure must compare unequal.
+function artworkShapeOf(root: Element) {
+  const ids = new Map(Array.from(root.querySelectorAll('[id]'), (node, index) => [node.id, `resource-${index}`]))
+  return Array.from(root.querySelectorAll('path, rect, circle, ellipse, polygon, polyline, line, text, g[mask]'), (node) => ({
+    tag: node.tagName.toLowerCase(),
+    attributes: Array.from(node.attributes)
+      .filter((attribute) => attribute.name !== 'id' && !attribute.name.startsWith('data-'))
+      .map((attribute) => [attribute.name, attribute.value.replace(/url\(["']?#([^"')\s]+)["']?\)/g, (_match, id: string) => {
+        expect(ids.has(id), `artwork resolves its own cutout ${id}`).toBe(true)
+        return `url(#${ids.get(id)})`
+      })])
+      .sort(([left], [right]) => left.localeCompare(right)),
+    text: node.tagName.toLowerCase() === 'text' ? node.textContent : null,
+  }))
+}
+
+function workingArtworkMaskOf(icon: HTMLElement): string {
+  const ink = inkOf(icon)
+  const inkSvg = ink.querySelector('svg')!
+  const sheen = icon.querySelector<HTMLElement>('[data-agent-icon-sheen]')
+  expect(sheen, 'Working still paints its translating highlight').not.toBeNull()
+  const clip = sheen!.parentElement!
+  expect(clip.parentElement, 'mask coordinates belong to the fixed full icon, not the moving stripe').toBe(icon)
+  expect(clip).toHaveClass('absolute', 'inset-0', 'overflow-hidden')
+  expect(clip).not.toContainElement(ink)
+  expect(clip).not.toContainElement(icon.querySelector('[data-glow]'))
+
+  const reference = clip.style.maskImage || clip.style.getPropertyValue('-webkit-mask-image') ||
+    clip.style.clipPath || clip.getAttribute('mask') || clip.getAttribute('clip-path') || ''
+  expect(reference, 'box overflow is not an artwork mask: the fixed sheen surface must reference the icon silhouette')
+    .toMatch(/^url\(["']?#[^"')\s]+["']?\)$/)
+  const id = reference.match(/^url\(["']?#([^"')\s]+)["']?\)$/)![1]
+  const resource = Array.from(icon.querySelectorAll('mask, clipPath')).find((node) => node.id === id)
+  expect(resource, 'the sheen references a resource local to this icon, not a box or another mark').toBeDefined()
+  if (resource!.tagName.toLowerCase() === 'mask') {
+    const mode = resource!.getAttribute('mask-type') || (resource as SVGElement).style.getPropertyValue('mask-type')
+    expect(mode, 'the mark alpha, not its colour brightness, defines the sheen silhouette').toBe('alpha')
+  }
+  expect(artworkShapeOf(resource!), 'sheen shape and cutouts equal this icon artwork, not the rectangular viewport')
+    .toEqual(artworkShapeOf(inkSvg))
+
+  const inkPump = Array.from(ink.classList).find((token) => token.startsWith('animate-[agent-icon-pump_'))
+  expect(inkPump, 'commissioned Working ink pump').toBeDefined()
+  const stencilPump = Array.from(resource!.querySelectorAll('[class]')).find((node) => node.classList.contains(inkPump!))
+  expect(stencilPump, 'the stencil follows the ink pump rather than the stripe translation').toBeDefined()
+  expect(selectedAnimationSeconds(stencilPump!)).toBe(1.6)
+  expect(selectedAnimationSeconds(ink)).toBe(1.6)
+  return id
+}
+
+describe('AgentIcon — artwork-shaped Working sheen', () => {
+  // Founder UAT crops show the highlight outside the octopus. Clipping the
+  // 48px viewport alone is not sufficient; the actual alpha must gate the sheen.
+  it('masks the Working octopus sheen to its own artwork and cutouts, not just its box', async () => {
+    const AgentIcon = await loadAgentIcon()
+    const { container } = render(
+      iconSteelBlue(AgentIcon, { figure: 'Omnipus', role: 'general', size: 48, motion: 'working', reducedMotion: false }),
+    )
+    const icon = screen.getByTestId('agent-icon')
+    expect(inkOf(container)).toHaveAttribute('data-art', 'octopus')
+    workingArtworkMaskOf(icon)
+  })
+
+  it('keeps simultaneous octopus and Monogram sheen masks local to their own shape and letter geometry', async () => {
+    const AgentIcon = await loadAgentIcon()
+    render(<>
+      {iconSteelBlue(AgentIcon, { figure: 'Omnipus', role: 'general', size: 48, motion: 'working', reducedMotion: false })}
+      {iconSteelBlue(AgentIcon, { figure: 'Monogram', role: 'writer', size: 40, motion: 'working', reducedMotion: false, name: 'Daniel' })}
+    </>)
+    const icons = screen.getAllByTestId('agent-icon')
+    expect(icons.map((icon) => icon.getAttribute('data-figure'))).toEqual(['Omnipus', 'Monogram'])
+    const maskIds = icons.map(workingArtworkMaskOf)
+    expect(new Set(maskIds).size, 'each simultaneously rendered mark owns its own silhouette resource').toBe(2)
+  })
+})
