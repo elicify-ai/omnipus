@@ -245,14 +245,17 @@ function handleCatchUpCompleteFrame({ frame, targetSid, get, set, withBucket }: 
     decideRestartInterruptedSignal(draft, completeFrame, bootChanged, wasWipedOpen)
     draft.snapshotWasBootMismatch = undefined
   }))
-  if (completeFrame.mode === 'live_only' || get().sessionsById[targetSid]?.history.serverState?.status === 'unavailable' || !get().sessionsById[targetSid]?.history.historyLoaded) return
-  finishRecoveredFirstSend({ set, get, withBucket }, targetSid)
-  if (!isSupersededAttachFrame(frame)) acknowledgeShownCatchUp(targetSid)
-  // D1/V2: catch-up completion is a replay→idle transition — a projection
-  // the clear re-read held back during replay applies HERE, with no new
-  // network read. (Round-3 review F2: the round-3 call sat in
-  // user_message by mistake.)
-  flushHeldClearProjection(targetSid, withBucket)
+  const history = get().sessionsById[targetSid]?.history
+  const controlOnly = completeFrame.mode === 'live_only' || history?.serverState?.status === 'unavailable'
+  if (!controlOnly && history?.historyLoaded) {
+    finishRecoveredFirstSend({ set, get, withBucket }, targetSid)
+    if (!isSupersededAttachFrame(frame)) acknowledgeShownCatchUp(targetSid)
+  }
+  // D1/V2: an explicit /clear may already own a validated REST page held only
+  // by replay. Normal catch-up becoming idle releases that page independently
+  // of prior history proof, without another read or a catch-up/seen claim.
+  // Live-only/unavailable completion must not replace its newer history error.
+  if (!controlOnly) flushHeldClearProjection(targetSid, withBucket)
 }
 
 // Function-budget extraction (size budgets: a brand-new function must be

@@ -239,7 +239,7 @@ While the clear is held, or when the server cannot carry it out, your `/clear` r
 | **Couldn't be sent · Try again** | The server could not carry the clear out — for example, the running reply could not be stopped. The server's reason appears as a normal reply above the row. | Nothing was cleared. Select **Try again** to send the `/clear` again, or type a new `/clear` yourself. |
 | **Not applied** | You stopped the turn and the `/clear` was discarded before it could run. | Nothing was cleared. Sending `/clear` again works normally. |
 
-After the `/clear` is sent, the chat checks the server after later replies until the clear is confirmed. If a check cannot read the history, the chat shows **Could not load messages.** and that screen's **Retry** also completes the refresh — you do not need to repeat `/clear`.
+After the `/clear` is sent, the chat checks the server after later replies until the clear is confirmed. If a confirmed result arrives while saved messages are being restored or a reply is still running, it waits until normal catch-up has finished and the chat is idle. The saved result can then replace the view without another history read or another `/clear` send. Catching up current controls while history is unavailable is not confirmation of the clear. If a check cannot read the history, the chat shows **Could not load messages.** and that screen's **Retry** also completes the refresh — you do not need to repeat `/clear`.
 
 `/clear` works in a main or extra chat only. In a helper, worker, delegate or task-child session it refuses with an explanation and changes nothing — no view move, no history change, no new chat. The refusal appears as the command's reply.
 
