@@ -689,9 +689,9 @@ func parseUID(raw any) (uint32, bool) {
 // workspace→transport map. Returned in a stable order. Used by the per-agent
 // wiring in pkg/agent. The three attachment tools (w4 F3) ride the same
 // transports-only construction signature: list/read resolve their capability
-// on the transport at execution time; the save tool receives the shared
-// transfer service through its optional SetTransferService setter at the
-// same registration pass that wires SetMailBudget here.
+// on the transport at execution time; normal registration configures the save
+// tool's per-turn SetTransferServiceFactory alongside SetMailBudget. The fixed
+// SetTransferService seam remains available for direct service injection.
 func EmailToolset(tps EmailTransports) []Tool {
 	return []Tool{
 		NewReadInboxTool(tps),

@@ -2,7 +2,7 @@ package tools
 
 // The agent attachment tools (ADR-20261001 F3; w4 spec US-3): list and read
 // received attachments freely (shipped ceiling allow), save with the
-// ordinary ask default and the ordinary Auto classification (founder Q4=A —
+// Main/Worker Allow default and the ordinary Auto classification (Q4=A —
 // no exception, no attachment-specific mechanism, no blocklist, no extra
 // approval layer).
 //
@@ -348,9 +348,9 @@ type DownloadEmailAttachmentTool struct {
 	// budget + budgetAgentID are wired at registration (SetMailBudget).
 	budget        *email.MailBudget
 	budgetAgentID string
-	// service + home/restrict are wired at registration by the optional
-	// SetTransferService setter (the SetMailBudget pattern); an unwired
-	// tool refuses with an explicit, visible error — never a silent no-op.
+	// Normal registration configures a context-bound service factory. The
+	// fixed service setter remains unchanged. With neither path configured,
+	// the tool refuses explicitly rather than pretending a save occurred.
 	service         *mailattachment.Service
 	agentHome       string
 	restrict        bool
