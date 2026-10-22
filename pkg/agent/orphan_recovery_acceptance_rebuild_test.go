@@ -65,10 +65,20 @@ func orphanACReload(t *testing.T) {
 	h.append(t, raw...)
 	before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
 	orphanACReopen(t, h)
-	wantLines := []int{0, 4, 5, 6, 7, 8}
-	out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, wantLines...))
-	require.Equal(t, []int{-1, 0, 4, 5, 6, 7, 8}, mapWindowMessages(orphanACSnapshot(t, h), out, -1, 0), "R2: reloaded view uses the original decoded archive addresses")
-	require.NoError(t, validateWindowGroups(out), "only complete surviving groups reach validation")
+	// Crash-recovery DESIGN Decision 5 supersedes whole-batch omission:
+	// the successful A occurrence remains exact; only B needs an engine
+	// recovery observation. Its wording is not specified, so do not invent it.
+	out := orphanACAssemble(t, h, h.turn(""), h.agent.Sessions.GetHistory(h.key))
+	require.Len(t, out, 10, "R2: pinned envelope, original entries and one missing-occurrence observation")
+	require.Equal(t, raw[:3], out[1:4], "R2: reload retains A's declaration and exact completed result")
+	require.Equal(t, "tool", out[4].Role, "R2: B has a provider-valid recovery observation, not an invented original return")
+	require.Equal(t, "missing-b", out[4].ToolCallID)
+	require.NotContains(t, out[4].Content, "denied", "R2: missing result is not approval denial")
+	require.Equal(t, raw[4:], out[5:], "R2: unrelated controls and later completed occurrences remain exact and ordered")
+	mapped := mapWindowMessages(orphanACSnapshot(t, h), out, -1, 0)
+	require.Equal(t, []int{-1, 0, 1, 2}, mapped[:4], "R2: completed history keeps its original addresses")
+	require.Equal(t, []int{4, 5, 6, 7, 8}, mapped[5:], "R2: unrelated/later archive addresses do not shift")
+	require.NoError(t, validateWindowGroups(out), "settled siblings and recovery observations form valid provider groups")
 	orphanACAssertUnchanged(t, h, before, bytes)
 }
 
