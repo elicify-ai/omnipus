@@ -308,28 +308,24 @@ func defaultToolPoliciesGeneral() map[string]string {
 		"read_inbox":          "allow",
 		"search_email":        "allow",
 		"read_message":        "allow",
-		"send_email":          "allow",
-		"reply":               "allow",
+		// Sending mail asks at the ceiling as well as in the Main/Worker
+		// seeds (founder ruling, 2026-10-22); reading and drafting do not.
+		"send_email": "ask",
+		"reply":      "ask",
 		// create_email_draft (email-mail-view-spec §2.7 point 1): the
 		// Drafts-only write path — it can never send — so the ceiling ships
 		// allow. The D19 configure-time fill (§2.7 point 2) writes the
 		// per-tool ask/allow values only where the agent has no explicit
 		// entry.
 		"create_email_draft": "allow",
-		// Attachment tools (ADR-20261001 F3, w4 spec US-3): listing and
-		// reading RECEIVED attachments are read-only structure/text access
-		// — ceiling allow, alongside read_inbox/read_message. Saving is a
-		// normal download tool with the shipped global default ASK (founder
-		// F3 decision): the ordinary permission system governs it, with the
-		// existing workspace-path conditional Auto class and no
-		// attachment-specific approval, blocklist or fallback. Hard
-		// Constraint #6: these are the shipped ceiling entries every agent's
-		// policy resolution reads; ReconcileToolPolicyCeiling self-heals
-		// them into old installs additively, never overwriting an
-		// operator-set value, and no per-agent deny backfill exists.
+		// Received attachments can be listed, read and downloaded without
+		// a policy approval (founder ruling, 2026-10-22). Downloads retain
+		// their normal workspace-path checks; there is no special approval
+		// path or fallback. ReconcileToolPolicyCeiling adds missing entries
+		// only and never overwrites an operator's saved value.
 		"list_email_attachments":    "allow",
 		"read_email_attachment":     "allow",
-		"download_email_attachment": "ask",
+		"download_email_attachment": "allow",
 		"ToolSearch":                "allow",
 		// Skill (ADR-072 D1): the on-demand skill load/search tool —
 		// the same structural-floor reasoning as ToolSearch above
@@ -428,9 +424,11 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"remove_mcp_server": "ask",
 		// list_mcp_servers is read-only and reports name/transport/enabled/
 		// command/url only — never args or env — so it leaks no credential.
-		"list_mcp_servers":  "allow",
-		"create_skill":      "allow",
-		"edit_skill":        "allow",
+		"list_mcp_servers": "allow",
+		// Skill authoring is available to Main agents and Workers, with
+		// Ask at both levels (founder ruling, 2026-10-22).
+		"create_skill":      "ask",
+		"edit_skill":        "ask",
 		"remove_skill":      "ask", // FR-020
 		"list_skills":       "allow",
 		"enable_channel":    "ask",   // FR-020

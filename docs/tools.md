@@ -52,6 +52,49 @@ You can also ask Omnipus in its chat to change an agent's permissions. Outside G
 
 The installation-wide setting lives in **Settings → Security**, under **Advanced / technical details**, in **Tool Access — Global Policies**. What you set there applies to every agent at once. Saving a change there asks you to re-type your password.
 
+## Default tool sets for main agents and workers
+
+A **Main** agent talks with you in chats and rooms. A **Worker** runs delegated work: a native **Subagent** or an external **subagent_3p**. New agents start with the following tool settings whether you create them in the app or through `create_agent`. These are editable starting points, not locked permissions; an agent's own setting can only tighten the global ceiling.
+
+**Allow** means no tool-policy approval is needed. **Ask** uses the normal approval rules, including Auto-approve. **Off** means Deny. Having permission does not remove a tool's other requirements: a mailbox, a workspace delegation link or the right kind of session may still be needed.
+
+| Tool or group | Main | Worker |
+|---|---|---|
+| Ask the user and communicate upward: `AskUserQuestion`, `send_message`, `message_parent` | Allow | Allow |
+| Answer requests and read conversations: `answer_request`, `read_conversation` | Allow | Off |
+| Track current work and report completion: `set_todos`, `goal_claim` | Allow | Allow |
+| Define a goal: `set_goal` | Allow | Off |
+| Save and recall memory: `remember`, `recall_memory`, `recall_conversation` | Allow | Allow |
+| Write a retrospective: `run_retrospective` | Allow | Off |
+| Delegate and inspect work: `delegate`, `list_agents`, `get_agent`, `get_agent_tools`, `inspect_session`, `list_jobs` | Allow | Allow |
+| Create, run, stop or correct plans: `create_plan`, `execute_plan`, `stop_plan`, `plan_correct` | Allow | Off |
+| List and update tasks: `list_tasks`, `update_task` | Allow | Allow |
+| Create tasks: `create_task` | Allow | Off |
+| Delete tasks: `delete_task` | Ask | Ask |
+| Find and load skills and tools: `Skill`, `ToolSearch`, `find_skills`, `list_skills` | Allow | Allow |
+| Create or edit a skill: `create_skill`, `edit_skill` | Ask | Ask |
+| Search and open the web: `search_web`, `fetch_url` | Allow | Allow |
+| Browser tools, except file upload | Allow | Allow |
+| Upload a file to a website: `browser_upload_file` | Ask | Ask |
+| Read and find files: `read_file`, `list_directory`, `grep`, `list_mounts`, `library_list`, `library_read` | Allow | Allow |
+| Write and send files: `write_file`, `edit_file`, `append_file`, `send_file` | Allow | Allow |
+| Request access to a folder: `request_mount` | Ask | Ask |
+| Serve a web preview: `serve_web` | Allow | Allow |
+| Read mail, draft messages and read or download received attachments: `read_inbox`, `search_email`, `read_message`, `create_email_draft`, `list_email_attachments`, `read_email_attachment`, `download_email_attachment` | Allow | Allow |
+| Send mail or reply: `send_email`, `reply` | Ask | Ask |
+| List secrets: `list_secrets` | Allow | Allow |
+| Ask you for a secret: `request_secret` | Allow | Off — the main agent requests it on the worker's behalf |
+| List and read workspace details: `list_workspaces`, `get_workspace` | Allow | Allow |
+| Set up an execution environment: `environment_setup` | Ask | Ask |
+
+**Shell access is unchanged.** A new custom Main or Worker starts with `bash` Off; the shipped global ceiling is Ask. Built-in agents retain their deliberate shell settings, including Jim's Deny. External command-line workers still use their own tool and safety settings internally; this table controls Omnipus tools, not the external program.
+
+Other administration tools stay Off for new agents: creating, changing or deleting agents and workspaces; changing permissions or configuration; managing providers, channels and connected servers; running diagnostics or checking usage; removing or installing skills; removing or selecting secret versions; and connecting or listing mailboxes. Skill creation and editing are the explicit Ask exceptions above.
+
+**Email sending now asks by default.** The shipped global settings for both `send_email` and `reply` are Ask, as are the Main and Worker seeds. They keep asking in a chat even with Auto-approve on. Reading mail, creating a draft and downloading a received attachment are Allow; downloading does not send a message and still follows the normal destination-path checks. Email tools require an enabled mailbox assigned to the agent and workspace. In a task or plan run, a call that still needs human approval is refused rather than opening an approval card — see [unattended runs](security.md#task-plan-scheduled-and-other-unattended-runs).
+
+These defaults apply when agents are created. They do not replace saved operator permissions on an existing agent or overwrite an existing global policy. Use the Tools tab to inspect the effective settings for your installation.
+
 ## Replacing tool policies through the API
 
 When creating an agent or replacing its built-in tool policy map through the API,

@@ -691,15 +691,12 @@ func (cra *restAPICreateAgent) buildToolConfig() bool {
 	// ADR-037: delegation_policy is retired from the wire entirely — the
 	// per-workspace delegation graph (Team tab) is the sole delegation
 	// mechanism. There is nothing left to map/validate/persist here.
-	// Seed the privilege rail (FR-008/FR-022): custom agents always get every
-	// static builtin tool explicitly denied except a narrow, conservative
-	// read-only allow-list (coreagent.NewCustomAgentToolsCfg —
-	// denyAllThenOverride), unless the caller explicitly overrides individual
-	// entries. There is no wildcard involved anywhere in this model (the old
-	// "system.*" glob matched zero real tool names and was retired). subagent_3p
-	// has no tools_cfg property at all (toolsCfgIn stays nil), so it always
-	// falls through to the seeded baseCfg — matching "the runner has its own
-	// tools" (field matrix).
+	// Seed the Main or Worker defaults (founder ruling, 2026-10-22), with
+	// every static builtin explicitly classified via denyAllThenOverride.
+	// Apply worker restrictions BEFORE caller overrides: these are creation
+	// defaults, not fixed role restrictions. There are no static wildcards or
+	// runtime fallbacks. subagent_3p has no tools_cfg property, so it keeps the
+	// Worker seed; the external runner still controls its own internal tools.
 	//
 	// CLAUDE.md hard constraint 6 — validate the CALLER'S OWN map FIRST, before
 	// the deny-seeded baseline below is allowed to paper over it.
@@ -730,12 +727,14 @@ func (cra *restAPICreateAgent) buildToolConfig() bool {
 		}
 	}
 	baseCfg := coreagent.NewCustomAgentToolsCfg()
+	if cra.ac.Type == config.AgentTypeWorker {
+		coreagent.RestrictForWorkerTier(baseCfg)
+	}
 	if cra.toolsCfgIn != nil {
 		builtin := config.AgentBuiltinToolsCfg{
-			// Inherit the fully-enumerated deny-by-default seed (every static
-			// tool present with an explicit "deny" or "allow" entry, no
-			// wildcard) so the merged map stays complete even when the
-			// caller's policies map is sparse.
+			// Copy the complete Main/Worker seed (every static tool has an
+			// explicit allow, ask or deny, no wildcard), then apply the
+			// caller's policies without mutating the shared defaults.
 			Policies: make(map[string]config.ToolPolicy, len(baseCfg.Builtin.Policies)),
 		}
 		for k, v := range baseCfg.Builtin.Policies {
