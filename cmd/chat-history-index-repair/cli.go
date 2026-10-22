@@ -11,22 +11,22 @@ import (
 	"unicode/utf8"
 )
 
-// repairFailure carries a fixed operator-facing class. Causes remain private;
+// repairError carries a fixed operator-facing class. Causes remain private;
 // command output never copies archive bodies or arbitrary filesystem errors.
-type repairFailure struct {
+type repairError struct {
 	class string
 	exit  int
 	cause error
 }
 
-func (e *repairFailure) Error() string { return e.class }
-func (e *repairFailure) Unwrap() error { return e.cause }
-func refusal(class string) error       { return &repairFailure{class: class, exit: 2} }
+func (e *repairError) Error() string { return e.class }
+func (e *repairError) Unwrap() error { return e.cause }
+func refusal(class string) error     { return &repairError{class: class, exit: 2} }
 func integrity(class string, cause error) error {
-	return &repairFailure{class: class, exit: 1, cause: cause}
+	return &repairError{class: class, exit: 1, cause: cause}
 }
 func failureClass(err error) (string, int) {
-	var f *repairFailure
+	var f *repairError
 	if errors.As(err, &f) {
 		return f.class, f.exit
 	}

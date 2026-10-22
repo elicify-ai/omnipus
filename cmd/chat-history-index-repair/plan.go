@@ -24,7 +24,7 @@ func classifyBuildError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var typed *repairFailure
+	var typed *repairError
 	if errors.As(err, &typed) {
 		return err
 	}

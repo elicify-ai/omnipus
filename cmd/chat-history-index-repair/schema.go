@@ -83,9 +83,9 @@ func uniqueJSONValue(d *json.Decoder) error {
 	seen := map[string]bool{}
 	for d.More() {
 		if delim == '{' {
-			key, err := d.Token()
-			if err != nil {
-				return err
+			key, keyErr := d.Token()
+			if keyErr != nil {
+				return keyErr
 			}
 			name, ok := key.(string)
 			if !ok || seen[name] {
@@ -93,8 +93,8 @@ func uniqueJSONValue(d *json.Decoder) error {
 			}
 			seen[name] = true
 		}
-		if err := uniqueJSONValue(d); err != nil {
-			return err
+		if valueErr := uniqueJSONValue(d); valueErr != nil {
+			return valueErr
 		}
 	}
 	_, err = d.Token()
