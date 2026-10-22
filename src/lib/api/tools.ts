@@ -3,6 +3,7 @@
 import type { ZodType } from 'zod'
 import { z } from 'zod'
 import {
+  ErrorResponse as ErrorResponseSchema,
   GlobalToolPolicies as GlobalToolPoliciesSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
   ToolApprovalResponse as ToolApprovalResponseSchema,
@@ -25,6 +26,7 @@ import type {
   ToolApprovalActionRequest,
   ToolApprovalResponse,
 } from '@/lib/api/generated/openapi-types'
+import { ApiError, isApiError } from '@/lib/api-error'
 import { REAUTH_HEADER } from './auth'
 import { request } from './http'
 import { requestConfiguration } from './configuration'
@@ -156,15 +158,36 @@ export function fetchGlobalToolPolicies(): Promise<GlobalToolPolicies> {
 // gated (Spec-3 FR-3.3 / Spec-6 FR-12.2): the server rejects the PUT with 403
 // unless a single-use consent token (from reAuth) is replayed in the
 // X-Reauth-Token header.
-export function updateGlobalToolPolicies(
+export async function updateGlobalToolPolicies(
   cfg: GlobalToolPolicies,
   reAuthToken?: string,
 ): Promise<GlobalToolPolicies> {
-  return request<GlobalToolPolicies>('/security/tool-policies', {
-    method: 'PUT',
-    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
-    body: JSON.stringify(cfg),
-  }, GlobalToolPoliciesSchema)
+  try {
+    return await request<GlobalToolPolicies>('/security/tool-policies', {
+      method: 'PUT',
+      headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
+      body: JSON.stringify(cfg),
+    }, GlobalToolPoliciesSchema)
+  } catch (error) {
+    if (!isApiError(error) || error.status !== 503 || !error.body) throw error
+    // Only this save's 503 means persisted but activation failed/unconfirmed.
+    // Validate the bounded error envelope; do not expose arbitrary 5xx bodies.
+    let body: unknown
+    try {
+      body = JSON.parse(error.body)
+    } catch {
+      throw error
+    }
+    const parsed = ErrorResponseSchema.safeParse(body)
+    if (!parsed.success || !parsed.data.error.trim()) throw error
+    throw new ApiError(error.status, parsed.data.error, {
+      code: error.code,
+      field: error.field,
+      body: error.body,
+      retryAfterMs: error.retryAfterMs,
+      cause: error,
+    })
+  }
 }
 
 // ── Tool Results (lazy fetch for ToolResultRef sentinels) ─────────────────────

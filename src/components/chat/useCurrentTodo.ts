@@ -54,7 +54,13 @@ function checklistDisplay(call: ToolCall | null) {
   // never the store's raw arguments; blank strings are intentionally absent.
   const normalized = Array.isArray(call.params.todos) ? call.params.todos.map((item: unknown) => {
     if (item && typeof item === 'object' && 'active_form' in item && typeof item.active_form === 'string') {
-      return { ...item, active_form: item.active_form.trim() || undefined }
+      // Match server normalization before the generated code-point bound.
+      // Only bidi controls are stripped; joiners in visible text stay intact.
+      const activeForm = item.active_form
+        .replace(/[\u202A-\u202E\u2066-\u2069\u200E\u200F]/gu, '')
+        .replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '')
+      const visible = /[^\p{White_Space}\p{Cf}]/u.test(activeForm)
+      return { ...item, active_form: visible ? activeForm : undefined }
     }
     return item
   }) : call.params.todos
