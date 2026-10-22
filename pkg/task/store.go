@@ -629,11 +629,13 @@ func normalizeTags(tags []string) ([]string, error) {
 	return out, nil
 }
 
-// validateTodos checks each todo's text length (1..500) and that status is a
-// known tri-state value. The UnmarshalJSON default-to-pending is only for
-// legacy disk reads; tool/REST input must supply a valid status explicitly.
+// validateTodos normalizes active forms, checks text/form length, and validates
+// the tri-state status. The UnmarshalJSON default-to-pending is only for legacy
+// disk reads; tool/REST input must supply a valid status explicitly.
 func validateTodos(todos []Todo) error {
-	for i, td := range todos {
+	for i := range todos {
+		td := &todos[i]
+		td.ActiveForm = NormalizeTodoActiveForm(td.ActiveForm)
 		n := len([]rune(td.Text))
 		if n < 1 {
 			return verr("todo[%d]: text is required", i)
