@@ -24,7 +24,7 @@ func crashRequireFileProof(t *testing.T) {
 		t.Fatal("BLOCKED: FileEffectReconciler and durable witnesses not implemented — required by crash-recovery DESIGN Decision 2 / Q15")
 	}
 }
-func crashReadback(t *testing.T, f *crashFileFixture, raw []byte, workspaceID string) map[string]any {
+func crashReadback(t *testing.T, f *crashFileFixture, raw []byte, workspaceID string, confined ...bool) map[string]any {
 	t.Helper()
 	work, err := workspace.EnsureWorkDir(f.h.home, testHarnessWorkspaceMembershipID)
 	require.NoError(t, err)
@@ -42,6 +42,9 @@ func crashReadback(t *testing.T, f *crashFileFixture, raw []byte, workspaceID st
 	value := reflect.New(method.Type().In(1))
 	require.NoError(t, json.Unmarshal(raw, value.Interface()))
 	ctx := tools.WithWorkspaceID(tools.WithTurnWorkspaceDir(context.Background(), work), workspaceID)
+	if len(confined) > 0 {
+		ctx = tools.WithReadConfined(ctx, confined[0])
+	}
 	out := method.Call([]reflect.Value{reflect.ValueOf(ctx), value.Elem()})
 	return crashFields(t, out[0].Interface())
 }

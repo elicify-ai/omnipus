@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,22 +145,41 @@ func TestCrashRecovery_LaterReusedIDAndIdenticalAppendsRemainDistinct(t *testing
 	require.NoError(t, os.MkdirAll(work, 0700))
 	path := filepath.Join(work, "repeat.txt")
 	call := crashCall("reused", "append_file", map[string]any{"path": path, "content": "same\n"})
-	h.append(t, providers.Message{Role: "user", Content: "old occurrence"}, providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{call}}, orphanACMarker(call.ID),
-		providers.Message{Role: "user", Content: "append the same text twice intentionally"})
+	h.append(t, providers.Message{Role: "user", Content: "old occurrence"}, providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{call}}, orphanACMarker(call.ID))
+	// Decision 5 retains the OLD declaration too. Recover it before the new
+	// explicit work arrives: three tool-role records, but only two real writes.
+	RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil)
+	h.append(t, providers.Message{Role: "user", Content: "append the same text twice intentionally"})
+	var wantReal []providers.Message
 	for range 2 {
 		result := tools.NewAppendFileTool(work, true).Execute(context.Background(), call.Arguments)
 		require.False(t, result.IsError, "new explicit occurrence is not globally deduplicated")
-		h.append(t, providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{call}}, providers.Message{Role: "tool", ToolCallID: call.ID, Content: result.ContentForLLM()})
+		message := providers.Message{Role: "tool", ToolCallID: call.ID, Content: result.ContentForLLM()}
+		wantReal = append(wantReal, message)
+		h.append(t, providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{call}}, message)
 	}
 	orphanACReopen(t, h)
 	messages := orphanACAssemble(t, h, h.turn(""), h.agent.Sessions.GetHistory(h.key))
 	var results int
+	var real []providers.Message
+	var observations []map[string]any
 	for _, m := range messages {
-		if m.Role == "tool" && m.ToolCallID == call.ID {
-			results++
+		if m.Role != "tool" || m.ToolCallID != call.ID {
+			continue
+		}
+		results++
+		var value map[string]any
+		if json.Unmarshal([]byte(m.Content), &value) == nil && value["type"] == "tool_recovery_observation" {
+			observations = append(observations, value)
+		} else {
+			real = append(real, m)
 		}
 	}
-	assert.Equal(t, 2, results, "later assistant occurrences using one provider ID both retain their results")
+	assert.Equal(t, 3, results, "one old missing-result observation and two later real results survive ID reuse")
+	require.Len(t, observations, 1, "old missing occurrence is repaired, not dropped")
+	assert.Equal(t, "unknown", observations[0]["disposition"])
+	assert.Equal(t, false, observations[0]["original_result_recovered"])
+	assert.Equal(t, wantReal, real, "later successful occurrences remain exact and distinct from the old observation")
 	bytes, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, "same\nsame\n", string(bytes), "two intentional identical appends are two effects")

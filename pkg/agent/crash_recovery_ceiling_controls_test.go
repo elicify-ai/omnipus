@@ -36,7 +36,11 @@ func TestCrashRecovery_StopAcceptedAtCeilingCommitWins(t *testing.T) {
 			}
 			once.Do(func() {
 				count++
-				_, stopErr = NewSteerCanceller(h.al.GetSessionLifecycleStore()).CancelSubtree(context.Background(), id, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "owner"})
+				result, err := h.al.StopSession(context.Background(), StopRequest{SessionID: id, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "owner"}})
+				stopErr = err
+				if stopErr == nil {
+					stopErr = result.RootErr
+				}
 			})
 		}
 		t.Cleanup(func() { completeStateWriteTestHook = nil })
@@ -51,42 +55,47 @@ func TestCrashRecovery_StopAcceptedAtCeilingCommitWins(t *testing.T) {
 }
 
 func TestCrashRecovery_CeilingCommitFailureIsVisibleAndUnpublished(t *testing.T) {
-	gate := make(chan struct{})
-	p := &crashScript{gate: gate, entered: make(chan int, 8)}
-	h := crashNew(t, p)
-	t.Cleanup(func() {
-		select {
-		case <-gate:
-		default:
-			close(gate)
+	var path, backup string
+	var before []byte
+	var setupErr error
+	var owner *executionDisposition
+	h, rec := crashCeiling(t, func(h *crashHarness, rec *session.LifecycleRecord) {
+		path = filepath.Join(h.al.GetSessionLifecycleStore().Dir(), rec.SessionID+".jsonl")
+		backup = path + ".fixture-backup"
+		owner = h.al.executionDispositionFor(h.al.executionClaimFor(rec))
+		var once sync.Once
+		completeStateWriteTestHook = func(id string) {
+			if id != rec.SessionID {
+				return
+			}
+			once.Do(func() {
+				before, setupErr = os.ReadFile(path)
+				if setupErr != nil {
+					return
+				}
+				setupErr = os.Rename(path, backup)
+				if setupErr == nil {
+					setupErr = os.Mkdir(path, 0700)
+				}
+			})
 		}
+		t.Cleanup(func() { completeStateWriteTestHook = nil })
 	})
-	rec, owner := crashChild(t, h, p)
-	path := filepath.Join(h.al.GetSessionLifecycleStore().Dir(), rec.SessionID+".jsonl")
-	backup := path + ".fixture-backup"
-	before, err := os.ReadFile(path)
+	require.NoError(t, setupErr)
+	require.NotNil(t, owner)
+	owner.mu.Lock()
+	completionErr := owner.result
+	owner.mu.Unlock()
+	assert.Error(t, completionErr, "actual typed ceiling persistence failure must be visible to its execution owner")
+	stored, err := os.ReadFile(backup)
 	require.NoError(t, err)
-	var once sync.Once
-	completeStateWriteTestHook = func(id string) {
-		if id != rec.SessionID {
-			return
-		}
-		once.Do(func() { require.NoError(t, os.Rename(path, backup)); require.NoError(t, os.Mkdir(path, 0700)) })
-	}
-	t.Cleanup(func() { completeStateWriteTestHook = nil })
-	err = h.al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: toolLimitResponse, turnFailed: true}, nil)
-	assert.Error(t, err, "failed persistence is returned, not reported as an ended/published ceiling")
-	stored, readErr := os.ReadFile(backup)
-	require.NoError(t, readErr)
-	assert.Equal(t, before, stored, "failed commit does not change the saved producing generation")
-	messages, _, _, inboxErr := h.al.GetMessageInboxStore().Drain(rec.SteeringSessionID(), rec.SessionID, "", 10)
-	require.NoError(t, inboxErr)
-	assert.Len(t, messages, 0, "no parent publication precedes the durable outcome")
+	assert.Equal(t, before, stored, "failed commit leaves the selected generation's bytes intact")
+	messages, _, _, err := h.al.GetMessageInboxStore().Drain(rec.SteeringSessionID(), rec.SessionID, "", 10)
+	require.NoError(t, err)
+	assert.Len(t, messages, 0, "no parent publication precedes the durable typed outcome")
 	completeStateWriteTestHook = nil
 	require.NoError(t, os.Remove(path))
 	require.NoError(t, os.Rename(backup, path))
-	close(gate)
-	crashAwaitDone(t, owner.done)
 }
 
 func TestCrashRecovery_CeilingPublicationFailureRetainsRetryableOutbox(t *testing.T) {
@@ -144,6 +153,8 @@ func TestCrashRecovery_TreeStopTraversesInterruptedHelper(t *testing.T) {
 	})
 	ended := h.record(t, parent.SessionID)
 	require.Equal(t, session.LifecycleState("interrupted"), ended.State)
+	require.Equal(t, session.LifecycleRunning, h.record(t, descendant.SessionID).State, "ceiling interruption must not failure-cascade-stop an independent active descendant")
+	require.NotNil(t, h.al.executionDispositionFor(h.al.executionClaimFor(descendant)), "active descendant remains independently owned until the explicit tree Stop")
 	result, err := h.al.StopSession(context.Background(), StopRequest{SessionID: parent.SessionID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "owner"}})
 	require.NoError(t, err)
 	require.Contains(t, result.Report.Reached, descendant.SessionID, "explicit tree Stop must cross the ended helper to reach active descendants")

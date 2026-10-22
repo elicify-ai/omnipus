@@ -67,6 +67,8 @@ type crashFileFixture struct {
 	args                                   map[string]any
 	assistant                              session.ArchiveAddress
 	beforeExists, afterResult, expectError bool
+	keepHeld                               bool
+	release                                func()
 }
 
 func crashFileCut(t *testing.T, name string, configure ...func(*crashFileFixture)) *crashFileFixture {
@@ -112,6 +114,9 @@ func crashFileCut(t *testing.T, name string, configure ...func(*crashFileFixture
 		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{crashCall("uncertain", name, f.args)}, FinishReason: "tool_calls"}, nil
 	}
 	barrier := &crashFileResultBarrier{tool: name, entered: make(chan *ToolResultHookResponse, 1), release: make(chan struct{}), passThrough: f.afterResult}
+	if name == "append_file" {
+		barrier.matchContent, _ = f.args["content"].(string)
+	}
 	require.NoError(t, h.al.MountHook(NamedHook("crash-file-result-barrier", barrier)))
 	t.Cleanup(barrier.open)
 	rec, owner := crashChild(t, h, p)
@@ -146,9 +151,12 @@ func crashFileCut(t *testing.T, name string, configure ...func(*crashFileFixture
 	}
 	require.Equal(t, wantResults, results, "the explicit cut distinguishes before-result from after-result durability")
 	f.snapshot = h.snapshot(t)
-	barrier.open()
-	openSecond()
-	crashAwaitDone(t, owner.done)
+	f.release = sync.OnceFunc(func() { barrier.open(); openSecond(); crashAwaitDone(t, owner.done) })
+	if f.keepHeld {
+		t.Cleanup(f.release)
+	} else {
+		f.release()
+	}
 	return f
 }
 func (f *crashFileFixture) witnessFile(t *testing.T, home string) string {

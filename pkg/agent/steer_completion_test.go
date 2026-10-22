@@ -161,30 +161,40 @@ func launchRunningTaskOriginChild(t *testing.T, al *AgentLoop, parentID, callID,
 
 func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 	tests := []struct {
-		name       string
-		answer     string
-		turnFailed bool
-		withQueued bool
-		wantState  session.LifecycleState
-		wantKind   string
-		wantText   string
-		wantFatal  bool
+		name          string
+		answer        string
+		turnFailed    bool
+		nativeCeiling bool
+		withQueued    bool
+		wantState     session.LifecycleState
+		wantKind      string
+		wantText      string
+		wantFatal     bool
 	}{
 		{name: "non-empty quiet", answer: "finished", wantState: session.LifecycleCompleted, wantKind: "handback"},
 		{name: "empty quiet", answer: "   ", wantState: session.LifecycleFailed, wantKind: "error", wantText: "empty_answer:", wantFatal: true},
 		// Crash-recovery DESIGN Decision 1 / founder Q14 supersedes the old
 		// Running expectation. The execution ended, but its parent notice is
 		// still nonfatal and explicit continuation remains available in G+1.
-		{name: "iteration limit is an ended non-fatal interruption", answer: toolLimitResponse, turnFailed: true, wantState: session.LifecycleState("interrupted"), wantKind: "error", wantText: "max_tool_iterations:", wantFatal: false},
+		{name: "iteration limit is an ended non-fatal interruption", nativeCeiling: true, wantState: session.LifecycleState("interrupted"), wantKind: "error", wantText: "max_tool_iterations:", wantFatal: false},
 		{name: "non-empty queued descendant", answer: "parent answer", withQueued: true, wantState: session.LifecycleRunning},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			al, cleanup := newSteerAL(t)
-			defer cleanup()
-			wireSteerCompletionDeps(t, al)
-			parentID := newTestSteeringSession(t, al, "ws-1")
-			rec := g1AdmitCompletionChild(t, al, parentID, "call-complete")
+			var al *AgentLoop
+			var rec *session.LifecycleRecord
+			var parentID string
+			if tc.nativeCeiling {
+				h, ended := crashCeiling(t)
+				al, rec, parentID = h.al, ended, ended.SteeringSessionID()
+			} else {
+				owned, cleanup := newSteerAL(t)
+				defer cleanup()
+				al = owned
+				wireSteerCompletionDeps(t, al)
+				parentID = newTestSteeringSession(t, al, "ws-1")
+				rec = g1AdmitCompletionChild(t, al, parentID, "call-complete")
+			}
 			if tc.withQueued {
 				if _, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 					SteeringSessionID: rec.SessionID,
@@ -196,7 +206,11 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 				}
 			}
 
-			al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: tc.answer, turnFailed: tc.turnFailed}, nil)
+			if !tc.nativeCeiling {
+				if err := al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: tc.answer, turnFailed: tc.turnFailed}, nil); err != nil {
+					t.Fatalf("completeSteeredTurn: %v", err)
+				}
+			}
 
 			got, err := al.GetSessionLifecycleStore().Load(rec.SessionID)
 			if err != nil {
@@ -255,21 +269,22 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 // not a generic Failed outcome. A genuine failure remains fatal and wakes.
 func TestCompletion_IterationLimit_NonFatal_WakesParent(t *testing.T) {
 	tests := []struct {
-		name      string
-		result    turnResult
-		runErr    error
-		wantFatal bool
-		wantWake  bool
-		wantText  string
-		wantState session.LifecycleState
+		name          string
+		result        turnResult
+		nativeCeiling bool
+		runErr        error
+		wantFatal     bool
+		wantWake      bool
+		wantText      string
+		wantState     session.LifecycleState
 	}{
 		{
-			name:      "iteration limit produces a non-fatal notice and DOES wake the parent",
-			result:    turnResult{finalContent: toolLimitResponse, turnFailed: true},
-			wantFatal: false,
-			wantWake:  true,
-			wantText:  "max_tool_iterations:",
-			wantState: session.LifecycleState("interrupted"),
+			name:          "iteration limit produces a non-fatal notice and DOES wake the parent",
+			nativeCeiling: true,
+			wantFatal:     false,
+			wantWake:      true,
+			wantText:      "max_tool_iterations:",
+			wantState:     session.LifecycleState("interrupted"),
 		},
 		{
 			name:      "genuine failure is fatal and wakes the parent",
@@ -282,32 +297,39 @@ func TestCompletion_IterationLimit_NonFatal_WakesParent(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			al, cleanup := newSteerAL(t)
-			defer cleanup()
-			wireSteerCompletionDeps(t, al)
-			parentID := newTestSteeringSession(t, al, "ws-1")
-			rec := g1AdmitCompletionChild(t, al, parentID, "call-"+tc.name)
-
-			// The plain webchat parent carries an empty PeerID, so the wake
-			// destination would be empty and WakeParentAlways would refuse.
-			// Give the child's reporting target a routable address so the
-			// wake-eligibility contrast is genuinely observable.
-			if err := al.GetSessionLifecycleStore().Mutate(rec.SessionID, func(r *session.LifecycleRecord) error {
-				r.SteeredBy.ReportingTarget = session.ReportingTarget{Channel: "webchat", ChatID: parentID}
-				return nil
-			}); err != nil {
-				t.Fatalf("Mutate(reporting target): %v", err)
-			}
-
+			var al *AgentLoop
+			var rec *session.LifecycleRecord
+			var parentID string
 			var wakes []string
-			al.asyncNotifier.registerObserver(func(e AsyncNotifyEvent) {
-				if strings.HasPrefix(e.SourceKind, "message_parent:") {
-					wakes = append(wakes, e.SourceKind)
+			observe := func(loop *AgentLoop, child *session.LifecycleRecord) {
+				if err := loop.GetSessionLifecycleStore().Mutate(child.SessionID, func(r *session.LifecycleRecord) error {
+					r.SteeredBy.ReportingTarget = session.ReportingTarget{Channel: "webchat", ChatID: child.SteeringSessionID()}
+					return nil
+				}); err != nil {
+					t.Fatalf("Mutate(reporting target): %v", err)
 				}
-			})
-
-			if err := al.completeSteeredTurn(context.Background(), rec, tc.result, tc.runErr); err != nil {
-				t.Fatalf("completeSteeredTurn: %v", err)
+				loop.asyncNotifier.registerObserver(func(e AsyncNotifyEvent) {
+					if strings.HasPrefix(e.SourceKind, "message_parent:") {
+						wakes = append(wakes, e.SourceKind)
+					}
+				})
+			}
+			if tc.nativeCeiling {
+				// Use the actual engine result. Transcript prose is not a typed
+				// ceiling outcome and must never be used to infer this disposition.
+				h, ended := crashCeiling(t, func(h *crashHarness, child *session.LifecycleRecord) { observe(h.al, child) })
+				al, rec, parentID = h.al, ended, ended.SteeringSessionID()
+			} else {
+				owned, cleanup := newSteerAL(t)
+				defer cleanup()
+				al = owned
+				wireSteerCompletionDeps(t, al)
+				parentID = newTestSteeringSession(t, al, "ws-1")
+				rec = g1AdmitCompletionChild(t, al, parentID, "call-"+tc.name)
+				observe(al, rec)
+				if err := al.completeSteeredTurn(context.Background(), rec, tc.result, tc.runErr); err != nil {
+					t.Fatalf("completeSteeredTurn: %v", err)
+				}
 			}
 
 			msgs, _, _, err := al.GetMessageInboxStore().Drain(parentID, rec.SessionID, "", 10)

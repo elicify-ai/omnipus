@@ -183,7 +183,7 @@ func TestCrashRecovery_ManualRetryCreatesFreshRun(t *testing.T) {
 			require.True(t, ok)
 			inst.Provider = p
 			inst.Tools.RegisterReplacing(tools.NewAppendFileTool(work, true))
-			inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"append_file": config.ToolPolicyAllow}})
+			inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"append_file": config.ToolPolicyAllow, "goal_claim": config.ToolPolicyAllow}})
 			t.Cleanup(func() { p.open(); api.taskExecutor.Drain(10 * time.Second) })
 			launcher := agent.NewSteerLauncher(api.agentLoop)
 			for i := 0; i < busy; i++ {

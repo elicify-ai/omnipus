@@ -39,7 +39,7 @@ func TestCrashRecovery_ConcurrentRetryCreatesExactlyOneFreshAttempt(t *testing.T
 	require.True(t, ok)
 	inst.Provider = p
 	inst.Tools.RegisterReplacing(tools.NewAppendFileTool(work, true))
-	inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"append_file": config.ToolPolicyAllow}})
+	inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"append_file": config.ToolPolicyAllow, "goal_claim": config.ToolPolicyAllow}})
 	t.Cleanup(func() { p.open(); api.taskExecutor.Drain(10 * time.Second) })
 	start := make(chan struct{})
 	responses := make(chan *httptest.ResponseRecorder, 2)
@@ -91,7 +91,7 @@ func TestCrashRecovery_RetryAtCapacityQueuesThenRunsAfterRelease(t *testing.T) {
 	require.True(t, ok)
 	inst.Provider = p
 	inst.Tools.RegisterReplacing(tools.NewAppendFileTool(work, true))
-	inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"append_file": config.ToolPolicyAllow}})
+	inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"append_file": config.ToolPolicyAllow, "goal_claim": config.ToolPolicyAllow}})
 	t.Cleanup(func() { p.open(); api.taskExecutor.Drain(10 * time.Second) })
 	parent, err := api.agentLoop.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err)

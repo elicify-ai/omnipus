@@ -108,6 +108,11 @@ func gatewayCrashStopLoop(t *testing.T, cancel context.CancelFunc, done <-chan e
 
 func gatewayCrashRoomAfterBoot(t *testing.T, beforeSnapshot ...func(*roomsHarness, string)) (*roomsHarness, gen.Room, string, string) {
 	t.Helper()
+	return gatewayCrashRoomAtBoot(t, true, beforeSnapshot...)
+}
+
+func gatewayCrashRoomAtBoot(t *testing.T, openRoom bool, beforeSnapshot ...func(*roomsHarness, string)) (*roomsHarness, gen.Room, string, string) {
+	t.Helper()
 	rh := newRoomsHarness(t)
 	t.Setenv("HOME", rh.api.homePath)
 	rh.hub.svc.SetClockForTest(func() time.Time { return time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC) })
@@ -170,8 +175,10 @@ func gatewayCrashRoomAfterBoot(t *testing.T, beforeSnapshot ...func(*roomsHarnes
 	rh.api.rooms.Store(hub)
 	gatewayCrashRoomPolicies(t, rh, newCrashRoomProvider(false, path))
 	t.Cleanup(hub.svc.Close)
-	_, err = hub.svc.List("sales")
-	require.NoError(t, err)
+	if openRoom {
+		_, err = hub.svc.List("sales")
+		require.NoError(t, err)
+	}
 	rec, err := al.GetSessionLifecycleStore().Load(mainID)
 	require.NoError(t, err)
 	if len(beforeSnapshot) == 0 {
@@ -186,19 +193,21 @@ func gatewayCrashRoomAfterBoot(t *testing.T, beforeSnapshot ...func(*roomsHarnes
 		require.NoError(t, intentErr)
 		require.Len(t, intents, 1, "accepted Stop survives reopened boot without being superseded")
 	}
-	capture, found, err = al.RequestLedger().Get(mainID, requestID)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.True(t, capture.Discarded, "real room recovery discards consumed G")
-	var snap gen.RoomSnapshotFrame
-	require.NoError(t, hub.svc.Attach(room.Id, 0, func(s gen.RoomSnapshotFrame) { snap = s }))
-	var states []string
-	for _, s := range snap.MemberStates {
-		if s.RequestId == requestID {
-			states = append(states, string(s.State))
+	if openRoom {
+		capture, found, err = al.RequestLedger().Get(mainID, requestID)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.True(t, capture.Discarded, "real room recovery discards consumed G")
+		var snap gen.RoomSnapshotFrame
+		require.NoError(t, hub.svc.Attach(room.Id, 0, func(s gen.RoomSnapshotFrame) { snap = s }))
+		var states []string
+		for _, s := range snap.MemberStates {
+			if s.RequestId == requestID {
+				states = append(states, string(s.State))
+			}
 		}
+		require.Equal(t, []string{"interrupted"}, states, "G is durably Interrupted before any new room message")
 	}
-	require.Equal(t, []string{"interrupted"}, states, "G is durably Interrupted before any new room message")
 	return rh, room, requestID, path
 }
 
@@ -282,10 +291,26 @@ func TestCrashRecovery_MembersNextTurnCannotRerunInterruptedRoomWork(t *testing.
 }
 
 func TestCrashRecovery_IntentionalStopStillHoldsRoomRequests(t *testing.T) {
-	rh, room, _, _ := gatewayCrashRoomAfterBoot(t)
+	rh, room, _, path := gatewayCrashRoomAfterBoot(t)
 	mainID, _ := session.MainSessionID("sales", "mia")
-	_, err := rh.api.agentLoop.StopSession(context.Background(), agent.StopRequest{SessionID: mainID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "owner"}})
+	// A Stop of an already restart-stopped idle root is a no-op. First admit
+	// a real human turn and hold it at the external provider, then Stop it.
+	p := newCrashRoomProvider(false, path)
+	gatewayCrashRoomPolicies(t, rh, p)
+	rh.h.handleChatMessage(context.Background(), mainID, mainID, "explicit continuation before intentional Stop", "mia", nil, "", "sales", makeTestConn())
+	cancel, done := gatewayCrashRun(t, rh)
+	gatewayCrashAwait(t, p.entered)
+	stopped, err := rh.api.agentLoop.StopSession(context.Background(), agent.StopRequest{SessionID: mainID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "owner"}})
 	require.NoError(t, err)
+	require.NoError(t, stopped.RootErr)
+	rh.api.agentLoop.WaitForActiveRequests()
+	p.open()
+	gatewayCrashStopLoop(t, cancel, done)
+	record, err := rh.api.agentLoop.GetSessionLifecycleStore().Load(mainID)
+	require.NoError(t, err)
+	require.Equal(t, session.LifecycleStopped, record.State)
+	require.NotNil(t, record.StopNote)
+	require.Equal(t, session.StopCauseStop, record.StopNote.Cause, "instrument: this is an intentional human Stop, not the prior restart Stop")
 	w := rh.do(http.MethodPost, "/api/v1/rooms/"+room.Id+"/messages", `{"client_message_id":"intentional-stop-H","text":"NEW_H_ONLY","mentions":["mia"]}`, rh.api.HandleRooms)
 	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
 	rh.hub.svc.WaitIdleForTest()
