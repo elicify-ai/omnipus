@@ -76,14 +76,16 @@ func TestCrashRecovery_RetiredRoomRequestIDCannotBeRetried(t *testing.T) {
 }
 
 func TestCrashRecovery_AcceptedUnlandedStopBlocksFreshRoomRevival(t *testing.T) {
-	rh, room, _, _ := gatewayCrashRoomAfterBoot(t)
+	rh, room, _, _ := gatewayCrashRoomAfterBoot(t, func(live *roomsHarness, mainID string) {
+		stampErr := errors.New("fixture: accepted human Stop lost its fence write")
+		_, _, _, acceptErr := live.api.agentLoop.GetSessionLifecycleStore().AcceptStopControl(mainID,
+			session.StopControlIntent{Cause: session.StopCauseStop, Actor: session.StopActorHumanUser("owner")},
+			func(*session.LifecycleRecord, session.ControlGrant, session.StopEffectTarget) error { return stampErr })
+		require.ErrorIs(t, acceptErr, stampErr, "inject only while the real pre-crash execution is admitted, not after its Stop landed")
+	})
 	mainID, err := session.MainSessionID("sales", "mia")
 	require.NoError(t, err)
 	store := rh.api.agentLoop.GetSessionLifecycleStore()
-	stampErr := errors.New("fixture: accepted human Stop lost its fence write")
-	_, _, _, err = store.AcceptStopControl(mainID, session.StopControlIntent{Cause: session.StopCauseStop, Actor: session.StopActorHumanUser("owner")},
-		func(*session.LifecycleRecord, session.ControlGrant, session.StopEffectTarget) error { return stampErr })
-	require.ErrorIs(t, err, stampErr)
 	intents, err := store.UnfinishedStopIntents(mainID)
 	require.NoError(t, err)
 	require.Len(t, intents, 1, "instrument: the accepted Stop is actually durable despite the failed fence")
@@ -99,7 +101,7 @@ func TestCrashRecovery_AcceptedUnlandedStopBlocksFreshRoomRevival(t *testing.T) 
 	after, err := store.Load(mainID)
 	require.NoError(t, err)
 	assert.Equal(t, before.ExecutionID, after.ExecutionID, "a fresh human room request cannot overtake a previously accepted intentional Stop")
-	assert.Equal(t, session.LifecycleStopped, after.State)
+	assert.Equal(t, before, after, "new room traffic cannot rewrite the original accepted-but-unlanded execution")
 	select {
 	case wake := <-rh.h.msgBus.InboundChan():
 		t.Fatalf("accepted human Stop was bypassed by a room wake: %+v", wake)

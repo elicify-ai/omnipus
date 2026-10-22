@@ -106,7 +106,7 @@ func gatewayCrashStopLoop(t *testing.T, cancel context.CancelFunc, done <-chan e
 	require.True(t, err == nil || err == context.Canceled, "fixture loop must join, not leak a surviving writer: %v", err)
 }
 
-func gatewayCrashRoomAfterBoot(t *testing.T) (*roomsHarness, gen.Room, string, string) {
+func gatewayCrashRoomAfterBoot(t *testing.T, beforeSnapshot ...func(*roomsHarness, string)) (*roomsHarness, gen.Room, string, string) {
 	t.Helper()
 	rh := newRoomsHarness(t)
 	t.Setenv("HOME", rh.api.homePath)
@@ -138,6 +138,9 @@ func gatewayCrashRoomAfterBoot(t *testing.T) (*roomsHarness, gen.Room, string, s
 	bytes, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, "G1\n", string(bytes))
+	for _, inject := range beforeSnapshot {
+		inject(rh, mainID)
+	}
 	snapshot := t.TempDir()
 	require.NoError(t, gatewayCrashCopy(rh.api.homePath, snapshot))
 	gatewayCrashStopLoop(t, cancel, done)
@@ -171,9 +174,18 @@ func gatewayCrashRoomAfterBoot(t *testing.T) (*roomsHarness, gen.Room, string, s
 	require.NoError(t, err)
 	rec, err := al.GetSessionLifecycleStore().Load(mainID)
 	require.NoError(t, err)
-	require.Equal(t, session.LifecycleStopped, rec.State)
-	require.NotNil(t, rec.StopNote)
-	require.Equal(t, session.StopCauseRestart, rec.StopNote.Cause)
+	if len(beforeSnapshot) == 0 {
+		require.Equal(t, session.LifecycleStopped, rec.State)
+		require.NotNil(t, rec.StopNote)
+		require.Equal(t, session.StopCauseRestart, rec.StopNote.Cause)
+	} else {
+		// A Stop accepted before the crash must NOT be replaced by a new
+		// restart Stop. The boot finisher still owes the original disposition.
+		require.Equal(t, session.LifecycleRunning, rec.State)
+		intents, intentErr := al.GetSessionLifecycleStore().UnfinishedStopIntents(mainID)
+		require.NoError(t, intentErr)
+		require.Len(t, intents, 1, "accepted Stop survives reopened boot without being superseded")
+	}
 	capture, found, err = al.RequestLedger().Get(mainID, requestID)
 	require.NoError(t, err)
 	require.True(t, found)
