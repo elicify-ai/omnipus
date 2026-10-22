@@ -83,17 +83,45 @@ func TestNativeStop_SuccessfulLateReconnectDisposesItsCapturedClient(t *testing.
 	}
 	held, release := fix1HoldCapturedReconnect(t)
 	joined := make(chan struct{})
-	t.Cleanup(func() { release(); f.ch.wg.Wait(); captured.Disconnect() })
+	qrContended, qrAllowed := make(chan struct{}, 1), make(chan struct{})
+	var qrOnce, unlockOnce sync.Once
+	allowQR := func() { qrOnce.Do(func() { close(qrAllowed) }) }
+	f.store.SetOrderContendedHookForTest(func(id string) {
+		var stack [32768]byte
+		n := runtime.Stack(stack[:], false)
+		if id == "whatsapp" && strings.Contains(string(stack[:n]), "(*PairingAttempts).Complete") {
+			qrContended <- struct{}{}
+			<-qrAllowed // actual competing QR completion is not yet admitted
+		}
+	})
+	order := f.store.LockChannel("whatsapp")
+	unlock := func() { unlockOnce.Do(order.Unlock) }
+	t.Cleanup(func() {
+		unlock()
+		allowQR()
+		release()
+		f.ch.wg.Wait()
+		captured.Disconnect()
+		f.store.SetOrderContendedHookForTest(nil)
+	})
 	require.NoError(t, remote.CloseNow()) // actual remote disconnect reaches the real registered event handler
 	select {
 	case <-held:
 	case <-time.After(5 * time.Second):
 		t.Fatal("HARNESS: real reconnect did not acknowledge its captured-client stage")
 	}
+	select {
+	case <-qrContended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("HARNESS: competing QR completion did not acknowledge its actual held ordering boundary")
+	}
+	unlock() // QR completion is still held before acquiring; Stop wins this legal ordering.
 	active, exists := f.store.Attempt("whatsapp", a)
 	require.True(t, exists)
+	require.Equal(t, channels.PairingPhaseActive, active.Phase)
 	selected, ok := f.store.BeginStop(active)
 	require.True(t, ok)
+	allowQR() // it can now observe the already-admitted Stop, never race ownership selection
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	err := selected.Cancel(ctx)
 	cancel()
