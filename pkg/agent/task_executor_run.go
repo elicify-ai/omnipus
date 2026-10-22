@@ -709,7 +709,6 @@ func (al *AgentLoop) runTaskExternalCLIOnce(
 		}
 	}
 	ts.depth = delegationDepth
-	ts.al = al // FIX 5: back-ref for hard-abort cascade (mirrors the pre-ADR-091 subturn.go, since deleted)
 
 	// FIX 5: register for the run's duration — see this function's doc
 	// comment for the full reachability analysis.

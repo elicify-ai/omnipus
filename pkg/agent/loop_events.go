@@ -4,6 +4,7 @@ package agent
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -76,6 +77,8 @@ func (al *AgentLoop) EventDrops(kind EventKind) int64 {
 }
 
 type turnEventScope struct {
+	// Carry the owner into newTurnState on every production construction path.
+	loop       *AgentLoop
 	agentID    string
 	sessionKey string
 	turnID     string
@@ -84,6 +87,7 @@ type turnEventScope struct {
 func (al *AgentLoop) newTurnEventScope(agentID, sessionKey string) turnEventScope {
 	seq := al.turnSeq.Add(1)
 	return turnEventScope{
+		loop:       al,
 		agentID:    agentID,
 		sessionKey: sessionKey,
 		turnID:     fmt.Sprintf("%s-turn-%d", agentID, seq),
@@ -101,6 +105,11 @@ func (ts turnEventScope) meta(iteration int, source, tracePath string) EventMeta
 	}
 }
 
+// eventEmissionsSuppressed counts events that never reach a bus because the
+// publisher is missing. Include its process-wide total in every warning, like
+// fallbackNoteSuppressed, so a wiring failure cannot disappear without a trace.
+var eventEmissionsSuppressed atomic.Uint64
+
 func (al *AgentLoop) emitEvent(kind EventKind, meta EventMeta, payload any) {
 	evt := Event{
 		Kind:    kind,
@@ -109,6 +118,15 @@ func (al *AgentLoop) emitEvent(kind EventKind, meta EventMeta, payload any) {
 	}
 
 	if al == nil || al.eventBus == nil {
+		reason := "nil_loop"
+		if al != nil {
+			reason = "nil_event_bus"
+		}
+		suppressed := eventEmissionsSuppressed.Add(1)
+		logger.WarnCF("eventbus", "Agent event suppressed: publisher is not initialized", map[string]any{
+			"reason": reason, "event_kind": kind.String(), "agent_id": meta.AgentID,
+			"turn_id": meta.TurnID, "source": meta.Source, "suppressed_total": suppressed,
+		})
 		return
 	}
 
