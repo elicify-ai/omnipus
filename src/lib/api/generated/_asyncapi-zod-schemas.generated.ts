@@ -627,6 +627,7 @@ export const ReplayMessageFrame = z
       reason: z.literal("stopped_before_delivery"),
     })
     .strict().optional(),
+    seq: z.number().int().min(1).optional(),
     terminal_outcome: z.boolean().optional(),
   })
   .strict();

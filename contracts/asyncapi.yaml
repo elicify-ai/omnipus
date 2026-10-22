@@ -1233,7 +1233,7 @@ components:
     ReplayMessageFrame:
       name: ReplayMessageFrame
       title: replay_message
-      summary: Replayed transcript entry (server → client).
+      summary: Persisted chat entry, delivered live or replayed (server → client).
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ReplayMessageFrame'
@@ -4681,9 +4681,10 @@ components:
     ReplayMessageFrame:
       title: ReplayMessageFrame
       description: >
-        Server → client replayed transcript entry. Session-scoped
-        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
-        ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
+        Server → client persisted chat entry, delivered live or during session
+        replay. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); live
+        publication uses the session hub, and transcript/snapshot projections
+        remain unsequenced.
         A CHAT PROJECTION of the session's single append-only archive, not a
         provider-message or raw-storage type (session-core C-ARCHIVE / U2;
         FR-004/FR-005): the archive's private model payload (model_message),
@@ -4818,6 +4819,14 @@ components:
               type: string
               enum:
                 - stopped_before_delivery
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Hub-assigned per-session sequence number. Present on live publication and
+            its incremental catch-up copies; absent on unsequenced transcript/snapshot
+            projections. Only frames carrying seq advance the session cursor.
         terminal_outcome:
           type: boolean
           description: >

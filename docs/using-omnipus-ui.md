@@ -162,6 +162,8 @@ A failure or refusal routed to an existing chat appears in that conversation, in
 
 Chat follows the current gateway connection. Once a replacement connection opens, an older connection closing does not disable the message box or interrupt the current reply. A genuine connection loss still triggers reconnect and reloads the chat's missing history.
 
+When a native chat turn reaches its tool-step limit without a final answer, Omnipus shows one saved system notice explaining the limit. It is separate from any earlier narration and has no model attribution. The notice stays visible with **Verbose chat** off, including after reconnecting, reopening the conversation or reloading the page.
+
 **Open browser** at the top of the chat shows the agent's [live browser](browser.md). Library is in the sidebar, and opens every workspace's files. When an agent builds something reviewable, like a small site, the chat links to it ([previews](previews.md)).
 
 While a turn is running, the message box stays yours:
