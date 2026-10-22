@@ -26,7 +26,7 @@ Email works differently. An email mailbox belongs to one agent in one workspace.
 5. Select **Save & Enable**. On success, the connected account appears with an **Enabled** status. For WhatsApp, keep the panel open for pairing: **Enabled** is the gateway's currently loaded setting, not proof that a code is ready, the phone is linked, or messages can be delivered. See the recovery details below if enabling reports an error.
 6. To connect another account on the same platform, select **Add another…** beside its group.
 
-If a connection finishes starting after a newer settings change has cancelled that start, Omnipus stops that older connection instead of leaving it active without a worker. If its cleanup cannot finish, the reload reports the error; resolve the reported problem and reload the configuration to retry cleanup. This cleanup belongs to that older connection, not a replacement with the same name.
+If a connection finishes starting after a newer settings change has cancelled that start, Omnipus stops that older connection instead of leaving it active without a worker. If its cleanup cannot finish, the reload reports the error; resolve the reported problem and reload the configuration to retry cleanup. Each failed retry still reports the error and retains that same connection for another cleanup attempt. A replacement is not installed over unfinished cleanup. This cleanup belongs to that older connection, not a replacement with the same name.
 
 ### Connecting from chat
 

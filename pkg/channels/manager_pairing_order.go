@@ -109,21 +109,7 @@ func (mr *managerReload) publishStartedWorker(name string, channel Channel) {
 // callback; the manager lock still protects the pointer-checked bookkeeping.
 func (mr *managerReload) disposeUnpublishedStart(name string, channel Channel) {
 	if err := channel.Stop(mr.ctx); err != nil {
-		mr.startCleanupErr = errors.Join(mr.startCleanupErr,
-			fmt.Errorf("channel %q started after its configuration changed; cleanup unfinished: %w; reload configuration to retry cleanup", name, err))
-		if mr.m.channels[name] == channel {
-			// Without an applied hash a subsequent disabled snapshot sees
-			// absent -> absent and never retries this still-live resource.
-			if mr.failedDisposals == nil {
-				mr.failedDisposals = make(map[string]bool)
-			}
-			mr.failedDisposals[name] = true
-			if mr.m.channelHashes == nil {
-				mr.m.channelHashes = make(map[string]string)
-			}
-			mr.m.channelHashes[name] = mr.list[name]
-			mr.m.recordResourceConfigOrder(name, mr.cfg)
-		}
+		mr.retainFailedDisposal(name, channel, err)
 		delete(mr.list, name)
 		return
 	}
@@ -135,6 +121,31 @@ func (mr *managerReload) disposeUnpublishedStart(name string, channel Channel) {
 		delete(mr.m.resourceConfigOrders, name)
 	}
 	delete(mr.list, name)
+}
+
+// retainFailedDisposal carries every failed Stop into this reload's outcome.
+// The manager lock is held; only the captured object's bookkeeping is retained.
+// A later reload may retry it, but cannot overwrite it with a new construction.
+func (mr *managerReload) retainFailedDisposal(name string, channel Channel, err error) {
+	mr.startCleanupErr = errors.Join(mr.startCleanupErr,
+		fmt.Errorf("channel %q cleanup unfinished: %w; reload configuration to retry cleanup", name, err))
+	if mr.m.channels[name] != channel {
+		return // never change a successor's registration or applied hash
+	}
+	if mr.failedDisposals == nil {
+		mr.failedDisposals = make(map[string]bool)
+	}
+	mr.failedDisposals[name] = true
+	if mr.m.channelHashes == nil {
+		mr.m.channelHashes = make(map[string]string)
+	}
+	if _, retained := mr.m.channelHashes[name]; !retained {
+		// A successful unpublished start has no applied hash yet. Retain its
+		// original snapshot's hash so even a disabled reload can find it.
+		mr.m.channelHashes[name] = mr.list[name]
+	}
+	// Keep the resource's existing originating order; this failed retry has
+	// not applied the newer settings to that resource.
 }
 
 func (mr *managerReload) recordStartFailure(name string, channel Channel, err error) {
