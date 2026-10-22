@@ -203,6 +203,12 @@ A change applies from the agent's next turn; a turn already running keeps the li
 
 A worker is just a session that another agent owns and steers. The delegating agent hands the worker a task and keeps working; the worker runs in its own session, with its own tools, its own transcript, and a chat you can open to watch it live.
 
+In native Omnipus turns, an agent with available delegation targets sees a compact directory for its current workspace. Each entry gives the target's name, ID, permitted handoff modes and effective maximum chain depth, plus one **Use for:** line from the target's description in the live configuration. An explicit **Use for** or **Use when** sentence takes priority; otherwise the first sentence is used. A small set of common English abbreviations is recognized, including `U.S.`, `e.g.`, `i.e.`, `etc.`, `Inc.` and titles such as `Dr.`/`Mr.`, rather than treating every period as a sentence ending. A blank description shows **(no description)**, never an invented role. The selected sentence can be the whole description. Per-agent tool lists and repeated call examples are omitted. External command-line workers do not automatically receive this native directory.
+
+When a directory is shown, shared call guidance appears once. It covers durable work with both acceptance criteria (`criteria`) and a definition of done (`dod`), helper messages, and targeted status/result checks instead of repeated polling. That shared guidance says to report a missing route as a dependency rather than take over prohibited specialist work. The existing fallback is different: if no targets can be shown, a depth cap is reached for every target, or the workspace, graph, live registry or depth limit cannot be resolved, the context says delegation is unavailable and tells the agent to complete the task itself. Missing live-registry targets and targets at their depth cap are not advertised.
+
+The delegation context is rebuilt each native turn. Its text stays the same between turns when the agent, workspace, chain depth, delegation graph, live agent details and global delegation-depth setting are unchanged. The directory does not grant access: workspace trust lines, modes, depth limits and tool permissions still apply.
+
 ```mermaid
 flowchart LR
   You[You] -->|"ask for work"| Main[Main agent]
