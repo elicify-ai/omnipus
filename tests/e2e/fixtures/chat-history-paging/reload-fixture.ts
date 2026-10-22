@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { test as base, expect, type Page, type TestInfo } from '@playwright/test';
 import { Agent, Workspace, Session, SessionDetail, SessionHistoryResponse } from '../../../../src/lib/api/generated/schemas';
-import type { AgentCreateRequestMain, WorkspaceCreateRequest, SessionCreateRequest } from '../../../../src/lib/api/generated/openapi-types';
+import type { Agent as AgentWire, AgentCreateRequestMain, WorkspaceCreateRequest, SessionCreateRequest } from '../../../../src/lib/api/generated/openapi-types';
 import { GatewayProcess } from '../gateway-process';
 import { chatInput } from '../selectors';
 import { E2E_MODEL } from '../e2e-model';
@@ -200,18 +200,17 @@ export const test = base.extend<{ reload: ReloadHarness }>({
       config.sandbox = { ...config.sandbox, tool_policies: { ...config.sandbox?.tool_policies, bash: 'allow' } };
       fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
       await gateway.restart();
-      const agentResult = await gateway.apiFetch('POST', '/api/v1/agents', { type: 'Main', name: 'Reload parity',
+      const agentResult = await gateway.apiFetch<AgentWire>('POST', '/api/v1/agents', { type: 'Main', name: 'Reload parity',
         soul: 'Execute the requested harmless native command and answer the user.', provider: 'openrouter', model: E2E_MODEL,
         tool_policy_changes: { set: { bash: 'allow' } },
         max_tool_iterations: 8 } satisfies AgentCreateRequestMain);
       expect(agentResult.ok, agentResult.raw).toBe(true);
       const agent = Agent.parse(agentResult.body);
-      // Keep generated Agent validation above. Its generated policy-map type
-      // is {}, so assert the same exact grant on the actual API JSON instead
-      // of casting the map or weakening the expected policy.
-      expect(agentResult.body,
-        'PREREQUISITE: the real custom agent explicitly grants native bash; the global ceiling alone cannot override its seeded deny')
-        .toMatchObject({ tools_cfg: { builtin: { policies: { bash: 'allow' } } } });
+      // Keep generated Agent runtime validation above. The generated OpenAPI
+      // response type retains the policy map's index signature (the schema
+      // parser's inferred map type is {}); no cast or parallel wire type.
+      expect(agentResult.body.tools_cfg?.builtin?.policies['bash'],
+        'PREREQUISITE: the real custom agent explicitly grants native bash; the global ceiling alone cannot override its seeded deny').toBe('allow');
       const workspaceResult = await gateway.apiFetch('POST', '/api/v1/workspaces', { name: 'Reload parity', core_team: [agent.id] } satisfies WorkspaceCreateRequest);
       expect(workspaceResult.ok, workspaceResult.raw).toBe(true);
       const workspace = Workspace.parse(workspaceResult.body);
