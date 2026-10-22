@@ -54,6 +54,7 @@ func (al *AgentLoop) pauseGoalReminders(sessionID string, rec *goal.Goal) error 
 		return nil
 	}
 	rec = current
+	goalReminderPauseCheckpoint(sessionID, rec.GoalID)
 	al.goalSetWaitingOnUser(rec.GoalID, true)
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {

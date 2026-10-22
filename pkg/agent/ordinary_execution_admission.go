@@ -171,6 +171,9 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 		rec.State == session.LifecycleStopped {
 		return ordinaryExecutionPreparation{}, errOwnerWakeRetained
 	}
+	if opts.goalWake != nil {
+		goalReminderPreRevivalCheckpoint(sessionID)
+	}
 	identity := session.ExecutionIdentity{RunID: freshRunID(), BootSeq: bootSeq}
 	stampedByRevival := false
 	// A person continues any landed stop. A normal scheduled trigger continues
