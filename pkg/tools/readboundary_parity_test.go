@@ -322,10 +322,11 @@ func TestReadBoundary_MissingPathIsError(t *testing.T) {
 // (files visited = 50)", but neither the spec nor the code names a seam
 // that lets a test inject grep's file limit (GrepTool.Execute sets only
 // Matches/MatchesPerFile). This test therefore runs with the shipped DS-5
-// limits and accepts either of the two DS-5 limits a root walk can hit
-// first — max_files (50,000) or deadline (10 s) — which is exactly US-1
-// AS-8's oracle ("stops at the unchanged search limits and says it stopped
-// early"). The missing seam is reported to the dispatcher as a finding.
+// limits and accepts the legitimate first global bound — max_files, max_bytes,
+// deadline or max_matches — which is US-1 AS-8's oracle ("stops at the
+// unchanged search limits and says it stopped early"). The match case also
+// verifies DS-5's1000 total/50 per-file bounds. The missing file-limit seam
+// remains explicit; no production limit or ordering is changed.
 //
 // A 60 s watchdog turns a hung walk (a blocking read of a special file
 // under /proc, say) into a loud failure instead of a hung test binary.
@@ -366,8 +367,14 @@ func TestReadBoundary_VolumeRootBounded(t *testing.T) {
 	// predicted. Adding it to the oracle is consistent with the test's
 	// existing deviation rationale (no seam exists to inject grep's file
 	// limit), not a weakening.
-	if reason != "max_files" && reason != "max_bytes" && reason != "deadline" {
-		t.Fatalf("grep path=%q: truncation reason = %q, want max_files, max_bytes, or deadline (D7/FR-011, DS-5 limits 4, total-bytes, 3):\n%.2000s", root, reason, res.ForLLM)
+	// Team-lead Q1=A: DS-5 also deliberately retains1000 total/50 per-file
+	// matches. That bound may win FIRST on a root walk. Accept only a truthful
+	// max_matches, with the exact total and per-file count guards intact.
+	if reason != "max_files" && reason != "max_bytes" && reason != "deadline" && reason != "max_matches" {
+		t.Fatalf("grep path=%q: truncation reason = %q, want max_files, max_bytes, deadline, or max_matches (D7/FR-011, DS-5):\n%.2000s", root, reason, res.ForLLM)
+	}
+	if countErr := rbDS5MatchBoundError(res.ForLLM, reason == "max_matches"); countErr != nil {
+		t.Fatalf("grep path=%q: %v", root, countErr)
 	}
 	if strings.Contains(res.ForLLM, "needle-volume-root-secret") {
 		t.Fatal("S-1.10: a protected Omnipus file's content appeared in a volume-root search")
