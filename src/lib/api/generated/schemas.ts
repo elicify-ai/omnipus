@@ -639,6 +639,7 @@ type subagent_end = {
 };
 type SessionHistoryResponse = {
   session_id: string;
+  session_tokens_total?: number | undefined;
   entries: Array<Message>;
   has_earlier: boolean;
   has_later: boolean;
@@ -4392,6 +4393,7 @@ export const page_info: z.ZodType<page_info> = z.object({
 export const SessionHistoryResponse: z.ZodType<SessionHistoryResponse> =
   z.object({
     session_id: z.string().min(1).max(255),
+    session_tokens_total: z.number().int().gte(0).optional(),
     entries: z.array(Message).max(100),
     has_earlier: z.boolean(),
     has_later: z.boolean(),
@@ -18083,6 +18085,7 @@ export const TokenFrame = z
 export const DoneStats = z
   .object({
     tokens: z.number().min(0).optional(),
+    session_tokens_total: z.number().int().min(0).optional(),
     cost: z.number().min(0).optional(),
     duration_ms: z.number().min(0).optional(),
     frames_emitted: z.number().min(0).optional(),
@@ -18256,7 +18259,7 @@ export const ToolCallResultFrame = z
     tool: z.string().min(1).max(128),
     call_id: z.string().min(1),
     result: z.unknown(),
-    status: z.enum(["success", "error"]),
+    status: z.enum(["success", "error", "cancelled"]),
     duration_ms: z.number().int().optional(),
     error: z.string().optional(),
     parent_call_id: z.string().optional(),
@@ -18674,6 +18677,7 @@ export const SessionStateFrame = z
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
+    session_tokens_total: z.number().int().min(0).optional(),
     attention_bound: z.number().int().min(0).optional(),
     auto_approve_modifier: z.boolean().nullable().optional(),
     active_turn: SessionStateActiveTurn.optional(),
