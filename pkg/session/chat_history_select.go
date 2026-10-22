@@ -415,16 +415,21 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 		if m := historyMetrics(ctx); m != nil {
 			start = *m
 		}
-		err = historyReadEvent(ctx, chatHistoryReadEvent{SessionID: sid, Scope: "page", Phase: "cut_captured", Cut: cut})
-		var p ChatHistoryPage
-		if err == nil {
-			p, err = historySelect(t, dir, cp, o)
-		}
-		closeErr := t.file.Close()
-		release()
-		if closeErr != nil {
-			err = errors.Join(err, closeErr)
-		}
+		p, err := func() (page ChatHistoryPage, readErr error) {
+			// Scope cleanup to this attempt, not the whole reselect loop. Close
+			// the handle before releasing the generation, including on panic.
+			defer release()
+			defer func() {
+				if closeErr := t.file.Close(); closeErr != nil {
+					readErr = errors.Join(readErr, closeErr)
+				}
+			}()
+			readErr = historyReadEvent(ctx, chatHistoryReadEvent{SessionID: sid, Scope: "page", Phase: "cut_captured", Cut: cut})
+			if readErr == nil {
+				page, readErr = historySelect(t, dir, cp, o)
+			}
+			return page, readErr
+		}()
 		if ctx.Err() != nil {
 			return ChatHistoryPage{}, ctx.Err()
 		}

@@ -9,7 +9,7 @@ day-partitioned transcript files, and the retention sweep. Interfaces in
 `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run
 '^TestStripedSessionLock_ShardIsolation$' ./pkg/session/`
 
-## Two independent 64-shard lock pools — and a one-directional order
+## Three lock classes: two independent shard pools and a history owner
 
 Two pool CLASSES with separate state, each 64 shards of FNV-32a keyed
 mutexes: the session pool (`unified_lock.go::u4SessionStripedLock`, held by
@@ -26,6 +26,26 @@ Lock order (FR-050, stated in `unified_lock.go`'s package doc):
 wider order (ADR-086) is goalLock(goalID) → sessionLock(sessionID) →
 cacheMu. `unified.go::GetMeta`'s fast path takes `cacheMu` and the shard
 sequentially, not nested — that does not invert the rule.
+
+### Per-session history owner — not another shard pool
+
+The third class is `chatHistoryOwner`, obtained through `historyOwner` for one
+canonical session. `reconcileChatHistoryIndex` holds `owner.mu` across bounded
+reconciliation I/O. It briefly takes the session shard and archive append mutex
+to capture source ends, releases them for content I/O, and takes the shard again
+for root publication. Do not describe this owner as an I/O-free mutex.
+
+| Boundary | Required discipline |
+|---|---|
+| Blocking reconciliation | `owner.mu` precedes the session shard; capture can then take the archive append mutex. The existing shard-to-`cacheMu` order still applies. |
+| Canonical append | `prepareHistoryAppend` uses `TryLock` before the shard. `historyAccepted` and `historyDispositionAccepted` also use `TryLock`, never queueing behind a recoverer; callbacks run after the archive append mutex is released. A skipped derived update remains a bounded suffix, not a failed canonical save. |
+| Reverse nesting | Never acquire `owner.mu` with a blocking lock while holding a session shard. A writer's nonblocking `TryLock` is the deliberate exception, not permission to introduce the reverse blocking order. |
+| Lifecycle shards | These remain a different pool. History reconciliation does not acquire them; no history-owner/lifecycle-shard nesting order is established. Do not introduce such nesting merely because both use session identifiers. |
+| Generation pins | The owner's separate `refsMu` guards pin/retirement bookkeeping. A selected generation stays pinned through tree/content use; close the handle before releasing its pin, including on errors or panic. Reader body I/O holds neither shard nor archive append mutex. |
+
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_index.go::reconcileChatHistoryIndex`,
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_reconcile.go::reconcileHistoryOwned`,
+and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::chatHistoryOwner`.
 
 ## One all-shard hold, one sequential parent-then-child protocol
 
@@ -69,6 +89,26 @@ lines MUST stay on disk for recall.
   that would be an import cycle). `archive_expiry.go::ArchiveDayStore.SweepExpired`
   (rolled-partition expiry and window repair) has no non-test caller at this tip;
   do not assume it runs.
+
+## Paged chat history and derived publication
+
+`ReadChatHistoryPage` is the bounded display reader, not a wrapper around a
+lifetime `ReadTranscript`/`ReadTranscriptView` scan. Whole source groups are
+selected at an immutable cut; selected content and dependencies are read after
+capture locks are released. The gateway must supply the real carrier weigher;
+there is no guessed default weight in the session package.
+
+| Invariant | Rule |
+|---|---|
+| One content authority | Canonical append-only archive bytes hold content. The `.chat-history` index is derived, content-free occurrence/correction metadata, not another transcript. |
+| Publication order | Fsync canonical acceptance first, then derived copy-on-write node frames and transaction footer, then publish the checkpoint/root. An index failure must not relabel an accepted canonical save as unsaved. |
+| New identity | Publish the verified empty baseline before making a new session identity readable. Never infer an empty conversation from missing or inconsistent derived state. |
+| Online recovery | Reconcile at most 64 combined archive/disposition/deletion facts from a valid checkpoint; the 65th refuses. Do not retry-walk a larger gap in batches or automatically build an index for historical unindexed data. |
+| Retention | Preserve only opaque token/rank tombstones for expired occurrences. Rich generation retirement waits for old reader pins; genuine Windows sharing-busy is not proof that a partition disappeared. |
+| Offline repair | The explicit `PrepareChatHistoryIndex` builder and shipped repair command share the reducer. They are not an application-startup or ordinary-send fallback and must not invoke the gateway/projector/model to reconstruct the index. |
+
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_select.go::readChatHistoryPage`
+and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::historyPublish`.
 
 ## Two id namespaces, compile-enforced
 

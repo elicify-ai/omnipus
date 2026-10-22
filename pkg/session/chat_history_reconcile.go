@@ -315,9 +315,6 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 		return result, nil
 	}
 	candidate := historyCloneCheckpoint(cp)
-	for _, s := range streams {
-		candidate.ArchiveEnds[s.key] = s.end
-	}
 	candidate.CurrentKey = current
 	candidate.DispositionEnd = dispEnd
 	// Build against the old root; the reducer advances coverage using each fact.
