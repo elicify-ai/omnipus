@@ -47,15 +47,10 @@ func TestGoalReminderR6PauseIsPublicThroughRESTAndLiveHub(t *testing.T) {
 	for _, frame := range beforePause {
 		assert.NotEqual(t, r6GatewayPause, frame.Content, "a still-running fifth outcome cannot pause")
 	}
-	close(gate)
-	require.Eventually(t, func() bool {
-		rec, e := f.al.GetSessionLifecycleStore().Load(f.root)
-		return e == nil && rec.State == session.LifecycleCompleted && f.al.GetActiveTurnHookForSession(f.root) == nil
-	}, 10*time.Second, 10*time.Millisecond, "the actual producing reminder must complete and leave the live-turn registry")
 	beforeDispatch := f.count()
 	require.Equal(t, 1, beforeDispatch, "one real keeper notification has actually been issued")
-	f.age(t)
-	f.engine.Tick(context.Background())
+	close(gate)
+	r6WarnAwaitProducingPause(t, f, beforeDispatch)
 	assert.Equal(t, beforeDispatch, f.count(), "fifth completed unproductive outcome must publish no sixth notification")
 	w := httptest.NewRecorder()
 	f.api.HandleSessions(w, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+f.root, nil))

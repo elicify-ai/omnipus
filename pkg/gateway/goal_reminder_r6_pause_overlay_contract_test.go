@@ -60,15 +60,10 @@ func r6SignalGapHoldFifth(t *testing.T, f *r6PublicFixture) chan struct{} {
 
 func r6SignalGapReleaseFifth(t *testing.T, f *r6PublicFixture, gate chan struct{}) {
 	t.Helper()
-	close(gate)
-	require.Eventually(t, func() bool {
-		rec, err := f.al.GetSessionLifecycleStore().Load(f.root)
-		return err == nil && rec.State == session.LifecycleCompleted && f.al.GetActiveTurnHookForSession(f.root) == nil
-	}, 10*time.Second, 10*time.Millisecond, "the fifth reminder must complete before the pause can be published")
 	before := f.count()
 	require.Equal(t, 1, before, "SETUP: one real keeper notification was issued")
-	f.age(t)
-	f.engine.Tick(context.Background())
+	close(gate)
+	r6WarnAwaitProducingPause(t, f, before)
 	assert.Equal(t, before, f.count(), "the fifth completed unproductive outcome must not publish a sixth reminder")
 }
 
