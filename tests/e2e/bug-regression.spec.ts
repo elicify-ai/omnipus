@@ -27,6 +27,7 @@ import {
   waitForConnected,
 } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
+import { assistantReplyChallenge, assertHansReplyPersisted } from './fixtures/assistant-reply-acceptance'
 
 // ─── Bug-1: Skip onboarding button must be gone ───────────────────────────────
 
@@ -862,7 +863,10 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
 
     // 6. Send a follow-up message. With the fix this lands normally; without
     //    it the SPA would surface the WS error.
-    await input.fill('Hello from the regression test.')
+    const challenge = assistantReplyChallenge('hans-follow-up')
+    const followup = `Hello from the regression test.\nReply only with the requested token. ${challenge.instruction}`
+    expect(followup, 'only the assistant can supply the concatenated reply nonce').not.toContain(challenge.nonce)
+    await input.fill(followup)
     await input.press('Enter')
 
     // 7. The user message bubble must appear (echoed by the WS). `.last()`,
@@ -911,5 +915,7 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
         },
       )
       .toContain('Hello from the regression test.')
+    // Addendum 5: the case's "follow-up succeeds" intent requires a completed saved answer, not only accepted input.
+    await assertHansReplyPersisted(page, receivedFrames, sessionID, agent.id, challenge.nonce, transcriptPath)
   })
 })

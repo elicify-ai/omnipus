@@ -14,6 +14,8 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { queryClient } from '@/lib/queryClient'
+import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
 
 // Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
 // D7, FOUNDER DECISION "middle way", and Team-lead ruling (frontend scope).
@@ -48,6 +50,8 @@ const ORIGINAL_FRAME: MessageFrame = {
 }
 
 function resetRecovery1090Stores() {
+  queryClient.removeQueries({ queryKey: ['session-detail'] })
+  queryClient.removeQueries({ queryKey: ['sessions'] })
   act(() => {
     useWorkspacesStore.setState(useWorkspacesStore.getInitialState(), true)
     useSessionStore.setState({
@@ -421,6 +425,7 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
     const otherId = '1090-unrelated-message'
     const otherSid = '1090-unrelated-session'
     const otherContent = 'An unrelated existing-session message'
+    seedCanonicalSession(otherSid, 'mia')
     act(() => useSessionStore.getState().setActiveSession(otherSid, 'mia'))
     sender.send.mockReturnValueOnce(false)
     act(() => useChatStore.getState().sendMessage(otherContent, {
