@@ -46,6 +46,10 @@ Goal of this work: **one coherent model** for (a) which event notifies the user 
 | Provider retries/refusals logging | 🔶 partial: several retry paths log at warning level (`pkg/agent/loop_run_turn_response.go` — stream reset, timeout, transport drop; `translate_error.go::defaultUserMessage` — unrecognised code), but there is no consistent per-attempt record and no network-vs-API field |
 | ADR-051's founding rule is “raw provider text never reaches the wire” | `pkg/agent/translate_error.go` file header; catalogue of 29 fixed sentences in `contracts/components/schemas/LLMError.yaml` (`x-user-messages`), only 7 with a provider/model template |
 | One code (`network`) covers both unreachable provider and HTTP 408/5xx | `translate_error.go` — `CodeNetwork` comment “408 / 5xx / timeout / connection drop” |
+| One external alert exists: a failed scheduled task posts “⚠ Scheduled task X failed: <full error text>” to the owning agent's channel — against D27 | `pkg/gateway/schedules.go::scheduledRunner.publishChannelAlert` |
+| That alert never delivers: it looks up channel bindings that today's channel screens delete, and it sends with no recipient, which Telegram, WhatsApp, WeCom and Feishu reject; no screen configures it and no test covers it | `schedules.go::resolveAgentDefaultChannel`; `pkg/gateway/rest_channels.go` (removes channel-wildcard bindings); `pkg/channels/telegram/telegram.go` (`invalid chat ID`) — read, not run; other channel types not checked |
+| Every channel has an “Allow From” list (user/chat IDs, phone numbers); empty = anyone may write. It filters incoming messages only | `pkg/config/config.go` (`allow_from`), `pkg/channels/base.go::IsAllowed`, `src/lib/channel-fields.ts` |
+| Email is an agent tool with per-agent mailboxes, not a channel and not a system sender | `pkg/email/CLAUDE.md`; ADR-033 per-pair mailboxes |
 
 ### 2.1 Pop-up audit (2026-10-22, all 322 call sites)
 
@@ -86,6 +90,7 @@ Source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/notification-review-
 | **Detail level** | Normal, Verbose or Debug — decides which chat content is shown. |
 | **Network failure** | Omnipus cannot reach the provider at all (DNS, refused, unreachable, TLS, timeout before a response). |
 | **API failure** | The provider was reached and answered with an error (e.g. 402 insufficient balance, 429 rate limit). |
+| **Notification channel** | A channel (any type, including email) set up to deliver system notifications to the owner. Configured like a normal channel, with “Notification System” / “Notification Bot” as its owner in the screens; no real workspace or agent exists behind it. |
 
 ## 5. Requirements
 
@@ -216,16 +221,25 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 |---|---|---|
 | R-SEC-1 | Secrets (API keys, tokens, login headers, credential values) are always masked, at every detail level — including inside a provider's message shown on the main line (providers echo partial keys, e.g. “Incorrect API key provided: sk-…xyz”). | D16, D28 |
 | R-SEC-2 | Notification retention as R-NC-4; deletion is real deletion from storage. | D23 |
-| R-SEC-3 | External messages (later) carry only the notification title and a link into Omnipus — never chat content, file names, technical details or error payloads. | D27 |
+| R-SEC-3 | External messages carry only the notification title and, when a public address is configured, a link into the app — never chat content, file names, technical details or error payloads. | D27, D53 |
 | R-SEC-4 | External delivery (later) is opt-in per kind, rate-limited and batched. | D27 |
 
-### 5.10 External delivery (requirements only — not designed or delivered now)
+### 5.10 External delivery (requirements; delivery timing per D11 — see open question)
 
 | ID | Requirement | Decisions |
 |---|---|---|
-| R-EXT-1 | Notifications can later be delivered via channels such as WhatsApp or email, reusing the existing channels where possible; the routing model reserves the “Also send externally” switch. | D4, D11 |
-| R-EXT-2 | Content and rate rules: R-SEC-3, R-SEC-4. | D27 |
-| R-EXT-3 | If Omnipus is offline, an external notification is dropped; the in-app notification is enough. | D38 |
+| R-EXT-1 | External notifications go only to the owner's **notification channels**. Agents' own channels are never used for automatic notifications; an agent may still report something in its own chats when it decides to — that is agent behaviour, not a notification. | D51 |
+| R-EXT-2 | Every channel type can be a notification channel, **including email**. Email for notifications is sent without any agent, with its own sender settings (mail server, sender address) — not through an agent's mailbox. | D58 |
+| R-EXT-3 | Notification channels are set up through the normal channel configuration. Where a channel normally names its workspace and owning agent, the screens offer **“Notification System”** and **“Notification Bot”**. This is a presentation only: no workspace or agent is created, nothing appears in the sidebar, no model runs. | D58, D61 |
+| R-EXT-4 | Recipients are the channel's **Allow From** list (IDs, phone numbers, email addresses). For a notification channel the list is **mandatory**: it cannot be enabled with an empty list (empty must never mean “everyone”). Where an app requires the person to write to the bot first (e.g. Telegram), setup says so. | D56 |
+| R-EXT-5 | An event set to “Also send externally” goes to **every enabled notification channel**, to each recipient on its list. | D55 |
+| R-EXT-6 | A notification channel uses its own account. The same bot or number may be used only as a separately configured notification channel; the spec must verify per channel type that this works (🔶 a Telegram bot accepts only one listener at a time). | D57 |
+| R-EXT-7 | Content: the notification title plus a link into the app — the link only when a public address is configured, otherwise the title alone. Neutral voice (R-WD-6). Never chat content, file names, technical details or error payloads (R-SEC-3). | D27, D53 |
+| R-EXT-8 | A message sent *to* a notification channel gets one fixed short reply, with no AI involved: “This chat only sends notifications. Open the app to act: {link}”. | D59 |
+| R-EXT-9 | Acting from a channel (approve, deny, answer) is a later requirement, with its own security review of sender verification. | D52 |
+| R-EXT-10 | When delivery to a notification channel fails after the channel's retries (bot blocked, mail rejected, channel offline), one grouped centre entry appears — “Could not deliver notifications to {channel}: {reason}” — and resolves itself when delivery works again. Every failure is logged. | D60 |
+| R-EXT-11 | Opt-in per event kind, rate-limited and batched (R-SEC-4). If Omnipus is offline, an external notification is dropped; the in-app notification is enough. | D27, D38 |
+| R-EXT-12 | The existing scheduled-task channel alert (2.) is replaced by this delivery: its trigger and outbound send path are reused, its binding lookup and full-error text are removed. | D54 |
 
 ### 5.11 Removals
 
@@ -253,6 +267,9 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 | F7 | Founder review of every system message: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/notification-review-20261022/messages/` (ADR-051 catalogue with proposed rewrites; 363 analysed chat/app messages; 322 pop-ups) | D35, R-WD-4 |
 | F9 | Withdrawn proposals: BE-097, BE-099, BE-101, BE-102, BE-104 are fragments inserted into the knowledge-drift notification (BE-096), not standalone messages; the review page's proposals for them were worker filler | correction, D49 |
 | F10 | Check whether a user can reach an agent that is on no workspace team (`agent_not_configured`): the code path exists (`create_agent` outside a workspace makes a “metadata only” agent; `pkg/agent/workspace_reroot.go::resolveTurnWorkDirAndWorkspaceOrRefuse` refuses its turns), but whether the UI lets a chat or task reach it is not yet checked | founder question |
+| F11 | Replace the dead scheduled-task channel alert as part of R-EXT-12 (tracked so it is not forgotten) | D54 |
+| F12 | Spec: per channel type, check that a second, separately configured notification channel on the same bot/number works (Telegram single listener, WhatsApp linked devices) | R-EXT-6 |
+| F13 | Spec: email as a channel type for notifications (sender settings, recipient addresses as Allow From, delivery failures) | R-EXT-2 |
 | F8 | Extend the pop-up category list with the audit's proposals (test result, mail sent/failed, sign-out, opened in another tab, placement failed, download/media failed, consequence warning, outside change) | D46 |
 | F4 | Close or re-scope #645 against this document | superseded question |
 | F5 | Check #177 (mobile notification-prefs) against R-PREF | compatibility |
@@ -312,6 +329,17 @@ One rule for every chat component (D8, D41). “Shown” = visible; “—” = 
 | D48 | Bug-report exception | “Please report it to the Omnipus.ai team” is the one allowed product-name use | Founder's own edit of `provider_request_rejected`; confirmed by the founder (Q1 yes) | Interview | 2026-10-22 |
 | D49 | Message review result | Founder ratings and edits adopted; unrated proposals count as agreed; voice rule applied over all of them | Founder: “in most cases I agreed to your proposal, assume that for the remaining ones” | Interview | 2026-10-22 |
 | D50 | “We / our / us” | In a chat they become “I / my / me”; elsewhere neutral | Founder: “not we our us it must be I from the agent perspective when it is shown in a chat” (replaces team-lead's earlier blanket ban; confirmed by the founder (Q2 yes)) | Interview | 2026-10-22 |
+| D51 | External sender | Only the owner's notification channels; agents' channels never used automatically; agents may report in their own chats by their own decision | Founder: “the agent can also in any channel report the failure but it is an agent decision not an automatic action” | Interview | 2026-10-22 |
+| D52 | Acting from a channel | Notify now; approve/answer from a channel later, with its own security review | Spoofing risk of channel replies | Interview | 2026-10-22 |
+| D53 | Link in external messages | Only when a public address is configured; otherwise title only | Omnipus often runs where a phone cannot reach it | Interview | 2026-10-22 |
+| D54 | Old scheduled-task channel alert | Replace in the new delivery, reusing trigger and send path | team-lead finding: it never delivers; founder: “lets see if we can reuse parts of it” | Interview | 2026-10-22 |
+| D55 | Several notification channels | Every enabled one receives each external event | Simplest model | Interview | 2026-10-22 |
+| D56 | Recipients | The channel's Allow From list, mandatory for notification channels | Founder: “the allow from must be mandatory not optional” | Interview | 2026-10-22 |
+| D57 | Accounts | Separate account; the same account allowed if separately configured | Founder: “separate account but it could be the same but separately configured” | Interview | 2026-10-22 |
+| D58 | Channel types and setup | All channel types including email, no agent involved; set up through the normal channel configuration with “Notification System” (workspace) and “Notification Bot” (agent) as owner | Founder: “we could use the normal channel configuration only as recipient Notification System as workspace and as agent Notification Bot” | Interview | 2026-10-22 |
+| D59 | Replies to a notification channel | Fixed short reply, no AI | No token cost; leaves room for D52 | Interview | 2026-10-22 |
+| D60 | External delivery failures | One grouped, self-resolving centre entry per channel; always logged | Lost alerts must not be silent | Interview | 2026-10-22 |
+| D61 | “Notification System” workspace | Not a real workspace — a presentation in the screens only | Founder: “not a real workspace just a UI trick” | Interview | 2026-10-22 |
 
 ## Dependency Graph & Implementation Order
 
