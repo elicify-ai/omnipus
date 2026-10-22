@@ -938,6 +938,7 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 	}
 
 	// Step 2: remove config entry and stale wildcard binding atomically.
+	var refreshFailure error
 	if err := a.safeUpdateConfigWithDeletedChannels(func(m map[string]any) error {
 		channels, _ := m["channels"].(map[string]any)
 		if channels != nil {
@@ -977,11 +978,18 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		}
 		return nil
 	}, channelID); err != nil {
-		slog.Error("rest: delete channel instance: save config", "id", channelID, "error", err)
-		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
-		return
+		var refreshErr *configRefreshError
+		if !errors.As(err, &refreshErr) {
+			slog.Error("rest: delete channel instance: save config", "id", channelID, "error", err)
+			jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
+			return // pre-persistence failure: no accepted deletion to finalize
+		}
+		// The removal IS durable. Finish this captured deletion's cleanup and
+		// finalizer even when its loaded-state publication failed. Returning
+		// here would strand an absent entry behind an unreachable exclusion.
+		refreshFailure = err
 	}
-	// The successful local commit already closed admission. Keep that barrier
+	// The durable local commit already closed admission. Keep that barrier
 	// through captured resource/state cleanup; a failed save changed no pairing.
 	defer a.agentLoop.EndPairingDelete(channelID, true)
 
@@ -1056,6 +1064,11 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 	}
 
 	slog.Info("rest: deleted channel instance", "id", channelID, "type", chBaseType, "cleanup_failed", cleanupFailed)
+	if refreshFailure != nil {
+		jsonServerFailure(w, http.StatusInternalServerError,
+			fmt.Sprintf("channel %s removal saved, but the running configuration could not be refreshed", channelID), refreshFailure)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

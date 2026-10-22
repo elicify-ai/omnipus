@@ -69,6 +69,8 @@ If the gateway restarts before pairing finishes, the panel shows "A server resta
 
 If the connection was deleted while its pairing card was open, Retry shows "This WhatsApp connection was deleted. Add it again from Connectors." with no Retry button. Add the connection again from **Connectors**. Retry from this card never recreates a deleted connection. The `enable_channel` agent tool can create a missing entry when called with revision `absent`; see [Connecting from chat](../connectors.md#connecting-from-chat) for that distinction.
 
+If deletion reports that the removal was saved but the running configuration could not be refreshed, the stored connection entry has already been removed. The gateway still completes that deletion's captured cleanup; the connection list can continue showing its older loaded entry until the refresh problem is resolved and the configuration reloads. Resolve the reported problem before adding the connection again. Any old client that is still stopping keeps its own exclusion: a new pairing cannot begin until that captured cleanup really finishes.
+
 The panel also says when a pairing could not start, was interrupted by a settings change, is still being stopped, or found the phone already linked — each with its exact message and next step. See [the pairing states in Connecting from chat](../connectors.md#connecting-from-chat).
 
 ### Pair from the gateway logs (headless)
