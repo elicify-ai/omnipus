@@ -772,6 +772,9 @@ test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both 
       figure: 'Robot', role: 'security', size: 48, motion, reducedMotion: false, color: AgentColor.options[8], name: 'Mia',
     }))).join('') + renderToStaticMarkup(createElement(AgentIcon!, {
       figure: 'Robot', role: 'security', size: 48, motion: 'thinking', color: AgentColor.options[8], name: 'Mia',
+    })) + renderToStaticMarkup(createElement(AgentIcon!, {
+      // R1: omitted reducedMotion must follow the system preference, not force either branch.
+      figure: 'Robot', role: 'security', size: 48, motion: 'working', color: AgentColor.options[8], name: 'Mia',
     }))
     const classes = Array.from(markup.matchAll(/class="([^"]*)"/g)).flatMap((match) => match[1].split(/\s+/))
     const source = resolve('src/styles/library.css')
@@ -863,6 +866,24 @@ test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both 
         await mkdir(directory, { recursive: true })
         await thinking.screenshot({ path: resolve(directory, `thinking-dimmest-${background.slice(1)}.png`), animations: 'allow' })
       }
+      const systemWorking = page.getByTestId('agent-icon').nth(4)
+      const normalWorking = await systemWorking.evaluate((root) => {
+        const running = (selector: string) => {
+          const layer = root.querySelector(selector)!
+          return getComputedStyle(layer).animationName !== 'none'
+            && layer.getAnimations().some((animation) => animation.playState === 'running')
+        }
+        return {
+          reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+          inkRunning: running('[data-ink]'),
+          glowRunning: running('[data-glow]'),
+          sheenRunning: running('[data-agent-icon-sheen]'),
+          loops: root.getAnimations({ subtree: true }).length,
+        }
+      })
+      expect(normalWorking, 'Working starts with an active ink, glow and sheen loop').toEqual({
+        reducedMotion: false, inkRunning: true, glowRunning: true, sheenRunning: true, loops: 3,
+      })
       await page.emulateMedia({ reducedMotion: 'reduce' })
       const mediaAware = page.getByTestId('agent-icon').nth(3)
       const reduced = await mediaAware.evaluate((root) => ({
@@ -872,4 +893,15 @@ test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both 
         inkOpacity: getComputedStyle(root.querySelector('[data-ink]')!).opacity,
       }))
       expect(reduced).toEqual({ inkAnimation: 'none', glowAnimation: 'none', loops: 0, inkOpacity: '1' })
+      const reducedWorking = await systemWorking.evaluate((root) => ({
+        reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        inkAnimation: getComputedStyle(root.querySelector('[data-ink]')!).animationName,
+        glowAnimation: getComputedStyle(root.querySelector('[data-glow]')!).animationName,
+        sheenAnimation: getComputedStyle(root.querySelector('[data-agent-icon-sheen]')!).animationName,
+        loops: root.getAnimations({ subtree: true }).length,
+        inkOpacity: getComputedStyle(root.querySelector('[data-ink]')!).opacity,
+      }))
+      expect(reducedWorking, 'Working respects system reduced motion for all three layers').toEqual({
+        reducedMotion: true, inkAnimation: 'none', glowAnimation: 'none', sheenAnimation: 'none', loops: 0, inkOpacity: '1',
+      })
 })
