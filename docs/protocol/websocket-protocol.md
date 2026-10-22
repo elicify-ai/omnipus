@@ -63,6 +63,12 @@ A missing/inconsistent index or suffix above 64 records is not a reason to stop 
 
 Replay `done` and `catch_up_complete` are different boundaries: active projection can follow replay done. Replay done's `stats.frames_emitted` counts the actual prepared content frames, excluding the done terminator; it is not a lifetime-history count. Below the local attach-buffer cap, matching clients stage historical replay through successful catch-up completion and commit the batch once, not once per content frame; the progressive exception is described above. The completion mode must be handled explicitly; `live_only` releases live/control attach locks but never sets history-loaded or replay-completed state. Deploy the matching server and client together and reload old tabs.
 
+### Recorded session usage during attach
+
+A session-scoped `session_state` includes optional `session_tokens_total` when the existing recorded usage aggregate is authoritative, including on `live_only` attach. It is a nonnegative integer with the same meaning as `SessionStats.tokens_total`, independent of the selected history page. It does not imply that history loaded. Unscoped connection-open state omits it; unavailable accounting is unknown and also omits it. A genuinely unused session can supply real zero. The corresponding REST page has the same optional absolute field; session detail already carries `session.stats.tokens_total`.
+
+Apply an absolute observation only to its addressed session/view, retaining a newer known total when a stale page or replay arrives. Do not add an absolute value to the per-turn delta. Replay completion, duplicate delivery and an omitted field must not reset or double-count usage. No extra field on `session_snapshot` is required: its current-state frame carries the baseline.
+
 ### `auth`
 
 First-frame bearer authentication for programmatic clients that do not carry the `omnipus-session` cookie. The web app does not send this frame.
@@ -256,6 +262,8 @@ Ownership applies to replay messages, tool starts/results, replay errors, provid
 
 Attach's session-scoped `session_state` includes generated `history_state`. `status=available` omits reason/message. `status=unavailable` requires both: reason is `index_missing`, `index_inconsistent`, `catchup_limit`, `storage_error` or `projection_error`, and message is fixed sanitized copy, never the storage cause. The unscoped connection-open state does not claim history readiness. Readiness is not proof that this client has loaded a page; only actual successful history application clears that client-side error.
 
+Session-scoped attach state can also carry optional generated `session_tokens_total`, the nonnegative absolute recorded session consumption, including during `live_only`. It has the same meaning as `SessionStats.tokens_total` and the REST history envelope's field. The unscoped connection-open state supplies no session usage baseline. A missing value is unknown, not a zero or a reason to erase a known total.
+
 ### `session_mode_updated`
 
 **Direction**: Server → client. Acknowledges a valid `session_mode_update` request with the resulting Auto-approve setting for that session, including when the request cleared the per-chat choice.
@@ -323,9 +331,13 @@ Signals that a streaming response has completed. The partial buffer is finalized
 | type | string | yes | Always `"done"` |
 | session_id | string | yes | Session whose turn has completed |
 | stats | object | no | Usage statistics for the completed turn (always an object, never null, when present) |
-| stats.tokens | number | no | Total tokens consumed (prompt + completion) |
+| stats.tokens | number | no | Accounted tokens consumed by this turn; retains its existing per-turn meaning |
+| stats.session_tokens_total | integer | no | Authoritative absolute session-wide consumed-token total, minimum zero; omitted when unknown and on replay-only done, never JSON null |
+| stats.frames_emitted | number | no | Replay-only count of prepared content frames, excluding the terminator; not tokens or lifetime history |
 | stats.cost | number | no | Estimated cost in USD |
 | stats.duration_ms | number | no | Wall-clock duration of the turn in milliseconds |
+
+The footer uses the absolute session observation, not that value plus `stats.tokens`. Merge known observations for the addressed session without decreasing a newer total. A replay-terminating `done` carries replay diagnostics, not an absolute usage baseline; duplicate/live/replay overlap and stale pages must not add the same turn twice. A recorded zero is distinct from missing usage.
 
 **Producer**: Agent loop turn completion in `pkg/agent/`
 **Consumer**: Chat message component — removes cursor, renders markdown, shows stats below message
@@ -409,12 +421,17 @@ Signals that a tool invocation has completed. Updates the tool call badge with r
 | tool | string | yes | Tool name — matches the corresponding `tool_call_start` |
 | call_id | string | yes | Tool invocation ID — matches the corresponding `tool_call_start` |
 | result | any | yes | Tool output (type depends on tool; may be string, object, or null) |
-| status | string | yes | One of `"success"` or `"error"` |
+| status | string | yes | One of `"success"`, `"error"` or `"cancelled"`; saved cancellation is not converted to error during replay |
 | duration_ms | number | no | Tool execution time in milliseconds |
 | error | string | no | Error message if `status` is `"error"`; omit the field rather than sending JSON null |
 
 **Producer**: Tool execution layer in `pkg/tools/`
-**Consumer**: Tool call badge component — updates to success/error state, expandable for detail
+A confirmed cancelled native call retains its original call identity, parameters and owner in saved history, with known duration and `result: null` when no result was admitted. This terminal event also follows the normal attach bind/hold journal ordering. A late execution return cannot replace cancellation, and reload does not execute a tool. The separate `turn_canceled` marker describes the interrupted turn; it is not a substitute tool result. Historical calls that were never saved are not invented during replay.
+
+**Consumer**: Tool call badge component — consumes success/error/cancelled state, expandable for available detail
+
+For a cancelled call, required `result` can be null when no result is available; it is not fake successful output. The original call ID, tool and owning source remain intact through REST paging and snapshots. Replaying those facts does not execute the tool again or cancel an unrelated call.
+
 
 ---
 
@@ -483,7 +500,7 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | C→S | `session_mode_update` | Set or clear an existing session's Auto-approve choice |
 | C→S | `cancel` | Cancel in-progress turn |
 | C→S | `ping` | Keep-alive |
-| C→S | `attach_session` | Attach to an existing session and replay its transcript (with optional `since` for incremental replay) |
+| C→S | `attach_session` | Attach to an authorized session. Use `since_seq` and `boot_id` for servable incremental catch-up; otherwise receive a bounded recent snapshot or an unavailable-history live/control result. |
 | C→S | `device_pairing_response` | Admin approval/rejection of a pending device pairing request |
 | C→S | `whatsapp_pairing_subscribe` | Start/stop receiving WhatsApp pairing frames on this connection (#283) |
 | S→C | `session_started` | New session ID minted by the server (response to a `message` without `session_id`) |

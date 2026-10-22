@@ -1535,24 +1535,12 @@ func resolveStatus(s string) string {
 	return s
 }
 
-// toolCallResultStatus normalises a persisted session.ToolCall.Status onto
-// ToolCallResultFrame's strict wire enum (success/error only —
-// ToolCallResultFrame.yaml has no "interrupted" value; only the richer
-// SubagentEndFrame.status enum does). pkg/agent/loop.go's tcStatus
-// derivation can now persist "interrupted" for a synchronous delegate call
-// canceled by its parent (Finding F / A-I4 round 5, ToolResult.Interrupted),
-// so tc.Status is no longer guaranteed to be one of ToolCallResultFrame's
-// two allowed values — passing it through resolveStatus verbatim, as this
-// function replaces at every ToolCallResultFrame call site, would emit a
-// contract-invalid frame the SPA's isValidFrame() drops. Any non-empty,
-// non-"success" value (error, interrupted, canceled, timeout, ...) reads as
-// "error" here, exactly matching what the LIVE EventKindToolExecEnd handler
-// already does for the same outer call — IsError is a plain bool there too,
-// with no room for a third state — so this clamp changes nothing about the
-// OUTER tool_call_result badge's live/reload parity; only the SPAN's own
-// subagent_end frame (built via resolveStatus, unclamped) is meant to ever
-// show "interrupted".
+// toolCallResultStatus preserves the contracted terminal cancellation. Other
+// richer span-only outcomes still map to error, never an invalid wire value.
 func toolCallResultStatus(s string) string {
+	if s == "cancelled" {
+		return "cancelled"
+	}
 	if s == "" || s == "success" {
 		return resolveStatus(s)
 	}

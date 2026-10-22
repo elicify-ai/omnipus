@@ -41,6 +41,8 @@ type historyPageRequest struct {
 	memo      map[session.HistoryPosition]historyPreparedGroup
 	media     *historyReadOnlyMedia
 	lifecycle *historyReadOnlyLifecycle
+	// Captured once before selection, included in every actual carrier weight.
+	sessionTokensTotal *int
 }
 
 func newHistoryPageRequest(sessionID string, opts session.ChatHistoryPageOptions, deps historyPageProjectionDeps) (*historyPageRequest, error) {
@@ -112,6 +114,7 @@ func (r *historyPageRequest) Read(ctx context.Context, store *session.UnifiedSto
 	}
 	defer func() { r.memo = nil; r.media = nil; r.lifecycle = nil }()
 	r.reset("")
+	r.sessionTokensTotal = store.ReadSessionTokensTotal(r.sessionID)
 	opts := r.opts
 	opts.Weigh = r.weigh
 	page, err := store.ReadChatHistoryPage(ctx, r.sessionID, opts)
@@ -143,7 +146,7 @@ func (r *historyPageRequest) Read(ctx context.Context, store *session.UnifiedSto
 	return prepared, nil
 }
 func (r *historyPageRequest) prepare(ctx context.Context, p session.ChatHistoryPage, final bool) (preparedHistoryPage, error) {
-	out := preparedHistoryPage{Page: p, Response: generated.SessionHistoryResponse{SessionId: p.SessionID, Entries: []generated.Message{}, HasEarlier: p.HasEarlier, HasLater: p.HasLater}, ReplayFrames: [][]byte{}, emitted: map[string]bool{}}
+	out := preparedHistoryPage{Page: p, Response: generated.SessionHistoryResponse{SessionId: p.SessionID, Entries: []generated.Message{}, HasEarlier: p.HasEarlier, HasLater: p.HasLater, SessionTokensTotal: r.sessionTokensTotal}, ReplayFrames: [][]byte{}, emitted: map[string]bool{}}
 	if p.NextBefore != "" {
 		v := string(p.NextBefore)
 		out.Response.NextBefore = &v
