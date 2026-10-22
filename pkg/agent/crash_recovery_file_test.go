@@ -28,10 +28,13 @@ import (
 // tool returns but BEFORE recordToolResult. Snapshotting there does not replace
 // the tool or the recovery engine, and requires no second test process.
 type crashFileResultBarrier struct {
-	tool    string
-	entered chan *ToolResultHookResponse
-	release chan struct{}
-	once    sync.Once
+	tool         string
+	entered      chan *ToolResultHookResponse
+	release      chan struct{}
+	once         sync.Once
+	passThrough  bool
+	matchContent string
+	signal       chan<- struct{}
 }
 
 func (h *crashFileResultBarrier) open() { h.once.Do(func() { close(h.release) }) }
@@ -39,10 +42,16 @@ func (h *crashFileResultBarrier) BeforeTool(_ context.Context, c *ToolCallHookRe
 	return c, HookDecision{Action: HookActionContinue}, nil
 }
 func (h *crashFileResultBarrier) AfterTool(ctx context.Context, r *ToolResultHookResponse) (*ToolResultHookResponse, HookDecision, error) {
-	if r.Tool != h.tool {
+	if r.Tool != h.tool || (h.matchContent != "" && r.Arguments["content"] != h.matchContent) {
 		return r, HookDecision{Action: HookActionContinue}, nil
 	}
 	h.entered <- r
+	if h.signal != nil {
+		h.signal <- struct{}{}
+	}
+	if h.passThrough {
+		return r, HookDecision{Action: HookActionContinue}, nil
+	}
 	select {
 	case <-h.release:
 	case <-ctx.Done():
@@ -51,22 +60,23 @@ func (h *crashFileResultBarrier) AfterTool(ctx context.Context, r *ToolResultHoo
 }
 
 type crashFileFixture struct {
-	h                    *crashHarness
-	record               *session.LifecycleRecord
-	snapshot, path, tool string
-	before, after        string
-	args                 map[string]any
-	assistant            session.ArchiveAddress
+	h                                      *crashHarness
+	record                                 *session.LifecycleRecord
+	snapshot, path, tool                   string
+	before, after                          string
+	args                                   map[string]any
+	assistant                              session.ArchiveAddress
+	beforeExists, afterResult, expectError bool
 }
 
-func crashFileCut(t *testing.T, name string) *crashFileFixture {
+func crashFileCut(t *testing.T, name string, configure ...func(*crashFileFixture)) *crashFileFixture {
 	t.Helper()
 	gate := make(chan struct{})
 	p := &crashScript{gate: gate, entered: make(chan int, 8)}
 	h := crashNew(t, p)
 	work, err := workspace.EnsureWorkDir(h.home, testHarnessWorkspaceMembershipID)
 	require.NoError(t, err)
-	f := &crashFileFixture{h: h, path: filepath.Join(work, "uncertain.txt"), tool: name, before: "base\n", args: map[string]any{}}
+	f := &crashFileFixture{h: h, path: filepath.Join(work, "uncertain.txt"), tool: name, before: "base\n", args: map[string]any{}, beforeExists: true}
 	switch name {
 	case "append_file":
 		f.args = map[string]any{"path": f.path, "content": "A\n"}
@@ -80,21 +90,38 @@ func crashFileCut(t *testing.T, name string) *crashFileFixture {
 	default:
 		t.Fatalf("unknown test adapter %q", name)
 	}
-	require.NoError(t, os.WriteFile(f.path, []byte(f.before), 0600))
+	for _, set := range configure {
+		set(f)
+	}
+	if f.beforeExists {
+		require.NoError(t, os.WriteFile(f.path, []byte(f.before), 0600))
+	}
+	second := make(chan struct{}, 1)
+	releaseSecond := make(chan struct{})
+	openSecond := sync.OnceFunc(func() { close(releaseSecond) })
+	t.Cleanup(openSecond)
 	p.next = func(i int, _ []providers.Message) (*providers.LLMResponse, error) {
+		if i == 1 && f.afterResult {
+			second <- struct{}{}
+			<-releaseSecond
+			return &providers.LLMResponse{Content: "fixture result was already committed", FinishReason: "stop"}, nil
+		}
 		if i != 0 {
 			return nil, fmt.Errorf("fixture crossed the held result cut")
 		}
 		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{crashCall("uncertain", name, f.args)}, FinishReason: "tool_calls"}, nil
 	}
-	barrier := &crashFileResultBarrier{tool: name, entered: make(chan *ToolResultHookResponse, 1), release: make(chan struct{})}
+	barrier := &crashFileResultBarrier{tool: name, entered: make(chan *ToolResultHookResponse, 1), release: make(chan struct{}), passThrough: f.afterResult}
 	require.NoError(t, h.al.MountHook(NamedHook("crash-file-result-barrier", barrier)))
 	t.Cleanup(barrier.open)
 	rec, owner := crashChild(t, h, p)
 	f.record = rec
 	close(gate)
+	if f.afterResult {
+		crashAwait(t, second)
+	}
 	result := crashAwait(t, barrier.entered)
-	require.False(t, result.Result.IsError, "real file mutation must succeed before cut: %s", result.Result.ContentForLLM())
+	require.Equal(t, f.expectError, result.Result.IsError, "actual file outcome at the chosen cut: %s", result.Result.ContentForLLM())
 	bytes, err := os.ReadFile(f.path)
 	require.NoError(t, err)
 	require.Equal(t, f.after, string(bytes), "applied-before-result crash cut has the exact intended bytes")
@@ -113,9 +140,14 @@ func crashFileCut(t *testing.T, name string) *crashFileFixture {
 		}
 	}
 	require.Equal(t, 1, issuers, "one actual issuing assistant occurrence")
-	require.Equal(t, 0, results, "the barrier is before the missing durable result, not after it")
+	wantResults := 0
+	if f.afterResult {
+		wantResults = 1
+	}
+	require.Equal(t, wantResults, results, "the explicit cut distinguishes before-result from after-result durability")
 	f.snapshot = h.snapshot(t)
 	barrier.open()
+	openSecond()
 	crashAwaitDone(t, owner.done)
 	return f
 }

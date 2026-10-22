@@ -18,7 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-func crashCeiling(t *testing.T) (*crashHarness, *session.LifecycleRecord) {
+func crashCeiling(t *testing.T, beforeRelease ...func(*crashHarness, *session.LifecycleRecord)) (*crashHarness, *session.LifecycleRecord) {
 	t.Helper()
 	gate := make(chan struct{})
 	p := &crashScript{entered: make(chan int, 8), gate: gate}
@@ -31,6 +31,9 @@ func crashCeiling(t *testing.T) (*crashHarness, *session.LifecycleRecord) {
 		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{crashCall(fmt.Sprintf("read-%d", i), "read_file", map[string]any{"path": path})}, FinishReason: "tool_calls"}, nil
 	}
 	rec, owner := crashChild(t, h, p)
+	for _, install := range beforeRelease {
+		install(h, rec)
+	}
 	close(gate)
 	crashAwaitDone(t, owner.done)
 	require.Len(t, p.calls(), 2, "configured small ceiling must actually execute exactly two model steps")
