@@ -172,14 +172,10 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 	}{
 		{name: "non-empty quiet", answer: "finished", wantState: session.LifecycleCompleted, wantKind: "handback"},
 		{name: "empty quiet", answer: "   ", wantState: session.LifecycleFailed, wantKind: "error", wantText: "empty_answer:", wantFatal: true},
-		// ADR-091 fix lane RX-HANG: state/kind/text/fatal are UNCHANGED by
-		// this lane's fix — the child stays resumable (LifecycleRunning,
-		// fatal: false is still correct; this is not a crash). What
-		// changed is WHETHER the parent is woken by this exact message,
-		// which this table does not assert — see
-		// TestCompletion_IterationLimit_NonFatal_WakesParent for that
-		// (deliberately flipped) pinned expectation.
-		{name: "iteration limit is a non-fatal lifecycle notice", answer: toolLimitResponse, turnFailed: true, wantState: session.LifecycleRunning, wantKind: "error", wantText: "max_tool_iterations:", wantFatal: false},
+		// Crash-recovery DESIGN Decision 1 / founder Q14 supersedes the old
+		// Running expectation. The execution ended, but its parent notice is
+		// still nonfatal and explicit continuation remains available in G+1.
+		{name: "iteration limit is an ended non-fatal interruption", answer: toolLimitResponse, turnFailed: true, wantState: session.LifecycleState("interrupted"), wantKind: "error", wantText: "max_tool_iterations:", wantFatal: false},
 		{name: "non-empty queued descendant", answer: "parent answer", withQueued: true, wantState: session.LifecycleRunning},
 	}
 	for _, tc := range tests {
@@ -254,9 +250,9 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 // and the whole ancestor chain hung silently up to the user's chat with no
 // log line and no UI signal (recoverable only by a gateway restart). The
 // parent MUST be woken so it can decide to retry, raise the tool-iteration
-// budget, or give up — Fatal stays false (see below) so the child does not
-// look dead; a genuine failure is still the contrast: `fatal: true` and the
-// parent is woken, as before.
+// budget, or give up. Crash-recovery DESIGN Decision 1 / founder Q14 now
+// freezes the ended generation as Interrupted. Fatal stays false: a ceiling is
+// not a generic Failed outcome. A genuine failure remains fatal and wakes.
 func TestCompletion_IterationLimit_NonFatal_WakesParent(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -273,7 +269,7 @@ func TestCompletion_IterationLimit_NonFatal_WakesParent(t *testing.T) {
 			wantFatal: false,
 			wantWake:  true,
 			wantText:  "max_tool_iterations:",
-			wantState: session.LifecycleRunning,
+			wantState: session.LifecycleState("interrupted"),
 		},
 		{
 			name:      "genuine failure is fatal and wakes the parent",
