@@ -299,24 +299,41 @@ func historyRetained(cp historyCheckpoint) []string {
 	return out
 }
 
-func (o *chatHistoryOwner) retain(path string) func() {
+func (o *chatHistoryOwner) retain(path string) func() error {
 	o.refsMu.Lock()
 	o.refs[path]++
 	o.refsMu.Unlock()
-	return func() {
+	released := false
+	var releaseErr error
+	return func() error {
 		o.refsMu.Lock()
 		defer o.refsMu.Unlock()
+		if released {
+			return releaseErr
+		}
+		released = true
 		o.refs[path]--
 		if o.refs[path] == 0 {
 			delete(o.refs, path)
-			if o.retired[path] {
-				if os.Remove(path) == nil {
-					delete(o.retired, path)
-				}
-			}
+			releaseErr = o.removeRetiredLocked(path)
 		}
+		return releaseErr
 	}
 }
+
+// removeRetiredLocked keeps failed cleanup pending. The caller holds refsMu;
+// neither this path nor a reader release waits for owner.mu/session shards.
+func (o *chatHistoryOwner) removeRetiredLocked(path string) error {
+	if !o.retired[path] || o.refs[path] > 0 {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	delete(o.retired, path)
+	return nil
+}
+
 func (o *chatHistoryOwner) retire(dir, keep string) error {
 	o.refsMu.Lock()
 	defer o.refsMu.Unlock()
@@ -324,20 +341,21 @@ func (o *chatHistoryOwner) retire(dir, keep string) error {
 	if err != nil {
 		return err
 	}
+	// Discover obsolete files after restart as well as remembered failures.
+	// Never retire the current published generation.
+	delete(o.retired, filepath.Join(dir, keep))
 	for _, e := range entries {
-		if e.Name() == keep || e.IsDir() {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		if o.refs[path] > 0 {
-			o.retired[path] = true
-			continue
-		}
-		if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+		if e.Name() != keep && !e.IsDir() {
+			o.retired[filepath.Join(dir, e.Name())] = true
 		}
 	}
-	return nil
+	var retirementErr error
+	for path := range o.retired {
+		if err := o.removeRetiredLocked(path); err != nil {
+			retirementErr = errors.Join(retirementErr, err)
+		}
+	}
+	return retirementErr
 }
 
 // validateIndexTail never trims framed damage or any canonical bytes. Only the

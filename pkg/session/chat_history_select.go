@@ -418,12 +418,19 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 		if m := historyMetrics(ctx); m != nil {
 			start = *m
 		}
+		var cleanupErr error
 		p, err := func() (page ChatHistoryPage, readErr error) {
 			// Scope cleanup to this attempt, not the whole reselect loop. Close
 			// the handle before releasing the generation, including on panic.
-			defer release()
+			defer func() {
+				if releaseErr := release(); releaseErr != nil {
+					cleanupErr = errors.Join(cleanupErr, releaseErr)
+					readErr = errors.Join(readErr, releaseErr)
+				}
+			}()
 			defer func() {
 				if closeErr := t.file.Close(); closeErr != nil {
+					cleanupErr = errors.Join(cleanupErr, closeErr)
 					readErr = errors.Join(readErr, closeErr)
 				}
 			}()
@@ -433,6 +440,11 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 			}
 			return page, readErr
 		}()
+		// A retirement failure is real storage failure even when this cut
+		// moved; reselect must not absorb a failed last-reader deletion.
+		if cleanupErr != nil {
+			return ChatHistoryPage{}, historyUnavailable("storage_error", err)
+		}
 		if ctx.Err() != nil {
 			return ChatHistoryPage{}, ctx.Err()
 		}
