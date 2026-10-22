@@ -63,9 +63,11 @@ func pagingPersistedOriginMatrix(t *testing.T) {
 		{"assistant", "replay_message", `{"role":"assistant","content":"answer","terminal_outcome":true,"model":"recorded-model"}`},
 		{"system", "replay_message", `{"type":"system","role":"system","content":"notice"}`},
 		{"finished_tool_only", "tool_call_result", `{"type":"tool_call","tool_calls":[{"id":"call","tool":"read_file","status":"success","parameters":{},"result":{"text":"real"}}]}`},
-		{"error", "replay_error", `{"role":"assistant","status":"error","content":"saved provider error","error_code":"provider_error","provider_message":true,"model":"recorded-model"}`},
+		// The real producer persists translated errors as system/error entries;
+		// an assistant/message fixture cannot be a replay_error positive control.
+		{"error", "replay_error", `{"type":"system","role":"system","status":"error","content":"saved provider error","error_code":"provider_auth_failed","provider_message":true,"model":"recorded-model"}`},
 		{"fallback", "replay_provider_fallback", `{"type":"provider_fallback","role":"system","content":"Answered by the Fallback model (used) because unavailable was unavailable.","unavailable_model":"unavailable","model":"used","unavailable_code":"rate_limited"}`},
-		{"diagnostic", "context_window_notice", `{"type":"context_window_notice","context_window_notice":{"kind":"mid_turn","message":"bounded context notice"}}`},
+		{"diagnostic", "context_window_notice", `{"type":"context_window_notice","role":"system","turn_id":"source-diagnostic-turn","context_window_notice":{"kind":"mid_turn","message":"bounded context notice"}}`},
 		{"verdict", "judge_verdict", `{"type":"judge_verdict","role":"system","content":"{\"id\":\"00000000-0000-4000-8000-000000000001\",\"scope\":\"goal\",\"goal_session_id\":\"goal-session\",\"round\":1,\"met\":true,\"per_criterion\":[],\"model\":\"test-model\",\"judged_at\":\"2026-10-21T12:00:00Z\"}"}`},
 		{"handover", "browser_handover_notice", `{"type":"system","role":"system","system_subtype":"browser_handover_notice","content":"Operator took control"}`},
 		{"helper", "helper_event", `{"type":"system","role":"system","system_subtype":"helper_event","helper_event":{"helper_session_id":"helper","kind":"finished","text":"Helper finished","created_at":"2026-10-21T12:00:00Z"}}`},
@@ -98,6 +100,7 @@ func pagingPersistedOriginMatrix(t *testing.T) {
 				e.SubagentEnd.SessionId = sid
 			}
 			e.AgentID = "mia"
+			e.ViewMembership = session.ViewMembershipChat
 			e.Timestamp = time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 			a, err := s.AppendTranscriptAddressed(sid, e)
 			require.NoError(t, err)

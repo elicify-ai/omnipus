@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,10 +20,11 @@ import (
 // The existing loop_context_notice_q33_test.go owns ordinary-chat suppression;
 // this pack does not drive the agent loop or change either existing Q33 test.
 //
-// Real: JSONL storage, UnifiedStore.ReadTranscript, REST routing and streamReplay.
-// Fake: the external model provider in newTestRestAPI and the WebSocket sink.
-// Seed generated-contract records directly on disk, not through a test-local
-// TranscriptEntry conversion that could discard the payload before the read.
+// Real: canonical append/index publication, UnifiedStore.ReadTranscript, REST
+// routing and streamReplay. Fake: the external model provider in newTestRestAPI
+// and the WebSocket sink. D10/D15 requires genuine writer-created history, not
+// raw JSONL appended behind the fresh session's published index. The fixture's
+// exact generated payload and original identity assertions remain unchanged.
 // GREEN and production mutation probes are deferred to an independent CHECK.
 const q33DurableNoticeJSON = `{
   "id": "q33-original-notice",
@@ -49,14 +48,16 @@ func q33SeedDurableNotice(t *testing.T, store *session.UnifiedStore, sessionID, 
 		"the fixture must decode into the landed generated Message contract")
 	require.NotNil(t, want.ContextWindowNotice, "the seed must contain the spec's required notice payload")
 	want.ContextWindowNotice.Kind = generated.MessageContextWindowNoticeKind(kind)
-	// session-core U2 (effects design D4/D11): the archive carries no reader
-	// default for view_membership, so the raw fixture must state it as "chat".
-	// The line is written verbatim (json.RawMessage) so the classified kind
-	// override lands without a TranscriptEntry conversion dropping it.
 	line := strings.Replace(q33DurableNoticeJSON,
 		`"kind": "provider_retry"`, `"kind": "`+string(want.ContextWindowNotice.Kind)+`"`, 1)
-	require.NoError(t, fileutil.AppendJSONL(filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl"), json.RawMessage(line)),
-		"seed the actual durable transcript with the complete classified wire record")
+	var entry session.TranscriptEntry
+	require.NoError(t, json.Unmarshal([]byte(line), &entry))
+	require.NotNil(t, entry.ContextWindowNotice, "the product archive type must retain the complete classified payload")
+	require.Equal(t, generated.ContextWindowNoticeKind(kind), entry.ContextWindowNotice.Kind)
+	require.Equal(t, "The context budget was reduced before retrying this turn.", entry.ContextWindowNotice.Message)
+	require.Equal(t, session.ViewMembershipChat, entry.ViewMembership)
+	require.NoError(t, store.AppendTranscriptStrict(sessionID, entry),
+		"genuine canonical append must persist the same notice and publish its history index")
 	return want
 }
 
@@ -101,9 +102,9 @@ func TestContextWindowNoticeReplayUsesSameClassifiedFrame_Q33(t *testing.T) {
 			store, err := session.NewUnifiedStore(t.TempDir())
 			require.NoError(t, err, "open a real disk-backed store for the reload")
 			t.Cleanup(func() { require.NoError(t, store.Close(), "close the fixture store and its background flusher") })
-			// No session creation is needed for a read-only disk fixture. The
-			// REST case separately exercises session creation and request routing.
-			const sessionID = "q33-reloaded-session"
+			meta, err := store.NewSession(session.SessionTypeChat, "webchat", "jim")
+			require.NoError(t, err, "use the real session/writer index baseline")
+			sessionID := meta.ID
 			wantEntry := q33SeedDurableNotice(t, store, sessionID, kind)
 			entries, err := store.ReadTranscript(sessionID)
 			require.NoError(t, err, "replay input must come from the real durable-history decoder")
