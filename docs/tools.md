@@ -125,7 +125,7 @@ What each setting does, and what you see when it fires:
 |---|---|---|
 | Allow | Runs the tool without checking | The call runs and shows in the chat |
 | Ask | Stops and waits for your approval, unless Auto-approve lets the call through | An approval card with Approve Once, Deny and Always Allow |
-| Deny | Cannot run the tool | The tool disappears from the agent's view |
+| Deny | Cannot run the tool | Not offered for execution; still listed by `get_agent_tools` |
 
 On the approval card, **Approve Once** runs the call and remembers nothing. **Always Allow** remembers that exact call for the rest of the chat, so an identical one does not ask again. For a shell command, Always Allow can instead remember a whole family of similar commands. See [security](security.md) for the exact wording and when that choice is offered.
 
