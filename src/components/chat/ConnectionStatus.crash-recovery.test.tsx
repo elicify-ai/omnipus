@@ -1,6 +1,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session } from '@/lib/api'
+import type { components } from '@/lib/api/generated/openapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
@@ -16,13 +17,14 @@ vi.mock('@/lib/api', async (original) => ({
 }))
 const SID = 'crash-recovery-notice'
 const NOW = '2026-10-22T00:00:00Z'
-function row(reason: string, lifecycle_state: Session['lifecycle_state'] = 'interrupted'): Session {
+type InterruptionReason = NonNullable<components['schemas']['Session']['interruption_reason']>
+function row(reason: InterruptionReason, lifecycle_state: Session['lifecycle_state'] = 'interrupted'): Session {
   return Object.assign({ id: SID, type: 'delegate' as const, agent_id: 'mia', title: 'Helper', status: 'active' as const,
     created_at: NOW, updated_at: NOW, channel: 'webchat', partitions: [], message_count: 0,
     stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 0 }, lifecycle_state,
   }, { interruption_reason: reason })
 }
-function saved(reason: string, state: Session['lifecycle_state'] = 'interrupted') {
+function saved(reason: InterruptionReason, state: Session['lifecycle_state'] = 'interrupted') {
   act(() => { queryClient.setQueryData(['sessions'], [row(reason, state)]) })
 }
 function running(value: boolean) {
@@ -47,7 +49,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); queryClient.clear(); vi.useRealTimers() })
 
 describe('crash recovery — cause-specific Interrupted notice', () => {
-  it.each(['tool_limit', 'reconciliation_required'])('%s is Interrupted, never restart copy or Failed', (reason) => {
+  it.each(['tool_limit', 'reconciliation_required'] as const)('%s is Interrupted, never restart copy or Failed', (reason) => {
     saved(reason)
     render(<RestartInterruptedNotice />)
     const notice = screen.getByTestId('restart-interrupted-notice')

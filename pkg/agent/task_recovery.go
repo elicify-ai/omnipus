@@ -24,7 +24,8 @@ func (al *AgentLoop) checkTaskRecovery(ctx context.Context, t *task.Task) error 
 			return fmt.Errorf("reconciliation_required: prior run agent is unavailable")
 		}
 		if _, err := al.recoverSessionToolCalls(ctx, inst, rec, id); err != nil {
-			return fmt.Errorf("reconciliation_required: prior run %s requires reconciliation: %w", id, err)
+			endingErr := al.freezePriorTaskReconciliation(ctx, rec)
+			return fmt.Errorf("reconciliation_required: prior run %s requires reconciliation: %w", id, errors.Join(err, endingErr))
 		}
 	}
 	return nil

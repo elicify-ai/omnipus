@@ -230,8 +230,8 @@ export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatS
     restartInterruptedListVersion: bucket.restartInterruptedListVersion,
     restartNoticeDismissed: bucket.restartNoticeDismissed,
     restartNoticeDismissedAt: bucket.restartNoticeDismissedAt,
-    restartNoticeDismissedVersion: bucket.restartNoticeDismissedVersion,
-    restartNoticeSettled: bucket.restartNoticeSettled,
+    restartNoticeDismissedListVersion: bucket.restartNoticeDismissedListVersion,
+    restartNoticeResolvedAt: bucket.restartNoticeResolvedAt,
     endedInterruption: bucket.endedInterruption,
     // Item 3 follow-up (orchestrator, Lane A confirmed the gateway side is
     // correct): the client sets isReplaying:true BEFORE session_snapshot

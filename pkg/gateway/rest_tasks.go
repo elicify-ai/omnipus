@@ -1559,8 +1559,9 @@ func (tp *taskPatch) launchIfStarted() bool {
 	if tp.req.Status != nil &&
 		tp.updated.Status == task.StatusInProgress &&
 		tp.preUpdateStatus != task.StatusInProgress &&
-		tp.updated.AgentID != "" &&
-		tp.updated.SessionID == "" {
+		tp.updated.AgentID != "" {
+		// Bound sessions still pay StartTaskNow's plan/identity gates. Only the
+		// locked crash-Retry transition retires a binding to create a fresh run.
 		// buildLaunchRevertPatch assembles the revert-to-prior-state patch shared
 		// by both failure branches below (nil executor, StartTaskNow error).
 		buildLaunchRevertPatch := func() task.Patch {
@@ -1574,6 +1575,10 @@ func (tp *taskPatch) launchIfStarted() bool {
 			if _, rErr := tp.a.taskStore.Update(tp.id, revertPatch); rErr != nil {
 				slog.Error("rest: could not revert task status after nil-executor failure",
 					"id", tp.id, "revert_to", tp.preUpdateStatus, "error", rErr)
+				jsonErr(tp.w, http.StatusInternalServerError,
+					"the task could not be started and its status could not be reverted: "+
+						"server storage failed. Check disk space and permissions, then retry. Details are in the server log.")
+				return true
 			}
 			slog.Warn("rest: taskExecutor is nil; rejecting in_progress transition",
 				"id", tp.id, "agent_id", tp.updated.AgentID)

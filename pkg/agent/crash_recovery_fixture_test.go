@@ -196,6 +196,11 @@ func crashCopyTree(src, dst string) error {
 			if e != nil {
 				return e
 			}
+			// Restore preserves directory identities and may retain an unchanged
+			// mount symlink. Reuse that exact link rather than failing with EEXIST.
+			if existing, err := os.Readlink(target); err == nil && existing == link {
+				return nil
+			}
 			return os.Symlink(link, target)
 		}
 		if !d.Type().IsRegular() {

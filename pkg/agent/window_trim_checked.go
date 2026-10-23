@@ -134,7 +134,7 @@ func (p *windowCheckpoint) trimWholeTurns(fits func([]providers.Message) bool, f
 	selected, cut := -1, p.state.Skip
 	var kept []providers.Message
 	var lines []int
-	for _, end := range parseTurnBoundaries(p.messages) {
+	for _, end := range p.wholeTurnStarts() {
 		if end <= 0 || end >= len(p.lines) || p.lines[end] <= p.state.Skip || !p.canTrimPrefix(end) {
 			continue
 		}

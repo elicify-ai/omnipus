@@ -116,7 +116,9 @@ func (al *AgentLoop) finishExecutionDisposition(d *executionDisposition) error {
 	}
 	if binding != nil {
 		err = al.settleSelectedStop(binding.selected, unlock)
-	} else if err == nil && !d.steered {
+	} else if err == nil && (!d.steered || taskDispositionInterrupted(d)) {
+		// A task can reserve a worker slot without having a steering parent.
+		// The canonical record, not the slot kind, decides root settlement.
 		err = al.settleOrdinaryRoot(d)
 	}
 	unlock()

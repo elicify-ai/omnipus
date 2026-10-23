@@ -570,6 +570,23 @@ export interface SessionChatState {
    */
   restartNoticeSettled?: boolean
   /**
+   * Sessions-list update count at the moment the notice was dismissed because
+   * the user continued the chat. While the continuation's outcome is
+   * unwitnessed (`restartNoticeResolvedAt` unset), the next saved `interrupted`
+   * observation past this count — any `updated_at`; a second same-boot ceiling
+   * can re-save the byte-identical row — re-arms the notice. See
+   * components/chat/useRestartInterrupted.ts.
+   */
+  restartNoticeDismissedListVersion?: number
+  /**
+   * Sessions-list update count at which the interrupted report was settled:
+   * a witnessed clean turn completion (done without interruption_reason) or
+   * an explicit dismissal. While set, refetching the same saved `interrupted`
+   * row — a stale read that predates the witnessed outcome — never re-arms.
+   * Cleared when the user continues the chat again.
+   */
+  restartNoticeResolvedAt?: number
+  /**
    * Live `done` stats named an ended interruption before the session list
    * refetch landed. `listVersion` is the sessions-query update count at
    * record time, so a refetch that is still the previous lifecycle cannot

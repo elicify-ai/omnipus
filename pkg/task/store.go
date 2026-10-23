@@ -226,6 +226,9 @@ func (s *Store) write(t *Task) error {
 	// DropOrphanEdges, the task migrations, pkg/sysagent/tools' writeEntity —
 	// takes this same sidecar lock.
 	return fileutil.WithFlock(fileutil.SidecarLockPath(p), func() error {
+		if hook := taskBeforeAtomicWriteTestHook; hook != nil {
+			hook(p, data)
+		}
 		return writeFileAtomicFn(p, data, 0o600)
 	})
 }
@@ -235,6 +238,10 @@ func (s *Store) write(t *Task) error {
 // write in this package — task files, evidence records, run day files — goes
 // through it. Production code never reassigns it.
 var writeFileAtomicFn = fileutil.WriteFileAtomic
+
+// taskBeforeAtomicWriteTestHook is a passive observation slot, nil in production.
+// Fault tests retain the real flock and atomic writer; no alternate write path.
+var taskBeforeAtomicWriteTestHook func(path string, data []byte)
 
 // Lock returns the per-task striped mutex for id. Callers performing a manual
 // read-modify-write outside Create/Update should hold this for the whole RMW.

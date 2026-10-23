@@ -121,6 +121,9 @@ func ReadRoomRequestScope(base string, ref *RoomScopeRef) ([]RoomRequestRef, err
 }
 
 func RetireRoomRequest(base string, retirement RoomRequestRetirement) error {
+	counter := roomProjectionCounter(base)
+	counter.Add(1)
+	defer counter.Add(1) // Invalidate reads begun before or during this commit, including failed commits.
 	if retirement.Input.EntryID == "" || retirement.Execution.RunID == "" || retirement.Execution.BootSeq == 0 {
 		return fmt.Errorf("context_repair_required: exact consumed room input correlation is missing")
 	}

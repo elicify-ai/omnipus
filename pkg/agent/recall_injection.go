@@ -107,7 +107,7 @@ func (al *AgentLoop) decideRecallInjection(
 	if toolName != recallConversationToolName || ts == nil || ts.agent == nil {
 		return unchanged
 	}
-	span := al.activeRecallSpan(ts.sessionKey)
+	span := al.roomSafeRecallSpan(ts)
 	if span == nil {
 		if ts.depth > 0 {
 			// FR-044 (ADR-066 §6.4 known limitation, pinned by

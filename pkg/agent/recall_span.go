@@ -44,6 +44,8 @@ func RecallSpanDropCount(reason string) int64 {
 // Construct exclusively via newRecallSpan so Tokens is always consistent with
 // Msgs. Read the span via Messages() and the Tokens field.
 type RecallSpan struct {
+	roomProjectionRevision uint64
+	roomProjectionBound    bool
 	// FromTurn and ToTurn are the minimum and maximum 1-based Turn ordinals
 	// present in this span (as grouped by parseTurnBoundaries over the full
 	// archive). They represent the extent of the kept turns, NOT a coverage
