@@ -291,6 +291,7 @@ export async function browserCampaign(gateway, wire, sid, otherSid, options) {
 
 async function traverse(page, cdp, wire, sid, directory, measurements, pageTarget) {
   let busy = false, lockWheel = false, error = null;
+  let wheelInFlight = Promise.resolve();
   const seenCuts = new Set();
   const traversalStarted = performance.now();
   await page.route('**/api/v1/sessions/*/messages?*', async route => {
@@ -307,6 +308,9 @@ async function traverse(page, cdp, wire, sid, directory, measurements, pageTarge
       if (!cut || seenCuts.has(cut)) throw new Error('older traversal did not advance a distinct page');
       seenCuts.add(cut);
       lockWheel = true;
+      // The lock stops new input, not a tick already dispatched. Finish that
+      // wheel and its renderer turns before measuring page-delivery drift.
+      await wheelInFlight;
       const anchor = await page.evaluate(visibleAnchor);
       const coverageBefore = await page.evaluate(() => ({ ...window.__b25Coverage }));
       await route.fulfill({ response }); // Deliver the actual gateway response, unchanged.
@@ -341,7 +345,11 @@ async function traverse(page, cdp, wire, sid, directory, measurements, pageTarge
   // paused product paging reports UNMEASURED with every collected sample intact.
   for (let tick = 0; tick < 16000 && measurements.traversal.length < pageTarget && !error; tick++) {
     const prior = measurements.traversal.length;
-    if (!lockWheel) await page.mouse.wheel(0, -box.height * .075);
+    if (!lockWheel) {
+      // Playwright's wheel promise acknowledges dispatch, not finished scrolling.
+      wheelInFlight = page.mouse.wheel(0, -box.height * .075).then(() => settle(page));
+      await wheelInFlight;
+    }
     await delay(100); // <=0.75 viewport/s; never fast-scroll to force a pass.
     if (await scroller.count() === 0) {
       measurements.scroll_crash = { elapsed_ms: performance.now() - traversalStarted,
