@@ -6,7 +6,6 @@ package goal
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -14,19 +13,22 @@ import (
 )
 
 // validateClaim checks a Claim's shape: Status must be one of the three
-// generated.GoalLatestClaimStatus values, and Evidence is required and
-// non-empty (whitespace-trimmed) when Status == met (JUDGE's own
-// machine-verifiable constraint, mirrored on Goal.yaml's latest_claim
-// description).
+// generated.GoalLatestClaimStatus values. Evidence is carried AS SUBMITTED —
+// possibly empty or whitespace-only on a met claim, which ADR-084 §13
+// (corrected 2026-10-23, issue #1431, MAJ-001) records and adjudicates like
+// any other claim: the durable invariant follows the tool's, whose schema
+// enforces PRESENCE at dispatch while the evidence TEXT is never refused.
+// (The former non-empty-when-met rejection reproduced the §13 defect one
+// layer below the tool: the task path paused via pauseRunForGoalError
+// before the Judge, and the chat record's latest claim never represented
+// the accepted call.) Mirrored on Goal.yaml's latest_claim.evidence
+// description.
 func validateClaim(c *Claim) error {
 	if c == nil {
 		return fmt.Errorf("goal: validate claim: nil claim")
 	}
 	if !c.Status.Valid() {
 		return fmt.Errorf("goal: claim: invalid status %q", c.Status)
-	}
-	if c.Status == generated.GoalLatestClaimStatusMet && strings.TrimSpace(c.Evidence) == "" {
-		return fmt.Errorf("goal: claim: evidence is required and must be non-empty when status is %q", c.Status)
 	}
 	return nil
 }

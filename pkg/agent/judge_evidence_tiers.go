@@ -146,15 +146,19 @@ func (al *AgentLoop) tierOneRedactFn() func(string) string {
 }
 
 // formatTierOneToolCall renders one session.ToolCall as FR-105's
-// "{tool, parameters, status, error}" — durable fields ONLY (FR-106):
-// Tool, Status, Parameters and Error are never touched by
-// empty_in_place.go's mid-turn Result rewrite (ADR-066 D5), unlike Result
-// itself, which this function never reads. When ContentState records that
-// Result WAS projected away ("emptied"/"capped"), an explicit marker is
-// rendered instead of silence, so the tier-1 fact reads as "this call's
-// result was redacted from view", never as "this tool returned nothing" —
-// the FR-106 failure mode (a rewritten Result read naively as absence,
-// contradicting and vetoing a true claim) this function exists to close.
+// "{tool, parameters, status, error, result}" — parameters, error and (as
+// of FR-106's 2026-10-23 amendment, ADR-084 §13 MAJ-004) the RESULT payload
+// are each redacted by the same redaction function and bounded by the same
+// rune truncation: all three are UNTRUSTED, model/tool-controlled text
+// reaching the Judge's own prompt. A result still on the record
+// (ContentState empty) renders — a decisive value living only in a worker's
+// tool result must be reachable for the adjudication. When ContentState
+// records that Result WAS projected away mid-turn ("emptied"/"capped",
+// ADR-066 D5), an explicit projection marker is rendered instead —
+// inconclusive, NEVER absence (the FR-106 failure mode: a rewritten Result
+// read naively as "the tool returned nothing", contradicting and vetoing a
+// true claim) — and a call that produced no result at all renders an
+// explicit no-result, so silence can never masquerade as either state.
 func formatTierOneToolCall(tc session.ToolCall, redact func(string) string) string {
 	if redact == nil {
 		redact = func(s string) string { return s }
@@ -172,6 +176,23 @@ func formatTierOneToolCall(tc session.ToolCall, redact func(string) string) stri
 		// FR-106: never rendered as absence — an explicit projection marker,
 		// distinct from "no result was ever produced".
 		fmt.Fprintf(&sb, " result=[projected away from this window — durable fields only, FR-106]")
+	default:
+		// FR-106 as amended (ADR-084 §13, MAJ-004): a result payload that
+		// exists on the record renders — same redaction, same bound.
+		if len(tc.Result) > 0 {
+			b, merr := json.Marshal(tc.Result)
+			if merr != nil {
+				// json.Marshal cannot fail for transcript-decoded
+				// map[string]any payloads; if one ever does, render the
+				// fallback text through the same redact+truncate path
+				// rather than silently dropping the result.
+				b = []byte(fmt.Sprintf("%v", tc.Result))
+			}
+			res := truncateRunesWithMarker(redact(string(b)), tierOneParamRuneLimit)
+			fmt.Fprintf(&sb, " result=%s", res)
+		} else {
+			fmt.Fprintf(&sb, " result=[no result]")
+		}
 	}
 	if strings.TrimSpace(tc.Error) != "" {
 		errText := truncateRunesWithMarker(redact(tc.Error), tierOneParamRuneLimit)
