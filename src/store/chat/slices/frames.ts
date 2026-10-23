@@ -24,7 +24,7 @@ import {
   readLLMErrorFromFrame,
   sanitizeLegacyErrorMessage,
 } from '@/lib/llm-error'
-import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, endTurnState, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
+import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, endTurnState, evictMessageFromBucket, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { mergeRecordedSessionTokens } from '../session-usage'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
@@ -623,6 +623,38 @@ function scheduleReplayingClear(
   return clearReplayingNow
 }
 
+/** Keep an occupied answer; discard only its data-free superseded placeholder. */
+function canRekeyAssistantPlaceholder(draft: SessionChatState, frame: TokenFrameType, localId: string): boolean {
+  if (!draft.messagesById[frame.message_id!]) return true
+  logDiagnostic('chatPlaceholderRekeyCollision', {
+    sessionId: frame.session_id,
+    turnId: frame.turn_id ?? null,
+    reason: 'occupied_destination',
+  })
+  if (!draft.messagesById[localId].tool_calls?.length) evictMessageFromBucket(draft, localId)
+  return false
+}
+
+/** Adopt a wire identity in place; tool/span references move only for step 2. */
+function rekeyAssistantPlaceholder(draft: SessionChatState, localId: string, messageId: string, remapOwnedReferences = false): void {
+  const placeholder = draft.messagesById[localId]
+  delete draft.messagesById[localId]
+  draft.messagesById[messageId] = { ...placeholder, id: messageId }
+  const idx = draft.messageOrder.indexOf(localId)
+  if (idx !== -1) draft.messageOrder[idx] = messageId
+  else draft.messageOrder.push(messageId)
+  if (!remapOwnedReferences) return
+  const owners = draft.toolCallOwnerMessageId
+  if (owners) {
+    for (const callId of Object.keys(owners)) {
+      if (owners[callId] === localId) owners[callId] = messageId
+    }
+  }
+  for (const entry of Object.values(draft.spanBySpanId ?? {})) {
+    if (entry.messageId === localId) entry.messageId = messageId
+  }
+}
+
 function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: TokenFrameType): void {
   const m = draft.messagesById[bubbleId]
   if (frame.replace) {
@@ -780,6 +812,13 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       const m = draft.messagesById[turnBubbleId]
       if (m.turnId === undefined) m.turnId = turnId // now that a token has named the turn
       m.closedBySteer = false
+      // Empty local placeholders adopt the wire key without replacing a real entry.
+      const rekeyable = !m.content && (m.isStreaming || m.status === 'streaming') && !m.mergedReplayIds?.length && !draft.messagesById[messageId]
+      if (rekeyable) {
+        rekeyAssistantPlaceholder(draft, turnBubbleId, messageId, true)
+        applyTokenContentTo(draft, messageId, frame)
+        return
+      }
       m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
       draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
       applyTokenContentTo(draft, turnBubbleId, frame)
@@ -828,24 +867,17 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       ownedIds.length === 0 &&
       !prevMsg.media?.length &&
       !prevMsg.spans?.length
-    if (isEmptyPlaceholder) {
-      delete draft.messagesById[prevOpenId]
-      const idx = draft.messageOrder.indexOf(prevOpenId)
-      const bubble: ChatMessage = {
-        ...prevMsg,
-        id: messageId,
-        content: frame.content,
-        agentId: frame.agent_id ?? prevMsg.agentId,
-        turnId: turnId ?? prevMsg.turnId,
-        ...(frame.room_ref ? { roomRef: frame.room_ref } : {}),
-      }
-      draft.messagesById[messageId] = bubble
-      if (idx !== -1) draft.messageOrder[idx] = messageId
-      else draft.messageOrder.push(messageId)
+    if (isEmptyPlaceholder && canRekeyAssistantPlaceholder(draft, frame, prevOpenId)) {
+      rekeyAssistantPlaceholder(draft, prevOpenId, messageId)
+      const bubble = draft.messagesById[messageId]
+      bubble.content = frame.content
+      bubble.agentId = frame.agent_id ?? prevMsg.agentId
+      bubble.turnId = turnId ?? prevMsg.turnId
+      if (frame.room_ref) bubble.roomRef = frame.room_ref
       draft.isStreaming = true
       return
     }
-    if (prevMsg.isStreaming || prevMsg.status === 'streaming') {
+    if (draft.messagesById[prevOpenId] && (prevMsg.isStreaming || prevMsg.status === 'streaming')) {
       if (ownedIds.length > 0) {
         bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, prevOpenId, draft.textAtToolCallStart)
       }

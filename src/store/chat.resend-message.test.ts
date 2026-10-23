@@ -22,10 +22,14 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import type { WsConnection } from '@/lib/ws'
+import { queryClient } from '@/lib/queryClient'
+import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
 
 const TEST_SESSION_ID = 'test-session-resend'
 
 function resetStore() {
+  queryClient.clear()
+  seedCanonicalSession(TEST_SESSION_ID, 'general-assistant')
   act(() => {
     useChatStore.getState().clearStreamingState()
     useChatStore.setState({

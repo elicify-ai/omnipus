@@ -43,6 +43,10 @@ Until a connector is bound, its card shows **Not bound — choose a workspace an
 
 Each drop is written to the log as an error and to the audit log, and the connector shows as degraded on the Connectors page with the reason. Saving a valid binding clears that status, and the next message is answered normally.
 
+### Changing the workspace binding
+
+Changing a connector from workspace A to B does not move its existing A conversation. Subsequent input uses a separate B-scoped conversation, without carrying A's conversation history or recalled shared notes into it. Existing A archives remain readable in A. Directly trying to reuse an A chat or helper in B is refused with a visible error; open B's conversation instead.
+
 ## Connectors you can set up
 
 Each guide explains the credentials and platform-specific setup.

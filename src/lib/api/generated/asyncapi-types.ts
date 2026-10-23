@@ -619,6 +619,7 @@ export interface ReplayMessageFrame {
     state: "discarded";
     reason: "stopped_before_delivery";
   };
+  seq?: number;
   terminal_outcome?: boolean;
 }
 

@@ -31,6 +31,10 @@
   0% { transform: translateX(-120%) skewX(-20deg); }
   70%, 100% { transform: translateX(220%) skewX(-20deg); }
 }
+/* Brighten the opaque ink with its existing gradient, only inside the alpha mask. */
+[data-agent-icon-sheen-mask] {
+  mix-blend-mode: screen;
+}
 .agent-icon-sheen {
   background-image: linear-gradient(
     90deg,

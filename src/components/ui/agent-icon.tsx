@@ -139,13 +139,47 @@ export function AgentIcon(props: AgentIconProps) {
           aria-hidden="true"
           width={size}
           height={size}
+          id={maskId(baseId, 'ink')}
           viewBox="0 0 256 256"
           fill="currentColor"
           dangerouslySetInnerHTML={{ __html: inkMarkup }}
         />
       </span>
       {animate && motion === 'working' && (
-        <span aria-hidden="true" data-agent-icon-sheen="" className={sheenClass} />
+        <>
+          <svg
+            aria-hidden="true"
+            width={size}
+            height={size}
+            viewBox={`0 0 ${size} ${size}`}
+            fill="currentColor"
+            className="pointer-events-none absolute inset-0"
+          >
+            <defs>
+              <mask
+                id={maskId(baseId, 'sheen')}
+                x="0" y="0" width="1" height="1"
+                maskUnits="objectBoundingBox"
+                maskContentUnits="userSpaceOnUse"
+                mask-type="alpha"
+              >
+                {/* Reuse the actual ink viewport so letters keep their painted font geometry. */}
+                <g data-agent-icon-mask-ink="" className={markClass}>
+                  <use href={`#${maskId(baseId, 'ink')}`} />
+                </g>
+              </mask>
+            </defs>
+          </svg>
+          {/* Mask the fixed highlight surface; ink and glow stay outside its clip. */}
+          <span
+            aria-hidden="true"
+            data-agent-icon-sheen-mask=""
+            className="pointer-events-none absolute inset-0 overflow-hidden"
+            style={{ maskImage: `url(#${maskId(baseId, 'sheen')})` }}
+          >
+            <span data-agent-icon-sheen="" className={sheenClass} />
+          </span>
+        </>
       )}
     </span>
   )

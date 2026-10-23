@@ -7,6 +7,7 @@ package agent
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -17,16 +18,23 @@ import (
 // 4 (context-audit 2026-08): the rendered "## Delegation" block used to teach
 // `delegate(action="status", task_id="…")` — task_id is a DEPRECATED alias in
 // the live delegate tool (pkg/tools/delegate.go), and session_id is the
-// current, non-deprecated parameter. This proves the poll instruction now
-// uses session_id.
+// current, non-deprecated parameter. The founder's 2026-10-21 format remap
+// permits prose guidance; both status and result must still use session_id.
 func TestBuildDelegationContext_UsesSessionIDNotDeprecatedTaskID(t *testing.T) {
 	targets := []delegationTarget{
 		makeTarget("ava", nil, ptr(3)),
 	}
 	got := buildDelegationContext(targets, 3, 0)
 
-	if !strings.Contains(got, `delegate(action="status", session_id="…")`) {
-		t.Errorf("expected the poll instruction to use session_id; got:\n%s", got)
+	// Approved generic guidance may describe addressing in prose instead of
+	// copying a tool call. Each action must independently name session_id;
+	// status cannot borrow the result clause's addressing (or vice versa).
+	for _, action := range []string{"status", "result"} {
+		prose := `\b` + action + `\s+action\s+(?:with|using)\s+session_id\b`
+		call := `delegate\(action="` + action + `",\s*session_id="[^"]+"\)`
+		if !regexp.MustCompile(`(?i)(?:` + prose + `|` + call + `)`).MatchString(got) {
+			t.Errorf("delegate %s guidance must address the child with session_id; got:\n%s", action, got)
+		}
 	}
 	if strings.Contains(got, "task_id") {
 		t.Errorf("rendered block still references the deprecated task_id alias; got:\n%s", got)

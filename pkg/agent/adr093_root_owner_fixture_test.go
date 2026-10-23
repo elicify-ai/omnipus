@@ -30,6 +30,15 @@ func r5AdmitRoot(t *testing.T) (*AgentLoop, *session.LifecycleRecord, *r1Complet
 // those fields without a lock once the turn is in flight).
 func r5AdmitRootWithAnswers(t *testing.T, answers ...string) (*AgentLoop, *session.LifecycleRecord, *r1CompletionProvider) {
 	t.Helper()
+	// Existing callers intentionally exercise an unfiled ordinary root.
+	return r5AdmitScopedRootWithAnswers(t, "", answers...)
+}
+
+// r5AdmitScopedRootWithAnswers binds scope at genuine root creation, before
+// task history or the first provider call exists. A held request needs this
+// option: a later SetMeta cannot adopt an already-used unfiled conversation.
+func r5AdmitScopedRootWithAnswers(t *testing.T, workspaceID string, answers ...string) (*AgentLoop, *session.LifecycleRecord, *r1CompletionProvider) {
+	t.Helper()
 	al, _ := newSteerAL(t)
 	wireSteerCompletionDeps(t, al)
 	provider := &r1CompletionProvider{answers: answers, entered: make(chan int, len(answers))}
@@ -45,6 +54,7 @@ func r5AdmitRootWithAnswers(t *testing.T, answers ...string) (*AgentLoop, *sessi
 	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		TargetAgentID: testDefaultAgentID, Task: "keep this ordinary conversation open",
 		Origin: steer.Origin{Kind: steer.OriginKindChat}, Owner: "r5-owner",
+		WorkspaceID: workspaceID,
 	})
 	if err != nil {
 		t.Fatalf("real root Launch: %v", err)
@@ -58,6 +68,13 @@ func r5AdmitRootWithAnswers(t *testing.T, answers ...string) (*AgentLoop, *sessi
 	ts := al.getActiveTurnState(rec.SessionID)
 	if rec.SteeredBy != nil || rec.ExecutionID == nil || ts == nil || al.tsExecutionClaim(ts, rec.SessionID) != al.executionClaimFor(rec) {
 		t.Fatalf("ordinary root has no real admission: %+v", rec)
+	}
+	meta, metaErr := al.GetSessionStore().GetMeta(rec.SessionID)
+	if metaErr != nil {
+		t.Fatalf("real root metadata: %v", metaErr)
+	}
+	if meta == nil || meta.WorkspaceID != workspaceID || rec.WorkspaceID != workspaceID {
+		t.Fatalf("root creation scope: meta=%+v lifecycle=%+v, want workspace %q", meta, rec, workspaceID)
 	}
 	return al, rec, provider
 }

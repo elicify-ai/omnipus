@@ -72,7 +72,7 @@ import {
   splitAnchoredDelegationEvents,
   type DelegationPlacementMessage,
 } from '@/lib/delegationEventPlacement'
-import { DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, useClaimedCallIds } from './DelegationEventLine'
+import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, useClaimedCallIds } from './DelegationEventLine'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { isGoalRunning } from '@/lib/goalActivity'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
@@ -1123,10 +1123,10 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
     () => splitMessageParts(message.content ?? '', positionedToolCalls),
     [message.content, positionedToolCalls],
   )
-  const inlineByCall = splitAnchoredDelegationEvents(delegationEvents, message.id, {
+  const delegationSplit = splitAnchoredDelegationEvents(delegationEvents, message.id, {
     spans: message.spans,
     toolCalls: positionedToolCalls,
-  }).byCall
+  })
 
   // D-fix: this row is also used by PlainMessageList (the ResizeObserver-
   // unavailable fallback), which — unlike VirtualizedMessageListInner — does
@@ -1195,7 +1195,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
   // (ChatConnectionStatusLine / UnavailableChatNotice).
   const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || !!message.isStreaming)
 
-  return (
+  const row = (
     <div
       data-testid="assistant-message"
       data-message-role="assistant"
@@ -1275,7 +1275,7 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
             return <div key={callId} data-history-tool-row={callId}>{renderHistoricalToolCall({
               tc,
               callId,
-              inlineEvents: inlineByCall.get(callId),
+              inlineEvents: delegationSplit.byCall.get(callId),
               activeSessionId,
               verboseChatEnabled,
               goalRecordEmpty,
@@ -1328,6 +1328,12 @@ export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMe
         <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />
       </div>
     </div>
+  )
+  return (
+    <>
+      {row}
+      <DelegationEventLineList events={delegationSplit.trailing} />
+    </>
   )
 })
 

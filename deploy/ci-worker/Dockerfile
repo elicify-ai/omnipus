@@ -78,7 +78,19 @@ ENV GOPATH=/cache/go \
 
 WORKDIR /work
 COPY runci.sh /usr/local/bin/runci.sh
-RUN chmod +x /usr/local/bin/runci.sh
+COPY idle-watchdog.sh ci-boot.sh ci-machine-halt /usr/local/bin/
+RUN chmod +x /usr/local/bin/runci.sh /usr/local/bin/idle-watchdog.sh /usr/local/bin/ci-boot.sh \
+        /usr/local/bin/ci-machine-halt
 
-# Stay alive so the orchestrator can `fly ssh console` / `fly machine exec` gate commands.
-CMD ["sleep", "infinity"]
+# The main process is ci-boot.sh (2026-10-21, founder: the self-stop timer must run on every
+# machine, not only on dispatcher-driven boots). It supervises the idle-watchdog — a watchdog
+# that dies is logged and restarted, never a reason to stop a possibly busy box — and it is what
+# stops the machine: Fly stops a machine when its main process exits, and exit 0 is not a failure
+# for the on-failure restart policy. `poweroff` cannot do it here (it is systemctl, and there is no
+# systemd under /fly/init; measured live: it returned 1 and the machine stayed up). The watchdog's
+# poweroff hook (ci-machine-halt) only drops a /tmp marker; ci-boot.sh takes runci.sh's run lock,
+# re-checks for a run under it, and only then exits 0. Proof: deploy/ci-worker/ci-boot.test.sh.
+# Between those events it stays alive so the orchestrator can `fly ssh console` / `fly machine
+# exec` gate commands.
+ENV IDLE_WATCHDOG_POWEROFF_CMD=/usr/local/bin/ci-machine-halt
+CMD ["/usr/local/bin/ci-boot.sh"]

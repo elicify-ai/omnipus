@@ -2405,12 +2405,12 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 		t.Fatal("No default agent found")
 	}
 	history := defaultAgent.Sessions.GetHistory(directTurnHistoryKeyForTest(defaultAgent.ID, "test", "chat1"))
-	if len(history) != 4 {
-		t.Fatalf("history len = %d, want 4", len(history))
+	if len(history) != 3 {
+		t.Fatalf("history len = %d, want 3 (the system notice is chat-only)", len(history))
 	}
-	assertRoles(t, history, "user", "assistant", "tool", "assistant")
-	if history[3].Content != toolLimitResponse {
-		t.Fatalf("final assistant content = %q, want %q", history[3].Content, toolLimitResponse)
+	assertRoles(t, history, "user", "assistant", "tool")
+	for _, message := range history {
+		assert.NotEqual(t, toolLimitResponse, message.Content, "harness notice must not enter model history")
 	}
 	// Assert that the turn is marked failed — reaching the iteration ceiling
 	// without a final response is a genuine failure.
