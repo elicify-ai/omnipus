@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/media"
@@ -146,6 +147,9 @@ func (wh *wsHandlerHandleAttachSession) sendPreparedHistorySnapshot() {
 	attempt.err = err
 	attempt.preparationComplete()
 	if err != nil {
+		if historyStorageFailure(err) {
+			slog.Error("ws: session storage failure", "op", "read", "session_id", wh.attachID, "error", err)
+		}
 		if wh.ctx.Err() != nil {
 			wh.historyDeliveryFailed(wh.ctx.Err())
 			return
