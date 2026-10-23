@@ -14,6 +14,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -123,23 +124,36 @@ func TestFormatTierOneToolCall_ParametersTruncatedAt512RunesWithMarker(t *testin
 // redaction function and the SAME rune truncation already applied to
 // parameters and error — never raw, never unbounded.
 func TestFormatTierOneToolCall_ResultIsRedactedAndBounded(t *testing.T) {
+	// #1431 CHECK F2: pin FR-105/106's exact bound independently of the
+	// implementation constant. A 600-rune result-only mutant must fail.
+	const limit = 512
+	const rawPrefix = "token sk-live-secret accepted; "
+	const safePrefix = "token [REDACTED] accepted; "
 	redact := func(s string) string { return strings.ReplaceAll(s, "sk-live-secret", "[REDACTED]") }
-	tc := session.ToolCall{
-		Tool: "http_request", Status: "success",
-		Result: map[string]any{"body": "token sk-live-secret accepted; " + strings.Repeat("a", 2000)},
-	}
-	got := formatTierOneToolCall(tc, redact)
-	if strings.Contains(got, "sk-live-secret") {
-		t.Fatalf("§13 MAJ-004: the rendered result payload must pass the same redaction as parameters/error, got %q", got)
-	}
-	if !strings.Contains(got, "[REDACTED]") {
-		t.Fatalf("§13 MAJ-004: expected the redaction marker to survive into the rendered result, got %q", got)
-	}
-	if !strings.Contains(got, tierOneTruncationMarker) {
-		t.Fatalf("§13 MAJ-004: an over-512-rune result payload must carry the same truncation marker, got len=%d", len(got))
-	}
-	if idx := strings.Index(got, "result="); idx >= 0 && len(got)-idx > 700 {
-		t.Errorf("rendered result segment too long (%d bytes after 'result='), truncation not applied", len(got)-idx)
+	for _, unit := range []string{"a", "界"} {
+		for _, size := range []int{511, 512, 513, 599, 600, 601, 2000} {
+			t.Run(fmt.Sprintf("%s/%d-runes", unit, size), func(t *testing.T) {
+				// These characters have no JSON escaping: this independently
+				// derived serialization includes the JSON wrapper in the bound.
+				overhead := len([]rune(`{"body":"` + safePrefix + `"}`))
+				padding := strings.Repeat(unit, size-overhead)
+				serialized := `{"body":"` + safePrefix + padding + `"}`
+				wantPayload := serialized
+				if size > limit {
+					wantPayload = string([]rune(serialized)[:limit]) + tierOneTruncationMarker
+				}
+				tc := session.ToolCall{Tool: "http_request", Status: "success",
+					Result: map[string]any{"body": rawPrefix + padding}}
+				got := formatTierOneToolCall(tc, redact)
+				want := "[tool_call] http_request -> success result=" + wantPayload
+				if got != want {
+					t.Errorf("FR-106 result at %d runes: got %q, want exact redacted 512-rune-bound rendering %q", size, got, want)
+				}
+				if strings.Contains(got, "sk-live-secret") || !strings.Contains(got, "[REDACTED]") {
+					t.Errorf("result must preserve the redaction, never the secret: %q", got)
+				}
+			})
+		}
 	}
 }
 
