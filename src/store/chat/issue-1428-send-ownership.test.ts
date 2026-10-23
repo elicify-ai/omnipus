@@ -16,14 +16,11 @@
 // WsConnection transport (a recorded vi.fn) and, where a deadline is
 // asserted, the clock (vi.useFakeTimers).
 //
-// DELIVERY CONFIRMATION DEADLINE — CHIEF QUESTION, NOT AN INVENTED ORACLE:
-// the issue fixes "a short correlated deadline" but not its length. The
-// 15 s below is the uat-send triage's PROPOSED value
-// (omnipus-scratch/l1/bundle2-ci/uat-send/TRIAGE.md §4: "a named 15-second
-// delivery-confirmation deadline… Chief/QA should agree the constant before
-// implementation"). Every RED failure below is independent of this constant
-// (no deadline is armed at all today), so changing the constant cannot turn
-// the pack green; only the implementation fix can.
+// DELIVERY CONFIRMATION DEADLINE — FOUNDER DECISION Q67: 15 seconds.
+// "Delivery not confirmed · Retry" appears 15 s after a send with no server
+// receipt; the agent keeps working either way (chief, 2026-10-23, ruling on
+// the uat-send triage §4 proposal this pack originally carried as an open
+// question). The value below IS the ruled 15 s.
 
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
@@ -52,8 +49,7 @@ const OWNER = 'mia'
 const TEXT = 'Issue 1428 ownership probe'
 const STEER = 'Issue 1428 steer probe — keep running'
 
-/** The triage-proposed delivery-confirmation deadline. CHIEF QUESTION — see
- * the file-header note. The RED failures do not depend on this value. */
+/** Founder decision Q67: the delivery-confirmation deadline is 15 s. */
 const DELIVERY_CONFIRM_DEADLINE_MS = 15_000
 
 let send: ReturnType<typeof vi.fn>
