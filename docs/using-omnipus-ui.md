@@ -272,6 +272,8 @@ Your first message is kept in the open tab while Omnipus checks delivery. If loa
 | **Not delivered** | You stopped the agent before it read this message, so it was discarded — the text stays in the chat, nothing is sent later, and the same status is shown again after you reload the page. |
 | **Waiting — delivered when <Agent> runs again** | You addressed an agent with `@` and that agent is stopped. Your message is saved and the request is held: it is delivered when the agent runs again, after which this label goes away (it is not a failure and nothing needs resending). |
 
+When checking a recovered chat, your original message stays in place until the requested saved-history page finishes loading and passes validation. It then becomes one saved message, not a second copy; its original attachments remain available for an explicit **Generate again**. Waiting follow-up messages stay queued until this check finishes, and still wait if an answer is running. Catching up current controls while history is unavailable does not complete the saved-history check.
+
 For an ordinary first message, an acknowledgement without the original delivery ID does not open or confirm the pending chat, or apply its agent and Auto-approve settings. Buffered messages remain queued until a matching save receipt or checked history confirms delivery; they also wait while a reply is running. An acknowledgement without the matching delivery ID alone does not release them.
 
 An unconfirmed message does not offer **Generate again**. That action is separate from delivery Retry: it sends a new request and may repeat work or tool actions. The saved chat's current Auto-approve setting applies, not a restored setting from the original send.

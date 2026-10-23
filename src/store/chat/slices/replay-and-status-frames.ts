@@ -584,6 +584,7 @@ interface ReplayMessageFrameFields {
   role: 'user' | 'assistant' | 'system'
   text: string
   messageId: string | undefined
+  replayClientMessageId: ReplayMessageFrame['client_message_id']
   messageTimestamp: string | undefined
   replayAgentId: string | undefined
   replayModel: string
@@ -658,6 +659,7 @@ function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayM
     role,
     text,
     messageId,
+    replayClientMessageId: replayFrame.client_message_id,
     messageTimestamp,
     replayAgentId,
     replayModel,
@@ -789,6 +791,7 @@ function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
     content: text,
     timestamp: messageTimestamp ?? new Date().toISOString(),
     status: 'done' as const,
+    ...(role === 'user' && fields.replayClientMessageId ? { clientMessageId: fields.replayClientMessageId } : {}),
     ...(replayAgentId ? { agentId: replayAgentId } : {}),
     // Per-turn model record. Only on assistant messages (user/system turns
     // don't carry a producer model). Empty model is treated as
