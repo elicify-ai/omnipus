@@ -820,6 +820,13 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
 			})
 
+		// Settle this turn's already-delivered stream before another turn can
+		// replace it. A notice-only stream must not suppress a later plain
+		// continuation answer through the channel's next-Send flag.
+		if finalResponse != "" && !published && al.bus.SettleStreamedResponse(target.Channel, target.ChatID) {
+			published = true
+		}
+
 		// Exit (a) (design note "Recommended design"): bounded retry, then
 		// fail loud. See continueDrainRetry's own doc comment for why a
 		// uniform bounded retry is simpler to review and just as safe here.

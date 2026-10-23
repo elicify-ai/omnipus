@@ -91,9 +91,9 @@ func (f wu21Fixture) path(ws, agent string) string {
 func TestWU21_RealRecapInAIsAbsentFromSessionB(t *testing.T) {
 	f := wu21New(t)
 	rr := f.recap(t, "alpha", "WU21_ALPHA_RECAP")
-	f.ag.ContextBuilder.Memory().SetWorkspaceID("beta") // deliberately unrelated mutable pointer.
+	f.ag.ContextBuilder.Memory().SharedRoom(f.ag.ContextBuilder.Memory().scopeForWorkspace("beta")) // unrelated lookup must not retarget recap.
 	rr.persistResponse()
-	if err := f.ag.ContextBuilder.Memory().AppendLongTermToScope("WU21_PRIVATE_NOTE_STAYS_AGENT_WIDE", "lesson_learned", memrooms.RoomScopePrivate); err != nil {
+	if err := f.ag.ContextBuilder.Memory().AppendLongTermToScope("WU21_PRIVATE_NOTE_STAYS_AGENT_WIDE", "lesson_learned", memrooms.RoomScopePrivate, f.ag.ContextBuilder.Memory().scopeForWorkspace("")); err != nil {
 		t.Fatalf("FR-219 private-note control could not write: %v", err)
 	}
 	bSession, err := f.store.GetOrCreateMainSession("beta", "self")
@@ -143,7 +143,7 @@ func TestWU21_ConcurrentSuccessAndFallbackKeepPairScope(t *testing.T) {
 			f := wu21New(t)
 			a := f.recap(t, "alpha", "WU21_ALPHA_ONLY")
 			b := f.recap(t, "beta", "WU21_BETA_ONLY")
-			f.ag.ContextBuilder.Memory().SetWorkspaceID("beta")
+			f.ag.ContextBuilder.Memory().SharedRoom(f.ag.ContextBuilder.Memory().scopeForWorkspace("beta"))
 			var wg sync.WaitGroup
 			var errs [2]error
 			for i, rr := range []*agentLoopRunRecap{a, b} {
@@ -188,7 +188,7 @@ func TestWU21_NoWorkspaceRecapHasNoAgentWideFallback(t *testing.T) {
 		if err := f.ag.ContextBuilder.Memory().WriteCarryForward(CarryForwardScope{AgentID: "self", WorkspaceID: "alpha"}, seeded); err != nil {
 			t.Fatalf("valid pair positive source could not be written: %v", err)
 		}
-		f.ag.ContextBuilder.Memory().SetWorkspaceID("alpha") // generic context must not follow this pointer.
+		f.ag.ContextBuilder.Memory().SharedRoom(f.ag.ContextBuilder.Memory().scopeForWorkspace("alpha")) // generic context must not follow this lookup.
 		t.Run("valid_workspace_summary_positive", func(t *testing.T) {
 			own := f.ag.ContextBuilder.BuildSystemPromptForWorkspace("alpha")
 			if !strings.Contains(own, seeded) || strings.Count(own, "## Last Session\n") != 1 {

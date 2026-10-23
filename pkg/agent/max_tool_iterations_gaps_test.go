@@ -121,10 +121,15 @@ func TestLoop_RunningTurnKeepsStartLimit(t *testing.T) {
 	if got := prov.takeCalls(); got != 3 {
 		t.Fatalf("turn 1 ran %d tool rounds, want 3: a running turn keeps the limit in force when it started (D18, FR-019)", got)
 	}
-	// Second witness for turn 1, from the instance the turn ran on: history
-	// = user + 3x(assistant, tool) + final = 8 (cf. TestLoop_StopsAtEffectiveLimit).
-	if h := started.Sessions.GetHistory(directTurnHistoryKeyForTest(started.ID, "test", "chat1")); len(h) != 8 {
-		t.Fatalf("turn 1 history len = %d, want 8 (3 tool rounds)", len(h))
+	// Second witness: user + 3x(assistant, tool) = 7 model slots. The
+	// system notice is strictly chat-only, not an extra model-history entry.
+	history := started.Sessions.GetHistory(directTurnHistoryKeyForTest(started.ID, "test", "chat1"))
+	if len(history) != 7 {
+		t.Fatalf("turn 1 history len = %d, want 7 (3 tool rounds; notice is chat-only)", len(history))
+	}
+	assertRoles(t, history, "user", "assistant", "tool", "assistant", "tool", "assistant", "tool")
+	for _, message := range history {
+		require.NotEqual(t, specToolLimitMessage, message.Content, "runtime notice cannot enter the model window")
 	}
 
 	al.RegisterTool(&toolLimitTestTool{})

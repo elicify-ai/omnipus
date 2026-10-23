@@ -160,7 +160,15 @@ func testSteeringHardIterationLimit(t *testing.T) {
 			al.steering.mu.Lock()
 			queued := append([]steeringQueueItem(nil), al.steering.queues[key]...)
 			al.steering.mu.Unlock()
-			assert.Equal(t, wantQueued, queued, "restore the unprocessed batch in order with its original receipt and entry ids")
+			queuedInputs := queued
+			if boundary == "tool_result" {
+				// Earlier injected work gets one control-only continuation. The
+				// original deferred batch still keeps all exact receipt/entry IDs.
+				require.Len(t, queued, len(wantQueued)+1)
+				assert.Equal(t, steeringQueueItem{resumeOnly: true}, queued[0], "continuation carries no duplicate text, wake, receipt or entry identity")
+				queuedInputs = queued[1:]
+			}
+			assert.Equal(t, wantQueued, queuedInputs, "restore the unprocessed batch in order with its original receipt and entry ids")
 
 			// Drive the same post-turn continuation used by the session worker,
 			// with a new iteration budget but the same conversation and history.

@@ -39,7 +39,7 @@ func TestBuildDelegationContext_NoTargets(t *testing.T) {
 		t.Errorf("nil targets:\ngot:  %q\nwant: %q", got, want)
 	}
 	// Must NOT contain the authority line (only in the non-empty path).
-	if strings.Contains(got, "COMPLETE, authoritative") {
+	if strings.Contains(got, "<delegation_guidance>") {
 		t.Errorf("cannot-delegate path must not contain authority line; got:\n%s", got)
 	}
 }
@@ -63,34 +63,34 @@ func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
 		t.Error("missing ## Delegation header")
 	}
 	// Authority line must appear immediately after the header (non-empty path).
-	if !strings.Contains(got, "COMPLETE, authoritative delegation roster") {
+	if !compactGuidanceHasFact(t, got, "authority") {
 		t.Errorf("missing authority line; got:\n%s", got)
 	}
-	if !strings.Contains(got, "do NOT call list_agents or search memory to determine your delegation targets") {
+	if !compactGuidanceHasFact(t, got, "no discovery") {
 		t.Errorf("missing list_agents prohibition in authority line; got:\n%s", got)
 	}
 	// Must contain the subagent header.
-	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
+	if !compactHasNamedEntry(t, got, "Ava (Builder: implementation & code)", "ava") {
 		t.Errorf("missing target header; got:\n%s", got)
 	}
 	// The background delegate form and create_task must appear. The former
 	// "await" form (`delegate(..., async=false)`) is GONE: ADR-091 D4 deleted
 	// the delegate tool's `async` parameter entirely (wait-inline delegation
 	// no longer exists), so it must never appear in the rendered context.
-	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+	if !compactHasMode(t, got, "ava", "direct") {
 		t.Errorf("missing background delegate(agent_id= tool call; got:\n%s", got)
 	}
 	if strings.Contains(got, "async=false") {
 		t.Errorf("retired await form 'async=false' must NOT appear (ADR-091 D4 deleted the async parameter); got:\n%s", got)
 	}
-	if !strings.Contains(got, `create_task(agent_id="ava"`) {
+	if !compactHasMode(t, got, "ava", "task") {
 		t.Errorf("missing create_task(agent_id= tool call; got:\n%s", got)
 	}
 	// Exclusivity footer must appear.
-	if !strings.Contains(got, "ONLY permitted delegation targets") {
+	if !compactGuidanceHasFact(t, got, "exclusive") {
 		t.Errorf("missing exclusivity footer; got:\n%s", got)
 	}
-	if !strings.Contains(got, "delegate / create_task to any other agent WILL be denied") {
+	if !compactGuidanceDeniesUnlisted(t, got) {
 		t.Errorf("missing denial warning in exclusivity footer; got:\n%s", got)
 	}
 	// Depth.
@@ -137,18 +137,18 @@ func TestBuildDelegationContext_RetiredModeValueRendersNoForms(t *testing.T) {
 	got := buildDelegationContext(targets, 0, 0)
 
 	// The target section still renders (the target itself is known/labeled) …
-	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
+	if !compactHasNamedEntry(t, got, "Ava (Builder: implementation & code)", "ava") {
 		t.Errorf("missing target header for unrecognized-mode target; got:\n%s", got)
 	}
 	// … but with NO tool-call bullets: neither the background delegate form
 	// nor create_task, and definitely not the retired async=false form.
-	if strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+	if compactHasMode(t, got, "ava", "direct") {
 		t.Errorf("background delegate call must NOT appear for an unrecognized mode value; got:\n%s", got)
 	}
 	if strings.Contains(got, "async=false") {
 		t.Errorf("retired await form 'async=false' must NOT appear; got:\n%s", got)
 	}
-	if strings.Contains(got, `create_task(agent_id=`) {
+	if compactHasMode(t, got, "ava", "task") {
 		t.Errorf("create_task tool call must NOT appear for an unrecognized mode value; got:\n%s", got)
 	}
 	// No mode footer — the new implementation renders the global depth footer only.
@@ -165,23 +165,23 @@ func TestBuildDelegationContext_TwoTargets(t *testing.T) {
 	got := buildDelegationContext(targets, 0, 0)
 
 	// Both subagent sections must be present.
-	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
+	if !compactHasNamedEntry(t, got, "Ava (Builder: implementation & code)", "ava") {
 		t.Errorf("missing ava section; got:\n%s", got)
 	}
-	if !strings.Contains(got, "### → Ray (Scout: research & browsing)") {
+	if !compactHasNamedEntry(t, got, "Ray (Scout: research & browsing)", "ray") {
 		t.Errorf("missing ray section; got:\n%s", got)
 	}
 	// Each target's ID must appear in delegate and create_task calls.
-	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+	if !compactHasMode(t, got, "ava", "direct") {
 		t.Errorf("missing delegate(agent_id=\"ava\" in tool calls; got:\n%s", got)
 	}
-	if !strings.Contains(got, `delegate(agent_id="ray", task="…")`) {
+	if !compactHasMode(t, got, "ray", "direct") {
 		t.Errorf("missing delegate(agent_id=\"ray\" in tool calls; got:\n%s", got)
 	}
-	if !strings.Contains(got, `create_task(agent_id="ava"`) {
+	if !compactHasMode(t, got, "ava", "task") {
 		t.Errorf("missing create_task(agent_id=\"ava\" in tool calls; got:\n%s", got)
 	}
-	if !strings.Contains(got, `create_task(agent_id="ray"`) {
+	if !compactHasMode(t, got, "ray", "task") {
 		t.Errorf("missing create_task(agent_id=\"ray\" in tool calls; got:\n%s", got)
 	}
 	// Depth: uncapped.
@@ -205,7 +205,7 @@ func TestBuildDelegationContext_UnknownTargetSkipped(t *testing.T) {
 	if !strings.Contains(got, "Do not call list_agents or search memory") {
 		t.Errorf("expected list_agents prohibition in cannot-delegate message; got:\n%s", got)
 	}
-	if strings.Contains(got, "### →") {
+	if strings.Contains(got, "<agent ") {
 		t.Errorf("unknown target must be skipped but a section header appeared; got:\n%s", got)
 	}
 	// The cannot-delegate path returns a single-line string with no tool calls.
@@ -213,10 +213,10 @@ func TestBuildDelegationContext_UnknownTargetSkipped(t *testing.T) {
 		t.Errorf("no tool call lines expected when all targets skipped; got:\n%s", got)
 	}
 	// The authority and exclusivity lines must NOT appear in the cannot-delegate path.
-	if strings.Contains(got, "COMPLETE, authoritative") {
+	if strings.Contains(got, "<delegation_guidance>") {
 		t.Errorf("cannot-delegate path must not contain authority line; got:\n%s", got)
 	}
-	if strings.Contains(got, "ONLY permitted delegation targets") {
+	if strings.Contains(got, "<team_directory>") {
 		t.Errorf("cannot-delegate path must not contain exclusivity footer; got:\n%s", got)
 	}
 }
@@ -247,10 +247,10 @@ func TestBuildDelegationContext_BackgroundModeOnly(t *testing.T) {
 	if strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
 		t.Errorf("await delegate call must NOT appear when Modes=[background]; got:\n%s", got)
 	}
-	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+	if !compactHasMode(t, got, "ava", "direct") {
 		t.Errorf("background delegate(agent_id= must appear for background mode; got:\n%s", got)
 	}
-	if strings.Contains(got, `create_task(agent_id=`) {
+	if compactHasMode(t, got, "ava", "task") {
 		t.Errorf("create_task tool call must NOT appear when Modes=[background]; got:\n%s", got)
 	}
 }
@@ -265,10 +265,10 @@ func TestBuildDelegationContext_TaskModeOnly(t *testing.T) {
 	if strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
 		t.Errorf("await delegate call must NOT appear when Modes=[task]; got:\n%s", got)
 	}
-	if strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+	if compactHasMode(t, got, "ava", "direct") {
 		t.Errorf("background delegate call must NOT appear when Modes=[task]; got:\n%s", got)
 	}
-	if !strings.Contains(got, "create_task(agent_id=") {
+	if !compactHasMode(t, got, "ava", "task") {
 		t.Errorf("create_task(agent_id= must appear for task mode; got:\n%s", got)
 	}
 }
@@ -288,10 +288,10 @@ func TestBuildDelegationContext_TwoModeSubset(t *testing.T) {
 		t.Errorf("await delegate call must NOT appear for [background,task] modes; got:\n%s", got)
 	}
 	// Both background and task must be present.
-	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+	if !compactHasMode(t, got, "ava", "direct") {
 		t.Errorf("background delegate(agent_id= must appear for background mode; got:\n%s", got)
 	}
-	if !strings.Contains(got, "create_task(agent_id=") {
+	if !compactHasMode(t, got, "ava", "task") {
 		t.Errorf("create_task(agent_id= must appear for task mode; got:\n%s", got)
 	}
 }
@@ -306,19 +306,19 @@ func TestBuildDelegationContext_MixedTargets(t *testing.T) {
 	}
 	got := buildDelegationContext(targets, 0, 0)
 
-	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
+	if !compactHasNamedEntry(t, got, "Ava (Builder: implementation & code)", "ava") {
 		t.Errorf("missing ava section; got:\n%s", got)
 	}
-	if !strings.Contains(got, "### → Ray (Scout: research & browsing)") {
+	if !compactHasNamedEntry(t, got, "Ray (Scout: research & browsing)", "ray") {
 		t.Errorf("missing ray section; got:\n%s", got)
 	}
 	if strings.Contains(got, "nonexistent") {
 		t.Errorf("nonexistent target must be skipped; got:\n%s", got)
 	}
-	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+	if !compactHasMode(t, got, "ava", "direct") {
 		t.Errorf("missing delegate(agent_id=\"ava\"; got:\n%s", got)
 	}
-	if !strings.Contains(got, `delegate(agent_id="ray", task="…")`) {
+	if !compactHasMode(t, got, "ray", "direct") {
 		t.Errorf("missing delegate(agent_id=\"ray\"; got:\n%s", got)
 	}
 }
@@ -339,13 +339,13 @@ func TestBuildDelegationContext_AllSkipped(t *testing.T) {
 	if !strings.Contains(got, "Do not call list_agents or search memory") {
 		t.Errorf("all-skipped must contain list_agents prohibition; got:\n%s", got)
 	}
-	if strings.Contains(got, "### →") {
+	if strings.Contains(got, "<agent ") {
 		t.Errorf("no section headers expected when all skipped; got:\n%s", got)
 	}
-	if strings.Contains(got, "COMPLETE, authoritative") {
+	if strings.Contains(got, "<delegation_guidance>") {
 		t.Errorf("cannot-delegate path must not contain authority line; got:\n%s", got)
 	}
-	if strings.Contains(got, "ONLY permitted delegation targets") {
+	if strings.Contains(got, "<team_directory>") {
 		t.Errorf("cannot-delegate path must not contain exclusivity footer; got:\n%s", got)
 	}
 }
@@ -362,10 +362,10 @@ func TestBuildDelegationContext_PerTargetOnwardForbidden(t *testing.T) {
 	}
 	got := buildDelegationContext(targets, 0, 0)
 
-	if strings.Contains(got, "### → Ava") || strings.Contains(got, `delegate(agent_id="ava"`) {
+	if compactHasNamedEntry(t, got, "Ava (Builder: implementation & code)", "ava") || compactHasEntryID(t, got, "ava") {
 		t.Errorf("depth=0 edge must not be advertised; got:\n%s", got)
 	}
-	if !strings.Contains(got, "### → Ray") {
+	if !compactHasNamedEntry(t, got, "Ray (Scout: research & browsing)", "ray") {
 		t.Errorf("missing ray section; got:\n%s", got)
 	}
 }
@@ -389,18 +389,18 @@ func TestBuildDelegationContext_PerTargetModeSubset(t *testing.T) {
 	got := buildDelegationContext(targets, 0, 0)
 
 	// ava section: no tool-call bullets at all for an unrecognized mode value.
-	if strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
+	if compactHasMode(t, got, "ava", "direct") {
 		t.Errorf("background delegate for ava must NOT appear when ava's only mode is unrecognized; got:\n%s", got)
 	}
-	if strings.Contains(got, `create_task(agent_id="ava"`) {
+	if compactHasMode(t, got, "ava", "task") {
 		t.Errorf("create_task for ava must NOT appear when ava's only mode is unrecognized; got:\n%s", got)
 	}
 
 	// ray section: both real tools (background delegate + create_task).
-	if !strings.Contains(got, `delegate(agent_id="ray", task="…")`) {
+	if !compactHasMode(t, got, "ray", "direct") {
 		t.Errorf("background delegate for ray must appear (all modes); got:\n%s", got)
 	}
-	if !strings.Contains(got, `create_task(agent_id="ray"`) {
+	if !compactHasMode(t, got, "ray", "task") {
 		t.Errorf("create_task for ray must appear (all modes); got:\n%s", got)
 	}
 
@@ -422,20 +422,20 @@ func TestBuildDelegationContext_DelegationAuthorityAndExclusivity(t *testing.T) 
 		targets := []delegationTarget{makeTarget("ava", nil, nil)}
 		got := buildDelegationContext(targets, 0, 0)
 
-		if !strings.Contains(got, "COMPLETE, authoritative delegation roster for THIS workspace") {
+		if !compactGuidanceHasFact(t, got, "authority") {
 			t.Errorf("authority line missing; got:\n%s", got)
 		}
-		if !strings.Contains(got, "do NOT call list_agents or search memory to determine your delegation targets") {
+		if !compactGuidanceHasFact(t, got, "no discovery") {
 			t.Errorf("list_agents prohibition missing from authority line; got:\n%s", got)
 		}
-		if !strings.Contains(got, "These are your ONLY permitted delegation targets") {
+		if !compactGuidanceHasFact(t, got, "exclusive") {
 			t.Errorf("exclusivity footer missing; got:\n%s", got)
 		}
-		if !strings.Contains(got, "delegate / create_task to any other agent WILL be denied") {
+		if !compactGuidanceDeniesUnlisted(t, got) {
 			t.Errorf("denial warning missing from exclusivity footer; got:\n%s", got)
 		}
 		// Exclusivity footer must appear BEFORE the depth footer.
-		exclusivityIdx := strings.Index(got, "ONLY permitted delegation targets")
+		exclusivityIdx := compactGuidanceExclusivityIndex(t, got)
 		depthIdx := strings.Index(got, "max chain depth")
 		if exclusivityIdx == -1 || depthIdx == -1 || exclusivityIdx > depthIdx {
 			t.Errorf(
@@ -449,10 +449,10 @@ func TestBuildDelegationContext_DelegationAuthorityAndExclusivity(t *testing.T) 
 
 	t.Run("cannot-delegate path has no authority or exclusivity lines", func(t *testing.T) {
 		got := buildDelegationContext(nil, 0, 0)
-		if strings.Contains(got, "COMPLETE, authoritative") {
+		if strings.Contains(got, "<delegation_guidance>") {
 			t.Errorf("cannot-delegate path must not contain authority line; got:\n%s", got)
 		}
-		if strings.Contains(got, "ONLY permitted delegation targets") {
+		if strings.Contains(got, "<team_directory>") {
 			t.Errorf("cannot-delegate path must not contain exclusivity footer; got:\n%s", got)
 		}
 		// But the list_agents prohibition MUST appear — the agent should not go looking.
@@ -464,10 +464,10 @@ func TestBuildDelegationContext_DelegationAuthorityAndExclusivity(t *testing.T) 
 	t.Run("all-skipped path has no authority or exclusivity lines", func(t *testing.T) {
 		targets := []delegationTarget{{ID: "unknown", Label: "", Modes: nil, Depth: nil}}
 		got := buildDelegationContext(targets, 0, 0)
-		if strings.Contains(got, "COMPLETE, authoritative") {
+		if strings.Contains(got, "<delegation_guidance>") {
 			t.Errorf("all-skipped path must not contain authority line; got:\n%s", got)
 		}
-		if strings.Contains(got, "ONLY permitted delegation targets") {
+		if strings.Contains(got, "<team_directory>") {
 			t.Errorf("all-skipped path must not contain exclusivity footer; got:\n%s", got)
 		}
 		if !strings.Contains(got, "Do not call list_agents or search memory") {
