@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { PRIORITY_LABELS, taskNodeVisual, type TaskGraphNode } from './taskGraph'
 import { TaskActionButton } from '../TaskActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
+import { TaskSessionInterrupted, useTaskSessionInterruption } from '@/components/workspaces/taskSessionInterruption'
 import { TaskDetailsPopover } from '../WorkItemDetails'
 import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 
@@ -48,6 +49,8 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
   const priority = task.priority ?? 3
   const todos = task.todos ?? []
   const doneTodos = todos.filter((todo) => todo.status === 'completed').length
+  const sessionInterruption = useTaskSessionInterruption(task.status === 'in_progress' ? task.session_id : undefined)
+  const showRunning = task.status === 'in_progress' && sessionInterruption == null
 
   // ADR-053 FE-2 §7 (D7) — plan-member DAG signals on the Graph node.
   // `is_join` marks the authored convergence member that folds one or more
@@ -134,7 +137,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         </div>
         <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           <span className="inline-flex items-center gap-[var(--space-1)]" style={{ color: visual.color }}>
-            {task.status === 'in_progress' ? <RunningIndicator /> : <span aria-hidden="true">●</span>}<span>{visual.label}</span>
+            {showRunning ? <RunningIndicator /> : sessionInterruption ? <TaskSessionInterrupted reason={sessionInterruption.reason} /> : <span aria-hidden="true">●</span>}<span>{visual.label}</span>
             {(agentName || todos.length > 0) && <span aria-hidden="true" className="text-[var(--color-muted)]">·</span>}
           </span>
           {agentName && <span className="inline-flex min-w-0 items-center gap-[var(--space-1)]"><span className="min-w-0 break-normal wrap-break-word">{agentName}</span>{todos.length > 0 && <span aria-hidden="true">·</span>}</span>}

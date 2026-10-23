@@ -219,6 +219,7 @@ function ActivityRow({
           {label}
         </span>
         {config.indicator}
+        {' '}
         <span className={cn('text-[var(--color-muted)] shrink-0')}>
           {config.label}
           {/* W1-9, carried via Fix 2: interrupt reason appended to the
