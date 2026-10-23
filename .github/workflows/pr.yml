@@ -3480,8 +3480,18 @@ jobs:
     steps:
       - name: Checkout quarantine classifier and tracked manifest
         uses: actions/checkout@v7
+      - name: Setup Python for required CI self-tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned PyYAML for workflow regression tests
+        run: python3 -I -m pip install --disable-pip-version-check 'PyYAML==6.0.3'
       - name: Prove the quarantine guard and aggregate reject unlisted failures
-        run: python3 -I scripts/ci-quarantine.py --self-test
+        run: |
+          set -euo pipefail
+          python3 -I scripts/ci-quarantine.py --self-test
+          python3 -I scripts/ci-gate-wiring.test.py
+          python3 -I scripts/ci-workflow-triggers.test.py
       - name: Report E2E shard coverage separately from gate results
         env:
           E2E_PLAN_RESULT: ${{ needs.e2e-plan.result }}
