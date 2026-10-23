@@ -2,7 +2,7 @@
 // the restoration must not strand the restored reader in a "loaded" state:
 // the visible "Could not load messages." + Retry is still published.
 // Real app/parser/frame owner/merger; only the fault subscriber is injected.
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, screen, within } from '@testing-library/react'
 import type { ServerFrame } from '@/lib/api/generated/asyncapi-types'
 import type { SessionHistoryResponse } from '@/lib/api/generated/openapi-types'
@@ -11,9 +11,22 @@ import { MAIN_ID } from '../../../tests/l1-room-ui/harness'
 import { entry, page, pos, replay, snapshot, STAMP } from '../../../tests/chat-history-paging/fixtures'
 import { openHistory, stopHistory } from '../../../tests/chat-history-paging/application'
 
+// Fault injection for the case the store never assigns: the restoration's own
+// row computation throws BEFORE Zustand publishes anything. Armed only by the
+// test below; every other call is the real implementation.
+const restoreFault = vi.hoisted(() => ({ armed: false }))
+vi.mock('@/store/chat/history-state', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/store/chat/history-state')>()
+  return { ...actual, historyRowsPatch: (...args: Parameters<typeof actual.historyRowsPatch>) => {
+    if (restoreFault.armed) { restoreFault.armed = false; throw new TypeError('restoration computed nothing') }
+    return actual.historyRowsPatch(...args)
+  } }
+})
+
 let app: Awaited<ReturnType<typeof openHistory>> | undefined
 let unsubscribe: (() => void) | undefined
 afterEach(async () => {
+  restoreFault.armed = false
   unsubscribe?.(); unsubscribe = undefined
   await stopHistory(app); app = undefined
 })
@@ -58,5 +71,29 @@ describe('snapshot rejection under a repeatedly throwing subscriber', () => {
     expect(alert, 'the visible rejection and its Retry are published').toHaveTextContent('Could not load messages.')
     expect(within(alert).getByRole('button', { name: /^Retry$/u })).toBeTruthy()
     expect(within(region).queryByText('REPLACEMENT_BODY', { exact: true }), 'the rejected body is not left on screen').toBeNull()
+  })
+
+  it('publishes the failed load when the restoration throws BEFORE anything is stored', async () => {
+    app = await openHistory(page(Array.from({ length: 40 }, (_, index) => entry(501 + index)), { sessionId: MAIN_ID }))
+    const replacement = pos(901)
+    let commits = 0
+    // Fail the commit through a subscriber, and arm a fault that makes the
+    // restoration throw while computing its patch, before any assignment.
+    unsubscribe = useChatStore.subscribe((state, previous) => {
+      if (state.messagesById === previous.messagesById) return
+      if (commits === 0 && state.sessionsById[MAIN_ID]?.history.readerPositions[0] === replacement) { commits++; restoreFault.armed = true; throw new TypeError('commit fault') }
+    })
+    try {
+      act(() => frames(page([entry(901, { content: 'REPLACEMENT_BODY' })], { sessionId: MAIN_ID })).forEach(frame => useChatStore.getState().handleFrame(frame)))
+    } catch { /* the original commit fault may propagate; the state below is the oracle */ }
+    unsubscribe(); unsubscribe = undefined
+    expect(commits, 'positive fault instrument: the replacement commit reached the subscriber').toBe(1)
+    expect(restoreFault.armed, 'positive fault instrument: the restoration actually hit the injected fault').toBe(false)
+    const history = useChatStore.getState().history
+    expect(history.historyLoaded, 'an unpublished restoration still cannot leave the history marked loaded').toBe(false)
+    expect(history.requests.latest.status).toBe('error')
+    const region = screen.getByRole('region', { name: 'Conversation history' })
+    const alert = await within(region).findByRole('alert')
+    expect(alert, 'the visible rejection and its Retry are published').toHaveTextContent('Could not load messages.')
   })
 })
