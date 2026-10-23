@@ -138,6 +138,14 @@ func TestGoalClaimWiring_EmptyEvidenceMetClaimIsRecordedAndAdjudicated(t *testin
 	if !strings.Contains(evts[0].Content, judgeReason) {
 		t.Errorf("steer = %q, want it to carry the Judge's reason — the amended AC-2 says an unmet ruling consumes a round and steers", evts[0].Content)
 	}
+	// MAJ-001 (chat owner kind, corrected 2026-10-23): the durable chat-owned
+	// record must carry the accepted claim — validateClaim's old rejection
+	// landed exactly here (WARN-logged, latest claim never represented the
+	// accepted call). Read back off the record the claim path wrote.
+	live = mustGoalRecord(t, gid)
+	if live.LatestClaim == nil || live.LatestClaim.Status != generated.GoalLatestClaimStatusMet || live.LatestClaim.Evidence != "" {
+		t.Fatalf("chat record LatestClaim = %+v, want status=met evidence=\"\" (ADR-084 §13 MAJ-001: the durable invariant follows the tool's)", live.LatestClaim)
+	}
 }
 
 // TestGoalClaimWiring_RepeatedEmptyMetClaimsEndGoalFailedAtTheRoundBound —
@@ -210,18 +218,25 @@ func TestGoalClaimWiring_RepeatedEmptyMetClaimsEndGoalFailedAtTheRoundBound(t *t
 }
 
 // TestRunGoalAdjudication_RecordedEmptyEvidenceClaimReachesTheJudge — the
-// §13 engine invariant at the deferred-dispatch seam:
-// runGoalAdjudicationOutcome, driven the SAME way the claim path drives it
-// (dispatchDeferredGoalAdjudication over a goalDeferredAdjudicationWork with
-// an empty claimText), must NOT refuse an adjudication whose claim a
-// successful goal_claim call recorded. TestRunGoalAdjudication_RejectsEmptyClaimText
-// (goal_triggers_adr084_test.go) keeps guarding the genuinely CLAIMLESS
-// caller — there no goal_claim happened; here one did ("a claim a successful
-// goal_claim call recorded is not claimless, even when its evidence line is",
-// §13). When the claim path signals claim-presence — §13 leaves the mechanism
-// ("a flag on the existing call") to backend-lead — only this call site's
-// arguments change; the assertions below are the requirement, not the
-// mechanism.
+// §13 engine invariant at the deferred-dispatch seam, TWO-SIDED per the
+// corrected FR-095 row (ADR-084 §13, MAJ-003, 2026-10-23 — "claim presence
+// and evidence-text length are different properties"):
+//
+//  1. THIS test is the recorded side: runGoalAdjudicationOutcome, driven the
+//     SAME way the claim path drives it (dispatchDeferredGoalAdjudication
+//     over a goalDeferredAdjudicationWork with an empty claimText), must NOT
+//     refuse an adjudication whose claim a successful goal_claim call
+//     recorded.
+//  2. The claimless side stays guarded by TestRunGoalAdjudication_RejectsEmptyClaimText
+//     (goal_triggers_adr084_test.go — an invocation with NO claim is still
+//     refused), and the timer/tick/sweep prohibition by
+//     TestQuietWindow_MakesZeroJudgeCalls (SC-012). Both are retention rows
+//     and are re-run alongside this test.
+//
+// When the claim path signals claim-presence — the corrected FR-095 says it
+// travels "as an explicit signal on the existing call path, never as a
+// sentinel string inside claimText" — only this call site's arguments
+// change; the assertions below are the requirement, not the mechanism.
 func TestRunGoalAdjudication_RecordedEmptyEvidenceClaimReachesTheJudge(t *testing.T) {
 	resetGoalTriggerStateForTest()
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
@@ -310,5 +325,123 @@ func TestTaskRun_RepeatedEmptyEvidenceClaimsEndTaskFailedWithinMaxAttempts(t *te
 	}
 	if turns := worker.requestSnapshot(); len(turns) != maxAttempts {
 		t.Errorf("worker turns = %d, want %d — an unmet ruling spends the run's goal try and the task restarts within max_attempts", len(turns), maxAttempts)
+	}
+	// MAJ-001 (task owner kind, corrected 2026-10-23): the empty-evidence
+	// claim reached the Judge — NOT pauseRunForGoalError, which would have
+	// left the task in_progress with a pause reason and zero Judge calls —
+	// and the task-owned durable record carries the claim.
+	rec := readTaskGoal(t, tk.ID)
+	if rec.LatestClaim == nil || rec.LatestClaim.Status != generated.GoalLatestClaimStatusMet || rec.LatestClaim.Evidence != "" {
+		t.Fatalf("task record LatestClaim = %+v, want status=met evidence=\"\" (ADR-084 §13 MAJ-001: the durable invariant follows the tool's)", rec.LatestClaim)
+	}
+}
+
+// TestClaimResolution_PresentEmptyToolClaimBeatsMarkers — FR-092's amended
+// outline rows (ADR-084 §13, MAJ-003, 2026-10-23): a SUCCESSFUL
+// present-empty goal_claim(met) is the turn's claim, empty evidence line and
+// all — the tool wins over prose markers in the same turn, whether they
+// agree (ClaimText is the tool's empty evidence, not the marker's text —
+// FR-094 discriminates) or conflict (a GOAL_STATUS: waiting_on_user marker
+// must not park a turn whose tool call claimed met — E-26).
+func TestClaimResolution_PresentEmptyToolClaimBeatsMarkers(t *testing.T) {
+	cases := []struct {
+		name          string
+		markerText    string
+		wantClaimRune string // the marker text must NOT become the claim text
+	}{
+		{"agreeing markers do not supply the claim text", "[goal:evidence] wrote report.md and re-read it\nGOAL_STATUS: met", "wrote report.md and re-read it"},
+		{"conflicting waiting_on_user marker does not park the tool claim", "[goal:evidence] blocked on supplier\nGOAL_STATUS: waiting_on_user", "blocked on supplier"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetGoalTriggerStateForTest()
+			al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+			agentInst, ok := al.GetRegistry().GetAgent("native-agent")
+			if !ok {
+				t.Fatal("native-agent not registered")
+			}
+			store, sid := newGoalTestSession(t, al, agentInst.ID)
+			cond := "write report.md summarising the three supplier quotes"
+			gid := armGoalRecord(t, sid, cond, recordedGoalCriteria(cond), 0, time.Now())
+			al.recordGoalRouting(sid, gid, "webchat", "c1", "sk1", agentInst.ID)
+
+			judge := &b6ScriptedJudge{metFromCall: alwaysUnmet, reason: "no verified work in the transcript"}
+			judgeInst.Provider = judge
+
+			claimTool, ok := agentInst.Tools.Get(tools.GoalClaimToolName)
+			if !ok {
+				t.Fatal("goal_claim is not registered on the working agent — the claim channel under test does not exist")
+			}
+
+			// The tool call succeeds with a present-empty evidence line —
+			// FR-088 as amended — and the SAME turn's prose carries markers.
+			wiringClaimMetAndPersist(t, claimTool, store, sid, "red-marker-claim-1", "")
+			opts := processOptions{
+				TranscriptStore: store, TranscriptSessionID: sid,
+				Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+			}
+			turn := &turnResult{finalContent: "I have claimed completion.\n" + tc.markerText}
+			al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, turn)
+
+			if turn.goalDeferredAdjudication == nil {
+				t.Fatalf("the successful present-empty tool call must be the turn's claim and schedule adjudication (FR-092 amended rows; §13 MAJ-003) — got no deferred adjudication; final content was %q", turn.finalContent)
+			}
+			if got := turn.goalDeferredAdjudication.claimText; got != "" {
+				t.Fatalf("claim text = %q, want the TOOL's empty evidence line — a successful call is the claim (FR-092/FR-094); the marker text %q must not supply it", got, tc.wantClaimRune)
+			}
+			al.dispatchDeferredGoalAdjudication(turn.goalDeferredAdjudication)
+			if n := judge.callCount(); n != 1 {
+				t.Fatalf("Judge calls = %d, want 1 — the tool claim adjudicates", n)
+			}
+		})
+	}
+}
+
+// TestClaimResolution_RefusedToolCallFallsBackToMarkers — FR-092's retained
+// rows (ADR-084 §13, MAJ-003, 2026-10-23): a goal_claim call that was
+// REFUSED (here: the FR-090 scope refusal, persisted as an error-status tool
+// call) or policy-denied is NOT a successful call and does not suppress
+// marker parsing — a turn that tried the tool, was refused, and then typed
+// the markers correctly still claims, from the MARKER. Retention row: this
+// behaviour exists today and must survive the amendment unchanged.
+func TestClaimResolution_RefusedToolCallFallsBackToMarkers(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
+	if !ok {
+		t.Fatal("native-agent not registered")
+	}
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	cond := "write report.md summarising the three supplier quotes"
+	gid := armGoalRecord(t, sid, cond, recordedGoalCriteria(cond), 0, time.Now())
+	al.recordGoalRouting(sid, gid, "webchat", "c1", "sk1", agentInst.ID)
+
+	judge := &b6ScriptedJudge{metFromCall: alwaysUnmet, reason: "the marker claim is still judged"}
+	judgeInst.Provider = judge
+
+	// A REFUSED goal_claim call: error status, the refusal text as the result
+	// (the FR-090 owner-session refusal) — resolveToolClaim must skip it.
+	if err := store.AppendTranscriptStrict(sid, session.TranscriptEntry{
+		ID: "red-refused-claim-1", Type: session.EntryTypeToolCall, Role: "assistant", Timestamp: time.Now().UTC(),
+		ToolCalls: []session.ToolCall{{
+			ID: session.ToolCallID("red-refused-claim-1"), Tool: tools.GoalClaimToolName, Status: "error",
+			Result: map[string]any{"text": "goal_claim is owner-session-only: a delegated sub-turn cannot claim this session's goal (ADR-084 JUDGE-FR-090)"},
+		}},
+	}); err != nil {
+		t.Fatalf("persist refused call: %v", err)
+	}
+
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
+	}
+	turn := &turnResult{finalContent: "The tool would not take my call, so I am typing the claim instead.\n[goal:evidence] wrote report.md and re-read it\nGOAL_STATUS: met"}
+	al.checkGoalLoopAfterTurn(context.Background(), agentInst, opts, turn)
+
+	if turn.goalDeferredAdjudication == nil {
+		t.Fatal("a refused goal_claim call must fall back to the prose markers — the turn still claims (FR-092 retained rows)")
+	}
+	if got := turn.goalDeferredAdjudication.claimText; !strings.Contains(got, "wrote report.md and re-read it") {
+		t.Fatalf("claim text = %q, want the MARKER path's claim (the turn output carrying [goal:evidence]) — the refused call must not suppress marker parsing", got)
 	}
 }
