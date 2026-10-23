@@ -204,7 +204,7 @@ describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay ded
       sessionsById: {
         ...s.sessionsById,
         [PT_SID]: {
-          ...(s.sessionsById[PT_SID] ?? ({} as never)),
+          ...emptySessionState(),
           messageOrder: ['failed-1'],
           messagesById: {
             'failed-1': { id: 'failed-1', role: 'user', content: 'did this send?', timestamp: '2026-09-24T00:00:00Z', deliveryStatus: 'failed' },
@@ -245,7 +245,7 @@ describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay ded
       sessionsById: {
         ...s.sessionsById,
         [PT_SID]: {
-          ...(s.sessionsById[PT_SID] ?? ({} as never)),
+          ...emptySessionState(),
           messageOrder: ['client-abc'],
           messagesById: {
             'client-abc': { id: 'client-abc', role: 'user', content: 'check my tasks', timestamp: '2026-09-24T00:00:00Z', deliveryStatus: 'sending' },

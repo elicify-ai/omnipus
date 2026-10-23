@@ -17,6 +17,7 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import * as React from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
@@ -149,12 +150,13 @@ function seedIdleBucket(): void {
     { id: 'u-seed', role: 'user', content: 'earlier question', timestamp: new Date().toISOString(), status: 'done' },
   ]
   const byId = Object.fromEntries(seeded.map((m) => [m.id, m]))
+  const defaults = emptySessionState()
   useChatStore.setState((s) => ({
     ...s,
     sessionsById: {
       ...s.sessionsById,
       [SID]: {
-        ...(s.sessionsById ?? {})[SID],
+        ...defaults,
         messagesById: byId,
         messageOrder: seeded.map((m) => m.id),
         isStreaming: false,
@@ -175,6 +177,7 @@ function seedIdleBucket(): void {
     // store syncs it on every withBucket write; the seed must do the same).
     messages: seeded,
     messagesById: byId,
+    history: defaults.history,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,

@@ -20,6 +20,7 @@ import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import * as React from 'react'
 import { useChatStore, makeBucketMessages, type ChatMessage } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -102,12 +103,11 @@ function frame(): ServerFrame {
 }
 
 function seedBucket(messages: ChatMessage[]): void {
-  const bucket = makeBucketMessages(messages)
+  const bucket = { ...emptySessionState(), ...makeBucketMessages(messages) }
   useChatStore.setState((s) => ({
     ...s,
     sessionsById: {
       [SID]: {
-        ...((s.sessionsById ?? {})[SID] ?? {}),
         ...bucket,
         isStreaming: false,
         isReplaying: false,
@@ -125,6 +125,7 @@ function seedBucket(messages: ChatMessage[]): void {
       },
     },
     messages,
+    history: bucket.history,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,

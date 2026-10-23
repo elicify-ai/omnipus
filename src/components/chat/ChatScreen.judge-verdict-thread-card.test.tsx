@@ -39,6 +39,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act } from '@testing-library/react'
 import * as React from 'react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import type { ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
@@ -105,12 +106,11 @@ const SID = 'test-session-judge-verdict'
 const GOAL_TEXT = 'write e8-impossible.txt at the workspace root'
 
 function seedBucket(messages: ChatMessage[]): void {
-  const bucket = makeBucketMessages(messages)
+  const bucket = { ...emptySessionState(), ...makeBucketMessages(messages) }
   useChatStore.setState((s) => ({
     ...s,
     sessionsById: {
       [SID]: {
-        ...((s.sessionsById ?? {})[SID] ?? {}),
         ...bucket,
         isStreaming: false,
         isReplaying: false,
@@ -128,6 +128,7 @@ function seedBucket(messages: ChatMessage[]): void {
       },
     },
     messages,
+    history: bucket.history,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,
