@@ -825,7 +825,7 @@ jobs:
             import { readFileSync } from "node:fs";
             const { stats } = JSON.parse(readFileSync("input-fixture-results.json", "utf8"));
             if (stats.expected !== 4 || stats.unexpected !== 0 || stats.skipped !== 0 || stats.flaky !== 0) {
-              throw new Error(`Expected four passing local fixture tests: ${JSON.stringify(stats)}`);
+              throw new Error("Expected four passing local fixture tests: " + JSON.stringify(stats));
             }
           '
 
