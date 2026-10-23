@@ -14,6 +14,7 @@ import { chatInput, waitForConnected } from '../selectors';
 import { seedChatHistoryDayPartitions, type ChatHistoryFixtureDay } from '../chat-history';
 import { E2E_MODEL } from '../e2e-model';
 import { startHistoryControlProvider, type HistoryControlKind, type HistoryControlProvider } from './control-provider';
+import { historyDevOrigin } from './dev-origin';
 type HistoryProvider = Awaited<ReturnType<typeof startTerminalOutcomeProvider>> | HistoryControlProvider;
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -37,8 +38,8 @@ export function observeTraffic(page: Page) {
   const sends: Extract<WsFrame, { type: 'message' }>[] = [];
   page.on('websocket', (socket) => {
     // A development build also opens Vite's HMR socket. Validate every real
-    // gateway chat frame, not unrelated development-server protocol messages.
-    if (new URL(socket.url()).pathname !== '/api/v1/chat/ws') return;
+    // gateway socket, not unrelated development-server protocol messages.
+    if (!new URL(socket.url()).pathname.startsWith('/api/')) return;
     socket.on('framereceived', ({ payload }) => {
       const parsed = WsFrame.safeParse(JSON.parse(payload.toString()));
       if (!parsed.success) {
@@ -86,7 +87,9 @@ function canonicalSeed(home: string, sessionId: string, seed: Seed) {
 export class HistoryHarness {
   readonly traffic: Traffic;
   constructor(readonly page: Page, readonly gateway: GatewayProcess, readonly ids: Awaited<ReturnType<typeof createTerminalSession>>,
-    readonly provider: HistoryProvider, readonly info: TestInfo, readonly logPath: string) {
+    readonly provider: HistoryProvider, readonly info: TestInfo, readonly logPath: string,
+    /** The SPA origin: the gateway itself, or a local dev server proxying it (dev-origin.ts). */
+    readonly origin = gateway.baseURL) {
     this.traffic = observeTraffic(page);
   }
   get sessionId() { return this.ids.session.id; }
@@ -122,11 +125,11 @@ export class HistoryHarness {
     if (options.currentControlMayLockComposer) {
       // A real pending AskUserQuestion intentionally locks the composer. Its
       // enabled state is NOT a catch-up-completion barrier for this fresh viewer.
-      await this.page.goto(`${this.gateway.baseURL}/#/sessions/${sessionId}`);
+      await this.page.goto(`${this.origin}/#/sessions/${sessionId}`);
       await expect(this.page.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible();
       await expect(chatInput(this.page)).toBeVisible();
       await waitForConnected(this.page);
-    } else await openSessionByDeepLink(this.page, sessionId, this.gateway.baseURL);
+    } else await openSessionByDeepLink(this.page, sessionId, this.origin);
     await expect.poll(() => this.traffic.frames.slice(prior).filter((frame) =>
       frame.type === 'catch_up_complete' && frame.session_id === sessionId).length,
     { message: 'opening readiness waits for catch_up_complete, never replay done' }).toBe(1);
@@ -189,6 +192,7 @@ export const test = base.extend<{ history: HistoryHarness; historyControlKind: '
   history: async ({ page, historyControlKind }, use, info) => {
     const provider = historyControlKind === 'none' ? await startTerminalOutcomeProvider() : await startHistoryControlProvider(historyControlKind);
     let gateway: GatewayProcess | undefined;
+    let dev: Awaited<ReturnType<typeof historyDevOrigin>> | undefined;
     const logPath = info.outputPath('history-gateway.jsonl');
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     try {
@@ -206,10 +210,12 @@ export const test = base.extend<{ history: HistoryHarness; historyControlKind: '
         fs.writeFileSync(filename, JSON.stringify(config), { mode: 0o600 });
         await gateway.restart();
       }
-      const harness = new HistoryHarness(page, gateway, ids, provider, info, logPath);
+      dev = await historyDevOrigin(gateway.baseURL, info);
+      const harness = new HistoryHarness(page, gateway, ids, provider, info, logPath, dev.origin);
       await use(harness);
     } finally {
       provider.finishToolRound();
+      await dev?.close();
       try { if (gateway) { await gateway.kill9(); await gateway.stop(); } }
       finally { await provider.close(); }
     }

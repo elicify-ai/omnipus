@@ -1,7 +1,4 @@
-import { expect } from '@playwright/test';
-import { fileURLToPath } from 'node:url';
-import { realpathSync } from 'node:fs';
-import type { ViteDevServer } from 'vite';
+import { expect, type Page } from '@playwright/test';
 import { chatInput } from './fixtures/selectors';
 import { openSessionByDeepLink } from './fixtures/session-setup';
 import { test, anchor, expectAnchor, fixtureId, geometry, historyRow, historyScroller, holdPage, scrollToDistance, settled } from './fixtures/chat-history-paging/harness';
@@ -252,66 +249,121 @@ for (const predecessors of [0, 19, 20]) {
 
 // FE185 regression: real React, virtualizer, ResizeObserver and wheel input.
 // D5/D8 require continuous reading, not merely a successful initial render.
-// OMNIPUS_HISTORY_DEV=1 serves this checkout's non-minified application while
-// proxying the same isolated real gateway; otherwise test its embedded SPA.
-test('FE185: slow real wheel reading stays mounted and reaches the first older page', async ({ history, page }, info) => {
-  test.setTimeout(420_000); // Includes canonical 2,000-group fixture writes and Vite's cold compilation.
+// history.origin is the embedded SPA, or this checkout's dev build when
+// OMNIPUS_HISTORY_DEV=1 (fixtures/chat-history-paging/dev-origin.ts).
+function watchReader(page: Page) {
   const errors: string[] = [];
-  const requests: string[] = [];
+  const older: string[] = [];
   page.on('pageerror', error => errors.push(error.stack ?? error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('request', request => {
     const url = new URL(request.url());
-    if (url.pathname.endsWith('/messages') && url.searchParams.has('before')) requests.push(request.url());
+    if (url.pathname.endsWith('/messages') && url.searchParams.has('before')) older.push(request.url());
   });
-  let dev: ViteDevServer | undefined;
+  return { errors, older };
+}
+/** Wheel/smooth-scroll movement has finished: scrollTop unchanged over 5 layout turns. */
+async function scrollIdle(page: Page) {
+  let previous = Number.NaN;
+  for (let stable = 0; stable < 5;) {
+    await settled(page);
+    const top = await historyScroller(page).evaluate(element => element.scrollTop);
+    stable = top === previous ? stable + 1 : 0;
+    previous = top;
+  }
+}
+const focusIdentity = (page: Page) => page.evaluate(() => {
+  const element = document.activeElement;
+  return element ? `${element.tagName}#${element.id}[${element.getAttribute('data-testid') ?? element.getAttribute('aria-label') ?? ''}]` : null;
+});
+
+test('FE185: slow real wheel reading stays mounted, prefetches and keeps the anchor and focus', async ({ history, page }, info) => {
+  test.setTimeout(420_000); // Canonical fixture writes, gateway restart and (dev) Vite's cold compilation.
+  const watch = watchReader(page);
   const samples: { top: number; height: number; H: number }[] = [];
+  let held: Awaited<ReturnType<typeof holdPage>> | undefined;
   try {
     await history.seed({ label: 'wheel185', count: 240, shape: 'varied' });
     await history.authenticate();
-    let origin = history.gateway.baseURL;
-    if (process.env.OMNIPUS_HISTORY_DEV === '1') {
-      const { createServer } = await import('vite');
-      const root = fileURLToPath(new URL('../../', import.meta.url));
-      dev = await createServer({ root, configFile: `${root}/vite.config.ts`, cacheDir: info.outputPath('vite-cache'),
-        server: { host: 'localhost', port: 0, strictPort: true,
-          fs: { allow: [root, realpathSync(`${root}/node_modules`), info.outputDir] },
-          proxy: { '/api': { target: history.gateway.baseURL, changeOrigin: true, ws: true, rewriteWsOrigin: true } } } });
-      await dev.listen();
-      const address = dev.httpServer?.address();
-      if (!address || typeof address === 'string') throw new Error('Vite did not bind its isolated port');
-      origin = `http://localhost:${address.port}`;
-      const transformed = await dev.transformRequest('/src/components/chat/useHistoryViewport.ts');
-      await info.attach('viewport-development-source', { contentType: 'text/javascript', body: transformed?.code ?? '' });
-    }
-    await openSessionByDeepLink(page, history.sessionId, origin);
+    await openSessionByDeepLink(page, history.sessionId, history.origin);
     await expect.poll(() => history.traffic.frames.filter(frame => frame.type === 'catch_up_complete' && frame.session_id === history.sessionId).length).toBe(1);
     await settled(page);
     const initial = await geometry(page);
     expect(initial.height, 'positive control: real layout has scrollable older content').toBeGreaterThan(4 * initial.H);
-    const baseline = requests.length;
+    const baseline = watch.older.length;
+    // Hold ONLY the delivery of the real older page so the reader can be
+    // measured at rest before it commits (D8 settled anchor, not total height).
+    held = await holdPage(page, url => url.searchParams.has('before'));
     const scroller = historyScroller(page);
     await scroller.hover();
+    const focusBefore = await focusIdentity(page);
     // B25's normal-reading bound: 0.075H per >=100ms is <=0.75H/s.
     // Never assign scrollTop or dispatch a synthetic scroll event here.
-    for (let tick = 0; tick < 240 && requests.length === baseline; tick++) {
+    for (let tick = 0; tick < 240 && watch.older.length === baseline; tick++) {
       await page.mouse.wheel(0, -initial.H * 0.075);
       await page.waitForTimeout(100);
-      expect(errors, 'no render/update-depth errors during genuine reader movement').toEqual([]);
+      expect(watch.errors, 'no render/update-depth errors during genuine reader movement').toEqual([]);
       await expect(scroller, 'the router error boundary must not replace Conversation history').toBeVisible();
       samples.push(await scroller.evaluate(element => ({ top: element.scrollTop, height: element.scrollHeight, H: element.clientHeight })));
     }
     expect(samples.some(sample => sample.top < initial.top), 'positive control: trusted wheel input actually moved the reader upward').toBe(true);
-    expect(requests.length, 'normal reading must reach a real older-page request, not loop in layout').toBeGreaterThan(baseline);
-    await expect.poll(() => history.traffic.pages.filter(reply => requests.slice(baseline).includes(reply.url) && reply.status === 200).length).toBeGreaterThan(0);
-    await settled(page);
+    expect(watch.older.length, 'normal reading must reach a real older-page request, not loop in layout').toBeGreaterThan(baseline);
+    await held.requested;
+    expect(samples.at(-1)!.top, 'D-G1: prefetch starts while older loaded content remains above the reader').toBeGreaterThan(0);
+    await scrollIdle(page);
+    const saved = await anchor(page);
+    held.release();
+    await expect.poll(() => history.traffic.pages.filter(reply => watch.older.slice(baseline).includes(reply.url) && reply.status === 200).length).toBeGreaterThan(0);
+    await expect(scroller, 'busy state resets after the real older page commits').not.toHaveAttribute('aria-busy', 'true');
+    await expectAnchor(page, saved);
+    expect(await focusIdentity(page), 'D8: a passive prefetch never moves focus').toBe(focusBefore);
     await expect(scroller).toBeVisible();
-    expect(errors, 'the real older response also commits without a render error').toEqual([]);
+    expect(watch.errors, 'the real older response also commits without a render error').toEqual([]);
     expect(history.traffic.failures, 'real frames remain contract-valid').toEqual([]);
-    await history.record('wheel185-after-older', { initial, samples, requests });
+    await history.record('wheel185-after-older', { initial, samples, older: watch.older, saved });
   } finally {
-    await info.attach('wheel185-diagnostics', { contentType: 'application/json', body: JSON.stringify({ frontend: process.env.OMNIPUS_HISTORY_DEV === '1' ? 'non-minified Vite checkout' : 'embedded gateway', gateway: history.gateway.baseURL, errors, requests, samples }, null, 2) });
+    held?.release();
+    await held?.dispose();
+    await info.attach('wheel185-diagnostics', { contentType: 'application/json', body: JSON.stringify({ frontend: process.env.OMNIPUS_HISTORY_DEV === '1' ? 'non-minified Vite checkout' : 'embedded gateway', gateway: history.gateway.baseURL, errors: watch.errors, older: watch.older, samples }, null, 2) });
     await info.attach('wheel185-final', { contentType: 'image/png', body: await page.screenshot() });
-    await dev?.close();
+  }
+});
+
+test('FE185: fast real wheel flicks cross several older pages without a loop, jump to latest or unsettled anchor', async ({ history, page }, info) => {
+  test.setTimeout(420_000);
+  const watch = watchReader(page);
+  const samples: { top: number; height: number }[] = [];
+  try {
+    await history.seed({ label: 'flick185', count: 600, shape: 'varied' });
+    await history.authenticate();
+    await openSessionByDeepLink(page, history.sessionId, history.origin);
+    await expect.poll(() => history.traffic.frames.filter(frame => frame.type === 'catch_up_complete' && frame.session_id === history.sessionId).length).toBe(1);
+    await settled(page);
+    const initial = await geometry(page);
+    const committed = () => history.traffic.pages.filter(reply => reply.status === 200 && new URL(reply.url).searchParams.has('before')).length;
+    const scroller = historyScroller(page);
+    await scroller.hover();
+    // A fast trackpad/wheel flick: 1.5 viewports per 50ms (30 viewports/s).
+    for (let tick = 0; tick < 400 && committed() < 3; tick++) {
+      await page.mouse.wheel(0, -initial.H * 1.5);
+      await page.waitForTimeout(50);
+      expect(watch.errors, 'no render/update-depth errors during fast reader movement').toEqual([]);
+      await expect(scroller, 'the router error boundary must not replace Conversation history').toBeVisible();
+      samples.push(await scroller.evaluate(element => ({ top: element.scrollTop, height: element.scrollHeight })));
+    }
+    expect(committed(), 'fast reading keeps prefetching: at least three real older pages commit').toBeGreaterThanOrEqual(3);
+    await scrollIdle(page);
+    await expect(page.getByRole('button', { name: 'Return to latest', exact: true }), 'still reading history, never thrown back to latest').toBeVisible();
+    const view = await geometry(page);
+    expect(view.bottom, 'the reader stays far from the recent end after flicking upward').toBeGreaterThan(2 * view.H);
+    // Settled means settled: with no input, no layout loop keeps moving rows.
+    const saved = await anchor(page);
+    await page.waitForTimeout(500);
+    await expectAnchor(page, saved);
+    expect(watch.errors).toEqual([]);
+    expect(history.traffic.failures, 'real frames remain contract-valid').toEqual([]);
+    await history.record('flick185-after-older', { initial, samples, older: watch.older, saved });
+  } finally {
+    await info.attach('flick185-diagnostics', { contentType: 'application/json', body: JSON.stringify({ frontend: process.env.OMNIPUS_HISTORY_DEV === '1' ? 'non-minified Vite checkout' : 'embedded gateway', errors: watch.errors, older: watch.older, samples }, null, 2) });
   }
 });
