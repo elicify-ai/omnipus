@@ -16,7 +16,7 @@ import (
 // 64 suffix-recovery items. Finite controlled churn lets the bad unbounded
 // implementation finish on attempt5, proving the defect without a hang timer.
 func TestChatHistoryRead_RetentionChurnStopsAfterThreeAttempts(t *testing.T) {
-	for _, churn := range []int{0, 1, 4} {
+	for _, churn := range []int{0, 1, 2, 4} {
 		t.Run(fmt.Sprintf("actual_retention_moves_%d", churn), func(t *testing.T) {
 			s, sid := newEffectsSession(t)
 			days := make([]chatHistoryFixtureDay, 0, 5)
@@ -58,13 +58,19 @@ func TestChatHistoryRead_RetentionChurnStopsAfterThreeAttempts(t *testing.T) {
 			page, readErr := s.ReadChatHistoryPage(ctx, sid, historyOptions(40))
 			chatHistoryReadHook = oldHook
 			if churn < 3 {
-				require.NoError(t, readErr, "stable or one-race read remains servable, not blanket unavailable")
+				require.NoError(t, readErr, "T48: a cut stabilizing on attempt1,2 OR3 succeeds, not blanket third-attempt refusal")
 				require.Equal(t, churn+1, attempts)
 				require.Equal(t, churn, moves)
 				require.EqualValues(t, churn, metrics.RetentionRetries)
 				require.Len(t, page.Entries, 40)
-				require.Equal(t, "retained-041", page.Entries[0].Entry.ID)
-				require.Equal(t, "retained-080", page.Entries[39].Entry.ID)
+				wantIDs := make([]string, 40)
+				for i := range wantIDs {
+					wantIDs[i] = fmt.Sprintf("retained-%03d", 41+i)
+					// Four rolled entries precede the80 current entries; latest40
+					// are canonical addresses44..83, independent of reselect count.
+					require.Equal(t, historyExpectedPosition(sid, addresses[44+i]), page.Entries[i].Position)
+				}
+				require.Equal(t, wantIDs, historyIDs(page), "all exact retained entries, no omitted/duplicated/substituted middle row")
 			} else {
 				assert.Equal(t, 3, attempts, "W: at most initial+2 reselects; a fourth cut is forbidden")
 				assert.Equal(t, 3, moves, "normal sweep fixture must not be chased past third moved cut")
