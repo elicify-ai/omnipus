@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import { walkFiles } from './safety.mjs';
 
 export function digest(file) {
@@ -25,6 +26,24 @@ export function archiveShape(directory) {
   const files = walkFiles(directory).filter(f => /(?:^|\/)(?:transcript|\d{4}-\d{2}-\d{2})\.jsonl$/.test(f));
   return { encoded_archive_bytes: files.reduce((sum, f) => sum + fs.statSync(f).size, 0), archive_files: files.length,
     actual_days: files.filter(f => /\d{4}-\d{2}-\d{2}\.jsonl$/.test(f)).length + (fs.existsSync(path.join(directory, 'transcript.day')) ? 1 : 0) };
+}
+export async function copiedArchiveShape(directory) {
+  const files = walkFiles(directory).filter(f => /(?:^|\/)(?:transcript|\d{4}-\d{2}-\d{2})\.jsonl$/.test(f));
+  const counts = { source_records: 0, malformed_lines: 0, tool_records: 0, image_records: 0, system_records: 0, clear_records: 0 };
+  for (const file of files) {
+    const reader = createInterface({ input: fs.createReadStream(file), crlfDelay: Infinity });
+    for await (const line of reader) {
+      if (!line) continue;
+      let row;
+      try { row = JSON.parse(line); } catch { counts.malformed_lines++; continue; }
+      counts.source_records++;
+      if (row.tool_calls?.length || row.type === 'tool_call') counts.tool_records++;
+      if (typeof row.content === 'string' && row.content.includes('![')) counts.image_records++;
+      if (row.role === 'system') counts.system_records++;
+      if (row.type === 'system' && row.role === 'system' && row.content === 'Conversation context cleared') counts.clear_records++;
+    }
+  }
+  return { ...archiveShape(directory), ...counts, note: 'source records/shape, not an invented eligible chat-group/projection count; scan outside all timings' };
 }
 export function syntheticDays(count, agent, reference = new Date()) {
   const days = Array.from({ length: 90 }, (_, day) => {

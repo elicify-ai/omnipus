@@ -13,6 +13,17 @@ export function absolute(value, name) {
   if (inside(FORBIDDEN, clean)) throw new Error(`${name} refuses the founder live-data root`);
   return clean;
 }
+export function safeOutput(value) {
+  const clean = absolute(value, '--output');
+  if (!inside('/Users/danielpiatkowski/AI-Agent-Workspace', clean) && process.platform === 'darwin') throw new Error('--output must be in the agent workspace');
+  let current = path.parse(clean).root;
+  for (const component of clean.slice(current.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, component);
+    try { if (fs.lstatSync(current).isSymbolicLink()) throw new Error('--output refuses symlinked path'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  return clean;
+}
 export function optionalCopy(value, inputRoot, name, io = fs) {
   if (value === undefined) return null; // No discovery, not even an existence check.
   const source = absolute(value, name);
