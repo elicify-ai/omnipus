@@ -285,6 +285,7 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
       applyDeclaredRecoveryFrame(replay)
       // Replaying the same entry is idempotent even after local ID re-keying.
       applyDeclaredRecoveryFrame(replay)
+      applyDeclaredRecoveryFrame({ type: 'done', session_id: SESSION_ID })
     })
     expect.soft(recovery1090Users(), 'D7: before COMPLETE the original client-ID input remains, not a partially rekeyed page')
       .toStrictEqual([{ id: CLIENT_ID, content: CONTENT }])
@@ -411,6 +412,7 @@ describe('#1090 D7 — ordinary first-send recovery, not setup kickoff', () => {
         id: SERVER_ENTRY_ID, client_message_id: CLIENT_ID, content: CONTENT,
         history_origin: { position: makeSnapshotHistory(1).page_info.first_position!, entry_id: SERVER_ENTRY_ID },
       })
+      applyDeclaredRecoveryFrame({ type: 'done', session_id: SESSION_ID })
       applyDeclaredRecoveryFrame({
         type: 'catch_up_complete', session_id: SESSION_ID, seq: 1, boot_id: '1090-boot', mode: 'snapshot',
       })

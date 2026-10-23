@@ -187,6 +187,7 @@ function completeAuthoritativeCheck() {
       client_message_id: ORIGINAL_ID, content: ORIGINAL_TEXT,
       history_origin: { position: makeSnapshotHistory(1).page_info.first_position!, entry_id: SERVER_ENTRY },
     })
+    applyDeclaredFrame({ type: 'done', session_id: SESSION_ID })
     applyDeclaredFrame({
       type: 'catch_up_complete', session_id: SESSION_ID, seq: 1, boot_id: 'combo-sf1-boot', mode: 'snapshot',
     })
