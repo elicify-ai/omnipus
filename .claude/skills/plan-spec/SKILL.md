@@ -13,7 +13,7 @@ allowed-tools: Read, Grep, Glob, Bash, Write, Edit
 
 # Plan & Spec (plan-spec)
 
-Last reviewed: 2026-09-30
+Last reviewed: 2026-10-23 — approved delivery-process rollout
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (§7.1, the
 feature-size flow); founder decisions:
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`.
@@ -21,7 +21,8 @@ feature-size flow); founder decisions:
 ## When this runs, and on what input
 
 Feature-size work only. Small and standard changes never reach this skill — they build
-directly, with tests, then go to their own reviewer set (§7.1 of the design doc above).
+directly, with tests, then join their size's combined train review (root `CLAUDE.md`,
+"Change sizes and the review gate").
 `/taskify` does not exist; task decomposition belongs to team-lead's planning
 (`omnipus-planning-orchestration`), not to this skill.
 
@@ -228,6 +229,13 @@ scenario and UI/behaviour documentation TODO appears at least once. For a requir
 with no user-visible effect, give the reason instead of leaving the docs cell blank.
 A gap here is an incomplete spec — fill it before finishing.
 
+**Hands-on rows** (root `CLAUDE.md`, "Hands-on pipeline") — write them now, not at the
+campaign window. Ask the feature's existing qa-lead test author for campaign detail;
+keep that same author through its test phases. Each row names its acceptance criterion, steps, expected result, affected
+area and critical path for independent validation; use those links to select later
+diff-scoped re-runs. Setup/version binding and paired start are operational procedure,
+not extra product acceptance criteria. Name stable rows suitable for later automation.
+
 ## Phase 7 — Assemble and hand off
 
 1. Assemble the spec using `knowledge/spec-template.md` as the structural skeleton —
@@ -267,6 +275,8 @@ A gap here is an incomplete spec — fill it before finishing.
 - [ ] User-facing documentation section names specific pages and DOC-xxx TODOs for
       each UI or behaviour change (or says why none applies); the Traceability
       Matrix links the matching requirements to those TODOs.
+- [ ] Spec-time hands-on rows trace to acceptance criteria, affected areas and critical
+      paths; a diff can select its touched-row re-run without inventing new oracles.
 - [ ] Traceability Matrix has no gaps.
 - [ ] No implementation detail leaked into Phase 2/3 sections (phrasing table above).
 - [ ] Output path is exactly `docs/internal/specs/<name>-spec.md` — nowhere else.

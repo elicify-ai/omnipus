@@ -4,6 +4,11 @@ Status: implemented (`deploy/ci-worker/ci-cluster.sh`), 2026-09-16. Operational 
 the machines themselves remains `deploy/ci-worker/CLAUDE.md`; this note records the design of
 the dispatcher and why the pieces are shaped the way they are.
 
+**Operating-policy amendment — 2026-10-23:** root `CLAUDE.md` ("CI scope and
+remote pre-flight", "CI quarantine") governs permission and qualified results. This
+document describes runner capabilities, not authorization to run full CI on work
+or lane branches; apply the shared skill's "Build and test" procedure first.
+
 ## Context
 
 The CI workers used to be one shared machine: every run took an exclusive `flock` on

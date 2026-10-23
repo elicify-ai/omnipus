@@ -3,6 +3,14 @@
 Scoped guidance for the `deploy/ci-worker/` directory. Loaded automatically by Claude Code
 whenever a file in this directory (or a descendant) is read.
 
+Last reviewed: 2026-10-23 — delivery policy
+
+**Before using any recipe below:** apply root `CLAUDE.md` ("CI scope and remote
+pre-flight" and "CI quarantine"). These are runner capabilities, not permission to
+run full CI on a lane. Use the shared skill's "Build and test" procedure for
+approval/pre-flight receipts. The trigger restriction and quarantine automation are
+separate backend work; this text does not claim either is implemented.
+
 ## ⚠️ "ALL GATES GREEN" from this worker does NOT mean races were checked
 
 The worker runs a FASTER SUBSET of GitHub CI. Two limits that have already caused a
@@ -72,45 +80,22 @@ as if it were a full pass):
 **Bottom line:** treat this worker as a fast pre-merge smoke gate, not as the authority on
 concurrency. For race coverage, push and read GitHub CI.
 
-## CI rollout rules (founder-approved 2026-10-23)
-
-Full GitHub CI runs on draft or ready PRs **into** `release/v0.1.1` or `main`,
-regardless of the source branch name, and on pushes to those two branches. Plain
-lane/work/integration pushes do not run it. A standalone feature's draft PR is
-eligible too. The weekly CodeQL scan remains; unrestricted manual dispatch of the
-four full workflows that had it is removed. The existing path/language filters
-and the `run-e2e` PR label still select work within an eligible run.
-
-Lanes run their own tests plus a minimal targeted regression. Fly requires the
-founder's OK and a passing local typecheck and compile before the window; heavy
-local commands use the slot runner. Do not replace the train's draft-PR run with
-a full cluster run on every lane.
-
-The tracked GitHub failure quarantine lives at
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/.github/ci-quarantine.json`.
-It can only shrink without founder approval. Quarantined tests still run and raw
-leaf checks remain red; only the required **CI** aggregate may report **green
-except quarantined**, with exact failures and open issues listed. A closed or
-missing issue blocks that aggregate. This Fly runner does **not** apply those
-exceptions: retain its raw verdict, collect the logs and parse `RESULT:` / `GATE
-FAILURE(S)` as before. A worker green is not a GitHub aggregate verdict.
-
-Exact scopes, evidence rules and verification commands:
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/docs/internal/ci-rules.md`.
-
 ## Local PR-runner (the `ci-omnipus-1` Fly cluster)
 
 The Go test/build suite is run on a dedicated Fly worker cluster, **never in the dev pod** (linking the full `pkg/gateway` test binary with the pure-Go OLM crypto via the `goolm` tag OOMs the pod — see the root CLAUDE.md's "Build, test, and quality gates" section). The cluster is sized, on-demand boxes with persistent caches, driven via `flyctl ssh console`.
 
 - **App**: `ci-omnipus-1` (`sin` region) — **ONE app, five machines**. Each machine has its own 8-vCPU / 16 GB VM and its own persistent `/cache` volume (go-build/mod cache, npm cache, the cloned repo), and its own `/tmp/runci.lock`. **Placement (founder ruling, 2026-10-12): the machines are sized per test type on purpose; no resizing.** Founder decision 2026-10-21 ("ok a") moves `spa` to the performance machine after the Go gates. The ONE `performance` 8x/16 GB machine, `080d74db170408`, runs the `go` tier in order: `gofmt go-build go-vet lint go-test go-race spa`. The full `e2e` gate runs there **after that entire tier, never in parallel**. The `node` tier keeps only `contracts` on shared `d8d0d90a1e9648`; `xplat` keeps `embed-build records-no-sqlite cli-verb-guard` on shared `78113d4f329908`. Both `contracts` and `spa` reinstall `node_modules` with their own `npm ci`, so keeping contracts separate preserves every per-tier override without losing reuse of an installed dependency tree. The other two shared machines, `d8d3977c946558` and `48ee71eb1e9768`, remain spare capacity. A targeted few-spec e2e rerun (`E2E_SPECS=...`) may use a shared machine; the FULL e2e gate must not. On 2026-10-11 the full e2e gate placed on shared machines ran 2 h at load ~21 and starved (even the baseline failed nearly everything), and `embed-build` took ~46 min on a shared machine against minutes on the performance one. That was a PLACEMENT error, not undersizing. The 2026-10-21 SPA decision likewise follows timing-test failures on shared machines and a pass on performance; it does not weaken the tests. Indicative gate times and the unmeasured new totals are in root CLAUDE.md's "Remote CI cluster" table. `fly machine status <id> --app ci-omnipus-1` is the source of truth for sizes. The former standalone worker apps were **destroyed** by founder decision (2026-09-16) — do not reference or recreate them. Machines are addressed **by id**; their ids are DATA in `ci-cluster.sh` / its env vars, never dispatch logic.
 - **Source of truth**: `deploy/ci-worker/runci.sh` (in this repo) **and** the deployed copy at `/cache/runci.sh` on **every** machine. **Editing the repo file does NOT update any executing copy** — see "Redeploying runci.sh" below.
-- **Trigger — full cluster (only when approved)**: `deploy/ci-worker/ci-cluster.sh <ref>` fans the gates out one tier per machine, concurrently, collects every machine's logs (verified, see trap 8), and stops every machine it started on the way out (see "CI cluster dispatcher" below and `docs/internal/architecture/ci-cluster-design.md`).
+- **Trigger — full cluster (preferred)**: `deploy/ci-worker/ci-cluster.sh <ref>` fans the gates out one tier per machine, concurrently, collects every machine's logs (verified, see trap 8), and stops every machine it started on the way out (see "CI cluster dispatcher" below and `docs/internal/architecture/ci-cluster-design.md`).
 - **Trigger — one gate on one machine**:
   ```bash
   fly ssh console --app ci-omnipus-1 --machine <id> -C "/cache/runci.sh <ref> <gate>"
   ```
 - **Gates** (verified against `runci.sh`'s `case` block 2026-09-16): `all | all-no-e2e | gofmt | go-build | go-vet | lint | go-test | go-race | records-no-sqlite | contracts | spa | quick | embed-build | e2e | cli-verb-guard`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `records-no-sqlite` (added for review finding F7) runs `pkg/gateway/rest_knowledge_find_propindexless_test.go`'s two tests under `-tags goolm,stdjson,records_no_sqlite` — the `records_no_sqlite` build tag otherwise appears nowhere in CI, so this is the only gate (here or in `.github/workflows/pr.yml`'s mirrored step) that ever exercises that honesty-contract carve-out. `e2e` runs the full Playwright matrix (90 spec files across 24 shards; count them with `ls tests/e2e/*.spec.ts | wc -l`) — see "E2E gate" below.
-- **When to use it** (2026-10-23 rollout): only with the founder's OK. Lane work uses its own tests plus a minimal targeted regression after the local typecheck/compile pre-flight; full verification normally runs once on the train or standalone-feature draft PR. A slow or memory-limited local machine is a reason to request a targeted Fly window, not permission to start a full lane run.
+- **When to use it**: only for a founder-approved remote window within root
+  `CLAUDE.md`'s CI scope. Use a pushed candidate for authorized integration gates, or
+  only the lane's targeted tests/regression after its local pre-flight. Machine
+  pressure alone does not authorize a full feature/lane run or a new hotfix branch.
 
 **`all-no-e2e` gate (setup once, three parallel groups).** `all` minus `go-race` and `e2e`,
 restructured so the shared setup is paid once per run instead of once per gate. Measured
