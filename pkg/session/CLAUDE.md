@@ -86,9 +86,13 @@ lines MUST stay on disk for recall.
 - The retention sweep (`retention_sweep.go::RetentionSweep`) removes aged-out
   session directories; goal retention runs as a separate pass AFTER the shard
   hold is released (a swappable hook, so pkg/session never imports pkg/goal —
-  that would be an import cycle). `archive_expiry.go::ArchiveDayStore.SweepExpired`
-  (rolled-partition expiry and window repair) has no non-test caller at this tip;
-  do not assume it runs.
+  that would be an import cycle). Rolled-partition expiry has a real caller:
+  `expireArchiveSessions` invokes `archiveBackend.expireSession`, which calls
+  `ArchiveDayStore.SweepExpired` and repairs the model-window cursor. After
+  releasing all session shards, the sweep calls `reconcileExistingChatHistory`
+  even on a zero-removal pass, then records expiry notices and runs goal retention.
+  Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/archive_expiry.go::expireSession`
+  and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/retention_sweep.go::RetentionSweep`.
 
 ## Paged chat history and derived publication
 
