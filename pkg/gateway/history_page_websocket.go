@@ -29,16 +29,19 @@ func (wc *wsConn) rememberedHistoryState(id string) (generated.SessionHistorySta
 func (wh *wsHandlerReadLoop) handleHistoryAttachFrame(data []byte) wsHandlerReadLoopFlow {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(data, &fields) != nil {
+		logsafeWarn("ws: malformed attach_session frame", "phase", "decode_object")
 		return wsHandlerReadLoopContinue
 	}
 	delete(fields, "history_limit")
 	delete(fields, "history_min_rows")
 	raw, err := json.Marshal(fields)
 	if err != nil {
+		logsafeWarn("ws: malformed attach_session frame", "phase", "encode_envelope")
 		return wsHandlerReadLoopContinue
 	}
 	var f generated.AttachSessionFrame
 	if json.Unmarshal(raw, &f) != nil {
+		logsafeWarn("ws: malformed attach_session frame", "phase", "decode_attach")
 		return wsHandlerReadLoopContinue
 	}
 	wh.h.handleAttachSessionWithAck(wh.ctx, wh.chatID, f.SessionId, &attachCursor{SinceSeq: f.SinceSeq, BootID: f.BootId}, &attachAck{Ack: f.AckAttention != nil && *f.AckAttention, Bound: f.AttentionBound}, wh.wc, data)

@@ -4217,54 +4217,52 @@ func TestContract_GodModeStatus_MissingRequiredFieldRejected(t *testing.T) {
 // wave T1 (docs/internal/specs/adr-084-086-joint-delivery-plan.md line 371):
 // GOAL-FR-037, GOAL-FR-042, GOAL-MV-7, GOAL-SC-008, JUDGE-FR-073a, JUDGE-FR-075.
 //
-// FR-073a: every hand-synced copy of every shape this joint delivery touches
-// must agree RECURSIVELY over the full sub-schema — not a top-level
-// property-set diff (C21), which would see "evidence: array" agree across
-// all three per-criterion-verdict copies and stop there, leaving the
-// nested evidence[] item shape (including its `source` field) unguarded in
-// exactly the copy openapi-zod-client reads. The copies-table enumeration
-// (judge spec "Every copy of every changed shape, by path (FR-073, C20)")
-// is the authority for which paths are compared below; $ref rows (4, 9 in
-// that table) are excluded on purpose — they inherit by reference and
-// cannot drift independently of their target. Row 12 of that table (the
-// judge degraded-capability agent-card field) is likewise EXCLUDED:
-// JUDGE-FR-077-FR-080 and judge spec §M ("the mixed state") are retired in
-// full by operator decisions D-F/D-H — building or guarding that field
-// would resurrect a retired surface, not protect one.
-//
-// Each comparison below targets an EXPLICIT (schema, path) pair, never a
-// bare field-name match (C-56): this is what stops the comparator from
-// ever cross-comparing AcceptanceCriterion's authority-layer `provenance`
-// enum ({stated, workspace, floor, inferred}) against CriterionVerdict's
-// evidence-source `provenance` enum ({judge_read, deterministic_check,
-// diff, transcript, session_read, none}) merely because both fields
-// happen to be named "provenance" on unrelated schemas.
+// FR-073a compares full sub-schemas recursively (C21), including evidence[].source,
+// not merely top-level property sets. Compare explicit (schema, path) pairs from
+// the judge copies table (FR-073/C20/C56), never matching bare field names:
+// AcceptanceCriterion provenance {stated, workspace, floor, inferred} differs from
+// CriterionVerdict evidence provenance {judge_read, deterministic_check, diff,
+// transcript, session_read, none}. Ref-only rows 4/9 inherit their targets; row 12's
+// degraded capability (JUDGE-FR-077..080/§M) is retired by D-F/D-H, not restored.
 
-// yamlNoiseKeys are documentation-only YAML keys that legitimately differ in
-// wording between independently hand-synced copies of the same shape
-// (each copy explains its own sync obligation in its own words) without
-// that being a structural drift the comparator should flag.
+// yamlNoiseKeys are schema documentation annotations. Wire property names with
+// these spellings are not annotations and must remain in the comparison.
 var yamlNoiseKeys = map[string]bool{"description": true, "example": true, "title": true}
 
-// stripYAMLNoise returns a deep copy of v with every yamlNoiseKeys entry
-// removed at every nesting level, so only structural schema content
-// survives for comparison: type, enum, required, additionalProperties,
-// properties, items, and bounds such as minLength/maxItems/minimum.
-func stripYAMLNoise(v any) any {
+// stripYAMLNoise deep-copies schemas, omitting only documentation annotations.
+// Property-name maps use "properties" context; enum/default/const and unknown
+// extension data stay literal. Wire members are never documentation by spelling.
+func stripYAMLNoise(v any, schemaContext ...string) any {
+	mode := "schema"
+	if len(schemaContext) > 0 {
+		mode = schemaContext[0]
+	}
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, val := range t {
-			if yamlNoiseKeys[k] {
+			if mode == "schema" && yamlNoiseKeys[k] {
 				continue
 			}
-			out[k] = stripYAMLNoise(val)
+			next := "literal"
+			switch mode {
+			case "properties":
+				next = "schema"
+			case "schema":
+				switch k {
+				case "properties", "patternProperties", "definitions", "$defs", "dependentSchemas", "dependencies":
+					next = "properties"
+				case "items", "additionalProperties", "additionalItems", "unevaluatedProperties", "unevaluatedItems", "contains", "propertyNames", "not", "if", "then", "else", "allOf", "anyOf", "oneOf", "prefixItems", "contentSchema":
+					next = "schema"
+				}
+			}
+			out[k] = stripYAMLNoise(val, next)
 		}
 		return out
 	case []any:
 		out := make([]any, len(t))
 		for i, val := range t {
-			out[i] = stripYAMLNoise(val)
+			out[i] = stripYAMLNoise(val, mode)
 		}
 		return out
 	default:
@@ -4272,10 +4270,8 @@ func stripYAMLNoise(v any) any {
 	}
 }
 
-// loadYAMLDoc reads and parses a whole YAML file into a generic mapping.
-// Distinct from this file's yamlLoader (which feeds the jsonschema
-// compiler for validation): this one is for direct structural
-// navigation/comparison between two hand-synced copies, not compilation.
+// loadYAMLDoc reads a fresh YAML mapping for structural comparison, not the
+// jsonschema compiler's separate yamlLoader harness.
 func loadYAMLDoc(t *testing.T, absPath string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(absPath)
@@ -4343,35 +4339,15 @@ func yamlStringSet(t *testing.T, v any) map[string]bool {
 	return out
 }
 
-// TestContractCopies_AllHandSyncedCopiesAgree_Recursive is FR-073a: every
-// hand-synced copy pair from the judge spec's "Every copy of every changed
-// shape" table (FR-073, C20) agrees structurally, recursively over the
-// full sub-schema. Renamed from a prior "AllThreeContractCopiesAgree"
-// precedent that counted one shape of four (C21) — this covers all four
-// shapes the joint delivery touches: the per-criterion verdict shape
-// (rows 1-3), AcceptanceCriterion's full property set including its status
-// enum (rows 5-8), GoalStatusFrame.state's enum (rows 10-11), and (C-85)
-// the new BrowserHandoverNoticeFrame the joint delivery adds.
-//
-// Manual break test: edit any one hand-synced copy's `type`, `enum`, or
-// nested `properties` (e.g. add an enum value to just the asyncapi.yaml
-// inline copy) and re-run — the corresponding subtest must go red. This
-// comparator caught exactly that drift for real: asyncapi.yaml's inline
-// JudgeVerdictFrame.per_criterion.items.evidence[].source carried a closed
-// `enum` while CriterionVerdict.yaml and JudgeVerdictFrame.yaml's own
-// evidence[].source were both deliberately plain `type: string` (each says so
-// in its own description, "not a closed enum ... a codegen constraint").
-// Left unfixed, the generated zod schema would have rejected — and the SPA
-// silently DROPPED — every judge-verdict frame carrying a per-clause evidence
-// source outside that enum, with `make verify-contracts` green throughout.
-// Resolved by removing the stray enum from the asyncapi.yaml inline copy, so
-// all three copies agree on plain `type: string`; the subtest below is what
-// keeps them that way.
-//
-// Traces to: docs/internal/specs/judge-active-reviewer-spec.md FR-073,
-// FR-073a (lines ~2100-2135) and the copies table (lines ~1341-1372);
-// docs/internal/specs/adr-084-086-joint-delivery-plan.md C-85 (line 315),
-// wave T1 (line 371).
+// TestContractCopies_AllHandSyncedCopiesAgree_Recursive enforces FR-073a across
+// CriterionVerdict (rows 1-3), AcceptanceCriterion incl. status (5-8),
+// GoalStatusFrame.state (10-11), and BrowserHandoverNoticeFrame (C-85), rather
+// than the former one-shape "AllThreeContractCopiesAgree" precedent (C21).
+// Historical control: an inline evidence[].source closed enum once differed
+// from the two deliberately plain-string copies, dropping judge frames in Zod
+// despite green verify-contracts. All three now stay plain string. Automated
+// member-name controls below complement these recursive type/enum/bound checks.
+// Sources: judge-active-reviewer-spec.md FR-073/073a/copies table; joint plan C-85/T1.
 func TestContractCopies_AllHandSyncedCopiesAgree_Recursive(t *testing.T) {
 	t.Run("row 1 vs row 2 — CriterionVerdict.yaml vs JudgeVerdictFrame.yaml per_criterion.items", func(t *testing.T) {
 		canonical := stripYAMLNoise(componentYAMLPath(t, "CriterionVerdict"))
@@ -4405,8 +4381,8 @@ func TestContractCopies_AllHandSyncedCopiesAgree_Recursive(t *testing.T) {
 		canonicalDoc := componentYAMLPath(t, "AcceptanceCriterion")
 		inputDoc := componentYAMLPath(t, "AcceptanceCriterionInput")
 
-		canonicalProps := stripYAMLNoise(yamlPath(t, "AcceptanceCriterion.yaml", canonicalDoc, "properties"))
-		inputProps := stripYAMLNoise(yamlPath(t, "AcceptanceCriterionInput.yaml", inputDoc, "properties"))
+		canonicalProps := stripYAMLNoise(yamlPath(t, "AcceptanceCriterion.yaml", canonicalDoc, "properties"), "properties")
+		inputProps := stripYAMLNoise(yamlPath(t, "AcceptanceCriterionInput.yaml", inputDoc, "properties"), "properties")
 		assert.Equal(t, canonicalProps, inputProps,
 			"AcceptanceCriterion.yaml and AcceptanceCriterionInput.yaml must describe the identical property set/shape — only `required` may legitimately differ between this pair (FR-073a, copies table rows 5-6)")
 
@@ -4437,6 +4413,26 @@ func TestContractCopies_AllHandSyncedCopiesAgree_Recursive(t *testing.T) {
 		canonical, handSync := c85ResolvedCopies(t)
 		assert.Equal(t, canonical, handSync,
 			"contracts/components/schemas/BrowserHandoverNoticeFrame.yaml and asyncapi.yaml's inline (generating) copy must agree structurally — F1's new comparator row per C-85")
+	})
+}
+
+// Documentation words inside properties are wire names, not annotations.
+// These independent in-memory controls must detect a one-sided optional member
+// without changing any real contract or weakening the six existing copy pairs.
+func TestContractCopies_DocumentationNamedMembersRemainStructural(t *testing.T) {
+	for _, name := range []string{"title", "description", "example"} {
+		t.Run(name, func(t *testing.T) {
+			canonical := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}
+			drift := map[string]any{"type": "object", "additionalProperties": false,
+				"properties": map[string]any{name: map[string]any{"type": "string"}}}
+			require.NotEqual(t, stripYAMLNoise(canonical), stripYAMLNoise(drift), "one-sided optional %s is wire drift", name)
+			require.NotEqual(t, stripYAMLNoise(map[string]any{}, "properties"), stripYAMLNoise(drift["properties"], "properties"), "property-root comparisons retain %s too", name)
+		})
+	}
+	t.Run("schema_annotations_remain_documentation", func(t *testing.T) {
+		left := map[string]any{"type": "string", "title": "left", "description": "old", "example": "before"}
+		right := map[string]any{"type": "string", "title": "right", "description": "new", "example": "after"}
+		require.Equal(t, stripYAMLNoise(left), stripYAMLNoise(right))
 	})
 }
 

@@ -43,6 +43,7 @@ import {
 } from '@/lib/llm-error'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { noteServerAttentionFrame } from '@/store/session/foregroundAck'
+import { mergeRecordedSessionTokens } from '../session-usage'
 import { buildBrowserHandoverInsertion, buildGoalAckInsertion, evictGoalPillsOverCap, mergeGoalPillFrame } from '../goals'
 import { MAX_MESSAGES_PER_SESSION, busyFlagIsUnbacked, evictMessageFromBucket, findAssistantMessageIdByTurnId, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { isTurnFinished, schedulePlanStatusInvalidate } from '../routing'
@@ -167,16 +168,12 @@ function handleSessionStateFrame(
   if (frame.session_id && frame.history_state) {
     withBucket(targetSid, b => ({ history: { ...b.history, serverState: frame.history_state!, ...(frame.history_state!.status === 'unavailable' ? { historyLoaded: false } : {}) } }))
   }
-  // FR-047 (C-ATTENTION): the attach response's attention_bound lives on THIS
-  // SessionStateFrame — per the contract it is "part of both the incremental
-  // catch-up and the full snapshot, so either attach answer can carry the
-  // bound" (the generated SessionSnapshotFrame has no such field). Remember
-  // this frame as the session's server attention frame so a later
-  // shown-commit acknowledgement can read the bound off it. Only an attach
-  // emit carries session_id (the connection-open emit does not), so a
-  // bound-less open emit can never overwrite a remembered bound.
+  // FR-047: both incremental and snapshot attach carry attention_bound here,
+  // not in SessionSnapshotFrame. Remember this addressed state for shown-commit
+  // acknowledgement; unscoped connection-open state must never replace it.
   if (frame.session_id) {
     noteServerAttentionFrame(targetSid, frame)
+    withBucket(targetSid, b => ({ sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, frame.session_tokens_total) }))
   }
   // ADR-092 review finding D: a page reload or gateway reconnect re-fetches
   // this frame, but a plain WS reconnect never replays a fresh

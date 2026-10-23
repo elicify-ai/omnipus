@@ -3,6 +3,18 @@ import type { SessionHistoryPage, SessionHistoryEntry } from '@/lib/api/history-
 import type { ChatMessage, SessionChatState } from './types'
 import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
 import { isClearContextMarker } from '@/lib/clearMarker'
+import { mergeRecordedSessionTokens } from './session-usage'
+
+/** Expected contradiction in a page's relation to the current reader. */
+export class HistoryPageProtocolError extends Error {}
+
+/** A valid page cannot currently replace a protected reader edge. */
+export class HistoryPageDeferredError extends Error {
+  constructor() {
+    super('Loading this page is paused to protect your reading position. Scroll or move focus, then retry.')
+    this.name = 'HistoryPageDeferredError'
+  }
+}
 
 // DOM/measurement protection is ephemeral and never serialized into chat state.
 const protection = new Map<string, ReadonlySet<string>>()
@@ -25,8 +37,8 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   const existingPositions = new Set(history.readerPositions)
   const oldOverlap = history.readerPositions.filter(position => pagePositions.includes(position))
   const newOverlap = pagePositions.filter(position => existingPositions.has(position))
-  if (oldOverlap.join() !== newOverlap.join()) throw new Error('Contradictory history overlap.')
-  if ((action === 'older' || action === 'newer') && page.entries.length && page.entries.every(entry => existingPositions.has(entry.historyPosition))) throw new Error('History boundary did not advance.')
+  if (oldOverlap.join() !== newOverlap.join()) throw new HistoryPageProtocolError('Contradictory history overlap.')
+  if ((action === 'older' || action === 'newer') && page.entries.length && page.entries.every(entry => existingPositions.has(entry.historyPosition))) throw new HistoryPageProtocolError('History boundary did not advance.')
   const incoming = page.entries.map(entry => mergeHistoryEntry(entry, bucket.messagesById[entry.id], baseline[entry.id]))
   const union = action === 'older' ? [...incoming, ...old] : action === 'newer' ? [...old, ...incoming] : incoming
   const byPosition = new Map<string, ChatMessage>()
@@ -42,7 +54,7 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   if (trimmed) {
     const removed = action === 'older' ? positions.slice(500) : positions.slice(0, positions.length - 500)
     const protectedSet = protection.get(page.session_id)
-    if (removed.some(position => protectedSet?.has(position))) return {} // bounded deferred commit, never evict the reader
+    if (removed.some(position => protectedSet?.has(position))) throw new HistoryPageDeferredError()
     positions = action === 'older' ? positions.slice(0, 500) : positions.slice(-500)
   }
   const rows = positions.map(position => byPosition.get(position)!)
@@ -70,6 +82,7 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   const hasLater = action === 'newer' || action === 'latest' ? page.has_later : (trimmed || history.hasLater === true)
   return {
     ...patch, historyNotice: undefined, historyNeedsSnapshot: false, hasEarlierMessages: hasEarlier,
+    sessionTokens: mergeRecordedSessionTokens(bucket.sessionTokens, page.session_tokens_total),
     history: {
       ...patch.history!, historyLoaded: true, serverState: { status: 'available' }, pageMetadata: historyMetadata(page),
       viewMode: action === 'latest' ? 'latest' : history.viewMode, hasEarlier, hasLater,

@@ -101,10 +101,10 @@ function pushHistoryParts(
       // toMessagePartStatus (message-runtime.ts) returns 'incomplete' only
       // for a RESULTLESS part inheriting the enclosing message's status —
       // it never reflects whether THIS tool call actually failed. A
-      // cancelled call has status:'cancelled' here (never 'error'), so
-      // isCancelledStatus's message-level derivation (unchanged) still
-      // renders cancellation correctly downstream.
+      // Cancellation is a per-call fact, independent of the enclosing answer.
+      // The native UI adapter reads it from AssistantUI's UI-only artifact.
       isError: resolved.status === "error",
+      artifact: { omnipusToolStatus: resolved.status },
     });
   }
   if (prevTextEnd < text.length) {
@@ -186,6 +186,7 @@ function buildContentParts(
         result: tc.result,
         // Issue #617 — same derivation as pushHistoryParts above.
         isError: tc.status === "error",
+        artifact: { omnipusToolStatus: tc.status },
       });
     }
 

@@ -14,11 +14,20 @@ import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending }
 import { useSessionStore } from '@/store/session'
 import { cursorFromTerminalFrame, isPendingTailMessage } from './cursor'
 import { abortHistoryReads, registerHistoryRelease } from './history'
-import { applyHistoryPageToBucket } from './history-merge'
+import { applyHistoryPageToBucket, HistoryPageProtocolError } from './history-merge'
+import { ApiSchemaError } from '@/lib/api/http'
+import { logDiagnostic } from '@/lib/telemetry'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
 import { SessionHistoryResponse as PageSchema } from '@/lib/api/generated/schemas'
 
 type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage> } // not-wire-format: transient projection ownership
+
+/** Local classification only; never carries source data or exception details. */
+class SnapshotProtocolError extends Error {
+  constructor(readonly kind: 'schema' | 'source_origin' | 'row_count') {
+    super('Invalid history snapshot.')
+  }
+}
 
 function sourceProjection(groups: Stage['groups']) {
   const positions = [...groups.keys()]
@@ -67,31 +76,46 @@ function publishProgressiveProjection(context: HistorySliceContext, sid: string,
   })
 }
 
-function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryPage, baseline: Record<string, ChatMessage>, bootMismatch: boolean): SessionChatState {
-  if (bucket.history.serverState?.status !== 'available' || bucket.activeTurnId) return bucket
+function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryPage, baseline: Record<string, ChatMessage>, bootMismatch: boolean): { bucket: SessionChatState; page: SessionHistoryPage } {
+  if (bucket.history.serverState?.status !== 'available' || bucket.activeTurnId) return { bucket, page }
   const messagesById = { ...bucket.messagesById }
   const settledTurns = new Set<string>()
   let refreshed = false
-  for (const entry of page.entries) {
-    const current = bucket.messagesById[entry.id]
-    const captured = baseline[entry.id]
-    if (entry.role !== 'assistant' || entry.status !== 'done' || current?.role !== 'assistant' || !captured) continue
-    if (current.content !== captured.content || (!current.isStreaming && current.status !== 'streaming')) continue
-    if (current.status === 'error' || current.status === 'interrupted') continue
-    // This is an unchanged cached prefix, not newer live narration. The current
-    // controls say its turn ended and the selected source supplies the saved
-    // answer; retain current media/terminal tool values while refreshing text.
-    messagesById[entry.id] = { ...mergeHistoryEntry(entry, current, captured), content: entry.content, status: entry.status, isStreaming: false, confirmedUnfinished: undefined }
+  const entries = page.entries.map(entry => {
+    // Live first-send narration can retain its generated display ID while the
+    // token resolver registers the real message_id in mergedReplayIds. Match
+    // only that actual alias, with the same turn/producer, never text or turn alone.
+    const aliases = !bucket.messagesById[entry.id] && entry.turnId
+      ? Object.values(bucket.messagesById).filter(row =>
+        row.role === 'assistant' && row.turnId === entry.turnId && row.mergedReplayIds?.includes(entry.id) &&
+        (!entry.agentId || !row.agentId || entry.agentId === row.agentId) &&
+        // A live bubble can aggregate several IDs. Never collapse distinct
+        // selected source occurrences onto that single display identity.
+        !page.entries.some(other => other !== entry && (other.id === row.id || row.mergedReplayIds?.includes(other.id))))
+      : []
+    const current = bucket.messagesById[entry.id] ?? (aliases.length === 1 ? aliases[0] : undefined)
+    const captured = current && baseline[current.id]
+    if (entry.role !== 'assistant' || entry.status !== 'done' || current?.role !== 'assistant' || !captured) return entry
+    if (current.content !== captured.content || (!current.isStreaming && current.status !== 'streaming')) return entry
+    if (current.status === 'error' || current.status === 'interrupted') return entry
+    // Keep the established display/tool-owner identity. The successful saved
+    // occurrence replaces this unchanged prefix, not a second rendered row.
+    const aligned = current.id === entry.id ? entry : { ...entry, id: current.id }
+    messagesById[current.id] = { ...mergeHistoryEntry(aligned, current, captured), content: entry.content, status: entry.status, isStreaming: false, confirmedUnfinished: undefined }
     if (current.turnId) settledTurns.add(current.turnId)
     refreshed = true
-  }
-  if (!refreshed) return bucket
+    return aligned
+  })
+  if (!refreshed) return { bucket, page }
   const stillOpen = Object.values(messagesById).some(row => row.role === 'assistant' && (row.isStreaming || row.status === 'streaming'))
   return {
-    ...bucket, messagesById, isStreaming: stillOpen ? bucket.isStreaming : false,
-    // A changed boot retains the personally witnessed-cut check. A normal
-    // completed snapshot must not relabel its completed answer as unfinished.
-    wipedOpenTurnIds: bootMismatch ? bucket.wipedOpenTurnIds : bucket.wipedOpenTurnIds?.filter(id => !settledTurns.has(id)),
+    bucket: {
+      ...bucket, messagesById, isStreaming: stillOpen ? bucket.isStreaming : false,
+      // A changed boot retains the personally witnessed-cut check. A normal
+      // completed snapshot must not relabel its completed answer as unfinished.
+      wipedOpenTurnIds: bootMismatch ? bucket.wipedOpenTurnIds : bucket.wipedOpenTurnIds?.filter(id => !settledTurns.has(id)),
+    },
+    page: { ...page, entries },
   }
 }
 
@@ -177,18 +201,19 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       const baseline = { ...stage.baseline, ...stage.publishedRows }
       const { frame } = stage
       const parsed = PageSchema.safeParse({ ...frame, entries: [] })
-      if (!parsed.success || stage.invalid) throw new Error('Invalid history snapshot.')
+      if (!parsed.success) throw new SnapshotProtocolError('schema')
+      if (stage.invalid) throw new SnapshotProtocolError('source_origin')
       validateHistoryMetadata(parsed.data, positions, 'WS history')
-      if (rowCount !== frame.page_info.row_count) throw new Error('Invalid history row count.')
+      if (rowCount !== frame.page_info.row_count) throw new SnapshotProtocolError('row_count')
       const page: SessionHistoryPage = { ...parsed.data, entries }
       context.withBucket(sid, original => {
-        const b = settleCompletedSnapshot(original, page, baseline, frame.reason === 'boot_mismatch')
+        const { bucket: b, page: completedPage } = settleCompletedSnapshot(original, page, baseline, frame.reason === 'boot_mismatch')
         const completion = b === original ? {} : { isStreaming: b.isStreaming, wipedOpenTurnIds: b.wipedOpenTurnIds }
         if (b.history.viewMode === 'historical') {
           const needed = new Set(retainedPending(b).map(row => row.id))
           const liveOrder = (b.historyLiveOrder ?? []).filter(id => !stage.baseline[id] || needed.has(id))
           const liveIds = new Set(liveOrder)
-          const incoming = new Map(entries.map(row => [row.id, row]))
+          const incoming = new Map(completedPage.entries.map(row => [row.id, row]))
           const rows = [...new Set([...b.messageOrder, ...liveOrder])].flatMap(id => {
             const current = b.messagesById[id]
             const fresh = incoming.get(id)
@@ -196,14 +221,20 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
           })
           const patch = historyRowsPatch(b, rows, b.history.readerPositions)
           const capacity = Math.max(0, 100 - liveOrder.length)
-          const tail = entries.filter(row => !liveIds.has(row.id))
+          const tail = completedPage.entries.filter(row => !liveIds.has(row.id))
           return { ...patch, ...completion, messageOrder: b.messageOrder, historyLiveOrder: liveOrder, historyNeedsSnapshot: false,
-            history: { ...patch.history!, tailEntries: capacity ? tail.slice(-capacity) : [], pageMetadata: historyMetadata(page), historyLoaded: true } }
+            history: { ...patch.history!, tailEntries: capacity ? tail.slice(-capacity) : [], pageMetadata: historyMetadata(completedPage), historyLoaded: true } }
         }
-        return { ...applyHistoryPageToBucket(b, page, 'latest', baseline), ...completion }
+        return { ...applyHistoryPageToBucket(b, completedPage, 'latest', baseline), ...completion }
       })
       return true
-    } catch {
+    } catch (error) {
+      const kind = error instanceof SnapshotProtocolError ? error.kind
+        : error instanceof ApiSchemaError || error instanceof HistoryPageProtocolError ? 'protocol_metadata'
+          : 'unexpected_exception'
+      // Only fixed classifications leave this boundary. Never log error text,
+      // stack, source bodies/identities or opaque source positions.
+      logDiagnostic('chatHistorySnapshotRejected', { phase: 'snapshot_commit', kind })
       restorePublishedProjection(context, sid, stage)
       reject(sid)
       return false

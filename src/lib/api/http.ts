@@ -269,11 +269,10 @@ async function performRequest<T>(
     throw await ApiError.fromResponse(res)
   }
 
-  // Response headers a caller needs beyond the body (e.g. the messages read's
-  // X-Has-Earlier-Messages — contracts/openapi.yaml GET /sessions/{id}/messages).
+  // Optional observer for response headers needed beyond the body. History
+  // paging authority lives in the generated response envelope, not this hook.
   // Success responses only: an error response carries no body contract the
-  // caller is about to consume. Optional, so every existing caller is
-  // unchanged.
+  // caller is about to consume. Callers without an observer are unchanged.
   onResponseHeaders?.(res.headers)
 
   // Empty-body responses (HTTP 204 No Content, 205 Reset Content, or any 2xx

@@ -4,9 +4,10 @@ import type { SessionHistoryPage, SessionHistoryQuery } from '@/lib/api/history-
 import type { ChatStore, ChatMessage } from './types'
 import { queryClient } from '@/lib/queryClient'
 import { useConnectionStore } from '@/store/connection'
+import { mergeRecordedSessionTokens } from './session-usage'
 import { isPendingTailMessage } from './cursor'
 import { emptyHistoryState, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
-import { applyHistoryPageToBucket, reachedClosedClear, releaseHistoryProtection } from './history-merge'
+import { applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection } from './history-merge'
 export { emptyHistoryState } from './history-state'
 export type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing, SessionHistoryState, SessionHistoryRange, HistoryRequestState } from './types'
 
@@ -62,7 +63,7 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
         if (error instanceof TypeError && !(error.name === 'ApiError')) throw error
         if (!failed.has(sid)) failed.set(sid, new Map())
         failed.get(sid)!.set(kind, { ...query })
-        withBucket(sid, b => ({ history: { ...b.history, requests: { ...b.history.requests, [kind]: { ...b.history.requests[kind], status: 'error', error: copy[kind] } } } }))
+        withBucket(sid, b => ({ history: { ...b.history, requests: { ...b.history.requests, [kind]: { ...b.history.requests[kind], status: 'error', error: error instanceof HistoryPageDeferredError ? error.message : copy[kind] } } } }))
       } finally {
         owner.baseline = {}; owner.staged.length = 0
         if (owners.get(sid)?.get(kind) === owner) {
@@ -80,12 +81,14 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
     const seen = new Set<string>()
     let before: string | undefined
     let retention: string | undefined
+    let recordedTokens: number | undefined
     for (;;) {
       const page = await fetchSessionMessages(sid, { ...query, ...(before ? { before } : {}), signal: owner.controller.signal })
       if (!valid()) return
       validateReadDomain(page, query, 'refresh')
       if (retention !== undefined && retention !== page.page_info.retention_generation) throw new Error('History retention changed during refresh.')
       retention = page.page_info.retention_generation
+      recordedTokens = mergeRecordedSessionTokens(recordedTokens, page.session_tokens_total)
       for (const entry of page.entries) {
         if (seen.has(entry.historyPosition) || !old.includes(entry.historyPosition)) throw new Error('Contradictory refresh interval.')
         seen.add(entry.historyPosition)
@@ -112,6 +115,7 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
       const live = liveOrder.flatMap(id => b.messagesById[id] ? [b.messagesById[id]] : [])
       const patch = historyRowsPatch(b, [...rows, ...pending, ...live], ordered)
       return { ...patch, messageOrder: [...new Set([...rows, ...pending].map(row => row.id))], historyLiveOrder: liveOrder,
+        sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, recordedTokens),
         historyNotice: ordered.length < old.length ? (ordered.length ? 'Some loaded messages have expired.' : 'These loaded messages have expired.') : undefined,
         history: { ...patch.history!, serverState: { status: 'available' }, historyLoaded: true,
           olderBoundary: ordered[0] ?? null, newerBoundary: ordered.at(-1) ?? null,

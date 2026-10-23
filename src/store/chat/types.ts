@@ -530,15 +530,10 @@ export interface SessionChatState {
    */
   snapshotWasBootMismatch?: boolean
   /**
-   * Founder ruling 2026-10-11 (until #1266): true when this session's chat
-   * view starts at its last /clear marker and earlier transcript entries
-   * exist before it — the cleared context. Read from every carrier the
-   * server sends it on (SessionDetail.has_earlier_messages,
-   * SessionSnapshotFrame.has_earlier_messages, the messages read's
-   * X-Has-Earlier-Messages header) and rendered ONLY as the quiet
-   * "Earlier messages are saved." line above the clear divider
-   * (components/chat/ClearContextDivider.tsx). Never a control, never a
-   * pager — scroll-back of the earlier messages is #1266.
+   * Compatibility display hint for the clear-divider UI, updated with the
+   * committed history projection. Paging authority, source boundaries and
+   * explicit clear-crossing controls belong to the existing history slice;
+   * this display field does not define selectors or request ordering.
    */
   hasEarlierMessages?: boolean
   /**
@@ -561,7 +556,7 @@ export interface SessionChatState {
   restartNoticeDismissed?: boolean
   /** Narrow recovery flag: unknown_position alone does not mean interrupted. */
   recoveredFirstSend?: { clientMessageId: string; attemptGeneration: number; reconciled: boolean }
-  sessionTokens: number
+  sessionTokens: number | undefined
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
   /**
@@ -963,7 +958,7 @@ export interface ChatStore extends HistorySlice {
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>
-  sessionTokens: number
+  sessionTokens: number | undefined
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
   /** provider-messages spec §8 — foreground projection of the session's `provider_retry` slot. Optional — see the SessionChatState field's doc comment. */
@@ -1057,12 +1052,10 @@ export interface ChatStore extends HistorySlice {
   cancelToolCall: (callId: string) => void
 
   updateSessionStats: (tokens: number, cost: number) => void
-  /**
-   * Seed sessionTokens from the persisted total_tokens on a historic session
-   * attach. Only sets the value when the bucket is fresh (sessionTokens === 0)
-   * so live deltas from the `done` frame are never double-counted.
+  /** Merge recorded absolute usage without lowering a newer observation.
+   * Explicit session IDs keep metadata hydration out of unrelated foregrounds.
    */
-  seedSessionTokens: (total: number) => void
+  seedSessionTokens: (total: number | undefined, sessionId?: string) => void
   setRateLimitEvent: (event: RateLimitEventData) => void
   clearRateLimitEvent: () => void
 

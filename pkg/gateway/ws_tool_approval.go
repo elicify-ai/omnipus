@@ -366,6 +366,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string, historyState
 	if sessionID != "" {
 		sid := sessionID
 		frame.SessionId = &sid
+		frame.SessionTokensTotal = h.sessionTokensTotal(sessionID)
 	}
 
 	// ADR-082 D4/FR-008: announce the in-flight foreground turn (if any) for
