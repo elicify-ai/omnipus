@@ -1,5 +1,5 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { elementScroll, useVirtualizer } from '@tanstack/react-virtual'
 import { ThreadPrimitive } from '@assistant-ui/react'
 import type { ChatMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
@@ -169,6 +169,9 @@ function VirtualizedMessageListInner({
     getItemKey,
     scrollMargin: viewport.prefix,
     overscan: 5,
+    // A virtualizer size adjustment is an application-owned placement: it must
+    // not read as the reader scrolling away from the live end.
+    scrollToFn: (offset, options, instance) => { elementScroll(offset, options, instance); viewport.claimScroll() },
     // measureElement default (rounded ResizeObserver border box, else offsetHeight) is
     // correct; useHistoryViewport samples the same transform-independent layout size.
   })

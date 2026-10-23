@@ -62,6 +62,9 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const compensating = useRef(false)
   // scrollTop the anchor bookkeeping last accounted for (capture or correction).
   const settledTop = useRef<number | null>(null)
+  // Last scrollTop an application-owned placement produced (latest pin,
+  // virtualizer adjustment). Such movement never ends follow-latest.
+  const ownedTop = useRef<number | null>(null)
   const opening = useRef(true)
   const fill = useRef<{ frame: number | null; finishLayout: (() => void) | null } | null>(null)
   const [average, setAverage] = useState(80)
@@ -238,7 +241,15 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     const scroller = scrollRef.current
     const state = current.current
     if (!scroller || !state.sid || compensating.current) return
-    if (dragging.current && scroller.scrollTop < lastTop.current) useChatStore.getState().enterHistoryReading(state.sid)
+    // Leaving follow-latest is decided by actual displacement away from the
+    // live end (scrollbar, Find, momentum, keys, wheel, programmatic), unless
+    // the application placed the viewport itself. Content growth leaves
+    // scrollTop unchanged and fires no scroll, so it never ends following.
+    const owned = ownedTop.current !== null && Math.abs(scroller.scrollTop - ownedTop.current) < 1
+    const awayFromEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 1
+    if (state.history.viewMode === 'latest' && !owned && awayFromEnd && (scroller.scrollTop < lastTop.current - 1 || dragging.current)) {
+      useChatStore.getState().enterHistoryReading(state.sid)
+    }
     lastTop.current = scroller.scrollTop
     // Our own correction's scroll event arrives a frame later, when a row
     // measurement may already have moved the content again: keep holding the
@@ -251,7 +262,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     else if (historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden) && state.history.hasLater) void requestFill('newer')
   }, [capture, correct, prefix, requestFill, scrollRef])
   useLayoutEffect(() => {
-    samples.current.reset(); heights.current.clear(); anchor.current = null; settledTop.current = null; opening.current = true
+    samples.current.reset(); heights.current.clear(); anchor.current = null; settledTop.current = null; ownedTop.current = null; opening.current = true
     priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; setAverage(80); setPrefix(0)
     return () => {
       cancelFill(); samples.current.reset(); heights.current.clear(); anchor.current = null; priorFocus.current = null
@@ -281,6 +292,8 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     const scroller = scrollRef.current
     if (scroller && history.historyLoaded && history.viewMode === 'latest' && !catchingUp) {
       scroller.scrollTop = scroller.scrollHeight
+      ownedTop.current = scroller.scrollTop
+      lastTop.current = scroller.scrollTop
       capture()
       // A layoutless/plain fallback stays manually reachable rather than
       // fetching invisible content on a guessed height.
@@ -312,5 +325,10 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     }
   }, [messages, correct, measure, rows, scrollRef])
   const busy = Object.values(history.requests).some(request => request.status === 'loading')
-  return { average, prefix, widthGeneration, onScroll, busy, historical: history.viewMode === 'historical' }
+  /** Record a placement the list itself made (e.g. a virtualizer size adjustment). */
+  const claimScroll = useCallback(() => {
+    const scroller = scrollRef.current
+    if (scroller) ownedTop.current = scroller.scrollTop
+  }, [scrollRef])
+  return { average, prefix, widthGeneration, onScroll, claimScroll, busy, historical: history.viewMode === 'historical' }
 }
