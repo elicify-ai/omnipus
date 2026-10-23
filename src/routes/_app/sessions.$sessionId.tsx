@@ -69,7 +69,7 @@ function SessionRoute() {
   }, [sessionId, detail?.session.id, detail?.session.total_tokens])
 
   // Fetch active workspaces to verify the session's workspace_id.
-  const { data: workspaces = [] } = useQuery({
+  const { data: workspaces = [], isPending: workspacesPending } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
@@ -261,9 +261,12 @@ function SessionRoute() {
     return <SessionNotFound />
   }
 
-  // Suppress inline render while workspace redirect is in flight.
+  // Suppress inline render while workspace redirect is in flight, and while
+  // the workspace list that decides it is still loading: an inline ChatScreen
+  // mounted only to be replaced would start (and then abort) a redundant
+  // history read before the workspace chat attaches.
   const wsId = detail?.session?.workspace_id
-  if (wsId && workspaces.find((w) => w.id === wsId)) {
+  if (wsId && (workspacesPending || workspaces.find((w) => w.id === wsId))) {
     return null
   }
 
