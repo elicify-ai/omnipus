@@ -3,6 +3,11 @@
 Detail behind SKILL.md §2. Design source: sections 5.4, 5.7, 5.9 and 7.6 of
 `docs/internal/design/dev-team-setup-design-2026-09-25.md`.
 
+Last reviewed: 2026-10-23
+
+Process authority: root `CLAUDE.md` ("Subagent Workflow"). Candidate assembly, review,
+CI and UAT procedure: `knowledge/landing-trains.md`.
+
 ## Directory layout
 
 `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/` — a sibling of the
@@ -112,30 +117,27 @@ table above, for humans to read, not what you write to disk).
 - After any context compaction or resume, re-read the whole ledger directory before
   your next write.
 
-## Squads — the two levels
+## Features, trains and independent sessions
 
-The unit of parallel feature-size work: one squad lead, its own worktree(s), its own
-feature branch, and the specialists it draws from the eleven roles.
+Retain the existing `squads/` filenames and strict row formats; the parser key `squad=`
+does not require a squad-lead dispatch. For new directly coordinated features and
+trains, write `lead=team-lead` and name the responsible session. Separate independent
+streams may name `lead=squad-lead`; only existing #1266 retains an in-session lead.
+Use one canonical ledger file per stream and record its GOAL and current evidence.
 
-- **Level 1 — in-session:** team-lead dispatches squad-lead subagents (Agent tool); each
-  orchestrates its own specialists. An in-session squad **finishes by handing a fully
-  gated branch back to team-lead**, which asks the founder and lands. In the founder's
-  personal layer, where workers are started outside the Agent tool, the squad
-  orchestrator must itself be a subagent — it must be able to dispatch.
-- **Level 2 — across sessions:** the founder runs several sessions; each acts as a squad
-  lead for its squad, aligned by the chief through the ledger plus urgent messages.
-  A separate-session squad **lands itself**, under the landing lock.
+The chief collects ready branches, makes mechanical merges and prepares candidate
+evidence; workers receive only conflicts needing a code/design choice. A separate
+squad session hands its branch/evidence to the chief for integration, rather than
+running another verification cycle for each lane. Large standalone candidates retain
+their own landing; coordinate the second-lander merge/re-check through the chief.
 
-Landing actors, fixed: team-lead lands its own direct work and in-session squads'
-handed-back branches; a separate-session squad lands its own work; nobody else ever
-lands on the integration branch.
+## Claims — planning information, not locks
 
-## Claims — information, not ownership
-
-A claim tells the other sessions what is in flight; it never blocks anyone. Two
-sessions wanting the same work: the later claimant takes its own worktree and branch
-(merge-later), or asks the chief to re-assign. Disputes go to the chief, then the
-founder. The enforced state is exactly two things — **holds** and the **landing lock**.
+Claims show who owns an area in the plan; they are not machine-enforced exclusion.
+Resolve duplicate ownership with the chief before dispatch, using the ownership rule
+in root `CLAUDE.md`, rather than starting another same-area writer on another branch.
+Only **holds** and the **landing lock** are enforced by the repo pre-push hook. Worker
+lane/worktree locking is separate controller tooling, not this ledger parser.
 
 ## Holds — hold and release
 
@@ -152,53 +154,46 @@ founder. The enforced state is exactly two things — **holds** and the **landin
   rule: bypassing it is a founder-only act, and a hook block is always visible, never
   silent.
 
-## The landing sequence — every landing, same order (Round 18)
+## The landing sequence — candidate evidence first, approval, then lock
 
-**Ask before you lock.** The lock is taken at landing time, after the founder's yes —
-not held across CI or across the wait for the founder's reply. Finish your checks first.
-
-1. **Ask.** Once your branch is fully gated (spec through its size gate, CI green),
-   send the landing ask — batched into one event message with any other pending landing
-   asks (SKILL.md §5) — or immediately for urgent work. State the branch, the gate
-   evidence, and the integration branch you confirmed at engagement start.
-2. **On a yes: take the lock.** Post the landing announcement in your squad file and
-   message the other sessions; create `LANDING-LOCK` **atomically**, so the first
-   announcer wins even under a race:
+1. **Prepare the candidate** with the chief: follow `knowledge/landing-trains.md`.
+   Assemble the combined diff and resolve real conflicts before the candidate review,
+   CI and hands-on campaign. Record the exact candidate commit, diff/row scope and
+   receipts in the stream's ledger file. Never run full CI on each incoming work branch.
+2. **Ask.** Present the candidate branch, exact-commit gate/CI/UAT evidence and the
+   confirmed release integration target. Batch pending asks (SKILL.md §5); only an
+   explicit reply to that specific ask is landing permission. Do not hold the lock
+   across checks or the founder's reply. Founder-question rules are unchanged.
+3. **On a yes: take the lock.** Post the landing announcement and message peers; create
+   `LANDING-LOCK` atomically, first writer wins:
    ```sh
    ( set -o noclobber; printf 'squad=%s branch=%s taken-at=%s\n' \
        "$OMNIPUS_SQUAD_ID" "$BRANCH" "$(date -u +%FT%TZ)" > "$COORD_DIR/LANDING-LOCK" )
    ```
-   A non-zero exit means the lock is already taken — someone else is landing; wait and
-   retry, do not overwrite. The lock is held for minutes, not for the founder's reply
-   time.
-3. **Merge the latest integration branch into your work branch**, then re-check **on
-   that result**: CI for the affected areas (the CI tiers covering the trees the merge
-   touched) plus a review of the conflict resolution (the merge's conflict hunks,
-   escalating to architect only where a resolution changes a design decision). The full
-   size gate is NOT re-run. This is where a parallel-merge-later overlap's conflict is
-   resolved and re-checked. For agent-engine changes covered by root `CLAUDE.md`
-   ("Definition of Done"), require hands-on UAT by `uat-tester` and an independent
-   `uat-validator`, using the agreed provider/model, on the **exact post-merge commit
-   being landed** before step 4. Green CI and unit tests are not enough.
-4. **Push** the merge to the integration branch, setting both required variables in the
-   same command so neither is ever forgotten in an unrelated shell:
+   On a non-zero exit, wait for its owner; never overwrite a live lock.
+4. **Check for target movement.** Fetch and compare with the base in the approved
+   candidate receipt. If unchanged, push that exact verified candidate. If another
+   train/standalone landed first, the second lander merges it and re-checks affected
+   areas and conflict resolutions; delegate only genuine code/design choices. Release
+   the lock while checks run, update the exact-version evidence (including touched-row
+   independent UAT for agent-engine changes) and ask on the updated candidate before
+   reacquiring it. Do not repeat every lane gate or every successful CI job.
+5. **Push the verified candidate** to the confirmed integration target, with both hook
+   variables in the command (BRANCH is the candidate branch, not a specialist lane):
    ```sh
-   OMNIPUS_INTEGRATION_BRANCH=<integration-branch> OMNIPUS_SQUAD_ID=<your-squad-id> \
-     git push origin <integration-branch>
+   OMNIPUS_INTEGRATION_BRANCH=<integration-branch> OMNIPUS_SQUAD_ID=<train-or-stream-id> \
+     git push origin <candidate-branch>:<integration-branch>
    ```
-   The pre-push hook enforces the ledger's holds and locks mechanically, but it only
-   enforces when both variables are set (A2) — **a WARNING about an unset integration
-   branch means the hook checked nothing at all: that push is not a landing, stop and
-   fix the command before retrying**, never treat the warning as a pass.
-5. **Release the lock**, post the landed commit to `LANDING-LOG.md` and to the other
-   sessions, and close every resolved issue with a comment citing the commit. A landing
-   is not done at "pushed" — the issue comments, the landing-log entry and the two-line
-   report ("code correct and tested" / "reachable by a user or agent") close it.
+   An unset-variable WARNING means the hook checked nothing: stop and correct the
+   command, never call the warning a pass. Humans alone merge to `main`.
+6. **Release the lock**, append the landed commit and receipts to `LANDING-LOG.md`,
+   notify peers and close resolved issues with commit-citing comments. Finish with
+   the two distinct delivery claims and their evidence; a push alone is not done.
 
 **Red integration branch:** nobody lands until it is green again — landing onto red
 hides the culprit. The single exception: a **fix-only landing** may land, takes the
 lock like any landing, and says so in its announcement; the fix itself is dispatched
-immediately, one dispatch per red check.
+immediately through the existing area owner, consolidating related red checks.
 
 **Stuck lock:** a lock held past the stale window (2 hours) is treated like a stale row
 — the chief asks the founder before force-releasing.
@@ -215,14 +210,15 @@ after a session that died without updating its row.
 - **Naming:** the founder names one session chief ("you are chief"); the named session
   writes the `CHIEF.md` line with a timestamp. On succession, the outgoing chief writes
   the line when the founder announces the successor.
-- **Role:** the chief is an **aligner, not a queue** — plans, holds and landing
-  announcements flow through the ledger; it does not collect, sequence or perform other
-  sessions' landings, and it escalates disputes it cannot settle to the founder.
+- **Role:** cut the trains and do mechanical merges/integration directly; align
+  standalone candidates and escalate real design/code conflicts to their owners.
+  Escalate unresolved disputes to the founder, rather than inventing a ruling.
 - **Vacancy:** if the chief's session ends without handover, whoever notices first
   marks `VACANT since <ts>` in `CHIEF.md` and the founder is asked to name a successor
-  — no squad lead appoints itself. Cross-session alignment pauses during a vacancy;
-  landing does not (separate-session squads land themselves under the lock, and
-  in-session landings never needed the chief).
+  — no squad lead appoints itself. Chief-owned train cuts and mechanical integration
+  wait for that appointment; retain prepared branch evidence rather than silently
+  replacing the chief. Independent standalone work retains its own landing, subject
+  to the same approval, lock and second-lander re-check.
 
 ## When a session ends
 
