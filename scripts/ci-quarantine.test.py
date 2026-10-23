@@ -25,6 +25,9 @@ LOCKS = 'Design system lock audit'
 INSTALL = 'Run npx playwright install --with-deps webkit'
 TEST_ID = 'Conformance_t0_ChatGoalE2E'
 FAIL_CHECK = 'Fail on skipped or flaky Playwright tests'
+CHAT_SPEC = 'conformance-design-chat-e2e.spec.ts'
+EXEC_SPEC = 'conformance-design-exec-e2e.spec.ts'
+WEBKIT_UPLOAD = 'Upload browser evidence for webkit'
 
 # Fixture API contract, not the unit being tested. Unknown endpoints fail hard.
 GH = r'''
@@ -97,6 +100,42 @@ def report(outcome='flaky', identity=TEST_ID):
                     else [{'status': 'failed'}]}]}], 'suites': []}],
             'stats': {'expected': 0, 'unexpected': int(outcome == 'unexpected'),
                       'flaky': int(outcome == 'flaky'), 'skipped': 0}}
+
+
+def t1_entry():
+    return {'id': 'Conformance_t1_StandaloneTaskE2E', 'kind': 'playwright', 'check': EXEC,
+            'spec': EXEC_SPEC, 'project': 'default', 'issue': 1431, 'added': '2026-10-23',
+            'reason': 'Known claim-loop conformance failure.'}
+
+
+def approved_records():
+    """The founder-approved quarantine records, transcribed from the approval
+    (root CLAUDE.md "CI quarantine" + docs/internal/ci-rules.md) — never read
+    back from the shipped file. The shipped list may only shrink from this
+    set: removing a resolved record is permitted, but adding a record or
+    changing one in place (scope/step/issue) needs the founder's yes and a
+    tracked deferral. Any approved change lands here together with the
+    manifest edit — this test diff is the approval checkpoint."""
+    return [
+        {'id': 'Conformance_t0_ChatGoalE2E', 'kind': 'playwright', 'check': CHAT,
+         'spec': CHAT_SPEC, 'project': 'default', 'issue': 1431, 'added': '2026-10-23',
+         'reason': 'Known claim-loop conformance failure; confirmed in integration run '
+                   '39832315507. The test still runs and its unexpected/flaky result is '
+                   'reported, not passed.'},
+        {'id': 'Conformance_t1_StandaloneTaskE2E', 'kind': 'playwright', 'check': EXEC,
+         'spec': EXEC_SPEC, 'project': 'default', 'issue': 1431, 'added': '2026-10-23',
+         'reason': 'Known claim-loop conformance failure; confirmed in integration run '
+                   '39832315507. Other tests and setup failures in this shard remain blocking.'},
+        {'id': 'design-system-browser-install', 'kind': 'infrastructure',
+         'checks': [{'check': DESIGN,
+                     'step': 'Run npx playwright install --with-deps chromium firefox webkit'},
+                    {'check': WEBKIT, 'step': INSTALL, 'missing_evidence_step': WEBKIT_UPLOAD}],
+         'issue': 1426, 'added': '2026-10-23',
+         'reason': 'Ubuntu apt mirror install hang; confirmed in integration run 39779260869 '
+                   'attempts 1 and 2. Requires the exact cancelled install step, apt-mirror log '
+                   'signature and job-timeout annotation. Dependent audit non-execution is '
+                   'explicitly reported, never claimed as coverage.'},
+    ]
 
 
 class QuarantineTest(unittest.TestCase):
@@ -282,18 +321,79 @@ class QuarantineTest(unittest.TestCase):
         self.fixture['jobs'][-1]['steps'].append(step('New unlisted step', 'failure'))
         self.assert_blocked('New unlisted step')
 
-    def test_shipped_manifest_has_only_the_three_approved_records(self):
-        self.manifest = json.loads((SCRIPT.parent.parent / '.github/ci-quarantine.json').read_text())
-        self.assertEqual([(e['id'], e['issue']) for e in self.manifest],
-                         [(TEST_ID, 1431), ('Conformance_t1_StandaloneTaskE2E', 1431),
-                          ('design-system-browser-install', 1426)])
-        self.assertEqual([(c['check'], c['step']) for c in self.manifest[2]['checks']],
-                         [(DESIGN, 'Run npx playwright install --with-deps chromium firefox webkit'),
-                          (WEBKIT, INSTALL)])
+    def shipped_manifest(self):
+        return json.loads((SCRIPT.parent.parent / '.github/ci-quarantine.json').read_text())
+
+    def assert_approved_subset(self, shipped):
+        approved = approved_records()
+        ids = [e['id'] for e in shipped]
+        self.assertEqual(sorted(i for i in set(ids) if ids.count(i) > 1), [],
+                         'duplicate quarantine ids — a shipped record may appear once')
+        unmatched = [e.get('id') for e in shipped if e not in approved]
+        self.assertEqual(unmatched, [], 'shipped quarantine records that are not unchanged '
+                         'approved records (added, or broadened scope/step/issue): '
+                         + repr(unmatched))
+
+    def test_shipped_manifest_is_an_unchanged_subset_of_the_approved_records(self):
+        # The quarantine list may only shrink without founder approval (root
+        # CLAUDE.md, "CI quarantine"): removals pass, additions and in-place
+        # broadenings fail. Order is irrelevant; no record is matched by position.
+        shipped = self.shipped_manifest()
+        self.assert_approved_subset(shipped)
+        self.manifest = shipped
         self.assertEqual(self.invoke('guard'), 0, self.output)
+
+    def test_removing_a_resolved_record_keeps_the_manifest_shippable(self):
+        approved = approved_records()
+        self.assert_approved_subset(list(reversed(approved)))
+        for removed in approved:
+            with self.subTest(removed=removed['id']):
+                shrunk = [e for e in approved if e['id'] != removed['id']]
+                self.assert_approved_subset(copy.deepcopy(shrunk))
+                # Temp copy through the real script; the shipped file is never edited.
+                self.manifest = copy.deepcopy(shrunk)
+                self.assertEqual(self.invoke('guard'), 0, self.output)
+
+    def test_adding_or_broadening_a_record_fails_the_subset_check(self):
+        approved = approved_records()
+        swapped_spec = copy.deepcopy(approved[0])
+        swapped_spec['spec'] = 'conformance-unlisted.spec.ts'
+        swapped_issue = copy.deepcopy(approved[0])
+        swapped_issue['issue'] = 999
+        swapped_step = copy.deepcopy(approved[2])
+        swapped_step['checks'][0]['step'] = INSTALL
+        extra_check = copy.deepcopy(approved[2])
+        extra_check['checks'].append({'check': 'Design system browser checks — chromium',
+                                      'step': 'Run npx playwright install --with-deps chromium'})
+        swapped_infra_issue = copy.deepcopy(approved[2])
+        swapped_infra_issue['issue'] = 999
+        added = dict(entry(), id='Conformance_t2_UnlistedE2E')
+        for label, needle, mutated in (
+                ('added unlisted record', 'Conformance_t2_UnlistedE2E', [added]),
+                ('duplicate of an approved record', 'duplicate quarantine ids',
+                 approved[:1] + [copy.deepcopy(approved[0])]),
+                ('playwright spec swapped', 'Conformance_t0_ChatGoalE2E',
+                 [swapped_spec, approved[1], approved[2]]),
+                ('playwright issue swapped', 'Conformance_t0_ChatGoalE2E',
+                 [swapped_issue, approved[1], approved[2]]),
+                ('install step swapped between checks', 'design-system-browser-install',
+                 [approved[0], approved[1], swapped_step]),
+                ('extra install check appended', 'design-system-browser-install',
+                 [approved[0], approved[1], extra_check]),
+                ('infrastructure issue swapped', 'design-system-browser-install',
+                 [approved[0], approved[1], swapped_infra_issue])):
+            with self.subTest(mutation=label):
+                with self.assertRaises(AssertionError) as raised:
+                    self.assert_approved_subset(mutated)
+                self.assertIn(needle, str(raised.exception))
+
+    def test_conformance_classifier_reports_both_approved_records_from_fixtures(self):
+        # Classifier cases stay on independent fixtures; they must not depend
+        # on the shipped manifest's current contents.
+        self.manifest = [entry(), t1_entry()]
         for check, spec, identity, group in (
-            (CHAT, 'conformance-design-chat-e2e.spec.ts', TEST_ID, 'llm-conformance-chat'),
-            (EXEC, 'conformance-design-exec-e2e.spec.ts', 'Conformance_t1_StandaloneTaskE2E', 'llm-conformance-exec')):
+                (CHAT, CHAT_SPEC, TEST_ID, 'llm-conformance-chat'),
+                (EXEC, EXEC_SPEC, 'Conformance_t1_StandaloneTaskE2E', 'llm-conformance-exec')):
             with self.subTest(check=check):
                 self.fixture['report'] = report(identity=identity)
                 self.fixture['report']['suites'][0]['specs'][0]['file'] = spec
