@@ -28,12 +28,13 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 let detail: unknown = null
 let workspacesQuery: { data: unknown; isPending: boolean; isPaused?: boolean } = { data: undefined, isPending: true }
+const refetch = vi.fn()
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
     ...actual,
     useQuery: vi.fn().mockImplementation(({ queryKey }: { queryKey: unknown[] }) => {
-      if (JSON.stringify(queryKey).includes('workspaces')) return { ...workspacesQuery, isLoading: workspacesQuery.isPending, isError: false }
+      if (JSON.stringify(queryKey).includes('workspaces')) return { ...workspacesQuery, isPaused: workspacesQuery.isPaused ?? false, isLoading: workspacesQuery.isPending, isError: false, refetch }
       return { data: detail, isLoading: false, isError: false, isPending: false }
     }),
   }
@@ -75,6 +76,10 @@ describe('legacy session deep link while its redirect is undecided', () => {
       expect(screen.queryByTestId('inline-chat-screen'), 'still within the bound').toBeNull()
       act(() => { vi.advanceTimersByTime(1) })
       expect(screen.getByTestId('inline-chat-screen'), 'a stalled list cannot leave the chat empty').toBeTruthy()
+      expect(screen.getByText(/^Still finding this chat's workspace\. The chat moves into its workspace once it is found\.$/u), 'the unresolved workspace and the later move are explained').toBeTruthy()
+      refetch.mockClear()
+      act(() => { screen.getByRole('button', { name: 'Retry' }).click() })
+      expect(refetch, 'Retry replaces the stalled lookup').toHaveBeenCalledWith({ cancelRefetch: true })
     } finally { vi.useRealTimers() }
   })
 
@@ -82,11 +87,13 @@ describe('legacy session deep link while its redirect is undecided', () => {
     workspacesQuery = { data: undefined, isPending: true, isPaused: true }
     render(<SessionRoute />)
     expect(screen.getByTestId('inline-chat-screen'), 'its connection notice and Retry stay reachable').toBeTruthy()
+    expect(screen.getByText(/^Waiting for the connection to find this chat's workspace\./u)).toBeTruthy()
   })
 
   it('mounts the inline thread once the list resolves without that workspace', () => {
     workspacesQuery = { data: [], isPending: false }
     render(<SessionRoute />)
     expect(screen.getByTestId('inline-chat-screen'), 'positive control: the inline fallback still renders').toBeTruthy()
+    expect(screen.queryByText(/this chat's workspace/u), 'a resolved lookup shows no workspace notice').toBeNull()
   })
 })
