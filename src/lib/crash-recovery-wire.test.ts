@@ -55,27 +55,20 @@ describe('crash-recovery generated wire reason parity', () => {
     expect(SubagentEndFrame.safeParse(value).success).toBe(true)
   })
 
-  it('requires the reason on a newly recorded Interrupted lifecycle', () => {
-    expect(SessionLifecycleRecord.safeParse(lifecycle('tool_limit')).success).toBe(true)
-    expect(SessionLifecycleRecord.safeParse(lifecycle()).success).toBe(false)
-  })
+  // Decision D: "the producer guarantees the relation; the client-side generated validators stay structural"
+  // Newly recorded Interrupted requires a reason at the Go public Persist boundary.
   it.each([null, 'restart', 'invented'])('rejects invalid durable reason %s', (reason) => {
     expect(SessionLifecycleRecord.safeParse(lifecycle('tool_limit')).success).toBe(true)
     expect(SessionLifecycleRecord.safeParse(lifecycle(reason)).success).toBe(false)
   })
-  it('forbids an interruption reason on a running lifecycle', () => {
-    const valid = { ...lifecycle(), state: 'running', terminal: false }
-    expect(SessionLifecycleRecord.safeParse(valid).success).toBe(true)
-    expect(SessionLifecycleRecord.safeParse({ ...valid, interruption_reason: 'tool_limit' }).success).toBe(false)
-  })
+  // Decision D: "The rejection of invalid pairings is enforced where the payloads are built"
+  // A reason on Running is rejected by the Go public Persist oracle, not this structural reader.
   it.each([null, 'invented'])('rejects invalid live DoneStats reason %s', (interruption_reason) => {
     expect(DoneStats.safeParse({ interruption_reason: 'tool_limit' }).success).toBe(true)
     expect(DoneStats.safeParse({ interruption_reason }).success).toBe(false)
   })
-  it('does not send execution=running for an Interrupted session', () => {
-    expect(Session.safeParse(session('tool_limit')).success).toBe(true)
-    expect(Session.safeParse({ ...session('tool_limit'), execution: 'running' }).success).toBe(false)
-  })
+  // Decision D: "invalid pairings are rejected by the producer's runtime validation"
+  // Interrupted execution-key omission is asserted on actual REST JSON bytes in Go.
   it('keeps ordinary stopped and genuine failed controls valid without a reason', () => {
     const base = { ...lifecycle(), terminal: false, state: 'stopped' }
     expect(SessionLifecycleRecord.safeParse(base).success).toBe(true)
