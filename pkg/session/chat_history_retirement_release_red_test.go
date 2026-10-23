@@ -57,7 +57,7 @@ func gate0PinnedRetiredGeneration(t *testing.T) (*UnifiedStore, string, string, 
 func TestChatHistoryRetirement_LastReaderErrorsAreRetried(t *testing.T) {
 	t.Run("native_remove_error_returns_and_stays_pending", func(t *testing.T) {
 		s, sid, path, release := gate0PinnedRetiredGeneration(t)
-		clear, nativeError := gate0HoldRetirementRemoveFault(t, path)
+		restoreRemove, nativeError := gate0HoldRetirementRemoveFault(t, path)
 		err, reports := gate0ReleaseRetired(t, release)
 		t.Run("required_typed_release_error", func(t *testing.T) {
 			if !reports {
@@ -67,7 +67,7 @@ func TestChatHistoryRetirement_LastReaderErrorsAreRetried(t *testing.T) {
 		})
 		assert.True(t, gate0RetirementPending(s.historyOwner(sid), path), "failed retirement remains pending")
 		require.FileExists(t, path)
-		clear()
+		restoreRemove()
 		require.NoError(t, s.CheckChatHistoryReadiness(context.Background(), sid), "normal zero-mutation reconcile retries cleanup after fault clears")
 		assert.NoFileExists(t, path, "X: normal reconcile must retry the deferred failed deletion even with no new expiry")
 	})
@@ -113,8 +113,8 @@ func gate0RetirementReadCaller(t *testing.T) {
 	joined := false
 	done := make(chan gate0RetirementReadResult, 1)
 	go func() {
-		p, err := s.ReadChatHistoryPage(ctx, sid, historyOptions(40))
-		done <- gate0RetirementReadResult{p, err}
+		p, readErr := s.ReadChatHistoryPage(ctx, sid, historyOptions(40))
+		done <- gate0RetirementReadResult{p, readErr}
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -137,7 +137,7 @@ func gate0RetirementReadCaller(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, removed)
 	require.FileExists(t, path)
-	clear, nativeError := gate0HoldRetirementRemoveFault(t, path)
+	restoreRemove, nativeError := gate0HoldRetirementRemoveFault(t, path)
 	unblock()
 	var result gate0RetirementReadResult
 	select {
@@ -154,7 +154,7 @@ func gate0RetirementReadCaller(t *testing.T) {
 		assert.Equal(t, "storage_error", unavailable.Reason)
 	}
 	assert.True(t, gate0RetirementPending(s.historyOwner(sid), path))
-	clear()
+	restoreRemove()
 	page := historyRead(t, s, sid, historyOptions(40))
 	require.Len(t, page.Entries, 40)
 	assert.NoFileExists(t, path, "normal subsequent read retries retirement; no new expiry/publication is required")

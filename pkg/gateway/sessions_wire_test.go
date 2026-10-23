@@ -60,7 +60,7 @@ func requirePagedSessionDetailWire(t *testing.T, body []byte) gen.SessionDetail 
 	require.NoError(t, schema.Validate(envelope), "actual paged detail must satisfy SessionDetail.yaml; body=%s", body)
 	var detail gen.SessionDetail
 	require.NoError(t, json.Unmarshal(body, &detail))
-	require.Equal(t, "available", string(detail.HistoryState.Status), "healthy canonical fixture must return a real page, not unavailable metadata")
+	require.Equal(t, "available", detail.HistoryState.Status, "healthy canonical fixture must return a real page, not unavailable metadata")
 	require.Nil(t, detail.HistoryState.Reason)
 	require.Nil(t, detail.HistoryState.Message)
 	require.NotNil(t, detail.Messages)

@@ -57,11 +57,11 @@ func gate0ReadSavedNodeTail(t *testing.T, fixture gate0SavedNodeTail, pending in
 		historyRequireUnavailable(t, readErr, refusal)
 		_, retryErr := reopened.ReadChatHistoryPage(context.Background(), fixture.sid, historyOptions(100))
 		historyRequireUnavailable(t, retryErr, refusal)
-		after, err := os.ReadFile(checkpointPath)
-		require.NoError(t, err)
+		after, checkpointReadErr := os.ReadFile(checkpointPath)
+		require.NoError(t, checkpointReadErr)
 		require.Equal(t, checkpointBefore, after, "no partial candidate root publication or repeated64-at-a-time progress")
-		afterFile, err := os.ReadFile(fixture.path)
-		require.NoError(t, err)
+		afterFile, refusedReadErr := os.ReadFile(fixture.path)
+		require.NoError(t, refusedReadErr)
 		require.Equal(t, fileBefore, afterFile, "corrupt/foreign-committed/excess candidate is not silently discarded")
 	} else if assert.NoError(t, readErr, "M2: complete valid footerless nodes within64 must not force operator repair") {
 		require.Len(t, page.Entries, len(fixture.addresses))
@@ -75,8 +75,8 @@ func gate0ReadSavedNodeTail(t *testing.T, fixture gate0SavedNodeTail, pending in
 		require.Equal(t, page.Entries, again.Entries)
 		require.Equal(t, stable, historyTree(t, historyIndexDir(reopened, fixture.sid)), "next read is an exact no-write fixed point")
 		if kind == "committed" || pending == 0 {
-			afterFile, err := os.ReadFile(fixture.path)
-			require.NoError(t, err)
+			afterFile, committedReadErr := os.ReadFile(fixture.path)
+			require.NoError(t, committedReadErr)
 			require.Equal(t, fileBefore, afterFile, "complete committed transaction/zero delta is reused intact, never trimmed/re-encoded")
 		}
 	}

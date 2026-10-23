@@ -48,7 +48,7 @@ func (c *repairFinalGuardContext) Err() error {
 			close(c.verifying)
 			select {
 			case <-c.verifyRelease:
-			case <-c.Context.Done():
+			case <-c.Done():
 			}
 		})
 	}

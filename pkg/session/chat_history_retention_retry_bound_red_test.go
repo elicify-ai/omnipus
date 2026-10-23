@@ -41,12 +41,12 @@ func TestChatHistoryRead_RetentionChurnStopsAfterThreeAttempts(t *testing.T) {
 				}
 				path := filepath.Join(s.BaseDir(), sid, addresses[moves].PartitionKey+".jsonl")
 				old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-				if err := os.Chtimes(path, old, old); err != nil {
-					return err
+				if touchErr := os.Chtimes(path, old, old); touchErr != nil {
+					return touchErr
 				}
-				removed, err := s.RetentionSweep(90) // real sweep/compaction/generation move, not a forged checkpoint value
-				if err != nil {
-					return err
+				removed, sweepErr := s.RetentionSweep(90) // real sweep/compaction/generation move, not a forged checkpoint value
+				if sweepErr != nil {
+					return sweepErr
 				}
 				require.Equal(t, 1, removed, "one actual newly eligible unselected old partition per cut")
 				moves++

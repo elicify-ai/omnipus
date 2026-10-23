@@ -169,10 +169,20 @@ func TestAttach_PagedIncrementalKeepsWholeJournal(t *testing.T) {
 // creator is not used on the target, since fresh creation must initialize indexes.
 func pagingUnindexedSession(t *testing.T, target *session.UnifiedStore) string {
 	t.Helper()
+	return pagingUnindexedSessionInWorkspace(t, target, "")
+}
+
+func pagingUnindexedSessionInWorkspace(t *testing.T, target *session.UnifiedStore, workspaceID string) string {
+	t.Helper()
 	donor, err := session.NewUnifiedStore(t.TempDir())
 	require.NoError(t, err)
 	meta, err := donor.NewSession(session.SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err)
+	if workspaceID != "" {
+		// Initial binding is legal ONLY before saved inputs exist. The US16
+		// donor must already belong to the same workspace its later send names.
+		require.NoError(t, donor.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &workspaceID}))
+	}
 	pagingSeed(t, donor, meta.ID, "old", 2)
 	require.NoError(t, donor.Close(), "complete all canonical stats writes before copying")
 	from := filepath.Join(donor.BaseDir(), meta.ID)

@@ -44,7 +44,7 @@ func (c *r1CleanupContext) Err() error {
 			close(c.entered)
 			select {
 			case <-c.release:
-			case <-c.Context.Done():
+			case <-c.Done():
 			}
 		})
 	}
