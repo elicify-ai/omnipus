@@ -133,7 +133,7 @@ function VirtualizedMessageListInner({
   const isStreaming = useChatStore((s) => s.isStreaming)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const viewport = useHistoryViewport(scrollContainerRef, messages)
+  const viewport = useHistoryViewport(scrollContainerRef, messages, virtualAnchorOffset)
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
@@ -170,6 +170,16 @@ function VirtualizedMessageListInner({
     for (const key of virtualizer.itemSizeCache.keys()) if (!kept.has(String(key))) virtualizer.itemSizeCache.delete(key)
   }, [virtualizer, historicalMessages])
   const virtualItems = virtualizer.getVirtualItems()
+
+  function virtualAnchorOffset(position: string): number | undefined {
+    const index = historicalMessages.findIndex(message => (message.historyPosition ?? `live:${message.id}`) === position)
+    const item = index >= 0 ? virtualizer.measurementsCache[index] : undefined
+    const scroller = scrollContainerRef.current
+    const content = scroller?.querySelector<HTMLElement>('[data-history-content]')
+    if (!item || !scroller || !content) return undefined
+    const physicalPrefix = content.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+    return physicalPrefix + item.start - virtualizer.options.scrollMargin
+  }
 
   const rowForMessage = (msg: ChatMessage) => {
     // ADR-049 D2/SD-C10: see PlainMessageList's identical branch above.
