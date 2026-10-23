@@ -26,6 +26,21 @@ function delegationEventsOutsideRow(events: readonly DelegationEvent[], message:
   return splitAnchoredDelegationEvents(events, message.id, placementOf(message)).trailing
 }
 
+/**
+ * A saved assistant record with nothing of its own to draw -- the content-less
+ * turn-start bookkeeping row every agent turn writes -- is still a counted
+ * history source group, but it draws no bubble (not even a name header).
+ * Anything that can still show output (streaming, owned tool calls, media,
+ * attachments, a truncation or a summary) keeps its row.
+ */
+function isSilentHistoryRecord(msg: ChatMessage, owners: Record<string, string> | undefined): boolean {
+  // Not every Message variant declares these optional fields; absent is "none".
+  const extra = msg as { summary?: string; attachments?: unknown[] }
+  return msg.role === 'assistant' && msg.type !== 'judge_verdict' && !!msg.historyPosition && !msg.isStreaming && msg.status !== 'streaming'
+    && !msg.content && !extra.summary && !msg.tool_calls?.length && !extra.attachments?.length && !msg.media?.length && !msg.spans?.length
+    && !msg.truncated && !msg.providerFallbackNote && !Object.values(owners ?? {}).includes(msg.id)
+}
+
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
 function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMessage[]; liteMode: boolean; agentName: string }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -36,6 +51,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   const sessionId = useSessionStore((s) => s.activeSessionId)
   const delegationEvents = useChatDelegationEvents(sessionId)
+  const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
   const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
   // F17 (1): the reply_to ids that have a reply bubble in the thread —
@@ -81,7 +97,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
             )
           } else if (msg.role === 'system') {
             row = <VirtualSystemMessageRow message={msg} />
-          } else {
+          } else if (!isSilentHistoryRecord(msg, toolCallOwners)) {
             row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
           }
           const trailing = delegationEventsOutsideRow(delegationEvents, msg)
@@ -201,6 +217,7 @@ function VirtualizedMessageListInner({
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
+    if (isSilentHistoryRecord(msg, toolCallOwners)) return null
     return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
   }
 
