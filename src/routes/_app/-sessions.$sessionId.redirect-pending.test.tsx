@@ -5,7 +5,7 @@
 // inline thread may mount only once the redirect is decided against.
 import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 
 vi.mock('@/components/chat/ChatScreen', () => ({
   ChatScreen: () => <div data-testid="inline-chat-screen" />,
@@ -27,7 +27,7 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 })
 
 let detail: unknown = null
-let workspacesQuery: { data: unknown; isPending: boolean } = { data: undefined, isPending: true }
+let workspacesQuery: { data: unknown; isPending: boolean; isPaused?: boolean } = { data: undefined, isPending: true }
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
@@ -41,7 +41,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 
 import { useConnectionStore } from '@/store/connection'
 import { availableHistoryDetail } from '../../../tests/chat-history-paging/legacy-fixtures'
-import { Route } from './sessions.$sessionId'
+import { Route, REDIRECT_DECISION_WAIT_MS } from './sessions.$sessionId'
 
 function sessionDetail() {
   return {
@@ -58,10 +58,30 @@ describe('legacy session deep link while its redirect is undecided', () => {
     detail = sessionDetail()
   })
 
-  it('does not mount the inline thread (and so no history read) while the workspace list is loading', () => {
+  it('shows a visible opening status, not the inline thread (no history read), while the workspace list is loading', () => {
     workspacesQuery = { data: undefined, isPending: true }
     render(<SessionRoute />)
     expect(screen.queryByTestId('inline-chat-screen')).toBeNull()
+    expect(screen.getByRole('status'), 'never an empty chat area').toHaveTextContent('Opening chat…')
+  })
+
+  it('falls back to the inline thread when the workspace list stays pending past the bounded wait', () => {
+    vi.useFakeTimers()
+    try {
+      workspacesQuery = { data: undefined, isPending: true }
+      render(<SessionRoute />)
+      expect(screen.queryByTestId('inline-chat-screen')).toBeNull()
+      act(() => { vi.advanceTimersByTime(REDIRECT_DECISION_WAIT_MS - 1) })
+      expect(screen.queryByTestId('inline-chat-screen'), 'still within the bound').toBeNull()
+      act(() => { vi.advanceTimersByTime(1) })
+      expect(screen.getByTestId('inline-chat-screen'), 'a stalled list cannot leave the chat empty').toBeTruthy()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('opens the inline thread at once when the list request is paused offline', () => {
+    workspacesQuery = { data: undefined, isPending: true, isPaused: true }
+    render(<SessionRoute />)
+    expect(screen.getByTestId('inline-chat-screen'), 'its connection notice and Retry stay reachable').toBeTruthy()
   })
 
   it('mounts the inline thread once the list resolves without that workspace', () => {
