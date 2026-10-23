@@ -102,6 +102,8 @@ The pause message is a goal status reason, not a Judge verdict. A normal reply c
 
 After three failed automatic reminder turns in a row, the same active goal also pauses; a successful reminder resets this failure count, failed turns never add to the separate five-reminder no-progress count, and a normal reply resumes it.
 
+`/goal status` is read-only: it does not resume the goal or reset either reminder count. Rebuilding reminder tracking from saved state normally keeps the same failure-pause notice rather than adding another one; this is not a guarantee against duplicates at every possible crash moment. A normal reply starts a new cycle, so three later failed automatic reminders earn a fresh pause notice.
+
 If Omnipus detects a failure while saving a reminder's final conversation state, it does not assess that reminder or add to either pause count. It reports that storage problem separately. Correct the underlying storage problem, then send a normal reply to start a new recovery turn on the same active goal. Repairing storage does not automatically retry the old turn's final save.
 
 A reply on its own is no progress: if an automatic reminder completes without a real tool call (other than `set_todos` or `goal_claim`), helper or background activity, new evidence, or a goal-scoped committed file change, five such turns in a row pause the goal.

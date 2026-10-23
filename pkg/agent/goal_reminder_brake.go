@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -60,7 +59,8 @@ func (al *AgentLoop) pauseGoalReminders(sessionID string, rec *goal.Goal) error 
 	work := goalReminderWorkFor(current.GoalID)
 	work.mu.Lock()
 	assessedTurn := work.lastAssessedTurn
-	noticeID, err := al.goalReminderPauseNoticeID(sessionID, current.GoalID, assessedTurn, goalReminderPauseContent(current))
+	assessedRunID := work.lastAssessedRunID
+	noticeID, err := al.goalReminderPauseNoticeID(sessionID, current.GoalID, assessedTurn, assessedRunID, goalReminderPauseContent(current))
 	work.mu.Unlock()
 	if err != nil {
 		return err
@@ -90,8 +90,14 @@ type goalReminderPauseAcceptance struct {
 // goalReminderPauseNoticeID binds the notice to the already assessed producing
 // turn before the passive seam. After a process-local reset only, recover the
 // existing transcript identity here, never from a later human turn after the seam.
-func (al *AgentLoop) goalReminderPauseNoticeID(sessionID, goalID, assessedTurn, content string) (string, error) {
+func (al *AgentLoop) goalReminderPauseNoticeID(sessionID, goalID, assessedTurn, assessedRunID, content string) (string, error) {
 	entryID := "goal-no-progress-" + goalID
+	if content == goalReminderFailedTurnNotice {
+		if assessedTurn != "" && assessedRunID == "" {
+			return "", errors.New("goal reminder pause: assessed failure execution identity is unavailable")
+		}
+		return al.goalReminderFailurePauseID(sessionID, entryID, assessedRunID)
+	}
 	if assessedTurn != "" {
 		return entryID + "-" + assessedTurn, nil
 	}
@@ -102,18 +108,6 @@ func (al *AgentLoop) goalReminderPauseNoticeID(sessionID, goalID, assessedTurn, 
 	entries, err := store.ReadTranscript(sessionID)
 	if err != nil {
 		return "", fmt.Errorf("goal reminder pause: read completed outcome identity: %w", err)
-	}
-	if content == goalReminderFailedTurnNotice {
-		for i := len(entries) - 1; i >= 0; i-- {
-			entry := &entries[i]
-			if entry.Role == "user" {
-				break // a genuine reply starts a new failure-pause cycle
-			}
-			if entry.GoalID == goalID && entry.Role == "system" && entry.Content == content && strings.HasPrefix(entry.ID, entryID) {
-				return entry.ID, nil
-			}
-		}
-		return al.goalReminderFailurePauseID(sessionID, entryID)
 	}
 	for i := len(entries) - 1; i >= 0; i-- {
 		if entries[i].GoalID == goalID && entries[i].Role == "assistant" && entries[i].TurnID != "" {
@@ -243,6 +237,7 @@ func (al *AgentLoop) resumeGoalRemindersForHuman(opts processOptions) {
 	}
 	work.pending = nil
 	work.failedReminders = 0
+	work.lastAssessedRunID = ""
 	consumeGoalReminderProgress(fresh.GoalID, work, time.Now().UTC())
 	al.goalMarkIdleSettling(fresh.GoalID, false)
 	if wasPaused {

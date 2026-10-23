@@ -81,10 +81,12 @@ func (al *AgentLoop) retryGoalReminderOutcome(sessionID string, rec *goal.Goal) 
 // assessGoalReminderLocked consumes only a settled actual reminder outcome.
 // Successful and failed turns have separate streaks; busy progress stays latched.
 func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, work *goalReminderWork) (*goal.Goal, bool, error) {
+	var assessedRunID string
 	if work.pending != nil {
 		settled, err := goalReminderExecutionSettled(work.pending.execution)
 		if errors.Is(err, context.Canceled) {
 			work.lastAssessedTurn = work.pending.turnID
+			work.lastAssessedRunID = ""
 			work.pending = nil
 			al.goalMarkIdleSettling(rec.GoalID, false)
 			return rec, false, nil
@@ -92,6 +94,11 @@ func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, 
 		if err != nil || !settled {
 			return rec, !settled, err
 		}
+		claim := work.pending.execution.claim
+		if work.pending.failed && (claim.SessionID != sessionID || claim.RunID == "") {
+			return rec, false, errors.New("goal reminder: failed outcome has no matching producing execution identity")
+		}
+		assessedRunID = claim.RunID
 	}
 	observedAt := time.Now().UTC()
 	progress, busy, err := al.collectGoalReminderProgress(sessionID, rec, work, goalReminderWatermark(rec.GoalID))
@@ -119,6 +126,7 @@ func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, 
 		return rec, false, err
 	}
 	work.lastAssessedTurn = work.pending.turnID
+	work.lastAssessedRunID = assessedRunID
 	work.pending = nil
 	consumeGoalReminderProgress(rec.GoalID, work, observedAt)
 	al.goalMarkIdleSettling(rec.GoalID, false)

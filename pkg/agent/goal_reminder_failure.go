@@ -6,6 +6,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/goal"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 const goalReminderFailedTurnMax = 3
@@ -44,20 +45,26 @@ func goalReminderPauseContent(rec *goal.Goal) string {
 	return goalReminderPauseNotice
 }
 
-// Failed turns can have an error row but no assistant TurnID. If a restart
-// lands before the pause notice is saved, the actual last execution supplies a
-// stable identity without inventing an assistant turn or another durable field.
-func (al *AgentLoop) goalReminderFailurePauseID(sessionID, prefix string) (string, error) {
-	store := al.GetSessionLifecycleStore()
-	if store == nil {
-		return "", errors.New("goal reminder pause: lifecycle store is unavailable")
+// Failed turns can have no assistant TurnID. Warm publication uses the actual
+// assessed producer. Cold recovery uses one terminal, non-restart snapshot only;
+// that necessary-state filter is not proof of arbitrary crash provenance.
+func (al *AgentLoop) goalReminderFailurePauseID(sessionID, prefix, assessedRunID string) (string, error) {
+	if assessedRunID == "" {
+		store := al.GetSessionLifecycleStore()
+		if store == nil {
+			return "", errors.New("goal reminder pause: lifecycle store is unavailable")
+		}
+		rec, err := store.Load(sessionID)
+		if err != nil {
+			return "", fmt.Errorf("goal reminder pause: read failed execution identity: %w", err)
+		}
+		if rec.ExecutionID == nil || rec.ExecutionID.RunID == "" {
+			return "", errors.New("goal reminder pause: failed execution identity is unavailable")
+		}
+		if !rec.Terminal() || session.LifecycleRecordIsRestartInterrupted(rec) {
+			return "", errors.New("goal reminder pause: cold failure execution is not a settled terminal producer")
+		}
+		assessedRunID = rec.ExecutionID.RunID
 	}
-	rec, err := store.Load(sessionID)
-	if err != nil {
-		return "", fmt.Errorf("goal reminder pause: read failed execution identity: %w", err)
-	}
-	if rec.ExecutionID == nil || rec.ExecutionID.RunID == "" {
-		return "", errors.New("goal reminder pause: failed execution identity is unavailable")
-	}
-	return prefix + "-run-" + rec.ExecutionID.RunID, nil
+	return prefix + "-run-" + assessedRunID, nil
 }

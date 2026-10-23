@@ -53,6 +53,7 @@ type goalReminderWork struct {
 	mu                  sync.Mutex
 	pending             *goalReminderOutcome
 	lastAssessedTurn    string
+	lastAssessedRunID   string
 	failedReminders     int
 	pauseNoticeEnqueued string
 	toolActivityAt      time.Time
