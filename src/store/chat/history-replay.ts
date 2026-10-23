@@ -52,12 +52,11 @@ function sourceProjection(groups: Stage['groups'], cancellations: ReadonlySet<st
 /** Restore the prior reader. With `failed`, the SAME store update also
  * publishes the failed load ("Could not load messages." + Retry), so a
  * subscriber exception during restoration cannot strand a restored reader
- * that still claims a successful load. Returns whether the update applied. */
-function restorePublishedProjection(context: HistorySliceContext, sid: string, stage: Stage, beforeCommit?: SessionChatState, failed = false, applied: { value: boolean } = { value: false }): boolean {
-  if (!stage.published && !beforeCommit) return false
+ * that still claims a successful load. */
+function restorePublishedProjection(context: HistorySliceContext, sid: string, stage: Stage, beforeCommit?: SessionChatState, failed = false): void {
+  if (!stage.published && !beforeCommit) return
   context.withBucket(sid, b => {
     if (b.history.viewGeneration !== stage.generation || (!beforeCommit && b.history.historyLoaded)) return {}
-    applied.value = true
     // Progressive rows are still provisional: on failure restore the pre-stage
     // reader, not the partially published page captured just before commit.
     const prior = stage.published ? undefined : beforeCommit
@@ -77,7 +76,6 @@ function restorePublishedProjection(context: HistorySliceContext, sid: string, s
       history: { ...history, viewGeneration: b.history.viewGeneration, serverState: b.history.serverState, liveControlsReady: b.history.liveControlsReady,
         ...(failed ? { historyLoaded: false, requests: failedLatest(b.history.requests) } : { requests: b.history.requests }) } }
   })
-  return applied.value
 }
 function failedLatest(requests: SessionChatState['history']['requests']): SessionChatState['history']['requests'] {
   return { ...requests, latest: { status: 'error', error: 'Could not load messages.', attempt: requests.latest.attempt + 1 } }
@@ -192,16 +190,18 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
    * during that update is diagnosed by its own fixed class, never re-thrown
    * past the already-published failure state. */
   function failSnapshot(sid: string, stage: Stage, beforeCommit?: SessionChatState): void {
-    // `applied` is set inside the store update, so it survives a subscriber
-    // exception thrown after Zustand has already assigned the new state.
-    const applied = { value: false }
     try {
-      restorePublishedProjection(context, sid, stage, beforeCommit, true, applied)
+      restorePublishedProjection(context, sid, stage, beforeCommit, true)
     } catch {
       logDiagnostic('chatHistorySnapshotRestoreFailed', { phase: 'snapshot_restore', kind: 'unexpected_exception' })
     }
-    // The restoration published the failed load itself; otherwise publish it now.
-    if (!applied.value) reject(sid)
+    // Decide from the STORED state, not from whether the restoration started:
+    // an exception before Zustand assigned it leaves the failed load
+    // unpublished; a subscriber exception after assignment does not. A view
+    // that moved on is not this snapshot's to fail. If this minimal visible
+    // failure update itself throws, it propagates.
+    const b = context.get().sessionsById[sid]
+    if (b && b.history.viewGeneration === stage.generation && (b.history.historyLoaded || b.history.requests.latest.status !== 'error')) reject(sid)
   }
   function begin(frame: SessionSnapshotFrame): void {
     abortHistoryReads(frame.session_id)
