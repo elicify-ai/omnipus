@@ -112,3 +112,113 @@ it('recomputes unmeasured composite prefixes when only A changes80→40, with st
   expect(mounted().length, 'real virtualization remains active after prefix recomputation').toBeLessThan(50)
   expect(network.requests.filter(read => read.path === path), 'hidden geometry probe performs exactly its bounded source read').toHaveLength(1)
 })
+
+it('M1 recomputes unmeasured estimates when only the drawn average changes inside a fixed mounted window', async () => {
+  // D5:50 two-row sources. H80 is smaller than the initial default estimate
+  // (2*80), every outer item128, and both measured composite estimates.
+  // Bootstrap and both phases keep ONLY index0 plus the SAME five overscan
+  // rows: no retained sample from a formerly mounted source can pollute A.
+  layout.state.height = 80
+  const sources = Array.from({ length: 50 }, (_, index) => entry(index + 1, {
+    role: 'assistant', tool_calls: [{
+      id: `average-fixed-window-${index + 1}`, tool: 'bash', content_state: 'full', status: 'success',
+      parameters: { command: `printf source-${index + 1}` }, result: { content: 'Complete saved tool output' },
+    }],
+  }))
+  for (const source of sources) {
+    layout.state.rowHeights.set(source.history_position!, 128)
+    layout.state.toolHeights.set(source.tool_calls![0].id, 128)
+  }
+  const response = page(sources, { sessionId: MAIN_ID, earlier: true, rows: 100, info: { limit: 100, min_rows: 20 } })
+  expectValidPage(response, Array.from({ length: 50 }, (_, index) => pos(index + 1)), 100)
+  network.respond('GET', path, () => json(response))
+  await act(async () => {
+    await useChatStore.getState().loadLatestHistory(MAIN_ID, { limit: 100, min_rows: 20 })
+    useChatStore.getState().enterHistoryReading(MAIN_ID)
+  })
+  // An ancestor insertion can report the same indexed descendant again.
+  // Deduplicate by Element identity, never by index: a replacement node
+  // with the same index must still count as a separate physical mount.
+  const initialMounts = new Set<Element>()
+  const bootstrap = new MutationObserver(records => {
+    for (const record of records) for (const node of record.addedNodes) {
+      if (!(node instanceof Element)) continue
+      const indexed = [...(node.matches('[data-index]') ? [node] : []), ...node.querySelectorAll('[data-index]')]
+      for (const row of indexed) initialMounts.add(row)
+    }
+  })
+  bootstrap.observe(document.body, { subtree: true, childList: true })
+  try {
+    render(<QueryClientProvider client={queryClient}><RealRows /></QueryClientProvider>)
+    await observeLayout()
+    // Initial split: tool128 + narration0 (excluded) => A128.
+    await waitFor(() => expect(historyAttachSizing(MAIN_ID)).toStrictEqual({ history_limit: 20, history_min_rows: 2 }))
+    await observeLayout()
+  } finally {
+    bootstrap.disconnect()
+  }
+  expect([...initialMounts].map(row => row.getAttribute('data-index')), 'bootstrap never samples a source outside the fixed six-node window').toStrictEqual(['0', '1', '2', '3', '4', '5'])
+  const region = screen.getByRole('region', { name: 'Conversation history' })
+  const content = region.querySelector<HTMLElement>('[data-history-content]')!
+  const mounted = () => [...region.querySelectorAll<HTMLElement>('[data-index]')]
+  expect(mounted().map(row => row.dataset.index)).toStrictEqual(['0', '1', '2', '3', '4', '5'])
+  const originalRows = mounted()
+  expect(originalRows.map(row => row.getBoundingClientRect().height)).toStrictEqual(Array(6).fill(128))
+  expect(Number.parseFloat(content.style.height), 'positive control: unmeasured two-row A128 estimates exceed50 actual128px sources').toBeGreaterThan(6400)
+
+  const messages = useChatStore.getState().messages
+  const positions = useChatStore.getState().history.readerPositions
+  const generation = useChatStore.getState().history.viewGeneration
+  const verbose = useChatPreferencesStore.getState().verboseChatEnabled
+  const initialPrefix = content.getBoundingClientRect().top + region.scrollTop
+  const initialWidth = region.getBoundingClientRect().width
+  const initialTop = region.scrollTop
+  const additions: Element[] = []
+  const removals: Element[] = []
+  const collectMountChanges = (records: MutationRecord[]) => {
+    for (const record of records) {
+      for (const [nodes, changes] of [[record.addedNodes, additions], [record.removedNodes, removals]] as const) {
+        for (const node of nodes) {
+          if (!(node instanceof Element)) continue
+          if (node.matches('[data-index]')) changes.push(node)
+          changes.push(...node.querySelectorAll('[data-index]'))
+        }
+      }
+    }
+  }
+  const mounts = new MutationObserver(collectMountChanges)
+  mounts.observe(region, { subtree: true, childList: true })
+  try {
+    // ONLY the tool/narration split changes. Outer128, messages, key owners,
+    // source count/order, session, width and presentation remain unchanged.
+    for (const source of sources) layout.state.toolHeights.set(source.tool_calls![0].id, 64)
+    await observeLayout()
+    await observeLayout()
+    // New split: tool64 + narration64 => A64. D5 floors are2→3.
+    await waitFor(() => expect(historyAttachSizing(MAIN_ID)).toStrictEqual({ history_limit: 20, history_min_rows: 3 }))
+    collectMountChanges(mounts.takeRecords())
+    expect(additions, 'no indexed row mounted, even transiently, during the average change').toStrictEqual([])
+    expect(removals, 'no indexed row unmounted during the average change').toStrictEqual([])
+    expect(mounted().map(row => row.dataset.index), 'same virtual window, not merely the same mounted count').toStrictEqual(['0', '1', '2', '3', '4', '5'])
+    for (const [index, row] of originalRows.entries()) {
+      expect(mounted()[index], 'same physical row node and key, not a replacement').toBe(row)
+      expect(row.isConnected).toBe(true)
+    }
+    expect(screen.getByRole('region', { name: 'Conversation history' })).toBe(region)
+    expect(region.querySelector('[data-history-content]')).toBe(content)
+    expect(useChatStore.getState().messages).toBe(messages)
+    expect(useChatStore.getState().history.readerPositions).toBe(positions)
+    expect(useChatStore.getState().history.viewGeneration).toBe(generation)
+    expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
+    expect(useChatPreferencesStore.getState().verboseChatEnabled).toBe(verbose)
+    expect(region.getBoundingClientRect().width).toBe(initialWidth)
+    expect(region.getBoundingClientRect().height).toBe(80)
+    expect(region.scrollTop).toBe(initialTop)
+    expect(content.getBoundingClientRect().top + region.scrollTop).toBe(initialPrefix)
+    expect(mounted().map(row => row.getBoundingClientRect().height), 'no physical item-size change can invalidate the cache').toStrictEqual(Array(6).fill(128))
+    expect(content.style.height, 'D5:50 complete two-row groups at current A64 total50*2*64, including unmeasured sources').toBe('6400px')
+    expect(network.requests.filter(read => read.path === path), 'no source replacement or extra network load can rescue the estimate').toHaveLength(1)
+  } finally {
+    mounts.disconnect()
+  }
+})
