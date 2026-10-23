@@ -1038,9 +1038,26 @@ jobs:
           name: design-system-storybook-build
           path: dist/storybook
       - name: Download all evidence artifacts
+        id: evidence_dl
+        # Retry a transport failure, never a test/audit verdict. outcome retains
+        # the raw failure even though conclusion is success for this attempt.
+        continue-on-error: true
         uses: actions/download-artifact@v7
         with:
           path: /tmp/ci-evidence
+      - name: Retry evidence download once
+        id: evidence_retry
+        if: steps.evidence_dl.outcome == 'failure'
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/ci-evidence
+      - name: Fail if both evidence downloads failed
+        # Explicit always() removes the implicit success() that would otherwise
+        # skip this diagnostic after the hard-failing second download.
+        if: always() && steps.evidence_dl.outcome != 'success' && steps.evidence_retry.outcome != 'success'
+        run: |
+          printf '%s\n' '::error::Evidence download did not succeed after at most two attempts.' >&2
+          exit 1
       - name: Merge evidence files and validate audit preconditions
         run: |
           set -e  # fail fast on any error
@@ -3412,33 +3429,13 @@ jobs:
             kill "$(cat /tmp/omnipus.pid)" 2>/dev/null || true
           fi
 
-  # ---------------------------------------------------------------------------
-  # The single required check.
-  #
-  # Branch protection currently names JOB IDS (typecheck, lint, test, security,
-  # perf-smoke, playwright, wire-types-lint, verify-contracts). GitHub reports
-  # check runs under a job's DISPLAY NAME, and every one of those jobs sets
-  # `name:` — so the required contexts match nothing that is ever emitted, and
-  # `playwright` is a matrix job that can only ever emit "E2E — <group>". The
-  # practical effect is that no result from this workflow gates any merge.
-  #
-  # Requiring eight name strings that must each stay in sync with a `name:`
-  # field is the kind of duplicated definition that drifts silently. This job
-  # exists so protection can require exactly ONE context that cannot drift:
-  # it depends on every gate and re-derives the verdict from their results.
-  #
-  # Semantics, deliberately:
-  #   failure/cancelled in ANY dependency -> fail. No exceptions, no allowlist.
-  #   skipped                             -> pass. Language scoping means a
-  #                                          Go-only PR legitimately skips the
-  #                                          SPA jobs and vice versa. The one
-  #                                          skip a pass may NOT hide — the
-  #                                          design-system audits skipping on
-  #                                          an SPA-changing PR — is converted
-  #                                          to an explicit failure by
-  #                                          design-system-audit-summary.
-  #   changes must have SUCCEEDED         -> otherwise "everything skipped"
-  #                                          reads as success while nothing ran.
+  # The single required check. Keep every gate in needs: an omitted gate is
+  # invisible to toJSON(needs), even when its raw job fails (hermetic-build).
+  # ci-quarantine.py requires changes to succeed, preserves legitimate path
+  # skips, and blocks every failure except exact, evidenced entries with OPEN
+  # issues in the one tracked quarantine list. Raw leaf jobs are never softened.
+  # The summary reports dependent audits not run after an install timeout as
+  # coverage gaps, not passes; no unlisted failure can ride their exception.
   ci-required:
     name: CI
     if: always()

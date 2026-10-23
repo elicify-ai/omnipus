@@ -91,6 +91,27 @@ A report/API/permission failure blocks rather than guessing that an exception
 applies. Re-running failed jobs uses the latest attempt for each check while
 preserving evidence from successful jobs that did not re-run.
 
+## Required build coverage and evidence-download retry
+
+The catalog-snapshot hermetic build is an explicit dependency of the required
+CI aggregate. Its raw failure therefore blocks landing; it is not quarantined.
+
+The `Design system enforcement audit` job retries `Download all evidence
+artifacts` exactly once after a failed first download. The first attempt keeps
+its raw failure outcome and permits that one retry. The retry is hard-failing;
+an `always()` guard also fails unless at least one attempt succeeded. The same
+destination and action version are used for both attempts. A first-attempt
+success causes no retry. Merge/precondition validation and every audit remain
+unchanged and blocking. This handles a transport reset, not a test failure, and
+adds nothing to the quarantine list.
+
+The local parsed-workflow proof at
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/scripts/ci-gate-wiring.test.py`
+feeds a failed hermetic gate through the actual declared dependency set and
+exercises first-download success, retry recovery and two failures. It finds
+every step named `Download all evidence artifacts` across the workflows, not
+just a hand-picked job.
+
 ## Verification commands
 
 Run the guard and its dependency-free fixture self-test with Python 3 and the
