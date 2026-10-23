@@ -82,7 +82,7 @@ func (al *AgentLoop) retryGoalReminderOutcome(sessionID string, rec *goal.Goal) 
 // Successful and failed turns have separate streaks; busy progress stays latched.
 func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, work *goalReminderWork) (*goal.Goal, bool, error) {
 	if work.pending != nil {
-		settled, err := goalReminderPendingSettled(work.pending)
+		settled, err := goalReminderExecutionSettled(work.pending.execution)
 		if errors.Is(err, context.Canceled) {
 			work.lastAssessedTurn = work.pending.turnID
 			work.pending = nil

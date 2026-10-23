@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"errors"
 	"fmt"
 
@@ -12,30 +11,6 @@ import (
 const goalReminderFailedTurnMax = 3
 
 const goalReminderFailedTurnNotice = "3 reminder turns failed in a row — goal paused. Reply to continue."
-
-// A failed reminder is assessed only after its real producing owner settles.
-// Its original error remains on the turn/receiver and execution disposition;
-// that expected failure is not itself an observation/storage error.
-func goalReminderPendingSettled(outcome *goalReminderOutcome) (bool, error) {
-	if !outcome.failed {
-		return goalReminderExecutionSettled(outcome.execution)
-	}
-	if outcome.execution == nil {
-		return false, errors.New("goal reminder: failed turn has no admitted execution owner")
-	}
-	select {
-	case <-outcome.execution.done:
-		outcome.execution.mu.Lock()
-		result := outcome.execution.result
-		outcome.execution.mu.Unlock()
-		if errors.Is(result, context.Canceled) {
-			return true, context.Canceled
-		}
-		return true, nil
-	default:
-		return false, nil
-	}
-}
 
 // Failure accounting is process-local. Only the existing pause reason is saved;
 // failed turns never increment the separate completed-no-progress streak.
