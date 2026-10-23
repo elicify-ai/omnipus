@@ -25,9 +25,10 @@ import {
   chatInput,
   assistantMessages,
   waitForConnected,
-  dismissStaleDialogOverlay,
 } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
+import { assistantReplyChallenge, assertHansReplyPersisted } from './fixtures/assistant-reply-acceptance'
+import { assertHansSessionUnfiled, provisionHansWorkspaceTeam } from './fixtures/hans-workspace'
 
 // ─── Bug-1: Skip onboarding button must be gone ───────────────────────────────
 
@@ -264,74 +265,38 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
   )
 })
 
-/**
- * Dismiss any ADR-092 tool-approval dialog, and make the drain VISIBLE.
- *
- * Dismissing a dialog = Deny, server-side (Escape on a live approval maps to
- * Deny — ToolApprovalModal.tsx::handleDismissRequest), so a drain is not
- * neutral harness bookkeeping: the model continues past a REFUSED tool. CI
- * must see when that happened, so every dismissal becomes a test annotation
- * (visible in the report; the drain can no longer hide a Deny inside a green).
- */
+/** Deny unexpected inline tool requests; annotate only after that ID resolves. */
 async function dismissAndAnnotate(page: Page): Promise<void> {
-  const dismissedDialogs = await dismissStaleDialogOverlay(page)
-  for (const dialogText of dismissedDialogs) {
-    test.info().annotations.push({
-      type: 'approval-drained',
-      description:
-        `Approval dialog dismissed via Escape → server-side Deny — the run ` +
-        `continues past the refused tool: ${dialogText}`,
-    })
-  }
+  const pending = page.getByTestId('tool-approval-panel')
+  if (!(await pending.isVisible())) return
+  const identity = await pending.getAttribute('aria-labelledby')
+  if (!identity) throw new Error('approval drain: inline request has no identity')
+  // A queue replacement must not receive a decision made for the prior card.
+  const request = page.locator(
+    `[data-testid="tool-approval-panel"][aria-labelledby=${JSON.stringify(identity)}]`,
+  )
+  await request.getByRole('button', { name: 'Deny', exact: true }).click({ timeout: 5_000 })
+  await expect(request).toHaveCount(0, { timeout: 5_000 })
+  test.info().annotations.push({
+    type: 'approval-drained',
+    description: `Deny selected for inline approval ${identity}; the request is no longer pending`,
+  })
 }
 
-/**
- * One poll-tick body shared by both drain waits: dismiss any approval dialog
- * (annotating each dismissal), ride out ONLY its 15s budget expiry — which
- * dismissStaleDialogOverlay throws as a genuine `errors.TimeoutError` by
- * construction — and report the number of settled assistant messages. Any
- * other error (a TargetClosedError from a closed page, a TypeError from a
- * broken helper) propagates and fails the test loudly instead of being
- * swallowed for the rest of the budget.
- */
+/** One poll tick: deny the inline request, then count; action errors propagate. */
 async function drainApprovalDialogsAndCount(page: Page): Promise<number> {
-  try {
-    await dismissAndAnnotate(page)
-  } catch (err) {
-    if (!(err instanceof errors.TimeoutError)) throw err
-    // The overlay drainer's own 15s budget expired; keep counting anyway —
-    // this outer poll owns the overall budget and a later interval can still
-    // clear the dialog.
-  }
+  await dismissAndAnnotate(page)
   return assistantMessages(page).count()
 }
 
 /**
- * Bug-5 count-wait that drains a pending ADR-092 tool-approval dialog while
- * waiting for assistant messages.
- *
- * Mechanism this guards (CI run 36328177911, job 108646568376, E2E llm-light):
- * a two-turn chat run is not guaranteed tool-free. When the model calls
- * `bash` and the ADR-092 D7/D8 pre-flight escalates, the run blocks on the
- * approval modal for up to the server approval timeout (600s,
- * pkg/gateway/gateway.go::defaultToolApprovalTimeout): the turn's assistant
- * message stays data-status="running", which assistantMessages() does not
- * count, so a plain toHaveCount() times out even though nothing is broken.
- * Worse, a retry attempt's fresh page rehydrates the still-pending approval
- * as a reconnect stub (session_state.pending_approvals on every WS connect →
- * toolApproval.ts::reconcileWithSessionState), and the Radix dialog's focus
- * trap then captures the composer's Enter press and activates the focused
- * Deny button — the new message is never sent at all (gateway log: bash
- * "not approved (user)", duration 95003).
- *
- * dismissStaleDialogOverlay() is the sanctioned disposal (commit 585b70b1b,
- * added for the same failure class in chat specs): Escape ON the overlay
- * denies server-side, so the blocked run resolves, the model continues past
- * the refused tool, and the turn finalizes. Dismissing before each poll
- * interval keeps the counts reachable without widening a single timeout —
- * the same counts are still required within the same budgets. Dismissals are
- * annotated (`approval-drained`) so the report shows every Deny the drain
- * recorded; see dismissAndAnnotate above.
+ * Keep the existing exact reply-count predicate while denying unexpected tools.
+ * CI39656158622 reached a network-preflight card on turn 2 (and turn 1 on
+ * retry), then waited until teardown: the former helper queried only the old
+ * modal. WU-8/#1263 cards are inline, keep the composer unlocked, and do not
+ * resolve on Escape. Click Deny on the inspected card instead. The existing
+ * count, replay-content/order checks and budgets remain unchanged; every
+ * completed denial is annotated and failed decisions fail the test loudly.
  */
 async function expectAssistantMessagesWithApprovalDrain(
   page: Page,
@@ -433,7 +398,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
 
       // The replayed message must have the same content as before navigation.
       const replayedText = await assistantMessages(page).first().textContent()
-      if (firstMessageText && replayedText && firstMessageText !== replayedText) {
+      if (firstMessageText !== replayedText) {
         throw new Error(
           `BUG-5: Replayed message content differs from original. ` +
           `Before: "${firstMessageText}" | After replay: "${replayedText}". ` +
@@ -514,6 +479,126 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       }
     },
   )
+})
+
+// Deterministic controls for Bug-5's test-operator helper. Synthetic card DOM,
+// real locators; these supplement, never replace, the live replay assertions.
+async function showBug5Approval(page: Page, keepPending = false): Promise<void> {
+  await page.setContent('<body data-approval-decisions="[]"></body>')
+  await page.evaluate(({ keepPending }) => {
+    const card = document.createElement('section')
+    card.dataset.testid = 'tool-approval-panel'
+    card.setAttribute('aria-labelledby', 'bug5-approval-a')
+    const title = document.createElement('h3')
+    title.id = 'bug5-approval-a'
+    title.textContent = 'Tool Approval Required'
+    const command = document.createElement('pre')
+    command.textContent = 'git status --short'
+    card.append(title, command)
+    for (const [label, action] of [['Approve Once', 'allow_once'], ['Deny', 'deny']]) {
+      const button = document.createElement('button')
+      button.textContent = label
+      button.onclick = () => {
+        const decisions = JSON.parse(document.body.dataset.approvalDecisions ?? '[]') as string[]
+        decisions.push(action)
+        document.body.dataset.approvalDecisions = JSON.stringify(decisions)
+        if (!keepPending) card.remove()
+      }
+      card.append(button)
+    }
+    document.body.append(card)
+  }, { keepPending })
+}
+
+test.describe('Bug-5 inline approval helper controls', () => {
+  test('denies the inline request once and annotates its resolved identity', async ({ page }) => {
+    await showBug5Approval(page)
+    const before = test.info().annotations.length
+    await dismissAndAnnotate(page)
+    expect(await page.locator('body').getAttribute('data-approval-decisions')).toBe('["deny"]')
+    const added = test.info().annotations.slice(before)
+    expect(added).toHaveLength(1)
+    expect(added[0]).toEqual({
+      type: 'approval-drained',
+      description: 'Deny selected for inline approval bug5-approval-a; the request is no longer pending',
+    })
+  })
+
+  test('does nothing without an inline request', async ({ page }) => {
+    await page.setContent('<body data-approval-decisions="[]"></body>')
+    const before = test.info().annotations.length
+    await dismissAndAnnotate(page)
+    expect(await page.locator('body').getAttribute('data-approval-decisions')).toBe('[]')
+    expect(test.info().annotations).toHaveLength(before)
+  })
+
+  test('fails rather than recording a denial when the request stays pending', async ({ page }) => {
+    await showBug5Approval(page, true)
+    const before = test.info().annotations.length
+    await expect(dismissAndAnnotate(page)).rejects.toThrow(/toHaveCount/)
+    expect(await page.locator('body').getAttribute('data-approval-decisions')).toBe('["deny"]')
+    expect(test.info().annotations).toHaveLength(before)
+  })
+
+  test('never transfers a stale request decision to its queued replacement', async ({ page }) => {
+    await showBug5Approval(page)
+    const before = test.info().annotations.length
+    await page.addLocatorHandler(page.locator('[aria-labelledby="bug5-approval-a"]'), async () => {
+      await page.locator('[aria-labelledby="bug5-approval-a"]').evaluate(original => {
+        const replacement = original.cloneNode(true) as HTMLElement
+        replacement.setAttribute('aria-labelledby', 'bug5-approval-b')
+        const title = replacement.querySelector('h3')
+        if (!title) throw new Error('replacement control has no title')
+        title.id = 'bug5-approval-b'
+        for (const button of replacement.querySelectorAll('button')) {
+          button.onclick = () => {
+            document.body.dataset.approvalDecisions = JSON.stringify([button.textContent])
+            replacement.remove()
+          }
+        }
+        original.replaceWith(replacement)
+        document.body.dataset.controlReplacement = '1'
+      })
+    }, { times: 1 })
+    const decision = dismissAndAnnotate(page)
+    await expect(decision).rejects.toThrow(errors.TimeoutError)
+    await expect(decision).rejects.toThrow(/locator\.click: Timeout 5000ms exceeded/)
+    expect(await page.locator('body').getAttribute('data-control-replacement')).toBe('1')
+    expect(await page.locator('body').getAttribute('data-approval-decisions')).toBe('[]')
+    await expect(page.locator('[aria-labelledby="bug5-approval-b"]')).toHaveCount(1)
+    expect(test.info().annotations).toHaveLength(before)
+  })
+
+  test('propagates a stale-request error through the exact-count polling wrapper', async ({ page }) => {
+    await showBug5Approval(page)
+    const before = test.info().annotations.length
+    await page.addLocatorHandler(page.locator('[aria-labelledby="bug5-approval-a"]'), async () => {
+      await page.locator('[aria-labelledby="bug5-approval-a"]').evaluate(original => {
+        const replacement = original.cloneNode(true) as HTMLElement
+        replacement.setAttribute('aria-labelledby', 'bug5-approval-b')
+        const title = replacement.querySelector('h3')
+        if (!title) throw new Error('replacement control has no title')
+        title.id = 'bug5-approval-b'
+        for (const button of replacement.querySelectorAll('button')) {
+          button.onclick = () => {
+            document.body.dataset.approvalDecisions = JSON.stringify([button.textContent])
+            replacement.remove()
+          }
+        }
+        original.replaceWith(replacement)
+        document.body.dataset.controlReplacement = '1'
+      })
+    }, { times: 1 })
+    // No assistant rows exist: count zero would pass if a stale-click timeout
+    // were swallowed. Require the action error, not a later count mismatch.
+    const decision = expectAssistantMessagesWithApprovalDrain(page, 0, 90_000)
+    await expect(decision).rejects.toThrow(errors.TimeoutError)
+    await expect(decision).rejects.toThrow(/locator\.click: Timeout 5000ms exceeded/)
+    expect(await page.locator('body').getAttribute('data-control-replacement')).toBe('1')
+    expect(await page.locator('body').getAttribute('data-approval-decisions')).toBe('[]')
+    await expect(page.locator('[aria-labelledby="bug5-approval-b"]')).toHaveCount(1)
+    expect(test.info().annotations).toHaveLength(before)
+  })
 })
 
 // ─── Bug-Hans: Per-agent session resume returns "session not found" ───────────
@@ -659,6 +744,7 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     })
     expect(agentResp.ok(), `POST /agents failed: ${agentResp.status()} ${await agentResp.text()}`).toBe(true)
     const agent = (await agentResp.json()) as { id: string; name: string }
+    await provisionHansWorkspaceTeam(page, BUG_BASE_URL, agent.id, authHeaders)
 
     // 3. Create a session owned by that custom agent and seed its transcript -
     //    what the task scheduler leaves behind when it schedules work to a
@@ -676,6 +762,7 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     })
     expect(sessionResp.ok(), `POST /sessions failed: ${sessionResp.status()} ${await sessionResp.text()}`).toBe(true)
     const sessionID = ((await sessionResp.json()) as { id: string }).id
+    await assertHansSessionUnfiled(page, BUG_BASE_URL, sessionID)
     const sessionDir = path.join(BUG_OMNIPUS_HOME, 'sessions', sessionID)
     expect(fs.existsSync(sessionDir), `session dir ${sessionDir} must exist after POST /sessions`).toBe(true)
     const nowISO = new Date().toISOString()
@@ -779,7 +866,10 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
 
     // 6. Send a follow-up message. With the fix this lands normally; without
     //    it the SPA would surface the WS error.
-    await input.fill('Hello from the regression test.')
+    const challenge = assistantReplyChallenge('hans-follow-up')
+    const followup = `Hello from the regression test.\nReply only with the requested token. ${challenge.instruction}`
+    expect(followup, 'only the assistant can supply the concatenated reply nonce').not.toContain(challenge.nonce)
+    await input.fill(followup)
     await input.press('Enter')
 
     // 7. The user message bubble must appear (echoed by the WS). `.last()`,
@@ -828,5 +918,8 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
         },
       )
       .toContain('Hello from the regression test.')
+    // Addendum 5: the case's "follow-up succeeds" intent requires a completed saved answer, not only accepted input.
+    await assertHansReplyPersisted(page, receivedFrames, sessionID, agent.id, challenge.nonce, transcriptPath)
+    await assertHansSessionUnfiled(page, BUG_BASE_URL, sessionID)
   })
 })

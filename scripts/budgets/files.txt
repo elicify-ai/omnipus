@@ -19,4 +19,3 @@ src/components/agents/AgentProfile.tsx	3211
 src/components/browser/BrowserLiveView.tsx	    3130
 src/components/chat/ChatScreen.tsx	3607
 src/lib/api.test.ts	3241
-src/store/chat.test.ts	3383

@@ -65,7 +65,9 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 	// U8 (FR-028): never stream to a connector from a main - which sender would it be?
 	if sp, ok := p.(providers.StreamingProvider); ok && rt.al.bus != nil && !rt.al.mainConnectorTurn(rt.ts.channel, rt.ts.transcriptSessionID) {
 		logger.DebugCF("agent", "Provider supports streaming, checking for streamer", map[string]any{"channel": rt.ts.channel, "chat_id": rt.ts.chatID})
-		if streamer, hasStreamer := rt.al.bus.GetStreamer(ctx, rt.ts.channel, rt.ts.chatID, rt.ts.transcriptSessionID); hasStreamer {
+		streamer, hasStreamer := rt.al.bus.GetStreamer(ctx, rt.ts.channel, rt.ts.chatID, rt.ts.transcriptSessionID)
+		rt.streamerLookupDeclined = !hasStreamer
+		if hasStreamer {
 			logger.InfoCF("agent", "Using streaming for response", map[string]any{"channel": rt.ts.channel, "chat_id": rt.ts.chatID})
 			// FIX 5a/5c: stamp the TRUE per-turn producer and this turn's own
 			// ID before any token can flow — see stampStreamerProducerAgentID

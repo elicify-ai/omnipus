@@ -695,6 +695,7 @@ type wsStreamerFinalize struct {
 	accumulated string
 	// pendingFinalContent is a new terminal outcome, not the already-saved narration.
 	pendingFinalContent string
+	systemNotice        *generated.ReplayMessageFrame
 }
 
 func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
@@ -823,6 +824,8 @@ func (wsf *wsStreamerFinalize) publishDone() {
 			h.hubPublishMetaAlsoTo(wsf.s.sessionID, string(generated.WsFrameTypeDone),
 				hubFrameMeta{kind: hubKindDone, turnID: wsf.turnID}, data, nil)
 		}
+		// Close the model's narration before the distinct system row arrives.
+		wsf.publishSystemNotice()
 	}
 	if wsf.s.channel != nil {
 		// Hand the channel this turn's identity BEFORE the markStreamed
@@ -839,7 +842,7 @@ func (wsf *wsStreamerFinalize) publishDone() {
 	// Suppress Send only when streaming already covered the final outcome.
 	// Earlier narration must not suppress a separate terminal notice; nor
 	// should an empty stream suppress the outbound fallback.
-	if wsf.s.channel != nil && wsf.accumulated != "" && wsf.pendingFinalContent == "" {
+	if wsf.s.channel != nil && (wsf.systemNotice != nil || (wsf.accumulated != "" && wsf.pendingFinalContent == "")) {
 		wsf.s.channel.markStreamed(wsf.s.chatID)
 	}
 }
@@ -863,6 +866,7 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	wsf.durF = float64(wsf.s.statsDuration.Milliseconds())
 	wsf.transcriptAlreadyPersisted = wsf.s.transcriptPersisted
 	wsf.producedModel = wsf.s.producedModel
+	wsf.systemNotice = wsf.s.systemNotice
 	wsf.turnFailed = wsf.s.statsTurnFailed
 	wsf.continuationContent = wsf.s.continuationContent
 	wsf.hasContinuation = wsf.s.hasContinuation
@@ -939,6 +943,13 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	wsf.accumulated = wsf.s.accumulated.String()
 	wsf.s.statsMu.Unlock()
 
+	// The harness already persisted this system entry. Neither its prose
+	// nor this round's saved narration may be appended as an assistant reply.
+	if wsf.systemNotice != nil {
+		wsf.finalContent = ""
+		wsf.transcriptAlreadyPersisted = true
+		return
+	}
 	// The persisted marker covers this round's narration, not a different
 	// terminal outcome. Neither the current buffer nor a full continuation
 	// answer should be appended or sent twice.

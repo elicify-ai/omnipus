@@ -132,8 +132,8 @@ func gate0SetTailFault(t *testing.T, fixture gate0SavedNodeTail, kind string) {
 	case "wrong_commit_owner":
 		cp := *fixture.footer
 		cp.SessionID = fmt.Sprintf("%0*s", len(cp.SessionID), "x") // Same encoded length; only owner differs.
-		encoded, err := historyEncodeFrame(historyFrame{Commit: &cp})
-		require.NoError(t, err)
+		encoded, encodeErr := historyEncodeFrame(historyFrame{Commit: &cp})
+		require.NoError(t, encodeErr)
 		require.Len(t, encoded, len(body)-int(fixture.footerAt))
 		body = append(body[:fixture.footerAt], encoded...)
 	case "committed":

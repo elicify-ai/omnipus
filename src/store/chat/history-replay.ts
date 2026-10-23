@@ -13,12 +13,22 @@ import { refreshRosterAfterAgentMutation } from './agentMutationRefresh'
 import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
 import { useSessionStore } from '@/store/session'
 import { cursorFromTerminalFrame, isPendingTailMessage } from './cursor'
+import { findFirstSendMessage } from './first-send'
 import { abortHistoryReads, registerHistoryRelease } from './history'
-import { applyHistoryPageToBucket } from './history-merge'
+import { applyHistoryPageToBucket, HistoryPageProtocolError } from './history-merge'
+import { ApiSchemaError } from '@/lib/api/http'
+import { logDiagnostic } from '@/lib/telemetry'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
 import { SessionHistoryResponse as PageSchema } from '@/lib/api/generated/schemas'
 
 type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage> } // not-wire-format: transient projection ownership
+
+/** Local classification only; never carries source data or exception details. */
+class SnapshotProtocolError extends Error {
+  constructor(readonly kind: 'schema' | 'source_origin' | 'row_count') {
+    super('Invalid history snapshot.')
+  }
+}
 
 function sourceProjection(groups: Stage['groups']) {
   const positions = [...groups.keys()]
@@ -65,6 +75,27 @@ function publishProgressiveProjection(context: HistorySliceContext, sid: string,
     const patch = historyRowsPatch(b, rows, positions)
     return { ...patch, history: { ...patch.history!, historyLoaded: false, pageMetadata: null, hasEarlier: null, hasLater: null, olderBoundary: null, newerBoundary: null } }
   })
+}
+
+/** Reconcile an explicitly recovered input only after the selected page validates. */
+function settleRecoveredSnapshotInput(bucket: SessionChatState, page: SessionHistoryPage): SessionChatState {
+  const recovery = bucket.recoveredFirstSend
+  if (!recovery) return bucket
+  const recorded = page.entries.find(entry => entry.role === 'user' && entry.clientMessageId === recovery.clientMessageId)
+  const original = findFirstSendMessage(bucket, recovery.clientMessageId)
+  if (!recorded || recorded.role !== 'user' || !original || original.role !== 'user') return bucket
+  const messagesById = { ...bucket.messagesById }
+  delete messagesById[original.id]
+  // The recorded identity/content wins; local attachment details and first-send
+  // state survive when the replay carrier does not repeat them.
+  messagesById[recorded.id] = { ...original, ...recorded, deliveryStatus: recorded.deliveryStatus ?? 'received' }
+  const rekey = (id: string) => id === original.id ? recorded.id : id
+  return {
+    ...bucket, messagesById,
+    messageOrder: [...new Set(bucket.messageOrder.map(rekey))],
+    historyLiveOrder: bucket.historyLiveOrder?.map(rekey),
+    recoveredFirstSend: { ...recovery, reconciled: true },
+  }
 }
 
 function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryPage, baseline: Record<string, ChatMessage>, bootMismatch: boolean): { bucket: SessionChatState; page: SessionHistoryPage } {
@@ -119,7 +150,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     if (stage) { restorePublishedProjection(context, sid, stage); discardedSnapshots.add(sid) }
     stages.delete(sid)
   })
-  let active: { sid: string; bucket: SessionChatState } | null = null
+  let active: { sid: string; bucket: SessionChatState; staging?: boolean } | null = null
   const wrappedBucket: HistorySliceContext['withBucket'] = (sid, update) => {
     if (active && sid === active.sid) active.bucket = { ...active.bucket, ...update(active.bucket) }
     else context.withBucket(sid, update)
@@ -127,7 +158,9 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
   const wrappedGet: HistorySliceContext['get'] = () => {
     const state = context.get()
     if (!active) return state
-    return { ...state, ...active.bucket, messages: getMessages(active.bucket), sessionsById: { ...state.sessionsById, [active.sid]: active.bucket } }
+    // Isolated source reconstruction must not settle the root first-send owner,
+    // including when the same recorded row is replayed twice before COMPLETE.
+    return { ...state, ...active.bucket, ...(active.staging ? { pendingFirstSend: null } : {}), messages: getMessages(active.bucket), sessionsById: { ...state.sessionsById, [active.sid]: active.bucket } }
   }
   function reject(sid: string): void {
     context.withBucket(sid, b => ({ history: { ...b.history, historyLoaded: false, requests: { ...b.history.requests, latest: { status: 'error', error: 'Could not load messages.', attempt: b.history.requests.latest.attempt + 1 } } } }))
@@ -151,7 +184,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     let position: string
     try { position = historyPosition(origin.position, 'WS history', ['history_origin', 'position']) } catch { stage.invalid = true; return }
     const previous = stage.groups.get(position) ?? { ...emptySessionState(), isReplaying: true, awaitingCatchUp: true }
-    active = { sid, bucket: previous }
+    active = { sid, bucket: previous, staging: true }
     // A tool-only owning source is a real non-prose group, not the preceding
     // assistant bubble. The ordinary tool adapters then retain exact offsets.
     if ((frame.type === 'tool_call_start' || frame.type === 'tool_call_result') && !active.bucket.messageOrder.length) {
@@ -192,13 +225,15 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       const baseline = { ...stage.baseline, ...stage.publishedRows }
       const { frame } = stage
       const parsed = PageSchema.safeParse({ ...frame, entries: [] })
-      if (!parsed.success || stage.invalid) throw new Error('Invalid history snapshot.')
+      if (!parsed.success) throw new SnapshotProtocolError('schema')
+      if (stage.invalid) throw new SnapshotProtocolError('source_origin')
       validateHistoryMetadata(parsed.data, positions, 'WS history')
-      if (rowCount !== frame.page_info.row_count) throw new Error('Invalid history row count.')
+      if (rowCount !== frame.page_info.row_count) throw new SnapshotProtocolError('row_count')
       const page: SessionHistoryPage = { ...parsed.data, entries }
       context.withBucket(sid, original => {
-        const { bucket: b, page: completedPage } = settleCompletedSnapshot(original, page, baseline, frame.reason === 'boot_mismatch')
-        const completion = b === original ? {} : { isStreaming: b.isStreaming, wipedOpenTurnIds: b.wipedOpenTurnIds }
+        const recovered = settleRecoveredSnapshotInput(original, page)
+        const { bucket: b, page: completedPage } = settleCompletedSnapshot(recovered, page, baseline, frame.reason === 'boot_mismatch')
+        const completion = b === original ? {} : { isStreaming: b.isStreaming, wipedOpenTurnIds: b.wipedOpenTurnIds, recoveredFirstSend: b.recoveredFirstSend }
         if (b.history.viewMode === 'historical') {
           const needed = new Set(retainedPending(b).map(row => row.id))
           const liveOrder = (b.historyLiveOrder ?? []).filter(id => !stage.baseline[id] || needed.has(id))
@@ -218,7 +253,13 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
         return { ...applyHistoryPageToBucket(b, completedPage, 'latest', baseline), ...completion }
       })
       return true
-    } catch {
+    } catch (error) {
+      const kind = error instanceof SnapshotProtocolError ? error.kind
+        : error instanceof ApiSchemaError || error instanceof HistoryPageProtocolError ? 'protocol_metadata'
+          : 'unexpected_exception'
+      // Only fixed classifications leave this boundary. Never log error text,
+      // stack, source bodies/identities or opaque source positions.
+      logDiagnostic('chatHistorySnapshotRejected', { phase: 'snapshot_commit', kind })
       restorePublishedProjection(context, sid, stage)
       reject(sid)
       return false

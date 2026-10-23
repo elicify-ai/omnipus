@@ -1,0 +1,38 @@
+{
+  "requirement": "G2-i",
+  "code_input": "7c1a92f80f75e29cf2c89b8de0ba90a76a569ad0",
+  "candidate": "7d2d03675a88ed893b298c3024694aa24851dbad",
+  "status": "verified generated-golden repair; producer unchanged",
+  "runs": [
+    {
+      "kind": "pre-update real gateway RED",
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/squad-1266/ci-fix-red-be-20261023/G2-i-goldens-before.log",
+      "raw_exit": 1,
+      "sha256": "438e0c9d53c007dcb451b709be595903f5e42ff83aeccd9192aaaaa23f7324fe"
+    },
+    {
+      "kind": "real gateway generation",
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/squad-1266/ci-fix-red-be-20261023/G2-i-goldens-regenerate.log",
+      "raw_exit": 0,
+      "sha256": "f5cd977feed3cf0861a9ba5e7ad6e824a5c8f6ef8736b6ac255792317c8c1849"
+    },
+    {
+      "kind": "read-only frozen-source verification",
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/squad-1266/ci-fix-red-be-20261023/G2-i-goldens-verify.log",
+      "raw_exit": 0,
+      "sha256": "e70cdf11de78ea7daf41accc6eb1a4857d205942a2ad45a07b778d76877eecdc"
+    }
+  ],
+  "fixture_sha256": {
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/src/store/__fixtures__/catchup/F1.json": "5975aa2b75ac6d151ad01b1436a80d8e3e60489eabaccd70e7eb4061631619fb",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/src/store/__fixtures__/catchup/F2.json": "a957cef92df22d4f1991af72996b3e9d1d61ea7b22835c1e62c14af39efed0c9",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/src/store/__fixtures__/catchup/F3.json": "41e32fabd50249852524da28e9788d040b694d04a52a598015bfdf2f96b86cc2",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/src/store/__fixtures__/catchup/F4.json": "c35e527115cb4583d020bad76ec4b9f4fc3271db50d941776ae75aa2fdb2d55c",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/src/store/__fixtures__/catchup/F5.json": "539062da8a0736fa0129f712cb3b78d35c2a151f72d952e67fe3ed2760bbffcb",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/src/store/__fixtures__/catchup/F6.json": "73de080fedf1bcb12b34c67bccad04247f4f35b69daf8ad0c18a6083a2800dde",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/src/store/__fixtures__/catchup/F7.json": "a06250eaf2f3eb776358d64a92f5609866fb86a10fc8c47030d76d17e9c35fb9",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/src/store/__fixtures__/catchup/F8.json": "65d2063ce4255fa92f5d765d3619cd9bc608e34cbd4b4c3b9bc87109c795f167"
+  },
+  "diff": "Exactly17 additive session_tokens_total:0 fields in scoped state/live done, no prior field/frame/order/expectation removed; valid D16 producer64e7034b added authority before golden refresh",
+  "self_check": "all8 captured pre-update outputs equal generated/committed files; named8 raw1\u21920\u21920 verified; human attribution/test-only source and no CI/Fly action"
+}

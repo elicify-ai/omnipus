@@ -21,6 +21,8 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
+import { queryClient } from '@/lib/queryClient'
+import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
 
 // WU-10: main ids come from generated WorkspaceMemberConfig fields, not a seam mock.
 vi.mock('@/lib/api', async (importOriginal) => ({
@@ -108,6 +110,8 @@ async function settleInputPromises() {
 }
 
 beforeEach(() => {
+  queryClient.clear()
+  seedCanonicalSession(TARGET, 'mia', TARGET_WS)
   localStorage.clear()
   vi.clearAllMocks()
   vi.mocked(fetchAgents).mockResolvedValue([MIA, JIM])

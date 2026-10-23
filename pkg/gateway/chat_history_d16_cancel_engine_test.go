@@ -88,7 +88,9 @@ func historyD16NativeStop(t *testing.T, h *historyD16Harness, tool *historyD16To
 		payload, ok := event.Payload.(agent.TurnEndPayload)
 		return event.Kind == agent.EventKindTurnEnd && ok && payload.SessionID == sid
 	})
-	assert.Equal(t, agent.TurnEndStatusAborted, end.Payload.(agent.TurnEndPayload).Status)
+	endPayload, endPayloadOK := end.Payload.(agent.TurnEndPayload)
+	require.True(t, endPayloadOK, "actual turn-end event has the required payload type")
+	assert.Equal(t, agent.TurnEndStatusAborted, endPayload.Status)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	require.True(t, h.loop.WaitForActiveRequestsContext(ctx), "all actual turn work joined before canonical proof")
@@ -158,7 +160,8 @@ func historyD16EngineCancellation(t *testing.T, mode historyD16CancelMode) {
 		payload, valid := event.Payload.(agent.ToolExecStartPayload)
 		return event.Kind == agent.EventKindToolExecStart && valid && payload.SessionID == sid && string(payload.ToolCallID) == historyD16CancelledID
 	})
-	payload := started.Payload.(agent.ToolExecStartPayload)
+	payload, payloadOK := started.Payload.(agent.ToolExecStartPayload)
+	require.True(t, payloadOK, "actual tool-start event has the required payload type")
 	require.Equal(t, historyD16ToolName, payload.Tool)
 	require.Equal(t, map[string]any{"step": "blocked"}, payload.Arguments)
 	require.Equal(t, "mia", payload.AgentID)

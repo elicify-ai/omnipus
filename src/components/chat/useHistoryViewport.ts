@@ -47,7 +47,7 @@ function bindReaderIntent(scroller: HTMLElement, enter: () => void, dragging: { 
 }
 
 /** One signed compensation/fill owner for virtual and plain layouts. */
-export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, messages: ChatMessage[]) {
+export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, messages: ChatMessage[], anchorOffset?: (position: string) => number | undefined) {
   const sid = useSessionStore(s => s.activeSessionId)
   const history = useChatStore(s => s.history)
   const catchingUp = useChatStore(s => s.isReplaying || (sid ? s.sessionsById[sid]?.awaitingCatchUp === true : false))
@@ -65,8 +65,8 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const [average, setAverage] = useState(80)
   const [prefix, setPrefix] = useState(0)
   const [widthGeneration, bumpWidthGeneration] = useState(0)
-  const current = useRef({ sid, history, messages, verbose })
-  useLayoutEffect(() => { current.current = { sid, history, messages, verbose } })
+  const current = useRef({ sid, history, messages, verbose, anchorOffset })
+  useLayoutEffect(() => { current.current = { sid, history, messages, verbose, anchorOffset } })
   const rows = useCallback(() => [...(scrollRef.current?.querySelectorAll<HTMLElement>('[data-history-anchor]') ?? [])], [scrollRef])
   const offset = useCallback((element: Element) => {
     const scroller = scrollRef.current!
@@ -97,13 +97,25 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     let delta = 0
     if (row) delta = offset(row) - held.offset
     else {
-      const fallback = held.alternatives.find(item => mounted.some(element => element.dataset.historyAnchor === item.position))
-      row = fallback ? mounted.find(item => item.dataset.historyAnchor === fallback.position) : undefined
-      if (row && fallback) delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - fallback.screenTop
+      // A prepend can move the retained anchor outside the mounted range before
+      // this layout effect. Use the real virtualizer's current measured/estimated
+      // item offset, not total scrollHeight or a guessed source rank.
+      const estimated = current.current.anchorOffset?.(held.position)
+      if (estimated !== undefined && Number.isFinite(estimated)) delta = estimated - held.offset
+      else {
+        const fallback = held.alternatives.find(item => mounted.some(element => element.dataset.historyAnchor === item.position))
+        row = fallback ? mounted.find(item => item.dataset.historyAnchor === fallback.position) : undefined
+        if (row && fallback) delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - fallback.screenTop
+      }
     }
     if (Number.isFinite(delta) && delta !== 0) {
       compensating.current = true
-      scroller.scrollTop += delta
+      const top = scroller.scrollTop + delta
+      // Consume this layout delta even if the corrected virtual row has not
+      // mounted yet; the following observer pass must not apply it twice.
+      held.offset += delta
+      if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: 'instant' })
+      else scroller.scrollTop = top
       queueMicrotask(() => { compensating.current = false })
     }
     if (priorFocus.current && !priorFocus.current.isConnected) scroller.focus({ preventScroll: true })
@@ -125,12 +137,17 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
       if (!message || message.isStreaming || message.status === 'streaming' || element.hidden || element.getAttribute('aria-hidden') === 'true') {
         stablePositions.delete(position); heights.current.delete(position); continue
       }
-      const height = element.getBoundingClientRect().height
+      // Sample the transform-independent layout size the virtualizer itself
+      // measures. A translated row's DOMRect height shifts by float rounding
+      // with its offset (685.234375 vs 685.23388671875 near 10,000px), so an
+      // unchanged row changed A -> virtualizer.measure() -> new translateY ->
+      // new A, until React's update-depth limit (#185) unmounted the list.
+      const height = element.offsetHeight
       if (!Number.isFinite(height) || height < 0) { stablePositions.delete(position); heights.current.delete(position); continue }
       heights.current.set(position, height)
       if (height === 0) { stablePositions.delete(position); continue }
       // One complete tool row includes its expanded body, not only a toggle.
-      const tools = [...element.querySelectorAll<HTMLElement>('[data-history-tool-row]')].map(node => ({ key: node.dataset.historyToolRow!, height: node.getBoundingClientRect().height })).filter(row => Number.isFinite(row.height) && row.height > 0)
+      const tools = [...element.querySelectorAll<HTMLElement>('[data-history-tool-row]')].map(node => ({ key: node.dataset.historyToolRow!, height: node.offsetHeight })).filter(row => Number.isFinite(row.height) && row.height > 0)
       const toolHeight = tools.reduce((sum, tool) => sum + tool.height, 0)
       const overhead = !message.content && tools.length ? Math.max(0, height - toolHeight) / tools.length : 0
       for (const tool of tools) samples.current.observe(`${position}:tool:${tool.key}`, tool.height + overhead)
@@ -210,7 +227,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; setAverage(80); setPrefix(0)
     return () => {
       cancelFill(); samples.current.reset(); heights.current.clear(); anchor.current = null; priorFocus.current = null
-      current.current = { sid: null, history: emptyHistoryState(), messages: [], verbose }
+      current.current = { sid: null, history: emptyHistoryState(), messages: [], verbose, anchorOffset: undefined }
       if (sid) { forgetHistoryGeometry(sid); releaseHistoryProtection(sid) }
     }
   }, [sid, verbose, cancelFill])

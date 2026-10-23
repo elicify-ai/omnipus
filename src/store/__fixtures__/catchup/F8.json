@@ -114,6 +114,7 @@
             "stats": {
               "cost": 0,
               "duration_ms": 1,
+              "session_tokens_total": 0,
               "tokens": 0
             },
             "turn_id": "turn-1",
@@ -158,6 +159,7 @@
             },
             "pending_approvals": [],
             "session_id": "sess-1",
+            "session_tokens_total": 0,
             "type": "session_state",
             "user_id": ""
           }
@@ -247,6 +249,7 @@
             "stats": {
               "cost": 0,
               "duration_ms": 1,
+              "session_tokens_total": 0,
               "tokens": 0
             },
             "turn_id": "turn-2",

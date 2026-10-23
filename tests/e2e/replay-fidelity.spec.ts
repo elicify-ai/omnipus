@@ -26,7 +26,8 @@ import { expectA11yClean } from './fixtures/a11y'
 // tool call is the parent chat's only delegation surface now that
 // SubagentBlock and shouldRenderSubagentSpan are deleted), so test (b)
 // asserts the default policy directly — see its own comment.
-import { chatInput, sendButton, waitForConnected } from './fixtures/selectors'
+import { assistantMessages, chatInput, sendButton, waitForConnected } from './fixtures/selectors'
+import { assistantReplyChallenge } from './fixtures/assistant-reply-acceptance'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -699,17 +700,22 @@ test(
     await renameSession(page, sessionId, sessionTitle)
 
     // ── Step 2: open session and send a long-form prompt on page1 ──
-    // The unique nonce forces a verbatim echo we can match exactly. The
-    // 600-word body prefix ensures the response streams for several seconds
-    // (typically 4-12s on the earlier pick; the central e2e model is
+    // The expected nonce concatenates two separate inputs and never appears in
+    // the user prompt. A roughly 600-word chat answer keeps the response streaming
+    // without requiring a file or a word-count tool (the central e2e model is
     // tests/e2e/e2e-model.json) so page2 can attach mid-turn.
     await openSession(page, sessionId)
     await waitForReplayDone(page)
 
-    const nonce = `attach-during-turn-${Date.now()}`
+    const challenge = assistantReplyChallenge('attach-during-turn')
+    const nonce = challenge.nonce
     const prompt =
-      `Write exactly 600 words about renewable energy. Vary your wording — do not repeat sentences. ` +
-      `At the very end of your reply, output the literal token ${nonce} on its own line.`
+      `Answer directly in this chat with roughly 600 words about renewable energy, using only your existing knowledge. ` +
+      `This is a plain-text chat answer, not a document or file task. Do not use tools, shell commands, scripts, ` +
+      `external research or filesystem access, and do not verify an exact word count. ` +
+      `Vary your wording and do not repeat sentences. ` +
+      `At the very end of your reply, on its own line: ${challenge.instruction}`
+    expect(prompt, 'the expected assistant nonce must not appear in the user prompt').not.toContain(nonce)
 
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 10_000 })
@@ -743,10 +749,13 @@ test(
       await expect(userMsgs2).toHaveCount(1, { timeout: 10_000 })
 
       // ── Step 4: both contexts receive the final assistant message ──
-      // Wait for the assistant reply containing our nonce on both pages.
-      // The nonce is a unique random string we asked the LLM to echo, so a
-      // body-text containment check confirms the response was delivered.
+      // Only completed assistant rows may satisfy the delivery oracle; user
+      // input, a running placeholder or a system cancellation notice cannot.
       // Page2 first — it attached mid-turn so it's the harder case (FR-I-009).
+      const reply1 = assistantMessages(page).filter({ hasText: nonce })
+      const reply2 = assistantMessages(page2).filter({ hasText: nonce })
+      await expect(reply2, 'second context receives one completed assistant answer').toHaveCount(1, { timeout: 60_000 })
+      await expect(reply1, 'first context receives the same completed assistant answer').toHaveCount(1, { timeout: 60_000 })
       await expect(page2.locator('body')).toContainText(nonce, { timeout: 60_000 })
       await expect(page.locator('body')).toContainText(nonce, { timeout: 60_000 })
 
@@ -766,9 +775,13 @@ test(
       // Final-state agreement: both browser contexts must show the same nonce.
       // The body-text contains check above proved both saw it; belt-and-suspenders
       // verifies the matched bubble text agrees character-for-character.
-      const text1 = await page.locator(`text=${nonce}`).first().innerText()
-      const text2 = await page2.locator(`text=${nonce}`).first().innerText()
+      const text1 = await reply1.locator(`text=${nonce}`).first().innerText()
+      const text2 = await reply2.locator(`text=${nonce}`).first().innerText()
       expect(text2.trim()).toBe(text1.trim())
+      const replyId = await reply1.getAttribute('data-message-id')
+      expect(replyId, 'the assistant answer has a stable entry identity').toEqual(expect.any(String))
+      expect(replyId).not.toBe('')
+      expect(await reply2.getAttribute('data-message-id'), 'both contexts render the SAME assistant entry').toBe(replyId)
     } finally {
       await context2.close()
     }

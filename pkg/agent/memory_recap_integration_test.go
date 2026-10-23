@@ -391,8 +391,8 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 // MemoryStore→bleve chain via the real tool layer.
 //
 // Unit tests in memory_integration_test.go call remember/recall tools with a
-// raw MemoryStoreAdapter directly.  This test additionally wires SetWorkspaceID
-// on the adapter (via tools.WithWorkspaceID) and verifies that:
+// raw MemoryStoreAdapter directly.  This test additionally passes immutable workspace identity
+// to the adapter (via tools.WithWorkspaceID) and verifies that:
 //  1. A memory written to the PRIVATE room (no workspace_id) is found by recall.
 //  2. A DIFFERENT query content returns DIFFERENT recall output (differentiation
 //     test — catches hardcoded returns).
@@ -400,10 +400,10 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 //     not bleed the shared-room content.
 //
 // The gap being closed: unit tests call the adapter directly, bypassing the
-// context key plumbing (WithWorkspaceID → SetWorkspaceID → room selection).
+// context key plumbing (WithWorkspaceID → immutable scope → room selection).
 // This test uses the exact same call path as a live tool execution.
 func TestIntegration_RememberRecallRoundTrip(t *testing.T) {
-	// Traces to: remember/recall integration gap — tool→adapter→SetWorkspaceID→bleve.
+	// Traces to: remember/recall integration gap — tool→adapter→immutable scope→bleve.
 
 	workspace := t.TempDir()
 	home := t.TempDir()
@@ -470,7 +470,7 @@ func TestIntegration_RememberRecallRoundTrip(t *testing.T) {
 		t.Error("recallIT: recall with different queries returned identical output — may be hardcoded")
 	}
 
-	// ── Part B: workspace_id routes to shared room (SetWorkspaceID via context) ─
+	// ── Part B: workspace_id routes to shared room (immutable workspace via context) ─
 
 	const workspaceID = "recallit-ws-01"
 	ctxShared := tools.WithWorkspaceID(

@@ -132,21 +132,31 @@ test.describe('terminal outcome agrees across real surfaces', () => {
         if (detail.messages === undefined) {
           throw new Error('Terminal transcript messages are missing; cannot verify durable terminal outcome');
         }
-        const assistants = detail.messages.filter((entry) => entry.role === 'assistant' && entry.content);
-        expect.soft(assistants.map((entry) => entry.content), 'prior narration cannot substitute for terminal outcome')
+        // Approved Notice mandate: narration is model-authored; the distinct cap notice is system-authored.
+        const outcomes = detail.messages.filter((entry) =>
+          (entry.role === 'assistant' || entry.role === 'system') && entry.content);
+        expect.soft(outcomes.map((entry) => entry.content), 'prior narration cannot substitute for terminal outcome')
           .toEqual([TERMINAL_NARRATION, TERMINAL_CAP_NOTICE]);
-        expect.soft(assistants.map((entry) => entry.turn_id), 'durability belongs to the SAME lifecycle turn')
+        expect.soft(outcomes.map((entry) => entry.role), 'only narration is an assistant model answer')
+          .toEqual(['assistant', 'system']);
+        expect.soft(outcomes.map((entry) => entry.turn_id), 'durability belongs to the SAME lifecycle turn')
           .toEqual([turnId, turnId]);
-        expect.soft(assistants.map((entry) => entry.agent_id), 'durable producer identity agrees')
+        expect.soft(outcomes.map((entry) => entry.agent_id), 'durable producer identity agrees')
           .toEqual([agent.id, agent.id]);
-        const terminalEntries = assistants.filter((entry) => entry.content === TERMINAL_CAP_NOTICE);
-        expect.soft(terminalEntries, 'exactly one distinct durable terminal entry').toHaveLength(1);
+        const terminalEntries = detail.messages.filter((entry) => entry.content === TERMINAL_CAP_NOTICE);
+        expect.soft(terminalEntries, 'exactly one distinct durable terminal entry across all roles').toHaveLength(1);
+        expect.soft(terminalEntries.map((entry) => entry.role), 'the terminal entry must have system role')
+          .toEqual(['system']);
+        expect.soft(terminalEntries.map((entry) => entry.type), 'the terminal entry must have system type')
+          .toEqual(['system']);
+        expect.soft(terminalEntries.map((entry) => entry.model), 'a harness notice has no model attribution')
+          .toEqual([undefined]);
         if (!disconnected) {
           const live = terminalLiveEntries(traffic.frames, session.id, turnId);
           expect.soft(live.map((entry) => entry.content), 'live content has the independently specified pair')
             .toEqual([TERMINAL_NARRATION, TERMINAL_CAP_NOTICE]);
           expect.soft(live, 'live and durable entries share stable IDs AND exact contents')
-            .toEqual(assistants.map(({ id, content }) => ({ id, content })));
+            .toEqual(outcomes.map(({ id, content }) => ({ id, content })));
         }
         await assertTerminalRendering(page, info, disconnected ? 'reconnected-after-terminal' : 'live', terminalEntries);
         // Re-opening the already-active session sends no attach by design, so
@@ -177,9 +187,14 @@ test.describe('terminal outcome agrees across real surfaces', () => {
       } finally {
         mock.finishToolRound();
         try {
-          if (gw) await gw.stop();
+          // Evidence and strict console checks above finish before this page's polling is stopped.
+          await page.close();
         } finally {
-          await mock.close();
+          try {
+            if (gw) await gw.stop();
+          } finally {
+            await mock.close();
+          }
         }
       }
     });

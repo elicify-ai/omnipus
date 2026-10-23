@@ -22,9 +22,9 @@ func r1CleanupHoldRemoveFault(t *testing.T, path string) (func(), error) {
 	require.NoError(t, err)
 	require.NoError(t, os.Chmod(dir, 0o500))
 	var once sync.Once
-	clear := func() { once.Do(func() { require.NoError(t, os.Chmod(dir, info.Mode().Perm())) }) }
-	t.Cleanup(clear)
+	restoreRemove := func() { once.Do(func() { require.NoError(t, os.Chmod(dir, info.Mode().Perm())) }) }
+	t.Cleanup(restoreRemove)
 	require.ErrorIs(t, os.Remove(path), fs.ErrPermission, "instrument: real native remove fails while the pinned retired file remains")
 	require.FileExists(t, path)
-	return clear, fs.ErrPermission
+	return restoreRemove, fs.ErrPermission
 }

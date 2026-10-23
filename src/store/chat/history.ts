@@ -7,7 +7,7 @@ import { useConnectionStore } from '@/store/connection'
 import { mergeRecordedSessionTokens } from './session-usage'
 import { isPendingTailMessage } from './cursor'
 import { emptyHistoryState, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
-import { applyHistoryPageToBucket, reachedClosedClear, releaseHistoryProtection } from './history-merge'
+import { applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection } from './history-merge'
 export { emptyHistoryState } from './history-state'
 export type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing, SessionHistoryState, SessionHistoryRange, HistoryRequestState } from './types'
 
@@ -63,7 +63,7 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
         if (error instanceof TypeError && !(error.name === 'ApiError')) throw error
         if (!failed.has(sid)) failed.set(sid, new Map())
         failed.get(sid)!.set(kind, { ...query })
-        withBucket(sid, b => ({ history: { ...b.history, requests: { ...b.history.requests, [kind]: { ...b.history.requests[kind], status: 'error', error: copy[kind] } } } }))
+        withBucket(sid, b => ({ history: { ...b.history, requests: { ...b.history.requests, [kind]: { ...b.history.requests[kind], status: 'error', error: error instanceof HistoryPageDeferredError ? error.message : copy[kind] } } } }))
       } finally {
         owner.baseline = {}; owner.staged.length = 0
         if (owners.get(sid)?.get(kind) === owner) {

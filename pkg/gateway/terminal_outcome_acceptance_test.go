@@ -59,6 +59,10 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			wantRole := "assistant"
+			if tc.wantFailed {
+				wantRole = "system"
+			}
 			// No parallelism: logging is process-global. Restore it only after
 			// the real loop and relay have been joined by fixture cleanup.
 			oldLevel := logger.GetLevel()
@@ -121,13 +125,18 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 			var contents []string
 			var terminalEntries []session.TranscriptEntry
 			for _, entry := range entries {
-				if entry.Role != "assistant" || entry.Content == "" {
+				if entry.Content != tc.wantText && (entry.Role != "assistant" || entry.Content == "") {
 					continue
 				}
-				assert.Equal(t, end.Meta.TurnID, entry.TurnID, "durable assistant entry belongs to the SAME turn")
+				assert.Equal(t, end.Meta.TurnID, entry.TurnID, "durable narration/outcome belongs to the SAME turn")
 				assert.Equal(t, agentID, entry.AgentID, "durable producer matches actual lifecycle producer")
 				contents = append(contents, entry.Content)
 				if entry.Content == tc.wantText {
+					assert.Equal(t, wantRole, entry.Role, "cutoff is system prose; a successful answer stays model-authored")
+					if tc.wantFailed {
+						assert.Equal(t, session.EntryTypeSystem, entry.Type)
+						assert.Empty(t, entry.Model)
+					}
 					terminalEntries = append(terminalEntries, entry)
 				}
 			}
@@ -140,7 +149,7 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 			live, liveByID := terminalAcceptanceLiveText(t, frames, meta.ID, end.Meta.TurnID)
 			assert.Len(t, liveByID, len(wantContents), "live message count agrees with the independent outcome oracle")
 			for _, entry := range entries {
-				if entry.Role == "assistant" && entry.Content != "" {
+				if (entry.Role == "assistant" && entry.Content != "") || entry.Content == tc.wantText {
 					assert.Equal(t, entry.Content, liveByID[entry.ID], "live and durable content share the SAME entry identity")
 				}
 			}
@@ -158,7 +167,7 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 				sendWSAuthFrameDevMode(t, replayConn)
 				require.NoError(t, replayConn.WriteJSON(generated.AttachSessionFrame{Type: "attach_session", SessionId: meta.ID}))
 				replayed := terminalAcceptanceCollect(t, replayConn)
-				terminalAcceptanceAssertReplay(t, replayed, meta.ID, end.Meta.TurnID, contents, terminalEntries, tc.wantText)
+				terminalAcceptanceAssertReplay(t, replayed, meta.ID, end.Meta.TurnID, contents, terminalEntries, tc.wantText, wantRole)
 			}
 		})
 	}
@@ -236,7 +245,7 @@ func terminalAcceptanceAssertLog(t *testing.T, path string, end agent.Event, wan
 
 func terminalAcceptanceAssertReplay(
 	t *testing.T, frames []collectedFrame, sessionID, turnID string,
-	contents []string, terminalEntries []session.TranscriptEntry, wantText string,
+	contents []string, terminalEntries []session.TranscriptEntry, wantText, wantRole string,
 ) {
 	t.Helper()
 	var replayContents, terminalIDs []string
@@ -246,13 +255,17 @@ func terminalAcceptanceAssertReplay(
 		}
 		var replay generated.ReplayMessageFrame
 		require.NoError(t, json.Unmarshal(frame.Raw, &replay))
-		if replay.SessionId != sessionID || replay.Role != "assistant" || replay.Content == "" {
+		if replay.SessionId != sessionID || replay.Content == "" || (replay.Role != "assistant" && replay.Content != wantText) {
 			continue
 		}
 		require.NotNil(t, replay.TurnId, "real replay must preserve the lifecycle turn identity")
 		assert.Equal(t, turnID, *replay.TurnId)
 		replayContents = append(replayContents, replay.Content)
 		if replay.Content == wantText {
+			assert.Equal(t, wantRole, replay.Role, "replay preserves the independently expected outcome role")
+			if wantRole == "system" {
+				assert.Nil(t, replay.Model)
+			}
 			require.NotNil(t, replay.Id, "replay outcome must preserve the durable entry identity")
 			terminalIDs = append(terminalIDs, *replay.Id)
 		}
