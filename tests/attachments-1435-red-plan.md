@@ -65,3 +65,21 @@ Step 4.1 (see RED for the right reason) is this task. Step 4.2 (GREEN), step 4.3
 Base: `303fc66bad3dc1b9b6c1d6f102e7e1fa09cfeef3` (fetched integration/l1-bundle3, local and origin equal).
 Evidence directory: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/omnipus-l1/logs/t4-1435
 Runs: the installed shared slot runner, one anchored `-run`, one package at a time, with `CGO_ENABLED=0`, `goolm,stdjson`, `-p 1`, `-count=1`, verbose named results, and load <=20 before execution. No full-suite, GREEN or mutation claim belongs to this RED pack.
+
+## Chief evidence amendment — planned before additional assertions
+
+Source read: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/jarvis-attachments-20261023/REPORT.md (sections A/B/C/E), plus the chief's saved control message. The original six regression groups finished before the outage; their saved test hashes and raw exits were verified on resume, with no re-run. They are checkpointed in tests-only commit `b77a5c74d7f49c70e5d3f0a0a3ea6ab3c16223ce`.
+
+The incident image is tool-generated, not user-uploaded. A full-page screenshot is **2560x15424**, so `ceil(2560/32) * ceil(15424/32) = 80 * 482 = 38,560`. This corroborates the original independent patch arithmetic. The original upload/cleanup regression is a separate conversation-lifetime counterexample; it is **not evidence that restart or cleanup caused the live same-second unknown ref**.
+
+| New group | Real boundary and sequence | Expected from issue Expected and chief's A/B/C requirements |
+|---|---|---|
+| A: tool JPEG and PNG | Register valid 2560x15424 images; call the real `attachToolResultMedia` before history admission | One fully decodable image, <=30,000 patches, within the effective catalog's byte/edge ceilings; not silently dropped |
+| B: old image in model history | Persist the old full-size tool image with a matching assistant tool call in the real session archive; fetch/present again in iterations 1 and 2 of one turn, drive the real downgrade feedback, then close/reopen the archive for iterations 1 and 2 of a fresh turn | Every provider-facing image fits; consuming a one-shot retry may never let the original oversized image escape again |
+| C: relabel and replay | Seed the real per-turn successful-strip stamp; persist a later exact patch-limit error via the real error-transcript writer | Replay code is not `media_unsupported`; public persisted text names image size, never wrong format |
+
+A and B use valid JPEG/PNG fixture bytes, not screenshots or private data copied from the live installation. B is a deterministic integration of real archive + history presentation + downgrade state; the full LLM/tool conductor and browser still need exact-candidate UAT. C exercises the actual persistence/relabel seam, not a test-side reimplementation of the classifier.
+
+E remains **Unknown for the live same-second 404**. It was already within the original ref-availability scope, so the accepted-ref/restart and missing-ref user-message tests are retained. On this base, the thumbnail handler already reads the current store through `agentLoop.GetMediaStore()` before its legacy fallback; simply assuming a stale REST-store pointer would manufacture a defect. This pack makes no new causal or reproduction claim for E. The chief's report and that handler need separate investigation; no production or live-instance changes were made.
+
+Additional CHECK mutants: restore the verbatim universal-image branch; reintroduce an unsafe old data URL when rebuilding iteration/turn history; let an earlier strip stamp override a later image-size verdict in the persisted transcript. GREEN and mutation execution remain **deferred to CHECK**.
