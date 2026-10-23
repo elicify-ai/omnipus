@@ -134,8 +134,8 @@ func TestNativeStop_SuccessfulLateReconnectDisposesItsCapturedClient(t *testing.
 	go func() { f.ch.wg.Wait(); close(joined) }()
 	select {
 	case <-joined:
-	case err := <-server.errors:
-		t.Fatalf("HARNESS: late real Noise handshake failed: %v", err)
+	case handshakeErr := <-server.errors:
+		t.Fatalf("HARNESS: late real Noise handshake failed: %v", handshakeErr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("HARNESS: released native reconnect did not join")
 	}
@@ -145,8 +145,8 @@ func TestNativeStop_SuccessfulLateReconnectDisposesItsCapturedClient(t *testing.
 		select {
 		case <-server.connected:
 			require.Equal(t, int32(2), server.handshakes.Load(), "instrument: the leaked late connection really completed a second authenticated handshake")
-		case err := <-server.errors:
-			t.Fatalf("HARNESS: late authenticated connection failed: %v", err)
+		case handshakeErr := <-server.errors:
+			t.Fatalf("HARNESS: late authenticated connection failed: %v", handshakeErr)
 		case <-time.After(5 * time.Second):
 			t.Fatal("HARNESS: live late client lacked its real remote handshake receipt")
 		}

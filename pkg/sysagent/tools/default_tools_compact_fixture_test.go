@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -37,7 +38,7 @@ func (m defaultToolsPreviewMetadata) Execute(context.Context, map[string]any) *t
 func defaultToolsWirePreviewCatalog(t *testing.T, deps *systools.Deps) []string {
 	t.Helper()
 	names := []string{"read_file", "bash", "write_file", "ToolSearch", "browser_handover"}
-	var metadata []tools.Tool
+	metadata := make([]tools.Tool, 0, len(names))
 	for _, name := range names {
 		metadata = append(metadata, defaultToolsPreviewMetadata{name: name})
 	}
@@ -63,7 +64,7 @@ func defaultToolsParsePreview(t *testing.T, raw, kind string, names []string) ma
 	require.Equal(t, "preview: "+kind+" | kind: "+column, lines[0], "SPEC.md compact preview identity")
 	require.Len(t, lines, len(names)+1, "SPEC.md no id/revision or extra metadata sections in preview")
 	policies := map[string]string{}
-	var actualNames []string
+	actualNames := slices.Grow([]string(nil), len(lines)-1)
 	for _, line := range lines[1:] {
 		parts := strings.SplitN(line, " | ", 3)
 		require.GreaterOrEqual(t, len(parts), 2)
@@ -114,7 +115,7 @@ func defaultToolsCompactPolicies(t *testing.T, raw, header string) map[string]st
 	lines := strings.Split(strings.TrimSuffix(raw, "\n"), "\n")
 	require.Equal(t, header, lines[0], "SPEC.md exact identity header")
 	result := map[string]string{}
-	var names []string
+	names := slices.Grow([]string(nil), len(lines)-1)
 	for _, line := range lines[1:] {
 		parts := strings.SplitN(line, " | ", 3)
 		require.GreaterOrEqual(t, len(parts), 2, "SPEC.md Q21=D tool row has name and policy")

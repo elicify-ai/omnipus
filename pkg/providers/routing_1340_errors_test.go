@@ -24,7 +24,7 @@ func TestRouting1340_CodexStructuredErrors(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("X-Request-Id", "routing1340-request")
+				w.Header().Set("X-Request-ID", "routing1340-request")
 				w.Header().Set("Retry-After", "7")
 				w.WriteHeader(status)
 				_, _ = w.Write([]byte(body))
