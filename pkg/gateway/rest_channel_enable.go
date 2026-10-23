@@ -175,16 +175,6 @@ func pairingCapable(channelID string) bool {
 	return baseType == "whatsapp" || baseType == "whatsapp_native"
 }
 
-// channelEnabledNow reports whether channelID is enabled in the live config.
-func (a *restAPI) channelEnabledNow(channelID string) bool {
-	cfg := a.agentLoop.GetConfig()
-	if cfg == nil {
-		return false
-	}
-	inst, ok := cfg.Channels[channelID]
-	return ok && inst.Enabled
-}
-
 // decodeChannelEnableRequest reads the optional body. It validates against
 // the contract schema in every inbound-validation mode, because a malformed
 // Retry must never be downgraded to an ordinary enable: null, a null or

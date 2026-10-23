@@ -1377,7 +1377,7 @@ jobs:
       # carry no !cgo build tags (see the cgo-gate job, which builds the module
       # under both CGO_ENABLED=0 and =1).
       CGO_ENABLED: "0"
-      GOLANGCI_LINT_VERSION: v2.10.1
+      GOLANGCI_LINT_VERSION: v2.15.0
     steps:
       - name: Checkout
         uses: actions/checkout@v7

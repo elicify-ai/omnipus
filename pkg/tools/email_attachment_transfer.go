@@ -70,14 +70,14 @@ func (t *DownloadEmailAttachmentTool) newTransferService(ctx context.Context) (*
 		return nil, nil, err
 	}
 	authorize := func(rel string) error {
-		handle, err := ResolvePath(ctx, policy, t.Name(), "", FSOpWrite, filepath.Join(workDir, filepath.FromSlash(rel)))
-		if err != nil {
-			return err
+		handle, rerr := ResolvePath(ctx, policy, t.Name(), "", FSOpWrite, filepath.Join(workDir, filepath.FromSlash(rel)))
+		if rerr != nil {
+			return rerr
 		}
 		return handle.Close()
 	}
 	// Check scope before OpenRoot can create the Library work directory.
-	if err := authorize("mail"); err != nil {
+	if err = authorize("mail"); err != nil {
 		return nil, nil, err
 	}
 	root, err := library.OpenRoot(home, wsID)
@@ -89,9 +89,13 @@ func (t *DownloadEmailAttachmentTool) newTransferService(ctx context.Context) (*
 	writer := mailattachment.AuthorizeDestination(mailattachment.RootWriter{Root: root, Marker: marker}, authorize)
 	key := attachmentTransferKey{home: home, agentID: t.transferAgentID, workspaceID: wsID}
 	store, _ := attachmentTransferReceipts.LoadOrStore(key, mailattachment.NewSaveReceiptStore())
+	receiptStore, ok := store.(*mailattachment.SaveReceiptStore)
+	if !ok {
+		return nil, nil, fmt.Errorf("download_email_attachment: receipt store has unexpected type %T", store)
+	}
 	service := mailattachment.NewService(reader, writer,
 		attachmentTransferAudit{logger: t.auditLogger.Load(), agentID: t.transferAgentID, workspaceID: wsID, sessionID: ToolTranscriptSessionID(ctx)},
-		store.(*mailattachment.SaveReceiptStore), identity.AccountAddress)
+		receiptStore, identity.AccountAddress)
 	return service, root.Close, nil
 }
 

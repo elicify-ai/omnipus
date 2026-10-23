@@ -78,14 +78,14 @@ OAPI_CODEGEN_VERSION := $(shell sed -n 's/^REQUIRED_OAPI_CODEGEN_VERSION="\(.*\)
 # installs track the same moving target rather than pinning behind it.
 GOVULNCHECK_VERSION?=latest
 # golangci-lint MUST match the version CI gates with (.github/workflows/pr.yml's
-# `golangci-lint-action` step: `version: v2.10.1`). ADR-067 §5: two different
+# `golangci-lint-action` step: `version: v2.15.0`). ADR-067 §5: two different
 # golangci-lint versions disagree on findings (measured: G115 differed between
 # 2.10.1 and 2.12.2 in both directions) — a local "0 issues" run with the wrong
 # version is not a green, it's an unmeasured claim. Bump this the moment
 # pr.yml's pin changes; `make lint`/`make fix` refuse to run on a mismatch
 # rather than silently trusting whatever is on PATH (see
 # golangci-lint-version-check below).
-GOLANGCI_LINT_VERSION := v2.10.1
+GOLANGCI_LINT_VERSION := v2.15.0
 
 # Installation
 INSTALL_PREFIX?=$(HOME)/.local
