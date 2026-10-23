@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { VirtualUserMessageRow } from '@/components/chat/ChatScreen'
 import { reattachActiveSession } from '@/components/chat/OmnipusRuntimeProvider'
-import type { ErrorFrame, MessageFrame } from '@/lib/api/generated/asyncapi-types'
+import type { ErrorFrame, MessageFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import type { WsConnection } from '@/lib/ws'
 import { getMessages, useChatStore } from './chat'
@@ -12,6 +12,8 @@ import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
 import { makeSnapshotHistory } from '@/test/factories'
+import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
+import { expectValidFrame } from '../../tests/chat-history-paging/fixtures'
 
 // Oracles: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/receipts/combo-silent.md,
 // COMBO-SF-1; /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
@@ -161,25 +163,32 @@ function beginKnownChatCheck() {
   return sender
 }
 
+function applyDeclaredFrame(frame: ServerFrame) {
+  expectValidFrame(frame)
+  useChatStore.getState().handleFrame(frame)
+}
+
 function completeAuthoritativeCheck() {
+  seedCanonicalSession(SESSION_ID, 'mia', WORKSPACE)
   // A successful later response is a separate network-edge control. It is NOT
   // a claim that a deleted chat can be recreated by Retry. Only authoritative
   // replay of the original permits the waiting queue to resume.
   act(() => {
-    useChatStore.getState().handleFrame({
+    applyDeclaredFrame({
       ...makeSnapshotHistory(1),
-      type: 'session_snapshot', session_id: SESSION_ID, reason: 'unknown_position', seq: 0, boot_id: 'combo-sf1-boot',
+      type: 'session_snapshot', session_id: SESSION_ID, reason: 'unknown_position', seq: 1, boot_id: 'combo-sf1-boot',
     })
-    useChatStore.getState().handleFrame({
+    applyDeclaredFrame({
       type: 'session_state', session_id: SESSION_ID, user_id: 'combo-sf1-user', pending_approvals: [],
-      emitted_at: NOW, auto_approve_modifier: true,
+      emitted_at: NOW, auto_approve_modifier: true, history_state: { status: 'available' },
     })
-    useChatStore.getState().handleFrame({
+    applyDeclaredFrame({
       type: 'replay_message', session_id: SESSION_ID, role: 'user', id: SERVER_ENTRY,
       client_message_id: ORIGINAL_ID, content: ORIGINAL_TEXT,
+      history_origin: { position: makeSnapshotHistory(1).page_info.first_position!, entry_id: SERVER_ENTRY },
     })
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SESSION_ID, seq: 0, boot_id: 'combo-sf1-boot', mode: 'snapshot',
+    applyDeclaredFrame({
+      type: 'catch_up_complete', session_id: SESSION_ID, seq: 1, boot_id: 'combo-sf1-boot', mode: 'snapshot',
     })
   })
 }
