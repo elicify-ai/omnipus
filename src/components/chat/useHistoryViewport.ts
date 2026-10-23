@@ -137,12 +137,17 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
       if (!message || message.isStreaming || message.status === 'streaming' || element.hidden || element.getAttribute('aria-hidden') === 'true') {
         stablePositions.delete(position); heights.current.delete(position); continue
       }
-      const height = element.getBoundingClientRect().height
+      // Sample the transform-independent layout size the virtualizer itself
+      // measures. A translated row's DOMRect height shifts by float rounding
+      // with its offset (685.234375 vs 685.23388671875 near 10,000px), so an
+      // unchanged row changed A -> virtualizer.measure() -> new translateY ->
+      // new A, until React's update-depth limit (#185) unmounted the list.
+      const height = element.offsetHeight
       if (!Number.isFinite(height) || height < 0) { stablePositions.delete(position); heights.current.delete(position); continue }
       heights.current.set(position, height)
       if (height === 0) { stablePositions.delete(position); continue }
       // One complete tool row includes its expanded body, not only a toggle.
-      const tools = [...element.querySelectorAll<HTMLElement>('[data-history-tool-row]')].map(node => ({ key: node.dataset.historyToolRow!, height: node.getBoundingClientRect().height })).filter(row => Number.isFinite(row.height) && row.height > 0)
+      const tools = [...element.querySelectorAll<HTMLElement>('[data-history-tool-row]')].map(node => ({ key: node.dataset.historyToolRow!, height: node.offsetHeight })).filter(row => Number.isFinite(row.height) && row.height > 0)
       const toolHeight = tools.reduce((sum, tool) => sum + tool.height, 0)
       const overhead = !message.content && tools.length ? Math.max(0, height - toolHeight) / tools.length : 0
       for (const tool of tools) samples.current.observe(`${position}:tool:${tool.key}`, tool.height + overhead)

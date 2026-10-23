@@ -169,7 +169,8 @@ function VirtualizedMessageListInner({
     getItemKey,
     scrollMargin: viewport.prefix,
     overscan: 5,
-    // measureElement default (getBoundingClientRect().height) is correct; no override needed.
+    // measureElement default (rounded ResizeObserver border box, else offsetHeight) is
+    // correct; useHistoryViewport samples the same transform-independent layout size.
   })
 
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => !viewport.historical
