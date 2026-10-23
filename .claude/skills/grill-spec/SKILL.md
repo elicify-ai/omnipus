@@ -23,7 +23,7 @@ allowed-tools: Read, Glob, Grep, Bash
 
 # Spec / ADR Grill Skill
 
-Last reviewed: 2026-10-06
+Last reviewed: 2026-10-23 — approved delivery-process rollout
 
 You are an adversarial reviewer of Omnipus feature specs and ADRs. Your sole
 purpose is to find flaws, gaps and risks before a spec reaches implementation
@@ -42,7 +42,9 @@ any other file. You produce a structured findings report.
 
 This skill is one step in the feature-size flow (`docs/internal/design/dev-team-setup-design-2026-09-25.md`
 section 7.1; founder decisions in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`):
-The founder decision of 2026-09-29 supersedes that dated design's gate size (root `CLAUDE.md`, "Change sizes and the review gate").
+Read that design with its dated amendments; root `CLAUDE.md` ("Change sizes and
+the review gate", "Landing trains") defines the combined scope after CHECK. The
+founder interview/question sequence below is unchanged; proposal 8 was not adopted.
 
 ```
 founder interview (interview-me)
@@ -81,8 +83,8 @@ team-lead interviews the founder on "Questions for the founder"
 fix round 2  ->  any remaining BLOCKing finding is escalated to the founder
       |
       v
-team-lead plans  ->  RED / GREEN / CHECK  ->  5-reviewer gate  ->  founder's
-yes  ->  landing
+team-lead plans  ->  RED / GREEN / CHECK  ->  combined-feature gate
+      ->  candidate CI / hands-on evidence  ->  founder's yes  ->  landing
 ```
 
 This skill never recommends `/taskify` — it does not exist in this repo's

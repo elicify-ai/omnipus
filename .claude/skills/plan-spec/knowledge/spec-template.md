@@ -222,6 +222,15 @@ because [reason].
 | Integration | [module interactions]         | [components work together]                  |
 | E2E         | [full user workflows]         | [complete feature from user view]           |
 
+### Hands-on UAT rows (written at spec time)
+
+Root `CLAUDE.md` ("Hands-on pipeline") defines execution/version independence. Fill
+the rows here so qa-lead refines a campaign from the spec, not from the implementation.
+
+| Row | Acceptance criterion | Steps | Expected result | Affected area | Validator critical path | Automation candidate |
+|---|---|---|---|---|---|---|
+| [id] | [US / scenario] | [human actions] | [spec-derived oracle] | [diff-selection area] | [independent re-drive] | [stable row / reason not yet] |
+
 ### Test Implementation Order
 
 | Order | Test Name | Level | Traces to BDD Scenario | Description |
