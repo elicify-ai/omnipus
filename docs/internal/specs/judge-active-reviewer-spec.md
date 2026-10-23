@@ -1087,14 +1087,16 @@ to claim. The G-4 bounce ladder exists to absorb the commonest failure of that s
 without evidence.
 
 **Why P0**: it replaces detection with arrival (ADR D12). Either the call was made or it was not.
-**Independent test**: a `met` claim carrying no evidence never reaches the engine's claim path at
-all — it is refused at the call, with a message the model can act on, and costs no round.
+**Independent test** *(amended 2026-10-23, issue #1431)*: a `met` claim carrying no evidence
+reaches the Judge and is adjudicated; an unmet ruling costs a round, and the round bound ends the
+goal `failed` — no claim is both unpriced and unrecorded.
 
 1. **Given** the working agent calls `goal_claim(status: "met", evidence: "…")`, **When** the turn
    ends, **Then** an adjudication is scheduled — with no marker anywhere in the output.
 2. **Given** the working agent calls `goal_claim(status: "met")` with `evidence` absent, empty or
-   whitespace-only, **When** the call is executed, **Then** it is **refused at the call** with a
-   stated violation, no claim is recorded, no round is consumed, and the Judge is not invoked.
+   whitespace-only, **When** the call is executed, **Then** the claim is **recorded and
+   adjudicated** — the Judge rules met or unmet from the conversation and the agent's tool
+   results, and an unmet ruling consumes a round.
 3. **Given** `goal_claim(status: "waiting_on_user")`, **Then** the goal parks exactly as the
    `GOAL_STATUS: waiting_on_user` marker parks it today: no verdict, no round, idle settlement
    suppressed.
@@ -1163,7 +1165,7 @@ zero Judge calls; a goal whose agent claims receives its answer first and its ve
 | E-25 | A turn calls `goal_claim(met)` **and** emits `GOAL_STATUS: met` | The tool call wins; the marker is not parsed for that turn; the divergence is logged at INFO with both statuses (FR-092) |
 | E-26 | A turn calls `goal_claim(met)` **and** emits `GOAL_STATUS: waiting_on_user` | The tool call wins — one claim channel per turn, chosen by presence, never merged. The goal claims; it does not park (FR-092) |
 | E-27 | A turn calls `goal_claim` **twice**, with different statuses | The **last successful call in the turn** is the claim, mirroring the marker family's own last-occurrence rule so the two channels cannot disagree about multiplicity (FR-092) |
-| E-28 | `goal_claim(status: "met", evidence: "   ")` | Refused at the call as an empty evidence violation — whitespace-only is empty, the same rule FR-026 applies to `evidence_quote` (FR-088) |
+| E-28 | `goal_claim(status: "met", evidence: "   ")` | Recorded and adjudicated like any `met` claim — whitespace-only is empty, but the empty evidence line is not refused (amended 2026-10-23, issue #1431); the Judge rules from the conversation and tool results, and an unmet ruling consumes a round (FR-088) |
 | E-29 | `goal_claim` is called by an agent whose per-agent policy denies it | Ordinary tool-policy denial; the turn sees a denial result. No claim, no round, no special case — a denied `goal_claim` is not a bare claim (FR-089) |
 | E-30 | The keeper's re-post is dispatched but `asyncNotifier.Notify` fails, or no route is recorded | `dispatchGoalAsyncFollowUp` clears the idle-settling marker itself so the next tick retries — the shipped un-wedge behaviour, unchanged and load-bearing (FR-096) |
 | E-31 | A goal goes quiet forever and never claims | The re-post ladder's existing bound (`goalZeroOutputPushMax`) applies; past it, the goal reaches a terminal state through the rounds bound and the multi-day idle-expiry sweep — **not** through a claimless verdict (FR-097) |
@@ -1336,7 +1338,7 @@ zero Judge calls; a goal whose agent claims receives its answer first and its ve
 | Per-adjudication tool-call cap | default 25, operator-configurable, hard ceiling 60, **clamped by FR-056** to `max(1, MaxAgentLLMCallsPerHour/4 − 2)` when that limit is non-zero. The `− 2` is not cosmetic: `checkJudgeSEC26` takes one token before dispatch and `turnLoop` takes one per iteration, so an N-tool-call turn spends **N + 2** tokens (N tool-emitting iterations, the final verdict iteration, and the pre-dispatch take). With `− 1`, the BDD's own example (limit 20 → cap 4) spends 6/20 = 30 %, breaching SC-007's 25 % |
 | Per-unit consecutive-withheld-adjudication bound | equal to `UnableToVerifyMaxRerunsDefault` (3, firing on the 4th), independent of which criterion withheld (FR-020a) |
 | `goal_claim.status` enum | exactly `[met, blocked, waiting_on_user]` |
-| `goal_claim.evidence` | required and non-empty after whitespace trimming when `status == met`; ignored otherwise. Refused **at the call** (FR-088) |
+| `goal_claim.evidence` | required in the schema for **every** status (amended 2026-10-23, issue #1431); trimmed, then carried as given — possibly empty — for `met`, where it becomes the Judge's `ClaimText`, and shown to the operator for `blocked`/`waiting_on_user`. Never refused at the call (FR-088) |
 | `goal_claim` catalogue parity | present in `coreagent::allStaticToolNames` **and** `config.DefaultConfig().Sandbox.ToolPolicies`; `TestCatalog_MatchesGlobalCeilingEntryForEntry` fails on a one-sided edit |
 | `goal_claim` global ceiling | `allow`, matching `set_goal`'s (writing your own session's claim is the safety-increasing direction) |
 | `goal_claim` per-agent seeds | `allow` for every human-facing agent (core roster, subagent tier, customs' default allowlist); explicit `deny` for Judge and PlanSupervisor via `denyAllThenOverride`; explicit `allow` for Worker via `tightenGlobalCeiling`. Identical to `set_goal`'s in every position except the Worker (amended 2026-09-15: a native task run finishes only through an upheld `goal_claim`, ADR-084 §11 / #710, and the Worker takes task runs; its `set_goal` stays `deny`) |
@@ -2435,26 +2437,31 @@ Five properties this change makes materially worse and which nothing above bound
 - **FR-087**: A new static builtin tool `goal_claim` MUST exist, implemented in
   `pkg/tools/goal_claim.go` alongside `set_goal.go`, with parameters:
   - `status` — required, `string`, enum exactly `[met, blocked, waiting_on_user]`.
-  - `evidence` — `string`. **Required and non-empty when `status == met`**; ignored otherwise.
-    Semantically the same thing the `[goal:evidence]` line carries today: the worker's own one-line
-    statement of *what it verified*, which becomes the Judge's `ClaimText` input.
+  - `evidence` — `string`. **Required in the schema for every status** *(amended 2026-10-23,
+    issue #1431 — see FR-088)*. Semantically the same thing the `[goal:evidence]` line carries
+    today: the worker's own one-line statement of *what it verified*, which becomes the Judge's
+    `ClaimText` input. For `blocked` and `waiting_on_user` it is the reason the operator sees.
 
   The tool description MUST state that a `met` claim starts an adjudication that runs after the
   reply is delivered, that a verdict may arrive later and may disagree, and that `waiting_on_user`
   and `blocked` end the turn without a verdict.
-- **FR-088**: A `goal_claim` call with `status == met` and an `evidence` argument that is absent,
-  empty, or whitespace-only MUST be **refused at the call**: the tool returns an error result naming
-  the violation and what to supply, **no claim is recorded, no round is consumed, and no
-  adjudication is scheduled.**
-  - **This is what retires the G-4 bounce economics for the tool path.** G-4 exists because a prose
-    claim's evidence line can only be checked *after* the turn has already ended, so the engine had
-    to price the correction: first bare claim free with a teaching steer
-    (`goalStatusBareClaimSteer`), second costs a round
-    (`bumpGoalBareClaimStreak` ≥ `goalBareClaimCostThreshold`). A tool call is checked **inside**
-    the turn, so the model gets the correction immediately and can retry in the same turn. There is
-    nothing to price. See FR-091 for exactly what survives on the marker path.
-  - Emptiness MUST be evaluated after Unicode whitespace trimming (E-28), matching FR-026's rule for
-    `evidence_quote` so the two cannot disagree.
+- **FR-088** *(amended 2026-10-23, issue #1431 — founder decision; the at-call refusal this FR
+  originally mandated is removed)*: `evidence` MUST be **mandatory in the tool's input schema**
+  (`"required": ["status", "evidence"]`), and a `goal_claim` call with `status == met` whose
+  `evidence` argument is absent, empty, or whitespace-only MUST be **recorded and adjudicated like
+  any other claim — never refused**. Nothing about an empty-evidence claim is free: the claim goes
+  to the Judge, who rules met or unmet against the acceptance criteria using the conversation and
+  the agent's tool results when no physical evidence is possible; an unmet ruling consumes an
+  attempt as usual, so a goal or task always ends `done` or `failed` within its round/try bound.
+  - **The G-4 bounce economics stay retired for the tool path — now by construction.** Every tool
+    claim adjudicates, so there is no bare tool claim left to price. The marker-path ladder is
+    unchanged (FR-091).
+  - **The claimless-adjudication tripwire does not apply to a recorded claim** (ADR-084 §13): a
+    claim a successful `goal_claim` call recorded is not claimless even when its evidence line is
+    empty; `runGoalAdjudicationOutcome`'s empty-`claimText` guard must never refuse one.
+  - The argument is still trimmed (`strings.TrimSpace`, E-28) before it is recorded — trimming now
+    only normalises what the Judge receives and what `blocked`/`waiting_on_user` show the
+    operator; it never refuses.
 - **FR-089**: `goal_claim` MUST be seeded per Constraint #6 / ADR-077, in **every** position
   `set_goal` occupies and with the same values. Specifically:
   - **The catalogue**: an entry in `coreagent::allStaticToolNames`, in the general-builtin block
@@ -2496,10 +2503,11 @@ Five properties this change makes materially worse and which nothing above bound
     on the first occurrence and still costing a round at `goalBareClaimCostThreshold`, and
     `goalStatusBareClaimSteer` is still the text the worker receives. None of those four symbols is
     deleted, weakened or renamed.
-  - **What does not survive.** On the **tool** path, none of it runs, because FR-088 makes the state
-    it handles unreachable: a `goal_claim` that would have been "bare" never becomes a claim at all.
-    `handleBareGoalClaim` MUST NOT be invoked for a tool-path claim, and the bare-claim streak MUST
-    NOT be incremented by one.
+  - **What does not survive.** On the **tool** path, none of it runs, because every `goal_claim`
+    claim adjudicates (FR-088, amended 2026-10-23, issue #1431): there is no bare tool claim left
+    to price — an empty-evidence `met` claim is recorded and judged like any other, and an unmet
+    ruling costs its round. `handleBareGoalClaim` MUST NOT be invoked for a tool-path claim, and
+    the bare-claim streak MUST NOT be incremented by one.
   - The streak is per session and shared between the two paths. A successful claim by **either**
     channel MUST clear it, exactly as the marker path's `clearGoalBareClaimStreak` does today —
     otherwise a worker that bounced once on markers and then switched to the tool would carry a
@@ -2515,9 +2523,10 @@ Five properties this change makes materially worse and which nothing above bound
     call** is the claim (E-27) — deliberately the same last-occurrence-wins rule
     `parseGoalStatusMarker` applies, so the two channels cannot disagree about which of several
     signals counts.
-  - A `goal_claim` call that was **refused** (FR-088 or FR-090) or **policy-denied** (E-29) is not a
+  - A `goal_claim` call that was **refused** (FR-090) or **policy-denied** (E-29) is not a
     successful call and does not suppress marker parsing. A turn that tried the tool, was refused,
-    and then typed the markers correctly still claims.
+    and then typed the markers correctly still claims. *(Amended 2026-10-23, issue #1431: FR-088
+    no longer refuses — an empty-evidence `met` call succeeds and IS the turn's claim.)*
 - **FR-093**: `status: blocked` MUST park the goal without an adjudication and without consuming a
   round, and MUST surface to the operator as a distinct goal state.
   - **It has no marker fallback, and that asymmetry is deliberate and must be stated.**
@@ -3603,23 +3612,24 @@ Traces to: US-11 AC-1, FR-087, FR-094
 - **Then** an adjudication is scheduled for that session
 - **And** the adjudication's `ClaimText` is the `evidence` argument — not the whole turn output
 
-**Scenario: a met claim with no evidence is refused at the call** *(Error Path)*
+**Scenario: a met claim with no evidence reaches the Judge** *(Amended 2026-10-23, issue #1431 — was "refused at the call")*
 Traces to: US-11 AC-2, FR-088
 - **Given** a goal-bearing session
 - **When** the working agent calls `goal_claim(status: "met")` with `evidence` absent
-- **Then** the tool returns an error result naming the violation and what to supply
-- **And** no claim is recorded, no adjudication is scheduled, and no round is consumed
+- **Then** the claim is recorded and an adjudication is scheduled after the reply is delivered
+- **And** the Judge rules met or unmet from the conversation and the agent's tool results
+- **And** an unmet ruling consumes a round and steers; the round bound still ends the goal `failed`
 - **And** `handleBareGoalClaim` is **not** invoked and the bare-claim streak is **not** incremented
-- **And** the same turn may retry the call with evidence and succeed
-- *(This is what retires the G-4 bounce economics on the tool path: a prose claim can only be
-  checked after the turn has ended, so the correction had to be priced; a tool call is checked
-  inside the turn, so there is nothing to price.)*
+- *(The at-call refusal this scenario used to assert looped forever on repeated empty claims —
+  issue #1431. G-4 stays retired on the tool path by construction: every claim adjudicates, so
+  there is nothing left to price.)*
 
-**Scenario Outline: an empty-equivalent evidence argument is refused** *(Edge Case)*
+**Scenario Outline: an empty-equivalent evidence argument is adjudicated** *(Edge Case — amended 2026-10-23, issue #1431)*
 Traces to: US-11 AC-2, FR-088, E-28
 - **Given** `goal_claim(status: "met", evidence: <evidence>)`
 - **When** the call executes
-- **Then** it is refused and no claim is recorded
+- **Then** it succeeds and records the claim with the evidence text as given
+- **And** the claim is adjudicated after the reply is delivered
 
 | evidence |
 |---|
@@ -3908,8 +3918,8 @@ each says so. Rows marked **(fails today)** are the ones that prove a closure ex
 | FR-111 | `TestNonCodingGoal_DeckSectionsCriterion_DecidedByTheJudgeReadingTheFile` **(fails today)** — oracle: a five-clause "the deck has sections for …" criterion over `board-q4.md` builds **no** check from its wording, and resolves `met` with five distinctly grounded entries / `unmet` at four sections | Go integration | same |
 | FR-111 | `TestJudgeDefaultRubric_DoesNotAssumeARepositoryOrATestSuite` — oracle: the rubric constant and `buildJudgeUserContent`'s rewritten fallbacks name no diff, repo, test run or build output as the assumed evidence | Go unit | `pkg/coreagent/judge_rubric_adr084_test.go` |
 | FR-087 | `TestGoalClaimTool_SchemaAndEnum` — oracle: `status` enum is exactly `[met, blocked, waiting_on_user]`; `evidence` is a string; the description states that a `met` claim adjudicates after delivery and may disagree later | Go unit | `pkg/tools/goal_claim_test.go` |
-| FR-088 | `TestGoalClaim_MetWithoutEvidenceIsRefusedAtTheCall` **(fails today)** — oracle: the call returns an error result, **no** claim is recorded, `handleBareGoalClaim` is NOT invoked, the bare-claim streak is NOT incremented, and no round is consumed. All five, because "returns an error" alone passes on a tool that also recorded the claim | Go integration | `pkg/agent/goal_claim_wiring_adr084_test.go` |
-| FR-088 (E-28) | `TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty` — table over `""`, `"   "`, `"\n\t "` | Go unit | `pkg/tools/goal_claim_test.go` |
+| FR-088 | RED (issue #1431 scope 2, amended 2026-10-23) — oracle: a `met` call with absent/empty/whitespace `evidence` **succeeds and records** the claim; the claim reaches the Judge; an unmet ruling consumes an attempt; a goal driven to repeat empty claims ends `failed` within the round bound; `handleBareGoalClaim` is NOT invoked and the streak is NOT incremented | Go integration | `pkg/agent/goal_claim_wiring_adr084_test.go` |
+| FR-088 (schema, E-28) | RED (issue #1431 scope 2, amended 2026-10-23) — oracle: `Parameters()` lists `"required": ["status", "evidence"]`; the old `TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty` table (`""`, `"   "`, `"\n\t "`) inverts to record-and-adjudicate | Go unit | `pkg/tools/goal_claim_test.go` |
 | FR-089 | `TestGoalClaim_Constraint6Seeding` — oracle: present in `allStaticToolNames` AND the ceiling at `allow`; core roster / Worker / subagent tier / customs allow; Judge and PlanSupervisor explicit deny (Worker amended to allow 2026-09-15, ADR-084 §11 / #710). Extends the shipped `TestCatalog_MatchesGlobalCeilingEntryForEntry`, which a one-sided edit already fails | Go unit | `pkg/coreagent/judge_seed_test.go` (extend), `pkg/config/defaults_test.go` (extend) |
 | FR-090 | `TestGoalClaim_RefusesOnDelegatedSubTurnAndGoallessSession` — oracle: mirrors `set_goal`'s own precondition tests exactly | Go integration | `pkg/tools/goal_claim_test.go` |
 | FR-091 | `TestMarkerPath_UnchangedIncludingBareClaimEconomics` **(passes today — retained as a regression row)** — oracle: `parseGoalStatusMarker`'s fenced/excluded/last-occurrence/adjacency rules and G-4's free-then-costly ladder all behave exactly as before. Retained because D12 is where a "simplification" would delete them | Go unit | `pkg/agent/task_completion_signal_test.go` (extend) |
@@ -4218,10 +4228,13 @@ duplicated holdout H1 exactly. It lives as H1 alone. SC-003 is retired with D6.
 - **SC-014**: **A quiet goal keeps working.** Of twenty goals whose agent goes quiet without
   claiming, 20 receive a re-post within one quiet window, 0 receive a verdict, and 0 consume a
   round. The eight surviving keeper behaviours (FR-096) each fire in the states that call for them.
-- **SC-015**: **`met` cannot be claimed without evidence through the tool path.** Of 100 synthetic
-  `goal_claim(status: "met")` calls with absent, empty or whitespace-only `evidence`, 100 are
-  refused at the call, 0 record a claim, 0 schedule an adjudication, 0 consume a round, and 0
-  increment the bare-claim streak. The marker path's G-4 ladder is separately asserted intact.
+- **SC-015**: **every `met` claim through the tool path is priced.** Of 100 synthetic
+  `goal_claim(status: "met")` calls with absent, empty or whitespace-only `evidence`, 100 record
+  a claim and 100 schedule an adjudication; every unmet ruling consumes exactly one round; a goal
+  driven to repeat empty claims reaches its round bound and ends `failed`; and 0 increment the
+  bare-claim streak. The marker path's G-4 ladder is separately asserted intact.
+  *(Amended 2026-10-23, issue #1431 — replaced "100 are refused at the call", which looped
+  forever.)*
 - **SC-016**: **No check is invented, and no goal is classified.** Over a corpus of at least 40
   criteria whose prose names a file path, a substring or a command but which declare no check, 0
   shell commands are executed by the adjudication, and `grep` finds 0 definitions of
@@ -4328,7 +4341,7 @@ duplicated holdout H1 exactly. It lives as H1 alone. SC-003 is retired with D6.
 | FR-085 | US-9 | An old client receiving a new frame — the property, not the value | vitest `an old strict per_criterion schema rejects the frame on the unknown PROPERTY outcome…`, `TestJudgeVerdictFrame_RolloutChoiceIsRecordedInTheSchemaDescription` |
 | FR-086 | — | RETIRED (rev 7) — answered by construction; replaced by FR-102 | none — the pill assertion moves to Regression Requirements |
 | FR-087 | US-11 | A tool-call claim starts an adjudication with no marker anywhere | `TestGoalClaimTool_SchemaAndEnum` |
-| FR-088 | US-11 | A met claim with no evidence is refused at the call; empty-equivalent evidence outline | `TestGoalClaim_MetWithoutEvidenceIsRefusedAtTheCall`, `TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty` |
+| FR-088 | US-11 | An empty-evidence `met` claim is recorded and adjudicated; an unmet ruling consumes an attempt; repeated empty claims end `failed` within the bound; the schema requires `evidence` | the four RED tests of issue #1431 scope 2 (replacing the two refusal tests this row named before the 2026-10-23 amendment) |
 | FR-089 | US-11 | goal_claim's seeding satisfies Constraint #6 | `TestGoalClaim_Constraint6Seeding` |
 | FR-090 | US-11 | goal_claim refuses outside its scope | `TestGoalClaim_RefusesOnDelegatedSubTurnAndGoallessSession` |
 | FR-091 | US-11 | The marker path still works, bounce economics intact | `TestMarkerPath_UnchangedIncludingBareClaimEconomics`, `TestGoalClaim_SuccessfulToolClaimClearsTheBareClaimStreak` |
@@ -4358,8 +4371,9 @@ below, not asserted by hand).** The Functional Requirements body defines **136**
 `- **FR-nnn**:` bullets — **124 live** plus **12 retired tombstones**. Revision 6 had 111 total
 (103 live). Revision 7 adds **25**, all of them in the three new sections:
 
-- **§O, D12 — the claim tool (8)**: FR-087 (the tool and its schema), FR-088 (a `met` with no
-  evidence refused at the call), FR-089 (Constraint #6 seeding), FR-090 (scope preconditions),
+- **§O, D12 — the claim tool (8)**: FR-087 (the tool and its schema), FR-088 (`evidence`
+  schema-required; an empty-evidence `met` claim is recorded and adjudicated — amended
+  2026-10-23, issue #1431), FR-089 (Constraint #6 seeding), FR-090 (scope preconditions),
   FR-091 (the marker fallback and what survives of G-4), FR-092 (tool-vs-marker precedence),
   FR-093 (`blocked`), FR-094 (`evidence` becomes `ClaimText`).
 - **§P, D13 — claim-triggered, after delivery (9)**: FR-095 (a claim is the sole trigger),
