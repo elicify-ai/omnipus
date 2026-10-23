@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -39,7 +38,7 @@ func (c *repairLateContext) Err() error {
 	if c.reached.Load() {
 		select {
 		case <-c.release:
-		case <-c.Context.Done():
+		case <-c.Done():
 		}
 	}
 	return c.Context.Err()
@@ -106,6 +105,6 @@ func repairJoinLateApply(t *testing.T, work *repairLateApply) repairLateResult {
 		return result
 	case <-time.After(30 * time.Second):
 		t.Fatal("C1 actual late-failure CLI did not join after barrier release")
-		return repairLateResult{exit: -1, output: fmt.Sprint("unjoined")}
+		return repairLateResult{exit: -1, output: "unjoined"}
 	}
 }

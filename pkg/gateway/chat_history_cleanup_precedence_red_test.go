@@ -111,7 +111,7 @@ func r1CleanupCombined(t *testing.T, driver, boundary, kind string) {
 		return nil // HTTP handler returns no error value; assertions inspect its REAL response and summary.
 	})
 	r1CleanupRetirePinned(t, f)
-	clear, nativeError := r1CleanupHoldRemoveFault(t, f.retired)
+	restoreRemove, nativeError := r1CleanupHoldRemoveFault(t, f.retired)
 	if kind == "cancellation" {
 		work.cancel() // Actual cancellation occurs ONLY after real pin/retirement/native denial proof.
 	}
@@ -123,7 +123,7 @@ func r1CleanupCombined(t *testing.T, driver, boundary, kind string) {
 		require.ErrorAs(t, err, &unavailable)
 		require.Equal(t, "storage_error", unavailable.Reason)
 		require.ErrorIs(t, err, nativeError, "actual native removal cause is retained internally")
-		original := error(session.ErrHistoryPositionNotFound)
+		original := session.ErrHistoryPositionNotFound
 		if kind == "cancellation" {
 			original = context.Canceled
 		}
@@ -145,7 +145,7 @@ func r1CleanupCombined(t *testing.T, driver, boundary, kind string) {
 		})
 		r1CleanupSummaryPrivacy(t, rows[before], r1CleanupCanaries(f, "hp1_"+strings.Repeat("A", 43)))
 	}
-	clear()
+	restoreRemove()
 	r1CleanupHealthy(t, f, []string{"r1-current"})
 	_, statErr := os.Stat(f.retired)
 	require.ErrorIs(t, statErr, os.ErrNotExist, "normal fresh REST read retries pending cleanup without new expiry")
