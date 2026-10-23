@@ -103,6 +103,16 @@ If the agent reaches its tool-call limit before a final answer, chat keeps the n
 
 After upgrading, reload the page once to refresh an older open chat. On the current version, a helper's outcome and the parent's new reply appear without a reload, and the Judge's outcome row also appears in the parent chat. If they appear only in the helper's chat, that is the old behaviour. Do not restart the gateway as a workaround. If the problem persists on the updated page, report the parent and helper session ids and whether a reload shows the missing reply.
 
+## A background result says the agent was not woken
+
+This warning concerns delivery of one notification, not rerunning or undoing the background work. Omnipus tries the handoff up to three times within the caller's existing window: up to five seconds per attempt, with one- and two-second cancellable waits. A caller deadline after an unsuccessful attempt still triggers the warning; intentional cancellation suppresses it and stops later attempts. A notification accepted by the bus is queued, not a guarantee that the receiving agent has executed it.
+
+Check the original conversation and any saved tool result before asking to rerun work. A real tool warning names the tool (or **background tool** if its name is unsafe) and a short tool-call reference. Generic warnings identify only a fixed source, such as a plan update; another path may still have dispatched the agent directly. Send a normal message if you want the agent to continue from the result.
+
+If saving succeeded, the same system line is used live and in reopened history for that session. Only the permitted original platform conversation gets a single best-effort external warning, with no redirect to another chat/account. A full or closed outbound queue can reject it; enqueue acceptance is not network delivery. If history cannot be written, the durable line may be absent, although an allowed live error or origin warning may still be possible. Check disk space, file permissions and session paths before relying on saved history; repairing them does not by itself replay the failed notification.
+
+The gateway's new **Async notification publish failed** records identify actual failed attempt numbers, their retry/final decision, a fixed source and a notice ID; optional tool/session references are shortened digests. They do not contain notification output, command arguments, raw routes or raw error causes. **Async notification origin warning enqueue rejected** separately means the one external enqueue was not accepted; it does not distinguish a full queue from a closed one. These are safe notification diagnostics, not a claim that every unrelated log record is content-free. See [Background results](tools.md#background-results).
+
 ## A task is refused before work starts
 
 Errors saying the assigned agent's store was not found, or that a task session could not be created, mean Omnipus could not create the task's conversation. A queued dispatch or manual start refuses to hand work to either a native agent or an external command-line agent in that case. It does not consume an execution attempt or add a run-history entry.

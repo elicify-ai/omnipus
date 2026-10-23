@@ -355,6 +355,11 @@ func (h *WSHandler) hubError(evt agent.Event) {
 	if !ok {
 		return
 	}
+	if notice := p.ChatNotice; notice != nil && p.SessionID != "" && notice.SessionId == p.SessionID &&
+		notice.Type == string(generated.WsFrameTypeReplayMessage) && notice.Role == "system" && notice.Id != nil && *notice.Id != "" {
+		h.hubPublishFrame(p.SessionID, string(generated.WsFrameTypeReplayMessage), *notice, nil)
+		return
+	}
 	errSID := p.SessionID
 	if errSID == "" {
 		errSID = h.hubResolveSessionIDForChat(p.ChatID)
