@@ -8,11 +8,15 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 var errAsyncNotifyOriginWarningRejected = errors.New("async notification origin warning: outbound enqueue not accepted")
@@ -103,4 +107,52 @@ func (n *asyncNotifierImpl) publishOriginWarning(ctx context.Context, event Asyn
 	}
 	logger.WarnCF("agent", "Async notification origin warning enqueue rejected", asyncNotifyDiagnosticFields(event, noticeID))
 	return errAsyncNotifyOriginWarningRejected
+}
+
+// reportAsyncNotifyFailure does not repair the failed inbound handoff. Notice
+// side effects keep caller values but detach an elapsed delivery deadline; no
+// PublishInbound budget is extended. Intentional cancellation remains quiet.
+func (n *asyncNotifierImpl) reportAsyncNotifyFailure(ctx context.Context, event AsyncNotifyEvent, noticeID string) error {
+	if ctx.Err() == context.Canceled {
+		return nil
+	}
+	if event.TranscriptSessionID == "" {
+		return errors.New("async notification delivery warning: transcript session is unavailable")
+	}
+	noticeCtx := context.WithoutCancel(ctx)
+	content := n.asyncNotifyWarningText(event)
+	entry := session.TranscriptEntry{
+		ID: noticeID, Type: session.EntryTypeSystem, Role: "system",
+		Content: content, Timestamp: time.Now().UTC(),
+	}
+	var saveErr error
+	var frame *generated.ReplayMessageFrame
+	store := n.loop.ResolveSessionStore(event.TranscriptSessionID)
+	if store == nil {
+		saveErr = errors.New("async notification delivery warning: transcript store is unavailable")
+	} else {
+		var written bool
+		written, saveErr = store.AppendTranscriptOnce(event.TranscriptSessionID, entry)
+		if saveErr != nil {
+			saveErr = fmt.Errorf("async notification delivery warning: save system notice: %w", saveErr)
+		} else if written {
+			stamp := entry.Timestamp.Format(time.RFC3339Nano)
+			frame = &generated.ReplayMessageFrame{
+				Type: string(generated.WsFrameTypeReplayMessage), SessionId: event.TranscriptSessionID,
+				Id: &entry.ID, Role: entry.Role, Content: entry.Content, Timestamp: &stamp,
+			}
+		}
+	}
+	if ctx.Err() == context.Canceled {
+		return saveErr
+	}
+	if n.loop.audienceFor(noticeCtx, steer.BoundaryTypedErrorFrame, event.TranscriptSessionID) != steer.AudienceNone {
+		n.loop.emitEvent(EventKindError, EventMeta{Source: "async_notify", SessionKey: event.TranscriptSessionID}, ErrorPayload{
+			Stage: "async_notify_delivery", Message: content, SessionID: event.TranscriptSessionID, ChatNotice: frame,
+		})
+	}
+	if ctx.Err() == context.Canceled {
+		return saveErr
+	}
+	return errors.Join(saveErr, n.publishOriginWarning(noticeCtx, event, noticeID, content))
 }
