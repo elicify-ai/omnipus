@@ -19,6 +19,8 @@ import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { ChatScreen } from './ChatScreen'
 import { emptyHistoryPage } from '../../../tests/chat-history-paging/legacy-fixtures'
+import { queryClient as storeQueryClient } from '@/lib/queryClient'
+import { seedCanonicalSession } from '../../../tests/unit/fixtures/canonical-session'
 
 // Oracle: release-UAT dispatch D3, validator/report-v.md V5/V5b / D5.
 // Enter after Stop must SEND "continue and say what you did" in the selected
@@ -50,6 +52,7 @@ const sender = { send: vi.fn<WsConnection['send']>() }
 let originalScrollIntoView: PropertyDescriptor | undefined
 
 function resetStores() {
+  storeQueryClient.clear()
   act(() => {
     useSessionStore.setState(useSessionStore.getInitialState(), true)
     useChatStore.setState(useChatStore.getInitialState(), true)
@@ -105,6 +108,9 @@ function seedParentAndHelper() {
     useSessionStore.getState().setActiveSession(CHILD, 'worker')
     useChatStore.getState().handleFrame({ type: 'token', session_id: CHILD, agent_id: 'worker', content: CHILD_TEXT })
     useSessionStore.getState().setActiveSession(PARENT, 'jim')
+    // D9 releases the outgoing session's cached detail. Establish this
+    // selected parent's canonical owner/workspace after that real switch.
+    seedCanonicalSession(PARENT, 'jim', WORKSPACE)
     useChatStore.getState().sendMessage(INITIAL_TEXT, { clientMessageId: INITIAL_ID })
     useChatStore.getState().handleFrame({ type: 'token', session_id: PARENT, agent_id: 'jim', content: PARTIAL_TEXT })
     useChatStore.getState().handleFrame({
