@@ -6,7 +6,7 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { onlineManager, QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query'
 import type { Workspace } from '@/lib/api/generated/openapi-types'
 
 const edges = vi.hoisted(() => ({
@@ -105,6 +105,7 @@ describe('legacy session deep link while its redirect is undecided', () => {
     await client.cancelQueries()
     client.clear()
     onlineManager.setOnline(true)
+    vi.restoreAllMocks()
     vi.useRealTimers()
   })
 
@@ -119,6 +120,8 @@ describe('legacy session deep link while its redirect is undecided', () => {
 
   it('falls back to the inline thread when the workspace list stays pending past the bounded wait', () => {
     vi.useFakeTimers()
+    // Observe the real refetch call without replacing its implementation.
+    const refetch = vi.spyOn(QueryObserver.prototype, 'refetch')
     openRoute()
     expectPendingLookup()
     expect(screen.queryByTestId('inline-chat-screen')).toBeNull()
@@ -128,9 +131,15 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Opening chat…')
     act(() => { vi.advanceTimersByTime(2) }) //4001ms: just OVER four seconds.
     expect(screen.getByTestId('inline-chat-screen'), 'a stalled list cannot leave the chat empty').toBeTruthy()
-    expect(screen.queryByRole('status')).toBeNull()
+    // The candidate now owns a persistent status notice; only the old opening
+    // placeholder must disappear. Merge commit records this oracle migration.
+    expect(screen.queryByText('Opening chat…', { exact: true })).toBeNull()
     expectPendingLookup()
     expect(edges.navigate).not.toHaveBeenCalled()
+    expect(screen.getByText(/^Still finding this chat's workspace\. The chat moves into its workspace once it is found\.$/u), 'the unresolved workspace and the later move are explained').toBeTruthy()
+    refetch.mockClear()
+    act(() => { screen.getByRole('button', { name: 'Retry' }).click() })
+    expect(refetch, 'Retry replaces the stalled lookup').toHaveBeenCalledWith({ cancelRefetch: true })
   })
 
   it('opens the inline thread at once when the list request is paused offline', () => {
@@ -139,9 +148,10 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expect(client.getQueryState(workspaceKey)?.status).toBe('pending')
     expect(client.getQueryState(workspaceKey)?.fetchStatus, 'real QueryClient pause, not an injected query-result object').toBe('paused')
     expect(screen.getByTestId('inline-chat-screen'), 'its connection notice and Retry stay reachable').toBeTruthy()
-    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText('Opening chat…', { exact: true })).toBeNull()
     expect(edges.fetchWorkspaces).not.toHaveBeenCalled()
     expect(edges.navigate).not.toHaveBeenCalled()
+    expect(screen.getByText(/^Waiting for the connection to find this chat's workspace\./u)).toBeTruthy()
   })
 
   it('mounts the inline thread once the list resolves without that workspace', async () => {
@@ -156,6 +166,7 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expect(screen.queryByRole('status')).toBeNull()
     expect(edges.navigate).not.toHaveBeenCalled()
     expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active' })
+    expect(screen.queryByText(/this chat's workspace/u), 'a resolved lookup shows no workspace notice').toBeNull()
   })
 
   it('opens inline immediately after a failed list lookup instead of rendering nothing', async () => {

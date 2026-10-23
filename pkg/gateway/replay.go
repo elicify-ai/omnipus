@@ -356,14 +356,14 @@ func (sr *streamReplayState) emitFlatToolCall(
 	if err2 := emitFrame(buildStart(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
-	if sr.stillActive || tc.Status == "pending" {
+	if sr.stillActive || tc.Status == "pending" || tc.Status == "running" {
 		// A spawn/delegate call whose real sub-turn is still running but
 		// has made no (recorded) nested tool calls yet — e.g. a background
 		// delegate reloaded before its first step landed (symptom:
 		// "0 steps working" live, "done 0ms" on reload). Withhold the
 		// result frame; the client sees only tool_call_start, i.e.
 		// genuinely in progress.
-		// D4 likewise: any ordinary call still recorded "pending" has no
+		// D4 likewise: any ordinary call still recorded "pending" or "running" has no
 		// completion yet. A result frame would invent one, and
 		// toolCallResultStatus would even present it as a terminal error.
 		return streamReplayStateContinue, nil
