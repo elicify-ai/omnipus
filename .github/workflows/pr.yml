@@ -1567,13 +1567,15 @@ jobs:
           go-package: ./...
           # The action runs its OWN setup-go with go-version-input:stable and
           # GOTOOLCHAIN=local, so it ignores both the job's Setup Go step and
-          # go.mod's toolchain. Two bumps clear the 2026-10-08 advisory batch and
-          # BOTH are required: go1.26.9 clears the Go-stdlib advisories — GO-2026-
-          # 6604 (os), 6605/6609/6613 (net/http), 6607 (crypto/tls), 6608
-          # (mime/multipart); go1.26.10 clears GO-2026-6809 (crypto/x509) — while
-          # the golang.org/x/net v0.60.0 bump in go.mod
-          # clears GO-2026-6603, 6610, 6611, 6612 and 6617, each of which carries
-          # an x/net range as well as a stdlib one.
+          # go.mod's toolchain. The 2026-10-08 advisory batch was cleared by three
+          # bumps then, all required together: go1.26.9 cleared the Go-stdlib
+          # advisories — GO-2026-6604 (os), 6605/6609/6613 (net/http), 6607
+          # (crypto/tls), 6608 (mime/multipart); go1.26.10 cleared GO-2026-6809
+          # (crypto/x509); and the golang.org/x/net v0.60.0 bump in go.mod cleared
+          # GO-2026-6603, 6610, 6611, 6612 and 6617, each of which carries an
+          # x/net range as well as a stdlib one. 2026-10-23: the pin moves to
+          # 1.27.3 (current stable line, go.dev); it includes every stdlib fix
+          # above.
           #
           # MAINTENANCE HAZARD: this is the ONLY literal Go version in this
           # workflow — every other Go job reads `go-version-file: go.mod`. A
@@ -1581,7 +1583,7 @@ jobs:
           # running against an older stdlib than the release ships (a false green
           # on a security gate). This literal is the one place to keep in sync
           # with the `go` directive in go.mod.
-          go-version-input: '1.26.10'
+          go-version-input: '1.27.3'
           # The job's own "Setup Go" step above already restored the Go module
           # cache into $GOMODCACHE. The action bundles its OWN setup-go, which
           # by default restores a SECOND module cache into that same, already
