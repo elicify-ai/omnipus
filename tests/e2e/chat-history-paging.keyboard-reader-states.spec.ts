@@ -90,7 +90,7 @@ test('T21 B34: Return-to-latest failure keeps the old reader, focused action and
 });
 
 for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as const) {
-  test(`T21 B29: ${presentation} announces one transition, not historical New response, and clears busy`, async ({ history, page }) => {
+  test(`T21 B29: ${presentation} announces once per request, not historical New response, and clears busy`, async ({ history, page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     if (presentation === 'plain-no-observer') {
       // Platform capability boundary only; actual plain list/store/styles remain real.
@@ -120,22 +120,50 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
         for (const owner of live) if (owner.getAttribute('aria-hidden') !== 'true' && owner.textContent?.trim()) events.push(owner.textContent.trim());
       }).observe(document.body, { subtree: true, childList: true, characterData: true });
     });
-    await scrollToDistance(page, 0);
+    // D8 / architect Q1: prefetch is its own request transition, not an
+    // announcement to discard or charge to the later keyboard attempt.
+    const prefetch = await holdPage(page, (url) => url.searchParams.has('before'));
+    let prefetchAnnouncements: string[];
+    try {
+      await scrollToDistance(page, 0);
+      await prefetch.requested;
+      expect(prefetch.requests, 'one real automatic prefetch before keyboard activation').toHaveLength(1);
+      await expect(page.getByRole('status').filter({ hasText: 'Loading earlier messages…' })).toHaveCount(1);
+      await expect(historyScroller(page)).toHaveAttribute('aria-busy', 'true');
+      prefetch.release();
+      await expect(page.getByText('Loading earlier messages…', { exact: true })).toHaveCount(0);
+      await expect(historyScroller(page)).not.toHaveAttribute('aria-busy', 'true');
+      await settled(page);
+      prefetchAnnouncements = await page.evaluate(() => (window as unknown as { __historyAnnouncements: string[] }).__historyAnnouncements);
+      expect(prefetchAnnouncements.filter((value) => value === 'Loading earlier messages…'), 'exactly one polite announcement for the settled automatic prefetch').toHaveLength(1);
+      expect(prefetch.requests, 'prefetch settled before a distinct keyboard request').toHaveLength(1);
+    } finally { prefetch.release(); await prefetch.dispose(); }
     const held = await holdPage(page, (url) => url.searchParams.has('before'));
     try {
       const earlier = page.getByRole('button', { name: 'Show earlier messages', exact: true });
       await earlier.focus();
+      await settled(page);
+      expect(held.requests, 'keyboard attempt has not started before its Enter action').toHaveLength(0);
       await page.keyboard.press('Enter');
       await held.requested;
       await expect(page.getByRole('status').filter({ hasText: 'Loading earlier messages…' })).toHaveCount(1);
       await expect(historyScroller(page)).toHaveAttribute('aria-busy', 'true');
       const before = await anchor(page);
+      const pendingAnnouncements = await page.evaluate(() => (window as unknown as { __historyAnnouncements: string[] }).__historyAnnouncements);
+      expect(pendingAnnouncements.slice(prefetchAnnouncements.length).filter((value) => value === 'Loading earlier messages…'), 'one announcement for the distinct keyboard attempt while pending').toHaveLength(1);
+      await page.keyboard.press('Enter'); // Joining the held attempt is not a new request transition.
+      await settled(page);
+      expect(held.requests, 'repeated Enter joins/guards the same in-flight keyboard request').toHaveLength(1);
+      const joinedAnnouncements = await page.evaluate(() => (window as unknown as { __historyAnnouncements: string[] }).__historyAnnouncements);
+      expect(joinedAnnouncements.filter((value) => value === 'Loading earlier messages…'), 'joined in-flight trigger adds no loading announcement').toEqual(pendingAnnouncements.filter((value) => value === 'Loading earlier messages…'));
       held.release();
       await expect(page.getByText('Loading earlier messages…', { exact: true })).toHaveCount(0);
       await expect(historyScroller(page)).not.toHaveAttribute('aria-busy', 'true');
       await expectAnchor(page, before);
       const announcements = await page.evaluate(() => (window as unknown as { __historyAnnouncements: string[] }).__historyAnnouncements);
-      expect(announcements.filter((value) => value === 'Loading earlier messages…'), 'one polite transition, not Button pending plus duplicate live region').toHaveLength(1);
+      expect(announcements.slice(0, prefetchAnnouncements.length), 'the fully asserted prefetch events remain in the append-only announcement ledger').toEqual(prefetchAnnouncements);
+      expect(announcements.slice(prefetchAnnouncements.length).filter((value) => value === 'Loading earlier messages…'), 'one polite transition, not Button pending plus duplicate live region').toHaveLength(1);
+      expect(held.requests, 'keyboard settlement did not create a second in-flight request').toHaveLength(1);
       expect(announcements.filter((value) => value.includes('New response')), 'historical hydration is not a new assistant answer').toEqual([]);
       const smooth = await historyScroller(page).evaluate((el) => getComputedStyle(el).scrollBehavior);
       expect(smooth, 'reduced-motion anchor correction is not smooth').not.toBe('smooth');
