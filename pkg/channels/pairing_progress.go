@@ -52,7 +52,7 @@ func (o *PairingOrder) Progress(attemptID string, status PairingStatus, qr, mess
 		if rec.Phase == PairingPhaseActive {
 			rec.Phase, rec.Outcome, rec.cancel = PairingPhaseTerminal, pairingStatusOutcome(status), nil
 		}
-		if rec.Phase != PairingPhaseTerminal && !(rec.Phase == PairingPhaseStopping && rec.disposal == pairingDisposalReplacement && status == PairingStatusError) {
+		if rec.Phase != PairingPhaseTerminal && (rec.Phase != PairingPhaseStopping || rec.disposal != pairingDisposalReplacement || status != PairingStatusError) {
 			return PairingProgress{}, false
 		}
 	}

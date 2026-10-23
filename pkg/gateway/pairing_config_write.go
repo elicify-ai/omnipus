@@ -127,7 +127,8 @@ func (a *restAPI) publishPairingAfterConfigUnlock(progress []channels.PairingPro
 	}
 	go func() {
 		a.configMu.Lock()
+		publisher := a.agentLoop
 		a.configMu.Unlock()
-		a.agentLoop.PublishPairingProgress(progress)
+		publisher.PublishPairingProgress(progress)
 	}()
 }
