@@ -968,10 +968,12 @@ func FixtureTask_Populated() Task {
 		StartedAt:     &startedAt,
 		CompletedAt:   &completedAt,
 	}
+	activeForm := "Drafting the summary section"
 	t.Todos = &[]struct {
-		Status TaskTodosStatus `json:"status"`
-		Text   string          `json:"text"`
-	}{{Text: "Draft the summary section", Status: TaskTodosStatusPending}}
+		ActiveForm *string         `json:"active_form,omitempty"`
+		Status     TaskTodosStatus `json:"status"`
+		Text       string          `json:"text"`
+	}{{Text: "Draft the summary section", Status: TaskTodosStatusPending, ActiveForm: &activeForm}}
 	t.Trigger = &struct {
 		Config Task_Trigger_Config `json:"config"`
 		Type   TaskTriggerType     `json:"type"`

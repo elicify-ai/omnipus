@@ -5,7 +5,7 @@
 // phrase). Oracles are the DOM seams — data-figure / data-initial — never a
 // snapshot.
 import * as React from 'react'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render } from '@testing-library/react'
 import { AgentStatusIndicator as TypedIndicator } from './AgentStatusIndicator'
 
@@ -22,6 +22,9 @@ const AgentStatusIndicator = TypedIndicator as unknown as (
     name?: string
   },
 ) => React.ReactElement
+
+beforeEach(() => { vi.spyOn(Math, 'random').mockReturnValue(0) })
+afterEach(() => vi.restoreAllMocks())
 
 describe('AgentStatusIndicator Monogram', () => {
   // I2: only Monogram needs a name to draw its figure. Existing figures must
@@ -46,7 +49,8 @@ describe('AgentStatusIndicator Monogram', () => {
     expect(mark).toHaveAttribute('aria-hidden', 'true')
     expect(mark?.querySelector('svg')).toHaveAttribute('width', '48')
     expect(container.querySelector('[data-initial]')).toBeNull()
-    expect(container.textContent).toBe('Thinking…')
+    expect(container.querySelector('[data-testid="reply-status-fallback"]')?.textContent).toBe('Thinking…')
+    expect(container.querySelector('.sr-only')?.textContent).toBe('Thinking')
   })
 
   it('draws the Monogram initial from the agent name and keeps the phrase (AC-16)', () => {

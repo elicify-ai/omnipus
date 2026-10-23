@@ -199,8 +199,18 @@ func IsValidTodoStatus(s TodoStatus) bool { return validTodoStatuses[s] }
 // Todo is a lightweight {text, status} checklist item embedded on a task.
 // A todo is NOT a task: no agent, no trigger, no ID.
 type Todo struct {
-	Text   string     `json:"text"`
-	Status TodoStatus `json:"status"`
+	Text       string     `json:"text"`
+	Status     TodoStatus `json:"status"`
+	ActiveForm string     `json:"active_form,omitempty"`
+}
+
+// ScratchpadText preserves the item label and includes optional in-progress phrasing.
+// Board labels continue to use Text directly.
+func (td Todo) ScratchpadText() string {
+	if td.ActiveForm == "" {
+		return td.Text
+	}
+	return td.Text + " (active_form: " + td.ActiveForm + ")"
 }
 
 // UnmarshalJSON implements json.Unmarshaler for Todo.
@@ -210,14 +220,16 @@ type Todo struct {
 func (td *Todo) UnmarshalJSON(data []byte) error {
 	// tolerant: accept legacy {"done":bool} and new {"status":"..."}.
 	var raw struct {
-		Text   string `json:"text"`
-		Status string `json:"status"`
-		Done   *bool  `json:"done"`
+		Text       string `json:"text"`
+		Status     string `json:"status"`
+		ActiveForm string `json:"active_form"`
+		Done       *bool  `json:"done"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	td.Text = raw.Text
+	td.ActiveForm = raw.ActiveForm
 	switch {
 	case raw.Status != "":
 		if s := TodoStatus(raw.Status); IsValidTodoStatus(s) {

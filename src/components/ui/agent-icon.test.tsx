@@ -1,6 +1,8 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import type { ComponentType } from 'react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { AgentColor } from '@/lib/api/generated/schemas'
 
 // F-3 / AC-19: prove RENDERING routes the derived mark through the real
@@ -157,9 +159,15 @@ function selectedAnimationSeconds(element: Element): number {
   const selected = Array.from(element.classList).find((token) => token.startsWith('animate-['))
   expect(selected, 'rendered looping animation').toBeDefined()
   const value = selected!.slice('animate-['.length, -1)
-  const duration = value.split('_').find((part) => /^\d+(?:\.\d+)?m?s$/.test(part))
-  expect(duration, 'selected animation duration').toBeDefined()
-  return duration!.endsWith('ms') ? Number.parseFloat(duration!) / 1000 : Number.parseFloat(duration!)
+  const part = value.split('_').find((part) => /^\d+(?:\.\d+)?m?s$/.test(part) || /^var\(--motion-.*-duration\)$/.test(part))
+  expect(part, 'selected animation duration').toBeDefined()
+  const variable = /^var\((--[^)]+)\)$/.exec(part!)?.[1]
+  // Resolve the rendered reference through the real registry; numerical
+  // expectations below remain independent commissioned motion oracles.
+  const foundations = JSON.parse(readFileSync(resolve(process.cwd(), 'design-system/tokens/foundations.json'), 'utf8')) as { tokens: Array<{ css: string; value?: string | number }> }
+  const duration = variable ? foundations.tokens.find((token) => token.css === variable)?.value : part
+  if (typeof duration !== 'string') throw new Error(`Unresolved animation duration: ${part}`)
+  return duration.endsWith('ms') ? Number.parseFloat(duration) / 1000 : Number.parseFloat(duration)
 }
 
 describe('AgentIcon', () => {
@@ -192,6 +200,19 @@ describe('AgentIcon', () => {
       expect(screen.queryByText('Developer')).toBeNull()
       expect(screen.queryByText('developer')).toBeNull()
       unmount()
+    }
+  })
+
+  it.each(['thinking', 'working', 'waiting'] as const)('selects the shared duration token for %s ink and glow', async (motion) => {
+    const AgentIcon = await loadAgentIcon()
+    const { container } = render(iconPewter(AgentIcon, { figure: 'Omnipus', role: 'general', size: 48, motion, reducedMotion: false }))
+    const reference = `var(--motion-agent-icon-${motion}-duration)`
+    for (const selector of ['[data-ink]', '[data-glow]']) {
+      const layer = container.querySelector(selector)
+      expect(layer, `${motion} ${selector} exists`).not.toBeNull()
+      const selected = Array.from(layer!.classList).find((value) => value.startsWith('animate-['))
+      expect(selected, `${motion} ${selector} duration must share its registered token`).toContain(reference)
+      expect(selected).toContain('var(--motion-easing-in-out)')
     }
   })
 
