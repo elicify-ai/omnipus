@@ -1096,9 +1096,22 @@ func (aa *agentLoopRunGoalAdjudicationAdvance) persistFinalUnmetRound() bool {
 	}); perr != nil {
 		logger.ErrorCF("agent", "goal trigger: final round persist failed at the bound; aborting termination to keep the round gate honest",
 			map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "attempt": aa.ag.attempt, "max_rounds": aa.ag.maxRounds, "error": perr.Error()})
-		aa.ag.al.writeGoalSystemTranscript(aa.ag.store, aa.ag.sessionID, aa.ag.agentInst.ID, fmt.Sprintf(
-			"Goal %q: could not persist the final adjudication round at the bound (%v). The goal was not terminated — investigate storage and retry the goal.",
-			aa.ag.rec.Prompt, perr))
+		note := fmt.Sprintf(
+			"Goal %q: could not persist the final adjudication round at the bound (%v). The goal was not terminated — investigate storage and claim completion again.",
+			aa.ag.rec.Prompt, perr)
+		detail := "The final adjudication round could not be saved: " + perr.Error()
+		if werr := aa.ag.al.writeGoalSystemTranscriptErr(aa.ag.store, aa.ag.sessionID, aa.ag.agentInst.ID, note); werr != nil {
+			logger.ErrorCF("agent", "goal trigger: final-round persistence failure could not be saved to the transcript either",
+				map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "error": werr.Error()})
+			detail += "; saving the storage-failure note also failed: " + werr.Error()
+		}
+		// Adjudication has stopped, but no terminal transition or round advance
+		// was saved. Replace the judging pill with that retryable truth, and
+		// raise the existing live notice even if the transcript is unwritable.
+		aa.ag.al.emitGoalStatusFrameWithCriteriaAndDoD(aa.ag.sessionID, aa.ag.rec.GoalID, aa.ag.rec.Prompt, aa.ag.rec.Round, aa.ag.maxRounds,
+			"Final adjudication round could not be saved. Check storage, then claim completion again.", goalPillActive,
+			aa.ag.goalDefinition, aa.ag.projectedCriteria, aa.ag.projectedDoD)
+		aa.ag.al.emitJudgeConclusionFailed(aa.ag.sessionID, detail)
 		return false
 	}
 	return true
