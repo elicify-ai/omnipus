@@ -124,6 +124,9 @@ func historyReduceEffect(t *chatHistoryIndexTree, r *historyRecord, e *ToolCallE
 			return err
 		}
 		if !ok {
+			if t.expiredAddress != nil && t.expiredAddress(a) {
+				continue
+			}
 			return historyBuildFailure("invalid_reference", errors.New("invalid projection retraction reference"))
 		}
 		prior, ok, err := historyReadRecordMeta(t, rank)
@@ -142,6 +145,9 @@ func historyReduceEffect(t *chatHistoryIndexTree, r *historyRecord, e *ToolCallE
 			return err
 		}
 		if !ok {
+			if t.expiredAddress != nil && t.expiredAddress(a) {
+				continue
+			}
 			return historyBuildFailure("invalid_reference", errors.New("invalid tool effect target"))
 		}
 		r.Targets = append(r.Targets, rank)

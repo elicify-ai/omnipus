@@ -124,10 +124,17 @@ func checkSessionFormat(dir string) error {
 	return nil
 }
 
-type repairTotals struct{ sessions, create, rebuild, unchanged, published, refused, code int }
+type repairTotals struct {
+	sessions, create, rebuild, unchanged, published, refused, code int
+	failureClasses                                                 map[string]bool
+}
 
 func (t *repairTotals) failure(out io.Writer, id string, err error) {
 	class, code := failureClass(err)
+	if t.failureClasses == nil {
+		t.failureClasses = map[string]bool{}
+	}
+	t.failureClasses[class] = true
 	if code > t.code {
 		t.code = code
 	}
@@ -250,8 +257,14 @@ func runRepairPlan(ctx context.Context, a repairArgs, out io.Writer) int {
 		}
 	}
 	if a.mode == "apply" {
-		if err = repairGuards(ctx, a); err != nil && totals.refused == 0 {
-			totals.failure(&report, "", err)
+		if err = repairGuards(ctx, a); err != nil {
+			class, _ := failureClass(err)
+			// Re-observing the unchanged guard refusal is one failure, but
+			// a distinct final safety failure must never disappear behind an
+			// earlier integrity error (including its higher exit precedence).
+			if !totals.failureClasses[class] {
+				totals.failure(&report, "", err)
+			}
 		}
 	}
 	if a.mode == "dry-run" && a.planOutput != "" {

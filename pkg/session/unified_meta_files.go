@@ -95,9 +95,12 @@ type u5IdentityFile struct {
 // (u5LaterOf, below) into the single exposed UnifiedMeta.UpdatedAt field on
 // every read. SessionStats is embedded WITHOUT a json tag so its fields
 // flatten directly into stats.json's top level.
-type u5StatsFile struct {
+type u5StatsFile struct { // not-wire-format: private aggregate/validity codec; public stats use generated DTOs.
 	SessionStats
-	UpdatedAt time.Time `json:"updated_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	UsageBaselineKnown *bool     `json:"usage_baseline_known,omitempty"`
+	present            bool
+	baselineKnown      bool
 }
 
 // ADR-086 GOAL-FR-005 (wave S6, "the deletion half"): goal.json and its
@@ -157,7 +160,8 @@ func u5IdentityFromMeta(meta *UnifiedMeta) u5IdentityFile {
 }
 
 func u5StatsFromMeta(meta *UnifiedMeta) u5StatsFile {
-	return u5StatsFile{SessionStats: meta.Stats, UpdatedAt: meta.UpdatedAt}
+	known := meta.usageBaselineKnown
+	return u5StatsFile{SessionStats: meta.Stats, UpdatedAt: meta.UpdatedAt, UsageBaselineKnown: &known}
 }
 
 func u5LoopFromMeta(meta *UnifiedMeta) u5LoopFile {
@@ -224,7 +228,8 @@ func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, loop u5Loo
 			LoopStartedAt:         loop.LoopStartedAt,
 			LoopLastActivityAt:    loop.LoopLastActivityAt,
 		},
-		Type: identity.Type,
+		Type:               identity.Type,
+		usageBaselineKnown: stats.baselineKnown,
 	}
 }
 
@@ -258,6 +263,18 @@ func u5ReadStatsFile(sessionDir string) (u5StatsFile, error) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return f, fmt.Errorf("parse %q: %w", filepath.Join(sessionDir, "stats.json"), err)
 	}
+	// Numeric zero cannot distinguish absent/null from a recorded total.
+	// An explicit false validity marker survives later partial accounting.
+	var presence struct { // not-wire-format: private codec presence check only.
+		Total    *int            `json:"tokens_total"`
+		Baseline json.RawMessage `json:"usage_baseline_known"`
+	}
+	if err := json.Unmarshal(data, &presence); err != nil {
+		return f, fmt.Errorf("parse usage authority: %w", err)
+	}
+	f.present = true
+	f.baselineKnown = presence.Total != nil && *presence.Total >= 0 &&
+		(len(presence.Baseline) == 0 || f.UsageBaselineKnown != nil && *f.UsageBaselineKnown)
 	return f, nil
 }
 
@@ -397,6 +414,7 @@ func (us *UnifiedStore) u5WriteStatsLocked(sessionID string, meta *UnifiedMeta) 
 	us.cacheMu.Lock()
 	if cached, ok := us.metaCache[sessionID]; ok {
 		cached.Stats = meta.Stats
+		cached.usageBaselineKnown = meta.usageBaselineKnown
 		cached.Stats.ByModel = maps.Clone(meta.Stats.ByModel)
 		cached.Stats.ByProvider = maps.Clone(meta.Stats.ByProvider)
 		if meta.UpdatedAt.After(cached.UpdatedAt) {

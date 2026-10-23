@@ -145,6 +145,9 @@ type MetaPatch struct {
 type UnifiedMeta struct {
 	SessionMeta
 	Type UnifiedSessionType `json:"type"`
+	// Private aggregate provenance, never a generated/public wire property.
+	// Numeric counters and later activity cannot establish a lost baseline.
+	usageBaselineKnown bool
 }
 
 // Clone returns a deep, independent copy of m. Nil-safe (returns nil for a
@@ -669,6 +672,7 @@ func (us *UnifiedStore) persistNewSessionLocked(sessionID string, meta *UnifiedM
 	if err := us.initEmptyChatHistoryIndexLocked(sessionID); err != nil {
 		return nil, err
 	}
+	meta.usageBaselineKnown = true // Verified new/empty identity, not historical backfill.
 	if err := historyPublication(chatHistoryPublicationEvent{SessionID: sessionID, Operation: "create", Point: "before_identity_publish"}); err != nil {
 		return nil, err
 	}
@@ -1006,6 +1010,9 @@ func readUnifiedMeta(sessionDir string) (*UnifiedMeta, error) {
 	}
 
 	meta := u5ComposeUnifiedMeta(identity, stats, loop, pendingAsk)
+	if !stats.present {
+		meta.usageBaselineKnown = historyEmptyUsageBaseline(sessionDir, meta.ID, len(meta.Partitions))
+	}
 	// If Type is not set (legacy PartitionStore session), default to chat.
 	if meta.Type == "" {
 		meta.Type = SessionTypeChat
