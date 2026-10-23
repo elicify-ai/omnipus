@@ -5,7 +5,7 @@ Detail behind SKILL.md §3. Design source: section 5.6 of
 a dev-team tool authored under that design; it is deliberately not `check-`-prefixed, so
 the CI guards runner does not adopt it as a gate).
 
-Last reviewed: 2026-10-23
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 
 Current safety authority: root `CLAUDE.md` ("Running CLI agents" and "Build, test,
 and quality gates"). The monitor and the worker controller are separate instruments.
@@ -40,8 +40,10 @@ squad). Team-lead and any squad lead widening its own fan-out both run it.
 existing monitor, not permission to launch. Sample the **1-minute** load (`uptime`),
 compare it with the refusal threshold in root `CLAUDE.md` ("Running CLI agents"),
 and queue new workers when over it even if the monitor says OK. The five-minute
-overload check is not a substitute. Controller enforcement is separate tooling
-work; verify it before claiming it is active. Keep memory/disk HOLDs as well.
+overload check is not a substitute. The controller load refusal is implemented;
+use its actual admission result, not this monitor's advisory CPU row. Current
+controller behavior and shared-root lock exemptions are in root `CLAUDE.md`
+("Worker safety") and `knowledge/dispatch-and-watch.md`. Keep memory/disk HOLDs too.
 
 Thresholds are named constants at the top of the script, founder-adjustable — the
 numbers above are the shipped starting points, tuned through governance.

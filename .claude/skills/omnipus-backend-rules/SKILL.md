@@ -5,7 +5,7 @@ description: Go-specific operational detail for backend-lead only — build/test
 
 # Omnipus Backend Rules
 
-Last reviewed: 2026-10-23 — approved delivery-process rollout
+Last reviewed: 2026-10-23 — minimum toolchain follows go.mod
 
 Backend-lead only. Read `omnipus-shared-rules` first — this skill adds Go-specific
 detail on top of it, never repeats it. Root `CLAUDE.md` stays authoritative on the facts
@@ -27,7 +27,9 @@ rule and the live-build toolchain pin; this skill does not authorize a lane CI r
   multiple Go suites in parallel. One at a time allows repeats: a red run, the green run
   after the fix, an isolated re-run, and a mutation probe each run this same command
   serially, never two running at once.
-- Toolchain minimum: Go 1.26.9 (`go.mod`) — a 1.22 compiler cannot build this.
+- Toolchain minimum: the `go` directive in `go.mod` is the minimum toolchain. Read
+  it from the checked-out revision; live builds still use the release-pinned compiler
+  required by root `CLAUDE.md` ("Build, test, and quality gates").
 - Fresh worktree / new clone: stub the SPA embed before building `pkg/gateway`
   (`CLAUDE.md` gives the exact `mkdir`/`echo`/`touch` sequence) — the resulting compile
   error looks like a code defect and is not one.

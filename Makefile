@@ -514,7 +514,7 @@ lint-no-removed-providers:
 	bash scripts/check-no-removed-providers.sh
 
 ## lint-budgets: Fail if a file or function is over its size budget (founder ruling, 2026-09-15)
-## File: warns over 2,000 lines, fails over 4,000. Function: warns over 120, fails over 240.
+## File: warns over 2,000 lines, fails over 3,000. Function: warns over 120, fails over 240.
 ## Grandfathered files/functions may only shrink (scripts/budgets/*.txt). Runs each gate's own
 ## self-check first so a guard that can no longer fail is itself a failure. This target is a thin
 ## delegate for muscle memory and direct invocation — scripts/guards.sh (via `lint-guards` below)
