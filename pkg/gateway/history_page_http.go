@@ -25,7 +25,7 @@ func historyStateForError(err error) generated.SessionHistoryState {
 	if errors.As(err, &unavailable) {
 		reason = unavailable.Reason
 	}
-	if errors.Is(err, session.ErrHistoryProjection) {
+	if errors.Is(err, session.ErrHistoryProjection) && !historyStorageFailure(err) {
 		reason = "projection_error"
 	}
 	switch reason {
@@ -37,7 +37,23 @@ func historyStateForError(err error) generated.SessionHistoryState {
 	}
 	return generated.SessionHistoryState{Status: "unavailable", Reason: &reason, Message: &message}
 }
-func historyHTTPFailure(w http.ResponseWriter, id string, err error) {
+func historyStorageFailure(err error) bool {
+	var unavailable *session.ChatHistoryUnavailableError
+	return errors.As(err, &unavailable) && unavailable.Reason == "storage_error"
+}
+func historyHTTPFailure(ctx context.Context, w http.ResponseWriter, id string, err error) {
+	// Cleanup failure is primary even when its private cause also retains the
+	// read's cancellation or selector error. Keep both causes, but do not let
+	// the secondary cause suppress the storage log or select a misleading 404.
+	if historyStorageFailure(err) {
+		if ctx.Err() != nil {
+			// Transport cancellation changes delivery, not storage observability.
+			slog.Error("rest: session storage failure", "op", "read", "session_id", id, "error", err)
+			return
+		}
+		jsonSessionStorageError(w, "read", id, err)
+		return
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return
 	}
@@ -94,7 +110,7 @@ func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id
 	if err != nil {
 		attempt.err = err
 		attempt.preparationComplete()
-		historyHTTPFailure(w, id, err)
+		historyHTTPFailure(r.Context(), w, id, err)
 		return
 	}
 	attempt.validated(opts, requested)
@@ -102,14 +118,14 @@ func (a *restAPI) serveSessionHistory(w http.ResponseWriter, r *http.Request, id
 	if err != nil {
 		attempt.err = err
 		attempt.preparationComplete()
-		historyHTTPFailure(w, id, err)
+		historyHTTPFailure(r.Context(), w, id, err)
 		return
 	}
 	prepared, err := request.Read(attempt.context(r.Context()), store)
 	attempt.err = err
 	if err != nil {
 		attempt.preparationComplete()
-		historyHTTPFailure(w, id, err)
+		historyHTTPFailure(r.Context(), w, id, err)
 		return
 	}
 	attempt.page = &prepared.Page
@@ -137,7 +153,11 @@ func (a *restAPI) writePagedSessionDetail(w http.ResponseWriter, r *http.Request
 		prepared, err = request.Read(attempt.context(r.Context()), store)
 	}
 	attempt.err = err
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	storageFailure := historyStorageFailure(err)
+	if storageFailure {
+		slog.Error("rest: session storage failure", "op", "read", "session_id", meta.ID, "error", err)
+	}
+	if r.Context().Err() != nil || !storageFailure && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return
 	}
 	detail := generated.SessionDetail{HistoryState: historyStateForError(err)}

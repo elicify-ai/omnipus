@@ -2,9 +2,11 @@
 
 **Amended 2026-10-06 (founder):** this remains a dated source walkthrough, not proof of current implementation. **Stop click 1 / Esc 1 / `/stop` stops this chat's current turn only and opens a 3 s window; A second Stop / Esc / `/stop` within it stops this chat and its whole helper tree. `/cancel` does that immediately. No separate button or offer. `/stop-redirect <instruction>` stops this chat's turn and continues this chat with the instruction, in any root or helper chat.** Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged. Authority: founder decision, 2026-10-06. **[External-worker qualification, U5b 2026-10-09]:** the "any root or helper chat" redirect scope is native-engine behaviour; an external-CLI (subagent_3p) helper chat refuses `/stop-redirect` (`not_steerable`) and steers by interrupt + native-conversation resume, not tool-boundary injection (FR-043). People/agents share `AgentLoop.StopSession` with polite now, force at 3 s and detach 3 s later; no agent grace/cancel_grace/public hard option. Root completion is lifecycle done/completed, not archive/hide; scheduled/heartbeat new rounds may revive completed as system principal but never stopped. Durable delegated injection, exactly-one poll-or-wake final, held stopped-parent results and goal-tail ownership follow [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](ADR-20260928-sub-agent-control-plane.md)::Amended 2026-10-06. Unrelated older source claims are not silently refreshed by this document-only task.
 
-**Date:** 2026-04-27
-**Method:** Source-only walkthrough of `pkg/` and `cmd/`. Docs, BRDs, and `CLAUDE.md` were intentionally excluded. Every claim cites `file:line`. Anything not present in the code is flagged as a gap, not assumed.
-**Scope:** Agent loop, memory & sessions, tools system (incl. MCP and skills), channels & bus.
+**Chat-history amendment — 2026-10-23:** Section 2, the session-history row in Section 7, and the memory qualification in Section 8 describe source read on `feature/1266-green-be` at `980a1a2f23f186172d50a742882a4e02a98a03b9`. They replace the old description of chat reads as full transcript/JSONL playback. **Code wins over docs.** This is source verification, not fresh runtime, browser, platform or release acceptance. Current accuracy of unrelated, pre-existing sections is **Unknown**: they were not re-audited in this amendment.
+
+**Original walkthrough date:** 2026-04-27
+**Method:** The original source-only walkthrough covered the backend. Its untouched line-number citations are historical, not revalidated current evidence. The chat-history amendment uses absolute `file::symbol` citations to source read for this amendment; anything outside that verified scope is marked **Unknown**, not inferred absent.
+**Scope:** Original agent loop, memory & sessions, tools system (incl. MCP and skills), channels & bus; the 2026-10-23 refresh covers the session-history store, gateway carriers, standalone repair command and frontend reader.
 
 ---
 
@@ -71,56 +73,136 @@ The loop is a classic ReAct-style tool-using loop, implemented inline rather tha
 
 ---
 
-## 2. Memory & Session
+## 2. Session storage and bounded chat history
 
-### 2.1 What "memory" actually is in code
+**Evidence scope:** Source-verified at `980a1a2f23f186172d50a742882a4e02a98a03b9`, 2026-10-23. This section describes chat display history, not every product memory or model-context feature. Wider claims about semantic retrieval, tokenization, summaries, daily memory, heartbeat or export facilities are **Unknown** in this refresh; the old negative claims about those features are not carried forward as current facts.
 
-Memory in this codebase is **conversation history + a rolling summary**. There is **no** RAG, vector index, semantic retrieval, or per-fact memory layer. Retrieval is linear playback of stored messages.
+### 2.1 Content authority versus the display reader
 
-- `pkg/memory/store.go:9-42` defines the `Store` interface: `AddMessage`, `AddFullMessage`, `GetHistory`, `SetHistory`, `GetSummary`, `SetSummary`, `Truncate`, `Compact`.
-- `JSONLStore` (`pkg/memory/jsonl.go`) is the canonical implementation: append-only JSONL with a sidecar `meta.json` containing summary, skip offset, and counts.
-- `pkg/session/manager.go` (`SessionManager`, RWMutex over an in-memory map, JSON snapshots on `Save`) is the legacy path; new sessions use `UnifiedStore` (`pkg/session/unified.go:51-100`) which delegates message storage to a `JSONLStore` under `.context/`.
+The addressed, append-only archive is the content authority. `ArchiveDayStore.Append` writes and syncs the canonical record before returning its address. The history index contains locations, digests, occurrence ranks and correction/reference metadata, **not a second copy of message bodies**. The gateway reads selected source groups through `ReadChatHistoryPage`, not a lifetime transcript scan.
 
-### 2.2 On-disk layout
+```text
+canonical archive + input dispositions
+                |
+       bounded reconciliation
+                v
+     derived checkpoint + ordered tree
+                |
+       pinned, immutable read cut
+                v
+  selected groups + bounded dependencies
+                |
+     shared gateway projector / weigher
+                v
+     REST page or WS history snapshot
+```
 
-- Per-agent root: `~/.omnipus/agents/{agentID}/sessions/`.
-- Per session:
-  - `meta.json` — `SessionMeta`: ID, status (`StatusActive` | `StatusArchived` | `StatusInterrupted`, `pkg/session/daypartition.go:40-50`), timestamps, per-agent compaction summaries.
-  - `.context/{sanitized_key}.jsonl` — one message per line.
-  - `.context/{sanitized_key}.meta.json` — `sessionMeta` (`pkg/memory/jsonl.go:35-43`) with summary, skip offset, message count.
-  - `transcript.jsonl` — day-partitioned record with `EntryType` ∈ {`Message`, `Compaction`, `System`, `ToolCall`} (`pkg/session/daypartition.go:26-38`).
-- Path sanitization replaces `:`, `/`, `\` with `_` for cross-platform safety (`pkg/memory/jsonl.go:92-97`).
-- `~/.omnipus/agents/{agentID}/memory/daily/` is **created** by `pkg/datamodel/init.go:140-172` but **not written to** by any code in `pkg/memory` or `pkg/session` — gap.
+`ReadTranscriptView` still exists: it reads the merged transcript with dispositions, limits it to the segment since the last clear, and removes saved inputs. Its continued existence does **not** mean the paged messages/detail/snapshot path uses that full-read helper.
 
-### 2.3 Token counting and compression
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/archive_day_store.go::ArchiveDayStore.Append`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::historyRecord`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/transcript_view.go::ReadTranscriptView`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_projection.go::historyPageRequest.Read`.
 
-- Token counting is a single chars-per-token heuristic regardless of model: `tokens = chars × 2 / 5` plus 256/media item and 12/message overhead (`pkg/agent/context_budget.go:89-131`). No provider-specific tokenizer.
-- `isOverContextBudget` is checked before each LLM call (`pkg/agent/context_budget.go:161-176`).
-- `windowTrim` (`pkg/agent/loop.go::windowTrim`) is the only compaction path: it evicts the oldest whole turn(s) from the in-memory window on a token budget (boundaries detected by `parseTurnBoundaries`, `pkg/agent/context_budget.go::parseTurnBoundaries`) and deletes nothing on disk. The retired LLM summariser (`maybeSummarize` / `summarizeSession` / `forceCompression`) no longer exists (`pkg/agent/window_trim_test.go` asserts those methods are never redefined).
-- `Compact` (`pkg/memory/jsonl.go:405-442`) physically rewrites the JSONL to discard skipped lines.
+### 2.2 Derived per-session index and publication
 
-### 2.4 Persistence and concurrency
+For an indexed canonical session, the private index directory is named by `ChatHistoryIndexDirectory`, currently format version 1. The store resolves its format marker, checkpoint, generation journals and staging area from that session's directory. This is not the former per-agent context-store layout.
 
-- Atomic writes everywhere (`fileutil.WriteFileAtomic`, `os.Rename`) — `pkg/memory/jsonl.go:119-125`, `:444-459`; `pkg/session/manager.go:219-254`.
-- JSONLStore uses a **64-shard mutex pool** keyed by FNV hash of session key (`pkg/memory/jsonl.go:21-77`), giving O(1) memory regardless of session count.
-- `UnifiedStore` has a coarse `sync.Mutex` for directory ops (`pkg/session/unified.go:56-60`).
-- Crash safety: meta is written *before* JSONL rewrite, so a crash mid-Compact leaves `Skip=0` and the old JSONL intact — readers may see "extra" messages but never lose data (`pkg/memory/jsonl.go:383-396, 427-441`).
+| Component | Implemented role |
+|---|---|
+| Checkpoint | `historyCheckpoint` records format/session ownership, publication and retention generations, journal file, root, committed mutation end, maximum rank, covered archive ends, disposition end and source anchor. Loading rejects a missing/null root and a nonempty rank with root zero rather than fabricating empty history. |
+| Ordered tree | Copy-on-write nodes preserve old roots for readers. Node and commit frames use `CHI1` framing, a bounded length and SHA-256 checksum; decoding validates the frame variant. |
+| Publication | After canonical acceptance, `historyPublish` flushes derived nodes, writes the transaction footer, syncs the generation file, then publishes the checkpoint/root. An accepted canonical save and derived readiness are separate outcomes. |
+| New identity | `initEmptyChatHistoryIndexLocked` publishes an empty baseline for the new-identity path. An interrupted creation can resume only through verified empty, unpublished state; existing content is not replaced by an invented empty index. |
 
-### 2.5 Retention
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_index.go::ChatHistoryIndexDirectory`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::historyCheckpoint`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::historyLoadCheckpoint`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::historyCreateTree`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_tree.go::chatHistoryIndexTree.set`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_tree.go::chatHistoryIndexTree.readFrame`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::historyPublish`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_index.go::initEmptyChatHistoryIndexLocked`.
 
-- `RetentionSweep` (`pkg/session/retention_sweep.go:18-89`) deletes JSONL files older than `storage.retention.session_days` (default in `pkg/datamodel/init.go:56-60`). Default 90 days. No per-message TTL.
+### 2.3 Online recovery and lock boundaries
 
-### 2.6 Heartbeat
+Online reconciliation starts from a valid checkpoint and collects **at most 64 combined archive, disposition and expired-partition mutations**. Item 65 returns typed unavailable history with `catchup_limit`; it is not processed as another batch of a larger historical rebuild. Missing or inconsistent baseline state is not a successful empty conversation.
 
-- `pkg/heartbeat/service.go` is unrelated to memory: it polls a `TaskQueueChecker` and emits via the `MessageBus`. No memory/session interaction.
+The per-session `chatHistoryOwner.mu` serializes reconciliation **across its I/O**. Within that ownership, reconciliation briefly takes the session shard and archive append mutex to capture source ends, releases those capture locks before reading suffix content, and takes the session shard again for publication. Canonical acceptance callbacks use a nonblocking `TryLock`: they do not wait behind that owner while retaining the session shard. A skipped derived update leaves a suffix for the bounded reconciler.
 
-### 2.7 Memory gaps (in-code reality vs. apparent intent)
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_reconcile.go::historyCollectMutations`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_reconcile.go::reconcileHistoryOwned`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_index.go::reconcileChatHistoryIndex`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_index.go::historyAccepted`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_index.go::historyDispositionAccepted`.
 
-1. No RAG / embeddings / semantic recall.
-2. No per-provider tokenizer.
-3. The `memory/daily/` directory is provisioned but never used.
-4. No per-message TTL; only session-level retention.
-5. No memory export/backup API surfaced through the gateway.
+### 2.4 Read cuts, retention generations and cleanup errors
+
+The page reader captures a checkpoint, opens its tree and pins that generation under the session shard, then releases the shard. Selection, canonical-body reads and the injected gateway weigher run against that immutable cut without retaining the session shard or archive append mutex. Selection keeps source groups whole, seeks by index metadata and passes each candidate page to the real carrier weigher; it caps a page at 100 source groups. The byte budget is soft: the row floor or an indivisible group can override it, with the override recorded in page metadata.
+
+| Boundary | Implemented behavior |
+|---|---|
+| Retention publication | `historyCompact` creates a fresh generation, removes rich metadata for expired partitions and preserves opaque position-to-rank tombstones. The checkpoint's retention generation lets a reader detect that its captured content cut moved. |
+| Retention caller | `RetentionSweep` expires rolled archive content through `expireArchiveSessions`, then releases all session shards before `reconcileExistingChatHistory`, including a zero-removal pass. |
+| Reselect bound | A moved retention cut reclassifies that attempt's selected/lookahead/dependency reads as discarded and increments retries. There are **three attempts total: initial selection plus at most two reselects**. A third moved cut returns typed unavailable history with existing reason `index_inconsistent`. |
+| Pins and retirement | Old rich generation files remain while readers pin them. Attempt-scoped defers close the tree handle before releasing its pin, including error and panic unwinding. |
+| Release failure | The last-reader release callback returns errors. A real removal failure remains pending and surfaces to the page caller as typed `storage_error`, even if retention also moved. Normal reconciliation retries pending retirement, including zero-mutation reads; an already absent file is success. |
+
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_select.go::readChatHistoryPage`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_select.go::historySelect`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_compact.go::historyCompact`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/retention_sweep.go::RetentionSweep`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::chatHistoryOwner.retain`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::chatHistoryOwner.retire`.
+
+### 2.5 Generated REST page and session-detail union
+
+`newHistoryPageRequest` is the shared prepared reader/projector/weigher for REST messages, session detail and snapshot replay. It measures the actual REST and historical-WebSocket encodings and uses the larger carrier size, with memoization scoped to a request/cut. The messages handler performs addressed-session access checks before strict history-query validation, and writes the prepared, validated envelope rather than a raw message array or legacy paging headers.
+
+| Carrier | Implemented shape |
+|---|---|
+| Messages | Generated `SessionHistoryResponse`: entries, page information, earlier/later flags, optional before/after continuations, session identity and optional recorded absolute token total. |
+| Detail: available | Generated `SessionDetail` with `history_state.status = available`, authorized session metadata, messages and page fields. |
+| Detail: unavailable | The same generated carrier with `history_state.status = unavailable`; authorized session metadata remains, but messages, page information and paging fields are omitted. This is not an empty successful page. |
+
+The available/unavailable distinction is a **semantic union**, enforced by the detail writer's field construction and runtime schema validation; it is not a claim that the generated Go carrier is a language-level discriminated union.
+
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_projection.go::newHistoryPageRequest`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_projection.go::historyPageRequest.prepare`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_http.go::serveSessionHistory`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_http.go::writePagedSessionDetail`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/api/generated/openapi_types.gen.go::SessionHistoryResponse`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/api/generated/openapi_types.gen.go::SessionDetail`.
+
+### 2.6 WebSocket attach, live-only recovery and source ownership
+
+Attach resolves the addressed session and checks access before validating history sizing, then binds the connection with live frames held. Snapshot preparation must succeed **before** a snapshot frame can tell the client to replace history.
+
+```text
+success: snapshot metadata -> current state -> historical frames / replay done
+         -> uncovered current projection -> catch_up_complete(snapshot)
+         -> held live frames
+
+history unavailable: current state(unavailable) -> current projection
+                     -> catch_up_complete(live_only) -> held live frames
+                     [no snapshot or history wipe]
+```
+
+`live_only` does not claim history loaded or acknowledge attention as successful history delivery. A servable incremental journal takes its own complete-tail path; page sizing does not truncate that journal. Cancellation or delivery failure does not produce successful completion.
+
+For historical entry-derived frames, `prepareGroup` creates a generated `HistoryEntryOrigin` from the actual source occurrence. `stampHistoryOrigin` applies it to the supported typed message, tool, error and media frame variants. Session-only completion or current-projection cards do not receive an invented historical source owner. Historical replay `done` is a diagnostic boundary, not a fresh live-turn completion or fresh absolute usage observation.
+
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/websocket_replay.go::handleAttachSessionWithAck`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/websocket_replay.go::sendIncremental`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_websocket.go::sendPreparedHistorySnapshot`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_prepare.go::historyPageRequest.prepareGroup`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_replay_entry.go::stampHistoryOrigin`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_projection.go::historyPageRequest.prepare`.
+
+### 2.7 Content-free page diagnostics
+
+An authorized page attempt has one `history_page` summary. Its explicit fields describe carrier/mode/outcome, requested sizing, projected counts/bytes, selected/lookahead/dependency/recovery/discarded reads, index/disposition reads, retention retries and successful-page budget/retention metadata. The summary contains no message bodies, tool arguments, session/message identifiers, history positions, filesystem paths or raw storage causes. This statement applies to that summary, **not every gateway log**. `preparationComplete` freezes its duration before response/control delivery can block.
+
+Source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_diagnostics.go::historyPageAttempt.finish`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_diagnostics.go::historyPageAttempt.preparationComplete`.
+
+### 2.8 Standalone offline repair, not a product-binary fallback
+
+The repair program has its own `main` and an explicit operator-only Makefile target, `history-index-repair`. It is **not shipped inside the Omnipus application binary**, nor a dependency of the normal build/install/release targets. The product entry point separately calls `app.Main`.
+
+Repair supports dry-run, apply and verify. `prepareAllSessions` invokes the shared `PrepareChatHistoryIndex` builder; the offline builder can traverse retained canonical input rather than obeying the online 64-mutation recovery limit. It uses the same archive/disposition reducers. The command plans all sessions before publication and invokes the shared index verifier afterward.
+
+Apply prerequisites are **check-only**, not an exclusion lock: `repairGuards` checks stopped-instance evidence, backup/source validity and stopped evidence again, with checks around publication and at the end. They do not guarantee that another process cannot start after a check; that residual race remains. A late guard/publication failure can follow an already-published derived checkpoint. The command reports the failure and actual publication counts; it does not automatically restore the backup or retry the operation.
+
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/chat-history-index-repair/main.go::main`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/Makefile::history-index-repair`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/omnipus/main.go::main`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/chat-history-index-repair/plan.go::prepareAllSessions`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_build.go::PrepareChatHistoryIndex`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/chat-history-index-repair/plan.go::repairGuards`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/chat-history-index-repair/evidence.go::verifyStoppedEvidence`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/cmd/chat-history-index-repair/plan.go::runRepairPlan`.
+
+### 2.9 Frontend reader, live tail and inactive-body release
+
+`createHistorySlice` owns latest/older/newer/window-refresh actions. Each asynchronous action captures a view generation, an `AbortController` and its own baseline/staging; it checks ownership before committing. Refresh is bounded to the saved reader interval and 500 positions, with continuation/progress and retention-generation checks.
+
+| State boundary | Implemented behavior |
+|---|---|
+| Reader window | `applyHistoryPageToBucket` merges by source position and trims the committed reader interval to **500 source positions**, dropping the opposite edge. Positions are not sorted lexicographically. If trimming would remove protected positions, this source version returns no patch; a later successful deferred commit is **Unknown**, not established by that branch. |
+| Recent/live window | A latest page seeds up to **100** recent entries. While viewing historical messages, `detachedLivePatch` keeps the distant live tail separate from reader order and shares a 100-entry allowance between hidden live owners and cached recent entries. Pending/current execution state is handled separately; 500 + 100 is not a claim that every client object is globally capped at 600. |
+| Body ownership | `historyRowsPatch` replaces message bodies and prunes associated tool, text, alias and span-owner maps to retained rows rather than keeping every visited history body. |
+| Inactive session | Foreground switching calls `releaseSessionHistory` for the previous session. It aborts reads, clears staging/protection and messages/detail query caches, retains necessary pending/current owners, empties the history window, advances its view generation and requires a new snapshot. |
+| Rendering | `VirtualizedMessageList` in the chat message-list module uses the virtualized renderer when available and the plain-list fallback without `ResizeObserver`. Both use the history viewport hook and older/newer boundary components; virtualization alone is not the body-memory policy. |
+
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/src/store/chat/history.ts::createHistorySlice`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/src/store/chat/history-merge.ts::applyHistoryPageToBucket`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/src/store/chat/history-live.ts::detachedLivePatch`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/src/store/chat/history-state.ts::historyRowsPatch`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/src/store/chat.ts::registerSyncChatForeground`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/src/components/chat/ChatMessageList.tsx::VirtualizedMessageList`.
+
+### 2.10 Verification limits
+
+This amendment verifies implementation seams by reading source. Fresh execution of repair on every supported operating system, built-UI acceptance, independent reviewer closure and whole-release readiness are **Unknown in this documentation task**. The held session-list usage-contract/projection path is not changed or certified here.
 
 ---
 
@@ -302,20 +384,24 @@ Channels publish *into* and the manager consumes *from* the bus — channels the
 
 ## 7. Cross-cutting summary table
 
+Only the session-history row was refreshed on 2026-10-23; current accuracy of the other historical rows is **Unknown** in this amendment.
+
 | Subsystem | Interface | Registry | Registration site | Runtime extension? |
 |---|---|---|---|---|
 | Tools (native) | `tools.Tool` | `tools.BuiltinRegistry` (shared, mutex map) | One-time boot in `registerSharedTools`; per-agent filtered by `FilterToolsByPolicy` | No (compile-in only) |
 | Tools (MCP) | `tools.Tool` via `MCPTool` wrapper | `tools.MCPRegistry` (dynamic) | `MCPRegistry.RegisterServerTools` on connect; `EvictServer` on disconnect | **Yes — config-driven, stdio or HTTP/SSE subprocess** |
 | Skills | `skills.SkillRegistry` (for sources) | `RegistryManager` + filesystem scan | `SkillsLoader` scans 3 dirs | **Yes — filesystem drop-in + ClawHub install** |
 | Channels | `channels.Channel` (+ capability ifaces) | Factory map (`RegisterFactory`) | `func init()` per subpackage | No (also requires editing `ChannelsConfig` + `initChannels()` switch) |
-| Memory | `memory.Store` | n/a (per-agent JSONL) | n/a | No |
+| Session chat history (2026-10-23 source refresh) | `ReadChatHistoryPage`; generated REST/detail/WS carriers | Private per-session derived index over the canonical archive | Shared gateway page request and frontend history slice; sources in Section 2 | Compiled implementation; broader memory extension behavior **Unknown** |
 | Providers | `providers.LLMProvider` (+ optional capability ifaces) | n/a (selected by name in agent config) | Hardcoded in factory | No |
 
 ---
 
-## 8. Confirmed gaps (in-code, vs. apparent design)
+## 8. Historical gap claims — current status qualified
 
-1. No vector / semantic memory — only linear JSONL playback (`pkg/memory/jsonl.go`).
+These original observations are not a current absence audit. Except for the chat-history correction below, their current status is **Unknown** in the 2026-10-23 amendment.
+
+1. **Superseded for chat reads:** the original “only linear JSONL playback” description is false for the bounded indexed REST/detail/snapshot reader described and source-cited in Section 2. The broader availability or absence of vector/semantic memory is **Unknown** here.
 2. No provider-specific tokenization — single chars/token heuristic (`pkg/agent/context_budget.go:89-131`).
 3. `memory/daily/` directory is provisioned but unused (`pkg/datamodel/init.go:140-172` vs. no writers).
 4. No generalized `BridgeAdapter` type for external channels — WhatsApp encodes the bridge directly (`pkg/channels/whatsapp/whatsapp.go:31-46`).

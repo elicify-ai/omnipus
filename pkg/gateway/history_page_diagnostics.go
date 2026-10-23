@@ -41,6 +41,10 @@ func historyPageOutcome(err error) string {
 	if err == nil {
 		return "success"
 	}
+	// A typed cleanup/storage failure outranks the read cause it wraps.
+	if historyStorageFailure(err) {
+		return "storage"
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "abort"
 	}
