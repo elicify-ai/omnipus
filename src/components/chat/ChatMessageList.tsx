@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useMemo, useRef } from 'react'
+import React, { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ThreadPrimitive } from '@assistant-ui/react'
 import type { ChatMessage } from '@/store/chat'
@@ -159,13 +159,14 @@ function VirtualizedMessageListInner({
 
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
-  const historicalMessages = hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages
+  const historicalMessages = useMemo(() => hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages, [hasStreamingMessage, messages])
+  const getItemKey = useCallback((index: number) => historicalMessages[index]?.historyPosition ?? historicalMessages[index]?.id ?? index, [historicalMessages])
 
   const virtualizer = useVirtualizer({
     count: historicalMessages.length,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: index => Math.max(1, drawnHistoryRows(historicalMessages[index], verboseChatEnabled)) * viewport.average,
-    getItemKey: index => historicalMessages[index]?.historyPosition ?? historicalMessages[index]?.id ?? index,
+    getItemKey,
     scrollMargin: viewport.prefix,
     overscan: 5,
     // measureElement default (getBoundingClientRect().height) is correct; no override needed.
