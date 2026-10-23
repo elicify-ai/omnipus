@@ -381,7 +381,7 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) (startErr error) {
 	ctx = resource.ctx
 	logger.InfoCF("whatsapp", "Starting WhatsApp native channel (whatsmeow)", map[string]any{"store": c.storePath})
 
-	if err := os.MkdirAll(c.storePath, 0o700); err != nil {
+	if err = os.MkdirAll(c.storePath, 0o700); err != nil {
 		return fmt.Errorf("create session store dir: %w: %w", channels.ErrLocalState, err)
 	}
 

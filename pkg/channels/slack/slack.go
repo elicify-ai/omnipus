@@ -96,12 +96,11 @@ func (c *SlackChannel) Start(ctx context.Context) error {
 	go c.eventLoop()
 
 	go func() {
-		if err := c.socketClient.RunContext(c.ctx); err != nil {
-			if c.ctx.Err() == nil {
-				logger.ErrorCF("slack", "Socket Mode connection error", map[string]any{
-					"error": err.Error(),
-				})
-			}
+		runErr := c.socketClient.RunContext(c.ctx)
+		if c.ctx.Err() == nil {
+			logger.ErrorCF("slack", "Socket Mode connection error", map[string]any{
+				"error": runErr.Error(),
+			})
 		}
 	}()
 

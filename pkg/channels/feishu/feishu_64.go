@@ -150,11 +150,10 @@ func (c *FeishuChannel) Start(ctx context.Context) error {
 	logger.InfoC("feishu", "Feishu channel started (websocket mode)")
 
 	go func() {
-		if err := wsClient.Start(runCtx); err != nil {
-			logger.ErrorCF("feishu", "Feishu websocket stopped with error", map[string]any{
-				"error": err.Error(),
-			})
-		}
+		startErr := wsClient.Start(runCtx)
+		logger.ErrorCF("feishu", "Feishu websocket stopped with error", map[string]any{
+			"error": startErr.Error(),
+		})
 	}()
 
 	return nil
