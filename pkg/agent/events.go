@@ -682,6 +682,8 @@ type SubTurnOrphanPayload struct {
 // Detail is computed live at the forwarder (NEVER persisted); only the
 // WS path surfaces it, behind Verbose Chat (operator Q2).
 type ErrorPayload struct {
+	// ChatNotice is internal; only this already-saved generated replay reaches viewers.
+	ChatNotice    *generated.ReplayMessageFrame `json:"-"`
 	Stage         string
 	Code          string
 	Message       string

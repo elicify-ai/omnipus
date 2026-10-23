@@ -14,6 +14,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -88,6 +89,11 @@ type AsyncNotifyEvent struct {
 	// Metadata is an open, currently-unused extension point (FR-N4). See the
 	// type-level doc comment above.
 	Metadata map[string]any
+
+	// Only the actual finished-tool callback supplies these private identities.
+	// They are display attribution, never routing or execution authority.
+	finishedToolName   string
+	finishedToolCallID session.ToolCallID
 }
 
 // AsyncNotifier is the reusable "wake the conversation when background work
