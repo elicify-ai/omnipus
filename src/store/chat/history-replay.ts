@@ -49,10 +49,15 @@ function sourceProjection(groups: Stage['groups'], cancellations: ReadonlySet<st
   return { positions, entries, rowCount }
 }
 
-function restorePublishedProjection(context: HistorySliceContext, sid: string, stage: Stage, beforeCommit?: SessionChatState): void {
-  if (!stage.published && !beforeCommit) return
+/** Restore the prior reader. With `failed`, the SAME store update also
+ * publishes the failed load ("Could not load messages." + Retry), so a
+ * subscriber exception during restoration cannot strand a restored reader
+ * that still claims a successful load. Returns whether the update applied. */
+function restorePublishedProjection(context: HistorySliceContext, sid: string, stage: Stage, beforeCommit?: SessionChatState, failed = false, applied: { value: boolean } = { value: false }): boolean {
+  if (!stage.published && !beforeCommit) return false
   context.withBucket(sid, b => {
     if (b.history.viewGeneration !== stage.generation || (!beforeCommit && b.history.historyLoaded)) return {}
+    applied.value = true
     // Progressive rows are still provisional: on failure restore the pre-stage
     // reader, not the partially published page captured just before commit.
     const prior = stage.published ? undefined : beforeCommit
@@ -69,8 +74,13 @@ function restorePublishedProjection(context: HistorySliceContext, sid: string, s
     const patch = historyRowsPatch(prior ?? b, rows, history.readerPositions)
     return { ...patch,
       ...(prior ? { messageOrder: patch.messageOrder!.filter(id => !hidden.has(id)), historyLiveOrder: [...hidden], recoveredFirstSend: prior.recoveredFirstSend } : {}),
-      history: { ...history, viewGeneration: b.history.viewGeneration, serverState: b.history.serverState, liveControlsReady: b.history.liveControlsReady, requests: b.history.requests } }
+      history: { ...history, viewGeneration: b.history.viewGeneration, serverState: b.history.serverState, liveControlsReady: b.history.liveControlsReady,
+        ...(failed ? { historyLoaded: false, requests: failedLatest(b.history.requests) } : { requests: b.history.requests }) } }
   })
+  return applied.value
+}
+function failedLatest(requests: SessionChatState['history']['requests']): SessionChatState['history']['requests'] {
+  return { ...requests, latest: { status: 'error', error: 'Could not load messages.', attempt: requests.latest.attempt + 1 } }
 }
 
 function publishProgressiveProjection(context: HistorySliceContext, sid: string, stage: Stage): void {
@@ -176,7 +186,22 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     return { ...state, ...active.bucket, ...(active.staging ? { pendingFirstSend: null } : {}), messages: getMessages(active.bucket), sessionsById: { ...state.sessionsById, [active.sid]: active.bucket } }
   }
   function reject(sid: string): void {
-    context.withBucket(sid, b => ({ history: { ...b.history, historyLoaded: false, requests: { ...b.history.requests, latest: { status: 'error', error: 'Could not load messages.', attempt: b.history.requests.latest.attempt + 1 } } } }))
+    context.withBucket(sid, b => ({ history: { ...b.history, historyLoaded: false, requests: failedLatest(b.history.requests) } }))
+  }
+  /** Restore and reject as one update; a store subscriber that throws again
+   * during that update is diagnosed by its own fixed class, never re-thrown
+   * past the already-published failure state. */
+  function failSnapshot(sid: string, stage: Stage, beforeCommit?: SessionChatState): void {
+    // `applied` is set inside the store update, so it survives a subscriber
+    // exception thrown after Zustand has already assigned the new state.
+    const applied = { value: false }
+    try {
+      restorePublishedProjection(context, sid, stage, beforeCommit, true, applied)
+    } catch {
+      logDiagnostic('chatHistorySnapshotRestoreFailed', { phase: 'snapshot_restore', kind: 'unexpected_exception' })
+    }
+    // The restoration published the failed load itself; otherwise publish it now.
+    if (!applied.value) reject(sid)
   }
   function begin(frame: SessionSnapshotFrame): void {
     abortHistoryReads(frame.session_id)
@@ -278,8 +303,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       // Only fixed classifications leave this boundary. Never log error text,
       // stack, source bodies/identities or opaque source positions.
       logDiagnostic('chatHistorySnapshotRejected', { phase: 'snapshot_commit', kind })
-      restorePublishedProjection(context, sid, stage, beforeCommit)
-      reject(sid)
+      failSnapshot(sid, stage, beforeCommit)
       return false
     }
   }
@@ -331,7 +355,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     // Replay done bakes historical tool state only. It cannot close a current
     // turn or commit the source page; active projection may follow it.
     if (sid && stage && frame.type === 'done' && !frame.seq && !frame.turn_id) {
-      if (frame.stats?.replay_error) { restorePublishedProjection(context, sid, stage); stages.delete(sid); reject(sid); return }
+      if (frame.stats?.replay_error) { stages.delete(sid); failSnapshot(sid, stage); return }
       for (const [position, bucket] of stage.groups) {
         const messagesById = { ...bucket.messagesById }
         const fallback = [...bucket.messageOrder].reverse().find(id => messagesById[id]?.role === 'assistant') ?? null
