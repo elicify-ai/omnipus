@@ -3463,6 +3463,7 @@ jobs:
       - fast-tier
       - vuln_check
       - cgo-gate
+      - hermetic-build
       - test
       - test-race
       - security
