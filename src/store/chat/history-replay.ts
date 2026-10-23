@@ -21,7 +21,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
 import { SessionHistoryResponse as PageSchema } from '@/lib/api/generated/schemas'
 
-type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage> } // not-wire-format: transient projection ownership
+type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage>; cancellations: Set<string> } // not-wire-format: transient projection ownership
 
 /** Local classification only; never carries source data or exception details. */
 class SnapshotProtocolError extends Error {
@@ -30,7 +30,11 @@ class SnapshotProtocolError extends Error {
   }
 }
 
-function sourceProjection(groups: Stage['groups']) {
+/** Row weight per counted source, exactly as the server weighs the record
+ * (pkg/session/chat_history_reduce.go): one row per tool call plus one
+ * narration row when it has text or no tools at all -- a content-less turn
+ * start still counts -- and none for a cancellation marker. */
+function sourceProjection(groups: Stage['groups'], cancellations: ReadonlySet<string> = new Set()) {
   const positions = [...groups.keys()]
   const entries: SessionHistoryEntry[] = []
   let rowCount = 0
@@ -39,24 +43,33 @@ function sourceProjection(groups: Stage['groups']) {
       const tools = new Map<string, PositionedToolCall>(row.tool_calls?.map(call => [call.id, call]) ?? [])
       for (const call of Object.values(group.toolCalls)) tools.set(call.id, { ...call, textOffset: group.textAtToolCallStart[call.id]?.length })
       entries.push({ ...row, historyPosition: position, ...(tools.size ? { tool_calls: [...tools.values()] } : {}) } as SessionHistoryEntry)
-      rowCount += Number(!!row.content || (tools.size === 0 && row.role === 'system')) + tools.size
+      if (!cancellations.has(position)) rowCount += Number(!!row.content || tools.size === 0) + tools.size
     }
   }
   return { positions, entries, rowCount }
 }
 
-function restorePublishedProjection(context: HistorySliceContext, sid: string, stage: Stage): void {
-  if (!stage.published) return
+function restorePublishedProjection(context: HistorySliceContext, sid: string, stage: Stage, beforeCommit?: SessionChatState): void {
+  if (!stage.published && !beforeCommit) return
   context.withBucket(sid, b => {
-    if (b.history.viewGeneration !== stage.generation || b.history.historyLoaded) return {}
-    const rows = stage.priorOrder.flatMap(id => {
-      const old = stage.baseline[id]
+    if (b.history.viewGeneration !== stage.generation || (!beforeCommit && b.history.historyLoaded)) return {}
+    // Progressive rows are still provisional: on failure restore the pre-stage
+    // reader, not the partially published page captured just before commit.
+    const prior = stage.published ? undefined : beforeCommit
+    const baseline = prior?.messagesById ?? stage.baseline
+    const history = prior?.history ?? stage.priorHistory
+    const hidden = new Set(prior?.historyLiveOrder ?? [])
+    const priorOrder = prior ? [...new Set([...prior.messageOrder, ...hidden])] : stage.priorOrder
+    const rows = priorOrder.flatMap(id => {
+      const old = baseline[id]
       const current = b.messagesById[id]
       return old ? [current && !current.historyPosition ? current : old] : []
     })
     for (const pending of retainedPending(b)) if (!pending.historyPosition && !rows.some(row => row.id === pending.id)) rows.push(pending)
-    const patch = historyRowsPatch(b, rows, stage.priorHistory.readerPositions)
-    return { ...patch, history: { ...stage.priorHistory, viewGeneration: b.history.viewGeneration, serverState: b.history.serverState, liveControlsReady: b.history.liveControlsReady, requests: b.history.requests } }
+    const patch = historyRowsPatch(prior ?? b, rows, history.readerPositions)
+    return { ...patch,
+      ...(prior ? { messageOrder: patch.messageOrder!.filter(id => !hidden.has(id)), historyLiveOrder: [...hidden], recoveredFirstSend: prior.recoveredFirstSend } : {}),
+      history: { ...history, viewGeneration: b.history.viewGeneration, serverState: b.history.serverState, liveControlsReady: b.history.liveControlsReady, requests: b.history.requests } }
   })
 }
 
@@ -176,13 +189,14 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
         older: { status: 'idle', error: null, attempt: 0 }, newer: { status: 'idle', error: null, attempt: 0 }, refresh: { status: 'idle', error: null, attempt: 0 } } } }))
     const bucket = context.get().sessionsById[frame.session_id]
     stages.set(frame.session_id, { frame, groups: new Map(), generation: bucket.history.viewGeneration, baseline: { ...bucket.messagesById }, invalid: false,
-      progressive: isProgressiveAttachFrame(frame), published: false, priorOrder: bucket.messageOrder.slice(), priorHistory: bucket.history, publishedRows: {} })
+      progressive: isProgressiveAttachFrame(frame), published: false, cancellations: new Set(), priorOrder: bucket.messageOrder.slice(), priorHistory: bucket.history, publishedRows: {} })
   }
   function collect(frame: ServerFrame, sid: string, stage: Stage, reduce: (frame: ServerFrame) => void): void {
     const origin = 'history_origin' in frame ? frame.history_origin : undefined
     if (!origin) return
     let position: string
     try { position = historyPosition(origin.position, 'WS history', ['history_origin', 'position']) } catch { stage.invalid = true; return }
+    if (frame.type === 'replay_message' && frame.role === 'turn_canceled') stage.cancellations.add(position)
     const previous = stage.groups.get(position) ?? { ...emptySessionState(), isReplaying: true, awaitingCatchUp: true }
     active = { sid, bucket: previous, staging: true }
     // A tool-only owning source is a real non-prose group, not the preceding
@@ -220,8 +234,9 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
   function finish(sid: string, stage: Stage): boolean {
     const bucket = context.get().sessionsById[sid]
     if (!bucket || bucket.history.viewGeneration !== stage.generation || (stage.published && bucket.history.historyLoaded)) return false
+    let beforeCommit: SessionChatState | undefined
     try {
-      const { positions, entries, rowCount } = sourceProjection(stage.groups)
+      const { positions, entries, rowCount } = sourceProjection(stage.groups, stage.cancellations)
       const baseline = { ...stage.baseline, ...stage.publishedRows }
       const { frame } = stage
       const parsed = PageSchema.safeParse({ ...frame, entries: [] })
@@ -231,6 +246,9 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       if (rowCount !== frame.page_info.row_count) throw new SnapshotProtocolError('row_count')
       const page: SessionHistoryPage = { ...parsed.data, entries }
       context.withBucket(sid, original => {
+        // Zustand may publish this projection before a subscriber throws. Keep
+        // the immediate prior reader so that failure is still transactional.
+        beforeCommit = original
         const recovered = settleRecoveredSnapshotInput(original, page)
         const { bucket: b, page: completedPage } = settleCompletedSnapshot(recovered, page, baseline, frame.reason === 'boot_mismatch')
         const completion = b === original ? {} : { isStreaming: b.isStreaming, wipedOpenTurnIds: b.wipedOpenTurnIds, recoveredFirstSend: b.recoveredFirstSend }
@@ -260,7 +278,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       // Only fixed classifications leave this boundary. Never log error text,
       // stack, source bodies/identities or opaque source positions.
       logDiagnostic('chatHistorySnapshotRejected', { phase: 'snapshot_commit', kind })
-      restorePublishedProjection(context, sid, stage)
+      restorePublishedProjection(context, sid, stage, beforeCommit)
       reject(sid)
       return false
     }

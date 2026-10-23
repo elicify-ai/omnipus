@@ -128,6 +128,7 @@ While reading older history, **Return to latest** is always available, including
 | What happens | What stays, and how to recover |
 |---|---|
 | An earlier, newer or latest read fails | Your current messages stay. The action shows its own error and **Retry**, which repeats that read, not your last instruction. Focus stays on the action while it loads or fails. |
+| A replacement snapshot fails while being applied | The previous readable messages are restored, and **Could not load messages.** appears with **Retry**. Rejected replacement messages do not stay on screen. Retry deliberately reads the recent bounded page; it never resends your instruction. |
 | A reconnect needs a fresh snapshot while you read older history | The recent tail and current controls refresh separately. Your loaded interval is checked directly, without walking back from the live end or automatically returning you there. |
 | The interval check fails | **Could not refresh loaded messages.** appears with **Retry** and an out-of-date notice. Automatic paging pauses until that same interval is checked successfully or you deliberately leave it. |
 | A page would remove your protected reading position or focused row from the bounded window | **Loading this page is paused to protect your reading position. Scroll or move focus, then retry.** appears with **Retry**. Your current window and focus stay in place; no page is silently reported as loaded. After moving to a safe position, retry explicitly. |
