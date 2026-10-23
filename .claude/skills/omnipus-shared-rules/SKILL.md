@@ -5,7 +5,7 @@ description: Baseline procedure for every Omnipus dev-team role — the fifteen 
 
 # Omnipus Shared Rules
 
-Last reviewed: 2026-10-23 — approved delivery-process rollout
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 
 Root `CLAUDE.md` is the authority on project facts and hard constraints — the *what*.
 This skill is the *how*: the working procedure every dev-team role shares. It never
@@ -101,9 +101,12 @@ to the section instead of copying it, so there is one source per fact.
 - For an approved cluster run, use `deploy/ci-worker/ci-cluster.sh <ref>` (detail:
   `deploy/ci-worker/CLAUDE.md`, `docs/internal/architecture/ci-cluster-design.md`). Parse
   `RESULT:` / `GATE FAILURE(S)` in saved logs, never the ssh wrapper's exit code.
-- Match any qualified quarantine verdict to the single tracked list and issue links
-  under root `CLAUDE.md` ("CI quarantine"). Until that mechanism is evidenced, retain
-  the raw red result; do not turn an exception into an unqualified green.
+- Use the implemented CI aggregate/list linked from root `CLAUDE.md` ("CI
+  implementation pointer", "CI quarantine"). Match the required CI check's summary
+  to its exact tests and steps, open issues and candidate/run attempt; raw leaf failures
+  remain failures, not passed tests. Fly logs do not apply this GitHub-only aggregate.
+  PR eligibility follows destination base, not source name or draft status; keep
+  lane checks targeted rather than opening a PR per lane to obtain full CI.
 - Reading results honestly: capture exit codes directly (`cmd > log 2>&1; echo "exit=$?"`
   — never through a pipe); confirm the test actually ran (count named `--- PASS`/`--- FAIL`
   lines, not just `ok`); a bare trailing `FAIL` with zero `--- FAIL` lines is hang or
