@@ -36,6 +36,9 @@ export function observeTraffic(page: Page) {
   const pages: { url: string; status: number; body: unknown }[] = [];
   const sends: Extract<WsFrame, { type: 'message' }>[] = [];
   page.on('websocket', (socket) => {
+    // A development build also opens Vite's HMR socket. Validate every real
+    // gateway chat frame, not unrelated development-server protocol messages.
+    if (new URL(socket.url()).pathname !== '/api/v1/chat/ws') return;
     socket.on('framereceived', ({ payload }) => {
       const parsed = WsFrame.safeParse(JSON.parse(payload.toString()));
       if (!parsed.success) {
