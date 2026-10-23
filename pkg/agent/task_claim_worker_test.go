@@ -102,10 +102,7 @@ func (w *claimingWorker) Chat(
 	case cur.claim == "":
 		return &providers.LLMResponse{Content: cur.content}, nil
 	}
-	args := map[string]any{"status": cur.claim}
-	if cur.evidence != "" {
-		args["evidence"] = cur.evidence
-	}
+	args := map[string]any{"status": cur.claim, "evidence": cur.evidence}
 	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
 		ID: fmt.Sprintf("call-goal-claim-%d", w.started), Type: "function",
 		Name: tools.GoalClaimToolName, Arguments: args,
