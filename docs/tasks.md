@@ -129,6 +129,14 @@ A task flows from Inbox toward Done; Blocked hangs off to the side until its dep
 
 **Agents cannot certify their own task runs with `update_task`.** While working on that task, an agent cannot set its status to Done or Failed; it uses `goal_claim` with `met` and evidence when finished, or `blocked` if it cannot proceed. The judge decides the outcome of the run. Outside a run, `update_task` also refuses Done for a regular task with acceptance criteria: start the task so its work can be judged rather than skipping those checks.
 
+### How completion claims are judged
+
+The `evidence` field is required on every `goal_claim` call, but its text may be empty or only spaces. An empty-evidence completion claim is recorded and judged, not refused for lacking evidence text. The Judge checks the acceptance criteria and Definition of Done using the run's conversation and tool results as well as the claim.
+
+An unmet verdict uses one goal try. While tries remain, the agent keeps working in the same run with the Judge's feedback. When the try budget runs out, that run fails and uses a task attempt; another run can start if attempts remain. Repeated empty claims can therefore end the task **Failed**, rather than retrying for free.
+
+When the Judge upholds a claim, the task's result is the worker's actual answer, not its evidence sentence. Empty claim evidence does not erase a real answer or turn it into a failure. A genuinely empty answer still fails for producing no result.
+
 ## The task detail panel
 
 Click or tap a card or List row and the task detail panel slides in. The separate info icon opens a read-only details panel first; **Open task** inside it opens the task detail panel. Every field in the detail panel saves as you edit; there is no Save button. From here you can:

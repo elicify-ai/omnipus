@@ -55,6 +55,12 @@ flowchart LR
 
 The agent works, claims completion, and the Judge either ends the goal or sends the agent back with the list of what is missing.
 
+### Claims with empty evidence
+
+An agent must include the `evidence` field whenever it calls `goal_claim`, even if the text is empty. Leaving the field out is a validation error; including it with empty text or only spaces is different. A completion claim with empty evidence is recorded and goes to the Judge, rather than being refused for having no evidence text.
+
+The Judge checks the acceptance criteria using the conversation and the agent's tool results, not just the evidence sentence. Empty evidence is neither an automatic pass nor a free retry. Each completed review that finds the goal unmet uses one try and, while tries remain, sends the agent back with the Judge's reasons. Repeated empty claims can therefore exhaust the try budget and end the goal as **failed**.
+
 ## What you see while a goal runs
 
 Each goal shows as a labelled pill at the bottom-right of the chat:
@@ -104,6 +110,7 @@ A goal ends one of four ways — met, tries exhausted, expired, cleared by you �
 - For a helper working on a goal, the parent chat shows the Judge's conclusion as a lasting row: **Goal met** when the goal ends met, a not-met-yet notice when the helper continues, or **Not verified — the check could not complete** when the check cannot finish. The helper keeps its own existing outcome/check entry. An unmet continuing round and a Not verified conclusion do not become a Goal met card; the goal stays active. One ending starts at most one parent turn, with the verdict condition, Judge reason and hand-back retained together. A Stop or an unanswered question can hold that turn without losing the report.
 - An unverified criterion is different from an unavailable Judge. A review that ran but still could not verify a criterion can produce an **unmet** verdict, including after repeated failures following real review progress. That can consume a goal try, send the worker back to work, and eventually consume a task attempt if the run fails. Storage or delivery failures are reported separately; a helper conclusion is not routed to a guessed parent when its saved records cannot be read or do not agree about its parent.
 - For an interactive chat goal, a detected failure to save the conclusion in the chat transcript or goal record, resolve the saved chat route, or queue the conclusion for that route produces a separate notice. A helper whose records cannot establish a safe audience uses the same notice: **Omnipus could not fully save or deliver the Judge's conclusion. Check disk space, file permissions and the chat's channel connection, then reload the chat. Open Verbose chat for details.** The notice is not a verdict on the work. It does not end the goal, use a try, or stop a reply that is still running. It is not a guarantee that every later connector-send failure or every plan/helper storage failure is reported this way. Reloading does not itself retry conclusion delivery.
+- If the last unmet review cannot be saved, the goal stays **active** at its last saved try count instead of ending as failed or continuing to show **judging**. A separate storage-failure notice appears. Fix the storage problem, then have the agent claim completion again; an unsaved review is not counted as a saved try.
 - Ending a goal never erases it, but goal records are swept by the same retention rule as sessions. Keep what you need somewhere durable.
 
 ## Related pages
