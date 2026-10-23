@@ -19,7 +19,10 @@ type goalAdjudicationOutcome struct {
 
 // runGoalAdjudication retains the established bool interface for callers that
 // only need bookkeeping. The outer retry loop consumes the detailed outcome.
+// It passes recordedClaim=false: this legacy entry takes the caller's
+// claimText at face value, so an empty one stays a refused, claimless call
+// (JUDGE-FR-095; ADR-084 §13 keeps the tripwire for exactly this shape).
 func (al *AgentLoop) runGoalAdjudication(ctx context.Context, agent *AgentInstance, workspaceID, sessionID string, store *session.UnifiedStore, rec *goal.Goal, claimText string, deliverSteer func(string)) (met, unavailable bool) {
-	result := al.runGoalAdjudicationOutcome(ctx, agent, workspaceID, sessionID, store, rec, claimText, deliverSteer)
+	result := al.runGoalAdjudicationOutcome(ctx, agent, workspaceID, sessionID, store, rec, claimText, false, deliverSteer)
 	return result.met, result.unavailable
 }

@@ -820,10 +820,10 @@ const (
 // pre-Phase-2 checkGoalLoopAfterTurn.
 //
 //   - claimText is the worker's completion claim for a CLAIM adjudication
-//     (placed last in the judge's input ordering via ClaimText); EMPTY for a
-//     claimless IDLE adjudication (G-3: the Judge bypasses rung-0 and reads
-//     persisted evidence — this file only TRIGGERS it, the Judge itself reads
-//     the real diffs).
+//     (placed last in the judge's input ordering via ClaimText). It may be
+//     empty when recordedClaim is true — an empty-evidence claim is a
+//     recorded claim (ADR-084 §13, issue #1431) — and must be non-empty
+//     otherwise (the FR-095 tripwire refuses that shape).
 //   - steer is the steering fed forward on an unmet-but-rounds-remaining
 //     outcome; the caller decides how it's delivered (claim path: a follow-up
 //     bus.InboundMessage re-injected by runAgentLoop; idle path: a
@@ -834,10 +834,10 @@ const (
 // return only for its own re-arm bookkeeping; all persistence + pill emission
 // happens here.
 //   - claimText is the worker's completion claim for a CLAIM adjudication
-//     (placed last in the judge's input ordering via ClaimText); EMPTY for a
-//     claimless IDLE adjudication (G-3: the Judge bypasses rung-0 and reads
-//     persisted evidence — this file only TRIGGERS it, the Judge itself reads
-//     the real diffs).
+//     (placed last in the judge's input ordering via ClaimText). It may be
+//     empty when recordedClaim is true — an empty-evidence claim is a
+//     recorded claim (ADR-084 §13, issue #1431) — and must be non-empty
+//     otherwise (the FR-095 tripwire refuses that shape).
 //   - steer is the steering fed forward on an unmet-but-rounds-remaining
 //     outcome; the caller decides how it's delivered (claim path: a follow-up
 //     bus.InboundMessage re-injected by runAgentLoop; idle path: a
@@ -860,6 +860,12 @@ func (al *AgentLoop) runGoalAdjudicationOutcome(
 	store *session.UnifiedStore,
 	rec *goal.Goal,
 	claimText string,
+	// recordedClaim — ADR-084 §13 (2026-10-23, issue #1431): true when
+	// claimText is a claim a successful goal_claim call (or a prose marker)
+	// RECORDED, whose evidence line may legitimately be empty or
+	// whitespace-only. The FR-095 tripwire below must never refuse a
+	// recorded claim; it fires only for a caller with no claim at all.
+	recordedClaim bool,
 	deliverSteer func(string),
 ) goalAdjudicationOutcome {
 	aa := &agentLoopRunGoalAdjudicationAdvance{deliverSteer: deliverSteer}
@@ -878,7 +884,14 @@ func (al *AgentLoop) runGoalAdjudicationOutcome(
 	// (settleGoalNormally) no longer exists; this guard is the tripwire
 	// that keeps a claimless call site from silently returning if one is
 	// ever reintroduced by a future merge.
-	if strings.TrimSpace(claimText) == "" {
+	//
+	// ADR-084 §13 (2026-10-23, issue #1431) narrows this tripwire: a claim
+	// a successful goal_claim call recorded is NOT claimless, even when its
+	// evidence line is empty or whitespace-only — such a claim arrives with
+	// recordedClaim=true and adjudicates like any other. The tripwire fires
+	// only for a genuinely claimless caller (recordedClaim=false and an
+	// empty claimText).
+	if !recordedClaim && strings.TrimSpace(claimText) == "" {
 		logger.WarnCF("agent", "goal: refusing a claimless adjudication (JUDGE-FR-095 retires the claimless contract)",
 			map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID})
 		return goalAdjudicationOutcome{}

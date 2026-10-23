@@ -13,8 +13,13 @@
 // task_completion_signal.go's marker parser.
 //
 // This tool's own job stops at the call boundary: validating the scope
-// preconditions (FR-090), status/evidence shape (FR-087, FR-088), and direct
-// children before reporting the claim in its result. What the engine DOES
+// preconditions (FR-090), the status enum (FR-087), and direct children
+// before reporting the claim in its result. `evidence` is required in the
+// tool's INPUT SCHEMA for every status (ADR-084 §13, 2026-10-23, issue
+// #1431) — provider-side validation enforces its presence, and this tool
+// NEVER refuses a met claim over an empty or whitespace-only evidence line:
+// the claim is recorded with the text as given and adjudicated like any
+// other (FR-088 as amended). What the engine DOES
 // with a recorded claim — resolving tool-vs-marker precedence (FR-092), dispatching a
 // deferred adjudication after the reply is delivered (D13), refusing a
 // second claim while one is already in flight (FR-101), clearing the
@@ -163,7 +168,12 @@ func (t *GoalClaimTool) Parameters() map[string]any {
 					"\"Wrote the report to report.md and read it back; all three required sections are present.\"",
 			},
 		},
-		"required": []string{"status"},
+		// ADR-084 §13 (2026-10-23, issue #1431), decision line 1: `evidence` is
+		// required in the input schema for EVERY status — provider-side
+		// validation enforces its presence, and Execute never refuses on
+		// emptiness (an empty evidence line on a met claim is recorded and
+		// adjudicated like any other claim).
+		"required": []string{"status", "evidence"},
 	}
 }
 
@@ -236,28 +246,16 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(fmt.Sprintf("goal_claim rejected: %v", sErr))
 	}
 
-	// Emptiness is evaluated after Unicode whitespace trimming
+	// The argument is trimmed after Unicode whitespace trimming
 	// (strings.TrimSpace already trims every rune unicode.IsSpace reports —
-	// JUDGE-E-28), matching FR-026's rule for evidence_quote so the two
-	// cannot disagree about what "empty" means.
+	// JUDGE-E-28), the same rule FR-026 applies to evidence_quote so the two
+	// cannot disagree about what "empty" means. ADR-084 §13 (2026-10-23,
+	// issue #1431): trimming now only NORMALISES what the Judge receives and
+	// what blocked/waiting_on_user show the operator — it never refuses. The
+	// schema requires `evidence` for every status; an empty or
+	// whitespace-only evidence line on a met claim is recorded below with the
+	// text as given and adjudicated like any other claim.
 	evidence := strings.TrimSpace(argString(args, "evidence"))
-
-	// JUDGE-FR-088: a met claim with absent/empty/whitespace-only evidence
-	// is refused AT THE CALL — an error result, nothing recorded, no round
-	// consumed, no adjudication scheduled. This is what retires the G-4
-	// bounce economics for the tool path: the correction happens inside the
-	// turn, so the model can retry immediately instead of the engine having
-	// to price a bare claim it can only detect after the turn has ended.
-	if status == GoalClaimStatusMet && evidence == "" {
-		return ErrorResult("goal_claim(status:met) rejected: evidence is required and must be non-empty — " +
-			"nothing was recorded and the goal is unchanged, so retrying without evidence will be refused again. " +
-			"If the work is done and verified, call goal_claim again now with status \"met\" AND evidence — " +
-			"one line saying what you did and how you checked it, e.g. \"Wrote the report to report.md and read " +
-			"it back; all three required sections are present.\" If the work is NOT finished, do not claim met: " +
-			"keep working and claim later. If you cannot proceed or only the operator can unblock you, claim " +
-			"status \"blocked\" or \"waiting_on_user\" instead, with the reason as evidence. " +
-			"(ADR-084 JUDGE-FR-088)")
-	}
 
 	if status == GoalClaimStatusMet {
 		if direct, ok := access.(GoalClaimDirectChildrenAccess); ok {

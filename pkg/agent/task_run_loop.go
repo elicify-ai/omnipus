@@ -448,6 +448,10 @@ const reasoningOnlySteering = "Your last turn ended at the output-token limit wi
 // budget fails the run. A Judge only an operator can fix, or one still
 // unavailable after judgeUnavailableRetryBound tries, ends the task Failed
 // with a plain reason and no attempt consumed — restarting cannot help.
+// ADR-084 §13 (2026-10-23, issue #1431): there is no empty-evidence
+// pre-guard — every met claim, its evidence line empty or not, is recorded
+// and judged; an unmet ruling spends the run's goal try as usual, and the
+// try budget still ends the task failed.
 func (te *TaskExecutor) adjudicateRunClaim(
 	ctx context.Context,
 	t *task.Task,
@@ -456,10 +460,6 @@ func (te *TaskExecutor) adjudicateRunClaim(
 	state *taskRunState,
 ) (runStep, string, string) {
 	sessStore := te.agentLoop.GetSessionStore()
-	if strings.TrimSpace(evidence) == "" {
-		steer := "A completion claim needs your own one-line statement of what you verified. Verify the work, then claim again with that line."
-		return te.continueAfterInnerTry(ctx, t, taskSessionID, "a completion claim with no evidence", steer, sessStore, run, state)
-	}
 
 	// The claim is judged against the criteria on the task's goal record — the
 	// same record a chat goal is judged from and the one the task card reads
