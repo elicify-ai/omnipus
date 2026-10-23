@@ -185,6 +185,14 @@ can follow real publications, which are reported rather than described as zero.
 Mixed refusals select exit 2 if any precondition/unconverted class is present;
 otherwise integrity/I/O selects 1. Refused sessions never produce success exit 0.
 
+Offline reconstruction can ignore a missing settlement, projection or retraction
+target only when the validated existing index proves its token/rank tombstone
+and the captured retained catalog proves the target partition is absent. A
+missing address or file by itself is not expiry proof. Unexplained missing
+targets—including missing records inside a retained partition—still refuse as
+`invalid_reference`, without inventing an orphan tool result or rewriting the
+remaining canonical effect bytes.
+
 ## Runtime limits are different from offline repair
 
 Ordinary operation may reconcile **at most 64** consistent mutation facts after

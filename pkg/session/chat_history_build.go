@@ -140,23 +140,40 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 		return nil, err
 	}
 	planning := &chatHistoryIndexTree{ctx: ctx, sid: sid, planning: map[string]json.RawMessage{}, knownRanks: map[HistoryPosition]uint64{}}
+	retainedRanks := map[uint64]bool{}
+	oldProofValid := false
 	cp := historyCheckpoint{FormatVersion: 1, SessionID: sid, ArchiveEnds: map[string]int64{}}
 	old, oldErr := historyLoadCheckpoint(ctx, dir, sid)
 	if oldErr == nil {
 		t, e := historyOpenTree(ctx, dir, old, false)
 		if e == nil {
 			e = t.walk(func(n historyNode) error {
+				if strings.HasPrefix(n.Key, "r/") {
+					var record historyRecord
+					if decodeErr := json.Unmarshal(n.Value, &record); decodeErr != nil {
+						return decodeErr
+					}
+					if record.Rank == 0 || n.Key != historyRankKey("r/", record.Rank) {
+						return errors.New("invalid retained history rank")
+					}
+					retainedRanks[record.Rank] = true
+				}
 				if strings.HasPrefix(n.Key, "p/") {
 					var rank uint64
 					if decodeErr := json.Unmarshal(n.Value, &rank); decodeErr != nil {
 						return decodeErr
 					}
-					planning.knownRanks[HistoryPosition(n.Key[2:])] = rank
+					position, positionErr := ParseHistoryPosition(n.Key[2:])
+					if positionErr != nil || rank == 0 || rank > old.Rank {
+						return errors.New("invalid history position/rank binding")
+					}
+					planning.knownRanks[position] = rank
 				}
 				return nil
 			})
-			t.file.Close()
+			e = errors.Join(e, t.file.Close())
 			if e == nil {
+				oldProofValid = true
 				cp.Rank = old.Rank
 				cp.RetentionGeneration = old.RetentionGeneration
 			} else {
@@ -169,6 +186,23 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 		return nil, err
 	}
 	cp.CurrentKey = current
+	if oldProofValid {
+		retained := make(map[string]bool, len(streams))
+		for _, stream := range streams {
+			retained[stream.key] = true
+		}
+		// The complete old tree proves token/rank-only expiry; the captured
+		// catalog independently proves the target partition is absent. Missing
+		// addresses in a retained partition never inherit this exception.
+		planning.expiredAddress = func(a ArchiveAddress) bool {
+			if retained[a.PartitionKey] {
+				return false
+			}
+			position, positionErr := historyPositionForAddress(sid, a)
+			rank := planning.knownRanks[position]
+			return positionErr == nil && rank > 0 && !retainedRanks[rank]
+		}
+	}
 	var groups int64
 	for _, stream := range streams {
 		for off := int64(0); off < stream.end; {
@@ -191,6 +225,7 @@ func PrepareChatHistoryIndex(ctx context.Context, sessionDir string, opts ChatHi
 		}
 		cp.ArchiveEnds[stream.key] = stream.end
 	}
+	planning.expiredAddress = nil // Proof is construction-local, never a runtime/lifetime cache.
 	stream := historyCapturedStream{path: filepathJoinDisposition(dir), end: dispEnd}
 	for off := int64(0); off < dispEnd; {
 		b, e := historyReadSuffix(ctx, stream, off, sid, "disposition", "suffix")
