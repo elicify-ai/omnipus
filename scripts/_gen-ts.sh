@@ -432,61 +432,6 @@ if (out !== src) {
 }
 NODE_SCRIPT
 
-# Cross-field rules the YAML states in prose and the crash-recovery wire tests
-# require of the generated Zod schemas. Fresh codegen output only — this runs
-# once per generation, before the file is typechecked.
-node - "$GEN/schemas.ts" <<'NODE_SCRIPT'
-const fs = require("fs");
-const path = process.argv[2];
-let src = fs.readFileSync(path, "utf8");
-const chains = [
-  {
-    name: "Session",
-    refine: `.refine(
-  (session) => session.lifecycle_state !== "interrupted" || session.execution === undefined,
-  { message: "an interrupted session exposes no execution", path: ["execution"] },
-)`,
-  },
-  {
-    name: "SessionLifecycleRecord",
-    refine: `.refine(
-  (record) => record.state !== "interrupted" || record.interruption_reason !== undefined,
-  { message: "a newly recorded interrupted lifecycle requires interruption_reason", path: ["interruption_reason"] },
-)
-.refine(
-  (record) => record.state === "interrupted" || record.interruption_reason === undefined,
-  { message: "interruption_reason is only valid when state is interrupted", path: ["interruption_reason"] },
-)`,
-  },
-];
-for (const chain of chains) {
-  const marker = `export const ${chain.name}:`;
-  const start = src.indexOf(marker);
-  if (start === -1) {
-    console.error(`interruption refine: ${chain.name} not found`);
-    process.exit(1);
-  }
-  const end = src.indexOf(";\n", start);
-  if (end === -1) {
-    console.error(`interruption refine: ${chain.name} has no terminator`);
-    process.exit(1);
-  }
-  const decl = src.slice(start, end);
-  if (decl.includes("interrupted session exposes no execution") || decl.includes("newly recorded interrupted lifecycle")) {
-    continue;
-  }
-  const close = decl.lastIndexOf("})");
-  if (close === -1) {
-    console.error(`interruption refine: ${chain.name} object close not found`);
-    process.exit(1);
-  }
-  const next = decl.slice(0, close + 2) + "\n  " + chain.refine + decl.slice(close + 2);
-  src = src.slice(0, start) + next + src.slice(end);
-}
-fs.writeFileSync(path, src);
-console.log("  interruption cross-field refinements applied: Session, SessionLifecycleRecord");
-NODE_SCRIPT
-
 echo "  Written: $GEN/schemas.ts"
 
 # ── Quality gates ─────────────────────────────────────────────────────────────
