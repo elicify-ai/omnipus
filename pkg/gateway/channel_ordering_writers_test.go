@@ -234,7 +234,11 @@ func TestChannelOrdering_DisableCannotRevokeSuccessor(t *testing.T) {
 			_, _, err := f.al.RequestCancelForSession(context.Background(), chatA, wu6Owner, "webchat")
 			require.NoError(t, err)
 			require.NoError(t, f.api.safeUpdateConfigJSON(func(doc map[string]any) error {
-				doc["channels"].(map[string]any)["whatsapp"].(map[string]any)["enabled"] = true
+				channelConfig, channelsOK := doc["channels"].(map[string]any)
+				require.True(t, channelsOK, "config channels must be an object, got %T", doc["channels"])
+				whatsappConfig, whatsappOK := channelConfig["whatsapp"].(map[string]any)
+				require.True(t, whatsappOK, "WhatsApp config must be an object, got %T", channelConfig["whatsapp"])
+				whatsappConfig["enabled"] = true
 				return nil
 			}))
 			b := orderingReady(t, f, "req-b", chatB)

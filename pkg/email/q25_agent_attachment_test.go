@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -91,7 +92,7 @@ func q25DirectoryNames(t *testing.T, root string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(root)
 	require.NoError(t, err)
-	var names []string
+	names := slices.Grow([]string(nil), len(entries))
 	for _, entry := range entries {
 		names = append(names, entry.Name())
 	}
