@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -377,6 +378,47 @@ type turnState struct {
 	// boundary. Set by markContinuationDispatched, cleared by
 	// resolveContinuation and by nextRoundMessageID's own one-shot consume.
 	continueSameMessageID bool
+
+	// attemptStreamText captures, per PROVIDER ATTEMPT, the visible text this
+	// attempt streamed to the user (founder decision Q59, 2026-10-23 — the
+	// truncated-tool-call self-retry). The streaming callback in
+	// runProviderAttempt records every delta it forwards to the streamer, so
+	// the agent loop holds the exact bytes the live bubble showed even when
+	// the attempt then fails — a provider call whose tool call was cut off
+	// returns a nil response, so the streamer's buffer is the only copy of
+	// that text, and bus.Streamer exposes no way to read it back.
+	//
+	// evaluateTruncatedToolCallError uses it for two decisions: whether this
+	// attempt showed the user any text at all (the old ts.lastStreamer
+	// buffer-length check answered a DIFFERENT question — "has the last
+	// streaming round ever shown text" — so a stale streamer from an earlier
+	// round falsely refused repairs on channels whose streamer persists), and
+	// to settle that text into the transcript and session history before the
+	// corrective re-prompt dispatches. Settlement keeps the live view and the
+	// persisted record identical: the partial narration was shown under its
+	// own message id, and without this write it would vanish on reload the
+	// moment the repair round's streamer replaced it as ts.lastStreamer.
+	//
+	// Cleared at every attempt entry (beginAttemptStreamCapture) so the
+	// capture is always THIS attempt's text, never a previous round's.
+	// Guarded by mu like every other field here. Bounded naturally: it never
+	// holds more than one attempt's visible content — the same bytes the
+	// streamer's own buffer already held.
+	attemptStreamText strings.Builder
+
+	// consecutiveToolCallTruncations counts CONSECUTIVE truncated tool-call
+	// refusals observed this turn (founder decision Q59, 2026-10-23 — the
+	// bound on the self-retry): bumped by evaluateTruncatedToolCallError for
+	// every refusal whose error chain carries
+	// common.ErrToolArgumentsUndecodable, reset to zero by
+	// handleProviderResponse on every provider response that completes
+	// without one. When the count reaches
+	// maxTruncatedToolCallRepairsPerTurn, no further repair dispatches and
+	// the turn ends through the existing terminal path — the same
+	// tool_call_truncated code and user-visible notice as before this
+	// counter existed. Zero value is correct: each turnState is fresh per
+	// turn generation.
+	consecutiveToolCallTruncations int
 
 	// truncationReason carries ADR-087 D2's narrow enum ("max_output_tokens"
 	// — the only value this package ever writes; "cancelled" is cancel.go's
@@ -1654,6 +1696,62 @@ func (ts *turnState) continuationRoundsSnapshot() int {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 	return ts.continuationRounds
+}
+
+// beginAttemptStreamCapture clears the per-attempt streamed-text capture.
+// runProviderAttempt calls it on entry to EVERY provider attempt — streaming
+// or not — so the capture always describes exactly the attempt about to run
+// and can never accumulate text from a previous round or retry.
+func (ts *turnState) beginAttemptStreamCapture() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.attemptStreamText.Reset()
+}
+
+// recordAttemptStreamDelta appends one visible streaming delta to the
+// per-attempt capture. Called from runProviderAttempt's streaming callback
+// with the exact delta that was forwarded to the streamer, so the capture is
+// byte-identical to what the live bubble showed — including the stream
+// filter's own stripping.
+func (ts *turnState) recordAttemptStreamDelta(delta string) {
+	if delta == "" {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.attemptStreamText.WriteString(delta)
+}
+
+// takeAttemptStreamText returns everything this provider attempt streamed so
+// far and clears the capture. The empty string means the attempt showed the
+// user no text at all.
+func (ts *turnState) takeAttemptStreamText() string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	text := ts.attemptStreamText.String()
+	ts.attemptStreamText.Reset()
+	return text
+}
+
+// noteConsecutiveToolCallTruncation bumps the consecutive truncated
+// tool-call refusal count and returns the running total, so
+// evaluateTruncatedToolCallError can compare it against
+// maxTruncatedToolCallRepairsPerTurn in one mutex pass.
+func (ts *turnState) noteConsecutiveToolCallTruncation() int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.consecutiveToolCallTruncations++
+	return ts.consecutiveToolCallTruncations
+}
+
+// resetConsecutiveToolCallTruncations clears the consecutive truncated
+// tool-call refusal count. handleProviderResponse calls it on every provider
+// response that completed without a refusal, so the bound counts
+// CONSECUTIVE truncated calls, not lifetime attempts.
+func (ts *turnState) resetConsecutiveToolCallTruncations() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.consecutiveToolCallTruncations = 0
 }
 
 // setTruncationReason records ADR-087 D2's narrow reason enum for this

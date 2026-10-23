@@ -43,9 +43,17 @@ func stripOrphanToolCallMarkup(response *providers.LLMResponse) (providers.Orpha
 // make the next attempt smaller. Factored out of orphanToolMarkupRepairMessage
 // (ADR-087 D3.6) so both repair paths — the orphan-markup re-prompt and
 // toolCallTruncationRepairMessage below — send the model byte-identical
-// wording for the same underlying fault.
-const truncationOutputCapSentence = " Your previous response was also cut off at the output-token limit before the call was complete. " +
-	"Make this call smaller: send shorter arguments, or split the work across several calls."
+// wording for the same underlying fault. The "write a large file in parts,
+// then append" example is the concrete split founder decision Q59
+// (2026-10-23) asks the note to carry — the observed live failure was a 54 KB
+// write_file retried verbatim until the turn died. The closing do-not-repeat
+// sentence matters now that the repair can follow an attempt whose narration
+// already streamed: the model must continue with the corrected call, not
+// restate what the user has already read.
+const truncationOutputCapSentence = " The response was cut off at the output-token limit before the call was complete. " +
+	"Make this call smaller: send shorter arguments, or split the work across several calls — " +
+	"for example, write a large file in parts and append the rest with follow-up calls. " +
+	"Do not repeat text you have already produced."
 
 // orphanToolMarkupRepairMessage builds the corrective turn sent back to a
 // model whose tool call arrived as text.
@@ -85,13 +93,15 @@ func isTruncatedFinishReason(reason string) bool {
 
 // toolCallTruncationRepairMessage builds the corrective turn sent back to a
 // model whose tool call was cut off at the output-token limit before it
-// could be decoded (ADR-087 D3). Reuses truncationOutputCapSentence
-// (D3.6) — the same advice orphanToolMarkupRepairMessage gives for the
-// sibling fault.
+// could be decoded (ADR-087 D3, amended by founder decision Q59
+// 2026-10-23). It states the three facts the decision requires — the call
+// was cut off at the output limit, nothing was executed, the work must be
+// split — then reuses truncationOutputCapSentence (D3.6) so both repair
+// paths send byte-identical advice for the same underlying fault.
 func toolCallTruncationRepairMessage() providers.Message {
 	return providers.Message{
 		Role: "user",
-		Content: "Your tool call was cut off at the output-token limit before it finished, so it could not run and nothing was changed." +
+		Content: "Your tool call was cut off at the output-token limit before it finished, so it could not run and nothing was executed." +
 			truncationOutputCapSentence,
 	}
 }
@@ -127,6 +137,17 @@ const (
 	// maxTruncationContinuations bounds ADR-087 D6's auto-continue rounds
 	// per turn (D6.3).
 	maxTruncationContinuations = 2
+	// maxTruncatedToolCallRepairsPerTurn bounds the truncated-tool-call
+	// self-retry (founder decision Q59, 2026-10-23): the count of
+	// CONSECUTIVE truncated calls after which the turn ends through the
+	// existing terminal path instead of re-prompting again. Three is the
+	// founder's suggested bound — "after N consecutive truncated calls in
+	// one turn, end the turn with the existing user-visible notice" — so the
+	// first TWO truncated calls each get one corrective re-prompt and the
+	// THIRD ends the turn. Any provider response that completes without the
+	// refusal resets the count (handleProviderResponse's success path), so a
+	// turn that recovers never accumulates toward the bound.
+	maxTruncatedToolCallRepairsPerTurn = 3
 	// truncatedToolCallRetryReason labels a D3 tool-call-truncation repair
 	// on the event bus, distinct from orphanToolMarkupRetryReason and the
 	// plain "empty_response"/"timeout" reasons already in use.
@@ -136,18 +157,25 @@ const (
 	truncationContinueRetryReason = "truncation_continue"
 )
 
-// evaluateTruncatedToolCallError implements ADR-087 D3: a tool call cut off
-// at the output-token limit gets exactly one bounded repair per turnLoop
-// round before the turn falls through to the terminal error path.
+// evaluateTruncatedToolCallError implements ADR-087 D3 as amended by founder
+// decision Q59 (2026-10-23, "agent retries itself"): a tool call cut off at
+// the output-token limit does NOT end the turn — the model gets a corrective,
+// model-facing repair note in the same turn and re-issues the call smaller.
+// The repair is bounded by consecutive refusals, not by the old once-per-round
+// rule: after maxTruncatedToolCallRepairsPerTurn consecutive truncated calls
+// with no successful provider response in between, no further repair
+// dispatches and the turn falls through to the terminal error path — the same
+// tool_call_truncated code and user-visible notice as before the amendment.
+// Nothing partial is ever executed: the refused response never reaches the
+// tool dispatcher (D3.7 keeps its fragment out of history too).
 //
 // Returns (repairedMessages, true) when a repair was dispatched — the
 // caller must retry the provider call with repairedMessages. Returns
 // (nil, false) when the caller's EXISTING error handling (ClassifyError,
 // media downgrade, PDF fallback, the generic terminal path) must run
-// completely unchanged: the error was not a truncated tool call, nothing
-// was streamed's worth of content was already shown, the round already
-// spent its one repair, no provider retry remains, or a hard abort is
-// already in flight.
+// completely unchanged: the error was not a truncated tool call, the
+// consecutive-refusal bound is spent, no provider retry remains, the partial
+// narration could not be settled, or a hard abort is already in flight.
 func (al *AgentLoop) evaluateTruncatedToolCallError(
 	ts *turnState,
 	err error,
@@ -160,22 +188,26 @@ func (al *AgentLoop) evaluateTruncatedToolCallError(
 	if err == nil || !errors.Is(err, common.ErrToolArgumentsUndecodable) {
 		return nil, false
 	}
-	// D3.2: only repair when nothing was streamed yet this attempt — a
-	// partially-streamed response has already shown the user real text;
-	// repairing here would duplicate it. Same idiom as the timeout-retry
-	// guard at :10487.
-	if sc, ok := ts.lastStreamer.(interface{ StreamedContentLen() int }); ok && sc.StreamedContentLen() > 0 {
+	// Q59 bound: count this refusal first. handleProviderResponse resets the
+	// counter on every provider response that completes without the refusal,
+	// so the bound is consecutive truncated calls, never lifetime attempts.
+	// Reaching it ends the turn through the caller's existing terminal path,
+	// which surfaces the existing CodeToolCallTruncated notice unchanged.
+	refusals := ts.noteConsecutiveToolCallTruncation()
+	if refusals >= maxTruncatedToolCallRepairsPerTurn {
+		logger.WarnCF("agent", "tool call cut off at the output-token limit again — consecutive-refusal bound reached, ending the turn",
+			map[string]any{
+				"agent_id":  ts.agent.ID,
+				"iteration": iteration,
+				"model":     llmModel,
+				"refusals":  refusals,
+				"bound":     maxTruncatedToolCallRepairsPerTurn,
+			})
 		return nil, false
 	}
 	// D3.3: a `continue` on the last retry exits the loop without making
-	// the promised call — do not count or announce a repair that cannot
-	// run.
+	// the promised call — do not announce a repair that cannot run.
 	if retry >= maxRetries {
-		return nil, false
-	}
-	// D3.4: one repair per turnLoop round; the caller resets
-	// roundRepairUsed at the top of every round.
-	if roundRepairUsed == nil || *roundRepairUsed {
 		return nil, false
 	}
 	// D3.8: re-check hard-abort explicitly before dispatching the repair
@@ -184,13 +216,34 @@ func (al *AgentLoop) evaluateTruncatedToolCallError(
 	if ts.hardAbortRequested() {
 		return nil, false
 	}
-
-	*roundRepairUsed = true
+	// Q59 (replacing the old D3.2 streamed-content refusal): when THIS
+	// attempt already streamed narration to the user, settle that text into
+	// the transcript and session history BEFORE re-prompting, so the live
+	// bubble and the persisted record stay identical — the repair round's
+	// streamer will replace this attempt's as ts.lastStreamer, and an
+	// unsettled buffer's text would vanish on reload. A failed settlement
+	// declines the repair (#1178 §4.2's rule: a turn whose record write
+	// failed must not continue into the next round).
+	if settleErr := al.settleTruncatedAttemptStreamText(ts); settleErr != nil {
+		logger.WarnCF("agent", "could not settle the truncated attempt's streamed narration; not re-prompting",
+			map[string]any{
+				"agent_id":  ts.agent.ID,
+				"iteration": iteration,
+				"error":     settleErr.Error(),
+			})
+		return nil, false
+	}
+	// roundRepairUsed is kept as observability only since Q59: the bound that
+	// gates repairs is the turn-scoped consecutive-refusal counter above, and
+	// beginIteration's per-round reset of this flag no longer limits anything.
+	if roundRepairUsed != nil {
+		*roundRepairUsed = true
+	}
 
 	// D3.9: the provider boundary already debited the refused attempt, before
 	// fallback/recovery. Scheduling its repair must not debit it again.
 
-	logger.WarnCF("agent", "tool call cut off at the output-token limit — re-prompting the model once",
+	logger.WarnCF("agent", "tool call cut off at the output-token limit — feeding the model a corrective error and continuing the turn",
 		map[string]any{
 			"agent_id":  ts.agent.ID,
 			"iteration": iteration,
@@ -201,8 +254,8 @@ func (al *AgentLoop) evaluateTruncatedToolCallError(
 		EventKindLLMRetry,
 		ts.eventMeta("runTurn", "turn.llm.retry"),
 		LLMRetryPayload{
-			Attempt:    1,
-			MaxRetries: 1,
+			Attempt:    refusals,
+			MaxRetries: maxTruncatedToolCallRepairsPerTurn,
 			Reason:     truncatedToolCallRetryReason,
 			Error:      err.Error(),
 		},
@@ -214,6 +267,40 @@ func (al *AgentLoop) evaluateTruncatedToolCallError(
 	// history — only this repair note is.
 	repaired := append(append([]providers.Message(nil), callMessages...), toolCallTruncationRepairMessage())
 	return repaired, true
+}
+
+// settleTruncatedAttemptStreamText persists the narration the refused
+// attempt streamed to the user, if any, before the corrective re-prompt
+// dispatches (founder decision Q59, 2026-10-23).
+//
+// A truncated tool call arrives back as a nil response — the narration
+// streamed before the cut-off call exists only in the streamer's buffer,
+// and bus.Streamer exposes no read-back. runProviderAttempt therefore
+// records every visible delta into ts.attemptStreamText as it forwards it,
+// giving this function the exact bytes the live bubble showed.
+//
+// The write mirrors flushContinuationAccumulator's settlement body:
+// appendIntermediateAssistantTranscript (which stamps the entry with the
+// refused attempt's own round message id via roundMessageIDOrNew, matching
+// the live TokenFrames), Sessions.AddMessage so the model's next request
+// still carries the text it already said, and markLastStreamerTranscriptPersisted
+// so the superseded streamer can never write the same narration a second
+// time if it were somehow finalized later.
+func (al *AgentLoop) settleTruncatedAttemptStreamText(ts *turnState) error {
+	text := ts.takeAttemptStreamText()
+	if text == "" {
+		return nil
+	}
+	restoreAccounting := ts.holdFollowingCallAccounting()
+	defer restoreAccounting()
+	ts.appendIntermediateAssistantTranscript(text)
+	if !ts.opts.NoHistory && ts.agent != nil && ts.agent.Sessions != nil {
+		if err := ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", text); err != nil {
+			return err
+		}
+	}
+	ts.markLastStreamerTranscriptPersisted()
+	return nil
 }
 
 // truncationSuccessVerdict is evaluateTruncatedSuccess's return value.
