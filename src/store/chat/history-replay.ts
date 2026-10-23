@@ -13,6 +13,7 @@ import { refreshRosterAfterAgentMutation } from './agentMutationRefresh'
 import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
 import { useSessionStore } from '@/store/session'
 import { cursorFromTerminalFrame, isPendingTailMessage } from './cursor'
+import { findFirstSendMessage } from './first-send'
 import { abortHistoryReads, registerHistoryRelease } from './history'
 import { applyHistoryPageToBucket, HistoryPageProtocolError } from './history-merge'
 import { ApiSchemaError } from '@/lib/api/http'
@@ -76,6 +77,27 @@ function publishProgressiveProjection(context: HistorySliceContext, sid: string,
   })
 }
 
+/** Reconcile an explicitly recovered input only after the selected page validates. */
+function settleRecoveredSnapshotInput(bucket: SessionChatState, page: SessionHistoryPage): SessionChatState {
+  const recovery = bucket.recoveredFirstSend
+  if (!recovery) return bucket
+  const recorded = page.entries.find(entry => entry.role === 'user' && entry.clientMessageId === recovery.clientMessageId)
+  const original = findFirstSendMessage(bucket, recovery.clientMessageId)
+  if (!recorded || recorded.role !== 'user' || !original || original.role !== 'user') return bucket
+  const messagesById = { ...bucket.messagesById }
+  delete messagesById[original.id]
+  // The recorded identity/content wins; local attachment details and first-send
+  // state survive when the replay carrier does not repeat them.
+  messagesById[recorded.id] = { ...original, ...recorded, deliveryStatus: recorded.deliveryStatus ?? 'received' }
+  const rekey = (id: string) => id === original.id ? recorded.id : id
+  return {
+    ...bucket, messagesById,
+    messageOrder: [...new Set(bucket.messageOrder.map(rekey))],
+    historyLiveOrder: bucket.historyLiveOrder?.map(rekey),
+    recoveredFirstSend: { ...recovery, reconciled: true },
+  }
+}
+
 function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryPage, baseline: Record<string, ChatMessage>, bootMismatch: boolean): { bucket: SessionChatState; page: SessionHistoryPage } {
   if (bucket.history.serverState?.status !== 'available' || bucket.activeTurnId) return { bucket, page }
   const messagesById = { ...bucket.messagesById }
@@ -128,7 +150,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     if (stage) { restorePublishedProjection(context, sid, stage); discardedSnapshots.add(sid) }
     stages.delete(sid)
   })
-  let active: { sid: string; bucket: SessionChatState } | null = null
+  let active: { sid: string; bucket: SessionChatState; staging?: boolean } | null = null
   const wrappedBucket: HistorySliceContext['withBucket'] = (sid, update) => {
     if (active && sid === active.sid) active.bucket = { ...active.bucket, ...update(active.bucket) }
     else context.withBucket(sid, update)
@@ -136,7 +158,9 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
   const wrappedGet: HistorySliceContext['get'] = () => {
     const state = context.get()
     if (!active) return state
-    return { ...state, ...active.bucket, messages: getMessages(active.bucket), sessionsById: { ...state.sessionsById, [active.sid]: active.bucket } }
+    // Isolated source reconstruction must not settle the root first-send owner,
+    // including when the same recorded row is replayed twice before COMPLETE.
+    return { ...state, ...active.bucket, ...(active.staging ? { pendingFirstSend: null } : {}), messages: getMessages(active.bucket), sessionsById: { ...state.sessionsById, [active.sid]: active.bucket } }
   }
   function reject(sid: string): void {
     context.withBucket(sid, b => ({ history: { ...b.history, historyLoaded: false, requests: { ...b.history.requests, latest: { status: 'error', error: 'Could not load messages.', attempt: b.history.requests.latest.attempt + 1 } } } }))
@@ -160,7 +184,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     let position: string
     try { position = historyPosition(origin.position, 'WS history', ['history_origin', 'position']) } catch { stage.invalid = true; return }
     const previous = stage.groups.get(position) ?? { ...emptySessionState(), isReplaying: true, awaitingCatchUp: true }
-    active = { sid, bucket: previous }
+    active = { sid, bucket: previous, staging: true }
     // A tool-only owning source is a real non-prose group, not the preceding
     // assistant bubble. The ordinary tool adapters then retain exact offsets.
     if ((frame.type === 'tool_call_start' || frame.type === 'tool_call_result') && !active.bucket.messageOrder.length) {
@@ -207,8 +231,9 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       if (rowCount !== frame.page_info.row_count) throw new SnapshotProtocolError('row_count')
       const page: SessionHistoryPage = { ...parsed.data, entries }
       context.withBucket(sid, original => {
-        const { bucket: b, page: completedPage } = settleCompletedSnapshot(original, page, baseline, frame.reason === 'boot_mismatch')
-        const completion = b === original ? {} : { isStreaming: b.isStreaming, wipedOpenTurnIds: b.wipedOpenTurnIds }
+        const recovered = settleRecoveredSnapshotInput(original, page)
+        const { bucket: b, page: completedPage } = settleCompletedSnapshot(recovered, page, baseline, frame.reason === 'boot_mismatch')
+        const completion = b === original ? {} : { isStreaming: b.isStreaming, wipedOpenTurnIds: b.wipedOpenTurnIds, recoveredFirstSend: b.recoveredFirstSend }
         if (b.history.viewMode === 'historical') {
           const needed = new Set(retainedPending(b).map(row => row.id))
           const liveOrder = (b.historyLiveOrder ?? []).filter(id => !stage.baseline[id] || needed.has(id))

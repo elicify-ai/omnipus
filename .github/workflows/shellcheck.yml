@@ -6,12 +6,18 @@
 # to either script (POSIX violation, broken chrome bundling, install
 # abort path) is caught in CI rather than at release time.
 #
-# Two jobs:
+# Three jobs:
 #   1. shellcheck — lints both scripts with `shellcheck -s sh`. install.sh
 #      is POSIX sh; cft-bundle.sh is bash. Both must exit 0.
 #   2. bats — runs both bats test suites. bats is installed via apt on
 #      ubuntu-latest. The suites use only bash/jq/sha256sum/dpkg stubs
 #      that the test harness scrubs in and out; no real network.
+#   3. ci-worker-selftest — runs deploy/ci-worker/ci-boot.test.sh, the
+#      sandboxed self-test of the CI worker's main process (idle self-stop
+#      under the run lock, watchdog supervision), including its mutants and
+#      setup controls. Needs only bash/flock/pgrep/ps/python3 from the
+#      runner image; it never touches a real lock, /cache or a Fly machine.
+#      Exit 1 = a case failed, 2 = setup error; either fails the job.
 name: Shellcheck + bats
 
 on:
@@ -85,3 +91,19 @@ jobs:
       - name: Run ci-flake-classify test
         # Bash, not bats: it feeds fixture logs through the shared classifier.
         run: bash scripts/ci-flake-classify_test.sh
+
+  ci-worker-selftest:
+    name: ci-worker lifecycle self-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Bash syntax check
+        # one file per call: `bash -n a b` only parses a (b becomes $1)
+        run: |
+          bash -n deploy/ci-worker/ci-boot.sh
+          bash -n deploy/ci-worker/ci-boot.test.sh
+
+      - name: Run ci-boot.test.sh
+        run: bash deploy/ci-worker/ci-boot.test.sh

@@ -45,7 +45,22 @@ func TestDeltaGW_OmnipusChatCannotBeRebound_ByAFrameOnAnExistingSession(t *testi
 	env.seedWorkspace(t, deltaDefWS, true, "mia", "omnipus")
 	env.seedWorkspace(t, deltaOtherWS, false, "mia")
 	sid := deltaOmnipusChat(t, env)
-	h := newWSHandler(bus.NewMessageBus(), env.api.agentLoop, "")
+	store := env.store(t)
+	const oldContent = "Keep the original default-workspace conversation history."
+	require.NoError(t, store.AddMessage(sid, "assistant", oldContent))
+	require.NoError(t, store.AppendTranscriptStrict(sid, session.TranscriptEntry{
+		ID: "delta-original-history", Role: "assistant", AgentID: "omnipus", Content: oldContent,
+	}))
+	archiveBefore, err := store.ReadArchive(t.Context(), sid)
+	require.NoError(t, err)
+	require.NotEmpty(t, archiveBefore, "instrument: real model history exists before refusal")
+	transcriptBefore, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	require.NotEmpty(t, transcriptBefore, "instrument: real visible history exists before refusal")
+	metaBefore, err := store.GetMeta(sid)
+	require.NoError(t, err)
+	messages := bus.NewMessageBus()
+	h := newWSHandler(messages, env.api.agentLoop, "")
 	t.Cleanup(h.Wait)
 
 	wc := makeTestConn()
@@ -53,10 +68,28 @@ func TestDeltaGW_OmnipusChatCannotBeRebound_ByAFrameOnAnExistingSession(t *testi
 
 	frames := drainConnFrames(wc)
 	assert.Contains(t, frames, `"type":"error"`, frames)
-	assert.Contains(t, frames, "default workspace", frames)
-	meta, err := env.store(t).GetMeta(sid)
+	// Founder Q1 B: all existing conversations refuse a workspace move with
+	// actionable conversation/workspace copy, including Omnipus's main.
+	const wantRefusal = "this conversation cannot change workspace; open the conversation in the workspace you want"
+	assert.Contains(t, frames, wantRefusal, frames)
+	var refusal gen.ErrorFrame
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(frames)), &refusal), "exactly one complete refusal frame")
+	assert.Equal(t, gen.ErrorFrame{Type: "error", Message: wantRefusal, SessionId: &sid}, refusal)
+	meta, err := store.GetMeta(sid)
 	require.NoError(t, err)
 	assert.Equal(t, deltaDefWS, meta.WorkspaceID, "the Omnipus chat must stay in the default workspace")
+	assert.Equal(t, metaBefore, meta, "refusal changes no metadata field")
+	archiveAfter, err := store.ReadArchive(t.Context(), sid)
+	require.NoError(t, err)
+	assert.Equal(t, archiveBefore, archiveAfter, "refusal cannot append B input or rewrite the old model archive")
+	transcriptAfter, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	assert.Equal(t, transcriptBefore, transcriptAfter, "refusal preserves the entire old transcript")
+	select {
+	case msg := <-messages.InboundChan():
+		t.Fatalf("a refused workspace move was published for execution: %+v", msg)
+	default:
+	}
 }
 
 // Positive control for finding 1: the same frame carrying the default workspace is
@@ -65,7 +98,15 @@ func TestDeltaGW_OmnipusChatInTheDefaultWorkspace_IsNotRefusedOnAFrame(t *testin
 	env := u1NewEnv(t, false)
 	env.seedWorkspace(t, deltaDefWS, true, "mia", "omnipus")
 	sid := deltaOmnipusChat(t, env)
-	h := newWSHandler(bus.NewMessageBus(), env.api.agentLoop, "")
+	store := env.store(t)
+	require.NoError(t, store.AppendTranscriptStrict(sid, session.TranscriptEntry{
+		ID: "delta-same-workspace-prior", Role: "assistant", AgentID: "omnipus", Content: "Earlier default-scope answer.",
+	}))
+	transcriptBefore, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	require.NotEmpty(t, transcriptBefore, "instrument: accepted continuation preserves real prior history")
+	messages := bus.NewMessageBus()
+	h := newWSHandler(messages, env.api.agentLoop, "")
 	t.Cleanup(h.Wait)
 
 	wc := makeTestConn()
@@ -73,9 +114,36 @@ func TestDeltaGW_OmnipusChatInTheDefaultWorkspace_IsNotRefusedOnAFrame(t *testin
 
 	frames := drainConnFrames(wc)
 	assert.NotContains(t, frames, "default workspace", frames)
-	meta, err := env.store(t).GetMeta(sid)
+	assert.NotContains(t, frames, `"type":"error"`, "same-default-workspace input must actually be accepted: %s", frames)
+	meta, err := store.GetMeta(sid)
 	require.NoError(t, err)
 	assert.Equal(t, deltaDefWS, meta.WorkspaceID)
+	transcriptAfter, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	require.Len(t, transcriptAfter, len(transcriptBefore)+1, "accepted input is durably appended exactly once")
+	assert.Equal(t, transcriptBefore, transcriptAfter[:len(transcriptBefore)], "old visible history is unchanged")
+	accepted := transcriptAfter[len(transcriptBefore)]
+	assert.Equal(t, "user", accepted.Role)
+	assert.Equal(t, "hello", accepted.Content)
+	select {
+	case msg := <-messages.InboundChan():
+		assert.Equal(t, sid, msg.SessionID)
+		assert.Equal(t, "hello", msg.Content)
+		assert.Equal(t, "omnipus", msg.Metadata["agent_id"])
+		// Webchat scope is authoritative on the addressed stored session;
+		// the internal bus envelope need not duplicate workspace metadata.
+		publishedMeta, metaErr := store.GetMeta(msg.SessionID)
+		require.NoError(t, metaErr)
+		assert.Equal(t, deltaDefWS, publishedMeta.WorkspaceID)
+		assert.Equal(t, accepted.ID, msg.TranscriptEntryID, "publication addresses the input that really persisted")
+	default:
+		t.Fatal("same-default-workspace input was not published for execution")
+	}
+	select {
+	case duplicate := <-messages.InboundChan():
+		t.Fatalf("accepted input was published twice: %+v", duplicate)
+	default:
+	}
 }
 
 // breakWorkspacesDir replaces <home>/workspaces with a regular file so every read of

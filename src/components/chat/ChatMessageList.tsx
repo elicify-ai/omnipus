@@ -1,7 +1,8 @@
-import React, { useLayoutEffect, useMemo, useRef } from 'react'
+import React, { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ThreadPrimitive } from '@assistant-ui/react'
 import type { ChatMessage } from '@/store/chat'
+import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -17,6 +18,13 @@ import { SystemMessage, VirtualSystemMessageRow } from './SystemMessageRows'
 import { placementOf, useSkillChipData, VirtualUserMessageRow, VirtualAssistantMessageRow, StreamingDelegation, VirtualizerAutoFollow, UserMessage, AssistantMessage } from './ChatScreen'
 import { HistoryBoundary, HistoryReaderStatus } from './HistoryBoundary'
 import { drawnHistoryRows, useHistoryViewport } from './useHistoryViewport'
+
+function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
+  // The assistant row owns both inline and trailing events using its live-call
+  // projection. Splitting again from the unbaked message would draw them twice.
+  if (message.role === 'assistant' && message.type !== 'judge_verdict' && !(ROOMS_ENABLED && message.roomRef)) return []
+  return splitAnchoredDelegationEvents(events, message.id, placementOf(message)).trailing
+}
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
 function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMessage[]; liteMode: boolean; agentName: string }) {
@@ -76,7 +84,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
           } else {
             row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
           }
-          const trailing = splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing
+          const trailing = delegationEventsOutsideRow(delegationEvents, msg)
           return (
             <div key={msg.historyPosition ?? msg.id} data-history-position={msg.historyPosition} data-history-anchor={msg.historyPosition ?? `live:${msg.id}`}>
               {row}
@@ -151,13 +159,14 @@ function VirtualizedMessageListInner({
 
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
-  const historicalMessages = hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages
+  const historicalMessages = useMemo(() => hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages, [hasStreamingMessage, messages])
+  const getItemKey = useCallback((index: number) => historicalMessages[index]?.historyPosition ?? historicalMessages[index]?.id ?? index, [historicalMessages])
 
   const virtualizer = useVirtualizer({
     count: historicalMessages.length,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: index => Math.max(1, drawnHistoryRows(historicalMessages[index], verboseChatEnabled)) * viewport.average,
-    getItemKey: index => historicalMessages[index]?.historyPosition ?? historicalMessages[index]?.id ?? index,
+    getItemKey,
     scrollMargin: viewport.prefix,
     overscan: 5,
     // measureElement default (getBoundingClientRect().height) is correct; no override needed.
@@ -263,7 +272,7 @@ function VirtualizedMessageListInner({
                 >
                   {rowForMessage(msg)}
                   <DelegationEventLineList
-                    events={splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing}
+                    events={delegationEventsOutsideRow(delegationEvents, msg)}
                   />
                 </div>
               )

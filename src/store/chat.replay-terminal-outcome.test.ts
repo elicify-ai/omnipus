@@ -10,7 +10,8 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
-import { useChatStore } from './chat'
+import { getMessages, useChatStore } from './chat'
+import { WsFrame } from '@/lib/api/generated/ws-schemas'
 import { useSessionStore } from './session'
 
 const SID = 'sess-terminal-outcome'
@@ -56,5 +57,92 @@ describe('replay_message terminal_outcome', () => {
     replay('entry-narration', 'A')
     replay('entry-next', 'B', { terminal_outcome: false })
     expect(assistants().map((m) => m.id)).toEqual(['entry-narration'])
+  })
+})
+
+// Oracle: SEQ-RULING.md::Decision / Implementation acceptance and chief addendum 2.
+// New cases use the real generated validator, never a cast around the wire contract.
+const SYSTEM_NOTICE = {
+  type: 'replay_message', role: 'system', session_id: SID, id: 'system-notice',
+  content: 'Harness-authored sequence fixture notice.', agent_id: AGENT, turn_id: TURN,
+}
+
+function applyValidatedFrame(raw: unknown) {
+  const frame = WsFrame.parse(raw)
+  if (frame.type !== 'replay_message' && frame.type !== 'session_snapshot' && frame.type !== 'catch_up_complete') {
+    throw new Error('BLOCKED: replay sequence fixture did not produce a replay or snapshot frame')
+  }
+  act(() => useChatStore.getState().handleFrame(frame))
+}
+
+function noticeRows() {
+  return getMessages(useChatStore.getState().sessionsById[SID])
+    .map(({ id, role, content }) => ({ id, role, content }))
+}
+
+const EXPECTED_NOTICE = [{ id: SYSTEM_NOTICE.id, role: 'system', content: SYSTEM_NOTICE.content }]
+
+describe('generated ReplayMessageFrame sequence contract', () => {
+  it('accepts the minimum positive integer seq', () => {
+    expect(WsFrame.parse({ ...SYSTEM_NOTICE, seq: 1 })).toEqual({ ...SYSTEM_NOTICE, seq: 1 })
+  })
+
+  it('accepts an unnumbered transcript/snapshot message', () => {
+    expect(WsFrame.parse(SYSTEM_NOTICE)).toEqual(SYSTEM_NOTICE)
+  })
+
+  it.each([0, -1, 1.5, '1'])('rejects invalid seq %j without weakening generated validation', (seq) => {
+    expect(WsFrame.safeParse({ ...SYSTEM_NOTICE, seq }).success).toBe(false)
+  })
+
+  it('rejects an unknown key even when the remaining unnumbered message is valid', () => {
+    expect(WsFrame.parse(SYSTEM_NOTICE)).toEqual(SYSTEM_NOTICE)
+    expect(WsFrame.safeParse({ ...SYSTEM_NOTICE, unexpected: true }).success).toBe(false)
+  })
+})
+
+describe('system replay notice cursor and overlap', () => {
+  beforeEach(() => {
+    act(() => {
+      useChatStore.getState().clearStreamingState()
+      useChatStore.setState(useChatStore.getInitialState(), true)
+      useSessionStore.setState({ ...useSessionStore.getInitialState(), activeSessionId: SID }, true)
+    })
+    // #823 N4: only completed catch-up establishes a cursor; a later snapshot preserves it.
+    applyValidatedFrame({
+      type: 'catch_up_complete', session_id: SID, mode: 'incremental', seq: 5, boot_id: 'bundle2-boot',
+    })
+    applyValidatedFrame({
+      type: 'session_snapshot', session_id: SID, reason: 'unknown_position', seq: 5, boot_id: 'bundle2-boot',
+    })
+    expect(useChatStore.getState().sessionsById[SID].cursor).toEqual({ bootId: 'bundle2-boot', seq: 5 })
+  })
+
+  it('a numbered notice advances the session cursor and retains one exact entry', () => {
+    applyValidatedFrame({ ...SYSTEM_NOTICE, seq: 6 })
+    expect(useChatStore.getState().sessionsById[SID].cursor).toEqual({ bootId: 'bundle2-boot', seq: 6 })
+    expect(noticeRows()).toEqual(EXPECTED_NOTICE)
+  })
+
+  it('an unnumbered notice leaves the prior cursor untouched', () => {
+    applyValidatedFrame(SYSTEM_NOTICE)
+    expect(useChatStore.getState().sessionsById[SID].cursor).toEqual({ bootId: 'bundle2-boot', seq: 5 })
+    expect(noticeRows()).toEqual(EXPECTED_NOTICE)
+  })
+
+  it('snapshot/live same-ID overlap advances before ID dedup and old-seq redelivery never adds a row', () => {
+    applyValidatedFrame(SYSTEM_NOTICE)
+    expect(noticeRows()).toEqual(EXPECTED_NOTICE)
+    expect(useChatStore.getState().sessionsById[SID].cursor).toEqual({ bootId: 'bundle2-boot', seq: 5 })
+    applyValidatedFrame({ ...SYSTEM_NOTICE, seq: 6 })
+    expect(useChatStore.getState().sessionsById[SID].cursor).toEqual({ bootId: 'bundle2-boot', seq: 6 })
+    expect(noticeRows()).toEqual(EXPECTED_NOTICE)
+    applyValidatedFrame({ ...SYSTEM_NOTICE, seq: 6 })
+    expect(noticeRows()).toEqual(EXPECTED_NOTICE)
+    // Distinguish sequence rejection from ID-only deduplication: an old number
+    // cannot add a row even if a different ID would otherwise evade the ID gate.
+    applyValidatedFrame({ ...SYSTEM_NOTICE, seq: 6, id: 'old-seq-must-not-render' })
+    expect(noticeRows()).toEqual(EXPECTED_NOTICE)
+    expect(useChatStore.getState().sessionsById[SID].cursor).toEqual({ bootId: 'bundle2-boot', seq: 6 })
   })
 })

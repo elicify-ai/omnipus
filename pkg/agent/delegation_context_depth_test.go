@@ -34,7 +34,7 @@ func TestBuildDelegationContext_AdvertisedSubsetOfEnforceable(t *testing.T) {
 					// configured ceiling, footer from the backstop-resolved one.
 					tgt.DepthCap = resolveEffectiveDelegationDepth(ed, gc)
 					block := buildDelegationContext([]delegationTarget{tgt}, effectiveGlobal, depth)
-					advertised := strings.Contains(block, `delegate(agent_id="ava"`)
+					advertised := compactHasEntryID(t, block, "ava")
 
 					edge := &workspace.DelegationEdge{
 						FromAgent: "mia", ToAgent: "ava", Depth: ed,
@@ -64,7 +64,7 @@ func TestBuildDelegationContext_AtCeilingSaysSo(t *testing.T) {
 	if !strings.Contains(got, "maximum delegation depth") {
 		t.Fatalf("expected an at-max-depth note, got:\n%s", got)
 	}
-	if strings.Contains(got, `delegate(agent_id="ava"`) {
+	if compactHasEntryID(t, got, "ava") {
 		t.Fatalf("must not advertise a target the gate will deny:\n%s", got)
 	}
 	if strings.Contains(got, "none configured for you here") {
@@ -83,11 +83,11 @@ func TestWireDelegationInjectors_BlockReflectsTurnDepth(t *testing.T) {
 	_, cb := wireTestLoopWithGraphAndMaxDepth(t, "jim", 2)
 
 	root := cb.buildDynamicContext(0, "", "", "", "", "")
-	if !strings.Contains(root, `delegate(agent_id="worker"`) {
+	if !compactHasEntryID(t, root, "worker") {
 		t.Fatalf("depth 0 must advertise the target, got:\n%s", root)
 	}
 	atCeiling := cb.buildDynamicContext(2, "", "", "", "", "")
-	if strings.Contains(atCeiling, `delegate(agent_id="worker"`) {
+	if compactHasEntryID(t, atCeiling, "worker") {
 		t.Fatalf("depth 2 (== cap 2) must not advertise the target, got:\n%s", atCeiling)
 	}
 	if !strings.Contains(atCeiling, "maximum delegation depth") {
@@ -106,7 +106,7 @@ func TestWireDelegationInjectors_LargerEdgeCapNotClampedToBackstop(t *testing.T)
 	_, cb := wireTestLoopWithGraphAndMaxDepth(t, "jim", 0)
 
 	got := cb.buildDynamicContext(3, "", "", "", "", "")
-	if !strings.Contains(got, `delegate(agent_id="worker"`) {
+	if !compactHasEntryID(t, got, "worker") {
 		t.Fatalf("edge cap 5 allows chain depth 3; block must advertise, got:\n%s", got)
 	}
 }
@@ -123,7 +123,7 @@ func TestDelegation_InvalidMaxDepth_BlockAndGateFailClosedTogether(t *testing.T)
 	al.GetConfig().Performance.MaxDelegationDepth = -1
 
 	got := cb.buildDynamicContext(0, "", "", "", "", "")
-	if !strings.Contains(got, delegationFailClosedBlock) || strings.Contains(got, `delegate(agent_id="worker"`) {
+	if !strings.Contains(got, delegationFailClosedBlock) || compactHasEntryID(t, got, "worker") {
 		t.Fatalf("block must fail closed on an invalid depth limit, got:\n%s", got)
 	}
 	found := false

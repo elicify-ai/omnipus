@@ -90,9 +90,10 @@ type ContextBuilder struct {
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
 	// The cache auto-invalidates when workspace source files change (mtime check).
-	systemPromptMutex  sync.RWMutex
-	cachedSystemPrompt string
-	cachedAt           time.Time // max observed mtime across tracked paths at cache build time
+	systemPromptMutex   sync.RWMutex
+	cachedSystemPrompt  string
+	cachedMemoryContext string    // rendered notes are part of the cache identity
+	cachedAt            time.Time // max observed mtime across tracked paths at cache build time
 
 	// existedAtCache tracks which source file paths existed the last time the
 	// cache was built. This lets sourceFilesChanged detect files that are newly
@@ -660,7 +661,7 @@ Only a subset of your allowed tools are sent as callable definitions every turn 
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {
-	return cb.buildSystemPromptForShelf(cb.projectShelf, "")
+	return cb.buildSystemPromptForShelf(cb.projectShelf, "", cb.longTermMemoryContext(""))
 }
 
 // BuildSystemPromptForWorkspace is BuildSystemPrompt with the "# Skills"
@@ -672,10 +673,10 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 // superset of BuildSystemPrompt: with no resolver installed
 // (WithProjectShelfResolver never called), effectiveProjectShelf falls back
 // to cb.projectShelf for every workspaceID, so the skills menu matches
-// BuildSystemPrompt(); the carry-forward block is the only section that can
-// differ, and BuildSystemPrompt() itself never carries one.
+// BuildSystemPrompt(); workspace-specific shared notes and carry-forward
+// summaries also differ. BuildSystemPrompt() itself reads only private notes.
 func (cb *ContextBuilder) BuildSystemPromptForWorkspace(workspaceID string) string {
-	return cb.buildSystemPromptForShelf(cb.effectiveProjectShelf(workspaceID), workspaceID)
+	return cb.buildSystemPromptForShelf(cb.effectiveProjectShelf(workspaceID), workspaceID, cb.longTermMemoryContext(workspaceID))
 }
 
 // buildSystemPromptForShelf is the shared assembly body for
@@ -683,7 +684,7 @@ func (cb *ContextBuilder) BuildSystemPromptForWorkspace(workspaceID string) stri
 // identical between the two; which project shelf feeds the "# Skills" menu
 // and whether the workspace's carry-forward summary is rendered differ;
 // shelf may be nil. A workspaceID of "" renders no carry-forward block.
-func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf, workspaceID string) string {
+func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf, workspaceID, longTerm string) string {
 	parts := []string{}
 
 	// FR-053: prepend env preamble at parts[0] when a provider is wired.
@@ -747,7 +748,7 @@ The following skills extend your capabilities. When a task matches one, call the
 		if carry := cb.carryForwardContext(workspaceID); carry != "" {
 			memoryContext += "## Last Session\n" + carry
 		}
-		if longTerm := cb.memory.GetMemoryContext(); longTerm != "" {
+		if longTerm != "" {
 			if memoryContext != "" {
 				memoryContext += "\n\n"
 			}
@@ -772,11 +773,13 @@ Each part separated by the marker will be sent as an independent message.`)
 
 // BuildSystemPromptWithCache returns the cached system prompt if available
 // and source files haven't changed, otherwise builds and caches it.
-// Source file changes are detected via mtime checks (cheap stat calls).
+// Bootstrap/skill changes use mtime checks; rendered notes are also part of
+// the cache identity, so changed memory content never reuses a stale prompt.
 func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
+	longTerm := cb.longTermMemoryContext("")
 	// Try read lock first — fast path when cache is valid
 	cb.systemPromptMutex.RLock()
-	if cb.cachedSystemPrompt != "" && !cb.sourceFilesChangedLocked() {
+	if cb.cachedSystemPrompt != "" && cb.cachedMemoryContext == longTerm && !cb.sourceFilesChangedLocked() {
 		result := cb.cachedSystemPrompt
 		cb.systemPromptMutex.RUnlock()
 		return result
@@ -788,7 +791,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 	defer cb.systemPromptMutex.Unlock()
 
 	// Double-check: another goroutine may have rebuilt while we waited
-	if cb.cachedSystemPrompt != "" && !cb.sourceFilesChangedLocked() {
+	if cb.cachedSystemPrompt != "" && cb.cachedMemoryContext == longTerm && !cb.sourceFilesChangedLocked() {
 		return cb.cachedSystemPrompt
 	}
 
@@ -799,8 +802,9 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 	// rebuild. The alternative (baseline after build) risks caching stale
 	// content with a too-new baseline, making the staleness invisible.
 	baseline := cb.buildCacheBaseline("")
-	prompt := cb.BuildSystemPrompt()
+	prompt := cb.buildSystemPromptForShelf(cb.projectShelf, "", longTerm)
 	cb.cachedSystemPrompt = prompt
+	cb.cachedMemoryContext = longTerm
 	cb.cachedAt = baseline.maxMtime
 	cb.existedAtCache = baseline.existed
 	cb.skillFilesAtCache = baseline.skillFiles
@@ -821,6 +825,7 @@ func (cb *ContextBuilder) InvalidateCache() {
 	defer cb.systemPromptMutex.Unlock()
 
 	cb.cachedSystemPrompt = ""
+	cb.cachedMemoryContext = ""
 	cb.cachedAt = time.Time{}
 	cb.existedAtCache = nil
 	cb.skillFilesAtCache = nil
@@ -854,6 +859,7 @@ const maxCachedWorkspacePromptBytes = 4 * 1024 * 1024 // 4 MB
 // fileChangedSinceBaseline/skillFilesChangedSince — just scoped to one
 // workspace's snapshot instead of the whole agent's).
 type workspacePromptVariant struct {
+	memoryContext     string // actual rendered notes, not directory mtime
 	prompt            string
 	bytes             int
 	cachedAt          time.Time
@@ -1022,12 +1028,15 @@ func (cb *ContextBuilder) storeWorkspaceVariantLocked(workspaceID string, v *wor
 // call instead, so one pathological workspace cannot evict every other
 // entry on each insertion.
 func (cb *ContextBuilder) BuildSystemPromptWithCacheForWorkspace(workspaceID string) string {
+	// Read once: compare and assemble from the SAME immutable snapshot. This
+	// notices teammates' notes without requiring a local remember/recall call.
+	longTerm := cb.longTermMemoryContext(workspaceID)
 	wc := &cb.workspacePromptCache
 
 	wc.mu.Lock()
 	defer wc.mu.Unlock()
 
-	if v, ok := wc.variants[workspaceID]; ok && !cb.workspaceVariantStaleLocked(v, workspaceID) {
+	if v, ok := wc.variants[workspaceID]; ok && v.memoryContext == longTerm && !cb.workspaceVariantStaleLocked(v, workspaceID) {
 		wc.lru.MoveToBack(v.elem)
 		return v.prompt
 	}
@@ -1037,7 +1046,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCacheForWorkspace(workspaceID str
 	// mtime after this baseline, so the next staleness check still catches
 	// it rather than caching it as if it were already reflected.
 	baseline := cb.buildCacheBaseline(workspaceID)
-	prompt := cb.BuildSystemPromptForWorkspace(workspaceID)
+	prompt := cb.buildSystemPromptForShelf(cb.effectiveProjectShelf(workspaceID), workspaceID, longTerm)
 
 	if len(prompt) > wc.effectiveMaxBytes() {
 		// D8.1: never cache a variant bigger than the whole budget — caching
@@ -1055,6 +1064,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCacheForWorkspace(workspaceID str
 	}
 
 	cb.storeWorkspaceVariantLocked(workspaceID, &workspacePromptVariant{
+		memoryContext:     longTerm,
 		prompt:            prompt,
 		bytes:             len(prompt),
 		cachedAt:          baseline.maxMtime,
@@ -1093,6 +1103,15 @@ func (cb *ContextBuilder) EvictWorkspacePrompt(workspaceID string) {
 	wc.mu.Lock()
 	defer wc.mu.Unlock()
 	cb.evictWorkspaceVariantLocked(workspaceID)
+}
+
+// longTermMemoryContext resolves from the current turn, never from prior tool
+// calls. Memory-disabled agents do not read notes or emit missing-scope warnings.
+func (cb *ContextBuilder) longTermMemoryContext(workspaceID string) string {
+	if !cb.memoryEnabled || cb.memory == nil {
+		return ""
+	}
+	return cb.memory.GetMemoryContextForScope(cb.memory.scopeForWorkspace(workspaceID))
 }
 
 // carryForwardContext returns the workspace's own carry-forward summary for

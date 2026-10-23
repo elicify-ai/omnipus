@@ -230,7 +230,8 @@ describe('FR-047 server-owned workspace setup offer', () => {
     expect(chatFrames()).toHaveLength(1)
     expect(chatFrames()[0]).toMatchObject({ type: 'message', session_id: OMNIPUS_MAIN,
       workflow_start: { workflow: 'W18', target_workspace_id: 'research' } })
-    expect(chatFrames()[0].metadata ?? {}).not.toHaveProperty('workspace_id')
+    // Chat binding is default; the distinct W18 workflow target remains research.
+    expect(chatFrames()[0].metadata ?? {}).toHaveProperty('workspace_id', 'default')
     expectNoClientKickoff()
   })
   it.each([

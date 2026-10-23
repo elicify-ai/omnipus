@@ -46,6 +46,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
+import { emptySessionState } from './session'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
@@ -56,6 +57,7 @@ import type { ServerFrame } from '@/lib/ws'
 import type { ChatMessage } from './types'
 import { clearHistoryPage, wireHistoryPage, type FixtureHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
 import { narrationHistoryPage } from '../../../tests/chat-history-paging/legacy-fixtures'
+import { seedCanonicalSession } from '../../../tests/unit/fixtures/canonical-session'
 
 const requestMock = vi.hoisted(() => vi.fn())
 
@@ -114,6 +116,7 @@ function seedBucket(messages: ChatMessage[], opts: { isStreaming?: boolean; acti
     sessionsById: {
       ...s.sessionsById,
       [SID]: {
+        ...emptySessionState(),
         ...(s.sessionsById ?? {})[SID],
         messagesById: Object.fromEntries(messages.map((m) => [m.id, m])),
         messageOrder: messages.map((m) => m.id),
@@ -168,6 +171,7 @@ beforeEach(() => {
   toasts = []
   requestMock.mockReset()
   queryClient.removeQueries()
+  seedCanonicalSession(SID, 'jim')
   delete pendingClearRefetches[SID]
   vi.spyOn(useUiStore.getState(), 'addToast').mockImplementation(((t: { message: string }) => { toasts.push(t.message) }) as never)
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'jim', activeAgentType: null })
