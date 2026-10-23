@@ -183,7 +183,7 @@ canonical bodies, credentials, raw cursor values or physical archive addresses.
 A failed all-session preflight publishes no sessions. A detected late failure
 can follow real publications, which are reported rather than described as zero.
 Mixed refusals select exit 2 if any precondition/unconverted class is present;
-otherwise integrity/I/O selects 1. Refused sessions never produce success exit 0.
+otherwise integrity/I/O selects 1. Refused sessions never produce success exit 0. The final safety guard still runs after an earlier error. A distinct final refusal is also reported and participates in exit precedence: one publication followed by `index_verification` and then `source_changed` reports `published=1 unchanged=0 refused=2`, exit 2. A re-observation of the same unchanged guard refusal is not counted twice, and later unattempted sessions do not acquire fictional refusals or publications.
 
 Offline reconstruction can ignore a missing settlement, projection or retraction
 target only when the validated existing index proves its token/rank tombstone
