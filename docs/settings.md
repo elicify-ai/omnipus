@@ -107,7 +107,7 @@ Each tab and neighbor screen has one job.
 | Screen or tab | What it is for |
 |---|---|
 | Settings, Providers | Connect providers, manage keys and sign-ins, set the default model |
-| Settings, Models | Context budget: per-result caps, the combined share of the model's context window used by tool results, and model context-length overrides |
+| Settings, Models | Context budget: per-result caps, the combined share of the model's context window used by tool results, the default output-token budget, and model context-length overrides |
 | Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
 | Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
@@ -124,6 +124,10 @@ Each tab and neighbor screen has one job.
 **Tool-result share limit**, under **Settings → Models**, sets the maximum share of the active model's context window that all tool results together may occupy before trimming is needed. The context window is how much information the model can read at once. This is a percentage of the whole window, not the smaller budget left after reserving space for output and instructions, and it replaces the absolute character count. The default is **50%**. Enter a percentage **greater than 0% and no more than 100%**; fractional percentages are accepted.
 
 For scripts, the same setting is `context.tool_result_share_fraction` in configuration and `tool_result_share_fraction` on `GET` / `PUT /api/v1/settings/context`. Send the fraction, not the percentage: `0.125` means 12.5%. An omitted field in a partial update keeps the saved value; it does not reset to 50%. Null, text, booleans, zero and values outside the interval are rejected. A successful update takes effect on the next turn without a restart.
+
+**Default max tokens**, under **Settings → Models**, sets how many tokens an agent may output in one turn when the agent does not set its own max tokens. Fresh installs start at **64,000**. The per-agent **Max tokens** field in an agent's profile overrides this default for that agent. Enter a whole number **from 256 up to 1,048,576**. A value larger than a model's context window can hold is clamped down to fit when the agent runs.
+
+For scripts, the same setting is `agents.defaults.max_tokens` in configuration and `default_max_tokens` on `GET` / `PUT /api/v1/settings/context`. An omitted field in a partial update keeps the saved value. A successful update takes effect on the next turn without a restart.
 
 The existing Usage screen counts recorded agent-turn-loop tokens, not money. Auxiliary provider calls such as automatic recaps, fallback goal compilation and audio-model transcription are outside that per-call accounting path; see [observability](operations/observability.md#model-call-cache-accounting) for the coverage limits. Choose a period and use **By agent**, **By model**, **By provider**, or **By session** to see the breakdown. **Cached** is cache reads plus cache writes, already included in the total; **Uncached** is the rest. **By agent** and **By provider** also show **Cache hit**, the share of all input tokens read from the provider's cache. For example, a ratio of `0.8` appears as **80%**. A row with no input tokens shows no percentage, not **0%**. These numbers are on Usage, not a separate caching page. A ChatGPT sign-in call still counts tokens but is not given a dollar cost. See the provider's invoice for costs.
 

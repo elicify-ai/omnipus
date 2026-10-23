@@ -1082,12 +1082,12 @@ export interface paths {
         };
         /**
          * Get the global context-budget settings (ADR-066 D9)
-         * @description Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 < f ≤ 1, default 0.5), the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+         * @description Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 < f ≤ 1, default 0.5), the ingest bound, the global default context window, the global default max output tokens and the per-(provider, model) window overrides. User-facing location: Settings → Models; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
          */
         get: operations["getContextSettings"];
         /**
          * Update the global context-budget settings (ADR-066 D9)
-         * @description Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+         * @description Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1; default_max_tokens < 256 or > 1,048,576. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
          */
         put: operations["updateContextSettings"];
         post?: never;
@@ -11026,12 +11026,17 @@ export interface components {
              * @example 128000
              */
             default_context_window?: number | null;
+            /**
+             * @description Global default max output tokens per turn — the agents.defaults.max_tokens value a fresh install is seeded with (default 64,000) and the fallback for agents that set no per-agent max_tokens. Stored at agents.defaults.max_tokens; this endpoint is its only REST write path. A per-agent "Max tokens" (an agent's profile) overrides it. Clamped to the resolved model's window budget on use (FR-005b A-18).
+             * @example 64000
+             */
+            default_max_tokens: number;
             /** @description Per-(provider, model) context-window overrides (D2 rung 2). Empty array when none. */
             model_overrides: components["schemas"]["ContextModelOverride"][];
         };
         /**
          * ContextSettingsUpdate
-         * @description Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the valid interval): any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
+         * @description Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the valid interval): any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1; default_max_tokens < 256 or > 1,048,576. Malformed/nonfinite JSON and unknown fields are rejected with 400. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
          */
         ContextSettingsUpdate: {
             /** @example 62500 */
@@ -11050,6 +11055,11 @@ export interface components {
             ingest_bound_bytes?: number;
             /** @example 128000 */
             default_context_window?: number | null;
+            /**
+             * @description Global default max output tokens per turn. Omitted means unchanged. Writes agents.defaults.max_tokens; agents without their own per-agent max_tokens pick the new value up from the reload this PUT triggers.
+             * @example 64000
+             */
+            default_max_tokens?: number;
             model_overrides?: components["schemas"]["ContextModelOverride"][];
         };
         /** @description Body for POST /auth/reauth. Re-verifies the single user's one password before a sensitive settings change is permitted (FR-12.2). This is a consent primitive, NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). A successful re-auth mints a short-lived re-auth token the SPA attaches to the subsequent sensitive request. */

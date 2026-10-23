@@ -13,6 +13,7 @@ required:
   - builtin_failure_cap
   - tool_result_share_fraction
   - ingest_bound_bytes
+  - default_max_tokens
   - model_overrides
 additionalProperties: false
 properties:
@@ -73,6 +74,18 @@ properties:
       this setting (agents.defaults.context_window no longer exists). Absent
       or null when unset. Clamped to the model's capability on resolution.
     example: 128000
+  default_max_tokens:
+    type: integer
+    minimum: 256
+    maximum: 1048576
+    description: >
+      Global default max output tokens per turn — the agents.defaults.max_tokens
+      value a fresh install is seeded with (default 64,000) and the fallback
+      for agents that set no per-agent max_tokens. Stored at
+      agents.defaults.max_tokens; this endpoint is its only REST write path.
+      A per-agent "Max tokens" (an agent's profile) overrides it. Clamped to
+      the resolved model's window budget on use (FR-005b A-18).
+    example: 64000
   model_overrides:
     type: array
     items:

@@ -4769,8 +4769,9 @@ paths:
       description: >
         Returns the per-surface tool-result caps, tool_result_share_fraction
         (finite fraction of the resolved model window W, 0 < f ≤ 1, default
-        0.5), the ingest bound, the global default context window and the
-        per-(provider, model) window overrides. User-facing location:
+        0.5), the ingest bound, the global default context window, the global
+        default max output tokens and the per-(provider, model) window
+        overrides. User-facing location:
         Settings → Models; Tool-result share limit displays a percentage.
         Readable by any authenticated user (withAuth, the /settings/memory
         precedent — not RequireNotBypass).
@@ -4797,7 +4798,8 @@ paths:
         cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON
         number with 0 < f ≤ 1 (numeric 1 is allowed; null, strings, booleans,
         zero, negatives and values > 1 are invalid); ingest_bound_bytes
-        ≥ 8,388,608 or < 1; model_overrides[].context_window < 1.
+        ≥ 8,388,608 or < 1; model_overrides[].context_window < 1;
+        default_max_tokens < 256 or > 1,048,576.
         Malformed/nonfinite JSON and unknown fields are rejected with 400.
         The wire carries a fraction, not a percentage; 12.5% is 0.125.
         Every 200 write triggers a registry reload so the next turn uses the

@@ -16450,6 +16450,9 @@ type ContextSettings struct {
 	// DefaultContextWindow Global default context window (tokens), D2 rung 3 — the single home of this setting (agents.defaults.context_window no longer exists). Absent or null when unset. Clamped to the model's capability on resolution.
 	DefaultContextWindow *int `json:"default_context_window,omitempty"`
 
+	// DefaultMaxTokens Global default max output tokens per turn — the agents.defaults.max_tokens value a fresh install is seeded with (default 64,000) and the fallback for agents that set no per-agent max_tokens. Stored at agents.defaults.max_tokens; this endpoint is its only REST write path. A per-agent "Max tokens" (an agent's profile) overrides it. Clamped to the resolved model's window budget on use (FR-005b A-18).
+	DefaultMaxTokens int `json:"default_max_tokens"`
+
 	// IngestBoundBytes Maximum bytes read from any network or subprocess source at ingest (D10). Must be strictly below 8,388,608 (0.8 × the archive line size). Default 8,000,000.
 	IngestBoundBytes int `json:"ingest_bound_bytes"`
 
@@ -16463,14 +16466,17 @@ type ContextSettings struct {
 	ToolResultShareFraction float64 `json:"tool_result_share_fraction"`
 }
 
-// ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the valid interval): any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
+// ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the valid interval): any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1; default_max_tokens < 256 or > 1,048,576. Malformed/nonfinite JSON and unknown fields are rejected with 400. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
 type ContextSettingsUpdate struct {
-	BuiltinFailureCap    *int                    `json:"builtin_failure_cap,omitempty"`
-	BuiltinSuccessCap    *int                    `json:"builtin_success_cap,omitempty"`
-	DefaultContextWindow *int                    `json:"default_context_window,omitempty"`
-	IngestBoundBytes     *int                    `json:"ingest_bound_bytes,omitempty"`
-	McpResultCap         *int                    `json:"mcp_result_cap,omitempty"`
-	ModelOverrides       *[]ContextModelOverride `json:"model_overrides,omitempty"`
+	BuiltinFailureCap    *int `json:"builtin_failure_cap,omitempty"`
+	BuiltinSuccessCap    *int `json:"builtin_success_cap,omitempty"`
+	DefaultContextWindow *int `json:"default_context_window,omitempty"`
+
+	// DefaultMaxTokens Global default max output tokens per turn. Omitted means unchanged. Writes agents.defaults.max_tokens; agents without their own per-agent max_tokens pick the new value up from the reload this PUT triggers.
+	DefaultMaxTokens *int                    `json:"default_max_tokens,omitempty"`
+	IngestBoundBytes *int                    `json:"ingest_bound_bytes,omitempty"`
+	McpResultCap     *int                    `json:"mcp_result_cap,omitempty"`
+	ModelOverrides   *[]ContextModelOverride `json:"model_overrides,omitempty"`
 
 	// ToolResultShareFraction Finite fraction of the resolved model window W: 0 < f ≤ 1; numeric 1 is valid. Omitted means unchanged, not reset to the fresh default 0.5. The wire carries a fraction, not a percentage (12.5% is 0.125).
 	ToolResultShareFraction *float64 `json:"tool_result_share_fraction,omitempty"`

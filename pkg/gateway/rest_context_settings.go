@@ -42,6 +42,13 @@ import (
 // per-surface caps (ContextSettings.yaml: maximum 150000).
 const contextCapCeiling = 150_000
 
+// defaultMaxTokensFloor / defaultMaxTokensCeiling are the contract's bounds
+// for default_max_tokens (ContextSettings.yaml: 256..1,048,576).
+const (
+	defaultMaxTokensFloor   = 256
+	defaultMaxTokensCeiling = 1_048_576
+)
+
 // contextIngestBoundCeiling is the exclusive upper bound for
 // ingest_bound_bytes: it must stay strictly below 0.8 × the archive line
 // size (D10).
@@ -86,10 +93,12 @@ func (a *restAPI) HandleContextSettings(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// contextSettingsWire projects the stored config.ContextSettings onto the
-// generated wire type. WarnThreshold is config-internal and deliberately not
-// on the wire (spec §1.1).
-func contextSettingsWire(cs config.ContextSettings) gen.ContextSettings {
+// contextSettingsWire projects the stored config onto the generated wire
+// type. WarnThreshold is config-internal and deliberately not on the wire
+// (spec §1.1). default_max_tokens lives one section over — it projects
+// agents.defaults.max_tokens, whose only REST write path is this endpoint.
+func contextSettingsWire(cfg *config.Config) gen.ContextSettings {
+	cs := cfg.Context
 	overrides := make([]gen.ContextModelOverride, 0, len(cs.ModelOverrides))
 	for _, o := range cs.ModelOverrides {
 		overrides = append(overrides, gen.ContextModelOverride{
@@ -104,6 +113,7 @@ func contextSettingsWire(cs config.ContextSettings) gen.ContextSettings {
 		BuiltinFailureCap:       cs.BuiltinFailureCap,
 		ToolResultShareFraction: cs.ToolResultShareFraction,
 		IngestBoundBytes:        cs.IngestBoundBytes,
+		DefaultMaxTokens:        cfg.Agents.Defaults.MaxTokens,
 		ModelOverrides:          overrides,
 	}
 	if cs.DefaultContextWindow != nil {
@@ -120,7 +130,7 @@ func (a *restAPI) getContextSettings(w http.ResponseWriter, _ *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "config not available")
 		return
 	}
-	jsonOK(w, contextSettingsWire(cfg.Context))
+	jsonOK(w, contextSettingsWire(cfg))
 }
 
 // validateContextSettingsUpdate enforces the contract's 400 rules, each
@@ -161,6 +171,14 @@ func validateContextSettingsUpdate(req *gen.ContextSettingsUpdate) string {
 	}
 	if req.DefaultContextWindow != nil && *req.DefaultContextWindow < 1 {
 		return "default_context_window must be ≥ 1 (send null to clear it)"
+	}
+	if req.DefaultMaxTokens != nil {
+		if *req.DefaultMaxTokens < defaultMaxTokensFloor {
+			return fmt.Sprintf("default_max_tokens must be ≥ %d", defaultMaxTokensFloor)
+		}
+		if *req.DefaultMaxTokens > defaultMaxTokensCeiling {
+			return fmt.Sprintf("default_max_tokens must be ≤ %d", defaultMaxTokensCeiling)
+		}
 	}
 	if req.ModelOverrides != nil {
 		for i, o := range *req.ModelOverrides {
@@ -232,6 +250,10 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 
 	// Start from the live values so an omitted field is genuinely unchanged.
 	next := cfg.Context
+	nextDefaultMaxTokens := cfg.Agents.Defaults.MaxTokens
+	if req.DefaultMaxTokens != nil {
+		nextDefaultMaxTokens = *req.DefaultMaxTokens
+	}
 	if req.McpResultCap != nil {
 		next.McpResultCap = *req.McpResultCap
 	}
@@ -276,6 +298,10 @@ func (a *restAPI) putContextSettings(w http.ResponseWriter, r *http.Request) {
 		ctxSection["builtin_failure_cap"] = next.BuiltinFailureCap
 		ctxSection["tool_result_share_fraction"] = next.ToolResultShareFraction
 		ctxSection["ingest_bound_bytes"] = next.IngestBoundBytes
+		// default_max_tokens persists one section over — it IS
+		// agents.defaults.max_tokens, the fresh-install seed and the
+		// per-agent fallback (founder decision 2026-10-23: default 64000).
+		ensureMap(m, "agents", "defaults")["max_tokens"] = nextDefaultMaxTokens
 		if next.DefaultContextWindow != nil {
 			ctxSection["default_context_window"] = *next.DefaultContextWindow
 		} else {
