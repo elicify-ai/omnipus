@@ -384,6 +384,9 @@ func historySelect(t *chatHistoryIndexTree, dir string, cp historyCheckpoint, o 
 	return p, nil
 }
 
+// Initial selection plus at most two reselects after a retention move.
+const chatHistoryPageMaxAttempts = 3
+
 func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opts ChatHistoryPageOptions) (ChatHistoryPage, error) {
 	o, err := historyNormalizeOptions(opts)
 	if err != nil {
@@ -392,7 +395,7 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 	if err = validateSessionID(sid); err != nil {
 		return ChatHistoryPage{}, err
 	}
-	for {
+	for attempt := 1; ; attempt++ {
 		if _, err = us.reconcileChatHistoryIndex(ctx, sid); err != nil {
 			return ChatHistoryPage{}, err
 		}
@@ -415,15 +418,32 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 		if m := historyMetrics(ctx); m != nil {
 			start = *m
 		}
-		err = historyReadEvent(ctx, chatHistoryReadEvent{SessionID: sid, Scope: "page", Phase: "cut_captured", Cut: cut})
-		var p ChatHistoryPage
-		if err == nil {
-			p, err = historySelect(t, dir, cp, o)
-		}
-		closeErr := t.file.Close()
-		release()
-		if closeErr != nil {
-			err = errors.Join(err, closeErr)
+		var cleanupErr error
+		p, err := func() (page ChatHistoryPage, readErr error) {
+			// Scope cleanup to this attempt, not the whole reselect loop. Close
+			// the handle before releasing the generation, including on panic.
+			defer func() {
+				if releaseErr := release(); releaseErr != nil {
+					cleanupErr = errors.Join(cleanupErr, releaseErr)
+					readErr = errors.Join(readErr, releaseErr)
+				}
+			}()
+			defer func() {
+				if closeErr := t.file.Close(); closeErr != nil {
+					cleanupErr = errors.Join(cleanupErr, closeErr)
+					readErr = errors.Join(readErr, closeErr)
+				}
+			}()
+			readErr = historyReadEvent(ctx, chatHistoryReadEvent{SessionID: sid, Scope: "page", Phase: "cut_captured", Cut: cut})
+			if readErr == nil {
+				page, readErr = historySelect(t, dir, cp, o)
+			}
+			return page, readErr
+		}()
+		// A retirement failure is real storage failure even when this cut
+		// moved; reselect must not absorb a failed last-reader deletion.
+		if cleanupErr != nil {
+			return ChatHistoryPage{}, historyUnavailable("storage_error", err)
 		}
 		if ctx.Err() != nil {
 			return ChatHistoryPage{}, ctx.Err()
@@ -451,6 +471,9 @@ func (us *UnifiedStore) readChatHistoryPage(ctx context.Context, sid string, opt
 				m.DiscardedArchiveRecords += records
 				m.DiscardedArchiveBytes += count
 				m.RetentionRetries++
+			}
+			if attempt >= chatHistoryPageMaxAttempts {
+				return ChatHistoryPage{}, historyUnavailable("index_inconsistent", errors.New("retention changed during all bounded history read attempts"))
 			}
 			continue
 		}
