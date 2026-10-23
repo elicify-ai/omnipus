@@ -1,7 +1,8 @@
 import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChatScreen } from '@/components/chat/ChatScreen'
+import { Skeleton } from '@/components/ui/skeleton'
 import { fetchSessionDetail, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { useSessionStore } from '@/store/session'
@@ -69,7 +70,7 @@ function SessionRoute() {
   }, [sessionId, detail?.session.id, detail?.session.total_tokens])
 
   // Fetch active workspaces to verify the session's workspace_id.
-  const { data: workspaces = [], isPending: workspacesPending } = useQuery({
+  const { data: workspaces = [], isPending: workspacesPending, isPaused: workspacesPaused } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
@@ -254,6 +255,8 @@ function SessionRoute() {
     isReplaying,
   ])
 
+  const redirectWaitExpired = useBoundedWait(!!detail?.session?.workspace_id && workspacesPending, REDIRECT_DECISION_WAIT_MS)
+
   // Confirmed 404 (loader caught it and returned null, then the client-side
   // refetch above hit the same 404) — surface it instead of falling through
   // to a bare ChatScreen that looks like a fresh, empty chat.
@@ -261,16 +264,46 @@ function SessionRoute() {
     return <SessionNotFound />
   }
 
-  // Suppress inline render while workspace redirect is in flight, and while
-  // the workspace list that decides it is still loading: an inline ChatScreen
-  // mounted only to be replaced would start (and then abort) a redundant
-  // history read before the workspace chat attaches.
+  // Suppress inline render while workspace redirect is in flight.
   const wsId = detail?.session?.workspace_id
-  if (wsId && (workspacesPending || workspaces.find((w) => w.id === wsId))) {
+  if (wsId && workspaces.find((w) => w.id === wsId)) {
     return null
+  }
+  // While the workspace list that decides the redirect is still loading, an
+  // inline ChatScreen would start (and then abort) a redundant history read.
+  // Show a visible status instead -- but only for a bounded time: a paused
+  // (offline) or stalled list falls back to the inline thread, whose own
+  // connection notice and history error/Retry surfaces stay reachable, and
+  // the redirect still happens if the list arrives later.
+  if (wsId && workspacesPending && !workspacesPaused && !redirectWaitExpired) {
+    return <RedirectPendingStatus />
   }
 
   return <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
+}
+
+/** How long a deep link waits for the workspace list before opening inline. */
+export const REDIRECT_DECISION_WAIT_MS = 4_000
+
+/** True once `active` has stayed true for `ms`; resets whenever it turns false. */
+function useBoundedWait(active: boolean, ms: number): boolean {
+  const [expired, setExpired] = useState(false)
+  useEffect(() => {
+    setExpired(false)
+    if (!active) return
+    const timer = setTimeout(() => setExpired(true), ms)
+    return () => clearTimeout(timer)
+  }, [active, ms])
+  return active && expired
+}
+
+function RedirectPendingStatus() {
+  return (
+    <div className="flex flex-1 flex-col gap-[var(--space-2)] p-[var(--space-3)]">
+      <Skeleton className="h-4 w-48" />
+      <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Opening chat…</p>
+    </div>
+  )
 }
 
 export const Route = createFileRoute('/_app/sessions/$sessionId')({
