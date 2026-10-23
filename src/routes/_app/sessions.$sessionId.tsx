@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChatScreen } from '@/components/chat/ChatScreen'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Button } from '@/components/ui/button'
 import { fetchSessionDetail, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { useSessionStore } from '@/store/session'
@@ -70,7 +71,7 @@ function SessionRoute() {
   }, [sessionId, detail?.session.id, detail?.session.total_tokens])
 
   // Fetch active workspaces to verify the session's workspace_id.
-  const { data: workspaces = [], isPending: workspacesPending, isPaused: workspacesPaused } = useQuery({
+  const { data: workspaces = [], isPending: workspacesPending, isPaused: workspacesPaused, refetch: refetchWorkspaces } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
@@ -279,6 +280,18 @@ function SessionRoute() {
     return <RedirectPendingStatus />
   }
 
+  // The bounded wait ended (or the lookup is paused offline) while the
+  // workspace is still unresolved: open inline, but say so, and offer a Retry
+  // that replaces the stalled lookup. The later automatic move is announced.
+  if (wsId && workspacesPending) {
+    return (
+      <div className="flex h-full min-h-0 flex-1 flex-col">
+        <WorkspaceLookupNotice paused={workspacesPaused} onRetry={() => { void refetchWorkspaces({ cancelRefetch: true }) }} />
+        <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
+      </div>
+    )
+  }
+
   return <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
 }
 
@@ -295,6 +308,19 @@ function useBoundedWait(active: boolean, ms: number): boolean {
     return () => clearTimeout(timer)
   }, [active, ms])
   return active && expired
+}
+
+function WorkspaceLookupNotice({ paused, onRetry }: { paused: boolean; onRetry: () => void }) {
+  return (
+    <div className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-1)]">
+      <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        {paused
+          ? "Waiting for the connection to find this chat's workspace. The chat moves into its workspace once it is found."
+          : "Still finding this chat's workspace. The chat moves into its workspace once it is found."}
+      </p>
+      <Button variant="ghost" size="sm" onClick={onRetry}>Retry</Button>
+    </div>
+  )
 }
 
 function RedirectPendingStatus() {
