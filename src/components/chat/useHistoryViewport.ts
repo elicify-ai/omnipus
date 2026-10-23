@@ -60,6 +60,8 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const lastTop = useRef(0)
   const dragging = useRef(false)
   const compensating = useRef(false)
+  // scrollTop the anchor bookkeeping last accounted for (capture or correction).
+  const settledTop = useRef<number | null>(null)
   const opening = useRef(true)
   const fill = useRef<{ frame: number | null; finishLayout: (() => void) | null } | null>(null)
   const [average, setAverage] = useState(80)
@@ -81,6 +83,7 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     const first = visible[0]
     if (!first) return
     const alternatives = [...visible, ...mounted.filter(row => row.getBoundingClientRect().bottom <= top).reverse()]
+    settledTop.current = scroller.scrollTop
     anchor.current = { position: first.dataset.historyAnchor!, offset: offset(first), alternatives: alternatives.map(row => ({ position: row.dataset.historyAnchor!, screenTop: row.getBoundingClientRect().top - top })) }
     const protectedPositions = new Set(visible.filter(row => row.dataset.historyPosition && row.getBoundingClientRect().top < top + 2 * scroller.clientHeight).map(row => row.dataset.historyPosition!))
     const focused = document.activeElement?.closest<HTMLElement>('[data-history-position]')
@@ -92,34 +95,54 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     const scroller = scrollRef.current
     const held = anchor.current
     if (!scroller || !held || current.current.history.viewMode !== 'historical') return
+    // Content shrinking at the scroll end makes the browser clamp scrollTop.
+    // That is not reader movement: count it as not yet applied, so the anchor
+    // is restored as soon as the content allows (and a shrink above the reader
+    // that the clamp already compensated is not corrected a second time).
+    if (settledTop.current !== null) {
+      const moved = scroller.scrollTop - settledTop.current
+      if (moved < 0 && scroller.scrollTop >= scroller.scrollHeight - scroller.clientHeight - 1) held.offset += moved
+    }
+    settledTop.current = scroller.scrollTop
     const mounted = rows()
     let row = mounted.find(item => item.dataset.historyAnchor === held.position)
     let delta = 0
+    let estimatedOnly = false
     if (row) delta = offset(row) - held.offset
     else {
       // A prepend can move the retained anchor outside the mounted range before
       // this layout effect. Use the real virtualizer's current measured/estimated
       // item offset, not total scrollHeight or a guessed source rank.
       const estimated = current.current.anchorOffset?.(held.position)
-      if (estimated !== undefined && Number.isFinite(estimated)) delta = estimated - held.offset
+      if (estimated !== undefined && Number.isFinite(estimated)) { delta = estimated - held.offset; estimatedOnly = true }
       else {
         const fallback = held.alternatives.find(item => mounted.some(element => element.dataset.historyAnchor === item.position))
         row = fallback ? mounted.find(item => item.dataset.historyAnchor === fallback.position) : undefined
         if (row && fallback) delta = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top - fallback.screenTop
       }
     }
+    const exact = row !== undefined && row.dataset.historyAnchor === held.position
+    let residual = delta
     if (Number.isFinite(delta) && delta !== 0) {
       compensating.current = true
-      const top = scroller.scrollTop + delta
-      // Consume this layout delta even if the corrected virtual row has not
-      // mounted yet; the following observer pass must not apply it twice.
-      held.offset += delta
+      const before = scroller.scrollTop
+      const top = before + delta
       if (typeof scroller.scrollTo === 'function') scroller.scrollTo({ top, behavior: 'instant' })
       else scroller.scrollTop = top
+      // Consume only what the browser actually applied, so the next layout
+      // pass neither applies this delta twice nor forgets the part a scroll
+      // edge clamp or device-pixel snapping held back.
+      const applied = scroller.scrollTop - before
+      held.offset += applied
+      residual = delta - applied
+      settledTop.current = scroller.scrollTop
       queueMicrotask(() => { compensating.current = false })
     }
     if (priorFocus.current && !priorFocus.current.isConnected) scroller.focus({ preventScroll: true })
-    capture()
+    // Re-anchor only once the held row sits where it belongs. Re-capturing the
+    // first visible row at an estimated or clamped position would turn that
+    // error into permanent drift.
+    if (!estimatedOnly && (!exact || !Number.isFinite(residual) || Math.abs(residual) < 1)) capture()
   }, [capture, offset, rows, scrollRef])
   const measure = useCallback(() => {
     const scroller = scrollRef.current
@@ -217,13 +240,18 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     if (!scroller || !state.sid || compensating.current) return
     if (dragging.current && scroller.scrollTop < lastTop.current) useChatStore.getState().enterHistoryReading(state.sid)
     lastTop.current = scroller.scrollTop
-    capture()
+    // Our own correction's scroll event arrives a frame later, when a row
+    // measurement may already have moved the content again: keep holding the
+    // same anchor then. Any other position is genuine reader movement.
+    const own = settledTop.current !== null && Math.abs(scroller.scrollTop - settledTop.current) < 0.5
+    if (own && state.history.viewMode === 'historical') correct()
+    else capture()
     if (state.history.requests.refresh.status !== 'idle') return
     if (historyPixelTrigger(scroller.scrollTop - prefix, scroller.clientHeight, !document.hidden)) void requestFill('older', opening.current)
     else if (historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden) && state.history.hasLater) void requestFill('newer')
-  }, [capture, prefix, requestFill, scrollRef])
+  }, [capture, correct, prefix, requestFill, scrollRef])
   useLayoutEffect(() => {
-    samples.current.reset(); heights.current.clear(); anchor.current = null; opening.current = true
+    samples.current.reset(); heights.current.clear(); anchor.current = null; settledTop.current = null; opening.current = true
     priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; setAverage(80); setPrefix(0)
     return () => {
       cancelFill(); samples.current.reset(); heights.current.clear(); anchor.current = null; priorFocus.current = null
