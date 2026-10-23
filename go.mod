@@ -14,6 +14,7 @@ require (
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc
 	github.com/chromedp/chromedp v0.15.1
+	github.com/coder/websocket v1.8.15
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/emersion/go-message v0.18.2
 	github.com/ergochat/irc-go v0.6.0
@@ -57,6 +58,7 @@ require (
 	github.com/teambition/rrule-go v1.8.2
 	github.com/tencent-connect/botgo v0.2.1
 	github.com/yuin/goldmark v1.8.6
+	go.mau.fi/libsignal v0.2.2
 	go.mau.fi/util v0.9.10
 	go.mau.fi/whatsmeow v0.0.0-20260713112832-d8960d9575d2
 	go.uber.org/goleak v1.3.0
@@ -102,7 +104,6 @@ require (
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
-	github.com/coder/websocket v1.8.15 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -154,7 +155,6 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	go.etcd.io/bbolt v1.4.0 // indirect
-	go.mau.fi/libsignal v0.2.2 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
@@ -174,7 +174,7 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/grbit/go-json v0.11.0 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
