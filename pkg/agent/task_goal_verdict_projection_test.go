@@ -60,6 +60,7 @@ func TestTaskVerdictProjectsOntoTheGoalRecordsOwnCriteria_UATDefect3(t *testing.
 			criterionID := stored.Criteria[0].ID
 
 			al.taskExecutor.adjudicateRunClaim(context.Background(), stored, taskSessionID,
+				"Implemented the CSV export and exercised the endpoint by hand.",
 				"Implemented the CSV export and exercised the endpoint by hand.", nil, &taskRunState{})
 
 			rec, err := goal.NewStore(config.OmnipusHomeDir()).GetByOwner(generated.GoalOwnerKindTask, stored.ID)
