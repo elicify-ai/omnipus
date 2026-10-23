@@ -45,18 +45,27 @@ function sourceProjection(groups: Stage['groups']) {
   return { positions, entries, rowCount }
 }
 
-function restorePublishedProjection(context: HistorySliceContext, sid: string, stage: Stage): void {
-  if (!stage.published) return
+function restorePublishedProjection(context: HistorySliceContext, sid: string, stage: Stage, beforeCommit?: SessionChatState): void {
+  if (!stage.published && !beforeCommit) return
   context.withBucket(sid, b => {
-    if (b.history.viewGeneration !== stage.generation || b.history.historyLoaded) return {}
-    const rows = stage.priorOrder.flatMap(id => {
-      const old = stage.baseline[id]
+    if (b.history.viewGeneration !== stage.generation || (!beforeCommit && b.history.historyLoaded)) return {}
+    // Progressive rows are still provisional: on failure restore the pre-stage
+    // reader, not the partially published page captured just before commit.
+    const prior = stage.published ? undefined : beforeCommit
+    const baseline = prior?.messagesById ?? stage.baseline
+    const history = prior?.history ?? stage.priorHistory
+    const hidden = new Set(prior?.historyLiveOrder ?? [])
+    const priorOrder = prior ? [...new Set([...prior.messageOrder, ...hidden])] : stage.priorOrder
+    const rows = priorOrder.flatMap(id => {
+      const old = baseline[id]
       const current = b.messagesById[id]
       return old ? [current && !current.historyPosition ? current : old] : []
     })
     for (const pending of retainedPending(b)) if (!pending.historyPosition && !rows.some(row => row.id === pending.id)) rows.push(pending)
-    const patch = historyRowsPatch(b, rows, stage.priorHistory.readerPositions)
-    return { ...patch, history: { ...stage.priorHistory, viewGeneration: b.history.viewGeneration, serverState: b.history.serverState, liveControlsReady: b.history.liveControlsReady, requests: b.history.requests } }
+    const patch = historyRowsPatch(prior ?? b, rows, history.readerPositions)
+    return { ...patch,
+      ...(prior ? { messageOrder: patch.messageOrder!.filter(id => !hidden.has(id)), historyLiveOrder: [...hidden], recoveredFirstSend: prior.recoveredFirstSend } : {}),
+      history: { ...history, viewGeneration: b.history.viewGeneration, serverState: b.history.serverState, liveControlsReady: b.history.liveControlsReady, requests: b.history.requests } }
   })
 }
 
@@ -220,6 +229,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
   function finish(sid: string, stage: Stage): boolean {
     const bucket = context.get().sessionsById[sid]
     if (!bucket || bucket.history.viewGeneration !== stage.generation || (stage.published && bucket.history.historyLoaded)) return false
+    let beforeCommit: SessionChatState | undefined
     try {
       const { positions, entries, rowCount } = sourceProjection(stage.groups)
       const baseline = { ...stage.baseline, ...stage.publishedRows }
@@ -231,6 +241,9 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       if (rowCount !== frame.page_info.row_count) throw new SnapshotProtocolError('row_count')
       const page: SessionHistoryPage = { ...parsed.data, entries }
       context.withBucket(sid, original => {
+        // Zustand may publish this projection before a subscriber throws. Keep
+        // the immediate prior reader so that failure is still transactional.
+        beforeCommit = original
         const recovered = settleRecoveredSnapshotInput(original, page)
         const { bucket: b, page: completedPage } = settleCompletedSnapshot(recovered, page, baseline, frame.reason === 'boot_mismatch')
         const completion = b === original ? {} : { isStreaming: b.isStreaming, wipedOpenTurnIds: b.wipedOpenTurnIds, recoveredFirstSend: b.recoveredFirstSend }
@@ -260,7 +273,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       // Only fixed classifications leave this boundary. Never log error text,
       // stack, source bodies/identities or opaque source positions.
       logDiagnostic('chatHistorySnapshotRejected', { phase: 'snapshot_commit', kind })
-      restorePublishedProjection(context, sid, stage)
+      restorePublishedProjection(context, sid, stage, beforeCommit)
       reject(sid)
       return false
     }
