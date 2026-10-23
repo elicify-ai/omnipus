@@ -228,7 +228,9 @@ describe('I1 protected reader edges and F6 explicit deferral — D8/D9', () => {
       expect(removed.has(safeAnchor.position!), 'retry anchor is independently outside the trim set').toBe(false)
       expect(historyRequests(), 'moving away alone does not refetch').toHaveLength(readsBefore + 1)
       network.respond('GET', path, () => json(response))
-      await user.click(within(region).getByRole('button', { name: label(direction) }))
+      const retryTrigger = within(region).getByRole('button', { name: label(direction) })
+      const focusCallsBeforeRetry = focus.mock.calls.length
+      await user.click(retryTrigger)
       await waitFor(() => expect(bucket().history.readerPositions).toStrictEqual(positions(direction === 'older' ? 100 : 102)))
       expect(historyRequests(), 'one explicit retry reuses the bounded read domain').toHaveLength(readsBefore + 2)
       const retried = historyRequests().slice(-2).map(read => Object.fromEntries(new URLSearchParams(read.query)))
@@ -237,7 +239,13 @@ describe('I1 protected reader edges and F6 explicit deferral — D8/D9', () => {
         { [direction === 'older' ? 'before' : 'after']: pos(direction === 'older' ? 101 : 600), limit: '20', min_rows: '2' },
       ])
       await expectCommitted(region, direction, safeAnchor)
-      expect(region, 'safe successful retry cannot focus the first new history row').toHaveFocus()
+      if (retryTrigger.isConnected) {
+        expect(retryTrigger, 'D8 retains the SAME mounted retry trigger').toHaveFocus()
+      } else {
+        expect(region, 'D8 removed trigger falls back to labelled history, never a new row or composer').toHaveFocus()
+        expect(focus.mock.calls.slice(focusCallsBeforeRetry), 'D8 fallback during this retry explicitly prevents scrolling')
+          .toContainEqual([expect.objectContaining({ preventScroll: true })])
+      }
     }
   })
 })
