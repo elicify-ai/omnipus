@@ -1057,74 +1057,7 @@ func (al *AgentLoop) runGoalAdjudicationOutcome(
 	}
 
 	if aa.ag.attempt >= aa.ag.maxRounds {
-		// ADR-084 §13 (corrected 2026-10-23, issue #1431, MIN-001/INV-1):
-		// every COMPLETED, APPLICABLE unmet verdict advances the round —
-		// including the one that reaches the bound. Persist the final
-		// verdict and its pinned round on the record BEFORE the terminal
-		// transition, with exactly the arithmetic advanceUnmetGoal uses
-		// (RecordVerdict, Round pinned to `attempt`), minus the steer
-		// delivery and active-path frame a continuing goal needs. Without
-		// this the terminal record's Round ended at maxRounds-1 while its
-		// own outcome entry carried rounds_used=maxRounds — the record
-		// contradicted the outcome it terminated with.
-		if _, perr := aa.ag.gstore.Update(aa.ag.rec.GoalID, func(cur *goal.Goal) error {
-			if aa.ag.verdict != nil {
-				if rerr := cur.RecordVerdict(aa.ag.verdict, aa.ag.reasonText, time.Now().UTC()); rerr != nil {
-					return rerr
-				}
-			} else {
-				cur.LatestReason = aa.ag.reasonText
-				cur.LastActivityAt = time.Now().UTC()
-			}
-			cur.Round = aa.ag.attempt
-			return nil
-		}); perr != nil {
-			// silent-M3's rule applies unchanged: a bound-exhaustion
-			// termination written onto a record whose counter could not be
-			// durably advanced would terminate on a stale value. Abort THIS
-			// termination — the goal stays active and a later adjudication
-			// re-fires — with the fault surfaced loudly.
-			logger.ErrorCF("agent", "goal trigger: final round persist failed at the bound; aborting termination to keep the round gate honest",
-				map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "attempt": aa.ag.attempt, "max_rounds": aa.ag.maxRounds, "error": perr.Error()})
-			aa.ag.al.writeGoalSystemTranscript(aa.ag.store, aa.ag.sessionID, aa.ag.agentInst.ID, fmt.Sprintf(
-				"Goal %q: could not persist the final adjudication round at the bound (%v). The goal was not terminated — investigate storage and retry the goal.",
-				aa.ag.rec.Prompt, perr))
-			return goalAdjudicationOutcome{}
-		}
-		// silent-SF-7 (review): the handover used to be written to the user's
-		// OWN transcript BEFORE the transition was attempted. On a store
-		// failure the user read "Goal X did not reach a MET verdict" while the
-		// record was still ACTIVE and the keeper kept pushing it. Attempt the
-		// transition first and write the handover only once it has actually
-		// landed; on failure the goal stays visibly active and clearGoal's own
-		// deferral re-drives it on the next turn.
-		//
-		// The handover is the outcome entry's own content (goal_outcome.go):
-		// one line, written only after the transition landed.
-		note := fmt.Sprintf("round bound reached (%d/%d)", aa.ag.attempt, aa.ag.maxRounds)
-		handover := fmt.Sprintf(
-			"Goal %q did not reach a MET verdict within %d round(s). Latest judge feedback:\n%s",
-			aa.ag.rec.Prompt, aa.ag.maxRounds, aa.ag.reasonText,
-		)
-		if _, ok := aa.ag.al.clearGoalWithOutcome(aa.ag.sessionID, aa.ag.store, note, goalOutcomeInput{
-			ending:      generated.GoalOutcomeEndingRoundsExhausted,
-			roundsUsed:  aa.ag.attempt,
-			maxRounds:   aa.ag.maxRounds,
-			verdict:     aa.ag.verdict,
-			judgeReason: aa.ag.reasonText,
-			agentID:     aa.ag.agentInst.ID,
-			content:     handover,
-		}); !ok {
-			logger.ErrorCF("agent", "goal trigger: round-bound termination failed; no handover written (the goal is still active)",
-				map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "attempt": aa.ag.attempt, "max_rounds": aa.ag.maxRounds})
-			return goalAdjudicationOutcome{}
-		}
-		// (b) #947 defect 1: the goal decision is settled — the goal path's
-		// second terminal arm hands the completion tail the child's final
-		// answer, exactly as its met arm does, so an exhausted goal no longer
-		// leaves the child `running` with a settled goal above it.
-		aa.ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), aa.ag.producer), aa.ag.sessionID, aa.ag.upwardAnswer(), nil)
-		return goalAdjudicationOutcome{}
+		return aa.terminateRoundsExhausted()
 	}
 
 	switch aa.advanceUnmetGoal() {
@@ -1132,6 +1065,86 @@ func (al *AgentLoop) runGoalAdjudicationOutcome(
 		return goalAdjudicationOutcome{met: aa.ret0}
 	}
 
+	return goalAdjudicationOutcome{}
+}
+
+// persistFinalUnmetRound persists the bound-reaching unmet verdict and its
+// pinned round on the goal record BEFORE the terminal transition, with
+// exactly the arithmetic advanceUnmetGoal uses (RecordVerdict, Round pinned
+// to `attempt`), minus the steer delivery and active-path frame a continuing
+// goal needs. ADR-084 §13 (corrected 2026-10-23, issue #1431, MIN-001/
+// INV-1): every COMPLETED, APPLICABLE unmet verdict advances the round —
+// including the one that reaches the bound. Without this the terminal
+// record's Round ended at maxRounds-1 while its own outcome entry carried
+// rounds_used=maxRounds — the record contradicted the outcome it terminated
+// with. Reports failure loudly (silent-M3's rule: a termination written onto
+// a record whose counter could not be durably advanced would terminate on a
+// stale value) and returns false; the caller must then abort the
+// termination — the goal stays active and a later adjudication re-fires.
+func (aa *agentLoopRunGoalAdjudicationAdvance) persistFinalUnmetRound() bool {
+	if _, perr := aa.ag.gstore.Update(aa.ag.rec.GoalID, func(cur *goal.Goal) error {
+		if aa.ag.verdict != nil {
+			if rerr := cur.RecordVerdict(aa.ag.verdict, aa.ag.reasonText, time.Now().UTC()); rerr != nil {
+				return rerr
+			}
+		} else {
+			cur.LatestReason = aa.ag.reasonText
+			cur.LastActivityAt = time.Now().UTC()
+		}
+		cur.Round = aa.ag.attempt
+		return nil
+	}); perr != nil {
+		logger.ErrorCF("agent", "goal trigger: final round persist failed at the bound; aborting termination to keep the round gate honest",
+			map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "attempt": aa.ag.attempt, "max_rounds": aa.ag.maxRounds, "error": perr.Error()})
+		aa.ag.al.writeGoalSystemTranscript(aa.ag.store, aa.ag.sessionID, aa.ag.agentInst.ID, fmt.Sprintf(
+			"Goal %q: could not persist the final adjudication round at the bound (%v). The goal was not terminated — investigate storage and retry the goal.",
+			aa.ag.rec.Prompt, perr))
+		return false
+	}
+	return true
+}
+
+// terminateRoundsExhausted is the round-bound arm: it persists the final
+// unmet round (persistFinalUnmetRound), transitions the goal to the
+// rounds_exhausted terminal state with the handover carrying the Judge's
+// last reason, and hands the completion tail the child's final answer.
+func (aa *agentLoopRunGoalAdjudicationAdvance) terminateRoundsExhausted() goalAdjudicationOutcome {
+	if !aa.persistFinalUnmetRound() {
+		return goalAdjudicationOutcome{}
+	}
+	// silent-SF-7 (review): the handover used to be written to the user's
+	// OWN transcript BEFORE the transition was attempted. On a store
+	// failure the user read "Goal X did not reach a MET verdict" while the
+	// record was still ACTIVE and the keeper kept pushing it. Attempt the
+	// transition first and write the handover only once it has actually
+	// landed; on failure the goal stays visibly active and clearGoal's own
+	// deferral re-drives it on the next turn.
+	//
+	// The handover is the outcome entry's own content (goal_outcome.go):
+	// one line, written only after the transition landed.
+	note := fmt.Sprintf("round bound reached (%d/%d)", aa.ag.attempt, aa.ag.maxRounds)
+	handover := fmt.Sprintf(
+		"Goal %q did not reach a MET verdict within %d round(s). Latest judge feedback:\n%s",
+		aa.ag.rec.Prompt, aa.ag.maxRounds, aa.ag.reasonText,
+	)
+	if _, ok := aa.ag.al.clearGoalWithOutcome(aa.ag.sessionID, aa.ag.store, note, goalOutcomeInput{
+		ending:      generated.GoalOutcomeEndingRoundsExhausted,
+		roundsUsed:  aa.ag.attempt,
+		maxRounds:   aa.ag.maxRounds,
+		verdict:     aa.ag.verdict,
+		judgeReason: aa.ag.reasonText,
+		agentID:     aa.ag.agentInst.ID,
+		content:     handover,
+	}); !ok {
+		logger.ErrorCF("agent", "goal trigger: round-bound termination failed; no handover written (the goal is still active)",
+			map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "attempt": aa.ag.attempt, "max_rounds": aa.ag.maxRounds})
+		return goalAdjudicationOutcome{}
+	}
+	// (b) #947 defect 1: the goal decision is settled — the goal path's
+	// second terminal arm hands the completion tail the child's final
+	// answer, exactly as its met arm does, so an exhausted goal no longer
+	// leaves the child `running` with a settled goal above it.
+	aa.ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), aa.ag.producer), aa.ag.sessionID, aa.ag.upwardAnswer(), nil)
 	return goalAdjudicationOutcome{}
 }
 
