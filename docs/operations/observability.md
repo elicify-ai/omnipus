@@ -10,7 +10,7 @@ You don't enable these. They run on every install, by default, with no extra ser
 
 ## Session transcript
 
-Each session has a folder at `$OMNIPUS_HOME/sessions/<session-id>/` (`~/.omnipus/sessions/<session-id>/` by default). All sessions live in this one shared store; there are no per-agent session folders. The history is one append-only stream of entries (one line per entry, atomic writes via temp-file-rename), split into one file per UTC day: `transcript.jsonl` holds the current day, and earlier days are frozen as `<YYYY-MM-DD>.jsonl` beside it (a small `transcript.day` file records which day `transcript.jsonl` holds). A script that reads a whole session must read all of these files in date order. Paged APIs project requested ranges. Clients that need all retained chat history must explicitly enumerate pages.
+Each session has a folder at `$OMNIPUS_HOME/sessions/<session-id>/` (`~/.omnipus/sessions/<session-id>/` by default). All sessions live in this one shared store; there are no per-agent session folders. The history is one append-only stream of entries, split into one file per UTC day. The canonical archive appends one newline-framed JSON entry at a time and fsyncs each accepted append. If writing or fsync fails, the writer attempts to truncate back to the pre-append size; transcript appends do not use temp-file-rename replacement. Per day: `transcript.jsonl` holds the current day, and earlier days are frozen as `<YYYY-MM-DD>.jsonl` beside it (a small `transcript.day` file records which day `transcript.jsonl` holds). A script that reads a whole session must read all of these files in date order. Paged APIs project requested ranges. Clients that need all retained chat history must explicitly enumerate pages.
 
 ### Entry types (`pkg/session/daypartition.go::EntryType`)
 
@@ -18,7 +18,7 @@ Each session has a folder at `$OMNIPUS_HOME/sessions/<session-id>/` (`~/.omnipus
 |---|---|
 | `message` (or empty) | A user or assistant chat turn |
 | `tool_call` | A tool invocation — name, args, status, duration, result |
-| `compaction` | A context-compression summary written when token budget is exceeded |
+| `compaction` | Legacy context-compression summary records. Current context relief trims the retained model window without generating a new summarization response. |
 | `system` | System-level event (boot, shutdown, sandbox state change) |
 | `turn_canceled` | A turn that was cancelled mid-stream, with cancel method + descendants |
 | `provider_fallback` | The note that a fallback model answered, with the models involved, written once per session and model pair |
@@ -44,7 +44,7 @@ Each session has a folder at `$OMNIPUS_HOME/sessions/<session-id>/` (`~/.omnipus
     {
       "id":         "call_…",
       "tool":       "search_web",
-      "status":     "success",      // success | error | pending | denied
+      "status":     "success",      // success | error | pending | denied | running | cancelled | interrupted | parked
       "duration_ms": 1230,
       "parameters": {"query": "…"},
       "result":     {"…"}
