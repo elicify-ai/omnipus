@@ -207,6 +207,10 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 }
 
 // recordEmittedIDs adds the ids a replayed frame carries to emitted.
+// emittedResultKey is the emitted-set key of a tool call's RESULT, kept
+// separate from the call id that records its start.
+func emittedResultKey(callID string) string { return "result\x00" + callID }
+
 func recordEmittedIDs(emitted map[string]bool, f any) {
 	switch v := f.(type) {
 	case generated.ReplayMessageFrame:
@@ -216,7 +220,9 @@ func recordEmittedIDs(emitted map[string]bool, f any) {
 	case generated.ToolCallStartFrame:
 		emitted[v.CallId] = true
 	case generated.ToolCallResultFrame:
-		emitted[v.CallId] = true
+		// A start is not result coverage (D4): record the terminal result
+		// under its own key so the live projection can still deliver it.
+		emitted[emittedResultKey(v.CallId)] = true
 	case generated.SubagentStartFrame:
 		emitted[v.SpanId] = true
 	case generated.SubagentEndFrame:
