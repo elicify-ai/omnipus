@@ -68,9 +68,13 @@ func TestGoalClaimTool_SchemaAndEnum(t *testing.T) {
 		t.Fatalf("evidence.type = %v, want \"string\"", evidenceProp["type"])
 	}
 
+	// ADR-084 §13 (2026-10-23, issue #1431), decision line 1: `evidence` is
+	// required in the tool's input schema for EVERY status — required is
+	// exactly ["status", "evidence"]. FR-088 as amended / E-28; the spec's
+	// constants-table row ("required in the schema for every status").
 	required, ok := params["required"].([]string)
-	if !ok || len(required) != 1 || required[0] != "status" {
-		t.Fatalf("Parameters()[\"required\"] = %#v, want exactly [\"status\"]", params["required"])
+	if !ok || len(required) != 2 || required[0] != "status" || required[1] != "evidence" {
+		t.Fatalf("Parameters()[\"required\"] = %#v, want exactly [\"status\" \"evidence\"] (ADR-084 §13, issue #1431: evidence is schema-required for every status)", params["required"])
 	}
 
 	desc := tool.Description()
@@ -85,13 +89,19 @@ func TestGoalClaimTool_SchemaAndEnum(t *testing.T) {
 	}
 }
 
-// TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty — JUDGE-FR-088 (E-28): a
-// status:met claim with "", "   " or "\n\t " as evidence is refused at the
-// call as an empty-evidence violation, exactly like a wholly absent
-// evidence argument — no claim is recorded (access.writes stays 0, since
-// GoalClaimTool never writes anything on any path), and the refusal message
-// names the violation.
-func TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty(t *testing.T) {
+// TestGoalClaim_EmptyEvidenceMetClaimIsRecordedNotRefused — JUDGE-FR-088 as
+// amended 2026-10-23 (issue #1431; ADR-084 §13, decision line 2): an
+// absent/empty/whitespace evidence argument on a status:met call is
+// RECORDED, never refused. The refusal this table used to assert let a goal
+// loop forever — nothing recorded, no attempt, no judge (§13 "The defect
+// this closes") — so it was deleted and this test replaces it, per §13
+// "Tests and specs that must change" (it inverts
+// TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty). The call succeeds and the
+// result payload is the record the engine reads off the transcript
+// (JUDGE-FR-092/094): {"status", "evidence", "goal_id"}, with the evidence
+// text as supplied after trimming (E-28) — trimming normalises, it never
+// refuses, so every empty-equivalent argument records an empty evidence line.
+func TestGoalClaim_EmptyEvidenceMetClaimIsRecordedNotRefused(t *testing.T) {
 	cases := []struct {
 		name     string
 		evidence any
@@ -105,6 +115,7 @@ func TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			const sessionID = "session_goal_claim_whitespace"
 			access := newFakeGoalRecordAccess()
+			access.goalID[sessionID] = "goal-empty-evidence"
 			access.condition[sessionID] = "an active goal"
 			tool := newGoalClaimTool(access)
 
@@ -114,14 +125,27 @@ func TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty(t *testing.T) {
 			}
 			res := tool.Execute(setGoalCtx(sessionID, "mia"), args)
 
-			if !res.IsError {
-				t.Fatalf("want a refusal for evidence %q, got success: %q", tc.evidence, res.ForLLM)
+			if res.IsError {
+				t.Fatalf("ADR-084 §13 (issue #1431): an empty-evidence met claim must be RECORDED, not refused — got an error: %q", res.ForLLM)
 			}
-			if !strings.Contains(res.ForLLM, "evidence") {
-				t.Fatalf("error should name the empty-evidence violation: %q", res.ForLLM)
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
+				t.Fatalf("recorded result payload is not valid JSON: %v (%q)", err, res.ForLLM)
+			}
+			if payload["status"] != "met" {
+				t.Fatalf("payload[status] = %v, want \"met\"", payload["status"])
+			}
+			// The claim's evidence line is what the Judge receives as ClaimText
+			// (FR-094): empty here, by the amendment — "records the claim with
+			// whatever text was supplied, empty or not".
+			if payload["evidence"] != "" {
+				t.Fatalf("payload[evidence] = %v, want the (trimmed, empty) evidence text as supplied", payload["evidence"])
+			}
+			if payload["goal_id"] != "goal-empty-evidence" {
+				t.Fatalf("payload[goal_id] = %v, want %q — the recorded claim names its goal", payload["goal_id"], "goal-empty-evidence")
 			}
 			if access.writes != 0 {
-				t.Fatalf("must not write on an empty-evidence refusal, got %d writes", access.writes)
+				t.Fatalf("goal_claim must never write a goal record, got %d writes", access.writes)
 			}
 		})
 	}
