@@ -26,7 +26,7 @@ For example: `write_file` is set to Ask. With Auto-approve off, every file write
 ### Set tool policies
 
 1. Open **Settings**, then select **Security**. You see the security health summary and the main protection settings.
-2. Open **Advanced / technical details**, then **Tool Access — Global Policies**. Choose Allow, Ask or Deny for each tool. This applies to every agent. Saving asks you to re-type your password.
+2. Open **Advanced / technical details**, then **Tool Access — Global Policies**. Choose Allow, Ask or Deny for each tool. Changes save immediately using your signed-in session, with no second password prompt. Changing a tool to **Allow** can enable it for every agent that follows the global setting; stricter per-agent **Ask** or **Deny** settings still apply. This exception does not remove the existing confirmation checks on Integrations, Providers, Sandbox, Credentials or Performance saves.
 3. To tighten one agent, open that agent's **Tools & Permissions** panel. An agent's setting can only be stricter than the global one, never looser. See [tools](tools.md) for how the two combine.
 
 A global policy change must also be applied to running agents. If the save result
