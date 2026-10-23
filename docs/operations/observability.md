@@ -135,6 +135,8 @@ One structured `message=history_page`, `event=history_page` summary records each
 
 These server summaries contain no session, agent or user IDs, bodies, parameters, results, secrets, raw query text, positions, disk addresses, paths or underlying error causes. Byte counters are actual encoded bytes read, including partial and discarded work, not decoded text size. Zero means measured zero work.
 
+The production browser also records a rejected snapshot commit through the existing rate-limited console diagnostic sink: `event=chatHistorySnapshotRejected`, `phase=snapshot_commit`, and a fixed `kind`. Expected kinds are `schema`, `source_origin`, `protocol_metadata`, and `row_count`; an unclassified exception is `unexpected_exception`, not a fabricated protocol error. The record contains no exception message or stack, source body, ID or opaque position. The history area keeps its visible rejection and Retry; a row-count contradiction cannot replace the prior reader. Valid commits do not emit a rejection record. Ordinary development/test builds suppress this production console sink. These browser diagnostics are not server page-attempt summaries or external telemetry.
+
 Allocation measurements are separate, isolated test evidence: `message=history_page_measurement`, `case=short_prefix|long_prefix`, positive `sample_count`, validated `limit` / `min_rows`, and nonnegative `allocated_bytes` per complete real reader-plus-carrier operation. Fixture construction and unrelated activity are outside that measurement. There is no concurrent production per-request heap-delta claim. A missing receipt is unverified, not zero allocation or a pass.
 
 ## Live event stream

@@ -14,11 +14,20 @@ import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending }
 import { useSessionStore } from '@/store/session'
 import { cursorFromTerminalFrame, isPendingTailMessage } from './cursor'
 import { abortHistoryReads, registerHistoryRelease } from './history'
-import { applyHistoryPageToBucket } from './history-merge'
+import { applyHistoryPageToBucket, HistoryPageProtocolError } from './history-merge'
+import { ApiSchemaError } from '@/lib/api/http'
+import { logDiagnostic } from '@/lib/telemetry'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
 import { SessionHistoryResponse as PageSchema } from '@/lib/api/generated/schemas'
 
 type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage> } // not-wire-format: transient projection ownership
+
+/** Local classification only; never carries source data or exception details. */
+class SnapshotProtocolError extends Error {
+  constructor(readonly kind: 'schema' | 'source_origin' | 'row_count') {
+    super('Invalid history snapshot.')
+  }
+}
 
 function sourceProjection(groups: Stage['groups']) {
   const positions = [...groups.keys()]
@@ -192,9 +201,10 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       const baseline = { ...stage.baseline, ...stage.publishedRows }
       const { frame } = stage
       const parsed = PageSchema.safeParse({ ...frame, entries: [] })
-      if (!parsed.success || stage.invalid) throw new Error('Invalid history snapshot.')
+      if (!parsed.success) throw new SnapshotProtocolError('schema')
+      if (stage.invalid) throw new SnapshotProtocolError('source_origin')
       validateHistoryMetadata(parsed.data, positions, 'WS history')
-      if (rowCount !== frame.page_info.row_count) throw new Error('Invalid history row count.')
+      if (rowCount !== frame.page_info.row_count) throw new SnapshotProtocolError('row_count')
       const page: SessionHistoryPage = { ...parsed.data, entries }
       context.withBucket(sid, original => {
         const { bucket: b, page: completedPage } = settleCompletedSnapshot(original, page, baseline, frame.reason === 'boot_mismatch')
@@ -218,7 +228,13 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
         return { ...applyHistoryPageToBucket(b, completedPage, 'latest', baseline), ...completion }
       })
       return true
-    } catch {
+    } catch (error) {
+      const kind = error instanceof SnapshotProtocolError ? error.kind
+        : error instanceof ApiSchemaError || error instanceof HistoryPageProtocolError ? 'protocol_metadata'
+          : 'unexpected_exception'
+      // Only fixed classifications leave this boundary. Never log error text,
+      // stack, source bodies/identities or opaque source positions.
+      logDiagnostic('chatHistorySnapshotRejected', { phase: 'snapshot_commit', kind })
       restorePublishedProjection(context, sid, stage)
       reject(sid)
       return false

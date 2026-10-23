@@ -5,6 +5,9 @@ import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending }
 import { isClearContextMarker } from '@/lib/clearMarker'
 import { mergeRecordedSessionTokens } from './session-usage'
 
+/** Expected contradiction in a page's relation to the current reader. */
+export class HistoryPageProtocolError extends Error {}
+
 /** A valid page cannot currently replace a protected reader edge. */
 export class HistoryPageDeferredError extends Error {
   constructor() {
@@ -34,8 +37,8 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   const existingPositions = new Set(history.readerPositions)
   const oldOverlap = history.readerPositions.filter(position => pagePositions.includes(position))
   const newOverlap = pagePositions.filter(position => existingPositions.has(position))
-  if (oldOverlap.join() !== newOverlap.join()) throw new Error('Contradictory history overlap.')
-  if ((action === 'older' || action === 'newer') && page.entries.length && page.entries.every(entry => existingPositions.has(entry.historyPosition))) throw new Error('History boundary did not advance.')
+  if (oldOverlap.join() !== newOverlap.join()) throw new HistoryPageProtocolError('Contradictory history overlap.')
+  if ((action === 'older' || action === 'newer') && page.entries.length && page.entries.every(entry => existingPositions.has(entry.historyPosition))) throw new HistoryPageProtocolError('History boundary did not advance.')
   const incoming = page.entries.map(entry => mergeHistoryEntry(entry, bucket.messagesById[entry.id], baseline[entry.id]))
   const union = action === 'older' ? [...incoming, ...old] : action === 'newer' ? [...old, ...incoming] : incoming
   const byPosition = new Map<string, ChatMessage>()
