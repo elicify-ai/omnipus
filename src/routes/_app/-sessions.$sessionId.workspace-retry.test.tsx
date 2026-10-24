@@ -3,7 +3,7 @@
 // TanStack Query and the real fetchWorkspaces/request path; only the network
 // edge (fetch) and the inline ChatScreen are stand-ins.
 import React from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -38,6 +38,21 @@ import { availableHistoryDetail } from '../../../tests/chat-history-paging/legac
 import { Route, REDIRECT_DECISION_WAIT_MS } from './sessions.$sessionId'
 
 const SessionRoute = (Route as unknown as { component: React.ComponentType }).component
+
+beforeEach(() => {
+  client.clear()
+  navigate.mockClear()
+  useSessionStore.setState({ activeSessionId: null, activeAgentId: null, activeAgentType: null, sessionByWorkspace: {} })
+  useWorkspacesStore.setState({ activeWorkspaceId: null })
+  useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null, reconnectPhase: null, reconnectAttempt: 0 })
+  // Every case, including the standalone layout control, owns its detail.
+  // Never inherit the session from an earlier test's assignment.
+  detail = {
+    ...availableHistoryDetail({ id: mockSessionId, agent_id: 'mia', title: 'Chat in ws-1', type: 'chat', workspace_id: 'ws-1',
+      created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', message_count: 3 }),
+    agent_removed: false,
+  }
+})
 
 afterEach(() => { client.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
