@@ -448,6 +448,11 @@ func TestFailoverError_IsRetriable(t *testing.T) {
 		{FailoverOverloaded, true},
 		{FailoverFormat, false},
 		{FailoverContextOverflow, false},
+		// Spec change (founder Q70, 2026-10-24): OLD — bad_model was terminal
+		// and absent from this table. NEW — bad_model falls back to the
+		// backup model like a rate limit (rule 1); format/overflow stay
+		// terminal (rule 4).
+		{FailoverBadModel, true},
 		{FailoverUnknown, true},
 	}
 
