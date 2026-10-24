@@ -16,7 +16,7 @@ import { RoomTrafficMessage } from './RoomTrafficEntry'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { SystemMessage, VirtualSystemMessageRow } from './SystemMessageRows'
 import { placementOf, useSkillChipData, VirtualUserMessageRow, VirtualAssistantMessageRow, StreamingDelegation, VirtualizerAutoFollow, UserMessage, AssistantMessage } from './ChatScreen'
-import { HistoryBoundary, HistoryReaderStatus } from './HistoryBoundary'
+import { FloatingReturnToLatest, HistoryBoundary, HistoryReaderStatus } from './HistoryBoundary'
 import { drawnHistoryRows, useHistoryViewport } from './useHistoryViewport'
 
 function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
@@ -95,6 +95,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
         </div>
         <HistoryBoundary action="newer" average={viewport.average} />
         {!viewport.historical && <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />}
+        <FloatingReturnToLatest />
       </div>
     </div>
   )
@@ -311,6 +312,7 @@ function VirtualizedMessageListInner({
         )}
         <HistoryBoundary action="newer" average={viewport.average} />
         {!viewport.historical && <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />}
+        <FloatingReturnToLatest />
       </div>
     </ThreadPrimitive.Viewport>
   )

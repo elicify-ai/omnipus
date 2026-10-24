@@ -82,7 +82,9 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     if (!scroller) return
     const top = scroller.getBoundingClientRect().top
     const mounted = rows().filter(row => row.getBoundingClientRect().height > 0)
-    const visible = mounted.filter(row => row.getBoundingClientRect().bottom > top)
+    // Only a row actually inside the viewport can anchor the reader. Right
+    // after a jump the virtualizer may still show rows far below it.
+    const visible = mounted.filter(row => row.getBoundingClientRect().bottom > top && row.getBoundingClientRect().top < top + scroller.clientHeight)
     const first = visible[0]
     if (!first) return
     const alternatives = [...visible, ...mounted.filter(row => row.getBoundingClientRect().bottom <= top).reverse()]
@@ -97,7 +99,10 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const correct = useCallback(() => {
     const scroller = scrollRef.current
     const held = anchor.current
-    if (!scroller || !held || current.current.history.viewMode !== 'historical') return
+    if (!scroller || current.current.history.viewMode !== 'historical') return
+    // A genuine reader move dropped the old anchor; adopt the first row that
+    // is now really visible as soon as the virtualizer has drawn one.
+    if (!held) { capture(); return }
     // Content shrinking at the scroll end makes the browser clamp scrollTop.
     // That is not reader movement: count it as not yet applied, so the anchor
     // is restored as soon as the content allows (and a shrink above the reader
@@ -145,7 +150,11 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     // Re-anchor only once the held row sits where it belongs. Re-capturing the
     // first visible row at an estimated or clamped position would turn that
     // error into permanent drift.
-    if (!estimatedOnly && (!exact || !Number.isFinite(residual) || Math.abs(residual) < 1)) capture()
+    // At the top edge a negative remainder can never be applied (content
+    // above shrank while the reader sits at scrollTop 0): accept the position
+    // rather than letting that stale remainder distort the next correction.
+    const unreachable = residual < 0 && scroller.scrollTop <= 0
+    if (!estimatedOnly && (!exact || !Number.isFinite(residual) || Math.abs(residual) < 1 || unreachable)) capture()
   }, [capture, offset, rows, scrollRef])
   const measure = useCallback(() => {
     const scroller = scrollRef.current
@@ -256,7 +265,12 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     // same anchor then. Any other position is genuine reader movement.
     const own = settledTop.current !== null && Math.abs(scroller.scrollTop - settledTop.current) < 0.5
     if (own && state.history.viewMode === 'historical') correct()
-    else capture()
+    else {
+      // Reader movement replaces the anchor. If no row is drawn at the new
+      // position yet, hold none rather than keep correcting toward the old one.
+      anchor.current = null
+      capture()
+    }
     if (state.history.requests.refresh.status !== 'idle') return
     if (historyPixelTrigger(scroller.scrollTop - prefix, scroller.clientHeight, !document.hidden)) void requestFill('older', opening.current)
     else if (historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden) && state.history.hasLater) void requestFill('newer')
