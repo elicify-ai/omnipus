@@ -188,6 +188,7 @@ func TestUnreadableDoDCannotCompleteTheTask_C2(t *testing.T) {
 			}
 
 			al.taskExecutor.adjudicateRunClaim(context.Background(), stored, taskSessionID,
+				"Implemented the CSV export and exercised the endpoint by hand.",
 				"Implemented the CSV export and exercised the endpoint by hand.", nil, &taskRunState{})
 
 			final, err := GetTaskStore(al).Get(stored.ID)
@@ -265,6 +266,7 @@ func TestUnreadableDoDDoesNotBlockAnUnrelatedTask(t *testing.T) {
 		[]task.AcceptanceCriterion{proseCriterion("", dodTestDoDText)})
 
 	al.taskExecutor.adjudicateRunClaim(context.Background(), healthy, healthySession,
+		"Implemented the CSV export and exercised the endpoint by hand.",
 		"Implemented the CSV export and exercised the endpoint by hand.", nil, &taskRunState{})
 
 	final, err := GetTaskStore(al).Get(healthy.ID)

@@ -1054,41 +1054,9 @@ func TestGoalLoop_RoundCap_StopsAndClearsWithHandover(t *testing.T) {
 }
 
 func TestGoalLoop_JudgeUnavailable_DoesNotConsumeRound(t *testing.T) {
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	opts := processOptions{
-		TranscriptStore: store, TranscriptSessionID: sid,
-		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
-	}
-	al.applyGoalCommandPrompt(context.Background(),
-		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
-	activatePendingGoal(t, al, agentInst, &opts)
-
-	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		return nil, context.DeadlineExceeded
-	}}
-
-	// Bound the judge's internal backoff retry loop with an already-expired
-	// ctx so JudgeCriteria gives up promptly instead of sleeping through the
-	// real 60/120/300s D7 schedule.
-	ctx, cancel := context.WithTimeout(context.Background(), 1)
-	defer cancel()
-	time.Sleep(2 * time.Millisecond)
-
-	result := &turnResult{finalContent: "still working on it"}
-	al.checkGoalLoopAfterTurn(ctx, agentInst, opts, result)
-
-	after := goalRecordForSessionOrNil(t, sid)
-	if after == nil {
-		t.Fatal("goal must remain active when the judge is unavailable")
-	}
-	if after.Round != 0 {
-		t.Fatalf("rounds_used = %d, want 0 (judge unavailability must not consume a round, D7)", after.Round)
-	}
-	if len(result.followUps) != 0 {
-		t.Fatal("judge unavailability must not schedule a follow-up round")
-	}
+	// #1431 CHECK F1: the former claimless turn never dispatched a Judge.
+	// Exercise the real present-empty claim and deferred dispatch instead.
+	assertGap1431JudgeUnavailableDoesNotConsumeRound(t)
 }
 
 // TestGoalLoop_JudgeThrottled_BoundedByOwnTimeout_NotCallerCtx is review r1

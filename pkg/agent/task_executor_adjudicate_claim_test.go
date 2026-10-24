@@ -66,7 +66,7 @@ func TestTaskExecutor_AdjudicateClaim_FR014_DropsStaleVerdictAfterConcurrentStop
 
 	done := make(chan string, 1)
 	go func() {
-		_, _, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "I finished the thing", nil, &taskRunState{})
+		_, _, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "I finished the thing", "I finished the thing", nil, &taskRunState{})
 		done <- redispatch
 	}()
 
@@ -334,7 +334,7 @@ func TestTrustTheClaimPathRemoved_GOALFR022(t *testing.T) {
 			}
 
 			_, _, redispatch := al.taskExecutor.adjudicateRunClaim(
-				context.Background(), stored, "", "I finished it, trust me.", nil, &taskRunState{})
+				context.Background(), stored, "", "I finished it, trust me.", "I finished it, trust me.", nil, &taskRunState{})
 
 			if got := judge.callCount(); got != tc.wantJudgeCalls {
 				t.Errorf("Judge dispatched %d time(s), want %d", got, tc.wantJudgeCalls)
@@ -432,7 +432,7 @@ func TestLegacyCriterialessTaskStillRuns_GOALFR023(t *testing.T) {
 			})
 
 			al.taskExecutor.adjudicateRunClaim(
-				context.Background(), stored, "", "painted it green", nil, &taskRunState{})
+				context.Background(), stored, "", "painted it green", "painted it green", nil, &taskRunState{})
 
 			if judge.callCount() != 1 {
 				t.Fatalf("Judge dispatched %d time(s), want exactly 1 — a criteria-less legacy task "+
@@ -516,7 +516,7 @@ func TestTaskExecutor_AdjudicateClaim_ConcurrencyBackoffStandsDownWithoutRetry(t
 	}
 
 	state := &taskRunState{}
-	step, _, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "I finished the thing", nil, state)
+	step, _, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "I finished the thing", "I finished the thing", nil, state)
 
 	// G-1: the Judge must never be re-invoked for a backed-off claim — the
 	// rejection happens before the provider call, and no retry may follow.
