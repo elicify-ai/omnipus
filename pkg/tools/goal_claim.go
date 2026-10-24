@@ -128,7 +128,7 @@ func (t *GoalClaimTool) Category() ToolCategory { return CategoryTasks }
 // Description implements Tool.
 func (t *GoalClaimTool) Description() string {
 	return "Claim THIS session's active goal as met, blocked, or waiting_on_user (ADR-084). " +
-		"Include status and evidence for every call; omitting evidence is rejected at dispatch. " +
+		"Both status and evidence are required on every call; omitting evidence is rejected at dispatch. " +
 		"Use met when you believe the acceptance criteria are satisfied. Prefer a one-line summary of " +
 		"what you did and how you checked it. A met claim is rejected while any direct child sub-agent " +
 		"is queued or actively running; wait for them to finish or cancel them, then claim again. " +
