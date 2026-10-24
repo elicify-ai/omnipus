@@ -14,8 +14,9 @@
 // back empty. pkg/agent/registry.go's NewAgentRegistry ALWAYS registers an
 // unrestricted "main" sentinel with no Tools/Policies, and
 // pkg/tools/compositor.go's global×agent policy merge falls through to the
-// permissive global floor (pkg/config/defaults.go seeds bash/write_file/
-// edit_file/delegate/send_email all "allow") for any agent with no per-agent
+// permissive global floor (pkg/config/defaults.go seeds write_file/
+// edit_file/delegate "allow"; bash and send_email ship "ask" — ADR-092 and
+// the founder ruling of 2026-10-22) for any agent with no per-agent
 // policy entry — so an emptied roster silently promotes ALL routed traffic to
 // that unrestricted floor. See roster_robustness_test.go's
 // TestEmptyAgentRosterWouldResolveToPermissiveGlobalFloor for the generic
