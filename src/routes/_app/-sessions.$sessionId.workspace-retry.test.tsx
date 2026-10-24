@@ -160,6 +160,8 @@ describe('workspace lookup Retry after the bounded wait', () => {
     try {
       const view = render(<QueryClientProvider client={client}><SessionRoute /></QueryClientProvider>)
       expect(lookups, 'the first real lookup starts').toHaveLength(1)
+      expect([...new URL(lookups[0].url, 'http://localhost').searchParams.entries()],
+        'the first success-path HTTP lookup requests exactly active workspaces').toStrictEqual([['status', 'active']])
       expect(lookups[0].signal).toBeInstanceOf(AbortSignal)
       expect(lookups[0].signal!.aborted).toBe(false)
       expect(navigate).not.toHaveBeenCalled()
@@ -171,6 +173,8 @@ describe('workspace lookup Retry after the bounded wait', () => {
         await vi.advanceTimersByTimeAsync(1)
       })
       expect(lookups, 'Retry really starts a replacement, not merely an option call').toHaveLength(2)
+      expect([...new URL(lookups[1].url, 'http://localhost').searchParams.entries()],
+        'the replacement success-path HTTP lookup requests exactly active workspaces').toStrictEqual([['status', 'active']])
       expect(lookups[0].signal!.aborted).toBe(true)
       expect(lookups[1].signal).toBeInstanceOf(AbortSignal)
       expect(lookups[1].signal).not.toBe(lookups[0].signal)
