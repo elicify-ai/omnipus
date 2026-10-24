@@ -8,6 +8,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient as client } from '@/lib/queryClient'
+import * as api from '@/lib/api'
 
 vi.mock('@/components/chat/ChatScreen', () => ({
   ChatScreen: () => <div data-testid="inline-chat-screen" />,
@@ -34,7 +35,7 @@ import { Route, REDIRECT_DECISION_WAIT_MS } from './sessions.$sessionId'
 
 const SessionRoute = (Route as unknown as { component: React.ComponentType }).component
 
-afterEach(() => { client.clear(); vi.unstubAllGlobals() })
+afterEach(() => { client.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('workspace lookup Retry after the bounded wait', () => {
   it('aborts the stalled first lookup and starts a second real request', async () => {
@@ -54,11 +55,19 @@ describe('workspace lookup Retry after the bounded wait', () => {
         init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
       })
     }))
+    // Forward through the REAL API implementation; observe the query's own
+    // signals here independently of their arrival at the HTTP fetch edge.
+    const workspaceReads = vi.spyOn(api, 'fetchWorkspaces')
     // Seed the detail query exactly as the route loader would.
     client.setQueryData(['session-detail', mockSessionId], detail)
     render(<QueryClientProvider client={client}><SessionRoute /></QueryClientProvider>)
     await waitFor(() => expect(lookups, 'positive instrument: the first real lookup started').toHaveLength(1))
     expect(lookups[0].signal, 'the query signal reaches the real request').toBeDefined()
+    expect(workspaceReads).toHaveBeenCalledTimes(1)
+    expect(workspaceReads).toHaveBeenNthCalledWith(1, { status: 'active', signal: expect.any(AbortSignal) })
+    expect([...new URL(lookups[0].url, 'http://localhost').searchParams.entries()], 'first HTTP request has exactly the active-status filter').toStrictEqual([['status', 'active']])
+    expect(lookups[0].signal).toBe(workspaceReads.mock.calls[0][0]?.signal)
+    expect(lookups[0].signal).toBeInstanceOf(AbortSignal)
     const retry = await screen.findByRole('button', { name: 'Retry' }, { timeout: REDIRECT_DECISION_WAIT_MS + 3_000 })
     expect(screen.getByTestId('inline-chat-screen'), 'the stalled lookup opened the chat inline').toBeTruthy()
     expect(lookups[0].signal!.aborted, 'still waiting before Retry').toBe(false)
@@ -66,6 +75,12 @@ describe('workspace lookup Retry after the bounded wait', () => {
     await waitFor(() => expect(lookups, 'Retry starts a SECOND real request').toHaveLength(2))
     expect(lookups[0].signal!.aborted, 'Retry aborts the stalled first request').toBe(true)
     expect(lookups[1].signal!.aborted, 'the new request is live').toBe(false)
+    expect(workspaceReads).toHaveBeenCalledTimes(2)
+    expect(workspaceReads).toHaveBeenNthCalledWith(2, { status: 'active', signal: expect.any(AbortSignal) })
+    expect([...new URL(lookups[1].url, 'http://localhost').searchParams.entries()], 'second HTTP request has exactly the active-status filter').toStrictEqual([['status', 'active']])
+    expect(lookups[1].signal).toBe(workspaceReads.mock.calls[1][0]?.signal)
+    expect(lookups[1].signal).toBeInstanceOf(AbortSignal)
+    expect(lookups[1].signal, 'the replacement request receives its own query signal').not.toBe(lookups[0].signal)
   }, 15_000)
 
   it('keeps the notice and the inline chat in separate layout slots', async () => {
