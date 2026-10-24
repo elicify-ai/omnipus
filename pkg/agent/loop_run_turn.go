@@ -186,11 +186,11 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseCompleted)
 	finalContent := rz.rc.rx.finalContent
-	if rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.RunningTaskID != "" && !rz.rc.rx.finalIsModelAnswer && finalContent == defaultResponse {
-		// Keep the empty-answer diagnostic in the chat/history above, but do
-		// not hand it to the task executor as if the worker produced an answer.
-		// Its completion guard must still receive empty and fail empty_answer.
-		finalContent = ""
+	if rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.RunningTaskID != "" {
+		// The executor receives only this turn's real assistant output, including
+		// pre-tool text. Framework notices remain in the chat/history above but
+		// cannot become task results, regardless of their wording.
+		finalContent = strings.Join(rz.rc.rx.rr.rq.ri.rf.rt.taskModelAnswerParts, "\n\n")
 	}
 	return turnResult{
 		finalContent: finalContent,

@@ -334,6 +334,7 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 		}
 	}
 	er.cn.rc.rx.rr.rq.ri.rf.response = retryResp
+	er.cn.rc.rx.rr.rq.ri.rf.recordTaskModelAnswer()
 	er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.Content
 	if er.cn.responseContent == "" && er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
 		er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent
@@ -448,6 +449,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) prepareIteration() agentLoopRu
 	}
 
 	// Successful usage was captured once at the provider boundary.
+	cn.rc.rx.rr.rq.ri.rf.recordTaskModelAnswer()
 
 	return agentLoopRunTurnConductorRunIterationsNext
 }

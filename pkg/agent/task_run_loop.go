@@ -327,7 +327,10 @@ func (te *TaskExecutor) finishRunTurn(
 		return te.failedRunStep(ctx, t, taskSessionID, "execution error: "+plain, run)
 	}
 
-	if taskSessionID != "" && resp != "" && sessStore != nil {
+	// Native turns already persist their actual assistant messages in the turn
+	// engine. Their result can join several saved messages, so appending it here
+	// would invent a duplicate reply. Keep this write for external CLI results.
+	if te.dispatchesExternalCLI(t.AgentID) && taskSessionID != "" && resp != "" && sessStore != nil {
 		if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 			ID:        fmt.Sprintf("%s-response-%d", t.ID, state.turns),
 			Role:      "assistant",

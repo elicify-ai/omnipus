@@ -135,7 +135,7 @@ The `evidence` field is required on every `goal_claim` call, but its text may be
 
 An unmet verdict uses one goal try. While tries remain, the agent keeps working in the same run with the Judge's feedback. When the try budget runs out, that run fails and uses a task attempt; another run can start if attempts remain. Repeated empty claims can therefore end the task **Failed**, rather than retrying for free.
 
-When the Judge upholds a claim, the task's result is the worker's actual answer, not its evidence sentence. Empty claim evidence does not erase a real answer or turn it into a failure. A genuinely empty answer still fails for producing no result. A framework-generated empty-response notice does not count as the agent's answer.
+When the Judge upholds a claim, the task's result is the worker's actual answer from the claiming turn, not its evidence sentence. This includes answer text written before a tool call, even if the final reply is empty. Empty claim evidence does not erase a real answer or turn it into a failure. A turn with no actual answer still fails for producing no result. Framework-generated notices, such as an empty-response message or a tool-step-limit warning, do not count as the agent's answer; those notices remain visible in the run's conversation.
 
 ## The task detail panel
 

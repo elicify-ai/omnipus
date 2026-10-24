@@ -32,6 +32,10 @@ type agentLoopRunTurn struct {
 	iteration                int
 	llmOpts                  map[string]any
 	llmModel                 string
+	// taskModelAnswerParts contains only successful provider responses from
+	// this task turn, before framework notices can replace the final reply.
+	// Ordinary chat and Judge turns do not collect an executor answer.
+	taskModelAnswerParts []string
 	// A streaming-capable provider already tried this channel. Do not retry
 	// a declined factory merely to finalize the plain fallback response.
 	streamerLookupDeclined bool
@@ -59,7 +63,10 @@ type agentLoopRunTurnFallbacks struct {
 	callMessages     []providers.Message
 	callLLM          func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error)
 	response         *providers.LLMResponse
-	err              error
+	// responseFromModel is established only by a successful provider call;
+	// framework recovery after a failed call cannot create a model answer.
+	responseFromModel bool
+	err               error
 }
 
 // agentLoopRunTurnIteration carries the shared state of runTurn across its stages.
