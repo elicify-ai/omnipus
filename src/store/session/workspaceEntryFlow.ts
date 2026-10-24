@@ -132,7 +132,10 @@ async function resolvePartialListPointer(
   }
 }
 
-async function loadInputs(workspaceId: string): Promise<{
+async function loadInputs(
+  workspaceId: string,
+  remembered: string | null | undefined,
+): Promise<{
   sessions: Session[]
   transportFailed: boolean
   team: EntryTeam
@@ -147,7 +150,6 @@ async function loadInputs(workspaceId: string): Promise<{
     ? sessionsResult.value
     : []
   const sessionsFailed = sessionsResult.status !== 'fulfilled' || !Array.isArray(sessionsResult.value)
-  const remembered = rememberedId(workspaceId)
   let pointerVerdict = classifyPointer(
     sessions,
     workspaceId,
@@ -272,7 +274,18 @@ function applyEntry(
   useSessionStore.setState({ workspaceEntry: view })
 }
 
-async function execute(workspaceId: string): Promise<void> {
+/** A session id carried by the address (a /sessions/{id} deep link's
+ *  resulting chat address, #1437). While present it IS this entry's chat
+ *  pointer: the linked chat wins over whatever chat another tab last
+ *  remembered for the workspace. */
+function linkedPointer(linkedSessionId: string | null | undefined): string | null | undefined {
+  if (typeof linkedSessionId !== 'string' || linkedSessionId.trim() === '' || linkedSessionId === '__pending') {
+    return undefined
+  }
+  return linkedSessionId
+}
+
+async function execute(workspaceId: string, linkedSessionId?: string): Promise<void> {
   clearPendingAutoApproveOnSessionChange()
   const token = supersedeNavigationIntent()
   const state = useSessionStore.getState()
@@ -286,6 +299,10 @@ async function execute(workspaceId: string): Promise<void> {
   }
   const descriptorAtStart = memoryDescriptor
   const committed = committedNow()
+  // #1437: a linked address names the chat exactly; it overrides the
+  // workspace's remembered pointer for this entry. Without it, the pointer
+  // stays whatever this browser last decided (memory, then persisted state).
+  const remembered = linkedPointer(linkedSessionId) ?? rememberedId(workspaceId)
   useSessionStore.setState((current) => ({
     resolvingSessionForWorkspace: { ...current.resolvingSessionForWorkspace, [workspaceId]: true },
   }))
@@ -294,7 +311,7 @@ async function execute(workspaceId: string): Promise<void> {
       await waitForEntryVisibility(token)
     }
     if (!navigationIntentCurrent(token)) return
-    const loaded = await loadInputs(workspaceId)
+    const loaded = await loadInputs(workspaceId, remembered)
     // The tab may have become hidden while the network requests were in flight.
     while (typeof document !== 'undefined' && document.hidden && navigationIntentCurrent(token)) {
       await waitForEntryVisibility(token)
@@ -304,7 +321,7 @@ async function execute(workspaceId: string): Promise<void> {
     const result = resolveWorkspaceEntry({
       workspaceId,
       entryKind: 'cold-reload',
-      rememberedSessionId: rememberedId(workspaceId),
+      rememberedSessionId: remembered,
       pointerVerdict: loaded.pointerVerdict,
       sessions: loaded.sessions,
       team: loaded.team,
@@ -331,10 +348,10 @@ async function execute(workspaceId: string): Promise<void> {
   }
 }
 
-export function runWorkspaceEntry(workspaceId: string): Promise<void> {
+export function runWorkspaceEntry(workspaceId: string, linkedSessionId?: string): Promise<void> {
   const existing = inFlight.get(workspaceId)
   if (existing) return existing
-  const job = execute(workspaceId)
+  const job = execute(workspaceId, linkedSessionId)
   inFlight.set(workspaceId, job)
   return job.finally(() => {
     if (inFlight.get(workspaceId) === job) inFlight.delete(workspaceId)
