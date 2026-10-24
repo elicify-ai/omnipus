@@ -46,6 +46,8 @@ var LLMErrorAttributionValues = []LLMErrorAttribution{
 // LLMErrorCodes lists every LLMError code, in contract (enum) order.
 var LLMErrorCodes = []string{
 	"media_unsupported",
+	"media_too_large",
+	"media_unavailable",
 	"provider_rejected",
 	"request_too_large",
 	"provider_auth_failed",
@@ -80,6 +82,8 @@ var LLMErrorCodes = []string{
 // Exhaustive by construction: codegen aborts if any code lacks an entry.
 var LLMErrorUserMessages = map[string]string{
 	"media_unsupported":         "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it.",
+	"media_too_large":           "An image in this conversation is too large for this model’s size limit, even after Omnipus resized it automatically. Try a smaller image, or open Verbose chat for details.",
+	"media_unavailable":         "That attachment is no longer available — Omnipus no longer has its stored copy. Please re-attach the file and send it again.",
 	"provider_rejected":         "The model declined to respond to this request. Try rephrasing it, or switch models.",
 	"request_too_large":         "We built a request that was too large for this model to accept. Try shortening your message, or switch to a model with a larger limit.",
 	"provider_auth_failed":      "The model provider rejected our credentials. Check this provider’s API key in Settings.",
@@ -114,6 +118,8 @@ var LLMErrorUserMessages = map[string]string{
 // Exhaustive by construction, same as LLMErrorUserMessages.
 var LLMErrorUserAttributions = map[string]LLMErrorAttribution{
 	"media_unsupported":         LLMErrorAttributionModel,
+	"media_too_large":           LLMErrorAttributionModel,
+	"media_unavailable":         LLMErrorAttributionProduct,
 	"provider_rejected":         LLMErrorAttributionModel,
 	"request_too_large":         LLMErrorAttributionProduct,
 	"provider_auth_failed":      LLMErrorAttributionConfig,

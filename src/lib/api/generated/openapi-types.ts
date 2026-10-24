@@ -10953,6 +10953,11 @@ export interface components {
              * @example 5242880
              */
             max_bytes: number;
+            /**
+             * @description Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+             * @example 30000
+             */
+            max_patches?: number;
         };
         /**
          * ContextWindowNotice

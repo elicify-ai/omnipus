@@ -64,6 +64,19 @@ x-user-messages:
   media_unsupported:
     message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
     attribution: model
+  media_too_large:
+    # Issue #1435: a provider "image too large / requires N patches" rejection is
+    # its own cause, never relabelled media_unsupported. `model` attribution: the
+    # ceiling belongs to the model; Omnipus has already resized automatically.
+    message: "An image in this conversation is too large for this model’s size limit, even after Omnipus resized it automatically. Try a smaller image, or open Verbose chat for details."
+    attribution: model
+  media_unavailable:
+    # Issue #1435: an accepted attachment whose stored copy can no longer be
+    # resolved. `product` attribution: Omnipus accepted the attachment and then
+    # lost its stored copy; the copy rules for `product` hold (no model
+    # shopping, no rephrasing advice).
+    message: "That attachment is no longer available — Omnipus no longer has its stored copy. Please re-attach the file and send it again."
+    attribution: product
   provider_rejected:
     message: "The model declined to respond to this request. Try rephrasing it, or switch models."
     attribution: model
@@ -178,6 +191,8 @@ properties:
       Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
     enum:
       - media_unsupported
+      - media_too_large
+      - media_unavailable
       - provider_rejected
       - request_too_large
       - provider_auth_failed

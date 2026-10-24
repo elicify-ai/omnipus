@@ -16072,6 +16072,9 @@ type CatalogResizeLimits struct {
 
 	// MaxBytes Maximum encoded image size in bytes.
 	MaxBytes int `json:"max_bytes"`
+
+	// MaxPatches Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+	MaxPatches *int `json:"max_patches,omitempty"`
 }
 
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
