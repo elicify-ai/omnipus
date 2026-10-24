@@ -7,16 +7,13 @@
 // explicit choice of the default itself is stored like any other choice (the
 // session keeps it until the user picks something else).
 //
-// Scope: workspace chat sessions only. The chat composer always runs inside a
-// bound workspace; the unfiled inline chat path (no active workspace) keeps
-// the historical in-memory behaviour — its pick lives in nextModel for the
-// page life and a reload re-seeds from the transcript/agent default.
+// Chief ruling 2026-10-24: this applies to EVERY chat — workspace chats and
+// unfiled chats (no bound workspace) alike; the key is the session id alone.
 //
 // Same-browser only: this is a restore convenience keyed in localStorage, not
 // a server-side preference. The wire already carries the model actually used
 // per message (metadata.model_name); no contract change is involved here.
 // not-wire-format: browser-local UI preference; never sent to the gateway.
-import { useWorkspacesStore } from '@/store/workspacesStore'
 
 const STORAGE_KEY = 'omnipus.sessionModelChoice.v1'
 
@@ -49,24 +46,21 @@ function readAll(): ChoiceMap {
 }
 
 /** The stored explicit choice for a session, or null when it has none (or
- *  when no workspace is bound, or storage is unreadable). */
+ *  storage is unreadable). */
 export function readSessionModelChoice(sessionId: string | null | undefined): SessionModelChoice | null {
   if (!sessionId || sessionId === '__pending') return null
-  if (!useWorkspacesStore.getState().activeWorkspaceId) return null
   const choice = readAll()[sessionId]
   if (!choice || typeof choice.model !== 'string' || choice.model.trim() === '') return null
   return choice
 }
 
 /** Record (choice) or clear (null) a session's explicit model choice.
- *  No-op for a pending/absent session id or a session with no bound
- *  workspace — see the scope note in the header comment. */
+ *  No-op for a pending/absent session id. */
 export function writeSessionModelChoice(
   sessionId: string | null | undefined,
   choice: SessionModelChoice | null,
 ): void {
   if (!sessionId || sessionId === '__pending') return
-  if (!useWorkspacesStore.getState().activeWorkspaceId) return
   try {
     const all = readAll()
     if (choice) {

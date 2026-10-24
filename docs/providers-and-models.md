@@ -49,7 +49,7 @@ The chat's model picker remembers the model you picked **for that one conversati
 
 The picker also marks the conversation agent's **default model**: the row that carries the **Default** chip is the model the agent uses when you have not picked one. The chip follows the provider too — the same model name under a second provider is not marked. To go back to the default, pick the **Default**-marked row deliberately; the conversation then keeps that choice like any other.
 
-The remembered choice is a per-browser convenience for workspace chats; it is not a server-side setting. A chat you open on another device, or a chat outside any workspace (an unfiled chat opened by link), starts from the conversation's last answered model or the agent's default instead.
+The remembered choice is a per-browser convenience, not a server-side setting, and it covers **every** chat — workspace chats and unfiled chats (a chat outside any workspace, opened by link) alike. A chat you open on another device starts from the conversation's last answered model or the agent's default instead.
 
 Two limits to know:
 
