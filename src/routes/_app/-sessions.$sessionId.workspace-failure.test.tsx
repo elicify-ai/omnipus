@@ -8,7 +8,7 @@ import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { onlineManager, QueryClientProvider } from '@tanstack/react-query'
+import { CancelledError, onlineManager, QueryClientProvider } from '@tanstack/react-query'
 import { queryClient as client } from '@/lib/queryClient'
 import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
@@ -77,13 +77,16 @@ describe('workspace lookup failure and shared producers', () => {
 
   it('aborts a lookup started by another producer of the shared query, then starts a second one', async () => {
     // Another component (the sidebar) starts the request through the shared definition.
-    void client.fetchQuery({ ...activeWorkspacesQueryOptions }).catch(() => undefined)
+    const producer = client.fetchQuery({ ...activeWorkspacesQueryOptions }).catch((error: unknown) => {
+      if (!(error instanceof CancelledError)) throw error
+      expect(error).toBeInstanceOf(CancelledError)
+    })
     await waitFor(() => expect(lookups, 'the other producer started the first real request').toHaveLength(1))
     expect(lookups[0].signal, 'the shared definition forwards the query signal').toBeDefined()
     render(<QueryClientProvider client={client}><SessionRoute /></QueryClientProvider>)
     const retry = await screen.findByRole('button', { name: 'Retry' }, { timeout: REDIRECT_DECISION_WAIT_MS + 3_000 })
     expect(lookups, 'the route joined the in-flight request instead of starting its own').toHaveLength(1)
-    await userEvent.click(retry)
+    await Promise.all([producer, userEvent.click(retry)])
     await waitFor(() => expect(lookups).toHaveLength(2))
     expect(lookups[0].signal!.aborted, 'Retry aborts the request the other producer started').toBe(true)
     expect(lookups[1].signal!.aborted).toBe(false)
