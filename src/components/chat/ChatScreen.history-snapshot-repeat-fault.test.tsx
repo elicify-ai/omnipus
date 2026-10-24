@@ -49,16 +49,24 @@ describe('snapshot rejection under a repeatedly throwing subscriber', () => {
     const replacement = pos(901)
     let commits = 0
     let restorations = 0
+    const commitFault = new TypeError('commit fault')
+    const restorationFault = new TypeError('restoration fault')
     // Throw on the replacement commit, then again on the very next message-map
     // replacement (the restoration of the prior reader).
     unsubscribe = useChatStore.subscribe((state, previous) => {
       if (state.messagesById === previous.messagesById) return
-      if (commits === 0 && state.sessionsById[MAIN_ID]?.history.readerPositions[0] === replacement) { commits++; throw new TypeError('commit fault') }
-      if (commits === 1 && restorations === 0) { restorations++; throw new TypeError('restoration fault') }
+      if (commits === 0 && state.sessionsById[MAIN_ID]?.history.readerPositions[0] === replacement) { commits++; throw commitFault }
+      if (commits === 1 && restorations === 0) { restorations++; throw restorationFault }
     })
     try {
       act(() => frames(page([entry(901, { content: 'REPLACEMENT_BODY' })], { sessionId: MAIN_ID })).forEach(frame => useChatStore.getState().handleFrame(frame)))
-    } catch { /* the original commit fault may propagate; the state below is the oracle */ }
+    } catch (error) {
+      // Only this exact injected commit fault may propagate. A different
+      // programming error after restoration must fail, even if state is valid.
+      if (error !== commitFault) throw error
+      expect(error).toBeInstanceOf(TypeError)
+      expect(error).toBe(commitFault)
+    }
     unsubscribe(); unsubscribe = undefined
     expect(commits, 'positive fault instrument: the replacement commit reached the subscriber').toBe(1)
     expect(restorations, 'positive fault instrument: the restoration reached the subscriber too').toBe(1)
@@ -77,17 +85,32 @@ describe('snapshot rejection under a repeatedly throwing subscriber', () => {
     app = await openHistory(page(Array.from({ length: 40 }, (_, index) => entry(501 + index)), { sessionId: MAIN_ID }))
     const replacement = pos(901)
     let commits = 0
+    let minimalUpdates = 0
+    let propagated: unknown
+    const commitFault = new TypeError('commit fault')
+    const minimalUpdateFault = new TypeError('minimal failure update fault')
     // Fail the commit through a subscriber, and arm a fault that makes the
     // restoration throw while computing its patch, before any assignment.
     unsubscribe = useChatStore.subscribe((state, previous) => {
+      // The fallback rejection changes history only, not the message map.
+      // Throw AFTER that exact minimal error state has actually been stored.
+      if (commits === 1 && state.messagesById === previous.messagesById &&
+        state.history.requests.latest.status === 'error' && previous.history.requests.latest.status !== 'error') {
+        minimalUpdates++
+        throw minimalUpdateFault
+      }
       if (state.messagesById === previous.messagesById) return
-      if (commits === 0 && state.sessionsById[MAIN_ID]?.history.readerPositions[0] === replacement) { commits++; restoreFault.armed = true; throw new TypeError('commit fault') }
+      if (commits === 0 && state.sessionsById[MAIN_ID]?.history.readerPositions[0] === replacement) { commits++; restoreFault.armed = true; throw commitFault }
     })
     try {
       act(() => frames(page([entry(901, { content: 'REPLACEMENT_BODY' })], { sessionId: MAIN_ID })).forEach(frame => useChatStore.getState().handleFrame(frame)))
-    } catch { /* the original commit fault may propagate; the state below is the oracle */ }
+    } catch (error) {
+      if (error !== minimalUpdateFault) throw error
+      propagated = error
+    }
     unsubscribe(); unsubscribe = undefined
     expect(commits, 'positive fault instrument: the replacement commit reached the subscriber').toBe(1)
+    expect(minimalUpdates, 'positive fault instrument: the stored minimal failure update reached the subscriber').toBe(1)
     expect(restoreFault.armed, 'positive fault instrument: the restoration actually hit the injected fault').toBe(false)
     const history = useChatStore.getState().history
     expect(history.historyLoaded, 'an unpublished restoration still cannot leave the history marked loaded').toBe(false)
@@ -95,5 +118,7 @@ describe('snapshot rejection under a repeatedly throwing subscriber', () => {
     const region = screen.getByRole('region', { name: 'Conversation history' })
     const alert = await within(region).findByRole('alert')
     expect(alert, 'the visible rejection and its Retry are published').toHaveTextContent('Could not load messages.')
+    expect(propagated, 'the exact minimal-update exception must escape the frame handler, not be swallowed').toBe(minimalUpdateFault)
+    expect(propagated).toBeInstanceOf(TypeError)
   })
 })

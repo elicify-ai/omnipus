@@ -26,6 +26,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import * as React from 'react'
 import { useChatStore } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import type { WsConnection } from '@/lib/ws'
@@ -152,6 +153,7 @@ function resetStores() {
   act(() => {
     sentFrames = []
     composerText = ''
+    const defaults = emptySessionState()
     // A mid-stream turn: the last message is a streaming assistant bubble,
     // which is what routes Enter through the mid-turn send branch.
     useChatStore.setState((s) => ({
@@ -159,7 +161,7 @@ function resetStores() {
       sessionsById: {
         ...s.sessionsById,
         [SID]: {
-          ...(s.sessionsById ?? {})[SID],
+          ...defaults,
           messagesById: { 'assistant-live': { id: 'assistant-live', role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true } },
           messageOrder: ['assistant-live'],
           isStreaming: true,
@@ -174,6 +176,7 @@ function resetStores() {
       },
       messages: [],
       messagesById: {},
+      history: defaults.history,
       isStreaming: true,
       isReplaying: false,
       replayCompletedForSession: SID,

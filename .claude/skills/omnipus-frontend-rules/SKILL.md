@@ -1,17 +1,22 @@
 ---
 name: omnipus-frontend-rules
-description: TypeScript/React-specific operational detail for frontend-lead only — the typecheck gate, the wire-type and design-system load rules, Vite build output, and component-budget exemption. Preloaded via the `skills:` frontmatter field on frontend-lead.md alongside `omnipus-shared-rules`. No other role loads this skill — it is not general Omnipus procedure, it is frontend-lead's own.
+description: TypeScript/React-specific operational detail for frontend-lead only — the typecheck gate, the wire-type and design-system load rules, Vite build output, and component-budget exemption. Preloaded via the `skills:` frontmatter field on frontend-lead.md alongside `omnipus-shared-rules`. Normally frontend-lead only; a backend-lead explicitly commissioned as a small feature's sole cross-stack implementer reads this file as task guidance under root CLAUDE.md (Feature ownership). It is not a general preload for other roles.
 ---
 
 # Omnipus Frontend Rules
 
-Last reviewed: 2026-09-27
+Last reviewed: 2026-10-23 — approved delivery-process rollout
 
-Frontend-lead only. Read `omnipus-shared-rules` first — this skill adds
+Frontend-lead, plus the explicit small-feature cross-stack reference exception in
+root `CLAUDE.md` ("Feature ownership"). Read `omnipus-shared-rules` first — this skill adds
 TypeScript/React-specific detail on top of it, never repeats it. Root `CLAUDE.md` stays
 authoritative on the facts this restates.
 
 ## Build and test
+
+Use `omnipus-shared-rules` ("Build and test") for slot-runner use, targeted lane
+checks and Fly pre-flight receipts. Root `CLAUDE.md` owns the candidate-only full-CI
+rule and the live-build toolchain pin; this skill does not authorize a lane CI run.
 
 - `npm run typecheck` (wired to `tsc -b --noEmit`) is the only TypeScript gate that
   means anything. Never bare `tsc --noEmit` # agent-guard: allow — `tsconfig.json` is a project-references
@@ -31,10 +36,13 @@ authoritative on the facts this restates.
 
 ## Tests
 
-- Never edit or rewrite test files — not even to reconcile legacy assertions with the
+- In feature-size work, leave test files to the feature's one test author — including
+  corrections to legacy assertions that contradict the spec. Standard work keeps tests
+  with the code under root `CLAUDE.md` ("Feature ownership"). Never weaken assertions
+  to reconcile them with the
   current spec. Loosening an assertion to make it pass (e.g. `toEqual` → `toContain`) is
   forbidden. A legacy test that contradicts the spec goes back to qa-lead, who owns test
-  files; implementers change production code, never tests.
+  files in that feature flow; its implementer changes production code, not the test pack.
 
 ## Founder demos and prototypes
 
@@ -53,8 +61,9 @@ authoritative on the facts this restates.
 - Before touching anything under `src/components/`, `src/styles/`, `design-system/`, or
   `packages/ui/` — including adding a button, dialog, color, spacing value, type size,
   shadow, or focus style, or publishing/editing a component manifest — the
-  `omnipus-design-system` skill is **preloaded** into your context already (`skills:`
-  frontmatter, founder decision Round 7); its rule catalog and the exact script or test
+  `omnipus-design-system` skill is **preloaded** for frontend-lead (`skills:`
+  frontmatter, founder decision Round 7); the commissioned cross-stack implementer
+  loads it on demand before touching those trees. Its rule catalog and exact script or test
   that enforces each rule live in `.claude/skills/omnipus-design-system/SKILL.md` — read
   it before the first edit in those trees, not after a red build.
 - A recurring UI job (tooltip, inline error banner, copy-to-clipboard, …) uses a

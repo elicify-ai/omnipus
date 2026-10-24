@@ -311,13 +311,14 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 	}
 	result.IndexGeneration = cp.Generation
 	result.RetentionGeneration = cp.RetentionGeneration
+	// Zero new source mutations must still retry deferred retirement failures.
+	if err = us.historyOwner(sid).retire(filepath.Join(historyIndexPath(dir), "generations"), cp.File); err != nil {
+		return result, historyUnavailable("storage_error", err)
+	}
 	if len(items) == 0 {
 		return result, nil
 	}
 	candidate := historyCloneCheckpoint(cp)
-	for _, s := range streams {
-		candidate.ArchiveEnds[s.key] = s.end
-	}
 	candidate.CurrentKey = current
 	candidate.DispositionEnd = dispEnd
 	// Build against the old root; the reducer advances coverage using each fact.
@@ -390,7 +391,9 @@ func (us *UnifiedStore) reconcileHistoryOwned(ctx context.Context, sid string) (
 	result.IndexGeneration = candidate.Generation
 	result.RetentionGeneration = candidate.RetentionGeneration
 	if len(expired) > 0 {
-		err = us.historyOwner(sid).retire(filepath.Join(historyIndexPath(dir), "generations"), candidate.File)
+		if err = us.historyOwner(sid).retire(filepath.Join(historyIndexPath(dir), "generations"), candidate.File); err != nil {
+			return result, historyUnavailable("storage_error", err)
+		}
 	}
-	return result, err
+	return result, nil
 }

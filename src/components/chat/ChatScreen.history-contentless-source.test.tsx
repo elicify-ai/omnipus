@@ -35,7 +35,9 @@ async function open(middle: Message, list: 'plain' | 'virtual') {
   const sources = [entry(1, { role: 'user', content: 'CONTENTLESS_QUESTION' }), middle, entry(3, { role: 'assistant', content: 'CONTENTLESS_ANSWER' })]
   app = await openHistory(page(sources, { sessionId: MAIN_ID }), { plain: list === 'plain' })
   expect(screen.queryByText('Could not load messages.'), 'the snapshot is accepted, not rejected as inconsistent').toBeNull()
+  expect(useChatStore.getState().sessionsById[MAIN_ID].history.historyLoaded, 'a successful snapshot is marked loaded').toBe(true)
   expect(useChatStore.getState().sessionsById[MAIN_ID].history.readerPositions, 'all three counted groups are retained in order').toStrictEqual([pos(1), pos(2), pos(3)])
+  expect(screen.getByText('CONTENTLESS_QUESTION'), 'hiding bookkeeping must not hide the neighboring user message').toBeTruthy()
   expect(screen.getByText('CONTENTLESS_ANSWER')).toBeTruthy()
   const row = screen.getByRole('region', { name: 'Conversation history' }).querySelector(`[data-history-position="${pos(2)}"]`)
   expect(row, 'positive instrument: the middle group has its own reader row').not.toBeNull()

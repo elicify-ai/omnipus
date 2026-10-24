@@ -75,6 +75,7 @@
             },
             "pending_approvals": [],
             "session_id": "sess-1",
+            "session_tokens_total": 0,
             "type": "session_state",
             "user_id": ""
           }

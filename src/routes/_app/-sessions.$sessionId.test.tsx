@@ -405,11 +405,11 @@ describe('SessionRoute loader — deep-link WS-replay regression guard', () => {
       const mod = await import('./sessions.$sessionId')
       const loader = (
         mod.Route as unknown as {
-          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+          loader: (opts: { params: { sessionId: string }; abortController: AbortController }) => Promise<SessionDetail | null>
         }
       ).loader
 
-      const result = await loader({ params: { sessionId: mockSessionId } })
+      const result = await loader({ abortController: new AbortController(), params: { sessionId: mockSessionId } })
 
       expect(result).toEqual(detail)
       expect(setActiveSession).not.toHaveBeenCalled()
@@ -431,11 +431,11 @@ describe('SessionRoute loader — deep-link WS-replay regression guard', () => {
       const mod = await import('./sessions.$sessionId')
       const loader = (
         mod.Route as unknown as {
-          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+          loader: (opts: { params: { sessionId: string }; abortController: AbortController }) => Promise<SessionDetail | null>
         }
       ).loader
 
-      const result = await loader({ params: { sessionId: mockSessionId } })
+      const result = await loader({ abortController: new AbortController(), params: { sessionId: mockSessionId } })
 
       expect(result).toBeNull()
       expect(setActiveSession).not.toHaveBeenCalled()
@@ -464,10 +464,10 @@ describe('SessionRoute loader — deep-link WS-replay regression guard', () => {
       const mod = await import('./sessions.$sessionId')
       const loader = (
         mod.Route as unknown as {
-          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+          loader: (opts: { params: { sessionId: string }; abortController: AbortController }) => Promise<SessionDetail | null>
         }
       ).loader
-      await loader({ params: { sessionId: mockSessionId } })
+      await loader({ abortController: new AbortController(), params: { sessionId: mockSessionId } })
 
       // Confirm the loader did not poison activeSessionId before mount.
       expect(useSessionStore.getState().activeSessionId).toBeNull()

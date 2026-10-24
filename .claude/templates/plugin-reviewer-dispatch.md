@@ -1,5 +1,7 @@
 # Plugin-reviewer dispatch template
 
+Last reviewed: 2026-10-23
+
 Team-lead or squad-lead: paste the block between the two markers at the **head** of every dispatch to a gate plugin reviewer — `code-reviewer`, `silent-failure-hunter`, `pr-test-analyzer`. Use it for explicitly requested optional plugin reviewers too — `type-design-analyzer`, `comment-analyzer`, `code-simplifier` are optional, not part of the gate. Name the model explicitly in every reviewer dispatch; model selection stays outside repo assets. Fill the two placeholders with a tool that cannot misparse the text (e.g. Python `str.replace`), never `sed` with a delimiter that can occur in the text — a `#` in an issue reference has broken a `sed` fill and a reviewer ran without its rules — then append the task brief below the block, and verify the filled prompt contains the discipline block (the `agent-discipline:shared-traits:start` marker) before dispatching. Two errors this template exists to prevent: dispatching a plugin reviewer without it, and pasting the `omnipus-shared-rules` skill body into the dispatch — the reviewer loads the skill itself; only the discipline block and the load instruction travel with the dispatch.
 
 --- paste from here ---
@@ -66,6 +68,6 @@ You review a still tree. Report findings rather than editing any file under revi
 
 ## Scope of this dispatch
 
-Review: `<files / diff / PR scope>`. Work branch: `<branch>`. Done when every claim in scope carries evidence and the report ends with the evidence table, its self-check row, and the skills acknowledgement.
+Review: `<files / diff / PR scope>`. Work branch: `<branch>`. The dispatcher supplies the combined feature diff, or the combined train diff for the items assigned to this reviewer set, under root `CLAUDE.md` ("Change sizes and the review gate"). Review no separate lane/finding gate. For a re-review, verify your fixed findings and affected paths only. Done when every claim in scope carries evidence and the report ends with the evidence table, its self-check row, and the skills acknowledgement.
 
 --- paste to here ---

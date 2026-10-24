@@ -68,11 +68,12 @@ function toolCallOf(msg: { tool_calls?: unknown } | undefined, idx = 0): Positio
   return list[idx]
 }
 
+beforeEach(() => {
+  useSessionStore.setState({ ...useSessionStore.getState(), activeSessionId: SID })
+  act(() => { useChatStore.getState().resetSession() })
+})
+
 describe('chat store — tool-call offset stamping (position-in-model fix)', () => {
-  beforeEach(() => {
-    useSessionStore.setState({ ...useSessionStore.getState(), activeSessionId: SID })
-    act(() => { useChatStore.getState().resetSession() })
-  })
 
   it('single tool call: textOffset equals the character length of the text preceding it, and the snapshot table is empty after done', () => {
     act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Let me check. ', session_id: SID }) })

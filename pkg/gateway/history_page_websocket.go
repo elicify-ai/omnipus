@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/media"
@@ -29,16 +30,19 @@ func (wc *wsConn) rememberedHistoryState(id string) (generated.SessionHistorySta
 func (wh *wsHandlerReadLoop) handleHistoryAttachFrame(data []byte) wsHandlerReadLoopFlow {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(data, &fields) != nil {
+		logsafeWarn("ws: malformed attach_session frame", "phase", "decode_object")
 		return wsHandlerReadLoopContinue
 	}
 	delete(fields, "history_limit")
 	delete(fields, "history_min_rows")
 	raw, err := json.Marshal(fields)
 	if err != nil {
+		logsafeWarn("ws: malformed attach_session frame", "phase", "encode_envelope")
 		return wsHandlerReadLoopContinue
 	}
 	var f generated.AttachSessionFrame
 	if json.Unmarshal(raw, &f) != nil {
+		logsafeWarn("ws: malformed attach_session frame", "phase", "decode_attach")
 		return wsHandlerReadLoopContinue
 	}
 	wh.h.handleAttachSessionWithAck(wh.ctx, wh.chatID, f.SessionId, &attachCursor{SinceSeq: f.SinceSeq, BootID: f.BootId}, &attachAck{Ack: f.AckAttention != nil && *f.AckAttention, Bound: f.AttentionBound}, wh.wc, data)
@@ -143,6 +147,9 @@ func (wh *wsHandlerHandleAttachSession) sendPreparedHistorySnapshot() {
 	attempt.err = err
 	attempt.preparationComplete()
 	if err != nil {
+		if historyStorageFailure(err) {
+			slog.Error("ws: session storage failure", "op", "read", "session_id", wh.attachID, "error", err)
+		}
 		if wh.ctx.Err() != nil {
 			wh.historyDeliveryFailed(wh.ctx.Err())
 			return

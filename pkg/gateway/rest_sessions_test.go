@@ -15,7 +15,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
-	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1023,13 +1022,11 @@ func TestGetSessionMessages_TruncatedEntry_PassesWireSchema(t *testing.T) {
 	assert.True(t, foundTruncated, "the seeded truncated entry must round-trip through the handler")
 }
 
-// TestGetSession_TranscriptWithCancelledTurn_PassesSessionDetailSchema covers
-// the envelope shape jsonSessionDetail emits — {session, messages,
-// agent_removed?}. The Session.partitions array regression we fixed earlier
-// in this branch landed in this exact envelope; this test pins the second
-// half of the contract (the messages array) against the same shape.
-//
-// Traces to: pkg/gateway/rest.go jsonSessionDetail.
+// TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema preserves
+// the original full envelope/message schema regression through the REAL public
+// paged-detail handler. It also proves available history, exact selected IDs,
+// current default paging fields and exclusion of private canonical provenance.
+// Traces to SessionDetail.yaml and history_page_http.go::writePagedSessionDetail.
 func TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
@@ -1047,11 +1044,12 @@ func TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema(t *test
 			AgentID:   "main",
 		},
 		{
-			ID:        "msg_asst_1",
-			Role:      "assistant",
-			Content:   "hi back",
-			Timestamp: time.Date(2026, 5, 21, 4, 20, 1, 0, time.UTC),
-			AgentID:   "main",
+			ID:                "msg_asst_1",
+			Role:              "assistant",
+			Content:           "hi back",
+			Timestamp:         time.Date(2026, 5, 21, 4, 20, 1, 0, time.UTC),
+			AgentID:           "main",
+			ParentSpawnCallID: "private-canonical-psc-canary",
 		},
 		{
 			ID:        "call_001",
@@ -1083,22 +1081,32 @@ func TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema(t *test
 	require.Equal(t, http.StatusOK, w.Code,
 		"GET /sessions/{id} must return 200; got %d body=%s", w.Code, w.Body.String())
 
-	// Validate the envelope against SessionDetail.yaml.
-	thisFile := gatewayTestCallerFile(t)
-	contractsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "contracts", "components", "schemas")
-	loader := newYAMLSchemaLoader(t)
-	compiler := jsonschema.NewCompiler()
-	compiler.UseLoader(loader)
-	schema, err := compiler.Compile("file://" + filepath.Join(contractsDir, "SessionDetail.yaml"))
-	require.NoError(t, err, "must compile SessionDetail.yaml")
-
-	var envelope any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
-
-	validationErr := schema.Validate(envelope)
-	assert.NoError(t, validationErr,
-		"jsonSessionDetail envelope must validate against SessionDetail.yaml; "+
-			"body=%s", w.Body.String())
+	// The private provenance must actually exist in saved data for this
+	// omission assertion to have power. It is not a producer-supplied wire field.
+	saved, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.Len(t, saved, 4)
+	require.Equal(t, "private-canonical-psc-canary", saved[1].ParentSpawnCallID)
+	detail := requirePagedSessionDetailWire(t, w.Body.Bytes())
+	require.Equal(t, sessionID, detail.Session.Id)
+	require.Len(t, *detail.Messages, 4)
+	ids := make([]string, 0, len(*detail.Messages))
+	positions := make(map[string]bool)
+	for _, entry := range *detail.Messages {
+		ids = append(ids, entry.Id)
+		require.NotNil(t, entry.HistoryPosition)
+		require.Regexp(t, `^hp1_[A-Za-z0-9_-]{43}$`, *entry.HistoryPosition)
+		require.False(t, positions[*entry.HistoryPosition], "each selected canonical occurrence has its own position")
+		positions[*entry.HistoryPosition] = true
+	}
+	require.Equal(t, []string{"msg_user_1", "msg_asst_1", "call_001", "cancel_001"}, ids)
+	require.EqualValues(t, 3, detail.PageInfo.RowCount, "D4/D16: two prose rows + one logical tool; cancel metadata adds zero")
+	assert.False(t, *detail.HasEarlier)
+	assert.False(t, *detail.HasLater)
+	assert.Nil(t, detail.NextBefore)
+	assert.Nil(t, detail.NextAfter)
+	assert.NotContains(t, w.Body.String(), "parent_spawn_call_id", "private canonical provenance is never a public Message member")
+	assert.NotContains(t, w.Body.String(), "private-canonical-psc-canary")
 }
 
 // TestGetSessions_ScheduledTypeFilter_RoundTrip verifies that a session of type
@@ -1306,7 +1314,7 @@ func findSessionRow(page sessionPageWire, id string) map[string]any {
 // the wire lifecycle_state/stop_note fields end-to-end — on BOTH
 // GET /api/v1/sessions (list, rest_sessions.go::listSessions) and
 // GET /api/v1/sessions/{id} (detail, rest_sessions.go::getSession via
-// jsonSessionDetail) — not merely present in the contract/generated types
+// history_page_http.go::writePagedSessionDetail) — not merely present in the contract/generated types
 // with nothing populating them (Definition of Done: reachable, not just
 // defined).
 func TestSessionLifecycle_PopulatesLifecycleStateAndStopNote(t *testing.T) {

@@ -17,6 +17,7 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import * as React from 'react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
@@ -24,7 +25,9 @@ import { ApiSchemaError } from '@/lib/api/http'
 import type { WsConnection } from '@/lib/ws'
 import type { ChatMessage } from '@/store/chat'
 import { MockButton, MockTextarea } from '@/test/assistantUiMock'
-import { clearHistoryPage, wireHistoryPage, type FixtureHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
+import { clearHistoryPage, type FixtureHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
+import type { ServerFrame } from '@/lib/api/generated/asyncapi-types'
+import { entry, expectValidFrame, expectValidPage, page, pos, replay, snapshot, STAMP } from '../../../tests/chat-history-paging/fixtures'
 
 if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function () {}
@@ -46,9 +49,6 @@ let sentFrames: unknown[] = []
 let messageResponses: Array<() => FixtureHistoryPage> = []
 let messageRequests = 0
 
-function rawUser(id: string, clientMessageId: string | undefined, content: string, ts: string): Record<string, unknown> {
-  return { id, role: 'user', content, timestamp: ts, agent_id: 'jim', status: 'ok', ...(clientMessageId ? { client_message_id: clientMessageId } : {}) }
-}
 function rawAssistant(id: string, content: string, ts: string): Record<string, unknown> {
   return { id, role: 'assistant', content, timestamp: ts, agent_id: 'jim', status: 'ok' }
 }
@@ -144,17 +144,36 @@ import { ChatScreen } from './ChatScreen'
 
 const SID = 'sess-clear-retry-screen'
 
+function publishConnectedOpening(): void {
+  const history = page([entry(1, {
+    id: 'srv-u-seed', role: 'user', agent_id: 'jim', content: 'earlier question', timestamp: '2026-10-10T00:00:00Z',
+  })], { sessionId: SID })
+  expectValidPage(history, [pos(1)], 1)
+  const frames: ServerFrame[] = [
+    { ...snapshot(history), seq: 1 },
+    { type: 'session_state', session_id: SID, user_id: 'clear-retry-reader', history_state: { status: 'available' }, pending_approvals: [], emitted_at: STAMP },
+    ...history.entries.map(source => replay(source, SID)),
+    { type: 'done', session_id: SID },
+    { type: 'catch_up_complete', session_id: SID, seq: 1, boot_id: 'history-boot', mode: 'snapshot' },
+  ]
+  frames.forEach(expectValidFrame)
+  frames.forEach(frame => useChatStore.getState().handleFrame(frame))
+  expect(useChatStore.getState().history.historyLoaded, 'positive opening instrument: the real WS snapshot committed').toBe(true)
+  expect(useChatStore.getState().sessionsById[SID].cursor).toStrictEqual({ bootId: 'history-boot', seq: 1 })
+}
+
 function seedIdleBucket(): void {
   const seeded: ChatMessage[] = [
     { id: 'u-seed', role: 'user', content: 'earlier question', timestamp: new Date().toISOString(), status: 'done' },
   ]
   const byId = Object.fromEntries(seeded.map((m) => [m.id, m]))
+  const defaults = emptySessionState()
   useChatStore.setState((s) => ({
     ...s,
     sessionsById: {
       ...s.sessionsById,
       [SID]: {
-        ...(s.sessionsById ?? {})[SID],
+        ...defaults,
         messagesById: byId,
         messageOrder: seeded.map((m) => m.id),
         isStreaming: false,
@@ -175,6 +194,7 @@ function seedIdleBucket(): void {
     // store syncs it on every withBucket write; the seed must do the same).
     messages: seeded,
     messagesById: byId,
+    history: defaults.history,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,
@@ -211,8 +231,9 @@ afterEach(() => {
 
 describe('ChatScreen — the history Retry completes a failed /clear refresh (V3)', () => {
   it('T4: a failed operation read is VISIBLE as the history-error state; Retry recovers with one /clear frame', async () => {
-    // The initial history load succeeds.
-    messageResponses.push(() => wireHistoryPage(SID, [rawUser('srv-u-seed', undefined, 'earlier question', '2026-10-10T00:00:00Z')], 1))
+    // D6: the connected opening comes from the actual snapshot contract,
+    // not an unused REST success that the later /clear read could consume.
+    act(() => publishConnectedOpening())
     let container!: HTMLElement
     await act(async () => {
       const result = render(
@@ -226,15 +247,18 @@ describe('ChatScreen — the history Retry completes a failed /clear refresh (V3
       expect(container.textContent).toContain('earlier question')
     })
     expect(screen.queryByText('Could not load messages.')).toBeNull()
+    expect(messageRequests, 'connected opening does not start a competing initial REST read').toBe(0)
 
     // The /clear is sent; its transcript read FAILS.
     const readsBefore = messageRequests
     act(() => { useChatStore.getState().sendMessage('/clear') })
     expect(sentFrames).toHaveLength(1)
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'done', session_id: SID, message_id: 'a-reply', turn_id: 'turn-clear', seq: 1, stats: { tokens: 1, cost: 0 },
-      } as never)
+      const done: ServerFrame = {
+        type: 'done', session_id: SID, message_id: 'a-reply', turn_id: 'turn-clear', seq: 2, stats: { tokens: 1, cost: 0 },
+      }
+      expectValidFrame(done)
+      useChatStore.getState().handleFrame(done)
     })
 
     // The failure is VISIBLE: the screen's own history-error state, with
@@ -266,8 +290,9 @@ describe('ChatScreen — the history Retry completes a failed /clear refresh (V3
   })
 
   it('T3: from the history-error state, the Retry click runs ONLY the operation read (no competing request)', async () => {
-    // The history endpoint fails from the start: the screen mounts into the
-    // error state.
+    // Supported initial failure: while disconnected, the real REST fallback
+    // runs and fails. Reconnect only after its visible error is established.
+    act(() => useConnectionStore.setState({ isConnected: false }))
     let container!: HTMLElement
     await act(async () => {
       const result = render(
@@ -281,13 +306,17 @@ describe('ChatScreen — the history Retry completes a failed /clear refresh (V3
       expect(screen.getByText('Could not load messages.')).toBeInTheDocument()
     })
 
+    expect(messageRequests, 'positive fallback instrument: one genuine initial read failed').toBe(1)
+    act(() => useConnectionStore.setState({ isConnected: true }))
     // A /clear goes out and its read fails too (still no good response).
     act(() => { useChatStore.getState().sendMessage('/clear') })
     expect(sentFrames).toHaveLength(1)
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'done', session_id: SID, message_id: 'a-reply', turn_id: 'turn-clear', seq: 1, stats: { tokens: 1, cost: 0 },
-      } as never)
+      const done: ServerFrame = {
+        type: 'done', session_id: SID, message_id: 'a-reply', turn_id: 'turn-clear', seq: 2, stats: { tokens: 1, cost: 0 },
+      }
+      expectValidFrame(done)
+      useChatStore.getState().handleFrame(done)
     })
     await vi.waitFor(() => {
       expect(messageRequests).toBe(2)
