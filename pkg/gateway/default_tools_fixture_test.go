@@ -180,10 +180,21 @@ func defaultToolsExecutable(t *testing.T) string {
 func defaultToolsPolicies(cfg *config.Config, agent *config.AgentConfig) (*tools.ToolPolicyCfg, string) {
 	// Use the production config-to-policy adapter, with the actual persisted
 	// agent rather than a stand-in seed map. The shipped ceiling is NOT lifted.
-	snapshot := *cfg
+	// Clone, not a struct copy: config.Config carries sync.RWMutex and go vet
+	// copylocks rejects copying the lock (pre-existing bundle3 finding, fixed
+	// under Hard Constraint #7). Behavior-identical here: BuildFallbackPolicyCfg
+	// reads only Sandbox.ToolPolicies and Agents.List — both survive Clone's
+	// JSON round-trip — and Agents is replaced immediately below, exactly as
+	// the old shallow copy did (including its aliasing of cfg.Agents).
+	// This helper has no *testing.T, so a clone failure panics loudly — the
+	// failing test names the cause — rather than degrading the policy snapshot.
+	snapshot, cloneErr := cfg.Clone()
+	if cloneErr != nil {
+		panic("defaultToolsPolicies: config clone failed: " + cloneErr.Error())
+	}
 	snapshot.Agents = cfg.Agents
 	snapshot.Agents.List = []config.AgentConfig{*agent}
-	return tools.BuildFallbackPolicyCfg(&snapshot, agent.ID)
+	return tools.BuildFallbackPolicyCfg(snapshot, agent.ID)
 }
 
 // Catalog reachability is separate from the spec's policy-resolution contract.
