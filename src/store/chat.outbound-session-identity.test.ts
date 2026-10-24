@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { getMessages, makeBucketMessages, useChatStore } from './chat'
+import { emptySessionState } from './chat/session'
 import type { ChatMessage, SessionChatState } from './chat'
 import { queryClient } from '@/lib/queryClient'
 import { useUiStore } from './ui'
@@ -109,6 +110,7 @@ const MODES = [
 
 function bucketFor(messages: ChatMessage[], streaming = false): SessionChatState {
   return {
+    ...emptySessionState(),
     ...makeBucketMessages(messages), toolCalls: {}, toolCallOrder: [], textAtToolCallStart: {},
     isStreaming: streaming, isReplaying: false, replayCompletedForSession: null,
     sessionTokens: 0, sessionCost: 0, rateLimitEvent: null, lastUserMessageAt: null,

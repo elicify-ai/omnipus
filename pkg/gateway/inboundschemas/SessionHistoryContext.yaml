@@ -1,0 +1,68 @@
+title: SessionHistoryContext
+type: object
+description: >
+  Bounded public dependencies of selected history groups (chat history paging D4/D10).
+  Resolve only selected/current relevant spans and duplicate identities, never all
+  session spans. Each optional lifecycle payload is the actual recorded generated
+  public frame, not a fabricated start, running state or success. No competing
+  cancellation/disposition value, private archive mark or copied content store.
+required:
+  - spans
+  - duplicate_ids
+additionalProperties: false
+properties:
+  spans:
+    type: array
+    items:
+      type: object
+      required:
+        - span_id
+      additionalProperties: false
+      properties:
+        span_id:
+          type: string
+          minLength: 1
+        start:
+          $ref: './SubagentStartFrame.yaml'
+          x-go-type: SubagentStartFrame
+        state:
+          $ref: './SubagentStateFrame.yaml'
+          x-go-type: SubagentStateFrame
+        message:
+          $ref: './SubagentMessageFrame.yaml'
+          x-go-type: SubagentMessageFrame
+        end:
+          $ref: './SubagentEndFrame.yaml'
+          x-go-type: SubagentEndFrame
+        has_run:
+          type: boolean
+          description: Present only when proven by actual persisted lifecycle facts.
+    description: Non-null array of relevant actual span facts; empty when none are needed.
+  duplicate_ids:
+    type: array
+    items:
+      type: object
+      required:
+        - kind
+        - id
+        - canonical_position
+        - occurrence_count
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - message
+            - tool
+        id:
+          type: string
+          minLength: 1
+        canonical_position:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+        occurrence_count:
+          type: integer
+          minimum: 2
+    description: Non-null selected/current relevant duplicate-ID canonical ownership facts.

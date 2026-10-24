@@ -329,7 +329,7 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 // sessionStateBytes builds the session_state frame emitSessionState sends
 // (nil on a marshal failure, which is logged). The attach path queues these
 // bytes itself, ahead of its held live frames (BE-DESIGN.md §4.1 A6).
-func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
+func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string, historyStates ...generated.SessionHistoryState) []byte {
 	// Always initialize to non-nil slice so JSON encodes as [] not null.
 	pendingApprovals := make([]generated.SessionStatePendingApproval, 0)
 
@@ -366,6 +366,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 	if sessionID != "" {
 		sid := sessionID
 		frame.SessionId = &sid
+		frame.SessionTokensTotal = h.sessionTokensTotal(sessionID)
 	}
 
 	// ADR-082 D4/FR-008: announce the in-flight foreground turn (if any) for
@@ -414,6 +415,14 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 	// may later echo back to acknowledge. 0 when the main has no outcome yet;
 	// omitted for a non-main, the connection-open emit, and an unreadable mark.
 	frame.AttentionBound = h.attentionBoundFor(sessionID)
+	if sessionID != "" {
+		if len(historyStates) > 0 {
+			state := historyStates[0]
+			frame.HistoryState = &state
+		} else if state, ok := wc.rememberedHistoryState(sessionID); ok {
+			frame.HistoryState = &state
+		}
+	}
 
 	raw, err := json.Marshal(frame)
 	if err != nil {

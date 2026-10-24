@@ -19,7 +19,7 @@ import { ErrorState } from '@/components/ui/error-state'
 import { IconButton } from '@/components/ui/icon-button'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { MagnifyingGlass, Calendar, X } from '@phosphor-icons/react'
-import { fetchAgents, fetchSessions, fetchWorkspaces, renameSession, deleteSession, workspacesQueryKeys, getErrorMessage, readSessionFetchCoverage } from '@/lib/api'
+import { fetchAgents, fetchSessions, renameSession, deleteSession, getErrorMessage, readSessionFetchCoverage } from '@/lib/api'
 import type { Session, Workspace, Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
@@ -28,6 +28,7 @@ import { useSelectSession } from '@/components/chat/useSelectSession'
 import { AgentHeader, WorkspaceHeader } from '@/components/sessions/SessionGroupHeaders'
 import { SessionOverviewList, visibleOverviewIds } from '@/components/sessions/SessionOverviewList'
 import { buildSessionOverview, sessionActivation } from '@/components/sessions/sessionOverview'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value)
@@ -147,8 +148,7 @@ export function SearchModal() {
     enabled: open,
   })
   const { data: workspaces = [], isLoading: wLoading, isError: workspacesError, refetch: retryWorkspaces } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     enabled: open,
   })
   const { data: agentData, isPending: agentsPending, isError: agentsError, refetch: retryAgents } = useQuery({

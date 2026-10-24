@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act } from '@testing-library/react'
 import * as React from 'react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import type { ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
@@ -64,7 +65,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
     ...actual,
-    useQuery: () => ({ data: [], isError: false, refetch: vi.fn() }),
+    useQuery: (opts: { queryKey?: readonly unknown[] }) => ({ data: queryDataWithEmptyHistory(opts?.queryKey), isError: false, refetch: vi.fn() }),
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
   }
@@ -82,12 +83,14 @@ vi.mock('@tanstack/react-router', () => ({
 // doesn't exercise mentions. The workspaces query stays disabled (no
 // activeWorkspaceId set here), so `fetchWorkspaces` is never actually
 // invoked — this just needs to exist so the module loads.
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchAboutInfo: vi.fn().mockResolvedValue({}),
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
@@ -154,12 +157,11 @@ function makeMessages(count: number): ChatMessage[] {
 }
 
 function seedStore(messages: ChatMessage[]): void {
-  const bucket = makeBucketMessages(messages)
+  const bucket = { ...emptySessionState(), ...makeBucketMessages(messages) }
   useChatStore.setState((s) => ({
     ...s,
     sessionsById: {
       [SID]: {
-        ...((s.sessionsById ?? {})[SID] ?? {}),
         ...bucket,
         isStreaming: false,
         isReplaying: false,
@@ -177,6 +179,7 @@ function seedStore(messages: ChatMessage[]): void {
       },
     },
     messages: messages,
+    history: bucket.history,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,
@@ -453,12 +456,11 @@ describe('VirtualizedMessageList', () => {
       isStreaming: true,
     }
     const allMessages = [...completed, streamingMsg]
-    const bucket = makeBucketMessages(allMessages)
+    const bucket = { ...emptySessionState(), ...makeBucketMessages(allMessages) }
     useChatStore.setState((s) => ({
       ...s,
       sessionsById: {
         [SID]: {
-          ...((s.sessionsById ?? {})[SID] ?? {}),
           ...bucket,
           isStreaming: true,
           isReplaying: false,
@@ -476,6 +478,7 @@ describe('VirtualizedMessageList', () => {
         },
       },
       messages: allMessages,
+      history: bucket.history,
       isStreaming: true,
       isReplaying: false,
       replayCompletedForSession: SID,
@@ -553,12 +556,11 @@ describe('VirtualizedMessageList', () => {
       timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true,
     }
     const allMessages = [userMsg, closedBySteerMsg, steerMsg, postSteerStreamingMsg]
-    const bucket = makeBucketMessages(allMessages)
+    const bucket = { ...emptySessionState(), ...makeBucketMessages(allMessages) }
     useChatStore.setState((s) => ({
       ...s,
       sessionsById: {
         [SID]: {
-          ...((s.sessionsById ?? {})[SID] ?? {}),
           ...bucket,
           isStreaming: true,
           isReplaying: false,
@@ -576,6 +578,7 @@ describe('VirtualizedMessageList', () => {
         },
       },
       messages: allMessages,
+      history: bucket.history,
       isStreaming: true,
       isReplaying: false,
       replayCompletedForSession: SID,

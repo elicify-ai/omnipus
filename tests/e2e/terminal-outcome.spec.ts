@@ -129,6 +129,9 @@ test.describe('terminal outcome agrees across real surfaces', () => {
         }
         const detail = await terminalTranscript(page, gw.baseURL, session.id);
         expect.soft(detail.session.id, 'read the SAME durable session').toBe(session.id);
+        if (detail.messages === undefined) {
+          throw new Error('Terminal transcript messages are missing; cannot verify durable terminal outcome');
+        }
         // Approved Notice mandate: narration is model-authored; the distinct cap notice is system-authored.
         const outcomes = detail.messages.filter((entry) =>
           (entry.role === 'assistant' || entry.role === 'system') && entry.content);

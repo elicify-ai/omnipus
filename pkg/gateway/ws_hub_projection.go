@@ -290,10 +290,18 @@ func projectionFrames(sessionID string, items []projSnapshotItem, emitted map[st
 			// A result whose call is no longer in the projection is never
 			// rebuilt on its own: the client would show it as an unmatched
 			// tool result (final-review N6).
-			if emitted[it.id] || len(it.start) == 0 {
+			if len(it.start) == 0 {
 				continue
 			}
-			out = appendNonEmpty(out, it.start, it.end)
+			// Starts and results are covered separately (D4): history that
+			// replayed only the start (the call was still pending at the cut)
+			// does not hide the live projection's terminal result.
+			if !emitted[it.id] {
+				out = appendNonEmpty(out, it.start)
+			}
+			if !emitted[emittedResultKey(it.id)] {
+				out = appendNonEmpty(out, it.end)
+			}
 		case hubKindItem:
 			out = appendNonEmpty(out, it.start)
 		}

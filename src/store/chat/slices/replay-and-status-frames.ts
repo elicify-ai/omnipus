@@ -43,6 +43,7 @@ import {
 } from '@/lib/llm-error'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { noteServerAttentionFrame } from '@/store/session/foregroundAck'
+import { mergeRecordedSessionTokens } from '../session-usage'
 import { buildBrowserHandoverInsertion, buildGoalAckInsertion, evictGoalPillsOverCap, mergeGoalPillFrame } from '../goals'
 import { MAX_MESSAGES_PER_SESSION, busyFlagIsUnbacked, evictMessageFromBucket, findAssistantMessageIdByTurnId, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { isTurnFinished, schedulePlanStatusInvalidate } from '../routing'
@@ -164,16 +165,15 @@ function handleSessionStateFrame(
   // ADR-082 review fix opens/marks the bubble first and this done
   // becomes a no-op for placeholder purposes.
   if (!targetSid) return
-  // FR-047 (C-ATTENTION): the attach response's attention_bound lives on THIS
-  // SessionStateFrame — per the contract it is "part of both the incremental
-  // catch-up and the full snapshot, so either attach answer can carry the
-  // bound" (the generated SessionSnapshotFrame has no such field). Remember
-  // this frame as the session's server attention frame so a later
-  // shown-commit acknowledgement can read the bound off it. Only an attach
-  // emit carries session_id (the connection-open emit does not), so a
-  // bound-less open emit can never overwrite a remembered bound.
+  if (frame.session_id && frame.history_state) {
+    withBucket(targetSid, b => ({ history: { ...b.history, serverState: frame.history_state!, ...(frame.history_state!.status === 'unavailable' ? { historyLoaded: false } : {}) } }))
+  }
+  // FR-047: both incremental and snapshot attach carry attention_bound here,
+  // not in SessionSnapshotFrame. Remember this addressed state for shown-commit
+  // acknowledgement; unscoped connection-open state must never replace it.
   if (frame.session_id) {
     noteServerAttentionFrame(targetSid, frame)
+    withBucket(targetSid, b => ({ sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, frame.session_tokens_total) }))
   }
   // ADR-092 review finding D: a page reload or gateway reconnect re-fetches
   // this frame, but a plain WS reconnect never replays a fresh
@@ -584,6 +584,7 @@ interface ReplayMessageFrameFields {
   role: 'user' | 'assistant' | 'system'
   text: string
   messageId: string | undefined
+  replayClientMessageId: ReplayMessageFrame['client_message_id']
   messageTimestamp: string | undefined
   replayAgentId: string | undefined
   replayModel: string
@@ -658,6 +659,7 @@ function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayM
     role,
     text,
     messageId,
+    replayClientMessageId: replayFrame.client_message_id,
     messageTimestamp,
     replayAgentId,
     replayModel,
@@ -708,7 +710,10 @@ function replayAlreadyApplied(
       (draft.mergedReplayMessageIds?.[messageId] ?? false) ||
       (tailAssistantId != null &&
         (draft.messagesById[tailAssistantId].mergedReplayIds?.includes(messageId) ?? false))
-    if (draft.messageOrder.includes(messageId) || alreadyMerged) {
+    // A source bucket may reserve its recorded ID for tools before its
+    // narration arrives. That one synthetic owner is not prose coverage.
+    const pendingNarration = role === 'assistant' && draft.historyPendingNarrationId === messageId
+    if ((draft.messageOrder.includes(messageId) && !pendingNarration) || alreadyMerged) {
       console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: alreadyMerged ? 'merged-id-match' : 'id-match' })
       logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: alreadyMerged ? 'merged-id-match' : 'id-match', sessionId: targetSid })
       return true
@@ -786,6 +791,7 @@ function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
     content: text,
     timestamp: messageTimestamp ?? new Date().toISOString(),
     status: 'done' as const,
+    ...(role === 'user' && fields.replayClientMessageId ? { clientMessageId: fields.replayClientMessageId } : {}),
     ...(replayAgentId ? { agentId: replayAgentId } : {}),
     // Per-turn model record. Only on assistant messages (user/system turns
     // don't carry a producer model). Empty model is treated as

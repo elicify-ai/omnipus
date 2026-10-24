@@ -2,7 +2,10 @@ title: SessionStateFrame
 description: >
   Server → client (FR-052, FR-073, FR-081). One-shot frame emitted to each
   WebSocket connection immediately after authentication. Contains every
-  pending tool approval (single-user model — no per-account scoping). The
+  pending tool approval (single-user model — no per-account scoping). Also
+  emitted as authoritative current control state during session attach. Attach's
+  session-scoped emit requires history_state; the unscoped connection-open emit
+  omits it. Readiness is not proof the client loaded history. The
   SPA reconciles its approval store against this frame on every WS reconnect.
 
   CRITICAL — nil-safety contract:
@@ -17,6 +20,12 @@ required:
   - emitted_at
 additionalProperties: false
 properties:
+  history_state:
+    $ref: './SessionHistoryState.yaml'
+    description: >
+      Required on attach's session-scoped emit, omitted on unscoped connection-open
+      state. Unavailable history never removes authorized current controls or claims
+      empty/successful history. Absence is not evidence that a page was loaded.
   type:
     type: string
     const: session_state
@@ -53,6 +62,16 @@ properties:
       the connection-open emit (no session yet). The SPA routes active_turn
       by this id instead of the globally active session. Keep in sync by
       hand with contracts/asyncapi.yaml's inline SessionStateFrame.
+  session_tokens_total:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Authoritative absolute session-wide consumed-token total, with the same
+      meaning as SessionStats.tokens_total. Present when authoritative usage is
+      available on an authorized session-scoped attach, including live_only;
+      omitted on unscoped connection-open state. Omitted means unknown, never zero.
+      Independent of history readiness; not a per-turn delta.
   attention_bound:
     type: integer
     format: int64

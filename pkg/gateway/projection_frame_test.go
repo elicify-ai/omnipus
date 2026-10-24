@@ -108,13 +108,15 @@ func TestGateway_ProjectionFrameAndContentState(t *testing.T) {
 		api.HandleSessions(w, r)
 		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
-		var entries []struct {
-			ToolCalls []generated.ToolCall `json:"tool_calls"`
-		}
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+		historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+		entries := historyMigrationRawEntries(t, w.Body.Bytes(), "entries")
 		calls := make([]generated.ToolCall, 0, 2)
-		for _, e := range entries {
-			calls = append(calls, e.ToolCalls...)
+		for _, rawEntry := range entries {
+			var fields map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(rawEntry, &fields))
+			var entryCalls []generated.ToolCall
+			require.NoError(t, json.Unmarshal(fields["tool_calls"], &entryCalls))
+			calls = append(calls, entryCalls...)
 		}
 		require.Len(t, calls, 2)
 		require.NotNil(t, calls[0].ContentState)

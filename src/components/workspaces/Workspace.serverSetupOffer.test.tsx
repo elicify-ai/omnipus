@@ -21,6 +21,7 @@ import { workspacesQueryKeys } from '@/lib/api'
 import type { Session } from '@/lib/api'
 import type { AppState, Message, Session as WireSession, SessionPage, Workspace } from '@/lib/api/generated/openapi-types'
 import type { ClientFrame, MessageFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
+import { wireHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
 import { WsConnection } from '@/lib/ws'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
@@ -114,7 +115,7 @@ beforeEach(() => {
         const workspaceId = url.searchParams.get('workspace_id')
         return response({ sessions: SESSIONS.filter((s) => !workspaceId || s.workspace_id === workspaceId).map(asWire) } satisfies SessionPage)
       }
-      if (url.pathname === `/api/v1/sessions/${OMNIPUS_MAIN}/messages`) return response(history)
+      if (url.pathname === `/api/v1/sessions/${OMNIPUS_MAIN}/messages`) return response(wireHistoryPage(OMNIPUS_MAIN, history, history.length))
       if (url.pathname === '/api/v1/agents/omnipus/activity-runs') return response([])
       if (url.pathname === '/api/v1/skills' || url.pathname === '/api/v1/providers' || url.pathname === '/api/v1/commands') return response([])
       if (url.pathname === '/api/v1/security/sandbox-status') return response({ backend: 'fallback', available: true,

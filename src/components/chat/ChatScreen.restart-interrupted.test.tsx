@@ -11,6 +11,7 @@ import { useConnectionStore } from '@/store/connection'
 import { ChatScreen } from './ChatScreen'
 import { codeToDisplay } from '@/lib/llm-error'
 import * as telemetry from '@/lib/telemetry'
+import { makeSnapshotHistory } from '@/test/factories'
 
 // I1 (UAT): after kill -9 + restart a chat whose turn was cut off must read
 // "Interrupted" in the chat body (the sidebar already does — see
@@ -26,9 +27,11 @@ vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ navigate: vi.fn() }), useNavigate: () => vi.fn(),
   useSearch: () => ({}), Link: ({ children }: { children: ReactNode }) => children,
 }))
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (original) => ({
   ...await original<typeof import('@/lib/api')>(),
-  fetchAgents: vi.fn().mockResolvedValue([]), fetchSessionMessages: vi.fn().mockResolvedValue([]),
+  fetchAgents: vi.fn().mockResolvedValue([]), fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
   fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }), fetchProviders: vi.fn().mockResolvedValue([]),
   fetchCommands: vi.fn().mockResolvedValue([]), fetchSkills: vi.fn().mockResolvedValue([]),
 }))
@@ -102,7 +105,7 @@ function feed(frames: Frame[]) {
 // (user prompt + the partial answer that was saved), then catch_up_complete.
 function freshTabAttach(reason: 'unknown_position' | 'boot_mismatch' = 'unknown_position'): Frame[] {
   return [
-    { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason },
+    { ...makeSnapshotHistory(2), type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason },
     { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
     { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
     { type: 'replay_message', session_id: SID, id: 'a-1', role: 'assistant', content: 'Partial text before the kill', turn_id: 't-1' },
@@ -116,7 +119,7 @@ async function mount() {
 
 function unansweredAttach(): Frame[] {
   return [
-    { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
+    { ...makeSnapshotHistory(1), type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
     { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
     { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
     { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
@@ -171,7 +174,7 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     // sender's client_message_id (so the optimistic bubble is reconciled in place), then the
     // saved partial answer. History order is therefore [user, assistant].
     feed([
-      { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
+      { ...makeSnapshotHistory(2), type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
       { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
       { type: 'replay_message', session_id: SID, id: 'srv-u-1', client_message_id: 'u-1', role: 'user', content: 'Write the long report' },
       { type: 'replay_message', session_id: SID, id: 'a-1', role: 'assistant', content: 'Partial text before the kill', turn_id: 't-1' },
@@ -192,7 +195,7 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
   it('control: a genuinely running session (lifecycle working, active turn) is not shown as Interrupted', async () => {
     savedLifecycle = 'working'
     feed([
-      { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'unknown_position' },
+      { ...makeSnapshotHistory(1), type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'unknown_position' },
       { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z', active_turn: { turn_id: 't-9', agent_id: 'jim', started_at: '2026-10-07T06:00:30Z' } },
       { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
       { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
@@ -292,7 +295,7 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
 
   it('saved interrupted but a turn is active for the chat: no notice', async () => {
     feed([
-      { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'unknown_position' },
+      { ...makeSnapshotHistory(0), type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'unknown_position' },
       { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z', active_turn: { turn_id: 't-9', agent_id: 'jim', started_at: '2026-10-07T06:00:30Z' } },
       { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
     ])
@@ -413,7 +416,7 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
 
   it('restart-cut question with no answer: Interrupted plus a manual Generate again that resends only on click (founder Q1 = A)', async () => {
     feed([
-      { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
+      { ...makeSnapshotHistory(1), type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
       { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
       { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
       { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
@@ -584,7 +587,7 @@ describe('Restart observation — witnessed cut, lifecycle freshness, and boot s
     expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).not.toBe(true)
     savedLifecycle = 'done'
     feed([
-      { type: 'session_snapshot', session_id: SID, seq: 9, boot_id: 'boot-2', reason: 'unknown_position' },
+      { ...makeSnapshotHistory(2), type: 'session_snapshot', session_id: SID, seq: 9, boot_id: 'boot-2', reason: 'unknown_position' },
       { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
       { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
       { type: 'replay_message', session_id: SID, id: 'a-other-tab', role: 'assistant', content: 'Completed elsewhere', turn_id: 't-elsewhere' },

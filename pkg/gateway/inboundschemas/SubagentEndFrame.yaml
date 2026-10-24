@@ -14,6 +14,9 @@ required:
   - status
 additionalProperties: false
 properties:
+  history_origin:
+    $ref: './HistoryEntryOrigin.yaml'
+    x-go-type: HistoryEntryOrigin
   type:
     type: string
     enum:

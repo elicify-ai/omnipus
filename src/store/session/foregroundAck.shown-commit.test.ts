@@ -23,6 +23,7 @@ import { queryClient } from '@/lib/queryClient'
 import type { Session } from '@/lib/api'
 import type { ServerFrame, WsConnection } from '@/lib/ws'
 import { noteForegroundAttach } from './foregroundAck'
+import { availableHistoryDetail } from '../../../tests/chat-history-paging/legacy-fixtures'
 
 /** Real loaded session metadata as the sidebar's ['sessions'] query holds it. */
 function mainSession(id: string, overrides: Partial<Session> = {}): Session {
@@ -200,7 +201,7 @@ describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the
   it('a direct open whose validated session-detail is loaded acknowledges exactly once with the captured bound', () => {
     const sid = 'main-ack-cold-detail'
     shownForeground(sid, []) // the sidebar roster has NOT resolved
-    queryClient.setQueryData(['session-detail', sid], { session: mainSession(sid), messages: [] })
+    queryClient.setQueryData(['session-detail', sid], availableHistoryDetail(mainSession(sid)))
 
     useChatStore.getState().handleFrame(stateFrame(sid, 7))
     useChatStore.getState().handleFrame(catchUpComplete(sid))

@@ -18,6 +18,11 @@ import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
 import { createFirstSendActions, firstSendBlocksQueue } from './first-send'
 import { createFrameSlice } from './slices/frames'
+import { createHistorySlice, emptyHistoryState } from './history'
+import { createHistoryFrameOwner } from './history-replay'
+import { applyHistoryPageToBucket } from './history-merge'
+import { mergeRecordedSessionTokens } from './session-usage'
+import { currentHistoryState, liveProjectionBucket, withLiveHistoryBucket } from './history-live'
 
 // HIGH-2: consecutive unknown frame counter. Reset on any known-good frame.
 // On threshold (5), promotes to a user-visible warning toast.
@@ -239,6 +244,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
     drainQueuedMessage(get, next)
   }
 
+  const historyFrames = createHistoryFrameOwner({ set, get, withBucket })
+  const frameSlice = createFrameSlice({ set, get: historyFrames.get, getActiveSid, bucketToForeground, withBucket: historyFrames.withBucket, syncForeground, armRateLimitClear, maybeDrainNext, runtime: chatRuntime })
   return {
     sessionsById: {},
 
@@ -249,6 +256,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
     abandonedFirstSendIds: [],
     firstSendGeneration: 0,
     ...createFirstSendActions({ set, get, withBucket }),
+    ...createHistorySlice({ set, get, withBucket }),
+    history: emptyHistoryState(),
+    acceptHistoryFallback: (sid, page, generation, baseline) => withBucket(sid, b => {
+      if (b.history.viewGeneration !== generation || b.isReplaying || b.history.liveControlsReady || b.history.historyLoaded) return {}
+      return applyHistoryPageToBucket(b, page, 'latest', baseline)
+    }),
 
     // Foreground selectors — derived from sessionsById[activeSessionId].
     // Initial values are the empty-session defaults projected through bucketToForeground.
@@ -264,7 +277,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     toolCalls: {},
     toolCallOrder: [],
     textAtToolCallStart: {},
-    sessionTokens: 0,
+    sessionTokens: undefined,
     sessionCost: 0,
     rateLimitEvent: null,
     goalStatus: null,
@@ -468,7 +481,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     markLastMessageInterrupted: (sessionId) => {
       const sid = sessionId ?? getActiveSid()
-      withBucket(sid, (b) => {
+      withLiveHistoryBucket(withBucket, sid, (b) => {
         // ADR-070 §2.7 (grill-spec round 2, NEW-001): a bare
         // findLastAssistantMessageId scan would resolve to an already-closed
         // closedBySteer bubble if Stop/Escape/`/cancel` fires in the window
@@ -480,7 +493,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
         // already exists for the analogous pre-existing case (cancel fired
         // before the first token frame) — the trigger condition just got
         // broader, not the branch itself.
-        const lastMsgId = findOpenAssistantMessageId(b.messageOrder, b.messagesById)
+        const candidate = findOpenAssistantMessageId(b.messageOrder, b.messagesById)
+        const lastMsgId = b.history.viewMode === 'historical' && candidate && !b.messagesById[candidate]?.isStreaming ? null : candidate
         if (!lastMsgId) {
           // FR-21 / T21–T23: No assistant message exists yet (cancel fired between
           // session_started and the first token frame). The server may still send
@@ -567,7 +581,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // different bucket before the active session was set (e.g. in test scaffolding).
       const state = get()
       const activeBucket = sid ? state.sessionsById[sid] : undefined
-      const hasInterruptedInActive = activeBucket && getMessages(activeBucket).some(
+      const hasInterruptedInActive = activeBucket && getMessages(liveProjectionBucket(activeBucket)).some(
         (m: ChatMessage) => m.role === 'assistant' && m.status === 'interrupted'
       )
       if (!hasInterruptedInActive) {
@@ -659,19 +673,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const sid = getActiveSid()
       if (!sid) return
       withBucket(sid, (b) => ({
-        sessionTokens: b.sessionTokens + tokens,
+        sessionTokens: b.sessionTokens === undefined ? undefined : b.sessionTokens + tokens,
         sessionCost: b.sessionCost + cost,
       }))
     },
 
-    seedSessionTokens: (total) => {
-      const sid = getActiveSid()
-      if (!sid) return
-      withBucket(sid, (b) => {
-        // Only seed when bucket is fresh — don't overwrite live-accumulated totals.
-        if (b.sessionTokens !== 0) return {}
-        return { sessionTokens: total }
-      })
+    seedSessionTokens: (total, sessionId) => {
+      const sid = sessionId ?? getActiveSid()
+      if (!sid || total === undefined) return
+      withBucket(sid, b => ({ sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, total) }))
     },
 
     setRateLimitEvent: (event) => {
@@ -729,10 +739,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     // ── Outbound queue actions ────────────────────────────────────────────────
 
-    ...createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, maybeDrainNext, runtime: chatRuntime }),
+    ...createOutboundLifecycleSlice({ set, get: () => currentHistoryState(get(), getActiveSid()), getActiveSid, withBucket: (sid, update) => withLiveHistoryBucket(withBucket, sid, update), bucketToForeground, maybeDrainNext, runtime: chatRuntime }),
     ...createOutboundResponseSlice(),
 
-    ...createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, syncForeground, armRateLimitClear, maybeDrainNext, runtime: chatRuntime }),
+    handleFrame: frame => historyFrames.handle(frame, frameSlice.handleFrame),
   }
 })
 

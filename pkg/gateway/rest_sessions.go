@@ -25,76 +25,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// jsonSessionDetail writes a response that conforms to the gen.SessionDetail wire
-// shape: { session, messages, agent_removed? }.
-// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize via
-// their own json tags to JSON layouts that match SessionDetail.yaml / Session.yaml /
-// Message.yaml — we exploit that to avoid a field-by-field copy into gen.SessionDetail.
-// The anonymous struct is not a named wire-format type and therefore does not trigger
-// the check-no-handwritten-wire-types lint rule.
-// jsonSessionDetail serializes a session detail response. The internal
-// session.UnifiedMeta is converted to gen.Session via unifiedMetaToGenSession
-// so that required-but-empty array fields (e.g. partitions) marshal as []
-// rather than null, honoring the Session.yaml contract (zod schema validates
-// type:array, rejecting null and dropping the whole list).
-//
-// Messages stay as []session.TranscriptEntry: the Message.yaml schema only
-// requires {id, timestamp, agent_id}, and every other field uses omitempty
-// in Go — so nil slices/maps are omitted, not emitted as null.
-//
-// ls is the durable lifecycle store (sub-agent control plane ADR D4/MAJ-009),
-// used to populate the optional lifecycle_state/stop_note wire fields via
-// computeSessionLifecycle. nil is accepted (no lifecycle store wired — most
-// webchat-only installs never mint one) and degrades to both fields absent,
-// matching Session.yaml's "absent for a session with no lifecycle record"
-// contract.
-func jsonSessionDetail(
-	w http.ResponseWriter,
-	meta *session.UnifiedMeta,
-	messages []session.TranscriptEntry,
-	agentRemoved bool,
-	ls *session.LifecycleStore,
-	needsAttention *bool,
-	currentBootSeq ...uint64,
-) {
-	writeSessionDetail(w, meta, messages, false, agentRemoved, ls, needsAttention, currentBootSeq...)
-}
-
-// writeSessionDetail is jsonSessionDetail for a chat-view read: hasEarlier says
-// messages starts at the session's last /clear marker with earlier entries
-// before it (SessionDetail.has_earlier_messages; absent when false).
-func writeSessionDetail(
-	w http.ResponseWriter,
-	meta *session.UnifiedMeta,
-	messages []session.TranscriptEntry,
-	hasEarlier bool,
-	agentRemoved bool,
-	ls *session.LifecycleStore,
-	needsAttention *bool,
-	currentBootSeq ...uint64,
-) {
-	genSession := unifiedMetaToGenSession(meta)
-	genSession.NeedsAttention = needsAttention
-	// C-MAIN: `protected` is computed here as well as in listSessions — the
-	// detail response is the surface the SPA's delete affordance keys on, so
-	// the two must not disagree about a main.
-	genSession.Protected = computeSessionProtected(meta)
-	if err := attachSessionRuntimeFields(&genSession, ls, meta.ID, currentBootSeq...); err != nil {
-		slog.Warn("rest: session detail: lifecycle read failed", "session_id", meta.ID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "session lifecycle unavailable")
-		return
-	}
-	if messages == nil {
-		messages = []session.TranscriptEntry{}
-	}
-	jsonOK(w, struct {
-		Session      gen.Session               `json:"session"`
-		Messages     []session.TranscriptEntry `json:"messages"`
-		HasEarlier   bool                      `json:"has_earlier_messages,omitempty"`
-		AgentRemoved bool                      `json:"agent_removed,omitempty"`
-	}{Session: genSession, Messages: messages, HasEarlier: hasEarlier, AgentRemoved: agentRemoved})
-}
-
 // --- Sessions ---
 
 // HandleSessions routes /api/v1/sessions requests: GET (list/detail/messages/tool-results), POST (create), PUT (rename), DELETE (delete).
@@ -525,7 +455,7 @@ func jsonSessionStorageError(w http.ResponseWriter, op, sessionID string, err er
 			"Check disk space and permissions, then retry. Details are in the server log.", op))
 }
 
-func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) {
+func (a *restAPI) getSession(w http.ResponseWriter, r *http.Request, id string) {
 	// session-core U1 / BDD-01.4: a main id resolves through its pair's
 	// eligibility, and any refusal (wrong owner, wrong workspace, unreadable
 	// metadata, non-member, Admin outside the default workspace) is a visible
@@ -553,18 +483,6 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
-	view, err := store.ReadTranscriptView(id)
-	if err != nil {
-		jsonSessionStorageError(w, "read", id, err)
-		return
-	}
-	messages := view.Entries
-	// ADR-057 D1/W11 (FR-034/FR-038): a delegated child owns its own real
-	// session (FR-005), so its narration lives in the CHILD's OWN
-	// transcript.jsonl and is simply never present here — the old REST-side
-	// visibility filter helper is deleted, not reapplied (FR-035). This
-	// boundary now returns id's full transcript unfiltered, same as every
-	// other read boundary (FR-035/FR-037/FR-038, BDD-37).
 	// Detect ghost sessions: if the session references an agent that no longer
 	// exists in the current config, surface agent_removed=true so the frontend
 	// can show the read-only "Agent removed" banner (#103).
@@ -580,55 +498,11 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		}
 		agentRemoved = !found
 	}
-	// Build response matching gen.SessionDetail wire shape:
-	// { session, messages, agent_removed? }
-	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
-	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
-	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
-	writeSessionDetail(w, a.withDisplayTitle(meta), messages, view.HasEarlier, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.pendingApprovalMains()), a.agentLoop.CurrentBootEpoch())
+	a.writePagedSessionDetail(w, r, meta, agentRemoved)
 }
 
-func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
-	// Final-gate M4: a main the pair is no longer entitled to is not readable
-	// here any more than it is listed.
-	if !a.gateMainRead(w, id) {
-		return
-	}
-	store := a.resolveSessionStore(id)
-	if store == nil {
-		jsonErr(w, http.StatusNotFound, "session not found")
-		return
-	}
-	view, err := store.ReadTranscriptView(id)
-	if err != nil {
-		jsonSessionStorageError(w, "read", id, err)
-		return
-	}
-	messages := view.Entries
-	// ADR-057 D1/W11 (FR-034/FR-038): see getSession's identical note above —
-	// the old delegate-narration visibility filter is deleted outright, not
-	// reapplied; a child's own entries never land in another session's
-	// transcript to begin with under the post-D1 design.
-	// Coerce nil → empty slice so JSON marshals as [] not null. The SPA's
-	// fetchSessionMessages validates via z.array(WireMessageSchema), which
-	// rejects null — a fresh session with no transcript would surface as
-	// "Could not load messages." in the UI.
-	if messages == nil {
-		messages = []session.TranscriptEntry{}
-	}
-	// review r2 RV2: every entry passes through as the raw TranscriptEntry
-	// (unchanged shape) EXCEPT EntryTypeJudgeVerdict, whose Content is a raw
-	// json.Marshal(task.JudgeVerdict) string with no typed field to carry it
-	// on the wire. Before this fix, cold-load rendered an empty/broken verdict
-	// card because Message.verdict was never populated. Parse Content and
-	// attach it as "verdict" (same shape handleTaskVerdicts/toWireJudgeVerdict
-	// produces, rest_tasks.go) so cold-load and live/replay can never disagree.
-	out := make([]any, 0, len(messages))
-	for _, entry := range messages {
-		out = append(out, withWireJudgeVerdict(id, entry))
-	}
-	w.Header().Set("X-Has-Earlier-Messages", strconv.FormatBool(view.HasEarlier))
-	jsonOK(w, out)
+func (a *restAPI) getSessionMessages(w http.ResponseWriter, r *http.Request, id string) {
+	a.serveSessionHistory(w, r, id)
 }
 
 // withWireJudgeVerdict returns entry unchanged for every entry type except

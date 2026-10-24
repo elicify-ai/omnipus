@@ -176,6 +176,17 @@ func TestSessionRuntime_LifecycleReadFailuresPropagate(t *testing.T) {
 		t.Run(endpoint, func(t *testing.T) {
 			f := newI1R1BootFixture(t)
 			id := f.root(t, session.LifecycleRunning, f.boot.Current())
+			store := f.api.agentLoop.GetSessionStore()
+			require.NoError(t, store.AppendTranscriptStrict(id, session.TranscriptEntry{
+				ID: "lifecycle-detail-saved", Role: "user", Content: "actual healthy paged fixture", AgentID: "mia",
+			}))
+			healthy := httptest.NewRecorder()
+			f.api.HandleSessions(healthy, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+id, nil))
+			require.Equal(t, http.StatusOK, healthy.Code, "real paged detail succeeds before lifecycle fault: %s", healthy.Body.String())
+			detail := requirePagedSessionDetailWire(t, healthy.Body.Bytes())
+			require.Len(t, *detail.Messages, 1)
+			require.Equal(t, "lifecycle-detail-saved", (*detail.Messages)[0].Id)
+			require.EqualValues(t, 1, detail.PageInfo.RowCount)
 			path := filepath.Join(f.ls.Dir(), id+".jsonl")
 			breakLifecycleJournal(t, path, "I/O")
 			rec := httptest.NewRecorder()
@@ -189,7 +200,7 @@ func TestSessionRuntime_LifecycleReadFailuresPropagate(t *testing.T) {
 			case "detail builder":
 				meta, err := f.api.agentLoop.GetSessionStore().GetMeta(id)
 				require.NoError(t, err)
-				jsonSessionDetail(rec, meta, nil, false, f.ls, nil, f.boot.Current())
+				f.api.writePagedSessionDetail(rec, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+id, nil), meta, false)
 			}
 			assert.Equal(t, http.StatusInternalServerError, rec.Code, "body: %s", rec.Body.String())
 			assert.Equal(t, map[string]any{"error": "session lifecycle unavailable"}, decodeObject(t, rec.Body.Bytes()))

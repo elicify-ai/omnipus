@@ -35,6 +35,8 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
   Element.prototype.scrollTo = function () {}
 }
 
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
@@ -44,7 +46,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       { id: 'agent-jim', name: 'Jim', color: '#4F8A80', icon: 'graph', figure: 'Man', role: 'general' },
       { id: 'agent-research', name: 'Research Assistant', color: '#6E8BA8', figure: 'Monogram', role: 'researcher' },
     ]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     uploadFiles: vi.fn(),

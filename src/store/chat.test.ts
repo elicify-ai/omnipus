@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, evictMessageFromBucket, findLastAssistantMessageId, findAssistantMessageIdByTurnId } from './chat'
+import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, findLastAssistantMessageId, findAssistantMessageIdByTurnId } from './chat'
 import type { SessionChatState, ChatMessage } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import { useWhatsAppPairingStore } from './whatsappPairing'
 import { useWorkspacesStore } from './workspacesStore'
 import type { WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
@@ -470,6 +471,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
   // acting on activeSessionId.
   function bucketFor(msgs: ChatMessage[]): SessionChatState {
     return {
+      ...emptyHistoryFixture(),
       ...makeBucketMessages(msgs),
       toolCalls: {},
       toolCallOrder: [],
@@ -1923,6 +1925,7 @@ describe('chat store — H1-FE: unknown-sid done does not corrupt active stream'
         sessionsById: {
           ...state.sessionsById,
           [ACTIVE_SID]: {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages(seedMsgs),
             toolCalls: {},
             toolCallOrder: [],
@@ -2002,6 +2005,7 @@ describe('chat store — cancel_stage frame (B3)', () => {
         sessionsById: {
           [TEST_SESSION_ID]: {
             ...useChatStore.getState().sessionsById[TEST_SESSION_ID] ?? {
+              ...emptyHistoryFixture(),
               ...makeBucketMessages([]),
               toolCalls: {},
               toolCallOrder: [],
@@ -2369,95 +2373,6 @@ describe('G5: lastReceivedEventTime advances on each replay_message with a newer
   })
 })
 
-// ── evictMessageFromBucket unit tests ─────────────────────────────────────────
-
-describe('evictMessageFromBucket — full sweep of dependent maps', () => {
-  it('removes the message from messagesById and messageOrder', () => {
-    const bucket: SessionChatState = {
-      messagesById: { 'm1': { id: 'm1', role: 'user', content: 'hi', timestamp: '', status: 'done' } },
-      messageOrder: ['m1'],
-      trimmedCount: 0,
-      toolCalls: {},
-      toolCallOrder: [],
-      textAtToolCallStart: {},
-      isStreaming: false,
-      isReplaying: false,
-      replayCompletedForSession: null,
-      sessionTokens: 0,
-      sessionCost: 0,
-      rateLimitEvent: null,
-      lastUserMessageAt: null,
-      cancelStage: null,
-      lastReceivedEventTime: null,
-    }
-    evictMessageFromBucket(bucket, 'm1')
-    expect(bucket.messageOrder).toHaveLength(0)
-    expect(bucket.messagesById['m1']).toBeUndefined()
-  })
-
-  it('removes tool calls owned by the evicted message (via tool_calls array)', () => {
-    const bucket: SessionChatState = {
-      messagesById: {
-        'm1': {
-          id: 'm1', role: 'assistant', content: '', timestamp: '', status: 'done',
-          tool_calls: [{ id: 'tc1', tool: 'exec', params: {}, status: 'success' }],
-        },
-      },
-      messageOrder: ['m1'],
-      trimmedCount: 0,
-      toolCalls: { tc1: { id: 'tc1', call_id: 'tc1', tool: 'exec', params: {}, status: 'success' } },
-      toolCallOrder: ['tc1'],
-      textAtToolCallStart: { tc1: 'some text' },
-      isStreaming: false,
-      isReplaying: false,
-      replayCompletedForSession: null,
-      sessionTokens: 0,
-      sessionCost: 0,
-      rateLimitEvent: null,
-      lastUserMessageAt: null,
-      cancelStage: null,
-      lastReceivedEventTime: null,
-    }
-    evictMessageFromBucket(bucket, 'm1')
-    expect(bucket.toolCalls['tc1']).toBeUndefined()
-    expect(bucket.toolCallOrder).toHaveLength(0)
-    expect(bucket.textAtToolCallStart['tc1']).toBeUndefined()
-  })
-
-  // ADR-091 D10: spanByParentCallId is deleted along with the child-step-
-  // nesting mechanism it served; spanBySpanId is now the only span index —
-  // this test is updated to prove the surviving index's eviction.
-  it('removes spanBySpanId entries pointing at the evicted message', () => {
-    const bucket: SessionChatState = {
-      messagesById: {
-        'm1': { id: 'm1', role: 'assistant', content: '', timestamp: '', status: 'done' },
-      },
-      messageOrder: ['m1'],
-      trimmedCount: 0,
-      toolCalls: {},
-      toolCallOrder: [],
-      textAtToolCallStart: {},
-      spanBySpanId: {
-        'span1': { messageId: 'm1', spanIdx: 0 },
-        'span2': { messageId: 'm2', spanIdx: 0 }, // belongs to a different message — must survive
-      },
-      isStreaming: false,
-      isReplaying: false,
-      replayCompletedForSession: null,
-      sessionTokens: 0,
-      sessionCost: 0,
-      rateLimitEvent: null,
-      lastUserMessageAt: null,
-      cancelStage: null,
-      lastReceivedEventTime: null,
-    }
-    evictMessageFromBucket(bucket, 'm1')
-    expect(bucket.spanBySpanId?.['span1']).toBeUndefined()
-    // span2 belongs to a different message and must not be touched.
-    expect(bucket.spanBySpanId?.['span2']).toBeDefined()
-  })
-})
-
 // ── Eviction-leak regression: applyMessageArray path ─────────────────────────
 // Seeds 600 messages where every assistant message has 3 tool calls and 1 span.
 // Trims via appendMessage (applyMessageArray path) and asserts dependent maps
@@ -2512,6 +2427,7 @@ describe('eviction-leak regression — applyMessageArray evicts spanBySpanId and
         sessionsById: {
           ...s.sessionsById,
           [TEST_SESSION_ID]: {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages(msgs),
             toolCalls,
             toolCallOrder,

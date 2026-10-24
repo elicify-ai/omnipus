@@ -1727,6 +1727,113 @@ jobs:
           shards=$(python3 scripts/go-test-shards.py test matrix)
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
 
+  history-index-repair:
+    name: History index repair (${{ matrix.os }})
+    # Deliberately unfiltered: command/private-schema/CI-only changes must not
+    # disappear behind Go language filtering. This is a required aggregate gate.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build standalone history-index repair command
+        run: python3 -I deploy/ci-worker/chat-history-ci.py build
+      - name: Test repair command and manifest
+        run: python3 -I deploy/ci-worker/chat-history-ci.py command
+      - name: Test bounded recovery and retention/read-handle semantics
+        run: python3 -I deploy/ci-worker/chat-history-ci.py core
+      - name: Preserve history repair named-test receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-index-repair-${{ matrix.os }}-${{ github.run_id }}
+          path: build/tools/history-*.log
+          if-no-files-found: error
+          retention-days: 7
+
+  history-e2e-fixtures:
+    name: Prepare history E2E fixtures and measurement
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build official history fixture driver and seed once per candidate
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
+      - name: Prepare embed stub for isolated history measurement
+        run: |
+          mkdir -p pkg/gateway/spa/assets
+          printf '<!doctype html>' > pkg/gateway/spa/index.html
+          touch pkg/gateway/spa/assets/.keep
+      # The 100k-prefix healthy-cut reads (history_heavy tag) build their own
+      # real 90-day fixtures and overrun group-1's 10m package budget, so they
+      # run here, serially, with the same assertions. A zero-test green is a
+      # failure: both named children must actually PASS.
+      - name: Run 100k-prefix healthy-cut and bounded-read test
+        run: |
+          mkdir -p build/tools
+          log=build/tools/history-index-100k-test.log
+          set +e
+          go test -tags goolm,stdjson,history_heavy -count=1 -v -p 1 -timeout 30m \
+            -run '^TestChatHistoryIndex_HealthyCutAndBoundedReads100K$' ./pkg/session > "$log" 2>&1
+          rc=$?
+          set -e
+          printf 'exit=%s\n' "$rc" >> "$log"
+          cat "$log"
+          if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+          if grep -Eq -- '--- SKIP:' "$log"; then echo "::error::a 100k-prefix case was skipped"; exit 1; fi
+          for name in prefix100000_limit40 prefix100000_limit100; do
+            if ! grep -Eq -- "--- PASS: TestChatHistoryIndex_HealthyCutAndBoundedReads100K/${name} " "$log"; then
+              echo "::error::TestChatHistoryIndex_HealthyCutAndBoundedReads100K/${name} did not run and pass"
+              exit 1
+            fi
+          done
+      - name: Preserve 100k-prefix test log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-index-100k-${{ github.run_id }}
+          path: build/tools/history-index-100k-test.log
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+      - name: Capture Section-H history page allocation receipt
+        env:
+          OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT: ${{ github.workspace }}/build/tools/chat-history-measurements.log
+        run: python3 -I deploy/ci-worker/chat-history-ci.py measurement --receipt "$OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT"
+      - name: Preserve actual T18 producer log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-measurement-${{ github.run_id }}
+          path: build/tools/history-measurement-test.log
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+      - name: Upload candidate history fixture tools
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-e2e-fixtures-${{ github.run_id }}
+          path: build/tools/chat-history-*
+          retention-days: 1
+          overwrite: true
+
   test-shards:
     name: Go Tests (${{ matrix.shard }})
     # #1122 part A: gateway and agent run on their own runners; the two
@@ -1780,6 +1887,10 @@ jobs:
 
       - name: Check Go test shard coverage
         run: python3 scripts/go-test-shards.py test check
+
+      - name: Prepare native history fixture tools (gateway tests)
+        if: matrix.shard == 'gateway'
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
 
       - name: Run go test (selected non-gateway packages)
         if: matrix.shard != 'gateway'
@@ -2242,6 +2353,10 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: python3 scripts/go-test-shards.py race check
+
+      - name: Prepare native history fixture tools (gateway race tests)
+        if: matrix.shard == 'gateway'
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
 
       - name: Run go test -race (concurrency-sensitive packages)
         if: matrix.shard != 'gateway'
@@ -2815,7 +2930,7 @@ jobs:
     # implicitly ANDs its own `success()` onto this `if:`, which would
     # silently defeat the `(... == 'skipped')` tolerance below.
     runs-on: ubuntu-latest
-    needs: [changes, e2e-plan, setup]
+    needs: [changes, e2e-plan, setup, history-e2e-fixtures]
     if: >-
       !cancelled() &&
       needs.changes.outputs.code == 'true' &&
@@ -2897,6 +3012,22 @@ jobs:
           # build tags (cross-platform.yml, Makefile).
           CGO_ENABLED=0 go build -tags goolm,stdjson -o /tmp/omnipus-ci ./cmd/omnipus/
           cp /tmp/omnipus-ci ./omnipus
+
+      - name: Download candidate history fixture tools
+        uses: actions/download-artifact@v7
+        with:
+          name: history-e2e-fixtures-${{ github.run_id }}
+          path: build/tools
+      - name: Export history fixture executables for every shard
+        run: |
+          set -euo pipefail
+          chmod +x build/tools/chat-history-fixture.test build/tools/chat-history-seed
+          test -s build/tools/chat-history-fixture.test
+          test -s build/tools/chat-history-seed
+          test -s build/tools/chat-history-measurements.log
+          printf 'OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT=%s/build/tools/chat-history-measurements.log\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          printf 'OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY=%s/build/tools/chat-history-fixture.test\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          printf 'OMNIPUS_CHAT_HISTORY_SEED_BINARY=%s/build/tools/chat-history-seed\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
 
       - name: Prepare gateway home directory
         # Fresh directory every run — never reuse state between jobs.
@@ -3464,6 +3595,8 @@ jobs:
       - cgo-gate
       - test
       - test-race
+      - history-index-repair
+      - history-e2e-fixtures
       - security
       - perf-smoke
       - e2e-plan

@@ -24,6 +24,7 @@
 // deterministic without adding hidden cross-test-order coupling.
 
 import type { Agent } from '@/lib/api'
+import type { SessionSnapshotFrame } from '@/lib/api/generated/asyncapi-types'
 
 export function makeAgent(overrides: Partial<Agent> = {}): Agent {
   return {
@@ -51,5 +52,31 @@ export function makeAgent(overrides: Partial<Agent> = {}): Agent {
       'soul', 'memory_enabled', 'voice', 'max_tool_iterations',
       'context_window_override', 'skills', 'tool_policy_changes', 'mcp_servers', 'executor', 'default',
     ].map((name) => ({ name, editable: true })),
+  }
+}
+
+// Terminal latest-page metadata for the small narration-only replay fixtures.
+export function makeSnapshotHistory(rowCount: 0 | 1 | 2): Pick<SessionSnapshotFrame, 'has_earlier' | 'has_later' | 'page_info'> {
+  const firstPosition = `hp1_${'A'.repeat(43)}`
+  return {
+    has_earlier: false,
+    has_later: false,
+    page_info: {
+      mode: 'latest',
+      limit: 40,
+      min_rows: 20,
+      row_count: rowCount,
+      source_group_count: rowCount,
+      soft_byte_budget: 4194304,
+      projected_bytes: 1024,
+      byte_budget_exceeded: false,
+      stop_reason: 'end',
+      retention_generation: 'snapshot-fixture',
+      context: { spans: [], duplicate_ids: [] },
+      ...(rowCount > 0 ? {
+        first_position: firstPosition,
+        last_position: rowCount === 1 ? firstPosition : `hp1_${'A'.repeat(42)}E`,
+      } : {}),
+    },
   }
 }

@@ -96,6 +96,17 @@ export type WsFrameType =
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
+export interface HistoryEntryOrigin {
+  position: string;
+  entry_id?: string;
+}
+
+export interface SessionHistoryState {
+  status: "available" | "unavailable";
+  reason?: "index_missing" | "index_inconsistent" | "catchup_limit" | "storage_error" | "projection_error";
+  message?: string;
+}
+
 export interface RoomRef {
   room_id: string;
   room_name: string;
@@ -298,6 +309,8 @@ export interface PongFrame {
 export interface AttachSessionFrame {
   type: "attach_session";
   session_id: string;
+  history_limit?: number;
+  history_min_rows?: number;
   since_seq?: number;
   boot_id?: string;
   ack_attention?: boolean;
@@ -346,6 +359,7 @@ export interface TokenFrame {
 
 export interface DoneStats {
   tokens?: number;
+  session_tokens_total?: number;
   cost?: number;
   duration_ms?: number;
   frames_emitted?: number;
@@ -403,6 +417,7 @@ export interface ErrorFrame {
 }
 
 export interface ToolCallStartFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "tool_call_start";
   session_id: string;
   tool: string;
@@ -481,12 +496,13 @@ export interface ToolResultRecallMark {
 }
 
 export interface ToolCallResultFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "tool_call_result";
   session_id: string;
   tool: string;
   call_id: string;
   result: unknown;
-  status: "success" | "error";
+  status: "success" | "error" | "cancelled";
   duration_ms?: number;
   error?: string;
   parent_call_id?: string;
@@ -495,6 +511,7 @@ export interface ToolCallResultFrame {
 }
 
 export interface SubagentStartFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "subagent_start";
   session_id: string;
   span_id: string;
@@ -506,6 +523,7 @@ export interface SubagentStartFrame {
 }
 
 export interface SubagentEndFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "subagent_end";
   session_id: string;
   span_id: string;
@@ -520,6 +538,7 @@ export interface SubagentEndFrame {
 }
 
 export interface SubagentMessageFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "subagent_message";
   session_id: string;
   child_session_id?: string;
@@ -536,6 +555,7 @@ export interface SubagentMessageFrame {
 }
 
 export interface SubagentStateFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "subagent_state";
   session_id: string;
   child_session_id?: string;
@@ -575,6 +595,7 @@ export interface TaskRunStatusFrame {
 }
 
 export interface ReplayMessageFrame {
+  history_origin?: HistoryEntryOrigin;
   room_ref?: RoomRef;
   type: "replay_message";
   session_id: string;
@@ -603,6 +624,7 @@ export interface ReplayMessageFrame {
 }
 
 export interface ReplayErrorFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "replay_error";
   session_id: string;
   entry_id: string;
@@ -658,6 +680,7 @@ export interface ContextWindowNoticeFrameNotice {
 }
 
 export interface ContextWindowNoticeFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "context_window_notice";
   session_id: string;
   turn_id: string;
@@ -679,6 +702,7 @@ export interface ProviderFallbackFrame {
 }
 
 export interface ProviderFallbackNote {
+  history_origin?: HistoryEntryOrigin;
   type: "replay_provider_fallback";
   session_id: string;
   entry_id: string;
@@ -705,6 +729,7 @@ export interface MediaPart {
 }
 
 export interface MediaFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "media";
   session_id: string;
   parts: Array<MediaPart>;
@@ -781,6 +806,7 @@ export interface AskUserQuestionCard {
 }
 
 export interface AskUserQuestionFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "ask_user_question";
   card: AskUserQuestionCard;
 }
@@ -824,12 +850,14 @@ export interface SessionStateActiveTurn {
 }
 
 export interface SessionStateFrame {
+  history_state?: SessionHistoryState;
   secret_requests?: Array<SessionStateSecretRequest>;
   type: "session_state";
   user_id: string;
   pending_approvals: Array<SessionStatePendingApproval>;
   pending_asks?: Array<AskUserQuestionCard>;
   session_id?: string;
+  session_tokens_total?: number;
   attention_bound?: number;
   auto_approve_modifier?: boolean | null;
   active_turn?: SessionStateActiveTurn;
@@ -1186,6 +1214,7 @@ export interface PlanStatusFrame {
 }
 
 export interface JudgeVerdictFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "judge_verdict";
   id: string;
   scope: "task" | "plan" | "goal";
@@ -1216,6 +1245,7 @@ export interface JudgeVerdictFrame {
 }
 
 export interface BrowserHandoverNoticeFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "browser_handover_notice";
   session_id: string;
   message_id: string;
@@ -1232,6 +1262,7 @@ export interface HelperEventFrameEvent {
 }
 
 export interface HelperEventFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "helper_event";
   session_id: string;
   message_id: string;
@@ -1251,6 +1282,7 @@ export interface GoalOutcomeFrameOutcome {
 }
 
 export interface GoalOutcomeFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "goal_outcome";
   session_id: string;
   message_id: string;
@@ -1319,14 +1351,57 @@ export interface BrowserInputControlAckFrame {
   capture_generation?: number;
 }
 
+export interface SessionHistoryContext {
+  spans: Array<{
+    span_id: string;
+    start?: SubagentStartFrame;
+    state?: SubagentStateFrame;
+    message?: SubagentMessageFrame;
+    end?: SubagentEndFrame;
+    has_run?: boolean;
+  }>;
+  duplicate_ids: Array<{
+    kind: "message" | "tool";
+    id: string;
+    canonical_position: string;
+    occurrence_count: number;
+  }>;
+}
+
+export interface SessionHistoryPageInfo {
+  mode: "latest" | "older" | "newer" | "window_refresh";
+  limit: number;
+  min_rows: number;
+  row_count: number;
+  source_group_count: number;
+  soft_byte_budget: number;
+  projected_bytes: number;
+  byte_budget_exceeded: boolean;
+  stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget";
+  budget_override?: "height_floor" | "atomic_group";
+  first_position?: string;
+  last_position?: string;
+  stopped_at_clear?: boolean;
+  latest_clear?: {
+    entry_id: string;
+    history_position: string;
+  };
+  retention_generation: string;
+  context: SessionHistoryContext;
+}
+
 export interface SessionSnapshotFrame {
-  secret_requests?: Array<SessionStateSecretRequest>;
   type: "session_snapshot";
   session_id: string;
   seq: number;
   boot_id?: string;
-  has_earlier_messages?: boolean;
+  has_earlier: boolean;
+  has_later: boolean;
+  next_before?: string;
+  next_after?: string;
+  page_info: SessionHistoryPageInfo;
   reason?: "cursor_ahead" | "retention_exceeded" | "unknown_position" | "boot_mismatch";
+  secret_requests?: Array<SessionStateSecretRequest>;
 }
 
 export interface CatchUpCompleteFrame {
@@ -1334,7 +1409,7 @@ export interface CatchUpCompleteFrame {
   session_id: string;
   seq: number;
   boot_id?: string;
-  mode: "incremental" | "snapshot";
+  mode: "incremental" | "snapshot" | "live_only";
 }
 
 export interface UserMessageFrame {

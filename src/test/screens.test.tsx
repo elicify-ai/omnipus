@@ -13,6 +13,8 @@ beforeEach(() => {
 // Traces to: wave0-brand-design-spec.md Scenario: Each non-chat screen renders empty state (US-4 AC2, FR-009)
 
 // Mock the API module so queries don't make real network requests
+import { emptyHistoryPage, type HistoryReadPort } from '../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
@@ -23,7 +25,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchMcpServers: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
   }
 })
 

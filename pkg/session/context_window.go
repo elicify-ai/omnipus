@@ -42,6 +42,7 @@ func (us *UnifiedStore) WindowView(ctx context.Context, key string) (WindowView,
 }
 
 func (us *UnifiedStore) AppendModelMessage(ctx context.Context, key string, in ModelAppend) (ModelSlot, WindowView, error) {
+	us.prepareHistoryAppend(owningSessionID(key))
 	// Effects design D2: a model append is a write to the session archive, so it
 	// takes the session shard first (shard, then backend, then store lock).
 	h := us.lockSession(owningSessionID(key))
@@ -50,6 +51,7 @@ func (us *UnifiedStore) AppendModelMessage(ctx context.Context, key string, in M
 }
 
 func (us *UnifiedStore) PlaceSavedInput(ctx context.Context, key string, source ArchiveAddress) (ModelSlot, WindowView, error) {
+	us.prepareHistoryAppend(owningSessionID(key))
 	// Effects design D2: a model append is a write to the session archive, so it
 	// takes the session shard first (shard, then backend, then store lock).
 	sessionID := owningSessionID(key)

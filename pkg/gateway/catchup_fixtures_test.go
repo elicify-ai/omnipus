@@ -216,13 +216,16 @@ var fixtureIDKeys = map[string]string{
 var fixtureTimeKeys = map[string]bool{"timestamp": true, "emitted_at": true, "started_at": true}
 
 type fixtureNormalizer struct {
-	ids       map[string]string
-	counts    map[string]int
-	timeCount int
+	ids         map[string]string
+	counts      map[string]int
+	positions   map[string]string
+	generations map[string]string
+	timeCount   int
 }
 
 func newFixtureNormalizer() *fixtureNormalizer {
-	return &fixtureNormalizer{ids: map[string]string{}, counts: map[string]int{}}
+	return &fixtureNormalizer{ids: map[string]string{}, counts: map[string]int{},
+		positions: map[string]string{}, generations: map[string]string{}}
 }
 
 func (n *fixtureNormalizer) id(prefix, raw string) string {
@@ -253,9 +256,16 @@ func (n *fixtureNormalizer) time(_ string) string {
 func (n *fixtureNormalizer) norm(v any, key string) any {
 	switch x := v.(type) {
 	case map[string]any:
+		// D10 origins must not become the first visitor that changes an
+		// existing replay id's placeholder family from id-* to entry-*.
+		if id, present := x["id"]; present {
+			x["id"] = n.norm(id, "id")
+		}
 		keys := make([]string, 0, len(x))
 		for k := range x {
-			keys = append(keys, k)
+			if k != "id" {
+				keys = append(keys, k)
+			}
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
@@ -268,6 +278,9 @@ func (n *fixtureNormalizer) norm(v any, key string) any {
 		}
 		return x
 	case string:
+		if normalized, paging := n.pagingString(key, x); paging {
+			return normalized
+		}
 		if prefix := fixtureIDKeys[key]; prefix != "" {
 			return n.id(prefix, x)
 		}
@@ -276,7 +289,9 @@ func (n *fixtureNormalizer) norm(v any, key string) any {
 		}
 		return x
 	case float64:
-		if key == "duration_ms" {
+		if key == "duration_ms" || key == "projected_bytes" {
+			// Actual paging bytes are validated against encoded history BEFORE
+			// this synthetic fixture normalization, never used as a receipt.
 			return float64(1)
 		}
 		return x
@@ -297,6 +312,7 @@ func (n *fixtureNormalizer) frame(t *testing.T, raw json.RawMessage) json.RawMes
 // finishFixture normalizes every tab's events and writes or checks the file.
 func finishFixture(t *testing.T, fx catchUpFixture, tabs ...*fxTab) {
 	t.Helper()
+	require.NoError(t, catchupPagingValidate(fx.Scenario, tabs...), "validate actual generated paging truth before normalizing run-specific fields")
 	n := newFixtureNormalizer()
 	for _, tab := range tabs {
 		rec := fixtureTab{Name: tab.name}

@@ -1,6 +1,7 @@
 import { queryClient } from '@/lib/queryClient'
-import { Session } from '@/lib/api/generated/schemas'
+import { Session, SessionDetail } from '@/lib/api/generated/schemas'
 import type { components } from '@/lib/api/generated/openapi-types'
+import { availableDetail, page } from '../../chat-history-paging/fixtures'
 
 /** Server-boundary fixture: the same generated Session contract used by saved chat/list responses. */
 export function seedCanonicalSession(
@@ -17,9 +18,9 @@ export function seedCanonicalSession(
     ...(workspaceId === undefined ? {} : { workspace_id: workspaceId }),
   })
   if (source === 'detail') {
-    queryClient.setQueryData<components['schemas']['SessionDetail']>(['session-detail', id], {
-      session, messages: [],
-    })
+    const detail = availableDetail(page([], { sessionId: id }), session)
+    SessionDetail.parse(detail)
+    queryClient.setQueryData<components['schemas']['SessionDetail']>(['session-detail', id], detail)
   } else {
     const previous = queryClient.getQueryData<components['schemas']['Session'][]>(['sessions']) ?? []
     queryClient.setQueryData<components['schemas']['Session'][]>(['sessions'], [

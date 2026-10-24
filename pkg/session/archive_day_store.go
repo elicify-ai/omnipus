@@ -64,6 +64,8 @@ type ArchiveDayStore struct {
 	// for one addressed read, "scan" for a whole-archive walk. It is how a test
 	// proves a hot path stays proportional to the window (FR-005).
 	onRead func(kind string, addr ArchiveAddress)
+	// Indexed model writers notify after the canonical fsync and after mu is released.
+	historyAccepted func(ArchiveAddress, ArchiveRecord)
 }
 
 // NewArchiveDayStore binds a store to one session directory. The session id must

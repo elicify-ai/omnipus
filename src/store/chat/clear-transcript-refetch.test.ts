@@ -32,6 +32,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
+import { emptySessionState } from './session'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
@@ -40,6 +41,7 @@ import { retryClearTranscriptRead } from './clear-refetch'
 import { useUiStore } from '@/store/ui'
 import type { ServerFrame } from '@/lib/ws'
 import type { ChatMessage } from './types'
+import { clearHistoryPage, wireHistoryPage, type FixtureHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
 import { seedCanonicalSession } from '../../../tests/unit/fixtures/canonical-session'
 
 // The ONLY stub: the HTTP edge (GET /sessions/{id}/messages answers here).
@@ -80,20 +82,20 @@ function rawSystem(id: string, content: string, ts: string): Record<string, unkn
  * fixture (own user row + reply + marker) was a 3-row window the server
  * never produced. No server link exists between the /clear row and its
  * marker; acceptance keys on the marker itself (clear-refetch.ts). */
-function rawPostClearProjection(_clearClientMessageId: string, n: number): Record<string, unknown>[] {
+function rawPostClearProjection(_clearClientMessageId: string, n: number): FixtureHistoryPage {
   const t = (s: number) => `2026-10-10T00:00:0${s}Z`
-  return [
+  return clearHistoryPage(SID, [
     rawSystem(`srv-clear-marker-${n}`, MARKER_TEXT, t(0)),
     rawAssistant(`srv-a-reply-${n}`, SUCCESS_REPLY, t(1)),
-  ]
+  ], 2)
 }
 
 /** The server's projection BEFORE a clear has executed (no clear user row, no marker). */
-function rawPreClearProjection(): Record<string, unknown>[] {
-  return [
+function rawPreClearProjection(): FixtureHistoryPage {
+  return wireHistoryPage(SID, [
     rawUser('srv-u-1', 'cmid-earlier', 'earlier question', '2026-10-09T23:00:00Z'),
     rawAssistant('srv-a-1', 'earlier answer', '2026-10-09T23:00:05Z'),
-  ]
+  ], 2)
 }
 
 // ── Local (ChatMessage) fixtures for seeding buckets ─────────────────────────
@@ -116,6 +118,7 @@ function seedBucket(messages: ChatMessage[], opts: { isStreaming?: boolean; isRe
     sessionsById: {
       ...s.sessionsById,
       [SID]: {
+        ...emptySessionState(),
         ...(s.sessionsById ?? {})[SID],
         messagesById: Object.fromEntries(messages.map((m) => [m.id, m])),
         messageOrder: messages.map((m) => m.id),
@@ -343,8 +346,8 @@ describe('/clear re-read — V1 live tail and D3 window (the view = projection +
       localMessage({ id: 'pre-clear-confirmed', role: 'user', content: 'confirmed earlier question', deliveryStatus: 'received' }),
       { id: 'pre-clear-answer', role: 'assistant', content: 'earlier answer', timestamp: new Date().toISOString(), status: 'done' },
     ])
-    let releaseRead1: (value: unknown[]) => void = () => {}
-    requestMock.mockImplementationOnce(() => new Promise<unknown[]>((resolve) => { releaseRead1 = resolve }))
+    let releaseRead1: (value: FixtureHistoryPage) => void = () => {}
+    requestMock.mockImplementationOnce(() => new Promise<FixtureHistoryPage>((resolve) => { releaseRead1 = resolve }))
 
     useChatStore.getState().sendMessage('/clear')
     const clearCmid = sentClientMessageId(0)
@@ -452,8 +455,8 @@ describe('/clear re-read — V1 live tail and D3 window (the view = projection +
 
   it('a delayed FAILED follow-up send (and its Retry state) survives a delayed projection', async () => {
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
-    let releaseFetch: (value: unknown[]) => void = () => {}
-    requestMock.mockImplementationOnce(() => new Promise<unknown[]>((resolve) => { releaseFetch = resolve }))
+    let releaseFetch: (value: FixtureHistoryPage) => void = () => {}
+    requestMock.mockImplementationOnce(() => new Promise<FixtureHistoryPage>((resolve) => { releaseFetch = resolve }))
 
     useChatStore.getState().sendMessage('/clear')
     const clearCmid = sentClientMessageId(0)
@@ -484,8 +487,8 @@ describe('/clear re-read — V1 live tail and D3 window (the view = projection +
 describe('/clear re-read — D1/D2: the held projection and operation ownership', () => {
   it('D1a: a read landing while STREAMING is held and applied at idle without a second read', async () => {
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
-    let releaseRead1: (value: unknown[]) => void = () => {}
-    requestMock.mockImplementationOnce(() => new Promise<unknown[]>((resolve) => { releaseRead1 = resolve }))
+    let releaseRead1: (value: FixtureHistoryPage) => void = () => {}
+    requestMock.mockImplementationOnce(() => new Promise<FixtureHistoryPage>((resolve) => { releaseRead1 = resolve }))
 
     useChatStore.getState().sendMessage('/clear')
     const clearCmid = sentClientMessageId(0)
@@ -516,8 +519,8 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
 
   it('T1/D1: a read landing while REPLAYING is applied when replay ends via an actual catch_up_complete frame', async () => {
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
-    let releaseRead1: (value: unknown[]) => void = () => {}
-    requestMock.mockImplementationOnce(() => new Promise<unknown[]>((resolve) => { releaseRead1 = resolve }))
+    let releaseRead1: (value: FixtureHistoryPage) => void = () => {}
+    requestMock.mockImplementationOnce(() => new Promise<FixtureHistoryPage>((resolve) => { releaseRead1 = resolve }))
 
     useChatStore.getState().sendMessage('/clear')
     const clearCmid = sentClientMessageId(0)
@@ -544,8 +547,8 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
 
   it('D2: an older read can neither retire nor satisfy a newer /clear', async () => {
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
-    let releaseRead1: (value: unknown[]) => void = () => {}
-    requestMock.mockImplementationOnce(() => new Promise<unknown[]>((resolve) => { releaseRead1 = resolve }))
+    let releaseRead1: (value: FixtureHistoryPage) => void = () => {}
+    requestMock.mockImplementationOnce(() => new Promise<FixtureHistoryPage>((resolve) => { releaseRead1 = resolve }))
 
     useChatStore.getState().sendMessage('/clear')
     const cmid1 = sentClientMessageId(0)
@@ -637,11 +640,11 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
 
 describe('/clear re-read — E1/E2: refusals are wire states, never silent (ruling S3-02: no bound, no timer)', () => {
   /** What the server answers when it refused the /clear: its own user row and a reply, but NO marker. */
-  function rawRefusedProjection(clearClientMessageId: string): Record<string, unknown>[] {
-    return [
+  function rawRefusedProjection(clearClientMessageId: string): FixtureHistoryPage {
+    return wireHistoryPage(SID, [
       rawUser('srv-u-refused', clearClientMessageId, '/clear', '2026-10-10T00:00:00Z'),
       rawAssistant('srv-a-refused', 'The clear was refused.', '2026-10-10T00:00:01Z'),
-    ]
+    ], 2)
   }
 
   let toasts: string[]
