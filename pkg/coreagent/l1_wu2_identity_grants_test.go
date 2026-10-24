@@ -111,7 +111,14 @@ func TestL1WU2OmnipusPolicies_ExactSupportSetAndNoPerAgentAsk(t *testing.T) {
 				assert.Equal(t, config.ToolPolicyDeny, p)
 			}
 			assert.Equal(t, want, tools.ResolveEffectivePolicy(pc, name), "BDD-1.6 normal mode")
-			assert.NotEqual(t, config.ToolPolicyAsk, ac.Tools.Builtin.Policies[name], "FR-022: Omnipus stores no per-agent Ask")
+			// SPEC.md Q22=B: Omnipus remains exempt and must not gain a per-agent Ask.
+			assert.NotEqual(t, config.ToolPolicyAsk, ac.Tools.Builtin.Policies[name], "FR-022 / Q22=B: Omnipus stores no per-agent Ask")
+			if name == "create_skill" || name == "edit_skill" {
+				// SPEC.md Q22=B: skill authoring stays Allow at the global ceiling.
+				assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies[name])
+				// SPEC.md Q22=B: Omnipus rides that ceiling with no per-agent entry.
+				assert.NotContains(t, ac.Tools.Builtin.Policies, name)
+			}
 			if slices.Contains(ask, name) {
 				_, present := ac.Tools.Builtin.Policies[name]
 				assert.False(t, present, "§6.5: ask-list tools ride the ceiling, not an agent override")
@@ -150,7 +157,9 @@ func TestL1WU2SecretAndManagementGrants_AllNativeRolesAndCustomMain(t *testing.T
 			require.NotNil(t, ac.Tools)
 			for _, name := range newNames {
 				want := config.ToolPolicyDeny
-				if row.private && slices.Contains([]string{"request_secret", "list_secrets", "read_conversation"}, name) {
+				// SPEC.md Table: list_secrets is Allow for ordinary Workers; request_secret/read_conversation remain Main-only.
+				if (row.private && slices.Contains([]string{"request_secret", "list_secrets", "read_conversation"}, name)) ||
+					(name == "list_secrets" && row.id != "judge" && row.id != "plansupervisor") {
 					want = config.ToolPolicyAllow
 				}
 				pc, _ := tools.BuildFallbackPolicyCfg(cfg, row.id)
@@ -162,7 +171,13 @@ func TestL1WU2SecretAndManagementGrants_AllNativeRolesAndCustomMain(t *testing.T
 				}
 			}
 			for _, name := range l1WU2ManagementNames() {
-				assert.Equal(t, config.ToolPolicyDeny, ac.Tools.Builtin.Policies[name], "%s must not inherit management %s", row.id, name)
+				want := "deny"
+				// SPEC.md Table + Q22=B: ordinary skill creation/editing are per-agent Ask exceptions; hidden roles stay Deny.
+				if (name == "create_skill" || name == "edit_skill") && row.id != "judge" && row.id != "plansupervisor" {
+					want = "ask"
+				}
+				pc, _ := tools.BuildFallbackPolicyCfg(cfg, row.id)
+				assert.Equal(t, want, tools.ResolveEffectivePolicy(pc, name), "%s management %s effective policy", row.id, name)
 			}
 		})
 	}
@@ -176,7 +191,12 @@ func TestL1WU2SecretAndManagementGrants_AllNativeRolesAndCustomMain(t *testing.T
 		for _, name := range l1WU2ManagementNames() {
 			p, present := custom.Builtin.Policies[name]
 			assert.True(t, present, "new custom main must classify %s", name)
-			assert.Equal(t, config.ToolPolicyDeny, p)
+			want := config.ToolPolicyDeny
+			// SPEC.md Table + Q22=B: a new Main stores Ask for skill authoring; all other management entries stay Deny.
+			if name == "create_skill" || name == "edit_skill" {
+				want = config.ToolPolicyAsk
+			}
+			assert.Equal(t, want, p)
 		}
 	})
 }

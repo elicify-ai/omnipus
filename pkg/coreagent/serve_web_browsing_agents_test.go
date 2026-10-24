@@ -47,9 +47,15 @@ func TestCoreAgentSeed_ServeWebIsGeneralPurposeOnly(t *testing.T) {
 			"nobody and this test would pass while asserting nothing")
 	}
 
+	// SPEC.md Table (2026-10-22): serve_web is core Allow for Main and Worker, not General Purpose only.
 	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDOmnipus, coreagent.IDPlanner, coreagent.IDResearcher} {
-		if got := d2Resolve(t, id, "serve_web"); got != "deny" {
-			t.Errorf("%s serve_web resolves %q, want deny", id, got)
+		want := "allow"
+		// SPEC.md Founder exclusion (2026-10-22): Omnipus keeps its baseline system serve_web Deny.
+		if id == coreagent.IDOmnipus {
+			want = "deny"
+		}
+		if got := d2Resolve(t, id, "serve_web"); got != want {
+			t.Errorf("%s serve_web resolves %q, want %s", id, got, want)
 		}
 	}
 	if got := d2Resolve(t, coreagent.IDWorker, "serve_web"); got != "allow" {

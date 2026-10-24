@@ -60,9 +60,9 @@ func TestEnvironmentSetup_EffectivePolicyPerRole(t *testing.T) {
 		// WU-2: spec OSA-1 / §6.5 / FR-022 replace Ava/Admin with
 		// Omnipus; it rides the Ask ceiling with no per-agent Ask.
 		"omnipus":        "ask",
-		"jim":            "deny",
-		"planner":        "deny",
-		"researcher":     "deny",
+		"jim":            "ask", // SPEC.md Table: environment_setup is Ask for Main.
+		"planner":        "ask", // SPEC.md Table: environment_setup is Ask for Worker.
+		"researcher":     "ask", // SPEC.md Table: environment_setup is Ask for Worker.
 		"judge":          "deny",
 		"plansupervisor": "deny",
 	}
@@ -125,11 +125,15 @@ func TestEnvironmentSetup_CustomStoredAskHoldsUnderCeilingChanges(t *testing.T) 
 func TestEnvironmentSetup_RaisedCeilingLeavesStoredAsk(t *testing.T) {
 	policies, types, _ := seededRosterPolicies(t)
 	allowCeiling := map[string]config.ToolPolicy{"environment_setup": config.ToolPolicyAllow}
-	// WU-2 FR-022: only Mia/worker keep the both-levels Ask posture.
-	for _, id := range []string{"mia", "worker"} {
+	// SPEC.md Table: all five ordinary roles retain their stored setup Ask under a raised ceiling.
+	for _, id := range []string{"mia", "worker", "jim", "planner", "researcher"} {
 		stored, ok := policies[id]
 		if !ok {
 			t.Fatalf("seeded roster missing agent %q", id)
+		}
+		// SPEC.md Table: the setup Ask is per-agent posture, not just an inherited global Ask.
+		if got := stored["environment_setup"]; got != config.ToolPolicyAsk {
+			t.Errorf("%s stored environment_setup = %q, want explicit ask", id, got)
 		}
 		polCfg := &ToolPolicyCfg{Policies: stored, GlobalPolicies: allowCeiling}
 		got := EffectiveToolPolicy(polCfg, ScopeGeneral, types[id], "environment_setup")
@@ -149,7 +153,8 @@ func TestEnvironmentSetup_RaisedCeilingLeavesStoredAsk(t *testing.T) {
 	if got := EffectiveToolPolicy(&ToolPolicyCfg{Policies: omnipus, GlobalPolicies: allowCeiling}, ScopeGeneral, types["omnipus"], "environment_setup"); got != "allow" {
 		t.Errorf("Omnipus under a raised ceiling = %q, want allow", got)
 	}
-	for _, id := range []string{"jim", "planner", "researcher"} {
+	// SPEC.md Founder exclusion: hidden system roles retain their stored setup Deny.
+	for _, id := range []string{"judge", "plansupervisor"} {
 		polCfg := &ToolPolicyCfg{Policies: policies[id], GlobalPolicies: allowCeiling}
 		got := EffectiveToolPolicy(polCfg, ScopeGeneral, types[id], "environment_setup")
 		if got != "deny" {
