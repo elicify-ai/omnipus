@@ -47,8 +47,8 @@ func (t *SetTodosTool) Description() string {
 		"list on every call; each call replaces the list, with no item IDs. Reuse the exact same `outcome` for " +
 		"the same unit of work. You have one active checklist in this session: changing `outcome` closes the " +
 		"previous checklist card as done and starts a new one. Your checklist is shown on the board and re-shown " +
-		"to you each turn. Optionally give each item an `active_form`: a present-participle phrase such as " +
-		"\"Drafting the Q4 summary\", up to 500 characters, used for the chat's working-on line while that item is " +
+		"to you each turn. An `active_form` is required for every item: a short present-participle phrase such as " +
+		"\"Drafting the Q4 summary\", at most 500 characters, shown as the chat's working-on line while that item is " +
 		"`in_progress`. Use create_task with dependencies for a durable multi-wave plan, while tracking your own " +
 		"current work here."
 }
@@ -80,7 +80,7 @@ func (t *SetTodosTool) Parameters() map[string]any {
 							"description": "Status of this item",
 						},
 					},
-					"required": []string{"text"},
+					"required": []string{"text", "active_form"},
 				},
 				"description": "Full todo list (replace-semantics). Empty array clears the list.",
 			},
@@ -287,7 +287,11 @@ func (t *SetTodosTool) resolveWorkspaceID(ctx context.Context) (string, error) {
 // parseTodosArg converts the raw []any slice from LLM args into []task.Todo.
 // Each element must be a map with "text" (string, non-empty) and optional
 // "status" (one of pending/in_progress/completed; default "pending"), and
-// "active_form" (trimmed, optional, up to 500 characters).
+// "active_form" (required on every item — founder decision 2026-10-24,
+// #1406; non-empty after the Q10=A normalization, up to 500 characters).
+// A missing or unusable active_form is rejected here, before any store
+// write, as an ordinary recoverable tool error the model can retry
+// (issue #1444).
 func parseTodosArg(raw []any) ([]task.Todo, error) {
 	todos := make([]task.Todo, 0, len(raw))
 	for i, item := range raw {
@@ -306,9 +310,15 @@ func parseTodosArg(raw []any) ([]task.Todo, error) {
 				return nil, fmt.Errorf("todos[%d]: active_form must be a string", i)
 			}
 			activeForm = task.NormalizeTodoActiveForm(activeFormRaw)
-			if len([]rune(activeForm)) > 500 {
-				return nil, fmt.Errorf("todos[%d]: active_form must be 500 characters or fewer", i)
-			}
+		}
+		if activeForm == "" {
+			return nil, fmt.Errorf(
+				"todos[%d]: active_form is required — give a present-participle phrase such as \"Drafting the Q4 summary\"",
+				i,
+			)
+		}
+		if len([]rune(activeForm)) > 500 {
+			return nil, fmt.Errorf("todos[%d]: active_form must be 500 characters or fewer", i)
 		}
 		statusRaw, _ := m["status"].(string)
 		if statusRaw == "" {

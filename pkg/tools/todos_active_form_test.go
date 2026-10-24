@@ -43,31 +43,37 @@ func TestSetTodosActiveForm(t *testing.T) {
 		}
 		assertTodoActiveFormJSON(t, card.Todos, want)
 
-		// Replacement must remove an earlier active form when it is omitted.
+		// SPEC CHANGE 2026-10-24 (founder decision): OLD — a replacement
+		// omitting active_form succeeded and removed the earlier active form;
+		// NEW — active_form is required on every item of every call, so the
+		// replacement is rejected and the earlier card keeps its active form.
 		replacement := NewSetTodosTool(reloaded).Execute(ctx, map[string]any{
 			"outcome": "Quarter plan",
 			"todos":   []any{map[string]any{"text": "Publish the summary", "status": "completed"}},
 		})
-		if replacement.IsError {
-			t.Fatalf("replace: %s", replacement.ForLLM)
-		}
+		assertActiveFormRequiredRejection(t, replacement, 0)
 		cards, err = task.New(dir).List(task.Filter{AgentID: "mia"})
 		if err != nil || len(cards) != 1 || cards[0].ID != card.ID {
-			t.Fatalf("replacement must reuse the card: cards=%v, err=%v", cards, err)
+			t.Fatalf("rejected replacement must not touch the card: cards=%v, err=%v", cards, err)
 		}
-		assertTodoActiveFormJSON(t, cards[0].Todos, `[{"text":"Publish the summary","status":"completed"}]`)
+		assertTodoActiveFormJSON(t, cards[0].Todos,
+			`[{"text":"Draft the Q4 summary","status":"in_progress","active_form":"Drafting the Q4 summary"}]`)
 	})
 
-	t.Run("optional_trimmed_and_bounded", func(t *testing.T) {
+	t.Run("required_trimmed_and_bounded", func(t *testing.T) {
 		cases := []struct {
-			name    string
-			item    map[string]any
-			want    string
-			wantErr string
+			name            string
+			item            map[string]any
+			want            string
+			wantErr         string
+			wantErrContains []string
 		}{
-			{name: "absent", item: map[string]any{"text": "Draft the Q4 summary"}},
-			{name: "empty", item: map[string]any{"text": "Draft the Q4 summary", "active_form": ""}},
-			{name: "whitespace", item: map[string]any{"text": "Draft the Q4 summary", "active_form": " \t\n "}},
+			// SPEC CHANGE 2026-10-24: absent/empty/whitespace were accepted
+			// under the old optional spec; active_form is now required and
+			// must be non-empty after the established trim.
+			{name: "absent", item: map[string]any{"text": "Draft the Q4 summary"}, wantErrContains: activeFormRequiredErrElements},
+			{name: "empty", item: map[string]any{"text": "Draft the Q4 summary", "active_form": ""}, wantErrContains: activeFormRequiredErrElements},
+			{name: "whitespace", item: map[string]any{"text": "Draft the Q4 summary", "active_form": " \t\n "}, wantErrContains: activeFormRequiredErrElements},
 			{name: "one_character", item: map[string]any{"text": "Draft the Q4 summary", "active_form": "a"}, want: "a"},
 			{name: "two_characters", item: map[string]any{"text": "Draft the Q4 summary", "active_form": "ab"}, want: "ab"},
 			{name: "499_characters", item: map[string]any{"text": "Draft the Q4 summary", "active_form": strings.Repeat("a", 499)}, want: strings.Repeat("a", 499)},
@@ -86,6 +92,10 @@ func TestSetTodosActiveForm(t *testing.T) {
 				result := NewSetTodosTool(store).Execute(ctx, map[string]any{
 					"outcome": "Quarter plan", "todos": []any{tc.item},
 				})
+				if len(tc.wantErrContains) > 0 {
+					assertActiveFormRequiredRejection(t, result, 0)
+					return
+				}
 				if tc.wantErr != "" {
 					if !result.IsError || result.ForLLM != tc.wantErr {
 						t.Fatalf("error = %t, %q; want %q", result.IsError, result.ForLLM, tc.wantErr)
@@ -123,8 +133,11 @@ func TestSetTodosActiveForm(t *testing.T) {
 				ctx := WithWorkspaceID(WithAgentID(context.Background(), "mia"), "ws-1")
 				result := NewSetTodosTool(store).Execute(ctx, map[string]any{
 					"outcome": "Quarter plan",
+					// SPEC CHANGE 2026-10-24: item 0 now carries active_form so
+					// the only violation under the new required-spec is item 1's
+					// non-string value.
 					"todos": []any{
-						map[string]any{"text": "First step"},
+						map[string]any{"text": "First step", "active_form": "Preparing the first step"},
 						map[string]any{"text": "Draft the Q4 summary", "active_form": value},
 					},
 				})
@@ -140,7 +153,12 @@ func TestSetTodosActiveForm(t *testing.T) {
 		}
 	})
 
-	t.Run("existing_item_without_active_form_unchanged", func(t *testing.T) {
+	t.Run("existing_item_without_active_form_rejected_card_unchanged", func(t *testing.T) {
+		// SPEC CHANGE 2026-10-24: OLD — a call without active_form succeeded
+		// and left the existing item unchanged; NEW — the call itself is
+		// rejected (the requirement is on the call's items; the stored item's
+		// legacy missing active_form does not excuse the call) and the card is
+		// unchanged.
 		dir := t.TempDir()
 		store := task.New(dir)
 		card := &task.Task{
@@ -155,13 +173,10 @@ func TestSetTodosActiveForm(t *testing.T) {
 		result := NewSetTodosTool(task.New(dir)).Execute(ctx, map[string]any{
 			"outcome": "Quarter plan", "todos": []any{map[string]any{"text": "Draft the Q4 summary"}},
 		})
-		want := "Outcome: Quarter plan\n- [pending] Draft the Q4 summary\n"
-		if result.IsError || result.ForLLM != want {
-			t.Fatalf("existing item changed: error=%t, result=%q, want=%q", result.IsError, result.ForLLM, want)
-		}
+		assertActiveFormRequiredRejection(t, result, 0)
 		cards, err := task.New(dir).List(task.Filter{AgentID: "mia"})
 		if err != nil || len(cards) != 1 || cards[0].ID != card.ID {
-			t.Fatalf("existing card identity changed: cards=%v, err=%v", cards, err)
+			t.Fatalf("rejected call must not touch the existing card: cards=%v, err=%v", cards, err)
 		}
 		assertTodoActiveFormJSON(t, cards[0].Todos, `[{"text":"Draft the Q4 summary","status":"pending"}]`)
 	})
@@ -189,8 +204,11 @@ func TestSetTodosActiveFormParameters(t *testing.T) {
 	if !reflect.DeepEqual(itemProperties["active_form"], want) {
 		t.Errorf("active_form schema = %#v, want %#v", itemProperties["active_form"], want)
 	}
-	if !reflect.DeepEqual(items["required"], []string{"text"}) {
-		t.Errorf("active_form must be optional: required = %#v", items["required"])
+	// SPEC CHANGE 2026-10-24: OLD — active_form optional (required was
+	// ["text"]); NEW — the founder decision requires active_form on every
+	// todo item.
+	if !reflect.DeepEqual(items["required"], []string{"text", "active_form"}) {
+		t.Errorf("active_form must be required: required = %#v, want [text active_form]", items["required"])
 	}
 }
 

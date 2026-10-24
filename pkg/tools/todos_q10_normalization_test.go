@@ -13,11 +13,18 @@ import (
 )
 
 // not-wire-format: independent founder Q10=A fixture, never a gateway type.
+// SPEC CHANGE (founder Q74, 2026-10-24): the fixture's ten empty-after-trim
+// cases are superseded — "Q10 empty cases superseded by founder Q74
+// 2026-10-24": they are rejected with the required-active_form message
+// (error: "required") instead of accepted as omitted. Trim normalization for
+// non-empty values and the 38-case count are unchanged; the three 501-length
+// cases keep their exact length-error pin (error field absent = length).
 type q10FormCase struct {
 	Name     string `json:"name"`
 	Input    string `json:"input"`
 	Expected string `json:"expected"`
 	Reject   bool   `json:"reject"`
+	Error    string `json:"error"`
 }
 
 func toolQ10Cases(t *testing.T) []q10FormCase {
@@ -45,6 +52,16 @@ func TestTodosActiveFormQ10Normalization(t *testing.T) {
 					if operation == "parse" {
 						got, err := parseTodosArg(raw)
 						if tc.Reject {
+							if tc.Error == "required" {
+								// Q74: empty-after-trim values are rejected as
+								// required, with the corrective message elements.
+								if err == nil {
+									t.Fatalf("empty-after-trim active_form must be rejected, parse accepted %q", tc.Input)
+								}
+								assertActiveFormRequiredErrorText(t, err.Error(), 0)
+								require.Nil(t, got, "rejected parse must not return a partial todo list")
+								return
+							}
 							require.EqualError(t, err, lengthError, "501 normalized code points must be rejected")
 							require.Nil(t, got, "rejected parse must not return a partial todo list")
 							return
@@ -59,6 +76,13 @@ func TestTodosActiveFormQ10Normalization(t *testing.T) {
 					cards, err := task.New(dir).List(task.Filter{AgentID: "mia"})
 					require.NoError(t, err)
 					if tc.Reject {
+						if tc.Error == "required" {
+							// Q74: empty-after-trim values are rejected as
+							// required, with the corrective message elements.
+							assertActiveFormRequiredRejection(t, result, 0)
+							require.Empty(t, cards, "rejected tool input must not create a task")
+							return
+						}
 						require.True(t, result.IsError, "501 normalized code points must not be saved")
 						require.Equal(t, lengthError, result.ForLLM)
 						require.Empty(t, cards, "rejected tool input must not create a task")
