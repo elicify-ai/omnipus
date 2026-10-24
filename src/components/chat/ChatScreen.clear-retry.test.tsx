@@ -58,7 +58,8 @@ function rawSystem(id: string, content: string, ts: string): Record<string, unkn
 const MARKER_TEXT = 'Conversation context cleared'
 const SUCCESS_REPLY = 'Context cleared. The conversation and its history are kept; the assistant continues from here with a fresh context.'
 
-function rawPostClear(_clearCmid: string): FixtureHistoryPage {
+function rawPostClear(clearCmid: string): FixtureHistoryPage {
+  expect(clearCmid, 'fixture: the sent /clear has a nonempty delivery identifier').toMatch(/^.+$/su)
   // D3/D6: latest starts at the reached clear, never with the cleared command
   // or content before it. The original response/marker identity is retained.
   return clearHistoryPage(SID, [

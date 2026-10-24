@@ -204,7 +204,10 @@ describe.each(VIEWS)('PF=A real paged history -> %s system renderer', view => {
     const source = fallback(1, { ...KNOWN, unavailable_code: 'model_retired' }, RETIRED)
     await load([source]); show(view)
     expectNote(source, true)
-    expect.soft(screen.queryAllByTestId('provider-fallback-note')[0]?.textContent?.split(HINT).length! - 1,
+    const noteText = screen.getByTestId('provider-fallback-note').textContent
+    expect(noteText, 'the rendered fallback note has text before counting its hint').not.toBeNull()
+    if (noteText === null) throw new TypeError('Rendered fallback note text is missing')
+    expect.soft(noteText.split(HINT).length - 1,
       'D12/Q4: saved text already has the single hint; do not append a duplicate').toBe(1)
   })
 
