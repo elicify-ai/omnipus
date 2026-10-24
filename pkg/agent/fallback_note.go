@@ -29,14 +29,33 @@ import (
 // finding F6). Mirrors turn_transcript.go::transcriptSuppressedErrors.
 var fallbackNoteSuppressed atomic.Uint64
 
-// fallbackNoteText — the §6 fallback-note sentence. Never "backup". The D12
-// hint appears ONLY when unavailable_code is model_retired.
-func fallbackNoteText(answeredModel, unavailableModel, unavailableCode string) string {
+// fallbackNoteText — the §6 fallback-note sentence. Never "backup". When the
+// failed attempt was a bad_model — the provider said the model was not found
+// or not offered (founder decision 2026-10-24, Q70) — the sentence says so
+// plainly, instead of the generic "was unavailable" that hides the
+// misconfiguration. The D12 hint appears ONLY when unavailable_code is
+// model_retired.
+func fallbackNoteText(answeredModel, unavailableModel, unavailableCode string, attemptErr error) string {
+	if fallbackAttemptBadModel(attemptErr) {
+		return fmt.Sprintf("Answered by the Fallback model (%s) because %s was not found or is not offered by its provider.", answeredModel, unavailableModel)
+	}
 	text := fmt.Sprintf("Answered by the Fallback model (%s) because %s was unavailable.", answeredModel, unavailableModel)
 	if unavailableCode == string(CodeModelRetired) {
 		text += " Pick a new model in the agent's settings."
 	}
 	return text
+}
+
+// fallbackAttemptBadModel reports whether the failed attempt the note is
+// written for was classified bad_model. The chain's mark-and-move-on attempt
+// record stores the classified *providers.FailoverError as the attempt's
+// error, so the verdict is read off the type, never off message text.
+func fallbackAttemptBadModel(attemptErr error) bool {
+	if attemptErr == nil {
+		return false
+	}
+	var fe *providers.FailoverError
+	return errors.As(attemptErr, &fe) && fe.Reason == providers.FailoverBadModel
 }
 
 // fallbackUnavailableCode maps a failed primary attempt to the frame's
@@ -125,7 +144,7 @@ func (ts *turnState) queueProviderFallbackNote(answeredModel string, attempts []
 		ID:               uuid.New().String(),
 		Type:             session.EntryTypeProviderFallback,
 		Role:             "system",
-		Content:          fallbackNoteText(answeredModel, unavailableModel, code),
+		Content:          fallbackNoteText(answeredModel, unavailableModel, code, attemptErr),
 		Timestamp:        time.Now().UTC(),
 		AgentID:          ts.resolveActiveAgentID(),
 		TurnID:           ts.turnID,
