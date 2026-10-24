@@ -210,11 +210,12 @@ func TestBadModelFallbackLiveTurn(t *testing.T) {
 		AgentID: agent.ID, TurnID: start.Meta.TurnID, SessionKey: key, Iteration: 1,
 		Source: "runTurn", TracePath: "turn.llm.fallback",
 	}, live[0].Meta)
-	// UnavailableCode is deliberately not pinned: Q70 fixes the user-visible
-	// wording, not the wire enum value (see the file header).
+	// Spec change (chief ruling, 2026-10-24): the RED literal above
+	// accidentally pinned UnavailableCode empty; the ruling sets the bad_model
+	// hop's enum value to model_not_found (contract-first, developer adds it).
 	require.Equal(t, ProviderFallbackPayload{
 		SessionID: meta.ID, TurnID: start.Meta.TurnID, AnsweredModel: fbNoteFinal,
-		UnavailableModel: fbNotePrimary,
+		UnavailableModel: fbNotePrimary, UnavailableCode: "model_not_found",
 	}, live[0].Payload)
 	require.Equal(t, live[0], tapEvents[0])
 }
