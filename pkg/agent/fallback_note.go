@@ -58,14 +58,27 @@ func fallbackAttemptBadModel(attemptErr error) bool {
 	return errors.As(attemptErr, &fe) && fe.Reason == providers.FailoverBadModel
 }
 
+// fallbackCodeModelNotFound is the unavailable_code enum value for a bad_model
+// hop (contract ProviderFallbackFrame.yaml, added by founder decision
+// 2026-10-24, Q70): the provider reported the model as not found or not
+// offered, and the hop fell back to the next candidate. No existing
+// LLMErrorCode constant spells this value (CodeBadModel is "bad_model", the
+// terminal error code — a different surface), so it is spelled here next to
+// the enum it names.
+const fallbackCodeModelNotFound = "model_not_found"
+
 // fallbackUnavailableCode maps a failed primary attempt to the frame's
-// unavailable_code enum {rate_limited, model_retired} (contract
-// ProviderFallbackFrame.yaml). model_retired is read off the attempt's own
-// error chain (a *common.ProviderError with a 404 + retirement phrase — the
-// user-side C-24 detector); a cooldown-skip (C-18) and every other condition
-// read rate_limited — the enum has no third value and unavailable_code's only
-// consumer is the D12 hint gate.
+// unavailable_code enum {rate_limited, model_retired, model_not_found}
+// (contract ProviderFallbackFrame.yaml). A bad_model attempt (Q70) reads
+// model_not_found. model_retired is read off the attempt's own error chain (a
+// *common.ProviderError with a 404 + retirement phrase — the user-side C-24
+// detector); a cooldown-skip (C-18) and every other condition read
+// rate_limited — unavailable_code's only consumer is the D12 hint gate, which
+// still fires only for model_retired.
 func fallbackUnavailableCode(attemptErr error) string {
+	if fallbackAttemptBadModel(attemptErr) {
+		return fallbackCodeModelNotFound
+	}
 	var pe *common.ProviderError
 	if errors.As(attemptErr, &pe) && isModelRetiredBody(pe.Body, pe.Status) {
 		return string(CodeModelRetired)

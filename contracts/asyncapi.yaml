@@ -5230,6 +5230,7 @@ components:
           enum:
           - rate_limited
           - model_retired
+          - model_not_found
         seq:
           type: integer
           format: int64
@@ -5285,6 +5286,7 @@ components:
           enum:
           - rate_limited
           - model_retired
+          - model_not_found
         message:
           type: string
           minLength: 1

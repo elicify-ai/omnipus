@@ -675,7 +675,7 @@ export interface ProviderFallbackFrame {
   turn_id: string;
   answered_model: string;
   unavailable_model: string;
-  unavailable_code: "rate_limited" | "model_retired";
+  unavailable_code: "rate_limited" | "model_retired" | "model_not_found";
   seq?: number;
 }
 
@@ -686,7 +686,7 @@ export interface ProviderFallbackNote {
   timestamp: string;
   answered_model?: string;
   unavailable_model?: string;
-  unavailable_code?: "rate_limited" | "model_retired";
+  unavailable_code?: "rate_limited" | "model_retired" | "model_not_found";
   message: string;
 }
 
