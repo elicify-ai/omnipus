@@ -41,11 +41,12 @@ package tools
 //	  R5 Q74      — chief ruling 2026-10-24: the wider old-spec tests are
 //	                reconciled by the same test author in this change
 //	                (todos_test.go, task_provenance_test.go, the uatRun4
-//	                fixture, and the Q10 fixture's empty-after-trim cases —
-//	                "Q10 empty cases superseded by founder Q74 2026-10-24":
-//	                the required-message replaces acceptance; trim
-//	                normalization for non-empty values and the 38-case count
-//	                stay).
+//	                fixture). "Q10 empty cases superseded by founder Q74
+//	                2026-10-24" applies to set_todos ONLY: the shared fixture
+//	                keeps its normalization+length oracle (Board/API writes
+//	                may omit active_form); the tool's overlay on inputs that
+//	                normalize to empty lives in todos_q10_normalization_test.go
+//	                (early train review fix).
 //	  R3 fixture  — done: the prompt engineer's required-form text is merged
 //	                (82d204711, branch tip 73913cf07); the exact-text pins now
 //	                carry it: pkg/tools/testdata/set_todos_q2_description.txt,
