@@ -47,8 +47,8 @@ func (t *SetTodosTool) Description() string {
 		"list on every call; each call replaces the list, with no item IDs. Reuse the exact same `outcome` for " +
 		"the same unit of work. You have one active checklist in this session: changing `outcome` closes the " +
 		"previous checklist card as done and starts a new one. Your checklist is shown on the board and re-shown " +
-		"to you each turn. Optionally give each item an `active_form`: a present-participle phrase such as " +
-		"\"Drafting the Q4 summary\", up to 500 characters, used for the chat's working-on line while that item is " +
+		"to you each turn. An `active_form` is required for every item: a short present-participle phrase such as " +
+		"\"Drafting the Q4 summary\", at most 500 characters, shown as the chat's working-on line while that item is " +
 		"`in_progress`. Use create_task with dependencies for a durable multi-wave plan, while tracking your own " +
 		"current work here."
 }
