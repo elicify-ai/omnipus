@@ -31,6 +31,10 @@ type chatHistoryFixturePlan struct { // not-wire-format: private driver plan v1.
 	SessionID     string                  `json:"session_id,omitempty"`
 	Days          []chatHistoryFixtureDay `json:"days,omitempty"`
 	RetentionDays *int                    `json:"retention_days,omitempty"`
+	AgentID       string                  `json:"agent_id,omitempty"`
+	Title         string                  `json:"title,omitempty"`
+	AgedAt        *time.Time              `json:"aged_at,omitempty"`
+	RequireEmpty  bool                    `json:"require_empty,omitempty"`
 }
 
 type chatHistoryFixtureResult struct { // not-wire-format: private driver receipt v1.
@@ -160,8 +164,8 @@ func TestChatHistoryFixtureDriver(t *testing.T) {
 	var trailing any
 	require.ErrorIs(t, decoder.Decode(&trailing), io.EOF, "one strict plan, no trailing JSON")
 	root := chatHistoryFixtureRoot(t, planPath, plan.DataRoot)
-	require.Contains(t, []string{"seed_days", "sweep"}, plan.Action)
-	if plan.Action == "seed_days" {
+	require.Contains(t, []string{"seed_days", "append_entries", "seed_aged", "sweep"}, plan.Action)
+	if plan.Action != "sweep" {
 		require.True(t, plan.SessionID != "" && plan.SessionID != "." && plan.SessionID != ".." && !strings.ContainsAny(plan.SessionID, "/\\\x00"), "session identity is exactly one native path component")
 		info, statErr := os.Lstat(filepath.Join(root, "sessions", plan.SessionID))
 		require.NoError(t, statErr)
@@ -179,8 +183,19 @@ func TestChatHistoryFixtureDriver(t *testing.T) {
 		}
 	})
 	result := chatHistoryFixtureResult{SchemaVersion: 1, Action: plan.Action, SessionID: plan.SessionID}
-	if plan.Action == "seed_days" {
-		addresses := buildChatHistoryDayFixture(t, store, plan.SessionID, plan.Days)
+	if plan.Action == "seed_aged" {
+		validateChatHistoryFixtureAge(t, store, plan)
+	}
+	if plan.Action != "sweep" {
+		var addresses []ArchiveAddress
+		if plan.Action == "append_entries" {
+			addresses = appendChatHistoryFixtureEntries(t, store, plan.SessionID, plan.Days, plan.RequireEmpty)
+		} else {
+			addresses = buildChatHistoryDayFixture(t, store, plan.SessionID, plan.Days)
+			if plan.Action == "seed_aged" {
+				ageChatHistoryFixtureMeta(t, store, plan)
+			}
+		}
 		result.WrittenRecords = len(addresses)
 		paths, pathsErr := store.transcriptPartitionPaths(plan.SessionID)
 		require.NoError(t, pathsErr)
@@ -196,6 +211,9 @@ func TestChatHistoryFixtureDriver(t *testing.T) {
 	}
 	require.NoError(t, store.Close(), "close/join background work before receipt or gateway restart")
 	closed = true
+	if plan.Action == "seed_aged" {
+		ageChatHistoryFixtureFiles(t, filepath.Join(root, "sessions", plan.SessionID), *plan.AgedAt)
+	}
 	encoded, err := json.Marshal(result)
 	require.NoError(t, err)
 	_, err = fmt.Printf("CHAT_HISTORY_FIXTURE_RESULT=%s\n", encoded)
