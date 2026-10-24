@@ -605,19 +605,20 @@ func TestLaunch_SteeredLaunch_ExplicitWorkspaceOwnerRefused(t *testing.T) {
 	}
 }
 
-// TestLaunch_UnderStampedParent_ChildStampedAtLaunch is named for the
-// pre-ADR-093 stamp-at-launch behavior it originally verified (was US-4/AS-6:
-// a launch under a parent carrying a Stop marker for its CURRENT generation
-// used to be stamped at launch and never start). ADR-093 D2
-// retired that behavior outright: "Option (b) stays rejected... refuse
-// outright, publish nothing... under the parent lock, inside the launch
-// callback and before anything is created" — a launch under a parent
-// carrying a current-generation Stop is now a typed refusal
-// (steer.ErrSteeringStopped), and "the stamp-at-launch branch... has no
-// remaining case [and] is removed for this path" (D2). This test now
-// verifies the refusal instead of the retired stamp: no child lifecycle
-// record, no unified session, nothing published — exactly D2's contract.
-func TestLaunch_UnderStampedParent_ChildStampedAtLaunch(t *testing.T) {
+// TestLaunch_UnderStampedParent_PublishesUnstampedChild replaces
+// TestLaunch_UnderStampedParent_ChildStampedAtLaunch.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23 (founder decision): D2's
+// launch-time backstop is REMOVED ("this check must be removed, a session
+// that ended can not fire anything"). OLD (ADR-093 D2, 2026-09-26): a
+// launch under a parent carrying a Stop marker for its CURRENT generation
+// was refused outright with steer.ErrSteeringStopped, publishing nothing.
+// NEW (amendment Decision 1): the launch PUBLISHES the child; nothing is
+// stamped at launch (founder Q1, option A: "no stamp at launch: in that
+// rare race a helper may run once"); the parent record is still not
+// written (D1 stands). What keeps a stopped generation from firing is the
+// turn, not the record (amendment Decision 3).
+func TestLaunch_UnderStampedParent_PublishesUnstampedChild(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	l := NewSteerLauncher(al)
@@ -644,41 +645,32 @@ func TestLaunch_UnderStampedParent_ChildStampedAtLaunch(t *testing.T) {
 		Task:              "do the thing",
 		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-1"},
 	})
-	if err == nil {
-		t.Fatalf("Launch under a current-generation-Stop parent succeeded (SessionID=%q), want D2's refusal", res.SessionID)
-	}
-	if !steer.IsSteeringUnavailable(err) {
-		t.Errorf("Launch err = %v, want steer.IsSteeringUnavailable(err) true (D2's ErrSteeringStopped sentinel)", err)
-	}
-	if !errors.Is(err, steer.ErrSteeringStopped) {
-		t.Errorf("Launch err = %v, want errors.Is(err, steer.ErrSteeringStopped) — this parent has no prior failed revival, so the plain stopped sentinel applies, not ErrSteeringRevivalFailed", err)
-	}
-	if res.SessionID != "" {
-		t.Errorf("LaunchResult.SessionID = %q on a refused launch, want empty (D2: refusal precedes CreateSessionWithID)", res.SessionID)
-	}
-
-	// D2: the refusal precedes any write — the store holds only the one
-	// record this test seeded (the parent), no child was ever minted.
-	all, err := al.GetSessionLifecycleStore().List(session.LifecycleFilter{})
 	if err != nil {
-		t.Fatalf("List after refused launch: %v", err)
+		t.Fatalf("Launch under a current-generation-Stop parent = %v — ADR-093 amendment 2026-10-23 Decision 1 removes D2's launch-time refusal; the launch must publish the child (old spec: steer.ErrSteeringStopped refusal)", err)
 	}
-	if len(all) != 1 || all[0].SessionID != steerer {
-		ids := make([]string, len(all))
-		for i, r := range all {
-			ids[i] = r.SessionID
-		}
-		t.Errorf("lifecycle store holds %v after a refused launch, want exactly [%s] (D2: refusal precedes CreateSessionWithID)", ids, steerer)
+	if res.SessionID == "" || res.SessionID == steerer {
+		t.Fatalf("Launch result session id = %q, want a fresh child distinct from the parent %s (amendment Decision 1: the child is published)", res.SessionID, steerer)
+	}
+	child, err := al.GetSessionLifecycleStore().Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("child lifecycle record %s missing after the launch (amendment Decision 1: a delegate launch under a stopped-record parent publishes the child): %v", res.SessionID, err)
+	}
+	if child.Stopped() {
+		t.Fatalf("child was stamped at launch: state=%q Stop=%+v — founder Q1 option A: no stamp at launch; the rare race may run once", child.State, child.Stop)
+	}
+	if child.SteeredBy == nil || child.SteeredBy.SteeringSessionID != steerer {
+		t.Fatalf("child steering edge = %+v, want the stopped parent %s as its steering session", child.SteeredBy, steerer)
 	}
 
-	// The parent's own record is unchanged by the refused launch attempt.
+	// D1 stands: the launch never writes the parent — same generation,
+	// running, and the current Stop marker untouched.
 	parentAfter, err := al.GetSessionLifecycleStore().Load(steerer)
 	if err != nil {
-		t.Fatalf("Load(parent) after refused launch: %v", err)
+		t.Fatalf("Load(parent) after launch: %v", err)
 	}
-	if parentAfter.Generation != 1 || parentAfter.Stop == nil || parentAfter.Stop.Generation != 1 {
-		t.Errorf("parent record changed by the refused launch: generation=%d stop=%+v, want unchanged (gen 1, Stop.Generation 1)",
-			parentAfter.Generation, parentAfter.Stop)
+	if parentAfter.Generation != 1 || parentAfter.Stop == nil || parentAfter.Stop.Generation != 1 || parentAfter.State != session.LifecycleRunning {
+		t.Errorf("parent record changed by the launch: generation=%d state=%q stop=%+v, want unchanged (gen 1 running, Stop.Generation 1 — D1: the launch does not write the parent)",
+			parentAfter.Generation, parentAfter.State, parentAfter.Stop)
 	}
 }
 

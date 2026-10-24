@@ -21,13 +21,16 @@
 //	Shutdown drain     The revived turn is an ordinary turn, so shutdown must
 //	                    cancel it. A turn started on a detached background
 //	                    context outlives Stop.
-//	Stop during revival ADR-093 test plan: "Stop lands after D4's revival, in
-//	                    the same turn; delegate follows. Refusal — no child on
-//	                    the generation a newer Stop covers."
-//	Dispatch refusal   ADR-093 D5: delegate: dispatch: maps to the plain
-//	                    sentence, same as delegate: launch:.
-//	Task refusal       ADR-093 D5: startTaskNowViaLauncher's launch wrapper
-//	                    maps a steering refusal to that same sentence.
+//	Stop during revival SPEC CHANGE (amendment 2026-10-23): the old "refusal
+//	                    — no child on the generation a newer Stop covers" pin
+//	                    is replaced by the founder's Q1 option A ruling — a
+//	                    launch after the cascade may publish, unstamped.
+//	Dispatch refusal   SPEC CHANGE (amendment 2026-10-23, Decision 2): D5's
+//	                    sentence mapping is deleted; the dispatch refusal
+//	                    surfaces its own typed sentinel text.
+//	Task refusal       SPEC CHANGE (amendment 2026-10-23, Decision 2): the
+//	                    sentence wrapper is deleted; a refused task stores
+//	                    the raw refusal text.
 //	Predicate halves   ADR-093 D4 / MIN-004: revive only when the channel is
 //	                    not system AND the message carries no steer-wake
 //	                    metadata. Each conjunct alone is enough to refuse.
@@ -60,10 +63,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// adr093D5Sentence is ADR-093 D5's refusal, copied from the decision text.
-// It is not read from steer.SteeringUnavailableMessage, so a drift in that
-// constant fails these tests instead of moving the oracle with it.
-const adr093D5Sentence = "Delegation is unavailable because this conversation is not active right now. Tell the user that sending a new message in this conversation resumes it, and that their request has not been started."
+// adr093D5Sentence was ADR-093 D5's refusal sentence.
+// SPEC CHANGE — ADR-093 amendment 2026-10-23, Decision 2: D5's refusal
+// sentences are DELETED (both variants), so the constant and its last use
+// are deleted with them. Dispatch-stage refusals surface their own typed
+// sentinel text (steer.ErrDispatchCancelled / ErrTerminal /
+// ErrStaleGeneration).
 
 // adr093RevivedReply is the model reply the delivery test asks the provider
 // to return. The oracle is that this exact text reaches the user.
@@ -458,10 +463,16 @@ func TestAdr093RevivedRoot_ShutdownCancelsTheTurn(t *testing.T) {
 	}
 }
 
-// TestAdr093StopDuringRevivedTurn_DelegateRefuses drives a real Stop while
-// the revived turn is still inside the model, then delegates. ADR-093's test
-// plan: no child on the generation that newer Stop covers.
-func TestAdr093StopDuringRevivedTurn_DelegateRefuses(t *testing.T) {
+// TestAdr093StopDuringRevivedTurn_LaunchPublishesUnstampedChild replaces
+// TestAdr093StopDuringRevivedTurn_DelegateRefuses.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23. OLD: a real Stop during the
+// revived turn covered that generation, and a later launch was refused ("no
+// child on the generation a newer Stop covers"). NEW (founder Q1, option A,
+// ruled on this exact race): a launch after the cascade MAY PUBLISH and the
+// helper may run once — no stamp at launch; the parent record is not
+// written by the launch (D1).
+func TestAdr093StopDuringRevivedTurn_LaunchPublishesUnstampedChild(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
@@ -498,39 +509,54 @@ func TestAdr093StopDuringRevivedTurn_DelegateRefuses(t *testing.T) {
 		t.Fatal("the revived turn did not return after Stop")
 	}
 
-	_, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
-		SteeringSessionID: parentID,
-		TargetAgentID:     testDefaultAgentID,
-		Task:              "Follow up on the draft",
-		Origin:            steer.Origin{Kind: steer.OriginKindDelegate},
-	})
-	if err == nil || !steer.IsSteeringUnavailable(err) {
-		t.Fatalf("Launch after Stop during the revived turn = %v, want the steering refusal — ADR-093 test plan: no child on the generation a newer Stop covers", err)
-	}
-	records, listErr := al.GetSessionLifecycleStore().List(session.LifecycleFilter{})
-	if listErr != nil {
-		t.Fatalf("List lifecycle: %v", listErr)
-	}
-	if len(records) != 1 || records[0].SessionID != parentID {
-		ids := make([]string, 0, len(records))
-		for _, rec := range records {
-			ids = append(ids, rec.SessionID)
-		}
-		t.Fatalf("lifecycle records after Stop-during-revival = %v, want only the parent %s (no child on the stopped generation)", ids, parentID)
-	}
+	// Characterisation of the state the ruling speaks to: the cascade covered
+	// the revived generation.
 	parent := adr093Load(t, al, parentID)
 	if parent.Generation != previous.Generation {
 		t.Fatalf("parent generation = %d, want %d (the same-generation revival that the newer Stop covers)", parent.Generation, previous.Generation)
 	}
 	if !parent.Stopped() && !parent.Terminal() {
-		t.Fatalf("parent after the concurrent Stop is generation %d state %q with no current Stop — ADR-093: the newer Stop covers that generation", parent.Generation, parent.State)
+		t.Fatalf("parent after the concurrent Stop is generation %d state %q with no current Stop — the newer Stop must cover that generation", parent.Generation, parent.State)
+	}
+
+	// The ruled outcome: the launch publishes, unstamped — the race may run
+	// once (Q1 option A); the parent record stays as the cascade left it.
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: parentID,
+		TargetAgentID:     testDefaultAgentID,
+		Task:              "Follow up on the draft",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate},
+	})
+	if err != nil {
+		t.Fatalf("Launch after a Stop during the revived turn = %v — ADR-093 amendment 2026-10-23 (Q1 option A): the launch after the cascade may publish; the helper may run once (old spec: steering refusal)", err)
+	}
+	if res.SessionID == "" || res.SessionID == parentID {
+		t.Fatalf("Launch result session id = %q, want a fresh child distinct from the parent %s", res.SessionID, parentID)
+	}
+	child, err := al.GetSessionLifecycleStore().Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("child lifecycle record %s missing after the post-cascade launch (Q1 option A: the child is published): %v", res.SessionID, err)
+	}
+	if child.Stopped() {
+		t.Fatalf("child was stamped at launch: state=%q Stop=%+v — Q1 option A: no stamp at launch", child.State, child.Stop)
+	}
+	after := adr093Load(t, al, parentID)
+	if after.Generation != parent.Generation || after.State != parent.State || (after.Stop == nil) != (parent.Stop == nil) {
+		t.Fatalf("parent changed by the post-cascade launch: before gen %d state %q stop=%+v, after gen %d state %q stop=%+v (D1: the launch does not write the parent)",
+			parent.Generation, parent.State, parent.Stop, after.Generation, after.State, after.Stop)
 	}
 }
 
-// TestDelegateRun_DispatchRefusal_SaysHowToResume is ADR-093 D5's dispatch
-// half: Launch succeeded, then Stop made Dispatch refuse. The model reads
-// the plain sentence, never "delegate: dispatch:" machinery.
-func TestDelegateRun_DispatchRefusal_SaysHowToResume(t *testing.T) {
+// TestDelegateRun_DispatchRefusal_SurfacesRawSentinelText replaces
+// TestDelegateRun_DispatchRefusal_SaysHowToResume.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23, Decision 2: D5's refusal
+// sentences and their mapping machinery are DELETED. OLD: the model read
+// the plain "Delegation is unavailable…" sentence. NEW: a dispatch-stage
+// refusal surfaces its OWN typed sentinel text (here
+// steer.ErrDispatchCancelled's) — short, no session id, no generation
+// number, no revival recipe, and never the deleted sentence.
+func TestDelegateRun_DispatchRefusal_SurfacesRawSentinelText(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
@@ -550,11 +576,18 @@ func TestDelegateRun_DispatchRefusal_SaysHowToResume(t *testing.T) {
 		t.Fatal("delegate(run) returned nil")
 	}
 	if !result.IsError {
-		t.Fatalf("delegate whose Dispatch was refused must be an error (ADR-093 D5), got success:\n%s", result.ForLLM)
+		t.Fatalf("delegate whose Dispatch was refused must still be an error (amendment: a bound-session dispatch refusal still fails), got success:\n%s", result.ForLLM)
 	}
-	assertIssue890RefusalText(t, "ForLLM", result.ForLLM, parentID)
-	if result.ForLLM != adr093D5Sentence {
-		t.Fatalf("dispatch refusal ForLLM =\n%s\nwant ADR-093 D5's sentence\n%s", result.ForLLM, adr093D5Sentence)
+	// The typed sentinel text surfaces (Decision 2), never the deleted D5
+	// sentence and never the parent's session id.
+	if !strings.Contains(result.ForLLM, steer.ErrDispatchCancelled.Error()) {
+		t.Fatalf("dispatch refusal ForLLM =\n%s\nwant it to surface steer.ErrDispatchCancelled's own text\n%q (amendment 2026-10-23 Decision 2)", result.ForLLM, steer.ErrDispatchCancelled.Error())
+	}
+	if strings.Contains(result.ForLLM, "Delegation is unavailable") {
+		t.Fatalf("dispatch refusal ForLLM still carries the deleted D5 sentence:\n%s (amendment 2026-10-23 Decision 2: the sentences are deleted)", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, parentID) {
+		t.Fatalf("dispatch refusal ForLLM names the session id %s:\n%s (Decision 2: short, no session id)", parentID, result.ForLLM)
 	}
 }
 

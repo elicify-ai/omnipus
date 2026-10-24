@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,6 +59,14 @@ func TestI1R5AdmissionPreservesStaleRevivalCause(t *testing.T) {
 
 // Silent E / already-passing storage-path control: a real store read error
 // remains a genuine revival failure. This is not a raw append/Write/Sync test.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23: the revival-failure ledger
+// (lastRevivalFailure) is deleted with the launch backstop, so this control
+// no longer asserts the diagnostic's ledger memory ("must remain available
+// to the launch backstop" — there is no launch backstop anymore). What
+// stays pinned: a real filesystem failure is a PathError, never demoted to
+// a stale-selection refusal, the provider is not called, and the journal is
+// untouched.
 func TestI1R4RealStorageRefusalRemainsRevivalFailure(t *testing.T) {
 	h := i1R3RestartStopped(t)
 	selected, before := h.load(t), h.journal(t)
@@ -81,24 +88,17 @@ func TestI1R4RealStorageRefusalRemainsRevivalFailure(t *testing.T) {
 	var pathErr *os.PathError
 	require.ErrorAs(t, refused, &pathErr)
 	assert.False(t, errors.Is(refused, steer.ErrStaleGeneration), "filesystem failure cannot become a lost selection")
-	failure, remembered := h.al.lastRevivalFailure(h.id)
-	require.True(t, remembered, "actual store error must remain available to the launch backstop")
-	assert.Equal(t, refused, failure.cause)
 	assert.Empty(t, h.provider.calls())
 	restore()
 	assert.Equal(t, before, h.journal(t))
 }
 
-// Silent D / accepted control: a later stale selection clears an older genuine
-// diagnostic too. This is the founder/dispatcher-accepted latest-attempt policy.
-func TestI1R4StaleSelectionClearsOlderFailure(t *testing.T) {
-	h := i1R3RestartStopped(t)
-	prior := errors.New("earlier genuine storage failure")
-	h.al.markRevivalFailure(h.id, prior)
-	failure, remembered := h.al.lastRevivalFailure(h.id)
-	require.True(t, remembered)
-	require.Equal(t, prior, failure.cause)
-	h.al.markRevivalFailure(h.id, fmt.Errorf("newer selection: %w", steer.ErrStaleGeneration))
-	_, remembered = h.al.lastRevivalFailure(h.id)
-	assert.False(t, remembered, "accepted policy: the newer selection refusal supersedes older diagnostic memory")
-}
+// TestI1R4StaleSelectionClearsOlderFailure is RETIRED.
+// SPEC CHANGE — ADR-093 amendment 2026-10-23: the revival-failure ledger
+// (markRevivalFailure / lastRevivalFailure) loses its only production reader
+// with D2's launch backstop and is deleted. This test's whole subject — the
+// ledger's latest-attempt memory policy (a newer stale selection clearing an
+// older genuine diagnostic) — is that deleted ledger; there is nothing left
+// to pin. The honest-attribution behaviour that motivated R3/R4 survives in
+// TestI1R3StaleRevivalHasHonestAttribution and
+// TestI1R4RealStorageRefusalRemainsRevivalFailure.

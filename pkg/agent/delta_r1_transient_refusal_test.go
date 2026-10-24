@@ -81,32 +81,62 @@ func unwrapOnce(err error) error {
 	return u.Unwrap()
 }
 
-// Permanent control: a lifecycle refusal (the steering conversation is stopped,
-// terminal, stale or its revival failed) is about the session, not the caller,
-// so a retry would hit the same refusal. It must still fail the task, at both
-// the launch and the dispatch stage.
+// Permanent control: a refusal that is about the session, not the caller, is
+// permanent — a retry would hit the same refusal — so it must still fail the
+// task.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23, Decision 2: the launch-time
+// lifecycle sentinels (steer.ErrSteeringStopped / ErrSteeringRevivalFailed)
+// and the D5 sentence wrapper (newSteeringRefusalError) are DELETED. OLD:
+// the launch stage injected ErrSteeringStopped and the task's stored failure
+// reason was the D5 sentence. NEW: the launch stage uses a keep-list
+// permanent refusal (ErrDepthExceeded — ADR-093 amendment refusal keep-list:
+// "depth exceeded ... KEEP — returns its short reason"), and a refused
+// bound-session dispatch keeps failing the task with the RAW SENTINEL TEXT
+// as its stored reason (Decision 2: "now with the sentinel text as its
+// stored failure reason"), never the deleted sentence.
 func TestStartTaskNow_LifecycleRefusalStillFailsTheTask(t *testing.T) {
-	for stage, set := range map[string]func(*m9cLauncher){
-		"launch":   func(l *m9cLauncher) { l.launchErr = steer.ErrSteeringStopped },
-		"dispatch": func(l *m9cLauncher) { l.dispatchErr = steer.ErrDispatchCancelled },
-	} {
-		t.Run(stage, func(t *testing.T) {
-			al, _ := newRunTaskPolicyLoop(t, nil)
-			tk := createRunnableTask(t, al, "t-r1-permanent", rtAssignee)
-			wl := &m9cLauncher{inner: NewSteerLauncher(al)}
-			set(wl)
-			al.taskExecutor.SetSessionLauncher(wl)
+	t.Run("launch", func(t *testing.T) {
+		al, _ := newRunTaskPolicyLoop(t, nil)
+		tk := createRunnableTask(t, al, "t-r1-permanent", rtAssignee)
+		wl := &m9cLauncher{inner: NewSteerLauncher(al)}
+		wl.launchErr = steer.ErrDepthExceeded
+		al.taskExecutor.SetSessionLauncher(wl)
 
-			_, err := al.taskExecutor.StartTaskNow(context.Background(), tk.ID)
-			require.Error(t, err)
-			got, gerr := GetTaskStore(al).Get(tk.ID)
-			require.NoError(t, gerr)
-			require.Equal(t, task.StatusFailed, got.Status, "a lifecycle refusal is permanent: the task fails")
-		})
-	}
+		_, err := al.taskExecutor.StartTaskNow(context.Background(), tk.ID)
+		require.Error(t, err)
+		got, gerr := GetTaskStore(al).Get(tk.ID)
+		require.NoError(t, gerr)
+		require.Equal(t, task.StatusFailed, got.Status, "a permanent launch refusal is about the task's admission: the task fails")
+	})
+	t.Run("dispatch", func(t *testing.T) {
+		al, _ := newRunTaskPolicyLoop(t, nil)
+		tk := createRunnableTask(t, al, "t-r1-permanent-dispatch", rtAssignee)
+		wl := &m9cLauncher{inner: NewSteerLauncher(al)}
+		wl.dispatchErr = steer.ErrDispatchCancelled
+		al.taskExecutor.SetSessionLauncher(wl)
+
+		_, err := al.taskExecutor.StartTaskNow(context.Background(), tk.ID)
+		require.Error(t, err)
+		got, gerr := GetTaskStore(al).Get(tk.ID)
+		require.NoError(t, gerr)
+		require.Equal(t, task.StatusFailed, got.Status, "a dispatch refusal is permanent: the task fails")
+		// Decision 2: the stored failure reason is the typed sentinel text —
+		// short, machinery-honest — never the deleted D5 sentence.
+		require.Contains(t, got.Result, steer.ErrDispatchCancelled.Error(),
+			"the stored failure reason must surface steer.ErrDispatchCancelled's own text (amendment 2026-10-23 Decision 2), got %q", got.Result)
+		require.NotContains(t, got.Result, "Delegation is unavailable",
+			"the stored failure reason must not carry the deleted D5 sentence (amendment 2026-10-23 Decision 2), got %q", got.Result)
+	})
 }
 
 // The predicate itself, including the cap, which no launcher-path test reaches.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23: the permanent list is re-pinned
+// to the three DISPATCH sentinels only — the launch-time lifecycle sentinels
+// (steer.ErrSteeringStopped / ErrSteeringRevivalFailed) and the D5 sentence
+// wrapper (newSteeringRefusalError) are deleted with the backstop (Decision 2
+// lists this file for exactly this re-pin).
 func TestIsTransientLaunchRefusal(t *testing.T) {
 	transient := []error{
 		context.Canceled, context.DeadlineExceeded, ErrExecutorDraining, ErrDispatchCapReached,
@@ -117,9 +147,8 @@ func TestIsTransientLaunchRefusal(t *testing.T) {
 	}
 	permanent := []error{
 		errors.New("session binding persistence failed"),
-		steer.ErrSteeringStopped, steer.ErrSteeringRevivalFailed, steer.ErrDispatchCancelled,
+		steer.ErrDispatchCancelled,
 		steer.ErrTerminal, steer.ErrStaleGeneration,
-		newSteeringRefusalError(steer.ErrSteeringStopped),
 	}
 	for _, err := range permanent {
 		require.Falsef(t, isTransientLaunchRefusal(err), "%v must be permanent", err)

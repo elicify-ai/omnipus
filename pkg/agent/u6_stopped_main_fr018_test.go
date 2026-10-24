@@ -24,15 +24,16 @@
 // parent, write its state or dispatch it.
 //
 // This file compiles against the pre-change tree (Launch, MainSessionID and the
-// lifecycle store all exist today) and fails BEHAVIOURALLY: today a launch under
-// a current-generation-Stop main is refused with steer.ErrSteeringStopped, so
-// the task-origin main child is never admitted.
+// lifecycle store all exist today). RED-era note (historical): at first
+// writing, a launch under a current-generation-Stop main was refused with
+// steer.ErrSteeringStopped, so the task-origin main child was never admitted.
+// SPEC CHANGE — the ADR-093 amendment of 2026-10-23 removes the guard
+// outright; admission is unconditional for every origin kind (Decision 1).
 
 package agent
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -146,29 +147,64 @@ func TestU6_FR018_TaskOriginMainChildAdmittedUnderStoppedMain(t *testing.T) {
 	}
 }
 
-// TestU6_FR018_DelegateUnderStoppedMainStillRefused pins the other half of
-// FR-018: "ordinary extra-chat helper parentage and general stopped-parent guard
-// stay." A non-main, delegate-origin launch under the same stopped main must
-// still be refused — the exemption is task-origin main children ONLY.
+// TestU6_FR018_DelegateUnderStoppedMainAdmittedUnconditionally replaces
+// TestU6_FR018_DelegateUnderStoppedMainStillRefused.
 //
-// This already holds today (the general guard), so it is a KEEP guard: it must
-// stay true after the exemption lands, and it catches an over-broad exemption.
-func TestU6_FR018_DelegateUnderStoppedMainStillRefused(t *testing.T) {
+// SPEC CHANGE — ADR-093 amendment 2026-10-23, Decision 1: D2's launch-time
+// backstop is REMOVED and with it the FR-018 exemption's other half —
+// isMainTaskChildLaunch "exists only relative to that check and is deleted
+// with it — a main-task child's admission becomes unconditional". OLD
+// (session-core FR-018): a non-main, delegate-origin launch under a stopped
+// main was refused with steer.ErrSteeringStopped ("the general
+// stopped-parent guard stays"). NEW: the delegate-origin launch is ADMITTED
+// like every other launch — the child is published, unstamped (Q1 option
+// A), and the main's record is untouched (D-U6.4's zero-main-model-wake
+// rule is kept: the launch never revives, writes or dispatches the main).
+func TestU6_FR018_DelegateUnderStoppedMainAdmittedUnconditionally(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	l := NewSteerLauncher(al)
 
 	mainID := u6SeedStoppedMain(t, al, "ws-1", testDefaultAgentID)
 
-	_, err := l.Launch(context.Background(), steer.LaunchRequest{
-		SteeringSessionID: mainID, // a main id, but a DELEGATE origin — not exempt
+	mainBefore, err := al.GetSessionLifecycleStore().Load(mainID)
+	if err != nil {
+		t.Fatalf("load main before launch: %v", err)
+	}
+
+	res, err := l.Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: mainID, // a main id, and a DELEGATE origin — admitted unconditionally now
 		TargetAgentID:     testDefaultAgentID,
 		Task:              "u6 delegate under stopped main",
 		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "c-u6-1"},
 	})
-	if !errors.Is(err, steer.ErrSteeringStopped) {
-		t.Fatalf("FR-018: a DELEGATE-origin launch under a stopped main = %v, want "+
-			"steer.ErrSteeringStopped. The exemption is task-origin main children ONLY; the general "+
-			"stopped-parent guard stays for everything else (session-core-spec FR-018).", err)
+	if err != nil {
+		t.Fatalf("FR-018 (as amended 2026-10-23): a DELEGATE-origin launch under a stopped main = %v, want admission — "+
+			"the amendment removes D2's stopped-parent guard outright; admission is unconditional "+
+			"(old spec: steer.ErrSteeringStopped refusal)", err)
+	}
+	if res.SessionID == "" || res.SessionID == mainID {
+		t.Fatalf("launch result session id = %q, want a fresh child distinct from the main %s", res.SessionID, mainID)
+	}
+	child, err := al.GetSessionLifecycleStore().Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("load child record: %v", err)
+	}
+	if child.Stopped() {
+		t.Fatalf("child was stamped at launch: state=%q Stop=%+v — founder Q1 option A: no stamp at launch", child.State, child.Stop)
+	}
+	if child.SteeredBy == nil || child.SteeredBy.SteeringSessionID != mainID {
+		t.Fatalf("child's steering edge = %+v, want the stopped main %s as its real parent", child.SteeredBy, mainID)
+	}
+
+	// The main stays untouched: the launch is not a revival (D-U6.4 / D1).
+	mainAfter, err := al.GetSessionLifecycleStore().Load(mainID)
+	if err != nil {
+		t.Fatalf("load main after launch: %v", err)
+	}
+	if mainAfter.Generation != mainBefore.Generation || mainAfter.State != mainBefore.State ||
+		(mainAfter.Stop == nil) != (mainBefore.Stop == nil) {
+		t.Fatalf("the stopped main changed: before gen %d state %q stop=%+v, after gen %d state %q stop=%+v — the launch must never revive or write the main",
+			mainBefore.Generation, mainBefore.State, mainBefore.Stop, mainAfter.Generation, mainAfter.State, mainAfter.Stop)
 	}
 }

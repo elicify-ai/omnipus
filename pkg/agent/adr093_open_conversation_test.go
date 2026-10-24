@@ -229,12 +229,16 @@ func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 	}
 }
 
-// TestAdr093Launch_StoppedParentRefusalLeavesNoArtifacts is ADR-093 D2's
-// stopped branch: a Launch under a parent carrying a Stop for its CURRENT
-// generation is refused outright — before any artifact is built — and the
-// parent's record is untouched. RED today: the stamp-at-launch branch
-// publishes a Stop-stamped child instead (steer_launcher.go::launchSteered).
-func TestAdr093Launch_StoppedParentRefusalLeavesNoArtifacts(t *testing.T) {
+// TestAdr093Launch_StoppedParent_PublishesUnstampedChild replaces
+// TestAdr093Launch_StoppedParentRefusalLeavesNoArtifacts.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23 (founder decision): D2's
+// launch-time backstop is REMOVED. OLD (D2, 2026-09-26): a Launch under a
+// parent carrying a Stop for its CURRENT generation was refused outright,
+// leaving no artifacts. NEW (amendment Decision 1): the launch PUBLISHES
+// the child; nothing is stamped at launch (Q1 option A); the parent's
+// record is untouched (D1 stands).
+func TestAdr093Launch_StoppedParent_PublishesUnstampedChild(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
@@ -243,45 +247,42 @@ func TestAdr093Launch_StoppedParentRefusalLeavesNoArtifacts(t *testing.T) {
 	rec.Stop = &session.Stop{At: time.Now(), Generation: 1, By: session.Principal{Kind: session.PrincipalKindHuman}}
 	adr093Persist(t, al, rec)
 
-	_, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: parentID,
 		TargetAgentID:     testDefaultAgentID,
 		Task:              "Follow up on the draft",
 		Origin:            steer.Origin{Kind: steer.OriginKindDelegate},
 	})
-
-	// D2: refused outright — and not with the lifecycle store's own terminal
-	// error (that would mean the refusal came after artifacts were built).
-	if err == nil {
-		t.Fatalf("Launch under a stopped parent succeeded — ADR-093 D2 refuses it outright (today the stamp-at-launch branch publishes a stamped child instead)")
-	}
-	if errors.Is(err, session.ErrLifecycleTerminalImmutable) {
-		t.Fatalf("refusal error is the lifecycle store's own (%v) — ADR-093 D2: the refusal is the launcher's own decision BEFORE any artifact is built", err)
-	}
-
-	// No artifacts: only the parent's lifecycle record exists, unchanged.
-	records, err := al.GetSessionLifecycleStore().List(session.LifecycleFilter{})
 	if err != nil {
-		t.Fatalf("List lifecycle after refused launch: %v", err)
+		t.Fatalf("Launch under a stopped parent = %v — ADR-093 amendment 2026-10-23 Decision 1 removes D2's launch-time refusal; the launch must publish the child (old spec: outright refusal)", err)
 	}
-	if len(records) != 1 || records[0].SessionID != parentID {
-		ids := make([]string, 0, len(records))
-		for _, r := range records {
-			ids = append(ids, r.SessionID)
-		}
-		t.Fatalf("lifecycle records after the refused launch = %v, want only the parent %s (ADR-093 D2: the refusal leaves no child record)", ids, parentID)
+	if res.SessionID == "" || res.SessionID == parentID {
+		t.Fatalf("Launch result session id = %q, want a fresh child distinct from the parent %s", res.SessionID, parentID)
 	}
+	child, err := al.GetSessionLifecycleStore().Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("child lifecycle record %s missing after the launch (amendment Decision 1: the child is published): %v", res.SessionID, err)
+	}
+	if child.Stopped() {
+		t.Fatalf("child was stamped at launch: state=%q Stop=%+v — founder Q1 option A: no stamp at launch", child.State, child.Stop)
+	}
+
+	// D1: the parent's record is untouched by the launch.
 	parent := adr093Load(t, al, parentID)
 	if parent.Generation != 1 || parent.State != session.LifecycleRunning || parent.Stop == nil || parent.Stop.Generation != 1 {
-		t.Fatalf("parent after refused launch = gen %d state %q Stop %+v, want gen 1 running with the human Stop intact (ADR-093 D2: the refusal never touches the parent)", parent.Generation, parent.State, parent.Stop)
+		t.Fatalf("parent after launch = gen %d state %q Stop %+v, want gen 1 running with the human Stop intact (D1: the launch never touches the parent)", parent.Generation, parent.State, parent.Stop)
 	}
 }
 
-// TestAdr093Launch_AfterRevivalStopRefusesLaunch is D2's second site: the
-// same refusal applies when the parent's record is generation 2 (a revival
-// already happened) and a new human Stop for the CURRENT generation 2 sits
-// on it. RED today: same stamp-at-launch defect.
-func TestAdr093Launch_AfterRevivalStopRefusesLaunch(t *testing.T) {
+// TestAdr093Launch_AfterRevivalStop_PublishesUnstampedChild replaces
+// TestAdr093Launch_AfterRevivalStopRefusesLaunch.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23: D2's launch-time backstop is
+// REMOVED. OLD (D2): the same refusal applied when the parent's record was
+// generation 2 with a new human Stop for the CURRENT generation 2. NEW
+// (amendment Decision 1): the launch publishes the child, unstamped (Q1
+// option A); the parent's record is untouched (D1).
+func TestAdr093Launch_AfterRevivalStop_PublishesUnstampedChild(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
@@ -291,34 +292,30 @@ func TestAdr093Launch_AfterRevivalStopRefusesLaunch(t *testing.T) {
 	rec.Stop = &session.Stop{At: time.Now(), Generation: 2, By: session.Principal{Kind: session.PrincipalKindHuman}}
 	adr093Persist(t, al, rec)
 
-	_, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: parentID,
 		TargetAgentID:     testDefaultAgentID,
 		Task:              "Follow up on the draft",
 		Origin:            steer.Origin{Kind: steer.OriginKindDelegate},
 	})
-
-	if err == nil {
-		t.Fatalf("Launch under a generation-2 parent with a current human Stop succeeded — ADR-093 D2 refuses it outright")
-	}
-	if errors.Is(err, session.ErrLifecycleTerminalImmutable) {
-		t.Fatalf("refusal error is the lifecycle store's own (%v) — ADR-093 D2: the refusal is the launcher's own decision BEFORE any artifact is built", err)
-	}
-
-	records, err := al.GetSessionLifecycleStore().List(session.LifecycleFilter{})
 	if err != nil {
-		t.Fatalf("List lifecycle after refused launch: %v", err)
+		t.Fatalf("Launch under a generation-2 parent with a current human Stop = %v — ADR-093 amendment 2026-10-23 Decision 1 removes D2's launch-time refusal; the launch must publish the child (old spec: outright refusal)", err)
 	}
-	if len(records) != 1 || records[0].SessionID != parentID {
-		ids := make([]string, 0, len(records))
-		for _, r := range records {
-			ids = append(ids, r.SessionID)
-		}
-		t.Fatalf("lifecycle records after the refused launch = %v, want only the parent %s (ADR-093 D2)", ids, parentID)
+	if res.SessionID == "" || res.SessionID == parentID {
+		t.Fatalf("Launch result session id = %q, want a fresh child distinct from the parent %s", res.SessionID, parentID)
 	}
+	child, err := al.GetSessionLifecycleStore().Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("child lifecycle record %s missing after the launch (amendment Decision 1: the child is published): %v", res.SessionID, err)
+	}
+	if child.Stopped() {
+		t.Fatalf("child was stamped at launch: state=%q Stop=%+v — founder Q1 option A: no stamp at launch", child.State, child.Stop)
+	}
+
+	// D1: the parent's record is untouched by the launch.
 	parent := adr093Load(t, al, parentID)
 	if parent.Generation != 2 || parent.ResumedFrom != parentID || parent.Stop == nil || parent.Stop.Generation != 2 || parent.State != session.LifecycleRunning {
-		t.Fatalf("parent after refused launch = gen %d resumed_from %q state %q Stop %+v, want gen 2 running resumed_from=self with the Stop for generation 2 intact (ADR-093 D2)", parent.Generation, parent.ResumedFrom, parent.State, parent.Stop)
+		t.Fatalf("parent after launch = gen %d resumed_from %q state %q Stop %+v, want gen 2 running resumed_from=self with the Stop for generation 2 intact (D1: the launch never touches the parent)", parent.Generation, parent.ResumedFrom, parent.State, parent.Stop)
 	}
 }
 
@@ -554,12 +551,20 @@ func TestAdr093TaskFromStoppedCreator_RunsAsOrdinaryRoot(t *testing.T) {
 	}
 }
 
-// TestAdr093SystemWakeIntoTerminalRoot_NoRevival is MIN-004's negative pin:
-// a system wake (a heartbeat-style wake, not a human message) into a chat
-// whose record is terminal does NOT revive the record, and a delegation
-// attempted from that state still gets D5's refusal. The revival trigger is
-// the human's message — nothing else.
-func TestAdr093SystemWakeIntoTerminalRoot_NoRevival(t *testing.T) {
+// TestAdr093SystemWakeIntoTerminalRoot_NoRevival_AndDelegationSucceeds
+// replaces TestAdr093SystemWakeIntoTerminalRoot_NoRevival.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23. OLD (D2/D5): MIN-004's pin
+// plus "a delegation attempted from that state still gets D5's refusal".
+// NEW: MIN-004 STANDS (the amendment: "System-wake turns do not revive the
+// record generally: MIN-004 and F890-3 stand") — the wake turn runs with a
+// stale terminal record — and D2/D5 are removed, so a delegate(run) from
+// that state SUCCEEDS and publishes the child (this is the founder's
+// Jarvis incident: a live wake turn whose parent record reads terminal
+// must be able to delegate). The parent record is still not written by the
+// launch (D1), and the stale terminal record is not revived by the wake or
+// by the delegate (MIN-004/D4: only a human message revives).
+func TestAdr093SystemWakeIntoTerminalRoot_NoRevival_AndDelegationSucceeds(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
@@ -582,10 +587,11 @@ func TestAdr093SystemWakeIntoTerminalRoot_NoRevival(t *testing.T) {
 
 	got := adr093Load(t, al, parentID)
 	if got.Generation != 1 || got.State != session.LifecycleFailed || got.ResumedFrom != "" {
-		t.Fatalf("record after system wake = gen %d state %q resumed_from %q — ADR-093 MIN-004: a system wake never revives a record", got.Generation, got.State, got.ResumedFrom)
+		t.Fatalf("record after system wake = gen %d state %q resumed_from %q — ADR-093 MIN-004 (kept by the 2026-10-23 amendment): a system wake never revives a record", got.Generation, got.State, got.ResumedFrom)
 	}
 
-	// And delegation from that state is still the D5 backstop refusal.
+	// Delegation from that wake-turn state succeeds and the child lifecycle
+	// file exists (amendment Decision 1; the D5 backstop refusal is gone).
 	tool := adr093DelegateTool(t, al)
 	callCtx := tools.WithToolCallID(
 		tools.WithAgentID(tools.WithTranscriptSessionID(context.Background(), parentID), testDefaultAgentID),
@@ -599,8 +605,19 @@ func TestAdr093SystemWakeIntoTerminalRoot_NoRevival(t *testing.T) {
 	if result == nil {
 		t.Fatal("delegate(run) returned nil")
 	}
-	if !result.IsError {
-		t.Fatalf("delegate from a terminal chat after a system wake must be refused (ADR-093 D2/D5), got success:\n%s", result.ForLLM)
+	if result.IsError {
+		t.Fatalf("delegate from a terminal chat after a system wake = refusal:\n%s\n— ADR-093 amendment 2026-10-23 Decision 1: D2/D5 are removed; the live wake turn must be able to delegate (old spec: D5 refusal)", result.ForLLM)
 	}
-	assertIssue890RefusalText(t, "ForLLM", result.ForLLM, parentID)
+	childID := adr093ChildSessionIDFromResult(t, result.ForLLM, parentID)
+	if _, err := al.GetSessionLifecycleStore().Load(childID); err != nil {
+		t.Fatalf("child lifecycle record for %s missing after the delegated wake turn (amendment Decision 1): %v", childID, err)
+	}
+
+	// The launch is not a revival: the parent's stale terminal record is
+	// exactly as the wake left it (gen 1, failed/interrupted, no
+	// resumed_from) — D1 stands, and only a human message revives (MIN-004).
+	after := adr093Load(t, al, parentID)
+	if after.Generation != 1 || after.State != session.LifecycleFailed || after.ResumedFrom != "" {
+		t.Fatalf("parent after delegation = gen %d state %q resumed_from %q — D1: the launch does not write the parent; MIN-004: a delegate is not the human's newer instruction", after.Generation, after.State, after.ResumedFrom)
+	}
 }

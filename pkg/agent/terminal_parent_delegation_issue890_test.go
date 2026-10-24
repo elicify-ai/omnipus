@@ -19,15 +19,22 @@
 // the failure (its own header said the error assertion "flips once the ADR
 // decides") and TestDelegateRun_TerminalParentRefusal_HidesInvariantAndAsks
 // ForNewChat asserted the "a new chat is needed" workaround that F890-1
-// explicitly rejected. Both are replaced below, per the ADR's test plan.
-// Oracles are the ADR and the founder text, not the implementation.
+// explicitly rejected. Both were replaced per the ADR's test plan.
+//
+// SPEC CHANGE — re-pinned again to the ADR-093 amendment of 2026-10-23
+// (founder decision): D2's launch-time backstop and D5's refusal sentences
+// are removed, so the 2026-09-26 re-pin's backstop-refusal test
+// (TestDelegateRun_TerminalParentBackstopRefusal_SaysHowToResume) and its
+// D5 text contract are retired; the file now pins the incident's regression
+// instead — delegation from a terminal chat SUCCEEDS (see the replacing
+// test below). TestAdr093RootRevival_… is unchanged and stays the main
+// oracle. Oracles are the ADR and the founder text, not the implementation.
 
 package agent
 
 import (
 	"context"
 	"encoding/json"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,31 +54,17 @@ const issue890WorkspaceID = "ws-issue-890"
 // ("gen=1 state=failed failed_reason=interrupted").
 const issue890FailedReason = "interrupted"
 
-// issue890ForbiddenUserText is internal machinery wording that must never
-// reach the model or the user, per issue #890 and ADR-093 D5 / the ADR test
-// plan's re-pin item 2: no store invariant, no revival recipe (follow_up /
-// Play / resumed_from), no generation arithmetic, no session id, and —
-// F890-1 — never the "new chat" workaround. "generation" is named in that
-// re-pin item and must be on this list.
-var issue890ForbiddenUserText = []string{
-	"terminal record is immutable",
-	"resumed_from",
-	"follow_up",
-	"play",
-	"generation",
-	"new chat",
-}
-
-// issue890RequiredRefusalText is the D5 contract's required phrases
-// (ADR-093 D5): the result is an instruction to the agent that names the
-// conversation and says a new message resumes it. The ADR's literal sentence
-// is: "Delegation is unavailable because this conversation is not active
-// right now. Tell the user that sending a new message in this conversation
-// resumes it, and that their request has not been started."
-var issue890RequiredRefusalText = []string{
-	"conversation",
-	"resumes",
-}
+// The D5 refusal-text contract (issue890ForbiddenUserText,
+// issue890RequiredRefusalText, assertIssue890RefusalText,
+// issue890RefusalProblems) is RETIRED.
+// SPEC CHANGE — ADR-093 amendment 2026-10-23, Decision 2: D5's refusal
+// sentences and their mapping machinery are deleted, and the amendment
+// rules that the required-phrases list "loses its subject". The leak the
+// contract guarded against — the lifecycle store's immutable-record
+// sentence reaching the model — was a property of the deleted mapping
+// paths; per Decision 2 that text does not return. The remaining refusal
+// surface (the dispatch sentinels) is pinned short by
+// TestDelegateRun_DispatchRefusal_SurfacesRawSentinelText.
 
 // issue890TerminalParent is a real chat session whose lifecycle tail is
 // already terminal (failed, interrupted — the boot sweep's shape, ADR-093
@@ -264,15 +257,21 @@ func TestAdr093RootRevival_HumanMessageRevivesTerminalChatAndDelegationSucceeds(
 	}
 }
 
-// TestDelegateRun_TerminalParentBackstopRefusal_SaysHowToResume is the
-// re-pinned defect-2 contract (ADR-093 D5): when delegate(action=run) cannot
-// launch because the calling conversation's own lifecycle record is terminal
-// and no revival is in the call chain (D2's backstop), the text handed back
-// to the model must be the D5 sentence — an instruction to the agent that
-// names the conversation and says a new message resumes it — never the
-// lifecycle store's own refusal, and never the "new chat" workaround
-// (F890-1 retired it).
-func TestDelegateRun_TerminalParentBackstopRefusal_SaysHowToResume(t *testing.T) {
+// TestDelegateRun_TerminalParent_DelegatePublishesChildWithoutRevivingParent
+// replaces TestDelegateRun_TerminalParentBackstopRefusal_SaysHowToResume.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23 (the founder's Jarvis incident
+// ruling): D2's launch-time backstop and D5's refusal sentences are REMOVED
+// ("this check must be removed, a session that ended can not fire
+// anything"). OLD (D2/D5): delegate(run) from a terminal chat with no
+// revival in the call chain was refused with the D5 sentence, leaving no
+// child behind. NEW (amendment Decision 1): the delegate SUCCEEDS — the
+// child lifecycle file exists; the launch is not a revival, so the parent's
+// stale terminal record is unchanged (D1 stands; only a human message
+// revives — D4). This is the incident's regression test: the triage found
+// exactly this call refused with "Delegation is unavailable…" while the
+// conversation was visibly running.
+func TestDelegateRun_TerminalParent_DelegatePublishesChildWithoutRevivingParent(t *testing.T) {
 	h := newIssue890TerminalParent(t)
 
 	tool := h.newDelegateTool(t)
@@ -280,39 +279,23 @@ func TestDelegateRun_TerminalParentBackstopRefusal_SaysHowToResume(t *testing.T)
 	if result == nil {
 		t.Fatal("delegate(run) returned nil")
 	}
-	if !result.IsError {
-		t.Fatalf("delegate from a terminal chat with no revival in the call chain must be refused (ADR-093 D2), got success:\n%s", result.ForLLM)
+	if result.IsError {
+		t.Fatalf("delegate from a terminal chat = refusal:\n%s\n— ADR-093 amendment 2026-10-23 Decision 1: D2's launch-time backstop is removed; the delegation must succeed (old spec: D5 refusal \"Delegation is unavailable…\")", result.ForLLM)
+	}
+	childID := adr093ChildSessionIDFromResult(t, result.ForLLM, h.parentID)
+	if _, err := h.al.GetSessionLifecycleStore().Load(childID); err != nil {
+		t.Fatalf("child lifecycle record for %s missing after the delegated launch (amendment Decision 1: the child is published): %v", childID, err)
 	}
 
-	// The model reads ForLLM. ForUser is the user channel when set.
-	surfaces := []struct{ name, text string }{{name: "ForLLM", text: result.ForLLM}}
-	if result.ForUser != "" {
-		surfaces = append(surfaces, struct{ name, text string }{name: "ForUser", text: result.ForUser})
-	}
-	for _, surface := range surfaces {
-		assertIssue890RefusalText(t, surface.name, surface.text, h.parentID)
-	}
-
-	// D2's backstop leaves nothing behind: no child lifecycle record, no new
-	// unified session, and the parent's record is unchanged (a refused launch
-	// is not a revival).
-	records, err := h.al.GetSessionLifecycleStore().List(session.LifecycleFilter{})
-	if err != nil {
-		t.Fatalf("List lifecycle after refused delegation: %v", err)
-	}
-	if len(records) != 1 || records[0].SessionID != h.parentID {
-		ids := make([]string, 0, len(records))
-		for _, rec := range records {
-			ids = append(ids, rec.SessionID)
-		}
-		t.Fatalf("lifecycle records after the refused delegation = %v, want only the parent %s (ADR-093 D2: the refusal produces no child lifecycle file)", ids, h.parentID)
-	}
+	// The launch is not a revival: the parent's stale terminal record stays
+	// gen 1 failed/interrupted (D1: the launch does not write the parent;
+	// D4: only a human message revives).
 	parent, err := h.al.GetSessionLifecycleStore().Load(h.parentID)
 	if err != nil {
-		t.Fatalf("Load(parent) after refused delegation: %v", err)
+		t.Fatalf("Load(parent) after delegation: %v", err)
 	}
 	if parent.Generation != 1 || parent.State != session.LifecycleFailed || parent.FailedReason != issue890FailedReason {
-		t.Fatalf("parent after refused delegation = gen %d state %q reason %q, want gen 1 failed/%s unchanged (ADR-093: a refused launch is not a revival)",
+		t.Fatalf("parent after delegation = gen %d state %q reason %q, want gen 1 failed/%s unchanged (D1: the launch is not a revival)",
 			parent.Generation, parent.State, parent.FailedReason, issue890FailedReason)
 	}
 }
@@ -334,36 +317,4 @@ func adr093ChildSessionIDFromResult(t *testing.T, forLLM, parentSessionID string
 		t.Fatalf("success did not launch a child distinct from the parent %s: %+v", parentSessionID, response)
 	}
 	return response.SessionId
-}
-
-// assertIssue890RefusalText checks one returned string against ADR-093 D5.
-// A harness that never reached the launch refusal fails here too, so a
-// setup error cannot pass by accident.
-func assertIssue890RefusalText(t *testing.T, surface, text, parentSessionID string) {
-	t.Helper()
-	problems := issue890RefusalProblems(text, parentSessionID)
-	if len(problems) == 0 {
-		return
-	}
-	t.Fatalf("%s does not meet ADR-093 D5's refusal contract.\ntext: %s\nproblems:\n- %s",
-		surface, text, strings.Join(problems, "\n- "))
-}
-
-func issue890RefusalProblems(text, parentSessionID string) []string {
-	var problems []string
-	lower := strings.ToLower(text)
-	for _, forbidden := range issue890ForbiddenUserText {
-		if strings.Contains(lower, forbidden) {
-			problems = append(problems, "contains forbidden text "+strconv.Quote(forbidden)+" (ADR-093 D5 / F890-1)")
-		}
-	}
-	if parentSessionID != "" && strings.Contains(text, parentSessionID) {
-		problems = append(problems, "names the parent session "+strconv.Quote(parentSessionID)+" (ADR-093 D5: the result must not contain a session id)")
-	}
-	for _, required := range issue890RequiredRefusalText {
-		if !strings.Contains(lower, required) {
-			problems = append(problems, "missing "+strconv.Quote(required)+" (ADR-093 D5's required phrases)")
-		}
-	}
-	return problems
 }

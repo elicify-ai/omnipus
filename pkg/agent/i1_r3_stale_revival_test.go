@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -12,8 +11,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// R3: losing an execution-identity race is not a storage/revival failure and
-// cannot poison the next stopped-parent refusal with the failure sentinel.
+// R3: losing an execution-identity race is not a storage/revival failure.
+//
+// SPEC CHANGE — ADR-093 amendment 2026-10-23: the revival-failure ledger
+// (recordRevivalFailure / lastRevivalFailure) "loses its only production
+// reader and is deleted with the backstop", and D2's launch refusal (whose
+// revival-failed variant this test's Launch assertions pinned) is removed.
+// OLD: the race must not poison the next stopped-parent refusal, and a later
+// Launch under the raced parent was still refused ErrSteeringStopped (never
+// ErrSteeringRevivalFailed). NEW: the stale race keeps its honest
+// attribution (ErrStaleGeneration, journal untouched, honest user-visible
+// error) and the later Launch PUBLISHES the child (Decision 1) — there is no
+// refusal left to poison. The ledger memory assertions are dropped with the
+// deleted symbols.
 func TestI1R3StaleRevivalHasHonestAttribution(t *testing.T) {
 	h := newD2bRoot(t)
 	boot := h.al.bootEpochFor()
@@ -30,18 +40,17 @@ func TestI1R3StaleRevivalHasHonestAttribution(t *testing.T) {
 	err = h.al.reviveOrdinaryRecordWithExecution(context.Background(), selected, session.ExecutionIdentity{RunID: "losing-attempt", BootSeq: boot}, steer.Principal{})
 	require.ErrorIs(t, err, steer.ErrStaleGeneration)
 	assert.Equal(t, before, h.journal(t), "stale snapshot cannot overwrite the newer owner")
-	_, remembered := h.al.lastRevivalFailure(h.id)
-	assert.False(t, remembered, "a race must not be recorded as a genuine failed resume")
 	assert.Equal(t, previousReplyStillFinishingMessage, userVisibleTurnError(err), "use the existing concurrent-admission guidance")
-	_, launchErr := NewSteerLauncher(h.al).Launch(context.Background(), steer.LaunchRequest{SteeringSessionID: h.id, TargetAgentID: testDefaultAgentID, Task: "Do not invent a storage failure", Origin: steer.Origin{Kind: steer.OriginKindDelegate}})
-	assert.ErrorIs(t, launchErr, steer.ErrSteeringStopped)
-	assert.False(t, errors.Is(launchErr, steer.ErrSteeringRevivalFailed), "later delegate refusal must not claim revival failed")
 
-	// Healthy failure-memory control: real storage failures still retain their
-	// diagnostic and cannot be silently demoted by the stale-race exception.
-	storeErr := errors.New("fixture storage refusal")
-	h.al.markRevivalFailure(h.id, storeErr)
-	failure, ok := h.al.lastRevivalFailure(h.id)
-	require.True(t, ok)
-	assert.Equal(t, storeErr, failure.cause)
+	// And the launch after the race publishes the child (amendment 2026-10-23
+	// Decision 1: D2's backstop — refused-launch/revival-failed variant — is
+	// gone; the old assertion that it still refused ErrSteeringStopped is
+	// replaced by the publish outcome).
+	res, launchErr := NewSteerLauncher(h.al).Launch(context.Background(), steer.LaunchRequest{SteeringSessionID: h.id, TargetAgentID: testDefaultAgentID, Task: "Delegate after the race", Origin: steer.Origin{Kind: steer.OriginKindDelegate}})
+	if launchErr != nil {
+		t.Fatalf("Launch after the stale-selection race = %v — ADR-093 amendment 2026-10-23 Decision 1: the launch publishes the child (old spec: ErrSteeringStopped refusal)", launchErr)
+	}
+	child, err := ls.Load(res.SessionID)
+	require.NoError(t, err, "child lifecycle record after the post-race launch")
+	require.Falsef(t, child.Stopped(), "child must not be stamped at launch (Q1 option A): state=%q stop=%+v", child.State, child.Stop)
 }

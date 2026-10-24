@@ -14,12 +14,16 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// Oracle: session-core FR-018 / D-U6.4 — with the stopped main's unified
-// session present (as production always has it: ensureMainSession creates it
-// before a main is ever eligible), a task-origin launch whose steering session
-// is the target's own computed main is admitted as a real child and the main's
-// lifecycle record is untouched; a delegate-origin launch under it, and a task
-// launch whose target is NOT that main's agent, are still refused.
+// Oracle: session-core FR-018 / D-U6.4, as amended by the ADR-093 amendment
+// of 2026-10-23 (Decision 1) — the stopped-main guard is removed outright, so
+// a task-origin launch whose steering session is the target's own computed
+// main is admitted as a real child with the main untouched, and admission is
+// unconditional. SPEC CHANGE: the OLD oracle's "only" half (a task launch for
+// a DIFFERENT agent under that main is still refused by the stopped guard)
+// loses its subject with the guard; what remains pinned here is the
+// keep-list refusal that still applies — an unknown target agent is refused
+// with steer.ErrAgentUnknown (ADR-093 amendment refusal keep-list, case
+// "unknown target agent"), not by any stopped-parent guard.
 // Real: SteerLauncher.Launch against the real stores.
 func TestFR018_ExemptionAdmitsOnlyTheTargetsOwnMainTaskChild(t *testing.T) {
 	al, cleanup := newSteerAL(t)
@@ -55,16 +59,17 @@ func TestFR018_ExemptionAdmitsOnlyTheTargetsOwnMainTaskChild(t *testing.T) {
 		t.Fatalf("the stopped main must be untouched: before=%+v after=%+v", before, after)
 	}
 
-	// A task-origin launch for a DIFFERENT agent under that main is not exempt.
+	// A task-origin launch for a DIFFERENT (unknown) agent still refuses —
+	// with the keep-list's own reason, never the removed stopped guard.
 	_, err = l.Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: mainID, TargetAgentID: "someone-else", Task: "not the main's own agent",
 		Origin: steer.Origin{Kind: steer.OriginKindTask, TaskID: "t-fr018-other"},
 	})
 	if err == nil {
-		t.Fatal("a task child targeting another agent under the stopped main must still be refused")
+		t.Fatal("a task child targeting an unknown agent must still be refused (ADR-093 amendment refusal keep-list: unknown target agent)")
 	}
-	if !errors.Is(err, steer.ErrSteeringStopped) && !errors.Is(err, steer.ErrAgentUnknown) {
-		t.Fatalf("refusal = %v, want the stopped-parent guard (or unknown agent)", err)
+	if !errors.Is(err, steer.ErrAgentUnknown) {
+		t.Fatalf("refusal = %v, want steer.ErrAgentUnknown (the keep-list reason); the stopped-parent guard that used to fire here was removed by the ADR-093 amendment of 2026-10-23", err)
 	}
 	// And a plain extra-chat id (not a computed main) keeps the guard.
 }
