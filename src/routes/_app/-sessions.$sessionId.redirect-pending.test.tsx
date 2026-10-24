@@ -6,7 +6,8 @@
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { onlineManager, QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query'
+import { onlineManager, QueryClientProvider } from '@tanstack/react-query'
+import { queryClient as client } from '@/lib/queryClient'
 import type { Workspace } from '@/lib/api/generated/openapi-types'
 
 const edges = vi.hoisted(() => ({
@@ -48,7 +49,7 @@ import { deferred } from '../../../tests/chat-history-paging/fixtures'
 import { Route } from './sessions.$sessionId'
 
 let detail: ReturnType<typeof sessionDetail>
-let client: QueryClient
+let savedDefaults: ReturnType<typeof client.getDefaultOptions>
 let lookup: ReturnType<typeof deferred<Workspace[]>>
 const workspaceKey = workspacesQueryKeys.list({ status: 'active' })
 function sessionDetail() {
@@ -72,7 +73,7 @@ function openRoute() {
 function expectPendingLookup() {
   expect(client.getQueryState(workspaceKey)?.status, 'the REAL query is pending, not an assigned mock flag').toBe('pending')
   expect(client.getQueryState(workspaceKey)?.fetchStatus).toBe('fetching')
-  expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active' })
+  expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active', signal: expect.any(AbortSignal) })
 }
 function expectWorkspaceRedirect() {
   expect(edges.navigate).toHaveBeenCalledExactlyOnceWith({
@@ -88,7 +89,9 @@ function expectWorkspaceRedirect() {
 describe('legacy session deep link while its redirect is undecided', () => {
   beforeEach(() => {
     onlineManager.setOnline(true)
-    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
+    savedDefaults = client.getDefaultOptions()
+    client.clear()
+    client.setDefaultOptions({ ...savedDefaults, queries: { ...savedDefaults.queries, retry: false, gcTime: Infinity } })
     lookup = deferred<Workspace[]>()
     edges.fetchWorkspaces.mockReset().mockImplementation(() => lookup.promise)
     edges.fetchSessionDetail.mockReset()
@@ -104,6 +107,7 @@ describe('legacy session deep link while its redirect is undecided', () => {
     cleanup()
     await client.cancelQueries()
     client.clear()
+    client.setDefaultOptions(savedDefaults)
     onlineManager.setOnline(true)
     vi.restoreAllMocks()
     vi.useRealTimers()
@@ -118,10 +122,8 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expect(edges.navigate).not.toHaveBeenCalled()
   })
 
-  it('falls back to the inline thread when the workspace list stays pending past the bounded wait', () => {
+  it('falls back to the inline thread when the workspace list stays pending past the bounded wait', async () => {
     vi.useFakeTimers()
-    // Observe the real refetch call without replacing its implementation.
-    const refetch = vi.spyOn(QueryObserver.prototype, 'refetch')
     openRoute()
     expectPendingLookup()
     expect(screen.queryByTestId('inline-chat-screen')).toBeNull()
@@ -137,9 +139,10 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expectPendingLookup()
     expect(edges.navigate).not.toHaveBeenCalled()
     expect(screen.getByText(/^Still finding this chat's workspace\. The chat moves into its workspace once it is found\.$/u), 'the unresolved workspace and the later move are explained').toBeTruthy()
-    refetch.mockClear()
-    act(() => { screen.getByRole('button', { name: 'Retry' }).click() })
-    expect(refetch, 'Retry replaces the stalled lookup').toHaveBeenCalledWith({ cancelRefetch: true })
+    // Replacement is proved by real fetch signals/requests in the preserved
+    // workspace-retry suite, not an obsolete observer-refetch option.
+    expect(screen.getByRole('button', { name: 'Retry' }), 'the notice offers Retry').toBeTruthy()
+    await act(async () => { screen.getByRole('button', { name: 'Retry' }).click() })
   })
 
   it('opens the inline thread at once when the list request is paused offline', () => {
@@ -165,7 +168,7 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expect(client.getQueryState(workspaceKey)?.fetchStatus).toBe('idle')
     expect(screen.queryByRole('status')).toBeNull()
     expect(edges.navigate).not.toHaveBeenCalled()
-    expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active' })
+    expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active', signal: expect.any(AbortSignal) })
     expect(screen.queryByText(/this chat's workspace/u), 'a resolved lookup shows no workspace notice').toBeNull()
   })
 
@@ -181,7 +184,7 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expect(await screen.findByTestId('inline-chat-screen'), 'a failed lookup cannot strand an empty chat area').toBeTruthy()
     expect(screen.queryByRole('status')).toBeNull()
     expect(edges.navigate).not.toHaveBeenCalled()
-    expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active' })
+    expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active', signal: expect.any(AbortSignal) })
   })
 
   it('opens inline after four seconds still pending and applies the late workspace redirect when the real query settles', async () => {
@@ -203,7 +206,7 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expect(client.getQueryState(workspaceKey)?.status).toBe('success')
     expect(client.getQueryState(workspaceKey)?.fetchStatus).toBe('idle')
     expectWorkspaceRedirect()
-    expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active' })
+    expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active', signal: expect.any(AbortSignal) })
   })
 
   it('redirects on a real pending-to-settled matching lookup before the bound without ever mounting inline', async () => {
@@ -217,6 +220,6 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expect(client.getQueryState(workspaceKey)?.status).toBe('success')
     expectWorkspaceRedirect()
     expect(edges.inline, 'no mount means no competing inline history read').not.toHaveBeenCalled()
-    expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active' })
+    expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active', signal: expect.any(AbortSignal) })
   })
 })

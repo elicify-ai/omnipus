@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { queryClient } from '@/lib/queryClient'
 import { ChatScreen } from '@/components/chat/ChatScreen'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -73,7 +74,9 @@ function SessionRoute() {
   // Fetch active workspaces to verify the session's workspace_id.
   const { data: workspaces = [], isPending: workspacesPending, isPaused: workspacesPaused, refetch: refetchWorkspaces } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    // The query's own signal reaches the request, so cancelling the query
+    // really aborts a stalled lookup (Retry below).
+    queryFn: ({ signal }) => fetchWorkspaces({ status: 'active', signal }),
     staleTime: 30_000,
     enabled: !!detail?.session?.workspace_id,
   })
@@ -256,6 +259,13 @@ function SessionRoute() {
     isReplaying,
   ])
 
+  // refetch({ cancelRefetch }) does not cancel an unfinished FIRST request
+  // that has no data yet (query-core 5.101): cancel this exact query first,
+  // which aborts its in-flight request, then start a fresh one.
+  const retryWorkspaceLookup = async () => {
+    await queryClient.cancelQueries({ queryKey: workspacesQueryKeys.list({ status: 'active' }), exact: true })
+    await refetchWorkspaces()
+  }
   const redirectWaitExpired = useBoundedWait(!!detail?.session?.workspace_id && workspacesPending, REDIRECT_DECISION_WAIT_MS)
 
   // Confirmed 404 (loader caught it and returned null, then the client-side
@@ -285,9 +295,13 @@ function SessionRoute() {
   // that replaces the stalled lookup. The later automatic move is announced.
   if (wsId && workspacesPending) {
     return (
-      <div className="flex h-full min-h-0 flex-1 flex-col">
-        <WorkspaceLookupNotice paused={workspacesPaused} onRetry={() => { void refetchWorkspaces({ cancelRefetch: true }) }} />
-        <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
+      <div className="absolute inset-0 flex flex-col">
+        <WorkspaceLookupNotice paused={workspacesPaused} onRetry={() => { void retryWorkspaceLookup() }} />
+        {/* ChatScreen's root is absolute inset-0: give it its own positioned
+            slot below the notice so the two never overlap. */}
+        <div className="relative min-h-0 flex-1" data-testid="workspace-lookup-chat-slot">
+          <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
+        </div>
       </div>
     )
   }
