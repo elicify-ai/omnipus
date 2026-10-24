@@ -185,7 +185,8 @@
         "tests/e2e/channel-instance-crud.spec.ts",
         "tests/e2e/channel-routing.spec.ts",
         "tests/e2e/tool-iteration-limit.spec.ts",
-        "tests/e2e/chat-history-paging.unavailable-history-live-controls.spec.ts"
+        "tests/e2e/chat-history-paging.unavailable-history-live-controls.spec.ts",
+        "tests/e2e/sidebar-session-backdrop.spec.ts"
       ]
     },
     {
