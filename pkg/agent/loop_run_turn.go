@@ -185,8 +185,15 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	}
 
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseCompleted)
+	finalContent := rz.rc.rx.finalContent
+	if rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.RunningTaskID != "" && !rz.rc.rx.finalIsModelAnswer && finalContent == defaultResponse {
+		// Keep the empty-answer diagnostic in the chat/history above, but do
+		// not hand it to the task executor as if the worker produced an answer.
+		// Its completion guard must still receive empty and fail empty_answer.
+		finalContent = ""
+	}
 	return turnResult{
-		finalContent: rz.rc.rx.finalContent,
+		finalContent: finalContent,
 		status:       rz.rc.rx.rr.rq.ri.turnStatus,
 		followUps:    append([]bus.InboundMessage(nil), rz.rc.rx.rr.rq.ri.rf.rt.ts.followUps...),
 		turnFailed:   rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed,
