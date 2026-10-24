@@ -46,10 +46,12 @@ package tools
 //	                the required-message replaces acceptance; trim
 //	                normalization for non-empty values and the 38-case count
 //	                stay).
-//	  R3 fixture  — pending: the prompt engineer's Description text lands on
-//	                work/t3-afreq-text; testdata/set_todos_q2_description.txt
-//	                is then updated to match it exactly (chief sends the
-//	                merged SHA).
+//	  R3 fixture  — done: the prompt engineer's required-form text is merged
+//	                (82d204711, branch tip 73913cf07); the exact-text pins now
+//	                carry it: pkg/tools/testdata/set_todos_q2_description.txt,
+//	                pkg/agent/testdata/todo_rule_q2.txt, the gateway rule-3
+//	                const in rest_tool_policies_activation_test.go, and the
+//	                docs/reference/built-in-tools.md set_todos row.
 //
 //	Mutations for CHECK (deferred per RED rules, elicify-test-writing step 4):
 //	remove the required entry from the item schema; skip the
