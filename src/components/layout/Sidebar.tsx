@@ -27,7 +27,7 @@ import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents, logout } from '@/lib/api'
+import { activeWorkspacesQueryOptions, fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents, logout } from '@/lib/api'
 import { logError } from '@/lib/telemetry'
 import type { Workspace } from '@/lib/api'
 import { WorkspaceAgentList } from './sidebar/WorkspaceAgentList'
@@ -167,8 +167,7 @@ export function Sidebar() {
     isSuccess: projectsSuccess,
     isPaused: projectsPaused,
   } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
     refetchInterval: 30_000,
   })

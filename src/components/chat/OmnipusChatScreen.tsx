@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { GearSix } from '@phosphor-icons/react'
-import { fetchAgents, fetchSessions, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
+import { activeWorkspacesQueryOptions, fetchAgents, fetchSessions } from '@/lib/api'
 import { OMNIPUS_AGENT_ID, omnipusMainSessionId } from '@/lib/omnipus'
 import { openOmnipusChat } from '@/store/omnipusChat'
 import { useSessionStore } from '@/store/session'
@@ -28,8 +28,7 @@ import { ChatScreen } from './ChatScreen'
 export function OmnipusChatScreen() {
   const navigate = useNavigate()
   const workspacesQuery = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: () => fetchSessions(), staleTime: 15_000 })

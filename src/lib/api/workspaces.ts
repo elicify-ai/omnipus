@@ -53,6 +53,16 @@ export function fetchWorkspaces(params?: { status?: string; signal?: AbortSignal
 }
 
 /**
+ * The ONE query definition for the active workspace list. Every producer of
+ * this key (sidebar, Omnipus chat, saved-chat route) uses it, so whichever
+ * component starts the request, cancelling the query aborts the real request.
+ */
+export const activeWorkspacesQueryOptions = {
+  queryKey: workspacesQueryKeys.list({ status: 'active' }),
+  queryFn: ({ signal }: { signal: AbortSignal }) => fetchWorkspaces({ status: 'active', signal }),
+}
+
+/**
  * Fetch a single workspace by id.
  * Used by the AgentProfile Heartbeat tab (FR-016 / US-5) to read the current
  * member_configs for the (workspace, agent) heartbeat pair.
