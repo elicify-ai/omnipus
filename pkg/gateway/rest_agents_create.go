@@ -643,6 +643,24 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	// helper that fix introduced for updateAgent; existing is nil here since
 	// this is a brand-new agent record.
 	pap.cra.ac.ModelParams = mergeAgentModelParams(nil, pap.modelParamsIn)
+	// Issue #1440: fallback_models was extracted in normalizeVariant and
+	// validated above (maxItems 2, provider/model pairing) but never assigned
+	// to the record being built — create returned 201 and silently dropped
+	// the chain, while a later PUT kept it. Assign it exactly like the PUT
+	// path (rest_agents_update.go's FallbackModels block), nil-provider
+	// tolerance included so the two writers stay mirror copies; the pairing
+	// rule means a REST create never actually carries an empty provider.
+	if pap.fallbackModels != nil {
+		fbs := make(config.FallbackModelSlice, 0, len(*pap.fallbackModels))
+		for _, fm := range *pap.fallbackModels {
+			provider := ""
+			if fm.Provider != nil {
+				provider = *fm.Provider
+			}
+			fbs = append(fbs, config.FallbackModel{Model: fm.Model, Provider: provider})
+		}
+		pap.cra.ac.FallbackModels = fbs
+	}
 	// Heartbeat is workspace-scoped (ADR-027); no per-agent heartbeat at create.
 	if pap.skills != nil && len(*pap.skills) > 0 {
 		pap.cra.ac.Skills = make([]string, len(*pap.skills))
