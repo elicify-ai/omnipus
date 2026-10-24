@@ -153,6 +153,40 @@ describe('#1436 — latest model belongs to the session', () => {
   })
 })
 
+describe('#1436 — unfiled chats keep their latest model without a workspace', () => {
+  // Chief ruling 2026-10-24: persistence applies to ALL chats. Keep the two
+  // restore paths independent so navigation failure cannot mask reload.
+  it.each(['navigation', 'reload'] as const)('restores the unfiled session choice after %s', async (returnPath) => {
+    act(() => page.useWorkspacesStore.getState().setActiveWorkspaceId(null))
+    const mounted = await renderPicker()
+    await choose(FIRST_CHOICE)
+    expect(page.useWorkspacesStore.getState().activeWorkspaceId, 'the chosen chat is unfiled').toBeNull()
+    expect(page.useChatStore.getState().messages, 'saving a choice does not require sending or a reply').toEqual([])
+
+    if (returnPath === 'navigation') {
+      await visit(SESSION_B)
+      await choose(LATEST_CHOICE)
+      await visit(SESSION_A)
+    } else {
+      mounted.unmount()
+      for (const client of clients.splice(0)) client.clear()
+      const oldChatStore = page.useChatStore
+      vi.resetModules()
+      page = await loadPageModules()
+      expect(page.useChatStore, 'reload must discard the previous in-memory store').not.toBe(oldChatStore)
+      act(() => {
+        page.useWorkspacesStore.getState().setActiveWorkspaceId(null)
+        page.useSessionStore.getState().setActiveSession(SESSION_A, agent.id)
+      })
+      await renderPicker()
+    }
+
+    expect(page.useWorkspacesStore.getState().activeWorkspaceId, 'restoration must not silently bind a workspace').toBeNull()
+    expect(page.useSessionStore.getState().activeSessionId).toBe(SESSION_A)
+    await expectChoice(FIRST_CHOICE)
+  })
+})
+
 describe('#1436 — visible agent default is independent of current selection', () => {
   it('marks only the agent\'s default provider/model row while another model is chosen', async () => {
     await renderPicker()
