@@ -781,6 +781,22 @@ type WhatsAppPairingPayload struct {
 	Status    channels.PairingStatus `json:"status"`
 	QR        string                 `json:"qr,omitempty"`
 	Message   string                 `json:"message,omitempty"`
+	// RequestID and SessionID correlate a chat-started pairing with the
+	// request and chat that started it (K10, FR-081). Empty for a pairing
+	// started elsewhere (e.g. the Channels screen).
+	RequestID string `json:"request_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	// Generation/Seq are assigned at acceptance under the channel order,
+	// never on the wire. Cache and queue effects revalidate this pair and the
+	// fixed AttemptID; a delayed emit is not permission to deliver old progress.
+	Seq        uint64 `json:"-"`
+	Generation uint64 `json:"-"`
+	AttemptID  string `json:"-"`
+	// RestartInterrupted marks the unowned result a gateway start records
+	// for a pairing the restart cut off (never on the wire). The reconnect
+	// cache keeps it, because every page reconnects after the restart and
+	// must still see it (founder ruling 2026-10-21).
+	RestartInterrupted bool `json:"-"`
 }
 
 // TaskStatusChangedPayload carries a workflow task status transition for the

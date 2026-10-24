@@ -73,6 +73,12 @@ export interface StartGatewayOptions {
    * preserving the existing "boot + onboard" contract.
    */
   skipOnboarding?: boolean;
+  /**
+   * Fixture-internal seed for THIS throwaway gateway only, never a production
+   * setting or a mutation of the shared CI gateway. Omitted preserves the
+   * original minimal config exactly. The requested port always wins.
+   */
+  fixtureConfig?: Record<string, unknown>;
 }
 
 /**
@@ -101,10 +107,13 @@ export async function startGateway(opts: StartGatewayOptions): Promise<GatewayHa
   // Create a throwaway OMNIPUS_HOME — unique per startGateway() call.
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), `omnipus-e2e-${opts.port}-`));
 
-  // Pre-write config.json with the port.
+  // An optional fixture seed is confined to this new home. Existing callers
+  // still get precisely {version:1,gateway:{port}}; no shared config is read
+  // or changed. The allocated listener port cannot be replaced by the seed.
+  const fixtureConfig = opts.fixtureConfig ?? {};
   fs.writeFileSync(
     path.join(homeDir, 'config.json'),
-    JSON.stringify({ version: 1, gateway: { port: opts.port } }, null, 2),
+    JSON.stringify({ ...fixtureConfig, version: 1, gateway: { ...(fixtureConfig.gateway as Record<string, unknown> | undefined), port: opts.port } }, null, 2),
     { mode: 0o600 },
   );
 

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // policyApproverAdapter implements agent.PolicyApprover using the in-process
@@ -44,6 +45,16 @@ func newPolicyApproverAdapter(reg *approvalRegistryV2, ws *WSHandler) *policyApp
 // the entry is already in denied_saturated state and resultCh has a pre-delivered
 // outcome, so we skip the WS broadcast and unblock immediately.
 func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.PolicyApprovalReq) (bool, string, bool) {
+	// Keep room pre-admission cards tied to their room. For a member's own
+	// work, consumed channel input takes precedence; plain contexts retain
+	// the server-derived label supplied by the turn (FR-240 / K7).
+	originLabel, roomRef := req.OriginLabel, req.RoomRef
+	if origin := tools.ToolTurnOrigin(ctx); !req.RoomPreAdmission && origin != nil && (originLabel == "" || origin.ChannelTriggered()) {
+		originLabel = origin.Label()
+		if origin.ChannelTriggered() {
+			roomRef = nil
+		}
+	}
 	entry, accepted := a.reg.requestApproval(
 		req.ToolCallID,
 		req.ToolName,
@@ -51,7 +62,7 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		req.AgentID,
 		req.SessionID,
 		req.TurnID,
-		approvalExtras{RoomRef: req.RoomRef, OriginLabel: req.OriginLabel, RoomPreAdmission: req.RoomPreAdmission},
+		approvalExtras{RoomRef: roomRef, OriginLabel: originLabel, RoomPreAdmission: req.RoomPreAdmission},
 	)
 	if entry == nil {
 		// Defensive: should never happen (requestApproval always returns non-nil).

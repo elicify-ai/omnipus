@@ -8,7 +8,7 @@ skills:
 
 # squad-lead — Omnipus Squad Lead
 
-Last reviewed: 2026-10-23 — approved delivery-process rollout
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 
 **Your first tool call, before any Bash, Read, or Agent call, is `Skill(omnipus-planning-orchestration)`.** Re-open it before you build every new plan, too. It is also preloaded via the `skills:` field above — this instruction is the belt to that skill's braces. It holds the dependency-graph/safe-parallel/waves planning method, the coordination-ledger protocol (formats, claims, hold/release, the landing lock, landing announcements), the idle-time playbook, and the status/reporting rules this file only summarizes below.
 
@@ -87,9 +87,9 @@ Inside your branch(es), run the same size-appropriate flow `team-lead` runs for 
 4. **RED** — one test author for the feature, retained through test fixes and test-side reconciliation. Separate features in an epic may have different authors; never split this feature's test phases among sub-workers. Write UAT rows at spec time (root `CLAUDE.md`, "Definition of Done").
 5. **GREEN** — `backend-lead` / `frontend-lead` implement against the failing tests; you review their evidence table, not their assertion of done.
 6. **CHECK** — a *different* `qa-lead` instance, fresh context, never the RED author: mutation check plus `test-integrity-audit`'s BLOCK / WARN / PASS verdict with file::line evidence. This is a separate test-integrity audit, not a gate reviewer. # agent-guard: allow
-7. **Combined review** — follow root `CLAUDE.md` ("Change sizes and the review gate") once on the combined feature branch, not each lane/finding. Use `.claude/templates/plugin-reviewer-dispatch.md` at the head of plugin reviews. Keep read-only reviewers, finding evidence, UNVERIFIED adjudication, affected-reviewer re-review only and the five-round ceiling. `grill-code` complements the feature gate; it never substitutes for it.
+7. **Combined review** — follow root `CLAUDE.md` ("Change sizes and the review gate") once on the combined feature branch, not each lane/finding. Use `.claude/templates/plugin-reviewer-dispatch.md` at the head of plugin reviews. Keep read-only reviewers, finding evidence, UNVERIFIED adjudication, affected-reviewer re-review only and the five-round ceiling. The post-landing `grill-code` audit is separate from this pre-landing gate.
 8. **Reachability and user-facing documentation check** before any landing ask — tool registered with an explicit policy entry? A screen renders it? Was the test plan executed, not merely written? For each UI or behaviour change, is the root `CLAUDE.md` ("Definition of Done") documentation TODO closed by a matching user-facing update, audited by `docs-verifier`, and checked by reviewers? A missing matching update is Important; an internal design note does not substitute for user docs.
-9. **After landing** — `spec-sync` updates the spec's `Status:` field (for example Approved → Implemented, or → Superseded) and reconciles any code/spec drift, treating the landed code as fact and flagging anything needing a founder decision rather than resolving it silently.
+9. **After landing** — `grill-code` audits the landed commit against the spec (root `CLAUDE.md`, "Spec-Driven Workflow"); `spec-sync` updates the spec's `Status:` field (for example Approved → Implemented, or → Superseded) and reconciles any code/spec drift, treating the landed code as fact and flagging anything needing a founder decision rather than resolving it silently.
 
 You keep your squad's ledger row current through every step (status: planned / in-flight / gated / handed-back / waiting-for-founder / landed / blocked / released), cap your reports to `team-lead` (or the founder in your separate session) at **about 40 lines plus the evidence table**, and re-read the ledger directory after any context compaction or resume — the ledger, never your own memory, is the coordination state.
 

@@ -4,10 +4,8 @@ package agent
 
 import (
 	"fmt"
-	"time"
+	"sync/atomic"
 
-	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
@@ -76,6 +74,8 @@ func (al *AgentLoop) EventDrops(kind EventKind) int64 {
 }
 
 type turnEventScope struct {
+	// Carry the owner into newTurnState on every production construction path.
+	loop       *AgentLoop
 	agentID    string
 	sessionKey string
 	turnID     string
@@ -84,6 +84,7 @@ type turnEventScope struct {
 func (al *AgentLoop) newTurnEventScope(agentID, sessionKey string) turnEventScope {
 	seq := al.turnSeq.Add(1)
 	return turnEventScope{
+		loop:       al,
 		agentID:    agentID,
 		sessionKey: sessionKey,
 		turnID:     fmt.Sprintf("%s-turn-%d", agentID, seq),
@@ -101,6 +102,11 @@ func (ts turnEventScope) meta(iteration int, source, tracePath string) EventMeta
 	}
 }
 
+// eventEmissionsSuppressed counts events that never reach a bus because the
+// publisher is missing. Include its process-wide total in every warning, like
+// fallbackNoteSuppressed, so a wiring failure cannot disappear without a trace.
+var eventEmissionsSuppressed atomic.Uint64
+
 func (al *AgentLoop) emitEvent(kind EventKind, meta EventMeta, payload any) {
 	evt := Event{
 		Kind:    kind,
@@ -109,49 +115,21 @@ func (al *AgentLoop) emitEvent(kind EventKind, meta EventMeta, payload any) {
 	}
 
 	if al == nil || al.eventBus == nil {
+		reason := "nil_loop"
+		if al != nil {
+			reason = "nil_event_bus"
+		}
+		suppressed := eventEmissionsSuppressed.Add(1)
+		logger.WarnCF("eventbus", "Agent event suppressed: publisher is not initialized", map[string]any{
+			"reason": reason, "event_kind": kind.String(), "agent_id": meta.AgentID,
+			"turn_id": meta.TurnID, "source": meta.Source, "suppressed_total": suppressed,
+		})
 		return
 	}
 
 	al.logEvent(evt)
 
 	al.eventBus.Emit(evt)
-}
-
-// EmitWhatsAppPairing publishes a WhatsApp native/QR pairing update (QR code or
-// status) onto the event bus so every connected SPA WebSocket client receives a
-// whatsapp_pairing frame (#283). Safe to call from a channel's own goroutine —
-// the bus drops to a full subscriber rather than blocking. Wired into the
-// WhatsApp native channel at gateway boot via SetPairingObserver.
-func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.PairingStatus, qr, message string) {
-	al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, WhatsAppPairingPayload{
-		ChannelID: channelID,
-		Status:    status,
-		QR:        qr,
-		Message:   message,
-	})
-	// FR-111 (#358): audit-log device-pairing lifecycle transitions so linking a new
-	// WhatsApp device leaves a tamper-evident trail. We deliberately do NOT log the
-	// `code`/`connecting` states (high-frequency, and the QR itself is a scannable
-	// secret that must never reach the audit file) — only the terminal outcomes.
-	// Decision uses the audit vocabulary (allow=linked, error=failed/expired); the
-	// exact pairing status rides in Details.
-	switch status {
-	case channels.PairingStatusLinked, channels.PairingStatusError, channels.PairingStatusTimeout:
-		decision := audit.DecisionAllow
-		if status != channels.PairingStatusLinked {
-			decision = audit.DecisionError
-		}
-		audit.EmitEntry(al.auditLogger, &audit.Entry{
-			Timestamp: time.Now().UTC(),
-			Event:     audit.EventChannelPairing,
-			Decision:  decision,
-			Details: map[string]any{
-				"channel": channelID,
-				"status":  string(status),
-				"message": message,
-			},
-		})
-	}
 }
 
 // EmitNotification publishes a user-facing notification onto the event bus so

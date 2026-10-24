@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	ta "github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
 	tu "github.com/mymmrac/telego/telegoutil"
 
@@ -127,6 +129,22 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 	logger.InfoC("telegram", "Starting Telegram bot (polling mode)...")
 
 	c.ctx, c.cancel = context.WithCancel(ctx)
+
+	// A token Telegram rejects (401) only shows up in the background polling
+	// loop, which logs and retries; check it here so a rejected credential
+	// fails the start instead of being reported as running (BDD-8.3, gate
+	// r1). A transport error is not a rejection: polling keeps retrying, as
+	// before.
+	if _, meErr := c.bot.GetMe(c.ctx); meErr != nil {
+		var apiErr *ta.Error
+		if errors.As(meErr, &apiErr) && apiErr.ErrorCode == http.StatusUnauthorized {
+			c.cancel()
+			return fmt.Errorf("telegram rejected the bot token: %w", meErr)
+		}
+		logger.WarnCF("telegram", "Could not reach Telegram to check the bot token; polling will retry", map[string]any{
+			"error": meErr.Error(),
+		})
+	}
 
 	updates, err := c.bot.UpdatesViaLongPolling(c.ctx, &telego.GetUpdatesParams{
 		Timeout: 30,

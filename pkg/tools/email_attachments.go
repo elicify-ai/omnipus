@@ -2,7 +2,7 @@ package tools
 
 // The agent attachment tools (ADR-20261001 F3; w4 spec US-3): list and read
 // received attachments freely (shipped ceiling allow), save with the
-// ordinary ask default and the ordinary Auto classification (founder Q4=A —
+// Main/Worker Allow default and the ordinary Auto classification (Q4=A —
 // no exception, no attachment-specific mechanism, no blocklist, no extra
 // approval layer).
 //
@@ -22,10 +22,13 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/mailattachment"
@@ -345,12 +348,15 @@ type DownloadEmailAttachmentTool struct {
 	// budget + budgetAgentID are wired at registration (SetMailBudget).
 	budget        *email.MailBudget
 	budgetAgentID string
-	// service + home/restrict are wired at registration by the optional
-	// SetTransferService setter (the SetMailBudget pattern); an unwired
-	// tool refuses with an explicit, visible error — never a silent no-op.
-	service   *mailattachment.Service
-	agentHome string
-	restrict  bool
+	// Normal registration configures a context-bound service factory. The
+	// fixed service setter remains unchanged. With neither path configured,
+	// the tool refuses explicitly rather than pretending a save occurred.
+	service         *mailattachment.Service
+	agentHome       string
+	restrict        bool
+	transferAgentID string
+	serviceFactory  func(context.Context) (*mailattachment.Service, func() error, error)
+	auditLogger     atomic.Pointer[audit.Logger]
 }
 
 // SetMailBudget wires the shared A8 mail-operation budget.
@@ -378,7 +384,7 @@ func (t *DownloadEmailAttachmentTool) Name() string           { return "download
 func (t *DownloadEmailAttachmentTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *DownloadEmailAttachmentTool) Category() ToolCategory { return CategoryCommunication }
 func (t *DownloadEmailAttachmentTool) Description() string {
-	return "Save one email attachment into your workspace's Library under mail/<mailbox>/<year-month>/ (the same place, name rules, 25 MiB cap and audit entry as the panel's Save to Library). Provide folder (inbox, sent, drafts), message_ref (issued by read_message/list output) and part_index (from list_email_attachments). The destination is chosen for you — there is no path parameter. Returns the saved file's workspace-relative path, absolute path and size; your normal file tools can then read that exact path. Saving a file is a normal permission-gated action: it asks under the ordinary permission settings and Auto-approve treats it like any other workspace write."
+	return "Save one email attachment into your workspace's Library. Files go under mail/<mailbox>/<year-month>/ (the same place, name rules, 25 MiB cap and audit entry as the panel's Save to Library). Provide folder (inbox, sent, drafts), message_ref (issued by read_message/list output) and part_index (from list_email_attachments). The destination is chosen for you — there is no path parameter. Returns the saved file's workspace-relative path, absolute path and size; your normal file tools can then read that exact path. Saving may ask for approval depending on your permissions and Auto-approve settings."
 }
 
 func (t *DownloadEmailAttachmentTool) Parameters() map[string]any {
@@ -410,7 +416,7 @@ func (t *DownloadEmailAttachmentTool) Parameters() map[string]any {
 // the evaluated path is that fixed hierarchy root inside the turn's work
 // dir. It never refuses the call itself — an unevaluable case asks.
 func (t *DownloadEmailAttachmentTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
-	if t.service == nil {
+	if t.service == nil && t.serviceFactory == nil {
 		return autoAsks(t.Name() + " save destination is not configured")
 	}
 	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpWrite,
@@ -431,24 +437,39 @@ func (t *DownloadEmailAttachmentTool) Execute(ctx context.Context, args map[stri
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	if t.service == nil {
+	if t.service == nil && t.serviceFactory == nil {
 		return ErrorResult(fmt.Sprintf("%s: the shared transfer service is not wired for this agent; saving is unavailable", toolName))
 	}
 	_, err = attachmentToolTransports(ctx, t.tps, toolName)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	// The save runs through the SHARED service — same cap, naming, audit
-	// and refusal semantics as the panel (US-3.AC-7). The token is
-	// generated per call: this is one explicit save attempt.
-	receipt, err := t.service.Save(ctx, mailattachment.SaveRequest{
-		Slug:      folder,
-		Ref:       ref,
-		PartIndex: idx,
-		Token:     fmt.Sprintf("agent-%s-%d", ToolAgentID(ctx), time.Now().UnixNano()),
-	})
+	service := t.service
+	closeService := func() error { return nil }
+	if service == nil {
+		service, closeService, err = t.serviceFactory(ctx)
+		if err != nil {
+			return ErrorResult(fmt.Sprintf("%s: could not authorize the Library destination: %v", toolName, err))
+		}
+	}
+	// One explicit save, through the same cap/naming/marker/audit service.
+	// The mutation budget path waits for Save to settle, even if the caller
+	// cancels after it starts. Only then may the destination be closed.
+	token := fmt.Sprintf("agent-%s-%d", ToolAgentID(ctx), time.Now().UnixNano())
+	var closeErr error
+	receipt, err := func() (*mailattachment.SaveReceipt, error) {
+		defer func() { closeErr = closeService() }()
+		return gateMailMutation(ctx, t.budget, t.budgetAgentID, toolName, t.tps.mustResolve(ctx, toolName),
+			map[string]any{"folder": folder, "ref": ref, "idx": idx, "save_operation_token": token},
+			func(c context.Context) (*mailattachment.SaveReceipt, error) {
+				return service.Save(c, mailattachment.SaveRequest{Slug: folder, Ref: ref, PartIndex: idx, Token: token})
+			})
+	}()
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("%s: could not save to Library: %v", toolName, err))
+		return ErrorResult(fmt.Sprintf("%s: could not save to Library: %v", toolName, errors.Join(err, closeErr)))
+	}
+	if closeErr != nil {
+		return ErrorResult(fmt.Sprintf("%s: saved to %s, but closing the destination failed: %v. Do not retry the save", toolName, receipt.Path, closeErr))
 	}
 	return marshalAttachmentResult(toolName, struct {
 		Saved        bool   `json:"saved"`

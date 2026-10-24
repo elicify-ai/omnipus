@@ -87,7 +87,9 @@ func (ts *turnState) queueProviderFallbackNote(answeredModel string, attempts []
 		EventKindProviderFallback,
 		ts.eventMeta("runTurn", "turn.llm.fallback"),
 		ProviderFallbackPayload{
-			SessionID:        string(ts.routingSessionID),
+			// A helper's cancellation scope can be its parent; this notice
+			// belongs to the producing session, just like the saved note.
+			SessionID:        ts.transcriptSessionID,
 			TurnID:           ts.turnID,
 			AnsweredModel:    answeredModel,
 			UnavailableModel: unavailableModel,

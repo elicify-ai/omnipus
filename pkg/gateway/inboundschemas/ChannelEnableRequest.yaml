@@ -1,0 +1,38 @@
+title: ChannelEnableRequest
+description: >
+  Optional body of PUT /api/v1/channels/{id}/enable. An absent body or {} is an
+  ordinary enable and grants no chat ownership of a pairing. pairing_retry is an
+  explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent
+  FR-081 / K10, BDD-8.8): the gateway proves the caller owns session_id and that
+  the request/session pair is the channel's recorded pairing owner, then claims
+  the next pairing attempt for that chat before enabling. A WebSocket
+  subscription never grants this ownership.
+type: object
+additionalProperties: false
+properties:
+  pairing_retry:
+    type: object
+    description: >
+      The original connect call and chat of the pairing being retried (not newly
+      minted identifiers). Compared verbatim. A mismatch, a stale owner or a
+      competing attempt is refused with 409 pairing_retry_conflict and nothing is
+      enabled.
+    additionalProperties: false
+    required:
+      - request_id
+      - session_id
+    properties:
+      request_id:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '\S'
+        description: The connect_channel tool-call ID that started the pairing.
+        example: original-connect-call-id
+      session_id:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: '\S'
+        description: The chat session that started the pairing.
+        example: requesting-chat-id

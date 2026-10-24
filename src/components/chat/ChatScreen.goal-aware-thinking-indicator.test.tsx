@@ -1,23 +1,5 @@
-// Goal-aware thinking indicator — operator-reported UX fix, 2026-09-08
-// (GX-C). Mirrors ChatScreen.thinking-indicator-context.test.tsx's harness
-// exactly ('@assistant-ui/react' left UNMOCKED, ChatScreen mounted inside a
-// real AssistantRuntimeProvider via the real useOmnipusRuntime hook) — see
-// that file's header comment for why every other ChatScreen test file
-// (which mocks ThreadPrimitive.Messages to null) cannot reach this surface.
-//
-// FR-039 (DEL-F39–40): the override now joins the PRODUCING message's own
-// goal_id to the exact keyed criteria in `goalPills` — never the "latest
-// goal" scalar. Cases key the streaming message's `goalId` and seed
-// `goalPills` accordingly; a message with no key is neutral.
-//
-// BDD:
-//   Given: a goal is active and its record is still empty, no tool call running
-//   Then:  the indicator reads "Framing your goal" (never the generic pool)
-//   Given: a goal is active, record empty, and `set_goal` is the running step
-//   Then:  the indicator reads "Setting acceptance criteria"
-//   Given: the goal's record has already been populated (criteria present)
-//   Then:  the override does not apply — falls back to the generic pool
-
+// Founder 2026-10-21: goal states retain their motion/records but do not
+// replace active-form-or-fixed-fallback status copy. Real live runtime.
 import { describe, it, expect, vi } from 'vitest'
 import { render, within } from '@testing-library/react'
 import * as React from 'react'
@@ -197,7 +179,7 @@ function seedGoalAwareStreamingAssistant(
 }
 
 describe('ChatScreen thinking indicator — goal-aware override (operator UX fix, 2026-09-08)', () => {
-  it('shows "Framing your goal" while a goal is active with an empty record and nothing is running yet', async () => {
+  it('uses fallback with an active empty goal and no active form', async () => {
     const sid = 'sess_goal_framing'
     seedGoalAwareStreamingAssistant(sid, 'goal_indicator_test', {
       goal_indicator_test: makeGoalFrame(),
@@ -214,10 +196,11 @@ describe('ChatScreen thinking indicator — goal-aware override (operator UX fix
     })
 
     const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-    expect(within(bubble).getByText('Framing your goal')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent(GENERIC_THINKING_RE)
+    expect(within(bubble).queryByText('Framing your goal')).not.toBeInTheDocument()
   })
 
-  it('shows "Setting acceptance criteria" while set_goal is the running step and the record is still empty', async () => {
+  it('uses fallback while set_goal runs without an active form', async () => {
     const sid = 'sess_goal_setting_criteria'
     seedGoalAwareStreamingAssistant(
       sid,
@@ -241,10 +224,11 @@ describe('ChatScreen thinking indicator — goal-aware override (operator UX fix
     })
 
     const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-    expect(within(bubble).getByText('Setting acceptance criteria')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent(GENERIC_THINKING_RE)
+    expect(within(bubble).queryByText('Setting acceptance criteria')).not.toBeInTheDocument()
   })
 
-  it('falls back to the generic rotating pool once the goal record is populated (criteria present)', async () => {
+  it('falls back to the fixed fallback pool once the goal record is populated (criteria present)', async () => {
     const sid = 'sess_goal_record_populated'
     seedGoalAwareStreamingAssistant(sid, 'goal_indicator_test', {
       goal_indicator_test: makeGoalFrame({
@@ -266,7 +250,7 @@ describe('ChatScreen thinking indicator — goal-aware override (operator UX fix
     expect(within(bubble).getByText(GENERIC_THINKING_RE)).toBeInTheDocument()
   })
 
-  it('falls back to the generic rotating pool when there is no active goal at all', async () => {
+  it('falls back to the fixed fallback pool when there is no active goal at all', async () => {
     const sid = 'sess_goal_none'
     seedGoalAwareStreamingAssistant(sid, null, {})
 

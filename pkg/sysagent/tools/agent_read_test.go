@@ -12,6 +12,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestGetAgentReturnsSanitizedConfigSoulSparseAssignmentsAndRevision(t *testing.T) {
@@ -74,50 +76,38 @@ func TestGetAgentReturnsSanitizedConfigSoulSparseAssignmentsAndRevision(t *testi
 
 func TestGetAgentToolsReturnsCatalogEffectivePoliciesAndStoredOverrideNames(t *testing.T) {
 	home := t.TempDir()
-	agent := config.AgentConfig{ID: "writer", Tools: &config.AgentToolsCfg{Builtin: config.AgentBuiltinToolsCfg{Policies: map[string]config.ToolPolicy{"bash": config.ToolPolicyDeny}}}}
-	if err := agentstore.New(home).Create(agent.ID, &agent); err != nil {
+	agent := config.AgentConfig{ID: "writer", Name: "Writer", Tools: &config.AgentToolsCfg{Builtin: config.AgentBuiltinToolsCfg{Policies: map[string]config.ToolPolicy{"bash": config.ToolPolicyDeny}}}}
+	store := agentstore.New(home)
+	if err := store.Create(agent.ID, &agent); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.ReadState(agent.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{}
 	cfg.Sandbox.ToolPolicies = map[string]string{"bash": "allow", "read_file": "allow"}
 	deps := &systools.Deps{Home: home, GetCfg: func() *config.Config { return cfg }}
-	deps.AgentConfigInventory = func() systools.AgentConfigInventory {
-		return systools.AgentConfigInventory{
-			ConfiguredMCP: map[string]struct{}{"mail": {}},
-			LiveMCPTools: map[string]map[string]struct{}{
-				"mail": {"mcp_mail_send": {}, "send": {}},
-			},
-		}
-	}
+	// SPEC.md compact output: only assigned live MCP tools may join the builtin rows.
+	mail := tools.NewMCPTool(nil, "mail", &mcp.Tool{Name: "send", Description: "Send mail."})
+	defaultToolsWireCatalog(t, deps, []tools.Tool{mail, defaultToolsPreviewMetadata{name: "read_file"}, defaultToolsPreviewMetadata{name: "bash"}})
 	result := systools.NewAgentGetToolsTool(deps).Execute(context.Background(), map[string]any{"id": agent.ID})
 	if result.IsError {
 		t.Fatalf("result=%s", result.ForLLM)
 	}
-	var got map[string]any
-	if err := json.Unmarshal([]byte(result.ForLLM), &got); err != nil {
+	// SPEC.md compact output: revision remains in the header; verbose override/connector blocks are dropped.
+	header := "agent: writer | name: Writer | kind: main | revision: " + state.Revision
+	policies := defaultToolsCompactPolicies(t, result.ForLLM, header)
+	if !reflect.DeepEqual(map[string]string{"bash": "deny", "read_file": "allow"}, policies) {
+		t.Fatalf("compact effective policies=%v, want exactly bash deny and read_file allow; no unassigned MCP tools", policies)
+	}
+	stored, err := store.Get(agent.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	names, namesOK := got["override_names"].([]any)
-	if !namesOK {
-		t.Fatalf("override_names=%T %v, want array", got["override_names"], got["override_names"])
-	}
-	if len(names) != 1 || names[0] != "bash" {
-		t.Fatalf("response=%v", got)
-	}
-	policies, policiesOK := got["effective_policies"].(map[string]any)
-	if !policiesOK {
-		t.Fatalf("effective_policies=%T %v, want object", got["effective_policies"], got["effective_policies"])
-	}
-	if policies["bash"] != "deny" || policies["read_file"] != "allow" {
-		t.Fatalf("effective=%v", policies)
-	}
-	connectors, ok := got["connector_catalog"].(map[string]any)
-	if !ok {
-		t.Fatalf("connector_catalog=%T %v, want sanitized per-server live tool inventory", got["connector_catalog"], got["connector_catalog"])
-	}
-	mail, ok := connectors["mail"].([]any)
-	if !ok || len(mail) != 2 || mail[0] != "mcp_mail_send" || mail[1] != "send" {
-		t.Fatalf("connector_catalog.mail=%v, want sorted public and remote names", connectors["mail"])
+	// SPEC.md read-only inventory: preserve the old stored-override check against the real protected record.
+	if !reflect.DeepEqual(map[string]config.ToolPolicy{"bash": config.ToolPolicyDeny}, stored.Tools.Builtin.Policies) {
+		t.Fatalf("read changed stored override map: %v", stored.Tools.Builtin.Policies)
 	}
 }
 

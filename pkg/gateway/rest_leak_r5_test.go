@@ -20,10 +20,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -245,8 +247,18 @@ func drainConnFrames(wc *wsConn) string {
 	}
 }
 
-// F1: a WebSocket Stop whose lifecycle journal cannot be opened answers the
-// ErrorFrame with fixed text - no session id, no path, no OS error.
+// r5ConnectStopNotices wires the real notification serializer to a named
+// recipient. Only the socket queue replaces a network edge.
+func r5ConnectStopNotices(t *testing.T, h *WSHandler, wc *wsConn) {
+	t.Helper()
+	wc.userID = "r5-stop-owner"
+	h.notifStore = notifications.NewStore(t.TempDir())
+	h.agentLoop.SetEventSyncTap(func(event agent.Event) { forwardStopTestEvent(h, wc, event) })
+}
+
+// F1: a WebSocket Stop whose lifecycle journal cannot be opened reports fixed
+// notice text - no session id, path or OS error in the prose. The generated
+// notification's session_id is correlation metadata, not failure text.
 func TestR5_F1_WebSocketStopFailureIsFixedText(t *testing.T) {
 	h := r5NewWSHandler(t)
 	lc := session.NewLifecycleStore(t.TempDir())
@@ -258,33 +270,43 @@ func TestR5_F1_WebSocketStopFailureIsFixedText(t *testing.T) {
 	}))
 	r5Block(t, filepath.Join(lc.Dir(), sid+".jsonl"))
 	wc := makeTestConn()
+	r5ConnectStopNotices(t, h, wc)
 
 	h.handleCancelWithScope(wc, sid, false)
 
 	frames := drainConnFrames(wc)
-	require.Contains(t, frames, `"type":"error"`, "the Stop failure must still be reported: %s", frames)
-	r5AssertClean(t, frames, sid, lc.Dir())
+	var notice gen.NotificationFrame
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(frames)), &notice))
+	require.Equal(t, "notification", notice.Type, "the Stop failure must still be reported: %s", frames)
+	require.Equal(t, "stop_notice", notice.NotificationType)
+	require.Equal(t, strPtr(sid), notice.SessionId)
+	require.NotNil(t, notice.Body)
+	assert.Equal(t, "cancel failed: the Stop request could not be completed. Details are in the server log.", *notice.Body)
+	r5AssertClean(t, *notice.Body, sid, lc.Dir())
+	r5AssertClean(t, frames, lc.Dir())
 }
 
 // F4: the settled-Stop failure notice names no session id.
 func TestR5_F4_StopSettledFailureNoticeNamesNoSession(t *testing.T) {
 	h := r5NewWSHandler(t)
 	wc := makeTestConn()
+	r5ConnectStopNotices(t, h, wc)
 	hooks := h.buildCancelHooks(wc)
 	require.NotNil(t, hooks.OnStopSettled)
 	hooks.OnStopSettled("session_r5settled0001", errors.New("boom"))
 	frames := drainConnFrames(wc)
-	require.Contains(t, frames, `"type":"error"`, frames)
-	assert.NotContains(t, frames, `"message":"Stop for session session_r5settled0001`)
+	var notice gen.NotificationFrame
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(frames)), &notice))
+	require.Equal(t, "notification", notice.Type, frames)
+	require.Equal(t, "stop_notice", notice.NotificationType)
 	// The frame's own session_id correlation field is the documented contract
 	// carrier and stays; the prose must not repeat it.
-	var f struct {
-		Message string `json:"message"`
-	}
-	line := strings.SplitN(frames, "\n", 2)[0]
-	require.NoError(t, json.Unmarshal([]byte(line), &f))
-	assert.NotContains(t, f.Message, "session_r5settled0001")
-	assert.Contains(t, strings.ToLower(f.Message), "stop")
+	require.Equal(t, strPtr("session_r5settled0001"), notice.SessionId)
+	require.NotNil(t, notice.Body)
+	assert.NotContains(t, *notice.Body, "session_r5settled0001")
+	assert.Contains(t, strings.ToLower(*notice.Body), "stop")
+	assert.Equal(t, "Stop could not finish; required storage or notice publication failed. Retry after storage is repaired.", *notice.Body)
+	r5AssertClean(t, *notice.Body, "session_r5settled0001")
 }
 
 // F1: the knowledge-base detection diagnostic travels inside an HTTP 200; its

@@ -1780,7 +1780,9 @@ components:
         display lines for the kind: endpoint (provider_key); transport + command
         or URL (mcp_env); channel instance + field (channel_credential); hosts +
         username + mailbox id (mailbox_password); workspace + agent + variable
-        (agent_private). Mirrored inline in contracts/asyncapi.yaml
+        (agent_private); for unbound (a stored value with no recipient
+        recorded) exactly the single fixed line "Stored in Settings; no
+        recipient recorded". Mirrored inline in contracts/asyncapi.yaml
         (components.schemas.SecretRecipientDisplay) — keep both copies in sync by
         hand.
       type: object
@@ -1797,6 +1799,7 @@ components:
             - channel_credential
             - mailbox_password
             - agent_private
+            - unbound
           description: Recipient kind.
         lines:
           type: array
@@ -2022,6 +2025,16 @@ components:
             - stopped
             - interrupted
             - refused
+        continuation_unconfirmed:
+          type: boolean
+          description: >
+            True only when state is `submitted` and the value-free continuation
+            (the reference-only resume message) is not confirmed delivered: the
+            latest ensure-delivery attempt failed or was revoked downstream.
+            Absent once delivery is confirmed, the person stops the continuation,
+            or the request reaches any non-submitted terminal state. Never carries
+            or implies a secret value, cause, stage or reference name. (Train 2
+            M13, T2-SF-02; K4, FR-079.)
         acting_agent_id:
           type: string
           minLength: 1
@@ -6322,6 +6335,7 @@ components:
           - linked
           - timeout
           - error
+          - stopped
         qr:
           type: string
         message:
@@ -6329,7 +6343,7 @@ components:
     WhatsAppPairingSubscribeFrame:
       title: WhatsAppPairingSubscribeFrame
       description: 'Client → server. Registers or clears this connection''s interest in a channel''s whatsapp_pairing frames
-        so the QR is delivered only to the operator viewing that channel''s pairing UI (#283).
+        so the QR is delivered only to the operator viewing that channel''s pairing UI (#283). Subscribing (including the automatic re-subscribe on reconnect) only observes pairing frames: it never restores chat ownership of a pairing and never restarts pairing. A chat Retry claims ownership through PUT /api/v1/channels/{id}/enable with pairing_retry.
 
         '
       type: object
@@ -6344,15 +6358,17 @@ components:
           minLength: 1
           maxLength: 128
           description: >
-            Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with
-            the chat request that started it (QR pairing in chat, WU-7).
+            Spec omnipus-system-agent K10 (FR-081). Correlation hint naming the
+            chat request that started the pairing (QR pairing in chat, WU-7).
+            It is not authority: subscribing never restores ownership.
         session_id:
           type: string
           minLength: 1
           maxLength: 255
           description: >
-            Spec K10. The chat session the pairing belongs to, when it was
-            started from a chat.
+            Spec K10. Correlation hint naming the chat session the pairing
+            belongs to, when it was started from a chat. It is not authority:
+            subscribing never restores ownership.
         type:
           type: string
           const: whatsapp_pairing_subscribe
@@ -6386,14 +6402,18 @@ components:
           minLength: 1
         notification_type:
           type: string
-          description: 'The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a)
-            means the drift check found a knowledge base''s search index out of step with the folder on disk and the index
-            is being rebuilt; it is never emitted for a healthy check.
-
-            '
+          description: >
+            The event class. Mirrors Notification.type in openapi.yaml.
+            "knowledge_drift" (ADR-067 FR-038a) means the drift check found a
+            knowledge base's search index out of step with the folder on disk
+            and the index is being rebuilt; it is never emitted for a healthy check.
+            "stop_notice" is an operational Stop outcome (already-approved request,
+            partial cleanup, or Stop did not complete). It is a non-terminal
+            header notification and must not be sent as a chat ErrorFrame.
           enum:
           - schedule_failed
           - knowledge_drift
+          - stop_notice
         title:
           type: string
           minLength: 1

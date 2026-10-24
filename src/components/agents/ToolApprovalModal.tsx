@@ -221,6 +221,8 @@ interface ToolApprovalCardProps {
    * own doc comment (src/store/toolApproval.ts).
    */
   segments?: CommandSegmentInfo[]
+  /** K7 / FR-251: server-derived turn origin, retained across reconnects. */
+  originLabel?: string
 }
 
 function ToolApprovalCard({
@@ -232,6 +234,7 @@ function ToolApprovalCard({
   queueLength,
   sessionId,
   segments,
+  originLabel,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
   const markResolved = useToolApprovalStore((s) => s.markResolved)
@@ -476,7 +479,7 @@ function ToolApprovalCard({
       <DialogContent
         className="max-w-lg border-[var(--color-warning)]/40 p-0 overflow-hidden gap-0"
         aria-labelledby={titleId}
-        aria-describedby={descId}
+        aria-describedby={originLabel ? `${descId} ${descId}-origin` : descId}
         // Land focus on Deny (safe default) instead of Radix's first-focusable
         // heuristic (which would be the X close button).
         onOpenAutoFocus={(e) => {
@@ -513,6 +516,15 @@ function ToolApprovalCard({
                 </>
               )}
             </DialogDescription>
+            {originLabel && (
+              <DialogDescription
+                id={`${descId}-origin`}
+                className="break-words text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+                data-testid="tool-approval-origin"
+              >
+                {originLabel}
+              </DialogDescription>
+            )}
           </div>
           {queueLength > 1 && (
             <span className="shrink-0 text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-0-5)] rounded-full">
@@ -801,6 +813,7 @@ export function ToolApprovalModal() {
       queueLength={visible.length}
       sessionId={first.sessionId}
       segments={first.segments}
+      originLabel={first.originLabel}
     />
   )
 }

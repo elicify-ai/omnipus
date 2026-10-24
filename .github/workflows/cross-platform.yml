@@ -32,14 +32,15 @@ name: Cross-Platform
 
 on:
   pull_request:
+    branches: [main, release/v0.1.1]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/cross-platform.yml'
   push:
-    branches: [main]
-  workflow_dispatch:
+    branches: [main, release/v0.1.1]
 
 jobs:
   matrix:

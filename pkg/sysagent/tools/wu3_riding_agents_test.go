@@ -84,10 +84,13 @@ func TestWU3PhantomMetadataWriterIsNotAdvertised(t *testing.T) {
 			assert.False(t, exists, "phantom grant on %s", ac.ID)
 		}
 	}
-	preview := wu3Success(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"new_agent_type": "Main"}))
-	assert.NotContains(t, preview["static_catalog"], "write_agent_metadata")
-	assert.NotContains(t, preview["stored_tool_overrides"], "write_agent_metadata")
-	assert.Contains(t, preview["static_catalog"], "read_agent_metadata", "nonempty catalog instrument")
+	// SPEC.md compact output: the real catalog is now name/policy rows, never verbose JSON blocks.
+	defaultToolsWireCatalog(t, d, append(systools.AllTools(d), tools.GeneralBuiltinMetadata()...))
+	result := systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"new_agent_type": "Main"})
+	require.False(t, result.IsError, result.ForLLM)
+	preview := defaultToolsCompactPolicies(t, result.ForLLM, "preview: Main | kind: main")
+	assert.NotContains(t, preview, "write_agent_metadata")
+	assert.Contains(t, preview, "read_agent_metadata", "nonempty catalog instrument")
 }
 
 // #1064 + chief ruling Q2 (HANDOFFS, 2026-10-15T02:25Z): update_agent
@@ -174,9 +177,10 @@ func TestWU3GetAgentToolsResolvesExactNameWithoutCrossAgentResponse(t *testing.T
 	id := wu3CreateAgent(t, d, cfg, "General Purpose fixture")
 	wu3CreateAgent(t, d, cfg, "Different agent")
 	tool := systools.NewAgentGetToolsTool(d)
-	byID := wu3Success(t, tool.Execute(context.Background(), map[string]any{"id": id}))
+	// SPEC.md compact output: exact-name lookup still equals id lookup, now as compact text.
+	byID, _ := defaultToolsExistingBody(t, d, id, map[string]any{"id": id})
 	for attempt := 0; attempt < 6; attempt++ {
-		byName := wu3Success(t, tool.Execute(context.Background(), map[string]any{"name": "General Purpose fixture"}))
+		byName, _ := defaultToolsExistingBody(t, d, id, map[string]any{"name": "General Purpose fixture"})
 		assert.Equal(t, byID, byName, "exact name lookup must be identical to id lookup on every call")
 	}
 	wu3Error(t, tool.Execute(context.Background(), map[string]any{"name": "General"}), "AGENT_NOT_FOUND")

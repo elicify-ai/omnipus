@@ -481,19 +481,12 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	// exclusively via the per-workspace Team tab now
 	// (PUT /api/v1/workspaces/{id}/delegation); this tool does not — and
 	// must not — pretend to grant it.
-	// Seed the privilege rail (FR-008/FR-022, plus bash:deny per CRIT-001 /
-	// bash-tool-spec.md FR-B12): system.agent.create has no tools_cfg
-	// parameter (see Parameters() above — there is no caller-supplied
-	// override for Tools), so newAgent.Tools is always nil here and the
-	// default seed IS the agent's entire tools config. Delegate to the
-	// single shared constructor — also used by the REST create path
-	// (pkg/gateway/rest.go's createAgent, via
-	// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
-	// paths cannot drift out of sync on this seed again.
+	// Share the REST path's complete Main/Worker creation defaults (founder
+	// ruling, 2026-10-22). Main-only tools are denied for Workers before any
+	// sparse caller patch is applied below. Workers may list secrets but ask
+	// their main agent to request one. bash and administration stay denied.
 	ac.newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
 	if ac.newAgent.Type == config.AgentTypeWorker {
-		// §6.5 (FR-007): the worker tier gets no secret card, secret list or
-		// conversation reading.
 		coreagent.RestrictForWorkerTier(ac.newAgent.Tools)
 	}
 	fields := mutationFieldNames(ac.args)

@@ -35,14 +35,13 @@ func TestListJobs_ResolvedPostureAcrossSeededRoster(t *testing.T) {
 	require.True(t, coreagent.SeedConfig(cfg))
 
 	want := map[coreagent.CoreAgentID]string{
-		// Chat targets have independent role-specific list_jobs policies.
-		coreagent.IDMia:     "deny",
-		coreagent.IDJim:     "allow",
-		coreagent.IDOmnipus: "deny",
-		// Delegation-only roles explicitly deny list_jobs in their sparse seeds.
-		coreagent.IDWorker:     "deny",
-		coreagent.IDPlanner:    "deny",
-		coreagent.IDResearcher: "deny",
+		// SPEC.md Table (2026-10-22): list_jobs is Allow for both Main and Worker core sets.
+		coreagent.IDMia:        "allow",
+		coreagent.IDJim:        "allow",
+		coreagent.IDOmnipus:    "deny", // SPEC.md Founder exclusion: Omnipus keeps its baseline system policy.
+		coreagent.IDWorker:     "allow",
+		coreagent.IDPlanner:    "allow",
+		coreagent.IDResearcher: "allow",
 		// System Agents. The Judge is a verifier with no background work of its
 		// own; PlanSupervisor is roster-blind by design (D-04).
 		coreagent.IDJudge:          "deny",
@@ -87,6 +86,10 @@ func TestListJobs_WorkerExplicitDeny_NotInherited(t *testing.T) {
 
 	worker := findSeeded(t, cfg, string(coreagent.IDWorker))
 	require.NotNil(t, worker.Tools)
+	// SPEC.md Table (2026-10-22): list_jobs defaults Allow for Worker, not a locked Deny.
+	assert.Equal(t, "allow", resolveFor(t, cfg, string(coreagent.IDWorker), "list_jobs", nil))
+	// SPEC.md Definitions: an operator may still switch one default tool off; keep the negative guard.
+	worker.Tools.Builtin.Policies["list_jobs"] = config.ToolPolicyDeny
 	p, ok := worker.Tools.Builtin.Policies["list_jobs"]
 	require.True(t, ok,
 		"the Worker's sparse map must carry an EXPLICIT \"list_jobs\" entry — an absent key inherits "+

@@ -153,6 +153,7 @@ func TestRunTurn_AvaCreateSkillSeededAllow_RealSeed(t *testing.T) {
 	_, err := al.ProcessDirectAs(context.Background(), string(coreagent.IDOmnipus), "please create the uat-s67 skill", "test-session-uat-s67-ava")
 	require.NoError(t, err)
 
+	// SPEC.md Q22=B: exempt Omnipus rides the global Allow ceiling and must not ask to create a skill.
 	assert.Zero(t, approver.callCount(),
-		"Ava's ADR-090 seeded create_skill policy is ALLOW — the approver must never be consulted (the ask path is covered by TestRunTurn_CreateSkillAskPolicy_ApproverConsulted)")
+		"Omnipus is Q22's skill-authoring exemption: no approver call; new native Main Ask is tested separately")
 }

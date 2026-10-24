@@ -1,6 +1,6 @@
 # Dispatch and watch — keep workers observable and resumable
 
-Last reviewed: 2026-10-23 — approved delivery-process rollout
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 
 Mechanics for the planning loop's "Dispatch and watch" step. Launcher selection stays
 in the personal rules, outside this repo; set `OMNIPUS_WORKER_CLI` from those rules
@@ -14,12 +14,23 @@ absolute worktree, provider quota/balance receipt and authorized routing choice.
 Keep related scope with its capable owner; contained jobs and UAT lanes use the
 personal-layer routing. Model names and launcher choices stay outside repo assets.
 
-Verify controller enforcement of lane/worktree lock plus live PID ownership, the
-load refusal and worker-owned process-group stop from its actual receipts. These are
-requirements on separate tooling, not a claim this document implements them. If that
-proof is missing, report BLOCKED on controller readiness before launch or resume;
-manual checks are not a substitute for machine enforcement. Never delete a live
-owner's lock or resume over a predecessor that is still alive.
+Controller locks, load refusal, local-receipt quota pre-flight and worker-owned
+process-group stop are **implemented** in the controller invoked below. Read its
+`lock_paths`, `acquire_lock`, `quota_refusal` and `main` before changing the launch
+procedure. Every launch keeps its output-base lock; ordinary worktrees also get
+a working-directory lock with live-PID checks. Exactly the shared launch roots
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus` and
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination` skip that directory
+lock, not the output-base, load or quota gates. Workers launched there still create
+their own writer worktrees; never use the exemption to edit the shared checkout or
+resume over a live predecessor.
+
+The quota check reads recent local receipts/streams, not a live balance endpoint;
+no known failure is not proof of remaining capacity. Record Unknown when reliable
+quota/balance information is unavailable. Save controller output and its direct
+exit code: 3 means ownership refusal, 4 load refusal, 5 quota refusal. A refusal is
+not a completed worker result. If this installed controller cannot be read or run,
+report BLOCKED rather than substituting manual checks or deleting a live lock.
 
 ## Launch with retained control
 

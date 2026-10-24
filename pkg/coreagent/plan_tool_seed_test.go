@@ -45,8 +45,12 @@ func TestToolPolicy_ExecutePlanSeed(t *testing.T) {
 		coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
 	} {
 		for _, tool := range planExecutionTools {
-			assert.Equalf(t, "deny", resolveFor(t, cfg, string(id), tool, nil),
-				"%s must not receive plan execution tool %q by default", id, tool)
+			want := "deny"
+			// SPEC.md Table + Founder exclusion (2026-10-22): Mia gains plan controls; Omnipus, Worker and run_task stay unchanged.
+			if id == coreagent.IDMia && tool != "run_task" {
+				want = "allow"
+			}
+			assert.Equalf(t, want, resolveFor(t, cfg, string(id), tool, nil), "%s plan tool %q", id, tool)
 		}
 	}
 
@@ -131,7 +135,8 @@ func TestToolPolicy_ExecutePlanSeed(t *testing.T) {
 // would now silently inherit the ceiling's "allow", which is exactly the
 // class of gap this test locks shut.
 func TestToolPolicy_InspectSession_JudgeOnly(t *testing.T) {
-	cfg := &config.Config{}
+	// SPEC.md Table (2026-10-22): ordinary Main/Worker inspection is Allow; hidden-role exclusions remain.
+	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 
 	for _, a := range cfg.Agents.List {
@@ -145,12 +150,14 @@ func TestToolPolicy_InspectSession_JudgeOnly(t *testing.T) {
 			continue
 		}
 		require.NotNilf(t, a.Tools, "agent %q must carry an explicit tools policy", a.ID)
-		p, ok := a.Tools.Builtin.Policies["inspect_session"]
-		require.Truef(t, ok,
-			"non-Judge agent %q must carry an EXPLICIT inspect_session entry (never absent) — "+
-				"an absent entry would silently inherit the ceiling's allow", a.ID)
-		assert.Equalf(t, config.ToolPolicyDeny, p,
-			"non-Judge agent %q must not be granted inspect_session", a.ID)
+		if a.Type != config.AgentTypeSystem && a.ID != string(coreagent.IDOmnipus) {
+			// SPEC.md Table (2026-10-22): inspect_session is core Allow for both columns.
+			assert.Equalf(t, "allow", resolveFor(t, cfg, a.ID, "inspect_session", nil), "ordinary agent %q inspect_session", a.ID)
+		} else {
+			p, ok := a.Tools.Builtin.Policies["inspect_session"]
+			require.Truef(t, ok, "hidden non-Judge agent %q must carry an explicit inspect_session denial", a.ID)
+			assert.Equalf(t, config.ToolPolicyDeny, p, "hidden non-Judge agent %q must not be granted inspect_session", a.ID)
+		}
 	}
 }
 

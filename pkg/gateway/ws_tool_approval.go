@@ -414,6 +414,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 	// may later echo back to acknowledge. 0 when the main has no outcome yet;
 	// omitted for a non-main, the connection-open emit, and an unreadable mark.
 	frame.AttentionBound = h.attentionBoundFor(sessionID)
+	frame.SecretRequests = h.secretRequestSnapshot(wc, sessionID)
 
 	raw, err := json.Marshal(frame)
 	if err != nil {

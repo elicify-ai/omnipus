@@ -21,10 +21,11 @@
 name: Shellcheck + bats
 
 on:
-  pull_request: { }
+  pull_request:
+    branches: [main, release/v0.1.1]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches: [main, release/v0.1.1]
 
 defaults:
   run:

@@ -174,8 +174,8 @@ func TestGeneralBuiltinMetadata_AllToolsHaveKnownScope(t *testing.T) {
 // pkg/sysagent/tools/registry.go BuildRegistry doc comment.
 func TestSysagentCatalog_AllToolsAreScopeCore(t *testing.T) {
 	catalog := systools.AllTools(nil)
-	if len(catalog) != 32 {
-		t.Fatalf("expected systools.AllTools(nil) to return exactly 32 tools (per registry.go's BuildRegistry doc comment: \"all 32 system tools\"), got %d — catalog membership drifted from its own documentation", len(catalog))
+	if len(catalog) != 35 {
+		t.Fatalf("expected systools.AllTools(nil) to return exactly 35 tools (32 after the FR-024 count, +select_secret_version and +list_secrets from WU-5/WU-6, +connect_channel from WU-7), got %d — catalog membership drifted from its own documentation", len(catalog))
 	}
 
 	for _, tl := range catalog {
