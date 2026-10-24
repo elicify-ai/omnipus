@@ -38,6 +38,18 @@ package tools
 //	  R4 retry    — issue #1444: the rejection is an IsError tool result,
 //	                writes nothing, and a corrected retry succeeds on both the
 //	                create and the replace path.
+//	  R5 Q74      — chief ruling 2026-10-24: the wider old-spec tests are
+//	                reconciled by the same test author in this change
+//	                (todos_test.go, task_provenance_test.go, the uatRun4
+//	                fixture, and the Q10 fixture's empty-after-trim cases —
+//	                "Q10 empty cases superseded by founder Q74 2026-10-24":
+//	                the required-message replaces acceptance; trim
+//	                normalization for non-empty values and the 38-case count
+//	                stay).
+//	  R3 fixture  — pending: the prompt engineer's Description text lands on
+//	                work/t3-afreq-text; testdata/set_todos_q2_description.txt
+//	                is then updated to match it exactly (chief sends the
+//	                merged SHA).
 //
 //	Mutations for CHECK (deferred per RED rules, elicify-test-writing step 4):
 //	remove the required entry from the item schema; skip the
@@ -84,14 +96,21 @@ func assertActiveFormRequiredRejection(t *testing.T, result *ToolResult, itemInd
 	if !result.IsError {
 		t.Fatalf("call must be rejected (active_form required), got success: %q", result.ForLLM)
 	}
-	plain := strings.ToLower(strings.ReplaceAll(result.ForLLM, "`", ""))
+	assertActiveFormRequiredErrorText(t, result.ForLLM, itemIndex)
+}
+
+// assertActiveFormRequiredErrorText asserts the same spec-pinned message
+// elements against a plain error string (parse-path variant).
+func assertActiveFormRequiredErrorText(t *testing.T, text string, itemIndex int) {
+	t.Helper()
+	plain := strings.ToLower(strings.ReplaceAll(text, "`", ""))
 	for _, want := range []string{
 		fmt.Sprintf("todos[%d]", itemIndex),
 		"active_form is required",
 		strings.ToLower(activeFormRequiredExample),
 	} {
 		if !strings.Contains(plain, want) {
-			t.Errorf("rejection message %q must contain %q", result.ForLLM, want)
+			t.Errorf("rejection message %q must contain %q", text, want)
 		}
 	}
 }
