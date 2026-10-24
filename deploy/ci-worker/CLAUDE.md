@@ -97,6 +97,37 @@ The Go test/build suite is run on a dedicated Fly worker cluster, **never in the
   only the lane's targeted tests/regression after its local pre-flight. Machine
   pressure alone does not authorize a full feature/lane run or a new hotfix branch.
 
+**`fly-targeted.sh` — one targeted command on a SPARE machine (founder 2026-10-24).** For
+a lane's single narrow command (one tagged Go test, one vitest spec) when the local
+heavy-command slots are the bottleneck:
+
+```bash
+deploy/ci-worker/fly-targeted.sh <git-ref> <machine-id|auto> -- <command...>
+deploy/ci-worker/fly-targeted.sh origin/release/v0.1.1 auto -- \
+  go test -tags goolm,stdjson -run '^TestX$' -p 1 ./pkg/foo/
+```
+
+Guarantees (each enforced, and each covered by `fly-targeted_test.bats`): **spares only**
+(default `d8d3977c946558 48ee71eb1e9768`; the performance machine and every tier machine
+are refused — the 2026-10-11 shared-machine starvation was a placement error, and this
+makes that placement impossible); **never beside a gate** (a held `/tmp/runci.lock`, a
+running `runci.sh`, or another targeted payload refuses the run — an unknowable probe
+state refuses too, it never "assumes free"); **pushed refs only** (`git ls-remote`
+membership, checked before any machine is touched); **per-run detached worktree** from
+the machine's own `/cache/omnipus` clone — the clone is never reset, so runci state is
+untouched, and the payload's `FLY_TARGETED_HEAD=` line is asserted against the requested
+sha (stale-checkout trap 1); **real exit code from the log marker** (`FLY_TARGETED_EXIT=`,
+never the ssh wrapper's — trap 2); **command as `ci`, CGO_ENABLED=0**, runci's cache env;
+**evidence before stop** — the log streams to a local file while the command runs, an
+owned machine is stopped when the verdict is known and on Ctrl-C, but a MISSING verdict
+(SSH drop, command possibly still running) leaves it running with hand-retrieval lines;
+**one lane, one machine** via a local per-machine lock (`${TMPDIR:-/tmp}/fly-targeted-locks`).
+An already-running machine is used but never stopped — another session owns it. The
+payload is `fly ssh sftp put`-ed and **md5-verified before execution** (sftp put has
+produced empty files here before). Exit codes: the command's real code, `1` = evidence
+incomplete/untrusted, `2` = refusal. First use on a spare needs its clone to exist
+(`run_gates` there once, or the payload refuses with `no-repo`).
+
 **`all-no-e2e` gate (setup once, three parallel groups).** `all` minus `go-race` and `e2e`,
 restructured so the shared setup is paid once per run instead of once per gate. Measured
 2026-09-15: driving gates one SSH call at a time ran `fetch + checkout` 5× and `npm ci` 4×
