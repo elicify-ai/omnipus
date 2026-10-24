@@ -6752,6 +6752,7 @@ const (
 	MessageTypeContextWindowNotice MessageType = "context_window_notice"
 	MessageTypeJudgeVerdict        MessageType = "judge_verdict"
 	MessageTypeMessage             MessageType = "message"
+	MessageTypeProviderFallback    MessageType = "provider_fallback"
 	MessageTypeSystem              MessageType = "system"
 	MessageTypeToolCall            MessageType = "tool_call"
 	MessageTypeTurnCanceled        MessageType = "turn_canceled"
@@ -6768,11 +6769,31 @@ func (e MessageType) Valid() bool {
 		return true
 	case MessageTypeMessage:
 		return true
+	case MessageTypeProviderFallback:
+		return true
 	case MessageTypeSystem:
 		return true
 	case MessageTypeToolCall:
 		return true
 	case MessageTypeTurnCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageUnavailableCode.
+const (
+	MessageUnavailableCodeModelRetired MessageUnavailableCode = "model_retired"
+	MessageUnavailableCodeRateLimited  MessageUnavailableCode = "rate_limited"
+)
+
+// Valid indicates whether the value is a known member of the MessageUnavailableCode enum.
+func (e MessageUnavailableCode) Valid() bool {
+	switch e {
+	case MessageUnavailableCodeModelRetired:
+		return true
+	case MessageUnavailableCodeRateLimited:
 		return true
 	default:
 		return false
@@ -20561,7 +20582,7 @@ type Message struct {
 	// MessagesCompacted Number of messages compacted (present only on compaction entries).
 	MessagesCompacted *int `json:"messages_compacted,omitempty"`
 
-	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
+	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries, and on a provider_fallback note it is the fallback model that actually answered (ProviderFallbackNote's answered_model). Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
 	Model *string `json:"model,omitempty"`
 
 	// Participant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
@@ -20854,8 +20875,14 @@ type Message struct {
 	// TurnId Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
 	TurnId *string `json:"turn_id,omitempty"`
 
-	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
+	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
 	Type *MessageType `json:"type,omitempty"`
+
+	// UnavailableCode Recorded fallback condition; model_retired controls the existing model-settings hint.
+	UnavailableCode *MessageUnavailableCode `json:"unavailable_code,omitempty"`
+
+	// UnavailableModel Recorded unavailable primary model on a provider_fallback note; omitted when unknown.
+	UnavailableModel *string `json:"unavailable_model,omitempty"`
 
 	// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
 	Verdict *struct {
@@ -21008,8 +21035,11 @@ type MessageToolCallsStatus string
 // MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means the reason is not recorded: readers do not default it to "cancelled" or to anything else (ADR-087 D2; session-core DEL-F36).
 type MessageTruncationReason string
 
-// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
+// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
 type MessageType string
+
+// MessageUnavailableCode Recorded fallback condition; model_retired controls the existing model-settings hint.
+type MessageUnavailableCode string
 
 // MessageVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
 type MessageVerdictPerCriterionEvidenceSource string

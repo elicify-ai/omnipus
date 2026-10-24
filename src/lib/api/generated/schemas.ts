@@ -242,6 +242,7 @@ type Message = {
         | "turn_canceled"
         | "judge_verdict"
         | "context_window_notice"
+        | "provider_fallback"
       )
     | undefined;
   view_membership?: ("chat" | "model" | "both") | undefined;
@@ -280,6 +281,8 @@ type Message = {
   cancel_method?: ("graceful" | "hard") | undefined;
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
+  unavailable_model?: string | undefined;
+  unavailable_code?: ("rate_limited" | "model_retired") | undefined;
   verdict?: JudgeVerdict | undefined;
   context_window_notice?: ContextWindowNotice | undefined;
   system_subtype?:
@@ -3915,6 +3918,7 @@ export const Message: z.ZodType<Message> = z.object({
       "turn_canceled",
       "judge_verdict",
       "context_window_notice",
+      "provider_fallback",
     ])
     .optional(),
   view_membership: z.enum(["chat", "model", "both"]).optional(),
@@ -3956,6 +3960,8 @@ export const Message: z.ZodType<Message> = z.object({
   cancel_method: z.enum(["graceful", "hard"]).optional(),
   descendants_canceled: z.array(z.string()).optional(),
   model: z.string().optional(),
+  unavailable_model: z.string().min(1).max(256).optional(),
+  unavailable_code: z.enum(["rate_limited", "model_retired"]).optional(),
   verdict: JudgeVerdict.optional(),
   context_window_notice: ContextWindowNotice.optional(),
   system_subtype: z

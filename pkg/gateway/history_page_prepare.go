@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/media"
@@ -109,6 +110,17 @@ func historyWireMessage(sid string, e session.ChatHistoryEntry) (generated.Messa
 	}
 	position := string(e.Position)
 	message.HistoryPosition = &position
+	if e.Entry.Type == session.EntryTypeProviderFallback {
+		// PF=A (chat-history paging spec D10; seams-decision section Q):
+		// the fallback-only semantic profile runs in the real projection in
+		// addition to generated validation. A valid note keeps its saved
+		// content, answering model and known unavailable facts and must
+		// never become the corruption placeholder; genuinely malformed
+		// notes take the D4 placeholder below.
+		if !historyProviderFallbackProfile(&message) {
+			return historyMessagePlaceholder(e)
+		}
+	}
 	raw, err = json.Marshal(message)
 	if err != nil {
 		return message, nil, err
@@ -117,18 +129,44 @@ func historyWireMessage(sid string, e session.ChatHistoryEntry) (generated.Messa
 		if serverErr {
 			return message, nil, errors.New("message projection schema unavailable")
 		}
-		if e.Entry.Type == session.EntryTypeProviderFallback {
-			return historyPendingProviderFallback(e)
-		}
 		return historyMessagePlaceholder(e)
 	}
 	return message, raw, err
 }
+
+// historyProviderFallbackProfile enforces the PF=A fallback-only semantic
+// rules (chat-history paging spec D10; seams-decision section Q2) that the
+// flat generated Message shape cannot express conditionally: the persisted
+// note text is required (1..4096 code points, verbatim) and the note's
+// author role is the system role — an absent legacy role normalizes to a
+// completed system note, a supplied non-system role is a malformed note.
+// Enum and length validation of unavailable_model/unavailable_code stays
+// with the generated Message schema; whatever fails it degrades through the
+// D4 malformed-item placeholder, never silently. Empty archive facts never
+// reach the wire (TranscriptEntry omitempty), so unknown optional facts
+// stay omitted rather than null/empty sentinels.
+func historyProviderFallbackProfile(message *generated.Message) bool {
+	if message.Role == nil {
+		role := generated.MessageRoleSystem
+		message.Role = &role
+	} else if *message.Role != generated.MessageRoleSystem {
+		return false
+	}
+	if message.Content == nil {
+		return false
+	}
+	if n := utf8.RuneCountInString(*message.Content); n < 1 || n > 4096 {
+		return false
+	}
+	return true
+}
 func historyPendingProviderFallback(e session.ChatHistoryEntry) (generated.Message, []byte, error) {
-	// TODO(PF=A, seams section Q): the additive Message mapping is explicitly
-	// held until the release lane repairs real live fallback publication. A
-	// valid saved note is not corrupt. This isolated placeholder is a known RED,
-	// not fallback parity; do not widen schemas or invent wire aliases here.
+	// PF=A landed (chat-history paging spec D10; seams-decision section Q):
+	// a valid saved note passes generated Message validation upstream and
+	// never reaches here. This branch now only sees notes the regenerated
+	// schema rejects (unknown type value, overlength model/code facts) —
+	// genuinely malformed under D4 — so they keep the per-item placeholder
+	// while valid neighbours stay intact.
 	return historyMessagePlaceholder(e)
 }
 func historyMessagePlaceholder(e session.ChatHistoryEntry) (generated.Message, []byte, error) {
