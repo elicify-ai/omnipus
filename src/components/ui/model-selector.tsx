@@ -92,7 +92,7 @@ interface ModelSelectorProps {
    * form fields and elements with an explicit tabindex attribute). Every
    * call site historically relied on this being optional and omitted it,
    * which soft-locked keyboard users on Safari at any required Model field
-   * (e.g. agent-creation wizard Step 1). Callers may still override.
+   * (e.g. onboarding's first-agent step). Callers may still override.
    */
   tabIndex?: number
   /** Prefix for each item's data-testid. The full id is `${itemTestIdPrefix}${model}`. */
