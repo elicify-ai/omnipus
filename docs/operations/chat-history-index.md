@@ -184,6 +184,24 @@ A failed all-session preflight publishes no sessions. A detected late failure
 can follow real publications, which are reported rather than described as zero.
 Mixed refusals select exit 2 if any precondition/unconverted class is present;
 otherwise integrity/I/O selects 1. Refused sessions never produce success exit 0.
+After apply reaches its publication stage, the final safety guard still runs
+when the publication loop ends with an error. Inventory, all-session preflight
+and initial-guard failures can return earlier, before that stage. A final
+failure whose fixed class has not already been reported adds another refusal
+and participates in exit precedence: one publication followed by
+`index_verification` and then `source_changed` reports
+`published=1 unchanged=0 refused=2`, exit 2. Final-guard deduplication is by
+**fixed failure class**, not equality of underlying causes. A final failure in
+an already reported class is not counted again; later unattempted sessions do
+not acquire fictional refusals or publications.
+
+Offline reconstruction can ignore a missing settlement, projection or retraction
+target only when the validated existing index proves its token/rank tombstone
+and the captured retained catalog proves the target partition is absent. A
+missing address or file by itself is not expiry proof. Unexplained missing
+targets—including missing records inside a retained partition—still refuse as
+`invalid_reference`, without inventing an orphan tool result or rewriting the
+remaining canonical effect bytes.
 
 ## Runtime limits are different from offline repair
 

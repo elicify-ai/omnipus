@@ -3,6 +3,14 @@
 Scoped guidance for the `deploy/ci-worker/` directory. Loaded automatically by Claude Code
 whenever a file in this directory (or a descendant) is read.
 
+Last reviewed: 2026-10-23 — delivery policy
+
+**Before using any recipe below:** apply root `CLAUDE.md` ("CI scope and remote
+pre-flight" and "CI quarantine"). These are runner capabilities, not permission to
+run full CI on a lane. Use the shared skill's "Build and test" procedure for
+approval/pre-flight receipts. The trigger restriction and quarantine automation are
+separate backend work; this text does not claim either is implemented.
+
 ## ⚠️ "ALL GATES GREEN" from this worker does NOT mean races were checked
 
 The worker runs a FASTER SUBSET of GitHub CI. Two limits that have already caused a
@@ -84,10 +92,10 @@ The Go test/build suite is run on a dedicated Fly worker cluster, **never in the
   fly ssh console --app ci-omnipus-1 --machine <id> -C "/cache/runci.sh <ref> <gate>"
   ```
 - **Gates** (verified against `runci.sh`'s `case` block 2026-09-16): `all | all-no-e2e | gofmt | go-build | go-vet | lint | go-test | go-race | records-no-sqlite | contracts | spa | quick | embed-build | e2e | cli-verb-guard`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `records-no-sqlite` (added for review finding F7) runs `pkg/gateway/rest_knowledge_find_propindexless_test.go`'s two tests under `-tags goolm,stdjson,records_no_sqlite` — the `records_no_sqlite` build tag otherwise appears nowhere in CI, so this is the only gate (here or in `.github/workflows/pr.yml`'s mirrored step) that ever exercises that honesty-contract carve-out. `e2e` runs the full Playwright matrix (90 spec files across 24 shards; count them with `ls tests/e2e/*.spec.ts | wc -l`) — see "E2E gate" below.
-- **When to use it**:
-  - Pre-push verification on a feature branch **before** opening a PR (when you want a signal without burning a PR slot).
-  - Pre-merge gate on a hotfix / release branch (faster turnaround than the public PR workflow).
-  - Any time the dev pod can't run the suite (OOM, RAM pressure, root disk > 90%).
+- **When to use it**: only for a founder-approved remote window within root
+  `CLAUDE.md`'s CI scope. Use a pushed candidate for authorized integration gates, or
+  only the lane's targeted tests/regression after its local pre-flight. Machine
+  pressure alone does not authorize a full feature/lane run or a new hotfix branch.
 
 **Chat-history native test prerequisites.** Checkout cleanup removes ignored tool outputs on every worker gate. The `go-test`, `go-race` and `e2e` consumers therefore build the real official session test driver and seed tool before tests, and export `OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY` and `OMNIPUS_CHAT_HISTORY_SEED_BINARY` as absolute native executable paths. Fixture builds keep `CGO_ENABLED=0` and `goolm,stdjson`; the race consumers retain their existing `CGO_ENABLED=1` and `-race` settings. GitHub's gateway test/race shards and cross-platform suite use the same preparation helper, which writes the bindings to `GITHUB_ENV` for later steps. A failed prebuild fails the gate; neither missing tools nor an unset receipt environment may skip or weaken the T18 producer.
 

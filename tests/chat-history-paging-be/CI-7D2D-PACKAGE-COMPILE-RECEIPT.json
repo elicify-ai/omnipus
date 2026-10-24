@@ -1,0 +1,12 @@
+{
+  "requirement": "G1 remaining package compilation",
+  "code_input": "7c1a92f80f75e29cf2c89b8de0ba90a76a569ad0",
+  "run_HEAD": "f98b0528739fc5517c2e6d565fda14f95185591d",
+  "command": "CGO_ENABLED=0 go test -tags goolm,stdjson -p 1 -list '^TestHistoryRepairCommand_FinalGuardTwoOverridesEarlierOne$' github.com/elicify-ai/omnipus/cmd/chat-history-index-repair",
+  "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/squad-1266/ci-fix-red-be-20261023/G1-repair-package-compile.log",
+  "raw_exit": 0,
+  "log_sha256": "3fa4005d461ab92233773aa97659ecd8d24b5dcad46a79849b88c496e76221b6",
+  "claim": "affected repair-command test package compiled and exact test discovered; no CLI runtime/full lint claim",
+  "limits": "full golangci and actual candidate CI unverified, not run; G2 production and G3 wiring dependencies remain",
+  "self_check": "saved raw0/exact discovery read, tagged narrow single package only, Go code bytes unchanged since WIP; human/no-agent attribution and test-only scope checked"
+}

@@ -18,12 +18,32 @@ import { SystemMessage, VirtualSystemMessageRow } from './SystemMessageRows'
 import { placementOf, useSkillChipData, VirtualUserMessageRow, VirtualAssistantMessageRow, StreamingDelegation, VirtualizerAutoFollow, UserMessage, AssistantMessage } from './ChatScreen'
 import { FloatingReturnToLatest, HistoryBoundary, HistoryReaderStatus } from './HistoryBoundary'
 import { drawnHistoryRows, useHistoryViewport } from './useHistoryViewport'
+import { getMessageStatusSuffix } from '@/lib/truncation'
 
 function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
   // The assistant row owns both inline and trailing events using its live-call
   // projection. Splitting again from the unbaked message would draw them twice.
   if (message.role === 'assistant' && message.type !== 'judge_verdict' && !(ROOMS_ENABLED && message.roomRef)) return []
   return splitAnchoredDelegationEvents(events, message.id, placementOf(message)).trailing
+}
+
+/**
+ * A saved assistant record with nothing of its own to draw -- the content-less
+ * turn-start bookkeeping row every agent turn writes -- is still a counted
+ * history source group, but it draws no bubble (not even a name header).
+ * Only a POSITIVELY silent record qualifies: a plain successful outcome with
+ * no body, tools, media, attachments, summary, status suffix ("(interrupted)",
+ * cut off), error, unfinished-turn recovery surface or fallback note. Every
+ * other empty row keeps its explanation.
+ */
+const SILENT_STATUSES: ReadonlySet<string | undefined> = new Set([undefined, 'ok', 'done'])
+function isSilentHistoryRecord(msg: ChatMessage, owners: Record<string, string> | undefined): boolean {
+  // Not every Message variant declares these optional fields; absent is "none".
+  const extra = msg as { summary?: string; attachments?: unknown[]; truncationReason?: string; truncation_reason?: string }
+  return msg.role === 'assistant' && msg.type !== 'judge_verdict' && !!msg.historyPosition && !msg.isStreaming
+    && SILENT_STATUSES.has(msg.status) && !msg.confirmedUnfinished && getMessageStatusSuffix(msg) === null
+    && !msg.content && !extra.summary && !msg.tool_calls?.length && !extra.attachments?.length && !msg.media?.length && !msg.spans?.length
+    && !msg.truncated && !extra.truncationReason && !extra.truncation_reason && !msg.providerFallbackNote && !Object.values(owners ?? {}).includes(msg.id)
 }
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
@@ -36,6 +56,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   const sessionId = useSessionStore((s) => s.activeSessionId)
   const delegationEvents = useChatDelegationEvents(sessionId)
+  const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
   const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
   // F17 (1): the reply_to ids that have a reply bubble in the thread —
@@ -81,7 +102,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
             )
           } else if (msg.role === 'system') {
             row = <VirtualSystemMessageRow message={msg} />
-          } else {
+          } else if (!isSilentHistoryRecord(msg, toolCallOwners)) {
             row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
           }
           const trailing = delegationEventsOutsideRow(delegationEvents, msg)
@@ -206,6 +227,7 @@ function VirtualizedMessageListInner({
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
+    if (isSilentHistoryRecord(msg, toolCallOwners)) return null
     return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
   }
 

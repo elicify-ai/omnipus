@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act } from '@testing-library/react'
 import * as React from 'react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import type { ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
@@ -156,12 +157,11 @@ function makeMessages(count: number): ChatMessage[] {
 }
 
 function seedStore(messages: ChatMessage[]): void {
-  const bucket = makeBucketMessages(messages)
+  const bucket = { ...emptySessionState(), ...makeBucketMessages(messages) }
   useChatStore.setState((s) => ({
     ...s,
     sessionsById: {
       [SID]: {
-        ...((s.sessionsById ?? {})[SID] ?? {}),
         ...bucket,
         isStreaming: false,
         isReplaying: false,
@@ -179,6 +179,7 @@ function seedStore(messages: ChatMessage[]): void {
       },
     },
     messages: messages,
+    history: bucket.history,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,
@@ -455,12 +456,11 @@ describe('VirtualizedMessageList', () => {
       isStreaming: true,
     }
     const allMessages = [...completed, streamingMsg]
-    const bucket = makeBucketMessages(allMessages)
+    const bucket = { ...emptySessionState(), ...makeBucketMessages(allMessages) }
     useChatStore.setState((s) => ({
       ...s,
       sessionsById: {
         [SID]: {
-          ...((s.sessionsById ?? {})[SID] ?? {}),
           ...bucket,
           isStreaming: true,
           isReplaying: false,
@@ -478,6 +478,7 @@ describe('VirtualizedMessageList', () => {
         },
       },
       messages: allMessages,
+      history: bucket.history,
       isStreaming: true,
       isReplaying: false,
       replayCompletedForSession: SID,
@@ -555,12 +556,11 @@ describe('VirtualizedMessageList', () => {
       timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true,
     }
     const allMessages = [userMsg, closedBySteerMsg, steerMsg, postSteerStreamingMsg]
-    const bucket = makeBucketMessages(allMessages)
+    const bucket = { ...emptySessionState(), ...makeBucketMessages(allMessages) }
     useChatStore.setState((s) => ({
       ...s,
       sessionsById: {
         [SID]: {
-          ...((s.sessionsById ?? {})[SID] ?? {}),
           ...bucket,
           isStreaming: true,
           isReplaying: false,
@@ -578,6 +578,7 @@ describe('VirtualizedMessageList', () => {
         },
       },
       messages: allMessages,
+      history: bucket.history,
       isStreaming: true,
       isReplaying: false,
       replayCompletedForSession: SID,

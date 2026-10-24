@@ -15,6 +15,7 @@ import { seedChatHistoryDayPartitions, type ChatHistoryFixtureDay } from '../cha
 import { E2E_MODEL } from '../e2e-model';
 import { startHistoryControlProvider, type HistoryControlKind, type HistoryControlProvider } from './control-provider';
 import { historyDevOrigin } from './dev-origin';
+import { assertNativeBashPolicy } from './agent-tool-policy';
 type HistoryProvider = Awaited<ReturnType<typeof startTerminalOutcomeProvider>> | HistoryControlProvider;
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -162,11 +163,15 @@ function object(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : { value };
 }
 
-async function createControlSessions(gateway: GatewayProcess) {
+async function createControlSessions(gateway: GatewayProcess, kind: HistoryControlKind) {
   // Eight rounds accommodate discovery + actual control + resumed stream; the
   // old terminal-outcome fixture deliberately stays cap1 and is not weakened.
   const result = await gateway.apiFetch('POST', '/api/v1/agents', { type: 'Main', name: 'History control acceptance',
     soul: 'Use the requested tool. Ask the human when their format choice is needed.', provider: 'openrouter', model: E2E_MODEL,
+    // The native approval scenario needs the real operator-facing grant on
+    // this custom agent. Ask remains Ask under the global ceiling; it does
+    // not auto-approve or bypass the actual decision being tested.
+    tool_policy_changes: kind === 'approval' ? { set: { bash: 'ask' } } : undefined,
     max_tool_iterations: 8 } satisfies AgentCreateRequestMain);
   expect(result.status, result.raw).toBe(201);
   const agent = Agent.parse(result.body);
@@ -198,7 +203,7 @@ export const test = base.extend<{ history: HistoryHarness; historyControlKind: '
     try {
       gateway = await GatewayProcess.start({ apiBase: provider.url, adminUsername: 'history-reader',
         env: { OMNIPUS_LOG_FILE: logPath, OMNIPUS_LOG_LEVEL: 'debug' } });
-      const ids = historyControlKind === 'none' ? await createTerminalSession(gateway) : await createControlSessions(gateway);
+      const ids = historyControlKind === 'none' ? await createTerminalSession(gateway) : await createControlSessions(gateway, historyControlKind);
       if (historyControlKind === 'approval') {
         await gateway.kill9();
         gateway.assertStoppedForFixture();
@@ -209,6 +214,7 @@ export const test = base.extend<{ history: HistoryHarness; historyControlKind: '
           tool_policies: { ...config.sandbox?.tool_policies, bash: 'ask' } };
         fs.writeFileSync(filename, JSON.stringify(config), { mode: 0o600 });
         await gateway.restart();
+        await assertNativeBashPolicy(gateway, ids.agent.id, 'ask', 'ask');
       }
       dev = await historyDevOrigin(gateway.baseURL, info);
       const harness = new HistoryHarness(page, gateway, ids, provider, info, logPath, dev.origin);
@@ -279,17 +285,27 @@ export async function holdPage(page: Page, predicate: (url: URL) => boolean) {
   let observed!: (route: Route) => void;
   const requested = new Promise<Route>((resolve) => { observed = resolve; });
   const requests: string[] = [];
+  const abortedOrHandledRequests: string[] = [];
+  let abortedOrHandled = false;
   const handler = async (route: Route) => {
     if (!predicate(new URL(route.request().url()))) { await route.continue(); return; }
     requests.push(route.request().url());
     observed(route);
     const response = await route.fetch();
     const status = await released;
-    if (status !== undefined) await route.fulfill({ status, json: { error: 'deterministic history transport failure' } });
-    else await route.fulfill({ response });
+    try {
+      if (status !== undefined) await route.fulfill({ status, json: { error: 'deterministic history transport failure' } });
+      else await route.fulfill({ response });
+    } catch (error) {
+      if (!(error instanceof Error) || !['Route is already handled!', 'route.fulfill: Route is already handled!'].includes(error.message)) throw error;
+      // Keep the interrupted app transition observable; it is not a successful delivery.
+      abortedOrHandled = true;
+      abortedOrHandledRequests.push(route.request().url());
+    }
   };
   await page.route('**/api/v1/sessions/*/messages?*', handler);
-  return { requested, requests, release, dispose: () => page.unroute('**/api/v1/sessions/*/messages?*', handler) };
+  return { requested, requests, release, get abortedOrHandled() { return abortedOrHandled; }, abortedOrHandledRequests,
+    dispose: () => page.unroute('**/api/v1/sessions/*/messages?*', handler) };
 }
 export async function assertComposerReady(page: Page) {
   await expect(chatInput(page)).toBeEnabled();

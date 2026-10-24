@@ -11,7 +11,6 @@ import { shouldClosePanelOnEscape } from '@/components/panel-shell/panelEscape'
 import { getPanelDefinition } from '@/components/panel-shell/registry'
 import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
 import type { PanelContext, PanelId } from '@/components/panel-shell/types'
-import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { announcePanelTabPresence, panelIdentityFromContext } from '@/lib/panelTabPresence'
@@ -20,6 +19,7 @@ import {
   announcePanelPopoutContext,
   announcePanelPopoutDeparture,
 } from '@/lib/panelPopoutLifecycle'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 export const Route = createFileRoute('/_fullscreen/panel/$panelId')({
   validateSearch: (search) => search as Record<string, unknown>,
@@ -96,8 +96,7 @@ function FullScreenPanelRoute() {
       let workspaceId = context.workspaceId ?? useWorkspacesStore.getState().activeWorkspaceId
       if (!workspaceId) {
         const workspaces = await queryClient.fetchQuery({
-          queryKey: workspacesQueryKeys.list({ status: 'active' }),
-          queryFn: () => fetchWorkspaces({ status: 'active' }),
+          ...activeWorkspacesQueryOptions,
           staleTime: 30_000,
         })
         workspaceId = (workspaces.find((workspace) => workspace.is_default) ?? workspaces[0])?.id ?? null

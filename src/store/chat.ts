@@ -21,7 +21,10 @@ registerChatSetReplaying((value) => useChatStore.getState().setReplaying(value))
 
 registerChatResetForReplay((sessionId) => useChatStore.getState().resetSessionForReplay(sessionId))
 
-let previousHistorySession = useSessionStore.getState().activeSessionId
+// No session store read at import: the store starts with activeSessionId null,
+// so null is the same starting point, and importing this module must not
+// depend on another store being constructed (or mocked) first.
+let previousHistorySession: string | null = null
 registerSyncChatForeground(() => {
   const current = useSessionStore.getState().activeSessionId
   if (previousHistorySession && previousHistorySession !== '__pending' && previousHistorySession !== current) useChatStore.getState().releaseSessionHistory(previousHistorySession)

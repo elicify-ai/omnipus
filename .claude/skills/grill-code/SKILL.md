@@ -19,7 +19,7 @@ allowed-tools: Read, Glob, Grep, Bash
 
 # Grill Code
 
-Last reviewed: 2026-10-06
+Last reviewed: 2026-10-23 — approved delivery-process rollout
 
 You audit code written by an agentic LLM coding agent. You do not trust anything the
 developer agent reports. You verify every claim by reading the actual code, the actual
@@ -37,23 +37,22 @@ narrowly-scoped tagged Go test to verify a specific claim (never more than one a
 never untagged, never `./...`) -- everything else about Go correctness comes from reading
 the code and reading CI's result, never from a local full run.
 
+Use shared-rules "Build and test" for slot-runner use and permitted check scope;
+this skill never authorizes full lane CI or an unapproved Fly run.
+
 ## Where this sits in the flow
 
 This skill is one input to the size/feature process (`docs/internal/design/dev-team-setup-design-2026-09-25.md`
 and the size-based flow it defines), not the whole gate.
-The founder decision of 2026-09-29 supersedes that dated design's gate size (root `CLAUDE.md`, "Change sizes and the review gate"). For a feature-size change the flow
-is: spec (`plan-spec`) -> two `grill-spec` rounds -> team-lead plan -> RED -> GREEN -> CHECK
--> **the 5-reviewer gate** (the 3 mandatory `pr-review-toolkit` plugin reviewers --
-`code-reviewer`, `silent-failure-hunter`, `pr-test-analyzer` -- plus an architect pass and a
-security-lead pass; `code-simplifier`, `comment-analyzer` and `type-design-analyzer` are
-optional, not part of the gate, dispatched on explicit request only, founder 2026-09-29)
--> the founder's yes -> landing. Dispatch `grill-code`
-**after CHECK, before or alongside the 5-reviewer gate** -- it is a fast, spec-aware
-pre-check that catches an unready branch (missing requirement, unwired feature, hand-written
-wire type, a test that asserts nothing) before it spends all five reviewers' time. It never
-substitutes for any of the five, and it never blocks the gate from also running.
+Current scope is defined in root `CLAUDE.md` ("Change sizes and the review gate",
+"Landing trains"). Dispatch `grill-code` after CHECK, before or alongside the one
+combined-feature gate, not per lane/finding. It is a spec-aware pre-check for missing
+requirements, unwired features, hand-written wire types and tests that assert nothing;
+it never replaces a required reviewer. The candidate then supplies the CI and
+hands-on evidence for the unchanged founder landing ask.
 
-For a small or standard-size change (no spec, maybe no ADR), `grill-code` still works: point
+For a small or standard-size change (no spec, maybe no ADR), `grill-code` still works
+as a requested complement to the combined train review: point
 it at the diff and it runs the code-quality lenses (Phase 5) and the reachability lens
 (Phase 2) without a compliance matrix.
 

@@ -133,7 +133,7 @@ func historyD16CancellationPageEdge(t *testing.T) {
 	assert.LessOrEqual(t, pagingCounter(t, rows[0], "lookahead_archive_records"), float64(1))
 	assert.Less(t, pagingCounter(t, rows[0], "archive_records_read"), float64(60), "healthy older-page preparation cannot decode all60 prefix groups when only17 are selected")
 	refresh := f.reader.page(f.sid, "?limit=20&min_rows=20&window_start="+f.owner+"&window_end="+f.owner)
-	assert.Equal(t, "window_refresh", string(refresh.PageInfo.Mode))
+	assert.Equal(t, "window_refresh", refresh.PageInfo.Mode)
 	require.Equal(t, []string{"d16-saved-call-owner"}, pagingIDs(refresh), "closed already-displayed owner range may underfill20, not import unrelated neighbors")
 	require.Equal(t, 1, refresh.PageInfo.SourceGroupCount)
 	require.Equal(t, 2, refresh.PageInfo.RowCount, "whole two-tool group remains two rows at a closed page edge")

@@ -1781,6 +1781,38 @@ jobs:
           mkdir -p pkg/gateway/spa/assets
           printf '<!doctype html>' > pkg/gateway/spa/index.html
           touch pkg/gateway/spa/assets/.keep
+      # The 100k-prefix healthy-cut reads (history_heavy tag) build their own
+      # real 90-day fixtures and overrun group-1's 10m package budget, so they
+      # run here, serially, with the same assertions. A zero-test green is a
+      # failure: both named children must actually PASS.
+      - name: Run 100k-prefix healthy-cut and bounded-read test
+        run: |
+          mkdir -p build/tools
+          log=build/tools/history-index-100k-test.log
+          set +e
+          go test -tags goolm,stdjson,history_heavy -count=1 -v -p 1 -timeout 30m \
+            -run '^TestChatHistoryIndex_HealthyCutAndBoundedReads100K$' ./pkg/session > "$log" 2>&1
+          rc=$?
+          set -e
+          printf 'exit=%s\n' "$rc" >> "$log"
+          cat "$log"
+          if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+          if grep -Eq -- '--- SKIP:' "$log"; then echo "::error::a 100k-prefix case was skipped"; exit 1; fi
+          for name in prefix100000_limit40 prefix100000_limit100; do
+            if ! grep -Eq -- "--- PASS: TestChatHistoryIndex_HealthyCutAndBoundedReads100K/${name} " "$log"; then
+              echo "::error::TestChatHistoryIndex_HealthyCutAndBoundedReads100K/${name} did not run and pass"
+              exit 1
+            fi
+          done
+      - name: Preserve 100k-prefix test log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-index-100k-${{ github.run_id }}
+          path: build/tools/history-index-100k-test.log
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
       - name: Capture Section-H history page allocation receipt
         env:
           OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT: ${{ github.workspace }}/build/tools/chat-history-measurements.log

@@ -211,6 +211,11 @@ func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHis
 	if err != nil {
 		return out, err
 	}
+	if len(out.frames) == 0 {
+		if err = sr.emitContentlessSource(e.Entry, &out); err != nil {
+			return out, err
+		}
+	}
 	if r.media != nil && r.media.failure != nil {
 		return out, r.media.failure
 	}
@@ -244,5 +249,38 @@ func validateHistorySourceFrame(raw []byte) error {
 	if msg, _ := validateBodyAgainstSchema(schema, raw); msg != "" {
 		return errors.New("invalid prepared historical frame")
 	}
+	return nil
+}
+
+// emitContentlessSource keeps an eligible source group that renders no chat
+// frame of its own -- the content-less, tool-less assistant row that starts
+// every agent turn, or a source whose own frame replay deliberately skips --
+// accountable in the snapshot. The page counts it (source_group_count,
+// first/last position, row_count), so the client needs one origin-stamped
+// carrier for it or it rejects the whole snapshot as inconsistent. The
+// carrier is an empty replay_message: it never exposes a skipped record's
+// body and draws no bubble.
+func (sr *streamReplayState) emitContentlessSource(entry session.TranscriptEntry, out *historyPreparedGroup) error {
+	sr.buildEntryMessage(entry)
+	frame := sr.msgFrame
+	frame.Content = ""
+	switch frame.Role {
+	case "user", "assistant", "system", "turn_canceled":
+	default:
+		frame.Role = "assistant"
+	}
+	stamped, err := stampHistoryOrigin(frame, sr.historyOrigin)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(stamped)
+	if err != nil {
+		return err
+	}
+	if err = validateHistorySourceFrame(raw); err != nil {
+		return err
+	}
+	recordEmittedIDs(out.emitted, stamped)
+	out.frames = append(out.frames, raw)
 	return nil
 }

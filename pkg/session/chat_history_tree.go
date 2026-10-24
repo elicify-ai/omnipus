@@ -41,8 +41,9 @@ type chatHistoryIndexTree struct {
 	buffer     []byte
 	sid        string
 	// planning exists only in the explicitly offline, no-write constructor.
-	planning   map[string]json.RawMessage
-	knownRanks map[HistoryPosition]uint64
+	planning       map[string]json.RawMessage
+	knownRanks     map[HistoryPosition]uint64
+	expiredAddress func(ArchiveAddress) bool
 	// overlay validates a bounded saved delta against an immutable old root.
 	// Unlike pending tree nodes, these values can never flush to the journal.
 	overlay      map[string]json.RawMessage

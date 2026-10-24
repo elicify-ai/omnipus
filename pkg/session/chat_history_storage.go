@@ -123,10 +123,13 @@ func historyLoadCheckpoint(ctx context.Context, dir, sid string) (historyCheckpo
 		}
 		return cp, historyUnavailable(reason, err)
 	}
+	// Root is mandatory. Missing/null must not inherit the valid empty-tree
+	// sentinel zero when decoding this private checkpoint.
+	cp.Root = -1
 	if err = json.Unmarshal(b, &cp); err != nil {
 		return cp, historyUnavailable("index_inconsistent", err)
 	}
-	if cp.FormatVersion != 1 || cp.SessionID != sid || cp.Generation == "" || cp.RetentionGeneration == "" || cp.ArchiveEnds == nil || cp.Root < 0 || cp.MutationEnd < 0 || cp.File == "" || filepath.Base(cp.File) != cp.File || cp.File == "." || cp.File == ".." {
+	if cp.FormatVersion != 1 || cp.SessionID != sid || cp.Generation == "" || cp.RetentionGeneration == "" || cp.ArchiveEnds == nil || cp.Root < 0 || cp.Root == 0 && cp.Rank != 0 || cp.MutationEnd < 0 || cp.File == "" || filepath.Base(cp.File) != cp.File || cp.File == "." || cp.File == ".." {
 		return cp, historyUnavailable("index_inconsistent", errors.New("invalid checkpoint"))
 	}
 	return cp, nil
@@ -296,24 +299,41 @@ func historyRetained(cp historyCheckpoint) []string {
 	return out
 }
 
-func (o *chatHistoryOwner) retain(path string) func() {
+func (o *chatHistoryOwner) retain(path string) func() error {
 	o.refsMu.Lock()
 	o.refs[path]++
 	o.refsMu.Unlock()
-	return func() {
+	released := false
+	var releaseErr error
+	return func() error {
 		o.refsMu.Lock()
 		defer o.refsMu.Unlock()
+		if released {
+			return releaseErr
+		}
+		released = true
 		o.refs[path]--
 		if o.refs[path] == 0 {
 			delete(o.refs, path)
-			if o.retired[path] {
-				if os.Remove(path) == nil {
-					delete(o.retired, path)
-				}
-			}
+			releaseErr = o.removeRetiredLocked(path)
 		}
+		return releaseErr
 	}
 }
+
+// removeRetiredLocked keeps failed cleanup pending. The caller holds refsMu;
+// neither this path nor a reader release waits for owner.mu/session shards.
+func (o *chatHistoryOwner) removeRetiredLocked(path string) error {
+	if !o.retired[path] || o.refs[path] > 0 {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	delete(o.retired, path)
+	return nil
+}
+
 func (o *chatHistoryOwner) retire(dir, keep string) error {
 	o.refsMu.Lock()
 	defer o.refsMu.Unlock()
@@ -321,20 +341,21 @@ func (o *chatHistoryOwner) retire(dir, keep string) error {
 	if err != nil {
 		return err
 	}
+	// Discover obsolete files after restart as well as remembered failures.
+	// Never retire the current published generation.
+	delete(o.retired, filepath.Join(dir, keep))
 	for _, e := range entries {
-		if e.Name() == keep || e.IsDir() {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		if o.refs[path] > 0 {
-			o.retired[path] = true
-			continue
-		}
-		if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+		if e.Name() != keep && !e.IsDir() {
+			o.retired[filepath.Join(dir, e.Name())] = true
 		}
 	}
-	return nil
+	var retirementErr error
+	for path := range o.retired {
+		if err := o.removeRetiredLocked(path); err != nil {
+			retirementErr = errors.Join(retirementErr, err)
+		}
+	}
+	return retirementErr
 }
 
 // validateIndexTail never trims framed damage or any canonical bytes. Only the
@@ -350,24 +371,13 @@ func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint) (hi
 	for off < info.Size() {
 		frame, next, readErr := t.readFrame(off, info.Size())
 		if errors.Is(readErr, io.ErrUnexpectedEOF) {
-			ev := chatHistoryPublicationEvent{SessionID: cp.SessionID, Operation: "reconcile", Point: "before_torn_tail_trim"}
-			if err = historyPublication(ev); err != nil {
-				return historyCheckpoint{}, false, err
-			}
-			if err = t.file.Truncate(cp.MutationEnd); err != nil {
-				return historyCheckpoint{}, false, err
-			}
-			if err = t.file.Sync(); err != nil {
-				return historyCheckpoint{}, false, err
-			}
-			ev.Point = "torn_tail_trimmed"
-			if err = historyPublication(ev); err != nil {
-				return historyCheckpoint{}, false, err
-			}
-			return historyCheckpoint{}, false, nil
+			return historyCheckpoint{}, false, historyDiscardUnpublishedTail(t, cp)
 		}
 		if readErr != nil {
 			return historyCheckpoint{}, false, readErr
+		}
+		if frame.Node != nil && (frame.Node.Key == "" || frame.Node.Left < 0 || frame.Node.Right < 0 || frame.Node.Left >= off+1 || frame.Node.Right >= off+1) {
+			return historyCheckpoint{}, false, errors.New("invalid unpublished history node")
 		}
 		if frame.Commit != nil {
 			saved = *frame.Commit
@@ -379,10 +389,29 @@ func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint) (hi
 		off = next
 	}
 	if info.Size() > cp.MutationEnd && !found {
-		return historyCheckpoint{}, false, errors.New("unpublished history transaction has no footer")
+		// Every complete frame beyond the published boundary was checked and
+		// none committed. Canonical mutation counting has already enforced64;
+		// tree-node count is not a substitute for that unique-fact bound.
+		return historyCheckpoint{}, false, historyDiscardUnpublishedTail(t, cp)
 	}
 	return saved, found, nil
 }
+
+func historyDiscardUnpublishedTail(t *chatHistoryIndexTree, cp historyCheckpoint) error {
+	ev := chatHistoryPublicationEvent{SessionID: cp.SessionID, Operation: "reconcile", Point: "before_torn_tail_trim"}
+	if err := historyPublication(ev); err != nil {
+		return err
+	}
+	if err := t.file.Truncate(cp.MutationEnd); err != nil {
+		return err
+	}
+	if err := t.file.Sync(); err != nil {
+		return err
+	}
+	ev.Point = "torn_tail_trimmed"
+	return historyPublication(ev)
+}
+
 func historyCloneCheckpoint(cp historyCheckpoint) historyCheckpoint {
 	out := cp
 	out.ArchiveEnds = make(map[string]int64, len(cp.ArchiveEnds))

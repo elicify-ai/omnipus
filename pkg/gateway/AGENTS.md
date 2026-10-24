@@ -2,6 +2,27 @@
 
 Mux, auth, WebSocket, SPA embed, `/preview`. Domain REST lives in its module.
 
+## Paged session history and WebSocket attach
+
+REST messages and session detail use the generated paged carriers. Their
+addressed-session access checks precede strict history-query validation. Keep
+`newHistoryPageRequest` as the one prepared reader/weigher factory for both REST
+and snapshot replay; do not restore raw transcript arrays, retired headers or a
+lifetime-read fallback. Preparation memoization belongs to one request/cut.
+
+| Path | Invariant |
+|---|---|
+| REST messages/detail | Prepare and validate selected source groups with the session reader and generated envelopes. Unavailable detail preserves authorized session metadata but omits message/page fields; it is not a successful empty page. |
+| Snapshot attach | Resolve access, validate sizing, bind/hold live frames, then prepare history before sending any snapshot/wipe. Successful order is snapshot metadata, current state, source-owned historical frames/replay done, uncovered current projection, then catch-up completion. Held live frames follow the completed boundary. |
+| Unavailable history | Authorized current state/projection can complete as `live_only`, without a snapshot, wipe, history-loaded claim or attention acknowledgement. A servable incremental journal remains complete; history sizing never truncates its tail. |
+| Shared projection | Meter the larger actual REST/historical-WS encoding, not a guessed weight. Weighing must not offload results, execute actions or mutate stores. Preserve recorded source ownership and generated validation. |
+| Completion and usage | Historical replay done is diagnostics, not live turn completion or a fresh token-total observation. Known absolute usage belongs to REST pages, scoped current state and live done; do not sum a loaded page or manufacture zero from unknown accounting. |
+| Diagnostics | One content-free history-page summary covers an authorized page attempt. Preparation duration ends before blocked delivery. Never add raw frames, content, parameters, positions, identifiers or storage causes to the history summary. Malformed-frame diagnostics must likewise be sanitized. |
+
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_http.go::serveSessionHistory`,
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_projection.go::newHistoryPageRequest`,
+and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/gateway/history_page_websocket.go::sendPreparedHistorySnapshot`.
+
 ## SPA embed — the stale-build trap
 
 The binary embeds `pkg/gateway/spa/` (`embed.go`, `//go:embed all:spa`), NOT

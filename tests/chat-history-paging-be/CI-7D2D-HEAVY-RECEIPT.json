@@ -1,0 +1,30 @@
+{
+  "requirement": "G3",
+  "code_input": "7c1a92f80f75e29cf2c89b8de0ba90a76a569ad0",
+  "status": "test-side split and discovery/ordinary control verified; actual heavy CI coverage BLOCKED/PENDING developer workflow wiring",
+  "original_candidate_CI": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squad-1266/ci-7d2d03675/120316210599.log package10m timeout, parent4m52s/active100k100 child21s",
+  "runs": [
+    {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/squad-1266/ci-fix-red-be-20261023/G3-heavy-tag-discovery.log",
+      "raw_exit": 0,
+      "sha256": "1c20a446240b90a230d830353a63f94c85e24fd9bb7bd6f711be99e099054fec",
+      "scope": "compile/discovery ONLY, no100k execution"
+    },
+    {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/squad-1266/ci-fix-red-be-20261023/G3-ordinary-1k40.log",
+      "raw_exit": 0,
+      "sha256": "165a8b03c423df6edc12f874322008d48ea6e48162a64acacfd096bfd8f30423",
+      "scope": "ordinary1k limit40 actual assertions"
+    }
+  ],
+  "source_sha256": {
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_index_red_test.go": "ca9a65715adec79b4f77131238392847c7c448e95d30a71950ea8f57acb52603",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_index_heavy_test.go": "0b4f11fe09c4fc2a36504eb3dac6322fae43bd8daca2528fbe30f374a828197f"
+  },
+  "assertions": "original shared matrix assertion body and recovery/missing-baseline suffix byte-identical; retain100k+both40/100 limits under explicit history_heavy tag",
+  "required_job": "history-e2e-fixtures (Prepare history E2E fixtures and measurement), sequential with T18; NOT Playwright ui-heavy shard",
+  "required_command": "CGO_ENABLED=0 go test -tags goolm,stdjson,history_heavy -count=1 -v -p 1 -timeout 30m -run '^TestChatHistoryIndex_HealthyCutAndBoundedReads100K$' ./pkg/session",
+  "workflow_handoff": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/tests/chat-history-paging-be/CI-7D2D-HEAVY-LANE-HANDOFF.md",
+  "runtime100k": "NOT executed locally; no CI/Fly started; do not land without wiring/execution evidence",
+  "self_check": "actual discovery/raw0+ordinary named PASS/raw0 read; exact original-body/suffix comparison; heavy100k40/100 source and workflow/shard distinction checked; no skip/fixture reduction/timing oracle"
+}

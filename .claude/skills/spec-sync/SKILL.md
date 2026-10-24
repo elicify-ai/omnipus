@@ -14,7 +14,7 @@ description: >
 
 # Spec sync
 
-Last reviewed: 2026-09-27
+Last reviewed: 2026-10-23 — delivery-process check scope
 
 Companion to plan-spec (writes a spec) and grill-spec (reviews a spec). spec-sync
 runs after the fact: it makes sure a spec still describes what the code does, once
@@ -59,7 +59,9 @@ recognise the variants actually on disk (`-spec-review-2.md`, `-review-pass2.md`
    fall back to `Read`/`Grep` — that is the correct fallback, not a compliance gap.
    Never guess a GitNexus tool name that isn't one of `query`, `context`, `impact`,
    `trace`, `explain` — describe the step in words instead and fall back to grep.
-4. At most one narrowly-scoped, tagged local test if a claim genuinely needs one
+4. Follow `omnipus-shared-rules` ("Build and test") for permitted check scope and
+   slot-runner use; this post-landing sync never authorizes full lane CI or an
+   unapproved Fly window. At most one narrowly-scoped, tagged local test if a claim genuinely needs one
    (`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/`);
    CI is still the authority for a suite result. `npm run typecheck`, never bare
    `tsc`. Never a whole-repo build or test, never `go test ./...`. # agent-guard: allow

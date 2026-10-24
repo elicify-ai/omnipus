@@ -11,6 +11,9 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { emptySessionState } from './session'
 import type { ServerFrame } from '@/lib/ws'
+import type { SessionSnapshotFrame, SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
+import type { Message } from '@/lib/api/generated/openapi-types'
+import { entry, expectValidFrame, expectValidPage, page, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 
 const SID = 'sess-regress'
 const MSG_ID = 'ad866ee6'
@@ -20,6 +23,32 @@ function token(seq: number, content: string, extra: Record<string, unknown> = {}
   return {
     type: 'token', session_id: SID, content, message_id: MSG_ID, turn_id: TURN_ID, agent_id: 'mia', seq, ...extra,
   } as ServerFrame
+}
+
+// Current bounded attach contract for the preserved Round8/9 scenarios.
+// Generated page/origin builders provide inputs, never the behaviour oracle.
+function deliverRestartSnapshot(sessionId: string, options: {
+  reason: SessionSnapshotFrame['reason']; seq: number; bootId: string; sources: Message[]
+  activeTurn?: SessionStateFrame['active_turn']; afterSnapshot?: () => void
+}) {
+  const history = page(options.sources, { sessionId })
+  expectValidPage(history, options.sources.map(source => source.history_position!), options.sources.length)
+  const frames: ServerFrame[] = [
+    { ...snapshot(history, options.reason), seq: options.seq, boot_id: options.bootId },
+    { type: 'session_state', session_id: sessionId, user_id: 'u1', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
+      history_state: { status: 'available' }, ...(options.activeTurn ? { active_turn: options.activeTurn } : {}) },
+    ...options.sources.map(source => replay(source, sessionId)),
+    { type: 'done', session_id: sessionId },
+    { type: 'catch_up_complete', session_id: sessionId, seq: options.seq, boot_id: options.bootId, mode: 'snapshot' },
+  ]
+  frames.forEach(expectValidFrame)
+  useChatStore.getState().handleFrame(frames[0])
+  options.afterSnapshot?.()
+  frames.slice(1).forEach(frame => useChatStore.getState().handleFrame(frame))
+  const bucket = useChatStore.getState().sessionsById[sessionId]!
+  expect(bucket.history.historyLoaded, 'valid history really committed before the preserved restart oracle').toBe(true)
+  expect(bucket.history.readerPositions).toStrictEqual(options.sources.map(source => source.history_position!))
+  expect(bucket.cursor).toStrictEqual({ bootId: options.bootId, seq: options.seq })
 }
 
 function assistantBubbles() {
@@ -204,7 +233,7 @@ describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay ded
       sessionsById: {
         ...s.sessionsById,
         [PT_SID]: {
-          ...(s.sessionsById[PT_SID] ?? ({} as never)),
+          ...emptySessionState(),
           messageOrder: ['failed-1'],
           messagesById: {
             'failed-1': { id: 'failed-1', role: 'user', content: 'did this send?', timestamp: '2026-09-24T00:00:00Z', deliveryStatus: 'failed' },
@@ -245,7 +274,7 @@ describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay ded
       sessionsById: {
         ...s.sessionsById,
         [PT_SID]: {
-          ...(s.sessionsById[PT_SID] ?? ({} as never)),
+          ...emptySessionState(),
           messageOrder: ['client-abc'],
           messagesById: {
             'client-abc': { id: 'client-abc', role: 'user', content: 'check my tasks', timestamp: '2026-09-24T00:00:00Z', deliveryStatus: 'sending' },
@@ -855,28 +884,24 @@ describe('Round 8 — gateway restart mid-stream, real content already streamed'
     // fix clearStreamingState() does NOT close the bubble on a bare disconnect,
     // so it's still isStreaming:true, with its real turn_id, right up until
     // the reconnect's session_snapshot wipes it.
-    useChatStore.getState().handleFrame({
+    const witnessedToken: ServerFrame = {
       type: 'token', session_id: SID, message_id: 'entry-asst-1', turn_id: 'turn-lost-in-crash', agent_id: 'mia', content: 'Partial answer before the crash', seq: 40,
-    } as ServerFrame)
+    }
+    expectValidFrame(witnessedToken)
+    useChatStore.getState().handleFrame(witnessedToken)
 
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 5, boot_id: 'boot-fresh-after-restart', reason: 'unknown_position',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh-after-restart', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'a very long prompt', timestamp: '2026-01-01T00:00:00Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'assistant', id: 'entry-asst-1', content: 'Partial answer before the crash', agent_id: 'mia', turn_id: 'turn-lost-in-crash', timestamp: '2026-01-01T00:00:05Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'done', session_id: SID, stats: { frames_emitted: 2, orphan_count: 0 },
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-fresh-after-restart', mode: 'snapshot',
-    } as ServerFrame)
+    deliverRestartSnapshot(SID, {
+      reason: 'unknown_position', seq: 5, bootId: 'boot-fresh-after-restart',
+      sources: [
+        entry(1, { id: 'entry-user-1', role: 'user', content: 'a very long prompt', timestamp: '2026-01-01T00:00:00Z' }),
+        entry(2, { id: 'entry-asst-1', role: 'assistant', content: 'Partial answer before the crash', agent_id: 'mia', turn_id: 'turn-lost-in-crash', timestamp: '2026-01-01T00:00:05Z' }),
+      ],
+      afterSnapshot: () => {
+        const witnessed = useChatStore.getState().sessionsById[SID]!
+        expect(witnessed.wipedOpenTurnIds, 'positive witness: the tab saw this exact turn open before the cut').toStrictEqual(['turn-lost-in-crash'])
+        expect(witnessed.snapshotWasBootMismatch, 'unknown_position must not be changed to boot_mismatch to force green').toBe(false)
+      },
+    })
 
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.awaitingCatchUp).toBe(false)
@@ -903,18 +928,10 @@ describe('Round 9 — a turn killed before any token streamed leaves no assistan
     const SID = 'sess-regress-i2'
     useSessionStore.setState({ activeSessionId: SID })
 
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 3, boot_id: 'boot-fresh', reason: 'boot_mismatch',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'question before the restart', timestamp: '2026-01-01T00:00:00Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SID, seq: 3, boot_id: 'boot-fresh', mode: 'snapshot',
-    } as ServerFrame)
+    deliverRestartSnapshot(SID, {
+      reason: 'boot_mismatch', seq: 3, bootId: 'boot-fresh',
+      sources: [entry(1, { id: 'entry-user-1', role: 'user', content: 'question before the restart', timestamp: '2026-01-01T00:00:00Z' })],
+    })
 
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.activeTurnId).toBeNull()
@@ -924,21 +941,13 @@ describe('Round 9 — a turn killed before any token streamed leaves no assistan
   it('does NOT flag a normal completed exchange (assistant reply present)', () => {
     const SID = 'sess-regress-i3'
     useSessionStore.setState({ activeSessionId: SID })
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-fresh', reason: 'boot_mismatch',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'a normal question', timestamp: '2026-01-01T00:00:00Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'assistant', id: 'entry-asst-1', content: 'a normal, complete answer', agent_id: 'mia', timestamp: '2026-01-01T00:00:05Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-fresh', mode: 'snapshot',
-    } as ServerFrame)
+    deliverRestartSnapshot(SID, {
+      reason: 'boot_mismatch', seq: 4, bootId: 'boot-fresh',
+      sources: [
+        entry(1, { id: 'entry-user-1', role: 'user', content: 'a normal question', timestamp: '2026-01-01T00:00:00Z' }),
+        entry(2, { id: 'entry-asst-1', role: 'assistant', content: 'a normal, complete answer', agent_id: 'mia', timestamp: '2026-01-01T00:00:05Z' }),
+      ],
+    })
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.unansweredLastUserMessageId).toBeNull()
   })
@@ -946,18 +955,10 @@ describe('Round 9 — a turn killed before any token streamed leaves no assistan
   it('does NOT flag when reason is retention_exceeded (old data trimmed, not a crash signal)', () => {
     const SID = 'sess-regress-i4'
     useSessionStore.setState({ activeSessionId: SID })
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 3, boot_id: 'boot-same', reason: 'retention_exceeded',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-same', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'question, older reply pruned by retention', timestamp: '2026-01-01T00:00:00Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SID, seq: 3, boot_id: 'boot-same', mode: 'snapshot',
-    } as ServerFrame)
+    deliverRestartSnapshot(SID, {
+      reason: 'retention_exceeded', seq: 3, bootId: 'boot-same',
+      sources: [entry(1, { id: 'entry-user-1', role: 'user', content: 'question, older reply pruned by retention', timestamp: '2026-01-01T00:00:00Z' })],
+    })
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.unansweredLastUserMessageId).toBeNull()
   })
@@ -965,18 +966,11 @@ describe('Round 9 — a turn killed before any token streamed leaves no assistan
   it('does NOT flag while a turn is still genuinely active', () => {
     const SID = 'sess-regress-i5'
     useSessionStore.setState({ activeSessionId: SID })
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 3, boot_id: 'boot-fresh', reason: 'boot_mismatch',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z', active_turn: { turn_id: 'turn-live', agent_id: 'mia', started_at: '2026-01-01T00:00:00Z' },
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'question, turn still running', timestamp: '2026-01-01T00:00:00Z',
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SID, seq: 3, boot_id: 'boot-fresh', mode: 'snapshot',
-    } as ServerFrame)
+    deliverRestartSnapshot(SID, {
+      reason: 'boot_mismatch', seq: 3, bootId: 'boot-fresh',
+      activeTurn: { turn_id: 'turn-live', agent_id: 'mia', started_at: '2026-01-01T00:00:00Z' },
+      sources: [entry(1, { id: 'entry-user-1', role: 'user', content: 'question, turn still running', timestamp: '2026-01-01T00:00:00Z' })],
+    })
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.unansweredLastUserMessageId).toBeNull()
   })
