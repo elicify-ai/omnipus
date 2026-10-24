@@ -41,7 +41,7 @@ export const WorkflowStart = z
 
 export const SecretRecipientDisplay = z
   .object({
-    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private"]),
+    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private", "unbound"]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
   })
   .strict();
@@ -91,6 +91,7 @@ export const SessionStateSecretRequest = z
     session_id: z.string().min(1).max(255),
     root_session_id: z.string().min(1).max(255).optional(),
     state: z.enum(["pending", "submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    continuation_unconfirmed: z.boolean().optional(),
     acting_agent_id: z.string().min(1).max(128),
     acting_agent_name: z.string().min(1).max(128),
     origin_label: z.string().min(1).max(200).optional(),
@@ -1020,7 +1021,7 @@ export const WhatsAppPairingFrame = z
     session_id: z.string().min(1).max(255).optional(),
     type: z.literal("whatsapp_pairing"),
     channel_id: z.string().min(1),
-    status: z.enum(["waiting", "code", "linked", "timeout", "error"]),
+    status: z.enum(["waiting", "code", "linked", "timeout", "error", "stopped"]),
     qr: z.string().optional(),
     message: z.string().optional(),
   })
@@ -1040,7 +1041,7 @@ export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
     id: z.string().min(1),
-    notification_type: z.enum(["schedule_failed", "knowledge_drift"]),
+    notification_type: z.enum(["schedule_failed", "knowledge_drift", "stop_notice"]),
     title: z.string().min(1),
     body: z.string().optional(),
     severity: z.enum(["info", "warning", "error"]),

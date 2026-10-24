@@ -94,6 +94,11 @@ type channelWorker struct {
 	done       chan struct{}
 	mediaDone  chan struct{}
 	limiter    *rate.Limiter
+	// gen is the dispatch generation (Manager.dispatchGen) the worker's
+	// goroutines run on. A reload joins only workers of the generation it
+	// cancelled, never one started on its own new context during its
+	// unlocked handoff (gate r3 CR-T2-R3-01).
+	gen uint64
 }
 
 // ChannelInitError records an enabled channel that failed to construct.
@@ -136,6 +141,7 @@ type Manager struct {
 	mediaStore            media.MediaStore
 	dispatchTask          *asyncTask
 	dispatchCtx           context.Context // stored so RegisterChannel can spin up workers after Start
+	dispatchGen           uint64          // increments with every new dispatchCtx; tags its workers
 	mux                   *dynamicServeMux
 	httpServer            *http.Server
 	mu                    sync.RWMutex
@@ -144,6 +150,10 @@ type Manager struct {
 	reactionUndos         sync.Map          // "channel:chatID" → reactionEntry
 	streamActive          sync.Map          // "channel:chatID" → streamEntry (set when streamer.Finalize sent the message)
 	channelHashes         map[string]string // channel name → config hash
+	resourceConfigOrders  map[string]uint64 // originating snapshot carried by each constructed resource
+	// pendingDisposals pins failed cleanup across reloads until that exact
+	// resource stops. It is independent of config hashes and restart intents.
+	pendingDisposals map[string]Channel
 	// credSigs mirrors channelHashes with a credential-availability signature
 	// per enabled instance (#1277): which of the instance's configured refs
 	// were present in the bundle when the hash was committed. Reload diffs it
@@ -169,6 +179,24 @@ type Manager struct {
 	// implements PairingObservable so linked-device pairing updates (QR/status)
 	// reach the SPA (#283). channelID is the channel name (e.g. "whatsapp_native").
 	pairingObserver func(channelID string, status PairingStatus, qr, message string)
+	// pairingAttemptObserver receives attempt-carrying pairing progress from
+	// PairingAttemptObservable channels (gate r3 M8).
+	pairingAttemptObserver func(channelID, attemptID string, status PairingStatus, qr, message string)
+	// pairingAttempts is the manager-owned pairing-attempt store (gate r3).
+	// It is reached without m.mu: a pairing observer reads it from inside a
+	// channel's Start, which runs under m.mu.
+	pairingAttempts atomic.Pointer[PairingAttempts]
+	// forcedRestarts names instances the next reload restarts even with an
+	// unchanged configuration (RequestRestart), each with the pairing attempt
+	// it restarts for ("" for none): a restart for an attempt that is no
+	// longer ready is dropped (gate r4 R4-A01).
+	forcedRestarts map[string]pairingRestartIntent
+	// startErrors keeps each channel's last Start failure (cleared when it
+	// starts), so an approved connect can name the cause (gate r2 T2-SF-10).
+	startErrors map[string]error
+	// reloadHandoffHook is a test seam (gate r3 CR-T2-R3-01): it runs while a
+	// reload waits for the old dispatchers with m.mu released. Nil in production.
+	reloadHandoffHook func()
 }
 
 // SetPairingObserver registers a callback to receive linked-device pairing
@@ -183,6 +211,22 @@ func (m *Manager) SetPairingObserver(fn func(channelID string, status PairingSta
 			chName := name
 			obs.SetPairingObserver(func(status PairingStatus, qr, message string) {
 				fn(chName, status, qr, message)
+			})
+		}
+	}
+	m.mu.Unlock()
+}
+
+// SetPairingAttemptObserver registers the attempt-carrying pairing callback
+// and propagates it to channels already initialized (gate r3 M8).
+func (m *Manager) SetPairingAttemptObserver(fn func(channelID, attemptID string, status PairingStatus, qr, message string)) {
+	m.mu.Lock()
+	m.pairingAttemptObserver = fn
+	for name, ch := range m.channels {
+		if obs, ok := ch.(PairingAttemptObservable); ok {
+			chName := name
+			obs.SetPairingAttemptObserver(func(attemptID string, status PairingStatus, qr, message string) {
+				fn(chName, attemptID, status, qr, message)
 			})
 		}
 	}
@@ -659,6 +703,7 @@ func (m *Manager) initChannel(name, instanceID, displayName string) error {
 			})
 		}
 	}
+	m.wirePairingAttemptsLocked(instanceID, ch)
 	// Stamp the trusted instance key onto the channel so every inbound message
 	// carries the correct InstanceID (FR-020 / FR-021). The key is always the
 	// config-map instanceID, never derived from message content.
@@ -669,7 +714,14 @@ func (m *Manager) initChannel(name, instanceID, displayName string) error {
 	// because "whatsapp.eu" and "whatsapp.us" occupy distinct slots. For
 	// legacy single-instance the instanceID equals the type name, so the
 	// behavior is unchanged (e.g. "telegram" → m.channels["telegram"]).
+	order := m.PairingAttempts().LockChannel(instanceID)
+	if !order.MatchesConfig(m.config) {
+		order.Unlock()
+		return nil // construction lost to a newer exact config write; never publish it
+	}
 	m.channels[instanceID] = ch
+	m.recordResourceConfigOrder(instanceID, m.config)
+	order.Unlock()
 	logger.InfoCF("channels", "Channel enabled successfully", map[string]any{
 		"channel":    displayName,
 		"instanceID": instanceID,
@@ -1041,6 +1093,7 @@ func (m *Manager) newDispatchContext(ctx context.Context) (context.Context, cont
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	m.dispatchTask = &asyncTask{cancel: cancel}
 	m.dispatchCtx = dispatchCtx
+	m.dispatchGen++
 	return dispatchCtx, cancel
 }
 
@@ -1089,19 +1142,24 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": name,
 		})
-		if err := channel.Start(ctx); err != nil {
+		// The gateway's boot start: a pairing a restart cut off is reported
+		// interrupted, never silently resumed (founder ruling 2026-10-21).
+		if err := channel.Start(WithPairingStart(ctx, "", true)); err != nil {
 			logger.ErrorCF("channels", "Failed to start channel", map[string]any{
 				"channel": name,
 				"error":   err.Error(),
 			})
+			m.noteStartLocked(name, err)
 			continue
 		}
+		m.noteStartLocked(name, nil)
 		// Lazily create worker only after channel starts successfully. Rate
 		// limiting is keyed by channel TYPE, not instance ID (name here is the
 		// instanceID under N-per-type instancing) — resolve the type so a second
 		// instance of a rate-limited type doesn't silently fall back to
 		// defaultRateLimit.
 		w := newChannelWorker(m.channelTypeForRateLimit(name), channel)
+		w.gen = m.dispatchGen
 		m.workers[name] = w
 		// Snapshot m.config while still holding m.mu.Lock() (see runWorker's doc
 		// comment for why runWorker must never read m.config itself).
@@ -1933,6 +1991,98 @@ func (m *Manager) evictStale(now time.Time) {
 	})
 }
 
+// notifyPairingLocked reports one pairing event of attemptID through the
+// attempt observer, for a pairing the manager itself ended.
+func (m *Manager) notifyPairingLocked(name, attemptID string, status PairingStatus, message string) {
+	if m.pairingAttemptObserver != nil {
+		m.pairingAttemptObserver(name, attemptID, status, "", message)
+	}
+}
+
+// RequestRestart asks the next reload to restart name even when its
+// configuration is unchanged, so an admitted pairing start (a chat Retry, or
+// connect_channel for a connector stopped in place) gets a fresh platform
+// start through the serialized reload lifecycle — never a start published
+// beside it (gate r3 M4, M10). An unknown or disabled name is ignored.
+// attemptID binds the restart to that admitted pairing attempt: when a Stop,
+// disable or delete revoked it before the reload ran, the restart is dropped,
+// so a revoked admission never restarts anything (gate r4 R4-A01). An empty
+// attemptID requests an unconditional restart (no pairing involved).
+func (m *Manager) RequestRestart(name, attemptID string, snapshots ...*config.Config) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cfg := m.config
+	if len(snapshots) > 0 {
+		cfg = snapshots[0]
+	}
+	order := m.PairingAttempts().LockChannel(name)
+	defer order.Unlock()
+	intent, accepted := order.restartIntent(attemptID, cfg)
+	if !accepted {
+		return
+	}
+	if m.forcedRestarts == nil {
+		m.forcedRestarts = make(map[string]pairingRestartIntent)
+	}
+	if previous, exists := m.forcedRestarts[name]; !exists || previous.generation <= intent.generation {
+		m.forcedRestarts[name] = intent
+	}
+}
+
+// LastStartError returns name's most recent Start failure, or nil once it
+// started (gate r2 T2-SF-10: the cause behind "saved but not working").
+func (m *Manager) LastStartError(name string) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.startErrors[name]
+}
+
+// noteStartLocked records name's Start result. Caller holds m.mu.
+func (m *Manager) noteStartLocked(name string, err error) {
+	if err == nil {
+		delete(m.startErrors, name)
+		return
+	}
+	if m.startErrors == nil {
+		m.startErrors = make(map[string]error)
+	}
+	m.startErrors[name] = err
+}
+
+// PairingAttempts returns the manager-owned pairing-attempt store, creating it
+// on first use. It takes no manager lock, so a pairing observer may call it
+// from inside a channel's Start (which runs under m.mu) — the store has its
+// own lock and never calls out under it.
+func (m *Manager) PairingAttempts() *PairingAttempts {
+	if store := m.pairingAttempts.Load(); store != nil {
+		return store
+	}
+	m.pairingAttempts.CompareAndSwap(nil, NewPairingAttempts())
+	return m.pairingAttempts.Load()
+}
+
+// wirePairingAttemptsLocked hands an attempt-aware channel the store and its
+// attempt observer. Caller holds m.mu.
+func (m *Manager) wirePairingAttemptsLocked(instanceID string, ch Channel) {
+	if m.pairingAttemptObserver != nil {
+		if obs, ok := ch.(PairingAttemptObservable); ok {
+			fn := m.pairingAttemptObserver
+			obs.SetPairingAttemptObserver(func(attemptID string, status PairingStatus, qr, message string) {
+				fn(instanceID, attemptID, status, qr, message)
+			})
+		}
+	}
+	if aware, ok := ch.(PairingAttemptAware); ok {
+		aware.SetPairingAttempts(m.PairingAttempts(), instanceID)
+	}
+}
+
+// ChannelRevision returns name's configuration revision in cfg (its config
+// hash): what a pairing admission binds to and its start must match (M14).
+func ChannelRevision(cfg *config.Config, name string) string {
+	return toChannelHashes(cfg)[name]
+}
+
 func (m *Manager) GetChannel(name string) (Channel, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1974,6 +2124,7 @@ type managerReload struct {
 	oldConfig   *config.Config
 	oldSecrets  credentials.SecretBundle
 	oldCredSigs map[string]string
+	credSigs    map[string]string
 	list        map[string]string
 	added       []string
 	removed     []string
@@ -1986,6 +2137,7 @@ type managerReload struct {
 	// (#1277 — see removeChannels/startAdded).
 	removedInstances map[string]Channel
 	cc               map[string]config.ChannelInstanceConfig
+	startCleanupErr  error
 }
 
 // Reload applies configuration changes to the channel manager. It compares
@@ -1998,33 +2150,31 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	mr.m.mu.Lock()
 	defer mr.m.mu.Unlock()
 
+	if !mr.publishConfigSnapshot() {
+		return nil // obsolete continuation; the coalesced current reload owns the effect
+	}
 	mr.prepareDispatch()
 
 	mr.quiesceDispatch()
 
 	mr.removeChannels()
+	// An unfinished captured resource cannot be overwritten by construction of
+	// its replacement. Retain the old hash/order until a later Stop succeeds.
+	mr.added = slices.DeleteFunc(mr.added, func(id string) bool { return mr.m.pendingDisposals[id] != nil })
 	if r0, stop := mr.initializeAdded(); stop {
-		return r0
+		return errors.Join(mr.startCleanupErr, r0)
 	}
 	mr.startAdded()
 
 	return mr.restartExisting()
 }
 
-// prepareDispatch saves rollback state, installs the new configuration, and refreshes the dispatch context.
+// prepareDispatch computes this published snapshot's diff and refreshes dispatch.
+// publishConfigSnapshot already guarded the config/rollback-state publication.
 func (mr *managerReload) prepareDispatch() {
-	// Save old config and secrets so we can revert on error.
-	mr.oldConfig = mr.m.config
-	mr.oldSecrets = mr.m.secrets
-	mr.oldCredSigs = mr.m.credSigs
-
-	// Update config and secrets early: initChannel uses m.config and m.secrets via factory call.
-	mr.m.config = mr.cfg
-	mr.m.liveCfg.Store(mr.cfg)
-	mr.m.secrets = mr.secrets
-
 	mr.list = toChannelHashes(mr.cfg)
 	mr.added, mr.removed = compareChannels(mr.m.channelHashes, mr.list)
+	mr.addGenerationRestarts()
 	// #1277 (founder decision 2026-10-12): a config-hash-identical instance
 	// whose credential availability changed — its secret was deleted from the
 	// vault, became unreadable, or was restored — must still be re-initialized,
@@ -2032,8 +2182,9 @@ func (mr *managerReload) prepareDispatch() {
 	// its stale in-process secret forever. Force the same removed+added pair a
 	// config change produces so removeChannels stops the stale instance and
 	// initializeAdded re-attempts the factory against the new bundle.
-	mr.m.credSigs = credentialSignatures(mr.cfg, mr.secrets)
-	for id, sig := range mr.m.credSigs {
+	// Stage availability; only commit it with the applied resource hash.
+	mr.credSigs = credentialSignatures(mr.cfg, mr.secrets)
+	for id, sig := range mr.credSigs {
 		if _, stillEnabled := mr.list[id]; !stillEnabled {
 			continue
 		}
@@ -2043,6 +2194,37 @@ func (mr *managerReload) prepareDispatch() {
 		if !slices.Contains(mr.added, id) {
 			mr.added = append(mr.added, id)
 			mr.removed = append(mr.removed, id)
+		}
+	}
+	// Explicit restarts (RequestRestart): an admitted pairing start for a
+	// connector whose configuration did not change. The same removed+added
+	// pair stops the current instance and starts a fresh one, consuming the
+	// admission's token on this serialized path (gate r3 M4, M10).
+	for id, intent := range mr.m.forcedRestarts {
+		order := mr.m.PairingAttempts().LockChannel(id)
+		if !order.MatchesConfig(mr.cfg) {
+			order.Unlock()
+			continue // this snapshot must not consume a later accepted restart
+		}
+		_, enabled := mr.list[id]
+		_, known := mr.m.channelHashes[id]
+		if order.acceptsRestart(intent, mr.cfg) && enabled && known && !slices.Contains(mr.added, id) {
+			mr.added = append(mr.added, id)
+			mr.removed = append(mr.removed, id)
+		}
+		delete(mr.m.forcedRestarts, id)
+		order.Unlock()
+	}
+
+	// Failed teardown belongs to the captured resource, not the reason that
+	// first selected its restart. Retry even when settings/credentials are now
+	// identical or an unconditional restart intent has already been consumed.
+	for id := range mr.m.pendingDisposals {
+		if !slices.Contains(mr.removed, id) {
+			mr.removed = append(mr.removed, id)
+		}
+		if _, enabled := mr.list[id]; enabled && !slices.Contains(mr.added, id) {
+			mr.added = append(mr.added, id)
 		}
 	}
 
@@ -2106,7 +2288,11 @@ func (mr *managerReload) quiesceDispatch() {
 	// during this window, but none of those readers combine config with the
 	// channel set, so that transient mismatch is not observable as a bug.
 	if mr.oldTask != nil {
+		hook := mr.m.reloadHandoffHook
 		mr.m.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
 		mr.oldTask.wg.Wait() // OLD dispatchers have EXITED; nothing can send on a removed channel's queue now
 		mr.m.mu.Lock()
 	}
@@ -2119,8 +2305,18 @@ func (mr *managerReload) removeChannels() {
 	mr.removedInstances = make(map[string]Channel, len(mr.removed))
 	for _, name := range mr.removed {
 		n := name // local copy — prevents closure from capturing the loop variable
-		// Stop all channels
+		// Select the exact resource at the guarded dispatch effect. Never look
+		// it up again after releasing this guard for native teardown.
+		order := mr.m.PairingAttempts().LockChannel(n)
+		if !order.MatchesConfig(mr.cfg) {
+			order.Unlock()
+			continue
+		}
 		channel := mr.m.channels[n]
+		if pending := mr.m.pendingDisposals[n]; pending != nil {
+			channel = pending // retry the captured object, never a successor by name
+		}
+		order.Unlock()
 		// #1277: remember the stale instance pointer. The unregister is
 		// deferred to restartExisting, so until then m.channels[n] still
 		// holds it; startAdded must not mistake it for an instance THIS
@@ -2135,8 +2331,9 @@ func (mr *managerReload) removeChannels() {
 			logger.WarnCF("channels", "Skipping stop for unregistered channel", map[string]any{
 				"channel": n,
 			})
+			staleWorker := mr.m.workers[n]
 			mr.deferFuncs = append(mr.deferFuncs, func() {
-				mr.m.unregisterChannelLocked(n)
+				mr.m.unregisterInstanceLocked(n, nil, staleWorker)
 			})
 			continue
 		}
@@ -2148,9 +2345,22 @@ func (mr *managerReload) removeChannels() {
 				"channel": n,
 				"error":   err.Error(),
 			})
+			mr.retainFailedDisposal(n, channel, err)
+			continue // unfinished cleanup must not schedule unregister
+		}
+		if mr.m.pendingDisposals[n] == channel {
+			delete(mr.m.pendingDisposals, n)
+		}
+		// Tear down exactly the instance and worker being removed. When the
+		// same name is also added (a forced or credential-driven restart),
+		// startAdded has already published the new instance and worker under
+		// that name; they must survive this deferred removal (gate r3 M10).
+		oldWorker := mr.m.workers[n]
+		if oldWorker != nil && oldWorker.ch != channel {
+			oldWorker = nil // the successor worker does not belong to this disposal
 		}
 		mr.deferFuncs = append(mr.deferFuncs, func() {
-			mr.m.unregisterChannelLocked(n)
+			mr.m.unregisterInstanceLocked(n, channel, oldWorker)
 		})
 	}
 }
@@ -2300,33 +2510,42 @@ func (mr *managerReload) startAdded() {
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": n,
 		})
-		if err := channel.Start(mr.ctx); err != nil {
+		// An admitted pairing start for n (ready, at this revision) is
+		// consumed by this start only (gate r3 M2, M14).
+		// Only an attempt committed at this reload's own revision starts; any
+		// other is left to the reload built for it (gate r5 R5-A05).
+		token, stamp, current := mr.m.PairingAttempts().ReadyForSnapshot(n, mr.cfg)
+		if !current {
+			delete(mr.list, n)
+			continue
+		}
+		if err := channel.Start(WithPairingStart(mr.ctx, token, false, stamp)); err != nil {
 			logger.ErrorCF("channels", "Failed to start channel", map[string]any{
 				"channel": n,
 				"error":   err.Error(),
 			})
-			// Fix 35: don't commit the hash for channels that failed to start.
-			delete(mr.list, n)
+			if token != "" && mr.m.PairingAttempts().Release(n, token, PairingOutcomeStartFailed) {
+				// The admitted pairing ended before its start: its chat (or
+				// Connectors) is told why, never left waiting for a code
+				// (gate r4 T2-SF-16).
+				mr.m.notifyPairingLocked(n, token, PairingStatusError, PairingStartFailureMessage(err))
+			}
+			mr.recordStartFailure(n, channel, err)
 			continue
 		}
-		// Lazily create worker only after channel starts successfully. Resolve
-		// TYPE from instance ID for rate limiting (see channelTypeForRateLimit).
-		w := newChannelWorker(mr.m.channelTypeForRateLimit(n), channel)
-		mr.m.workers[n] = w
-		// Snapshot m.config (already the NEW cfg, assigned above) while still
-		// holding m.mu.Lock() — see runWorker's doc comment.
-		go mr.m.runWorker(mr.dispatchCtx, n, w, mr.m.config)
-		go mr.m.runMediaWorker(mr.dispatchCtx, n, w)
-		mr.deferFuncs = append(mr.deferFuncs, func() {
-			mr.m.registerChannelLocked(n, channel)
-		})
+		if token != "" {
+			// The start ran without activating a pairing for its admission
+			// (the channel needed none): close it, so it can never start late.
+			mr.m.PairingAttempts().Release(n, token, PairingOutcomeNoPairing)
+		}
+		mr.publishStartedWorker(n, channel)
 	}
 }
 
 // restartExisting commits channel hashes and restarts dispatchers and unchanged-channel workers.
 func (mr *managerReload) restartExisting() error {
 	// Commit hashes only for successfully started channels.
-	mr.m.channelHashes = mr.list
+	mr.commitAppliedHashes()
 
 	// Restart the bus dispatchers + TTL janitor against the new dispatchCtx so
 	// outbound routing and stale-entry eviction resume after the old context was
@@ -2347,19 +2566,19 @@ func (mr *managerReload) restartExisting() error {
 		addedSet[n] = struct{}{}
 	}
 	for name, w := range mr.m.workers {
+		if pending := mr.m.pendingDisposals[name]; pending != nil && pending == w.ch {
+			continue // do not resume dispatch over unfinished captured cleanup
+		}
 		if _, isNew := addedSet[name]; isNew {
 			continue // already started above
 		}
-		// Wait for old goroutines to finish (they were canceled above).
-		<-w.done
-		<-w.mediaDone
-		// Reset done channels so the new goroutines can close them cleanly.
-		w.done = make(chan struct{})
-		w.mediaDone = make(chan struct{})
-		// Snapshot m.config (already the NEW cfg) while still holding
-		// m.mu.Lock() — see runWorker's doc comment.
-		go mr.m.runWorker(mr.dispatchCtx, name, w, mr.m.config)
-		go mr.m.runMediaWorker(mr.dispatchCtx, name, w)
+		if w.gen == mr.m.dispatchGen {
+			// Started on this reload's own live context during the unlocked
+			// handoff (RegisterChannel): it belongs to the new generation and
+			// must not be joined as if it were cancelled.
+			continue
+		}
+		mr.restartDrainedWorker(name, w)
 	}
 
 	// Execute the register/unregister mutations while STILL holding m.mu.
@@ -2381,19 +2600,21 @@ func (mr *managerReload) restartExisting() error {
 	for _, f := range mr.deferFuncs {
 		f()
 	}
-	return nil
+	return mr.startCleanupErr
 }
 
 func (m *Manager) RegisterChannel(name string, channel Channel) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.registerChannelLocked(name, channel)
+	m.wirePairingAttemptsLocked(name, channel)
 
 	// Spin up a worker so SendMessage/SendMedia can route to this channel.
 	// Without a worker, synchronous delivery (e.g., media frames) fails with
 	// "channel has no active worker".
 	if _, hasWorker := m.workers[name]; !hasWorker && m.dispatchCtx != nil {
 		w := newChannelWorker(m.channelTypeForRateLimit(name), channel)
+		w.gen = m.dispatchGen
 		m.workers[name] = w
 		// Snapshot m.config while still holding m.mu.Lock() — see runWorker's
 		// doc comment.
@@ -2414,6 +2635,28 @@ func (m *Manager) UnregisterChannel(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.unregisterChannelLocked(name)
+}
+
+// unregisterInstanceLocked removes one specific channel instance and its
+// worker: the HTTP handlers of oldCh, oldW's queues, and the map entries only
+// while they still point at them, so a replacement published under the same
+// name is untouched. Caller must hold m.mu.
+func (m *Manager) unregisterInstanceLocked(name string, oldCh Channel, oldW *channelWorker) {
+	if oldCh != nil && m.mux != nil {
+		m.unregisterChannelHTTPHandler(name, oldCh)
+	}
+	if oldW != nil {
+		close(oldW.queue)
+		<-oldW.done
+		close(oldW.mediaQueue)
+		<-oldW.mediaDone
+	}
+	if m.workers[name] == oldW {
+		delete(m.workers, name)
+	}
+	if m.channels[name] == oldCh {
+		delete(m.channels, name)
+	}
 }
 
 // unregisterChannelLocked unregisters a channel. Caller must hold m.mu.

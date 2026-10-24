@@ -112,6 +112,9 @@ echo "▸ Generating schemas.ts (Zod) from contracts/openapi.yaml …"
 # `.strict()`: unknown fields are rejected.
 STRICT_SCHEMAS=${STRICT_SCHEMAS:-"FallbackModel AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p MediaLibraryEntry MediaAttachmentRequest IntegrationProviderUpdateRequest SearchProviderCheckRequest SearchProviderCheckResponse RoomHistoryResponse"}
 STRICT_RAW="$GEN/_schemas.generated.tmp.ts"
+# JSON Schema and Go count Unicode code points; Zod's string.max counts UTF-16
+# units. Keep the new Todo.active_form limit aligned without changing old fields.
+node "$REPO_ROOT/scripts/_gen-todo-unicode.mjs" "$STRICT_RAW" "$CONTRACTS/components/schemas/Todo.yaml"
 for name in $STRICT_SCHEMAS; do
   # Match either a typed (export const Name: z.ZodType<Name> = …) or untyped
   # (export const Name = …) declaration. CR-01 (Wave 0 code-reviewer):
@@ -449,4 +452,6 @@ echo "  openapi-types.ts ^export count : $OPENAPI_EXPORTS  (required ≥ 50)"
 echo "  schemas.ts ^export const count : $SCHEMAS_EXPORTS  (required ≥ 50)"
 [ "$OPENAPI_EXPORTS" -ge 50 ] || { echo "FAIL: openapi-types.ts export count < 50"; exit 1; }
 [ "$SCHEMAS_EXPORTS" -ge 50 ] || { echo "FAIL: schemas.ts export const count < 50"; exit 1; }
+echo "▸ Verifying Todo.active_form contract conformance …"
+node --experimental-strip-types --test "$REPO_ROOT/scripts/todo-active-form-contract.test.mjs"
 echo "  All quality gates PASSED"

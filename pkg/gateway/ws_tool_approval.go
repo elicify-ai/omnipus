@@ -423,6 +423,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string, historyState
 			frame.HistoryState = &state
 		}
 	}
+	frame.SecretRequests = h.secretRequestSnapshot(wc, sessionID)
 
 	raw, err := json.Marshal(frame)
 	if err != nil {

@@ -5,7 +5,7 @@ description: Load on failure dispatches only — when a developer (backend-lead 
 
 # Failure triage — Omnipus
 
-Last reviewed: 2026-10-23 — approved delivery-process rollout
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 
 ## Standing rules for this dispatch
 
@@ -102,10 +102,13 @@ cross-platform matrix, the build matrix and shellcheck fire on pull requests and
 pushes only, and the scheduled workflows never run on branch pushes at all. Say in your
 report which checks never ran — do not treat the green as full coverage.
 
-The remote CI cluster's Go tiers run as root (issue #894): a permission-sensitive test
-that fails only there is an environment artefact, not a defect — GitHub Actions stays
-the authority for permission-sensitive tests until #894 is fixed, and no fixer is
-dispatched onto a root-only cluster red. Say so in your report instead.
+The remote runner's `ci_prepare` / gate re-exec in `deploy/ci-worker/runci.sh` runs
+Go/node gates as the non-root `ci` user after root-only setup; `e2e` and `all` retain
+root for browser/port setup. The old blanket root-user excuse is obsolete. For a
+permission-sensitive failure, inspect that run's actual gate, deployed runner and
+user evidence before classifying it; never dismiss a Go-tier red merely because
+the Fly SSH shell is root. See `deploy/ci-worker/CLAUDE.md` ("Non-root test user, disk
+pressure, machine ownership").
 
 ### 8. One narrow local test only
 

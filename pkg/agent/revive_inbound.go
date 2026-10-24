@@ -26,6 +26,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -203,6 +204,13 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	opts.executionDisposition = d
 	if directOwner {
 		defer func() { runErr = errors.Join(runErr, al.finishExecutionDisposition(d)) }()
+	}
+	if id := inboundMetadata(msg, secretResumeMetadataKey); id != "" {
+		secretRecord, claimed, claimErr := al.SecretRequests().ClaimResume(id, msg.SessionID)
+		if claimErr != nil || !claimed {
+			return "", agent, claimErr
+		}
+		opts.UserMessage = secretrequest.ResumeMessage(secretRecord)
 	}
 	resp, runErr = al.runAgentLoop(ctx, agent, opts)
 	d.recordTurnOutcome(runErr)

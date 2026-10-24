@@ -1,32 +1,5 @@
-// Context-aware, randomized thinking indicator — coverage for
-// InlineThinkingIndicator / ThinkingIndicator / deriveHiddenRunningToolLabel
-// (ChatScreen.tsx). Mirrors ChatScreen.assistant-empty-bubble.test.tsx's
-// harness: '@assistant-ui/react' is deliberately left UNMOCKED and ChatScreen
-// is mounted inside a real AssistantRuntimeProvider (via the real
-// useOmnipusRuntime hook, skipping OmnipusRuntimeProvider's WsLifecycle) so
-// these tests exercise the actual live AssistantMessage()/
-// InlineThinkingIndicator() render path — every OTHER ChatScreen test file
-// mocks ThreadPrimitive.Messages to null, which would make this feature
-// unreachable.
-//
-// BDD:
-//   Given: a fresh streaming assistant message with no tool calls
-//   Then:  the thinking indicator's first shown phrase is always 'Thinking…'
-//   Given: the generic rotating pool is showing
-//   Then:  each 2s tick picks a random phrase, never immediately repeating
-//   Given: the only in-progress step is a hidden background `bash` call
-//   Then:  the indicator shows a stable, context-specific label derived from
-//          the call's `description` (capped) or a command-verb mapping —
-//          and NEVER the raw command string
-//   Given: the only in-progress step is a hidden `delegate` STATUS poll
-//   Then:  the indicator falls through to the generic rotating pool (no
-//          specific-label rule for it — ADR-091 D7/AC-7 removed the `run`
-//          case's "Delegating to <name>…" label, since a `run` call is
-//          visible unconditionally now and never reaches this mechanism)
-//   Given: the only in-progress step is a hidden `ToolSearch` call
-//   Then:  the indicator falls through to the generic rotating pool (no
-//          special-cased label)
-
+// Founder 2026-10-21: one random fallback per status appearance, held fixed.
+// Real AssistantUI/live runtime. Hidden tool commands never become status copy.
 import { describe, it, expect, vi } from 'vitest'
 import { render, within } from '@testing-library/react'
 import * as React from 'react'
@@ -242,8 +215,8 @@ function seedPlainStreamingAssistant(sid: string): void {
   useConnectionStore.setState({ connection: null, isConnected: true, connectionError: null })
 }
 
-describe('ChatScreen thinking indicator — first beat and rotation', () => {
-  it('first shown phrase is always "Thinking…"', async () => {
+describe('ChatScreen thinking indicator — fixed random fallback', () => {
+  it('selects its initial phrase from the pool when the status appears', async () => {
     const sid = 'sess_thinking_first_beat'
     seedPlainStreamingAssistant(sid)
 
@@ -259,58 +232,30 @@ describe('ChatScreen thinking indicator — first beat and rotation', () => {
 
     const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
     expect(bubble).toBeTruthy()
-    // Deterministic opening beat — no timer has ticked yet.
-    expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent(GENERIC_THINKING_RE)
   })
 
-  it('rotates to a random phrase on each 2s tick and never immediately repeats', async () => {
-    const sid = 'sess_thinking_rotation'
-    seedPlainStreamingAssistant(sid)
-
-    vi.useFakeTimers()
-    const randomSpy = vi.spyOn(Math, 'random')
+  it('holds its chosen phrase across former two-second ticks', async () => {
+    seedPlainStreamingAssistant('sess_thinking_fixed')
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const random = vi.spyOn(Math, 'random').mockReturnValue(5.5 / 15)
     try {
       let container!: HTMLElement
-      await act(async () => {
-        const result = render(
-          <Providers>
-            <ChatScreen />
-          </Providers>,
-        )
-        container = result.container
-      })
+      await act(async () => { container = render(<Providers><ChatScreen /></Providers>).container })
       const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-      expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
-
-      // First tick (t=2000ms): force index 5 ('Considering the details…') —
-      // differs from the current 'Thinking…' (index 0), so the picker
-      // accepts it on the first Math.random() call.
-      randomSpy.mockReturnValueOnce(5.5 / 15)
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000)
-      })
-      expect(within(bubble).getByText('Considering the details…')).toBeInTheDocument()
-
-      // Second tick (t=4000ms): force Math.random() to first propose the
-      // SAME index as the currently-shown phrase (5 — an immediate repeat),
-      // then a different one (index 2, 'Composing a response…'). Proves the
-      // no-immediate-repeat retry actually engages rather than the first
-      // pick being accepted unconditionally.
-      randomSpy.mockReturnValueOnce(5.5 / 15).mockReturnValueOnce(2.5 / 15)
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(2000)
-      })
-      expect(within(bubble).getByText('Composing a response…')).toBeInTheDocument()
-      expect(randomSpy).toHaveBeenCalled()
-    } finally {
-      randomSpy.mockRestore()
-      vi.useRealTimers()
-    }
+      expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Considering the details…')
+      random.mockClear()
+      let alternate = false
+      random.mockImplementation(() => { alternate = !alternate; return alternate ? 0.2 : 0.6 })
+      await act(async () => { await vi.advanceTimersByTimeAsync(8000) })
+      expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Considering the details…')
+      expect(random).not.toHaveBeenCalled()
+    } finally { random.mockRestore(); vi.useRealTimers() }
   })
 })
 
 describe('ChatScreen thinking indicator — hidden background bash', () => {
-  it('shows the call\'s own description (capped to one line / ~48 chars), not the raw command', async () => {
+  it('uses the fixed fallback, not the hidden call description or raw command', async () => {
     const sid = 'sess_thinking_bash_description'
     // 68 characters — long enough to force truncation.
     const description = 'Running the complete cross-platform regression suite before shipping'
@@ -334,15 +279,14 @@ describe('ChatScreen thinking indicator — hidden background bash', () => {
     })
 
     const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-    // Spec rule: first line, capped at 48 chars, ellipsis appended when cut.
-    const expectedLabel = `${description.slice(0, 48).trimEnd()}…`
-    expect(within(bubble).getByText(expectedLabel)).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent(GENERIC_THINKING_RE)
+    expect(within(bubble).queryByText(description)).not.toBeInTheDocument()
     // The raw command string must NEVER be rendered anywhere in the bubble.
     expect(bubble.textContent).not.toContain(rawCommand)
     expect(bubble.textContent).not.toContain('run-full-regression-suite')
   })
 
-  it('derives a verb from the command\'s first token when no description is given', async () => {
+  it('uses the fallback without exposing an unlabelled command', async () => {
     const sid = 'sess_thinking_bash_verb'
     const rawCommand = 'git status --short'
     seedStreamingAssistantWithToolCall(
@@ -364,12 +308,12 @@ describe('ChatScreen thinking indicator — hidden background bash', () => {
     })
 
     const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-    expect(within(bubble).getByText('Running git…')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent(GENERIC_THINKING_RE)
     expect(bubble.textContent).not.toContain(rawCommand)
     expect(bubble.textContent).not.toContain('--short')
   })
 
-  it('falls back to "Working in the background…" when neither description nor command is present', async () => {
+  it('uses the same fallback when neither description nor command is present', async () => {
     const sid = 'sess_thinking_bash_fallback'
     seedStreamingAssistantWithToolCall(
       sid,
@@ -390,7 +334,7 @@ describe('ChatScreen thinking indicator — hidden background bash', () => {
     })
 
     const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-    expect(within(bubble).getByText('Working in the background…')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent(GENERIC_THINKING_RE)
   })
 })
 

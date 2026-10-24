@@ -86,7 +86,7 @@ type agentLoopRunTurnIteration struct {
 	// Live steering can already be in history when another tool response
 	// exhausts this turn. Its one post-ceiling continuation carries no text.
 	inTurnSteering               bool
-	inTurnSteeringOrigin         approvalOrigin
+	inTurnSteeringOrigin         inputOrigin
 	toolCallTruncationRepairUsed bool
 	gracefulTerminal             bool
 	ret0                         turnResult
@@ -113,6 +113,7 @@ type agentLoopRunTurnResponse struct {
 	orphanMarkup        providers.OrphanToolMarkup
 	hasOrphanMarkup     bool
 	normalizedToolCalls []providers.ToolCall
+	argumentRefusals    []*tools.ToolResult
 	ret0                turnResult
 	ret1                error
 }

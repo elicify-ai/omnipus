@@ -32,6 +32,7 @@ func TestL1WU2DefaultCeiling_OmnipusAskListAndPrivateSecretAllows(t *testing.T) 
 			assert.Equal(t, "allow", value)
 		})
 	}
+	// SPEC.md Q22=B: create_skill/edit_skill stay globally Allow so exempt Omnipus can ride the ceiling.
 	for _, name := range []string{"create_agent", "update_agent", "update_workspace", "create_skill", "edit_skill", "install_skill", "disable_channel"} {
 		t.Run(name, func(t *testing.T) {
 			assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies[name], "OSA-3: summary-gated changes retain allow")

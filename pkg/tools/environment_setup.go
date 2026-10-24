@@ -111,6 +111,10 @@ type EnvironmentSetupToolDeps struct {
 	// AuditFailClosed mirrors bash FR-B7: when true, a failed audit write on
 	// the install-start path aborts the install.
 	AuditFailClosed bool
+
+	// PrivateEnv supplies the turn's agent-private variables (FR-076),
+	// appended after the setup layer. Nil = none.
+	PrivateEnv PrivateEnvSource
 }
 
 // EnvironmentSetupTool implements the `environment_setup` builtin tool.
@@ -124,6 +128,8 @@ type EnvironmentSetupTool struct {
 	proxy          *sandbox.EgressProxy
 
 	store EnvironmentSetupStore
+
+	privateEnv PrivateEnvSource
 
 	sessionManager *SessionManager
 
@@ -146,6 +152,7 @@ func NewEnvironmentSetupTool(deps EnvironmentSetupToolDeps) *EnvironmentSetupToo
 		godMode:         deps.GodMode,
 		proxy:           deps.Proxy,
 		store:           deps.Store,
+		privateEnv:      deps.PrivateEnv,
 		sessionManager:  getSessionManager(),
 		auditFailClosed: deps.AuditFailClosed,
 	}
@@ -476,7 +483,11 @@ func (t *EnvironmentSetupTool) startRun(ctx context.Context, args map[string]any
 	}
 
 	env := t.setupEnv(lim, area, runtimeEnv)
-	return t.startSession(ctx, startPlan{
+	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
+	for _, private := range privateVars {
+		env = withPrivateVariable(env, private.Name, private.Value)
+	}
+	return appendRuntimeNotice(t.startSession(ctx, startPlan{
 		command:        command,
 		purpose:        purpose,
 		scope:          scope,
@@ -489,7 +500,7 @@ func (t *EnvironmentSetupTool) startRun(ctx context.Context, args map[string]any
 		ownerSessionID: ToolTranscriptSessionID(ctx),
 		agentID:        ToolAgentID(ctx),
 		cb:             cb,
-	})
+	}), privateNotice)
 }
 
 // environmentSetupAuditDenyPreviewBytes bounds every agent-supplied string on

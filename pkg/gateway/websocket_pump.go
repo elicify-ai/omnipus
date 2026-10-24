@@ -152,6 +152,7 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 	if wc == nil {
 		return
 	}
+	runPairingDeliveryBeforeEnqueueHook(wc, frameType, data)
 	if !wc.enqueue(data) {
 		slog.Debug("ws: frame not queued — connection closed or closing", "type", frameType)
 	}

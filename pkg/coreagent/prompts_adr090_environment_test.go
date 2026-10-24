@@ -44,8 +44,9 @@ func TestPrompt_JimDoesNotHandDocumentDependenciesToAdmin(t *testing.T) {
 	if strings.Contains(prompt, "Hand missing document dependencies to Admin") {
 		t.Fatalf("jim prompt must drop the Admin handoff instruction: %s", prompt)
 	}
-	if !strings.Contains(prompt, "notool:environment_setup") {
-		t.Fatalf("jim prompt must mark environment_setup as a tool he does not hold: %s", prompt)
+	// SPEC.md Table: Jim has environment_setup Ask; advertise tool availability without weakening the no-Admin handoff check.
+	if strings.Contains(prompt, "notool:environment_setup") || !strings.Contains(prompt, "tool:environment_setup") {
+		t.Fatalf("jim prompt must advertise Ask-gated environment_setup, not the obsolete notool marker: %s", prompt)
 	}
 }
 

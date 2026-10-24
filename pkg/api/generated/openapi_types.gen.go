@@ -7032,6 +7032,7 @@ func (e NotificationSeverity) Valid() bool {
 const (
 	NotificationTypeKnowledgeDrift NotificationType = "knowledge_drift"
 	NotificationTypeScheduleFailed NotificationType = "schedule_failed"
+	NotificationTypeStopNotice     NotificationType = "stop_notice"
 )
 
 // Valid indicates whether the value is a known member of the NotificationType enum.
@@ -7040,6 +7041,8 @@ func (e NotificationType) Valid() bool {
 	case NotificationTypeKnowledgeDrift:
 		return true
 	case NotificationTypeScheduleFailed:
+		return true
+	case NotificationTypeStopNotice:
 		return true
 	default:
 		return false
@@ -7071,6 +7074,7 @@ func (e NotificationListNotificationsSeverity) Valid() bool {
 const (
 	NotificationListNotificationsTypeKnowledgeDrift NotificationListNotificationsType = "knowledge_drift"
 	NotificationListNotificationsTypeScheduleFailed NotificationListNotificationsType = "schedule_failed"
+	NotificationListNotificationsTypeStopNotice     NotificationListNotificationsType = "stop_notice"
 )
 
 // Valid indicates whether the value is a known member of the NotificationListNotificationsType enum.
@@ -7079,6 +7083,8 @@ func (e NotificationListNotificationsType) Valid() bool {
 	case NotificationListNotificationsTypeKnowledgeDrift:
 		return true
 	case NotificationListNotificationsTypeScheduleFailed:
+		return true
+	case NotificationListNotificationsTypeStopNotice:
 		return true
 	default:
 		return false
@@ -9801,6 +9807,7 @@ const (
 	SecretNameEntryKindMailboxPassword   SecretNameEntryKind = "mailbox_password"
 	SecretNameEntryKindMcpEnv            SecretNameEntryKind = "mcp_env"
 	SecretNameEntryKindProviderKey       SecretNameEntryKind = "provider_key"
+	SecretNameEntryKindUnbound           SecretNameEntryKind = "unbound"
 )
 
 // Valid indicates whether the value is a known member of the SecretNameEntryKind enum.
@@ -9816,6 +9823,8 @@ func (e SecretNameEntryKind) Valid() bool {
 		return true
 	case SecretNameEntryKindProviderKey:
 		return true
+	case SecretNameEntryKindUnbound:
+		return true
 	default:
 		return false
 	}
@@ -9828,6 +9837,7 @@ const (
 	SecretNameEntryRecipientKindMailboxPassword   SecretNameEntryRecipientKind = "mailbox_password"
 	SecretNameEntryRecipientKindMcpEnv            SecretNameEntryRecipientKind = "mcp_env"
 	SecretNameEntryRecipientKindProviderKey       SecretNameEntryRecipientKind = "provider_key"
+	SecretNameEntryRecipientKindUnbound           SecretNameEntryRecipientKind = "unbound"
 )
 
 // Valid indicates whether the value is a known member of the SecretNameEntryRecipientKind enum.
@@ -9842,6 +9852,8 @@ func (e SecretNameEntryRecipientKind) Valid() bool {
 	case SecretNameEntryRecipientKindMcpEnv:
 		return true
 	case SecretNameEntryRecipientKindProviderKey:
+		return true
+	case SecretNameEntryRecipientKindUnbound:
 		return true
 	default:
 		return false
@@ -15401,6 +15413,18 @@ type ChannelCreateResponse struct {
 
 	// Type Base channel type.
 	Type string `json:"type"`
+}
+
+// ChannelEnableRequest Optional body of PUT /api/v1/channels/{id}/enable. An absent body or {} is an ordinary enable and grants no chat ownership of a pairing. pairing_retry is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the gateway proves the caller owns session_id and that the request/session pair is the channel's recorded pairing owner, then claims the next pairing attempt for that chat before enabling. A WebSocket subscription never grants this ownership.
+type ChannelEnableRequest struct {
+	// PairingRetry The original connect call and chat of the pairing being retried (not newly minted identifiers). Compared verbatim. A mismatch, a stale owner or a competing attempt is refused with 409 pairing_retry_conflict and nothing is enabled.
+	PairingRetry *struct {
+		// RequestId The connect_channel tool-call ID that started the pairing.
+		RequestId string `json:"request_id"`
+
+		// SessionId The chat session that started the pairing.
+		SessionId string `json:"session_id"`
+	} `json:"pairing_retry,omitempty"`
 }
 
 // ChannelEnabledResponse Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
@@ -21154,7 +21178,7 @@ type ModelTokens struct {
 	Total int `json:"total"`
 }
 
-// Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+// Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures, knowledge-base drift repair (ADR-067 FR-038a), and operational Stop outcomes; the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
 type Notification struct {
 	// AgentId The agent the notification concerns.
 	AgentId *string `json:"agent_id,omitempty"`
@@ -21178,6 +21202,7 @@ type Notification struct {
 	// Type The event class. Extensible; consumers must tolerate unknown values.
 	//
 	// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+	// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 	Type NotificationType `json:"type"`
 
 	// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -21190,6 +21215,7 @@ type NotificationSeverity string
 // NotificationType The event class. Extensible; consumers must tolerate unknown values.
 //
 // "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 type NotificationType string
 
 // NotificationList The authenticated user's notifications plus the unread count (#264).
@@ -21218,6 +21244,7 @@ type NotificationList struct {
 		// Type The event class. Extensible; consumers must tolerate unknown values.
 		//
 		// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+		// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 		Type NotificationListNotificationsType `json:"type"`
 
 		// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -21234,6 +21261,7 @@ type NotificationListNotificationsSeverity string
 // NotificationListNotificationsType The event class. Extensible; consumers must tolerate unknown values.
 //
 // "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 type NotificationListNotificationsType string
 
 // OnboardingCompleteRequest Body for POST /onboarding/complete. WP5 (ADR-0010) composes this by auth mode: in local mode (open-source edition) the route runs BEFORE any session exists and mints the instance's first account — `admin` is REQUIRED, upstream's behaviour restored. In platform mode (hosted/desktop) the caller is ALREADY signed in (ADR-0008 rulings 1 and 2: the omnipus.ai account is the login) — `admin` is REFUSED (400) because no local credential is ever minted on that edition. `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014). `preferences` is optional in both modes.
@@ -24017,8 +24045,10 @@ type SecretNameEntry struct {
 	AvailableInChannelTurns *bool `json:"available_in_channel_turns,omitempty"`
 
 	// Consumers What uses this version (display labels). Never null.
-	Consumers []string            `json:"consumers"`
-	Kind      SecretNameEntryKind `json:"kind"`
+	Consumers []string `json:"consumers"`
+
+	// Kind Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
+	Kind SecretNameEntryKind `json:"kind"`
 
 	// Owner A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
 	Owner *struct {
@@ -24029,7 +24059,7 @@ type SecretNameEntry struct {
 		WorkspaceId string `json:"workspace_id"`
 	} `json:"owner,omitempty"`
 
-	// Recipient Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+	// Recipient Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
 	Recipient struct {
 		// Kind Recipient kind.
 		Kind SecretNameEntryRecipientKind `json:"kind"`
@@ -24044,7 +24074,7 @@ type SecretNameEntry struct {
 	Version   int64                `json:"version"`
 }
 
-// SecretNameEntryKind defines model for SecretNameEntry.Kind.
+// SecretNameEntryKind Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
 type SecretNameEntryKind string
 
 // SecretNameEntryRecipientKind Recipient kind.
@@ -24059,7 +24089,7 @@ type SecretOptionsUpdateRequest struct {
 	AvailableInChannelTurns bool `json:"available_in_channel_turns"`
 }
 
-// SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Absence is never read as success.
+// SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
 type SecretRequestState struct {
 	// ReferenceNames Reference names the values were stored under. Present only when state is `submitted`.
 	ReferenceNames *[]string               `json:"reference_names,omitempty"`
@@ -25707,6 +25737,9 @@ type Task struct {
 
 	// Todos Lightweight `{text, done}` checklist items on this task (Tier 1 of the three-tier model). A todo is NOT a task — it has no agent, no status, no trigger. Distinct from a subtask (a full child Task with `parent_task_id`).
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskTodosStatus `json:"status"`
 
@@ -25997,6 +26030,9 @@ type TaskCreateRequest struct {
 
 	// Todos Optional initial checklist items.
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskCreateRequestTodosStatus `json:"status"`
 
@@ -26419,6 +26455,9 @@ type TaskUpdateRequest struct {
 
 	// Todos Replacement checklist (replaces the current `todos` atomically).
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskUpdateRequestTodosStatus `json:"status"`
 
@@ -26519,6 +26558,9 @@ type TaskUpdateRequestTriggerType string
 
 // Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need an independent agent/trigger. The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy boolean `done` so a checklist can express work-in-progress (§3 tasks-system refactor — the `set_todos` agent scratchpad rides this same array).
 type Todo struct {
+	// ActiveForm Optional phrasing for the item while it is in progress.
+	ActiveForm *string `json:"active_form,omitempty"`
+
 	// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 	Status TodoStatus `json:"status"`
 
@@ -28482,6 +28524,11 @@ type GetRoomHistoryParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// SubmitSecretRequest503JSONResponseBody defines parameters for SubmitSecretRequest.
+type SubmitSecretRequest503JSONResponseBody struct {
+	union json.RawMessage
+}
+
 // ListSessionsParams defines parameters for ListSessions.
 type ListSessionsParams struct {
 	// AgentId Filter by agent ID.
@@ -28765,6 +28812,9 @@ type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
 
 // ConfigureChannelJSONRequestBody defines body for ConfigureChannel for application/json ContentType.
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
+
+// EnableChannelJSONRequestBody defines body for EnableChannel for application/json ContentType.
+type EnableChannelJSONRequestBody = ChannelEnableRequest
 
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
 type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest
@@ -31291,5 +31341,67 @@ func (t *SkillInstallRequest) UnmarshalJSON(b []byte) error {
 		}
 	}
 
+	return err
+}
+
+// AsSecretRequestState returns the union data inside the SubmitSecretRequest503JSONResponseBody as a SecretRequestState
+func (t SubmitSecretRequest503JSONResponseBody) AsSecretRequestState() (SecretRequestState, error) {
+	var body SecretRequestState
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSecretRequestState overwrites any union data inside the SubmitSecretRequest503JSONResponseBody as the provided SecretRequestState
+func (t *SubmitSecretRequest503JSONResponseBody) FromSecretRequestState(v SecretRequestState) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSecretRequestState performs a merge with any union data inside the SubmitSecretRequest503JSONResponseBody, using the provided SecretRequestState
+func (t *SubmitSecretRequest503JSONResponseBody) MergeSecretRequestState(v SecretRequestState) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsErrorResponse returns the union data inside the SubmitSecretRequest503JSONResponseBody as a ErrorResponse
+func (t SubmitSecretRequest503JSONResponseBody) AsErrorResponse() (ErrorResponse, error) {
+	var body ErrorResponse
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromErrorResponse overwrites any union data inside the SubmitSecretRequest503JSONResponseBody as the provided ErrorResponse
+func (t *SubmitSecretRequest503JSONResponseBody) FromErrorResponse(v ErrorResponse) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeErrorResponse performs a merge with any union data inside the SubmitSecretRequest503JSONResponseBody, using the provided ErrorResponse
+func (t *SubmitSecretRequest503JSONResponseBody) MergeErrorResponse(v ErrorResponse) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SubmitSecretRequest503JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *SubmitSecretRequest503JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
 	return err
 }

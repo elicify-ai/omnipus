@@ -401,7 +401,7 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	// fields (Partitions in particular) marshal as [] not null — Zod on the SPA
 	// rejects null where the contract says type:array and drops the whole list.
 	genSessions := make([]gen.Session, 0, len(filtered))
-	approvals := a.pendingApprovalMains()
+	approvals := a.withPendingSecretCards(a.pendingApprovalMains())
 	for _, m := range filtered {
 		s := unifiedMetaToGenSession(a.withDisplayTitle(m))
 		// U11 (FR-047): needs_attention for a main (nil for every other row).

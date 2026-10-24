@@ -616,10 +616,11 @@ func TestPlanContainmentParity_NewCustomAgent(t *testing.T) {
 	for _, name := range []string{"execute_plan", "stop_plan", "plan_correct"} {
 		p, ok := pol[name]
 		require.Truef(t, ok, "a new custom agent's policy must enumerate %q", name)
-		assert.Equalf(t, config.ToolPolicyDeny, p,
-			"a new custom agent must start denied for %q — it opts in explicitly. If you ever grant "+
-				"execute_plan here, FR-006b requires stop_plan beside it at the same value", name)
+		// SPEC.md Table: a new Main gets execute_plan, stop_plan and plan_correct Allow.
+		assert.Equalf(t, config.ToolPolicyAllow, p, "a new Main starts Allow for %q", name)
 	}
+	// SPEC.md Table / containment invariant: the execution and stop defaults must match.
+	assert.Equal(t, pol["execute_plan"], pol["stop_plan"], "a plan owner must also be able to stop its plan")
 }
 
 // --- FR-006: the catalog surfaces --------------------------------------

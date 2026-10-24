@@ -7,8 +7,10 @@ package config
 
 import (
 	"encoding/json"
+	"log/slog"
 	"reflect"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -79,13 +81,57 @@ func (sec *Config) SensitiveDataReplacer() *strings.Replacer {
 // published — the reflection-walked SecureString values stay on this config's
 // own lazily built replacer — so building the published replacer reads no other
 // config field.
+var sensitiveRegistrationMu sync.Mutex
+
 func (sec *Config) RegisterSensitiveValues(values []string) {
+	sensitiveRegistrationMu.Lock()
+	defer sensitiveRegistrationMu.Unlock()
 	sec.sensitiveMu.Lock()
 	defer sec.sensitiveMu.Unlock()
+	if sec.storedSensitiveSource != nil {
+		stored, err := sec.storedSensitiveSource()
+		if err != nil {
+			slog.Error("credential masking: some stored values could not be read; keeping the previous masking set as well")
+			values = append(append([]string{}, values...), sec.registeredSensitive...)
+		}
+		values = append(append([]string{}, values...), stored...)
+	}
 	// Replace (not append) so stale secrets from a prior config are evicted.
 	sec.registeredSensitive = append(sec.registeredSensitive[:0:0], values...)
 	sec.registeredSensitive = unique(sec.registeredSensitive)
 	// Invalidate the cache so the next SensitiveDataReplacer() call rebuilds.
+	sec.sensitiveCache = nil
+	logger.SetSensitiveValueReplacer(newSensitiveReplacer(sec.registeredSensitive))
+}
+
+// EnsureSensitiveValues adds any of values not yet in the registered masking
+// set and republishes the process-wide replacer, keeping everything already
+// registered. It is for a value about to be handed to a child process before
+// the next full registration has run: a private variable injected into a
+// command must already be masked in its output (gate r1 M3, security T2-S1).
+// The next RegisterSensitiveValues replaces the set as usual; the stored
+// source it reads includes these values, so nothing is lost.
+func (sec *Config) EnsureSensitiveValues(values []string) {
+	sensitiveRegistrationMu.Lock()
+	defer sensitiveRegistrationMu.Unlock()
+	sec.sensitiveMu.Lock()
+	defer sec.sensitiveMu.Unlock()
+	known := make(map[string]struct{}, len(sec.registeredSensitive))
+	for _, v := range sec.registeredSensitive {
+		known[v] = struct{}{}
+	}
+	added := false
+	for _, v := range values {
+		if _, ok := known[v]; ok || v == "" {
+			continue
+		}
+		sec.registeredSensitive = append(sec.registeredSensitive, v)
+		known[v] = struct{}{}
+		added = true
+	}
+	if !added {
+		return
+	}
 	sec.sensitiveCache = nil
 	logger.SetSensitiveValueReplacer(newSensitiveReplacer(sec.registeredSensitive))
 }

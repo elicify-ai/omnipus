@@ -172,6 +172,10 @@ func (wh *wsHandlerHandleAttachSession) sendPreparedHistorySnapshot() {
 	response := prepared.Response
 	bootID, reason := wh.h.hubs.bootID, wh.res.Reason
 	snapshot := generated.SessionSnapshotFrame{Type: "session_snapshot", SessionId: wh.attachID, Seq: int64(wh.res.Head), BootId: &bootID, Reason: &reason, HasEarlier: response.HasEarlier, HasLater: response.HasLater, NextBefore: response.NextBefore, NextAfter: response.NextAfter, PageInfo: response.PageInfo}
+	// Train-3 merge parity: the snapshot frame carries this connection's
+	// pending and recent terminal secret requests, as the pre-paging inline
+	// snapshot did (ws_secret_requests.go).
+	snapshot.SecretRequests = wh.h.secretRequestSnapshot(wh.wc, wh.attachID)
 	if !wh.sendHistoryFrame(snapshot) {
 		return
 	}

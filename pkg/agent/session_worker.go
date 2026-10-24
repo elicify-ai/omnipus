@@ -256,6 +256,9 @@ func (w *sessionWorker) enqueueOrRetry(msg bus.InboundMessage) (handled, retry b
 	if w.exiting.Load() {
 		return false, true
 	}
+	if w.parent.deferSecretResume(msg, "worker_inbox_full") {
+		return true, false
+	}
 	if msg.Channel == "system" {
 		logger.WarnCF("agent.worker", "Session worker inbox full — system message not queued; falling back to unserialized dispatch",
 			map[string]any{
@@ -303,7 +306,7 @@ func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
 	// A group-chat room request is never steered into a running turn
 	// (omnipus-system-agent FR-214, the no-join intake): it waits in the
 	// inbox and runs as its own turn once the current one settles.
-	if msg.Channel == "system" || isNoJoinRoomWake(msg) {
+	if msg.Channel == "system" || inboundMetadata(msg, secretResumeMetadataKey) != "" || isNoJoinRoomWake(msg) {
 		return false
 	}
 	w.steerMu.Lock()
@@ -394,6 +397,9 @@ func (al *AgentLoop) dispatchSessionWorker(scope string, msg bus.InboundMessage)
 	// the check and overshoot the cap.
 	admitted, release := al.admission.TryAdmit(scope)
 	if !admitted {
+		if al.deferSecretResume(msg, "session_capacity") {
+			return true
+		}
 		logger.WarnCF("agent", "At capacity — rejecting new session",
 			map[string]any{
 				"scope":    scope,
@@ -910,7 +916,7 @@ func (w *sessionWorker) publishContinuationTargetFailureNotice(msg bus.InboundMe
 func (w *sessionWorker) continueDrainRetry(ctx context.Context, target *continuationTarget) (continued string, attemptsMade int, continueErr error) {
 	al := w.parent
 	return retrySteeringContinuation(ctx, func() (string, error) {
-		return al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+		return al.continueSession(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID, target.SessionID)
 	}, func(err error) bool {
 		return errors.Is(err, errContinuePostDequeueFailure)
 	})

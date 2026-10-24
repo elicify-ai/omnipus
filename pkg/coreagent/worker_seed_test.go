@@ -201,7 +201,8 @@ func TestSeedDelegationPolicies_SelfRolesDoNotPinRoleWideDepth(t *testing.T) {
 // policy retains required denies and explicit workflow entries while
 // inheriting unchanged ceiling values.
 func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
-	cfg := &config.Config{}
+	// SPEC.md Table (2026-10-22): check new core grants against the real shipped ceiling.
+	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 	worker := findSeeded(t, cfg, string(coreagent.IDWorker))
 
@@ -214,17 +215,18 @@ func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 		"configure_provider", "list_providers", "test_provider", "list_models",
 		"get_config", "set_config", "run_doctor", "get_usage",
 		"create_agent", "update_agent", "delete_agent", "read_agent_metadata",
-		"create_task", "delete_task",
-		"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
-		// inspect_session (fix-wave finding #2): the global ceiling now seeds
-		// "allow" for this tool (defaults.go), so an absent entry here would
-		// silently inherit that allow — the worker must tighten it to an
-		// explicit "deny" like every other seeded non-Judge agent.
-		"inspect_session",
+		// SPEC.md Table (2026-10-22): create_task and management writes remain Off; read-only workspace/session tools do not.
+		"create_task",
+		"create_workspace", "update_workspace", "delete_workspace",
 	} {
 		got, ok := pol[tool]
 		require.True(t, ok, "worker must have an explicit deny for tightened tool %q", tool)
 		assert.Equal(t, config.ToolPolicyDeny, got, "worker tool %q must be explicit 'deny'", tool)
+	}
+
+	// SPEC.md Table (2026-10-22): these four old-deny entries now resolve to the Worker column values.
+	for name, want := range map[string]string{"delete_task": "ask", "list_workspaces": "allow", "get_workspace": "allow", "inspect_session": "allow"} {
+		assert.Equal(t, want, resolveFor(t, cfg, string(coreagent.IDWorker), name, nil), "Worker %s", name)
 	}
 
 	// Deliberately absent from the worker's own map — inherits the global

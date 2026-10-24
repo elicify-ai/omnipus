@@ -770,7 +770,7 @@ export interface paths {
         get: operations["getGlobalToolPolicies"];
         /**
          * Update global tool policies
-         * @description Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15).
+         * @description Persists new global tool policies to config.json under the sandbox key and waits until the running-agent reload has finished. Changes are audit-logged (SEC-15). HTTP 200 means the policies were saved and the reload completed and was confirmed, so running agents are enforcing the saved policies. A reload that fails, or that does not confirm, does not roll the save back and is not HTTP 200: the response is 503 with ErrorResponse. This operation is not the dev_mode_bypass guard.
          */
         put: operations["updateGlobalToolPolicies"];
         post?: never;
@@ -1155,7 +1155,7 @@ export interface paths {
         get?: never;
         /**
          * Enable a channel
-         * @description Sets the channel's enabled flag to true in config.
+         * @description Sets the channel's enabled flag to true in config. An absent body or {} is an ordinary enable that grants no chat ownership. A pairing_retry body is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the caller must own the session and the request/session pair must be the channel's recorded pairing owner; the next pairing attempt is claimed for that chat before the channel is enabled. A refused Retry enables nothing and changes no ownership; a disable that already succeeded is not rolled back, so the channel stays disabled.
          */
         put: operations["enableChannel"];
         post?: never;
@@ -3942,7 +3942,7 @@ export interface paths {
         put?: never;
         /**
          * Submit (or cancel) a secret card
-         * @description Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of `values` or `cancel: true`. All checks run before any write; any failure writes nothing. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
+         * @description Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of `values` or `cancel: true`. All trust and payload checks run before the atomic store publication; a refusal or failed save writes no values. After publication, a metadata or continuation-dispatch failure returns 503 with state submitted and the committed references. The submission IS saved; boot or chat attach retries an undelivered continuation. If the request service or its saved state is unavailable before this attempt reaches publication, 503 instead carries an ErrorResponse: this attempt stored no values and returns no authoritative state. It does not prove that no request or earlier submission exists; read the state, or retry the same request id once available, and never resend values automatically. A repeated submit is idempotent and returns 409 with the same committed state, without storing another version. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
          */
         post: operations["submitSecretRequest"];
         delete?: never;
@@ -12585,6 +12585,25 @@ export interface components {
             cli_version?: string;
         };
         /**
+         * ChannelEnableRequest
+         * @description Optional body of PUT /api/v1/channels/{id}/enable. An absent body or {} is an ordinary enable and grants no chat ownership of a pairing. pairing_retry is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the gateway proves the caller owns session_id and that the request/session pair is the channel's recorded pairing owner, then claims the next pairing attempt for that chat before enabling. A WebSocket subscription never grants this ownership.
+         */
+        ChannelEnableRequest: {
+            /** @description The original connect call and chat of the pairing being retried (not newly minted identifiers). Compared verbatim. A mismatch, a stale owner or a competing attempt is refused with 409 pairing_retry_conflict and nothing is enabled. */
+            pairing_retry?: {
+                /**
+                 * @description The connect_channel tool-call ID that started the pairing.
+                 * @example original-connect-call-id
+                 */
+                request_id: string;
+                /**
+                 * @description The chat session that started the pairing.
+                 * @example requesting-chat-id
+                 */
+                session_id: string;
+            };
+        };
+        /**
          * ChannelEnabledResponse
          * @description Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
          */
@@ -14149,6 +14168,11 @@ export interface components {
              */
             text: string;
             /**
+             * @description Optional phrasing for the item while it is in progress.
+             * @example Drafting the summary section
+             */
+            active_form?: string;
+            /**
              * @description Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
              * @example pending
              * @enum {string}
@@ -14975,7 +14999,7 @@ export interface components {
         };
         /**
          * Notification
-         * @description A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+         * @description A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures, knowledge-base drift repair (ADR-067 FR-038a), and operational Stop outcomes; the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
          */
         Notification: {
             id: string;
@@ -14983,9 +15007,10 @@ export interface components {
              * @description The event class. Extensible; consumers must tolerate unknown values.
              *
              *     "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+             *     "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
              * @enum {string}
              */
-            type: "schedule_failed" | "knowledge_drift";
+            type: "schedule_failed" | "knowledge_drift" | "stop_notice";
             title: string;
             /** @description Optional detail (e.g. the failure reason). */
             body?: string;
@@ -17948,7 +17973,7 @@ export interface components {
         } & (unknown | unknown);
         /**
          * SecretRequestState
-         * @description Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Absence is never read as success.
+         * @description Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
          */
         SecretRequestState: {
             request_id: string;
@@ -17966,8 +17991,11 @@ export interface components {
         SecretNameEntry: {
             /** @description Reference name of this version. */
             reference: string;
-            /** @enum {string} */
-            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+            /**
+             * @description Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
+             * @enum {string}
+             */
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
             /** Format: int64 */
             version: number;
             recipient: components["schemas"]["SecretRecipientDisplay"];
@@ -18542,14 +18570,14 @@ export interface components {
         };
         /**
          * SecretRecipientDisplay
-         * @description Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+         * @description Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
          */
         SecretRecipientDisplay: {
             /**
              * @description Recipient kind.
              * @enum {string}
              */
-            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
             /** @description Display lines, in order. Never null, never empty. */
             lines: string[];
         };
@@ -20210,7 +20238,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated global tool policies. */
+            /** @description The policies were saved and the in-memory reload completed and was confirmed. Running agents are enforcing the returned policies. This status is not used when the save succeeded but the reload failed or did not confirm. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -20229,7 +20257,20 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            503: components["responses"]["503BypassActive"];
+            /** @description The policies were saved and were not rolled back, but they could not be applied to running agents because the reload failed or did not confirm. Retrying the same update, or restarting Omnipus, is the recovery. This 503 is not 503BypassActive and does not mean dev_mode_bypass refused the write. The error field is exactly "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus." No other field is required. The response must not say the write was undone. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus."
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     getExecProxyStatus: {
@@ -21184,9 +21225,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ChannelEnableRequest"];
+            };
+        };
         responses: {
-            /** @description Channel enable state updated. */
+            /** @description Channel enable state updated. For a Retry this confirms ownership admission and enable acceptance only, not QR readiness, linking or message delivery. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -21195,7 +21240,9 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -21205,6 +21252,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description code pairing_retry_conflict: this chat can no longer retry this pairing (missing, stale or mismatched ownership, or a competing attempt). Nothing was enabled and no ownership changed. code pairing_in_progress: an ordinary enable of a WhatsApp connector while another of its pairings is starting, running or stopping. Nothing was changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The enable could not be completed. The error text says which state is saved: the configuration could not be saved or reloaded; the connection is enabled but its restart could not be confirmed yet (a Retry's pairing keeps its chat and can still start); or the connection is enabled but its reserved pairing was cancelled before it started (nothing else starts). Never a refusal before effects, which is 404 or 409. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     disableChannel: {
@@ -27287,6 +27353,15 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description Saved request state is unavailable (the service is not ready, or saved state could not be read or reconciled). This is not absence and not success; retrying this read is safe. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     submitSecretRequest: {
@@ -27335,6 +27410,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description The save failed before publication. No submitted values were stored; the request remains pending. The error is value-free. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description One of two bodies. A SecretRequestState body means the submission IS committed, but post-commit metadata or continuation dispatch is not confirmed: it has state submitted and the committed reference_names. Boot or chat attach retries an undelivered continuation; re-submitting returns 409 with the same state and never stores another version. An ErrorResponse body means the service or saved request state was unavailable before this attempt reached publication: this attempt committed no values and no authoritative state is returned. A pending or earlier submitted request may still exist; retry the same request id once available and never resend values automatically. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"] | components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     listSecrets: {
@@ -27356,6 +27449,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     updateSecretOptions: {
@@ -27387,6 +27481,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     getAgentDependencies: {
@@ -27893,6 +27988,7 @@ export type SessionScopeUpdateResponse = components["schemas"]["SessionScopeUpda
 export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResponse"];
 export type AgentToolsResponse = components["schemas"]["AgentToolsResponse"];
 export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
+export type ChannelEnableRequest = components["schemas"]["ChannelEnableRequest"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];

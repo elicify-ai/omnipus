@@ -24,6 +24,13 @@ interface UseAutoSaveOptions<T> {
   /** If true, auto-save is disabled (e.g., for locked agents) */
   disabled?: boolean
   /**
+   * Recognize a failed save whose attempted payload was nevertheless persisted.
+   * Advances only the persisted baseline, never saved status/time or onSaved.
+   * Its error remains visible until the next save has an actual outcome.
+   * Omitted by default: ordinary errors never count as persisted writes.
+   */
+  isPersistedError?: (error: unknown) => boolean
+  /**
    * Optional endpoint to receive a best-effort flush of the pending data
    * when the page is hidden or unloaded. Uses `fetch(..., { keepalive: true })`
    * (preferred over `navigator.sendBeacon` because keepalive fetch can carry
@@ -154,6 +161,16 @@ interface UseAutoSaveResult<T> {
   hasPendingChanges: () => boolean
 }
 
+function notifySaved<T>(callback: UseAutoSaveOptions<T>['onSaved'], saved: T, latest: T, inFlightJson: string) {
+  try {
+    // Draft ownership: notify using the live snapshot, not the save's old data.
+    // Keep callback/serialization failures separate from a completed save.
+    callback?.(saved, JSON.stringify(latest) === inFlightJson)
+  } catch (err) {
+    console.error('useAutoSave: onSaved callback threw', err)
+  }
+}
+
 /**
  * useAutoSave — debounced auto-save hook.
  *
@@ -172,7 +189,7 @@ export function useAutoSave<T>(
   // Merge note (hotfix/v0.1.1): flushAuthToken was retired hook-wide — the
   // keepalive flush now carries the CSRF double-submit header instead of a
   // bearer token. onSaved is this lineage's draft-ownership callback.
-  const { debounceMs = 500, disabled = false, flushUrl, beaconFlush, onSaved, onDisabledWithPendingChanges } = options ?? {}
+  const { debounceMs = 500, disabled = false, flushUrl, beaconFlush, onSaved, onDisabledWithPendingChanges, isPersistedError } = options ?? {}
   const [status, setStatus] = useState<AutoSaveStatus>('idle')
   const [error, setError] = useState<string>()
   const [lastSavedAt, setLastSavedAt] = useState<Date | undefined>(undefined)
@@ -199,12 +216,11 @@ export function useAutoSave<T>(
   // (don't re-fire a save for identical data). Advanced eagerly when data
   // changes; NOT a record of what's been persisted.
   const previousJsonRef = useRef<string>('')
-  // The JSON of the last data that SUCCESSFULLY persisted. `hasPendingChanges()`
-  // compares against THIS (not `previousJsonRef`) so a failed PUT keeps the data
-  // "pending" — the unmount flush + page-hide beacon still fire and retry it.
-  // Without this, a thrown save would still mark the edit as saved and the
-  // user's delegation-edge changes would silently vanish on reload.
+  // Known persisted JSON, not merely the last observed draft. Ordinary failures
+  // leave edits pending; only the caller's explicit persisted-error predicate
+  // may advance this baseline after a rejected save.
   const lastSavedJsonRef = useRef<string>('')
+  const retainPersistedErrorRef = useRef(false)
   // FIX 3 — serialize saves, never let two be in flight at once. Without
   // this, two debounce cycles firing more than `debounceMs` apart — but with
   // the FIRST save's async work (network latency, or a pre-save step like an
@@ -252,6 +268,8 @@ export function useAutoSave<T>(
   // be a stable identity across renders.
   const onSavedRef = useRef(onSaved)
   onSavedRef.current = onSaved
+  const isPersistedErrorRef = useRef(isPersistedError)
+  isPersistedErrorRef.current = isPersistedError
   // Finding A: same always-fresh-ref pattern for the new disable-transition
   // callback (see its own doc comment on `UseAutoSaveOptions` above).
   const onDisabledWithPendingChangesRef = useRef(onDisabledWithPendingChanges)
@@ -269,6 +287,7 @@ export function useAutoSave<T>(
     const json = JSON.stringify(data)
     previousJsonRef.current = json
     lastSavedJsonRef.current = json
+    retainPersistedErrorRef.current = false
     if (timerRef.current) {
       clearTimeout(timerRef.current)
       timerRef.current = null
@@ -287,8 +306,10 @@ export function useAutoSave<T>(
       return
     }
     isSavingRef.current = true
-    setStatus('saving')
-    setError(undefined)
+    if (!retainPersistedErrorRef.current) {
+      setStatus('saving')
+      setError(undefined)
+    }
     // Snapshot what we're about to persist so success marks exactly that JSON
     // saved (data may change again while the request is in flight).
     const inFlightData = latestDataRef.current
@@ -306,6 +327,7 @@ export function useAutoSave<T>(
       // Only NOW is the data durable — advance the saved marker so
       // hasPendingChanges() flips false for this exact payload.
       lastSavedJsonRef.current = inFlightJson
+      retainPersistedErrorRef.current = false
       setStatus('saved')
       setLastSavedAt(new Date())
       savedSuccessfully = true
@@ -332,10 +354,15 @@ export function useAutoSave<T>(
       // treat it as a no-op and restore idle status so the indicator does not
       // stay red until the next edit. Genuine save failures still land in error.
       if (isReAuthCancelled(err)) {
-        setStatus('idle')
-        setError(undefined)
+        if (!retainPersistedErrorRef.current) {
+          setStatus('idle')
+          setError(undefined)
+        }
         return
       }
+      const persisted = isPersistedErrorRef.current?.(err) === true
+      retainPersistedErrorRef.current = persisted
+      if (persisted) lastSavedJsonRef.current = inFlightJson
       revisionConflict = isApiError(err) && err.status === 409
       setStatus(revisionConflict ? 'conflict' : 'error')
       setError(isApiError(err) ? err.userMessage : err instanceof Error ? err.message : String(err))
@@ -354,31 +381,9 @@ export function useAutoSave<T>(
         }
       }
     }
-    // Hook polish (7-reviewer-gate finding): `onSaved` is invoked OUTSIDE
-    // the try/catch above, in its own try/catch that only logs. A THROWING
-    // caller callback must never flip a save that already genuinely
-    // succeeded (the PUT landed, `lastSavedJsonRef` already advanced) into
-    // 'error' status — that would be a lie to the user (the AutoSaveIndicator
-    // would show a failure for a save that, in fact, persisted). `return`
-    // inside the `catch` block above (the re-auth-cancel path) still skips
-    // this entirely, since code after a try/catch/finally is unreachable
-    // once a `return` inside try/catch has fired; the plain error path falls
-    // through here with `savedSuccessfully` still false, so onSaved is
-    // correctly skipped for both failure modes.
-    if (savedSuccessfully) {
-      try {
-        // Draft-ownership rule (see `onSaved`'s doc comment above): report
-        // whether the LIVE draft — read now, after the round-trip — is
-        // still the exact payload we just persisted. Comparing
-        // `latestDataRef.current` (not `inFlightData`) here is the whole
-        // point: if the operator typed more while this save was in flight,
-        // they differ and `isCurrent` is false, so a caller-owned dirty
-        // flag must stay armed.
-        onSavedRef.current?.(inFlightData, JSON.stringify(latestDataRef.current) === inFlightJson)
-      } catch (err) {
-        console.error('useAutoSave: onSaved callback threw', err)
-      }
-    }
+    // Notify outside the save catch: callback failures cannot undo a save.
+    // Confirmed persistence with an application error is still not success.
+    if (savedSuccessfully) notifySaved(onSavedRef.current, inFlightData, latestDataRef.current, inFlightJson)
   }, [disabled])
 
   useEffect(() => {
@@ -439,6 +444,7 @@ export function useAutoSave<T>(
       wasDisabledRef.current = false
       previousJsonRef.current = json
       lastSavedJsonRef.current = json
+      retainPersistedErrorRef.current = false
       return
     }
 

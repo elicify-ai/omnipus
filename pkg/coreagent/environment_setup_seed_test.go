@@ -56,9 +56,9 @@ func TestEnvironmentSetup_FounderRoleMatrix(t *testing.T) {
 		// (omnipus-system-agent §6.5, FR-022); its inventory value is the
 		// ceiling's ask.
 		IDOmnipus:        config.ToolPolicyAsk,
-		IDJim:            config.ToolPolicyDeny,
-		IDPlanner:        config.ToolPolicyDeny,
-		IDResearcher:     config.ToolPolicyDeny,
+		IDJim:            config.ToolPolicyAsk,  // SPEC.md Table (2026-10-22): environment_setup Ask for both columns.
+		IDPlanner:        config.ToolPolicyAsk,  // SPEC.md Table (2026-10-22): environment_setup Ask for both columns.
+		IDResearcher:     config.ToolPolicyAsk,  // SPEC.md Table (2026-10-22): environment_setup Ask for both columns.
 		IDJudge:          config.ToolPolicyDeny, // locked (systemAgentSeed, re-enforced)
 		IDPlanSupervisor: config.ToolPolicyDeny, // locked (systemAgentSeed, re-enforced)
 	}
@@ -102,18 +102,20 @@ func TestEnvironmentSetup_PerAgentSeedsStoreExplicitPolicies(t *testing.T) {
 			t.Errorf("%s environment_setup = %q, want ask", id, got)
 		}
 	}
-	denied := []string{string(IDJim), string(IDPlanner), string(IDResearcher)}
-	for _, id := range denied {
+	// SPEC.md Table (2026-10-22): Jim, Planner and Researcher now store the ordinary Ask posture too.
+	newAskRoles := []string{string(IDJim), string(IDPlanner), string(IDResearcher)}
+	for _, id := range newAskRoles {
 		a, ok := byID[id]
 		if !ok {
 			t.Fatalf("seeded roster missing %q", id)
 		}
 		got, stored := a.Tools.Builtin.Policies["environment_setup"]
 		if !stored {
-			t.Fatalf("%s must carry an explicit persisted environment_setup Deny (ceiling is ask; absence would inherit ask)", id)
+			t.Fatalf("%s must carry its deliberate persisted environment_setup Ask", id)
 		}
-		if got != config.ToolPolicyDeny {
-			t.Errorf("%s environment_setup = %q, want deny", id, got)
+		// SPEC.md Table (2026-10-22): environment_setup is Ask for both Main and Worker.
+		if got != config.ToolPolicyAsk {
+			t.Errorf("%s environment_setup = %q, want ask", id, got)
 		}
 	}
 }

@@ -2,7 +2,7 @@
 # Toolchain baked in; the repo is pulled at runtime so the worker always tests the latest ref.
 # Includes baked-in Chromium/Firefox/WebKit + Playwright so the `e2e` gate can run the matrix
 # (chat, subagent, handoff, …) without re-downloading ~500 MB of browser binaries on every run.
-FROM golang:1.26-bookworm
+FROM golang:1.27-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
     GOTOOLCHAIN=auto \

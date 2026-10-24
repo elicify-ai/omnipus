@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import * as featureSwitches from './featureSwitches'
 import {
   AGENT_PRIVATE_SECRETS_ENABLED,
   INLINE_TOOL_APPROVALS_ENABLED,
@@ -21,9 +22,18 @@ describe('founder decision 2026-10-14 — stage-1 shipped switches', () => {
     expect(ROOMS_ENABLED).toBe(true)
   })
 
-  // CHECK mutant: featureSwitches.ts::AGENT_PRIVATE_SECRETS_ENABLED false → true.
-  it('[S1-g secrets] ships AGENT_PRIVATE_SECRETS_ENABLED as exactly false', () => {
-    expect(AGENT_PRIVATE_SECRETS_ENABLED).toBe(false)
+  // WU-4 server is landed; WU-5's private-secrets list is still unavailable.
+  // CHECK mutant: featureSwitches.ts::SECRET_CARDS_ENABLED true → false.
+  it('[WU-4 secrets] ships SECRET_CARDS_ENABLED as exactly true', () => {
+    expect(featureSwitches.SECRET_CARDS_ENABLED).toBe(true)
+  })
+
+  // WU-5 landed in Train 2, so its switch is back ON under the founder's
+  // 2026-10-14 rule: hide unfinished UI only until its work unit lands
+  // (Train 2 gate architect F02; Train 3 did the same for rooms).
+  // CHECK mutant: featureSwitches.ts::AGENT_PRIVATE_SECRETS_ENABLED true → false.
+  it('[S1-g secrets] ships AGENT_PRIVATE_SECRETS_ENABLED as exactly true', () => {
+    expect(AGENT_PRIVATE_SECRETS_ENABLED).toBe(true)
   })
 
   // SUPERSESSION (Train 3, amendment section 1 / bundle B3): inline approvals
