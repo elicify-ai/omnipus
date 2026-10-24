@@ -77,9 +77,8 @@ describe('legacy session deep link while its redirect is undecided', () => {
       act(() => { vi.advanceTimersByTime(1) })
       expect(screen.getByTestId('inline-chat-screen'), 'a stalled list cannot leave the chat empty').toBeTruthy()
       expect(screen.getByText(/^Still finding this chat's workspace\. The chat moves into its workspace once it is found\.$/u), 'the unresolved workspace and the later move are explained').toBeTruthy()
-      refetch.mockClear()
-      act(() => { screen.getByRole('button', { name: 'Retry' }).click() })
-      expect(refetch, 'Retry replaces the stalled lookup').toHaveBeenCalledWith({ cancelRefetch: true })
+      // The real abort-and-second-request proof is in -sessions.$sessionId.workspace-retry.
+      expect(screen.getByRole('button', { name: 'Retry' }), 'the notice offers Retry').toBeTruthy()
     } finally { vi.useRealTimers() }
   })
 
