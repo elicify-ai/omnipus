@@ -502,7 +502,7 @@ func (cb *ContextBuilder) getWorkspaceAndRules() string {
 
 	todoRule := ""
 	if cb.setTodosEnabled.Load() {
-		todoRule = "3. For every request, including one-line answers, call set_todos with your own checklist and the current item marked in_progress before your first reply or other tool call, then update the list as work advances."
+		todoRule = "3. For every request, including one-line answers, call set_todos with your own checklist, giving every item its required active_form (a present-participle phrase) and marking the current item in_progress, before your first reply or other tool call, then update the list as work advances."
 	}
 
 	memoryRule, memoryGuide := "", ""
