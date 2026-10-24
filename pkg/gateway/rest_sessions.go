@@ -866,6 +866,14 @@ func (a *restAPI) removeStoppedSession(store *session.UnifiedStore, id string) e
 			slog.Warn("rest: delete session: media store release failed",
 				"session_id", id, "error", err)
 		}
+		// Issue #1435: accepted user uploads are session-pinned
+		// (SessionUploadScopePrefix) and are no longer TTL-expired, so the
+		// owning session's delete is what frees their refs. Skipping this
+		// would leak the ref index entries for every deleted session.
+		if err := mediaStore.ReleaseAll(media.SessionUploadScopePrefix + id); err != nil {
+			slog.Warn("rest: delete session: upload media store release failed",
+				"session_id", id, "error", err)
+		}
 	}
 	return nil
 }

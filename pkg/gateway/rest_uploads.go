@@ -445,7 +445,7 @@ func (ru *restAPIHandleUpload) finishLegacyUpload(sanitized string, destPath str
 			ContentType:   contentType,
 			Source:        "upload:webchat",
 			CleanupPolicy: media.CleanupPolicyForgetOnly,
-		}, "upload:"+ru.sessionID)
+		}, media.SessionUploadScopePrefix+ru.sessionID)
 		if storeErr != nil {
 			slog.Warn("rest: upload: media store registration failed",
 				"path", destPath, "error", storeErr)

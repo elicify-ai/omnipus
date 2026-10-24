@@ -50,31 +50,34 @@ const NormalizeCacheCapacity = normalizeCacheCapacity
 // identity is what a content-derived key must hash. ModelSlot is the
 // canonical model identifier the orchestrator resolved (a different
 // model slot may have a different per-model budget, so the same raw
-// bytes can produce different normalized artifacts). BudgetMaxBytes and
-// BudgetMaxEdge complete the cache-affecting budget so two distinct
-// budget shapes (e.g. catalog default vs legacy maxSize cap) do not
-// collide.
+// bytes can produce different normalized artifacts). BudgetMaxBytes,
+// BudgetMaxEdge and BudgetMaxPatches (issue #1435) complete the
+// cache-affecting budget so two distinct budget shapes (e.g. catalog
+// default vs legacy maxSize cap, or two rows differing only in the
+// patch ceiling) do not collide.
 //
-// All four fields contribute to the cache key — modifying any one of
+// All five fields contribute to the cache key — modifying any one of
 // them yields a cache miss, which is the spec-required behavior.
 type NormalizeCacheKey struct {
-	Sha256         [32]byte
-	ModelSlot      string
-	BudgetMaxBytes int64
-	BudgetMaxEdge  int
+	Sha256          [32]byte
+	ModelSlot       string
+	BudgetMaxBytes  int64
+	BudgetMaxEdge   int
+	BudgetMaxPatches int
 }
 
 // mapKey returns the canonical string form used as the internal map
 // key. A string key keeps the map lookup O(len(key)) with no array-
 // shuffling concerns for the [32]byte field.
 func (k NormalizeCacheKey) mapKey() string {
-	// hex.EncodeToString writes 64 lowercase hex chars + 3 separators +
-	// the model slot + the two budget numbers. Allocates one string;
+	// hex.EncodeToString writes 64 lowercase hex chars + separators +
+	// the model slot + the three budget numbers. Allocates one string;
 	// acceptable for a cache hit path that's still a few-µs lookup.
 	return hex.EncodeToString(k.Sha256[:]) +
 		"|" + k.ModelSlot +
 		"|" + strconv.FormatInt(k.BudgetMaxBytes, 10) +
-		"|" + strconv.Itoa(k.BudgetMaxEdge)
+		"|" + strconv.Itoa(k.BudgetMaxEdge) +
+		"|" + strconv.Itoa(k.BudgetMaxPatches)
 }
 
 // NormalizeCacheStats is a snapshot of the process-wide normalize cache's

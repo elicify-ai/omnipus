@@ -336,6 +336,23 @@ export TMPDIR=/path/to/workspace/tmp
 mkdir -p "$TMPDIR"
 ```
 
+## Attachment and image size limits
+
+Omnipus shrinks images automatically before it sends them to a model, so they fit that model's limits: longest edge, file size, and — for providers that count them — vision-patch budgets such as ChatGPT's limit of 30,000 patches (32×32-pixel tiles) per image. This covers files you attach, images an agent captures itself (for example a full-page `browser_screenshot` of a very long page), and images already stored in the conversation: an oversized image in history is resized again on every send, so one large screenshot can no longer make every following reply on that model fail.
+
+If an image still cannot be made to fit, or an accepted attachment can no longer be found, the reply names the real cause — never a generic "unsupported format" message:
+
+| Notice | Meaning and next step |
+|---|---|
+| "An image in this conversation is too large for this model's size limit…" | The provider rejected the image for its size, even after automatic resizing. Send a smaller image — for example capture a viewport screenshot instead of a full-page capture of a very long page — or switch to a model with a larger image limit. Technical detail is available live under **Verbose chat**. |
+| "That attachment is no longer available…" | Omnipus no longer has the stored copy of a file it accepted earlier. Attach the file again and send it again. |
+
+Things to watch:
+
+- A resized image may be visibly smaller than the capture; the model sees the resized version.
+- Very tall full-page captures are the usual cause of size limits: a 2560-pixel-wide capture of a very long page can need more patches than a model allows even though its file size is modest.
+- Attachments stay resolvable for the life of their conversation, including across a gateway restart. Deleting the session releases them.
+
 ## Limits and things to watch
 
 - Sandbox strength depends on the operating system: Linux confines the gateway and everything it starts, macOS confines only the processes Omnipus launches, and Windows uses application-level checks alone. Details: [operations/sandbox-limitations.md](operations/sandbox-limitations.md).

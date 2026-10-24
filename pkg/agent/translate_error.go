@@ -21,6 +21,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
@@ -45,6 +46,25 @@ const (
 	// Either capability-absence (model has no vision) or format-rejection
 	// (model has vision, but the supplied format is not acceptable).
 	CodeMediaUnsupported LLMErrorCode = "media_unsupported"
+
+	// CodeMediaTooLarge (issue #1435): the provider rejected an IMAGE for
+	// its SIZE — OpenAI's "requires 38560 patches … exceeding the limit of
+	// 30000" 400, or an image-specific HTTP 413. This is its own cause,
+	// never media_unsupported: the model accepts the format, the payload is
+	// just too big, and Omnipus resizes automatically before sending. The
+	// media strip-retry must NOT fire for this code (a size failure strips
+	// the image and then mislabels the cause as unsupported-format); both
+	// TryMediaDowngrade trigger paths only fire for CodeMediaUnsupported /
+	// CodeUnknown, which this code deliberately is not.
+	CodeMediaTooLarge LLMErrorCode = "media_too_large"
+
+	// CodeMediaUnavailable (issue #1435): an attachment that was accepted
+	// can no longer be resolved — its stored copy is gone (media.ErrNotFound
+	// in the turn-error chain). Distinct from media_unsupported (the format
+	// was never the problem) and from unknown: the user's remedy is to
+	// re-attach the file. Attribution `product` — Omnipus accepted the
+	// attachment and then lost it.
+	CodeMediaUnavailable LLMErrorCode = "media_unavailable"
 
 	// CodeProviderRejected: a genuine model refusal — the model declined to
 	// answer for a reason that is neither media, policy, size, nor auth.
@@ -475,6 +495,33 @@ func isImageRejectionMessage(body string) bool {
 	return false
 }
 
+// imageTooLargeSubstrings are the body substrings that identify a
+// provider rejection as an IMAGE-SIZE failure — the image was received
+// and understood, but exceeds the provider/model's size budget (issue
+// #1435). Match is case-insensitive. The patch phrase is OpenAI's
+// verbatim shape ("requires 38560 patches after processing, exceeding
+// the limit of 30000"); the "image … too large" pair covers generic
+// image-size rejections including HTTP 413 bodies. Deliberately NOT
+// matched by isImageRejectionMessage: a size failure classifies as
+// CodeMediaTooLarge, never as the unsupported-format advice.
+var imageTooLargeSubstrings = []string{
+	"patches after processing", // OpenAI/ChatGPT patch-limit rejection (verbatim shape)
+	"image is too large",       // generic image-size rejection (HTTP 413 shape)
+	"image too large",          // variant without the copula
+}
+
+// isImageTooLargeMessage reports whether body carries any pinned
+// image-size substring.
+func isImageTooLargeMessage(body string) bool {
+	lower := strings.ToLower(body)
+	for _, s := range imageTooLargeSubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // capabilityAbsenceSubstrings match the "model has no vision / no PDF
 // capability" family. These phrases are NOT errors — they are the model
 // telling the operator what it can do. Mapped to CodeMediaUnsupported
@@ -662,6 +709,13 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 	case status >= 500 && status <= 599:
 		return CodeNetwork
 	case status == 413:
+		// Issue #1435: a 413 whose body names an image is an image-size
+		// rejection, not a generic oversized request — the honest cause is
+		// the image, so classify it as CodeMediaTooLarge before the
+		// request-shape fallback can label it.
+		if isImageTooLargeMessage(body) {
+			return CodeMediaTooLarge
+		}
 		// 413 → request_too_large (NOT context_too_long). The model never
 		// weighed the conversation; the request payload itself is oversized,
 		// and WE assembled it — the copy for this code says so rather than
@@ -716,6 +770,14 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		if isPDFRejectionMessage(body) {
 			return CodeMediaUnsupported
 		}
+		// Issue #1435: an image-SIZE rejection is its own cause, checked
+		// before the format-rejection shapes. It must NOT fall through to
+		// CodeUnknown here — CodeUnknown is exactly what armed the outcome
+		// fallback that stripped the image and relabelled the size failure
+		// as media_unsupported in the incident.
+		if isImageTooLargeMessage(body) {
+			return CodeMediaTooLarge
+		}
 		if isImageRejectionMessage(body) {
 			return CodeMediaUnsupported
 		}
@@ -761,6 +823,12 @@ func classifyByMessage(body string) LLMErrorCode {
 	}
 	if isPDFRejectionMessage(body) {
 		return CodeMediaUnsupported
+	}
+	// Issue #1435: image-size rejections keep their own cause even when no
+	// HTTP status is available (classifyByProviderError routes status-0
+	// provider errors here).
+	if isImageTooLargeMessage(body) {
+		return CodeMediaTooLarge
 	}
 	if isImageRejectionMessage(body) {
 		return CodeMediaUnsupported
@@ -967,6 +1035,21 @@ func TranslateTurnError(err error) LLMError {
 			Retryable: isRetryable(CodeAgentNotConfigured),
 			// Our own refusal text, not provider text — safe as a
 			// Verbose-Chat detail and never persisted.
+			Detail: buildDetail(nil, err.Error()),
+		}
+	}
+	// Issue #1435: an attachment that was accepted but can no longer be
+	// resolved is its own typed cause. Left to the substring classifier it
+	// fell to CodeUnknown ("we can't tell why"); the honest copy names the
+	// lost attachment and the remedy — re-attach. Checked with errors.Is so
+	// wrapped resolver errors classify identically.
+	if errors.Is(err, media.ErrNotFound) {
+		return LLMError{
+			Code:      CodeMediaUnavailable,
+			Message:   defaultUserMessage(CodeMediaUnavailable),
+			Retryable: isRetryable(CodeMediaUnavailable),
+			// The resolver's own "unknown ref <id>" text is safe as a
+			// Verbose-Chat detail — no provider payload, no credentials.
 			Detail: buildDetail(nil, err.Error()),
 		}
 	}

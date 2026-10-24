@@ -78,8 +78,30 @@ func resolveMediaRefsWithOffload(
 		var contentInjections []string
 
 		for _, ref := range m.Media {
-			// Pass through non-media:// strings (pre-resolved data URLs, HTTP URLs).
+			// Pass through non-media:// strings (HTTP URLs, and data URLs
+			// that already fit). Issue #1435: a data:image URL over the
+			// model's budget — e.g. an old oversized screenshot already
+			// persisted in history — is downscaled at send time the same as
+			// a freshly registered attachment, so one stored image can no
+			// longer break every later iteration and turn. When it cannot
+			// be made to fit, the marker below replaces it visibly; it is
+			// never dropped silently.
 			if !strings.HasPrefix(ref, "media://") {
+				if strings.HasPrefix(ref, "data:image/") {
+					normalized := normalizeImageDataURLToBudget(
+						ref, maxSize, resizeBudgetForModel(cat, provider, model, maxSize))
+					if normalized != "" {
+						resolved = append(resolved, normalized)
+					} else {
+						contentInjections = append(contentInjections,
+							"[attachment unavailable: image (too large to fit the model's size limits, even after resizing)]")
+						logger.WarnCF("agent", "history image exceeded the model budget and could not be resized — replaced with an honest marker", map[string]any{
+							"provider": provider,
+							"model":    model,
+						})
+					}
+					continue
+				}
 				resolved = append(resolved, ref)
 				continue
 			}
@@ -637,23 +659,166 @@ func attachToolResultMedia(msg *providers.Message, refs []string, store media.Me
 			continue
 		}
 
-		// Universal image MIME: build the data URL verbatim. Same
-		// shape as the pre-fix loop.go:8332-8337 site, so PNG/JPEG/
-		// WebP/GIF/BMP/TIFF behavior is preserved exactly.
-		data, err := os.ReadFile(localPath)
-		if err != nil {
-			logger.WarnCF("agent", "attachToolResultMedia: read failed", map[string]any{
+		// Universal image MIME. Issue #1435: an image that already fits the
+		// provider budget keeps its verbatim data URL (byte-identical to the
+		// pre-fix loop.go:8332-8337 shape, so PNG/JPEG/WebP/GIF/BMP/TIFF
+		// behavior is preserved exactly); an oversized one is downscaled
+		// through the resize ladder BEFORE it enters history — a full-page
+		// screenshot must shrink, never silently disappear or poison every
+		// later turn with a rejection. The tool-result path is model-
+		// agnostic (the image is replayed to whichever provider serves the
+		// next turn), so the budget is the catalog default, which carries
+		// the reconciled patch ceiling.
+		info, statErr := os.Stat(localPath)
+		if statErr != nil {
+			logger.WarnCF("agent", "attachToolResultMedia: stat failed", map[string]any{
 				"path":  localPath,
 				"mime":  mime,
-				"error": err.Error(),
+				"error": statErr.Error(),
 			})
 			continue
 		}
-		msg.Media = append(msg.Media, "data:"+mime+";base64,"+base64.StdEncoding.EncodeToString(data))
+		budget := catalog.DefaultResizeLimits
+		maxBytes := int64(maxSize)
+		if budget.MaxBytes <= 0 || budget.MaxBytes > maxBytes {
+			budget.MaxBytes = maxBytes
+		}
+		dataURL := ""
+		if imageFitsBudget(localPath, info, budget) {
+			data, err := os.ReadFile(localPath)
+			if err != nil {
+				logger.WarnCF("agent", "attachToolResultMedia: read failed", map[string]any{
+					"path":  localPath,
+					"mime":  mime,
+					"error": err.Error(),
+				})
+				continue
+			}
+			dataURL = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+		} else {
+			// Over budget: decode + resize ladder (edge, bytes and patches).
+			// Returns "" when the image cannot be made to fit (decode bomb
+			// above the downscale band, undecodable, or ladder floor) — the
+			// honest content marker below replaces the old silent skip.
+			dataURL = encodeImageToDataURLCached(localPath, mime, info, maxSize, "", budget)
+		}
+		if dataURL == "" {
+			name := sanitizeInjectedName(fallbackName(meta.Filename, localPath))
+			msg.Content = injectDocumentContent(msg.Content, []string{
+				"[attachment unavailable: " + name +
+					" (image too large to fit the model's size limits, even after resizing)]",
+			})
+			logger.WarnCF("agent", "attachToolResultMedia: oversized image could not be resized, inline attach replaced with honest marker", map[string]any{
+				"ref": ref,
+				"path": localPath,
+				"mime": mime,
+			})
+			continue
+		}
+		msg.Media = append(msg.Media, dataURL)
 	}
 }
 
+// imageFitsBudget reports whether the image at localPath already fits the
+// budget without any re-encoding: on-disk size within MaxBytes, decoded
+// dimensions within LongEdgePx, and — issue #1435 — its 32px patch grid
+// within MaxPatches when the budget carries one. DecodeConfig reads only
+// the header, so the per-tool-result cost on compliant images is negligible.
+func imageFitsBudget(localPath string, info os.FileInfo, budget catalog.ResizeLimits) bool {
+	if info.Size() > budget.MaxBytes {
+		return false
+	}
+	f, err := os.Open(localPath)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			logImageNormalizationFailure(localPath, "", "close-failed", closeErr, nil)
+		}
+	}()
+	config, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return false
+	}
+	if config.Width <= 0 || config.Height <= 0 {
+		return false
+	}
+	if budget.LongEdgePx > 0 && maxInt(config.Width, config.Height) > budget.LongEdgePx {
+		return false
+	}
+	if budget.MaxPatches > 0 && resize.PatchCount(config.Width, config.Height) > budget.MaxPatches {
+		return false
+	}
+	return true
+}
+
+// normalizeImageDataURLToBudget applies the model's resize budget to an
+// already-resolved data:image/… URL (issue #1435 requirement B: an image
+// that is ALREADY oversized in history must be shrunk at send time too, the
+// same as freshly registered attachments). Returns the input unchanged when
+// it fits or cannot be decoded (undecodable payloads keep today's pass-
+// through behavior — the provider's own rejection then classifies honestly);
+// returns "" only when the image is decodable, over budget, and cannot be
+// made to fit — the caller must replace it with a visible marker, never a
+// silent drop.
+func normalizeImageDataURLToBudget(dataURL string, maxSize int, budget catalog.ResizeLimits) string {
+	comma := strings.IndexByte(dataURL, ',')
+	if comma < 0 {
+		return dataURL
+	}
+	raw, err := base64.StdEncoding.DecodeString(dataURL[comma+1:])
+	if err != nil {
+		return dataURL
+	}
+	maxBytes := budget.MaxBytes
+	if maxBytes <= 0 || maxBytes > int64(maxSize) {
+		maxBytes = int64(maxSize)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return dataURL
+	}
+	if config.Width <= 0 || config.Height <= 0 {
+		return dataURL
+	}
+	overBytes := int64(len(raw)) > maxBytes
+	overEdge := budget.LongEdgePx > 0 && maxInt(config.Width, config.Height) > budget.LongEdgePx
+	overPatches := budget.MaxPatches > 0 && resize.PatchCount(config.Width, config.Height) > budget.MaxPatches
+	if !overBytes && !overEdge && !overPatches {
+		return dataURL
+	}
+	// Bounded-resource downscaling: the decode-bomb ceiling still applies —
+	// only images inside the downscale band are decoded for shrinking.
+	if uint64(config.Width)*uint64(config.Height) > maxDownscaleInputPixels {
+		return ""
+	}
+	limits := budget
+	limits.MaxBytes = maxBytes
+	decoded, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return dataURL
+	}
+	result, err := resize.ResizeToFit(decoded, limits)
+	if err != nil {
+		return ""
+	}
+	return "data:" + result.Mime + ";base64," + base64.StdEncoding.EncodeToString(result.Data)
+}
+
 const maxImagePixels = 16 * 1024 * 1024
+
+// maxDownscaleInputPixels is the bounded-resource downscaling band
+// (issue #1435). A real full-page browser capture is routinely far above
+// maxImagePixels (the incident image is 2560x15424 = ~39.5 Mpx); such an
+// image is legitimate and must be downscaled to the provider's budget, not
+// dropped. When the caller supplied a resize budget, images up to this
+// band are decoded (the DecodeConfig-declared dimensions bound the decode
+// memory; at the band's worst case that is 64 Mpx, at most ~256 MB RGBA
+// transiently) and the resize ladder then shrinks them under the budget.
+// Above the band the input stays a decode bomb and is dropped exactly as
+// before. The legacy no-budget path keeps maxImagePixels unchanged.
+const maxDownscaleInputPixels = 64 * 1024 * 1024
 
 // encodeImageToDataURL normalizes a decodable image to the provider-friendly
 // canonical PNG and returns it as a data URL. SVG is rasterized to PNG via
@@ -739,15 +904,19 @@ func encodeImageToDataURLCached(
 	// FR-011/014/015: resolve the effective budget BEFORE reading bytes
 	// so the cache key carries the resolved budget, not the variadic
 	// shell. The cache key requires numeric budget fields (MaxBytes,
-	// LongEdgePx) — the variadic may be empty (legacy call path), in
-	// which case the defaults below apply.
+	// LongEdgePx, MaxPatches) — the variadic may be empty (legacy call
+	// path), in which case the defaults below apply.
 	longEdgePx := 7680
 	maxBytes := int64(maxSize)
+	maxPatches := 0
 	if len(budget) > 0 && budget[0].LongEdgePx > 0 {
 		longEdgePx = budget[0].LongEdgePx
 		if budget[0].MaxBytes > 0 && budget[0].MaxBytes < maxBytes {
 			maxBytes = budget[0].MaxBytes
 		}
+		// Issue #1435: the patch ceiling rides the same budget. Zero (no
+		// budget supplied, or a row without max_patches) means unlimited.
+		maxPatches = budget[0].MaxPatches
 	}
 
 	f, err := os.Open(localPath)
@@ -773,10 +942,11 @@ func encodeImageToDataURLCached(
 	}
 
 	cacheKey := library.NormalizeCacheKey{
-		Sha256:         library.HashRawBytes(rawBytes),
-		ModelSlot:      modelSlot,
-		BudgetMaxBytes: maxBytes,
-		BudgetMaxEdge:  longEdgePx,
+		Sha256:           library.HashRawBytes(rawBytes),
+		ModelSlot:        modelSlot,
+		BudgetMaxBytes:   maxBytes,
+		BudgetMaxEdge:    longEdgePx,
+		BudgetMaxPatches: maxPatches,
 	}
 	if cached, ok := library.GlobalNormalizeCache().Get(cacheKey); ok {
 		// FR-004 hit: skip the entire decode → resize → encode
@@ -800,12 +970,24 @@ func encodeImageToDataURLCached(
 		return ""
 	}
 	pixels := uint64(config.Width) * uint64(config.Height)
-	if pixels > maxImagePixels {
+	// FR-013 pixel guard, two tiers (issue #1435):
+	//   - Legacy (no budget supplied): unchanged hard drop above
+	//     maxImagePixels — the pixel-bomb regression contract.
+	//   - Budget path: real captures legitimately exceed 16 Mpx, so the
+	//     drop moves out to maxDownscaleInputPixels; inside the band the
+	//     image is decoded (dimensions from DecodeConfig bound the decode)
+	//     and the resize ladder below shrinks it under the budget. Above
+	//     the band it is still a decode bomb and is dropped.
+	pixelCeiling := uint64(maxImagePixels)
+	if maxPatches > 0 {
+		pixelCeiling = uint64(maxDownscaleInputPixels)
+	}
+	if pixels > pixelCeiling {
 		logImageNormalizationFailure(localPath, mime, "pixel-budget-exceeded", nil, map[string]any{
 			"format":     format,
 			"width":      config.Width,
 			"height":     config.Height,
-			"max_pixels": maxImagePixels,
+			"max_pixels": pixelCeiling,
 		})
 		return ""
 	}
@@ -821,6 +1003,7 @@ func encodeImageToDataURLCached(
 	result, err := resize.ResizeToFit(decoded, catalog.ResizeLimits{
 		LongEdgePx: longEdgePx,
 		MaxBytes:   maxBytes,
+		MaxPatches: maxPatches,
 	})
 	if err != nil {
 		if errors.Is(err, resize.ErrLadderFloor) {

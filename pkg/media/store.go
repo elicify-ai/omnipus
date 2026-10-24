@@ -37,6 +37,16 @@ const (
 // index via CleanExpired (their files are preserved; only the ref is dropped).
 const SessionInlineScopePrefix = "tool:inline:session:"
 
+// SessionUploadScopePrefix is the media-store scope prefix for files a user
+// attached to a chat session (the REST upload path registers refs as
+// SessionUploadScopePrefix + "<sessionID>"). Entries under this scope are
+// SESSION-PINNED exactly like SessionInlineScopePrefix (issue #1435): the
+// TTL cleaner (CleanExpired) never expires them — an attachment that was
+// accepted must stay resolvable for the life of its conversation, across
+// restarts — and they are freed by ReleaseAll when the owning session is
+// deleted, so the exemption cannot leak refs for deleted sessions.
+const SessionUploadScopePrefix = "upload:"
+
 // MediaMeta holds metadata about a stored media file.
 type MediaMeta struct {
 	Filename      string
@@ -397,6 +407,12 @@ func (s *FileMediaStore) ReleaseAll(scope string) error {
 // here would cause 404s when revisiting chat history that contains
 // tool-generated screenshots or charts.
 //
+// Session-pinned scopes (SessionInlineScopePrefix for tool-generated inline
+// media, and — issue #1435 — SessionUploadScopePrefix for accepted user
+// uploads) are never TTL-expired: an attachment that was accepted stays
+// resolvable for the life of its conversation, across restarts. Both scopes
+// are freed by ReleaseAll when the owning session is deleted.
+//
 // Phase 1 (under lock): identify expired delete_on_cleanup entries and remove
 // from maps.
 // Phase 2 (no lock): delete store-managed files from disk to minimize lock
@@ -420,15 +436,22 @@ func (s *FileMediaStore) CleanExpired() int {
 		if !entry.storedAt.Before(cutoff) {
 			continue
 		}
-		// Never TTL-expire SESSION-PINNED inline media (scope prefix
-		// SessionInlineScopePrefix): it must stay resolvable so chat history keeps
-		// rendering tool-generated screenshots/charts, and it is freed explicitly
-		// by ReleaseAll on session delete. Other forget_only entries (user uploads,
-		// send_file) are NOT pinned — they still age out of the in-memory index
-		// here as before (their files are preserved; only the ref is dropped),
-		// which avoids an unbounded ref leak for those non-session scopes.
-		if scope, ok := s.refToScope[ref]; ok && strings.HasPrefix(scope, SessionInlineScopePrefix) {
-			continue
+		// Never TTL-expire SESSION-PINNED media: inline tool media (scope
+		// prefix SessionInlineScopePrefix) must stay resolvable so chat
+		// history keeps rendering tool-generated screenshots/charts, and —
+		// issue #1435 — accepted user uploads (SessionUploadScopePrefix)
+		// must stay resolvable for the life of their conversation,
+		// including across a restart. Both are freed explicitly by
+		// ReleaseAll on session delete, so the exemption cannot leak refs
+		// for deleted sessions. Other forget_only entries (send_file and
+		// other non-session scopes) are NOT pinned — they still age out of
+		// the in-memory index here as before (their files are preserved;
+		// only the ref is dropped), which avoids an unbounded ref leak for
+		// those non-session scopes.
+		if scope, ok := s.refToScope[ref]; ok {
+			if strings.HasPrefix(scope, SessionInlineScopePrefix) || strings.HasPrefix(scope, SessionUploadScopePrefix) {
+				continue
+			}
 		}
 
 		if scope, ok := s.refToScope[ref]; ok {

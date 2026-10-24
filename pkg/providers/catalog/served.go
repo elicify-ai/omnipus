@@ -142,6 +142,9 @@ type envelopeJSON struct {
 type resizeLimitsJSON struct {
 	LongEdgePx int   `json:"long_edge_px"`
 	MaxBytes   int64 `json:"max_bytes"`
+	// MaxPatches mirrors the contract's optional max_patches (issue #1435):
+	// 0 means the provider's patch accounting is unknown (no cap applied).
+	MaxPatches int `json:"max_patches"`
 }
 
 type endpointJSON struct {
