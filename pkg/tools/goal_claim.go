@@ -127,20 +127,18 @@ func (t *GoalClaimTool) Category() ToolCategory { return CategoryTasks }
 
 // Description implements Tool.
 func (t *GoalClaimTool) Description() string {
-	return "Claim THIS session's active goal as done, blocked, or waiting on the operator (ADR-084). " +
-		"status:met means you believe the goal's acceptance criteria are satisfied. If any direct child " +
-		"sub-agent is queued or actively running, the met claim is rejected immediately; wait for them to finish " +
-		"or cancel them, then claim again. With no queued or actively running direct child, a valid met claim " +
-		"proceeds to adjudication after your reply is delivered; adjudication may disagree with your " +
-		"claim. A met claim requires a non-empty evidence argument (your own one-line statement of what you " +
-		"verified) or the call is refused before anything is recorded — if the work is not finished yet, do " +
-		"not claim met: keep working, or claim blocked or waiting_on_user with the reason as evidence. " +
-		"status:waiting_on_user and status:blocked both end the turn without any adjudication: " +
-		"waiting_on_user means you need an answer from the operator to continue; blocked means you " +
-		"cannot proceed and it is not something the operator can answer directly — for either, give the " +
-		"reason in one line as evidence so the operator can see why. This tool refuses on " +
-		"a delegated sub-turn (it reports the OWNER session's completion only) and on a session with no " +
-		"active goal."
+	return "Claim THIS session's active goal as met, blocked, or waiting_on_user (ADR-084). " +
+		"Include status and evidence for every call; omitting evidence is rejected at dispatch. " +
+		"Use met when you believe the acceptance criteria are satisfied. Prefer a one-line summary of " +
+		"what you did and how you checked it. A met claim is rejected while any direct child sub-agent " +
+		"is queued or actively running; wait for them to finish or cancel them, then claim again. " +
+		"Otherwise, the met claim is recorded and judged after your reply is delivered, even with empty " +
+		"or whitespace-only evidence. If no physical evidence is available, you can still claim met. " +
+		"The Judge decides met or unmet against the acceptance criteria using the conversation and your " +
+		"tool results, and may disagree with your claim. An unmet verdict uses one try. " +
+		"blocked means you cannot proceed and an operator answer cannot resolve it; waiting_on_user means " +
+		"you need an operator answer to continue. Both end the turn without adjudication; give the reason " +
+		"as evidence. Only the owner session can claim its active goal."
 }
 
 // Parameters implements Tool.
@@ -151,21 +149,20 @@ func (t *GoalClaimTool) Parameters() map[string]any {
 			"status": map[string]any{
 				"type": "string",
 				"enum": []string{GoalClaimStatusMet, GoalClaimStatusBlocked, GoalClaimStatusWaitingOnUser},
-				"description": "met: you believe the goal's acceptance criteria are satisfied; requires evidence. " +
-					"If any direct child sub-agent is queued or actively running, the met claim is rejected immediately; " +
-					"wait for them to finish or cancel them, then claim again. With no such direct child, a valid " +
-					"met claim proceeds to adjudication after your reply is delivered. blocked: you " +
-					"cannot proceed and it is not a question the operator can answer — parks the goal, no " +
-					"adjudication. waiting_on_user: you need an answer from the operator to continue — parks " +
-					"the goal, no adjudication. Required — never omit this expecting a default.",
+				"description": "Required. met: you believe the acceptance criteria are satisfied. If any direct child " +
+					"sub-agent is queued or actively running, wait for them to finish or cancel them before claiming met. " +
+					"Otherwise, the claim is recorded and judged after your reply is delivered, even with empty evidence. " +
+					"An unmet verdict uses one try. blocked: you cannot proceed and an operator answer cannot resolve it. " +
+					"waiting_on_user: you need an operator answer to continue. Both park the goal without adjudication. " +
+					"Include evidence for every status.",
 			},
 			"evidence": map[string]any{
 				"type": "string",
-				"description": "Your own one-line statement of what you verified. Required and non-empty " +
-					"when status is met (whitespace-only counts as empty and the call is refused). For " +
-					"blocked and waiting_on_user it is optional: one line saying why you cannot proceed or " +
-					"what you need — it becomes the reason the operator sees. Example when status is met: " +
-					"\"Wrote the report to report.md and read it back; all three required sections are present.\"",
+				"description": "Required string for every status; omitting it is rejected at dispatch. For met, " +
+					"prefer one line saying what you did and how you checked it. Empty or whitespace-only evidence " +
+					"is accepted: the Judge decides met or unmet against the acceptance criteria using the conversation " +
+					"and your tool results. An unmet verdict uses one try. For blocked or waiting_on_user, " +
+					"give the reason or the answer you need; this is shown to the operator.",
 			},
 		},
 		// ADR-084 §13 (2026-10-23, issue #1431), decision line 1: `evidence` is
