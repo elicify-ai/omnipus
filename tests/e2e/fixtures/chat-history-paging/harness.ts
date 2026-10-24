@@ -279,17 +279,27 @@ export async function holdPage(page: Page, predicate: (url: URL) => boolean) {
   let observed!: (route: Route) => void;
   const requested = new Promise<Route>((resolve) => { observed = resolve; });
   const requests: string[] = [];
+  const abortedOrHandledRequests: string[] = [];
+  let abortedOrHandled = false;
   const handler = async (route: Route) => {
     if (!predicate(new URL(route.request().url()))) { await route.continue(); return; }
     requests.push(route.request().url());
     observed(route);
     const response = await route.fetch();
     const status = await released;
-    if (status !== undefined) await route.fulfill({ status, json: { error: 'deterministic history transport failure' } });
-    else await route.fulfill({ response });
+    try {
+      if (status !== undefined) await route.fulfill({ status, json: { error: 'deterministic history transport failure' } });
+      else await route.fulfill({ response });
+    } catch (error) {
+      if (!(error instanceof Error) || !['Route is already handled!', 'route.fulfill: Route is already handled!'].includes(error.message)) throw error;
+      // Keep the interrupted app transition observable; it is not a successful delivery.
+      abortedOrHandled = true;
+      abortedOrHandledRequests.push(route.request().url());
+    }
   };
   await page.route('**/api/v1/sessions/*/messages?*', handler);
-  return { requested, requests, release, dispose: () => page.unroute('**/api/v1/sessions/*/messages?*', handler) };
+  return { requested, requests, release, get abortedOrHandled() { return abortedOrHandled; }, abortedOrHandledRequests,
+    dispose: () => page.unroute('**/api/v1/sessions/*/messages?*', handler) };
 }
 export async function assertComposerReady(page: Page) {
   await expect(chatInput(page)).toBeEnabled();
