@@ -43,6 +43,14 @@ The model pickers — next to the chat message box, on an agent's profile, and o
 
 The same model name can appear under more than one provider, for example when a local proxy serves models that a subscription provider also offers. When that happens, the check mark appears only under the provider whose row you actually picked — by mouse or by keyboard — and picking the same model under a different provider moves the check mark to that provider's row.
 
+### The model a chat keeps
+
+The chat's model picker remembers the model you picked **for that one conversation**. Leave the conversation and come back, switch to another chat and back, or reload the browser — the picker shows the model you last chose there, and that is the model the next message uses. The choice is kept per browser until you pick a different model in that conversation.
+
+The picker also marks the conversation agent's **default model**: the row that carries the **Default** chip is the model the agent uses when you have not picked one. The chip follows the provider too — the same model name under a second provider is not marked. To go back to the default, pick the **Default**-marked row deliberately; the conversation then keeps that choice like any other.
+
+The remembered choice is a per-browser convenience, not a server-side setting, and it covers **every** chat — workspace chats and unfiled chats (a chat outside any workspace, opened by link) alike. A chat you open on another device starts from the conversation's last answered model or the agent's default instead.
+
 Two limits to know:
 
 - A value restored from a saved setting or conversation rather than picked in this session carries no provider record (for example a recap model saved earlier, or the model a conversation was last answered with). When exactly one provider offers that model, its row is marked; when several providers offer it, no row is marked, because the UI cannot know which one served it.

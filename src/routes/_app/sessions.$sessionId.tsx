@@ -186,6 +186,20 @@ function SessionRoute() {
         params: { workspaceId: wsId },
         replace: true,
       })
+      // #1437: the replace-redirect above is the redirect contract its tests
+      // pin, but by itself it drops the session from the address — a reload
+      // of the resulting address then re-enters the workspace through the
+      // remembered-chat pointer, which another tab may have moved to a
+      // different chat. Writing the linked session into the chat address's
+      // declared `open` search key (second replace, immediately after) keeps
+      // the address naming exactly this chat: WorkspaceTabContainer's entry
+      // reads it as the chat pointer for the page, so reloading the address
+      // always returns HERE. Without this write a session link loses its
+      // identity on the very first reload.
+      void navigate({
+        search: ((prev: Record<string, unknown>) => ({ ...prev, open: session.id })) as never,
+        replace: true,
+      })
       return
     }
 
