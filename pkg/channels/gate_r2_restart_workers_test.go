@@ -359,9 +359,19 @@ func TestManager_RevokedAdmissionNeverRestarts(t *testing.T) {
 	admitted, err := store.Admit("gate-r4-revoked", PairingAdmissionConnect, owner)
 	require.NoError(t, err)
 	require.True(t, store.MarkReady("gate-r4-revoked", admitted.AttemptID, ChannelRevision(cfg, "gate-r4-revoked")))
+	// Fixture: the direct ready admission carries its accepted config identity,
+	// as the real writer does (the ec98acab8 sibling pattern).
+	finalManagerAcceptedSnapshot(t, store, cfg, "gate-r4-revoked", admitted.AttemptID)
 	m.RequestRestart("gate-r4-revoked", admitted.AttemptID)
 	_, revoked := store.BeginStop(admitted)
 	require.True(t, revoked, "the chat's Stop revokes the ready admission")
+
+	// Fixture: absorb the stamp's generation change into a legitimate idle
+	// start first (the ec98acab8 sibling pattern) — without it, the published
+	// reload's ABA restart rides along and the revoked admission's dropped
+	// restart is no longer observable on its own.
+	m.RequestRestart("gate-r4-revoked", "")
+	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
 
 	before := len(built())
 	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
@@ -376,6 +386,10 @@ func TestManager_RevokedAdmissionNeverRestarts(t *testing.T) {
 	next, err := store.Admit("gate-r4-revoked", PairingAdmissionRetry, owner)
 	require.NoError(t, err, "the stopped chat may deliberately Retry")
 	require.True(t, store.MarkReady("gate-r4-revoked", next.AttemptID, ChannelRevision(cfg, "gate-r4-revoked")))
+	// Fixture: the control's own accepted write carries its identity too —
+	// an unstamped ready admission is refused by publication and the reload
+	// silently no-ops, which would hide the pinned restart behind a red.
+	finalManagerAcceptedSnapshot(t, store, cfg, "gate-r4-revoked", next.AttemptID)
 	m.RequestRestart("gate-r4-revoked", next.AttemptID)
 	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
 	all := built()

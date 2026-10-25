@@ -75,7 +75,8 @@ function validateOrSeedGatewayConfig(): void {
       '  {\n' +
       '    "version": 1,\n' +
       '    "gateway": { "port": 6060, "dev_mode_bypass": true },\n' +
-      '    "sandbox": { "audit_log": true, "tool_policies": { "delegate": "allow" } }\n' +
+      '    "sandbox": { "audit_log": true, "tool_policies": { "delegate": "allow" } },\n' +
+      '    "channels": { "whatsapp": { "type": "whatsapp", "enabled": false } }\n' +
       '  }\n' +
       '  EOF\n\n' +
       'Then start the gateway:\n' +
@@ -89,6 +90,14 @@ function validateOrSeedGatewayConfig(): void {
   if (!fs.existsSync(configPath)) {
     // Config absent — write a minimal correct config so the NEXT gateway start is correct.
     // (The current gateway run may already be in flight without these settings — warn.)
+    //
+    // channels.whatsapp (type whatsapp, enabled false) is seeded for
+    // whatsapp-qr.spec.ts Case D: since 151aa3af8 (M12) an ordinary enable
+    // requires an EXISTING connector (404 errChannelAbsent otherwise), and the
+    // spec's own BDD precondition is "the WhatsApp channel is initially
+    // disabled". The same key must be present in every config.json seeded
+    // before a gateway boot (pr.yml "Seed gateway config", runci.sh,
+    // sandbox-uat.yml).
     const minimalConfig = {
       version: 1,
       gateway: { port: 6060, dev_mode_bypass: true },
@@ -149,6 +158,29 @@ function validateOrSeedGatewayConfig(): void {
       'sandbox.audit_log is restart-gated — the audit subsystem (audit.jsonl) is only\n' +
       'created at boot when this flag is true. T26 will fail without it.\n' +
       'FIX: add "sandbox": { "audit_log": true } to config.json and restart the gateway.',
+    );
+  }
+
+  // Check 3: the seeded WhatsApp connector must exist for whatsapp-qr.spec.ts
+  // Case D. Since 151aa3af8 (M12) an ordinary enable requires an EXISTING
+  // connector — with no entry the enable 404s (errChannelAbsent) and Case D
+  // fails with `PUT /api/v1/channels/whatsapp/enable failed: 404`. The entry is
+  // boot-time configuration, so a warning (not a repair) is all setup can do
+  // for an already-running gateway; Case D itself stays the red detector.
+  // This is intentionally a warn, not a throw: not every environment that runs
+  // this suite seeds its config through this file (pr.yml, runci.sh and
+  // sandbox-uat.yml each carry their own seed), and failing setup here would
+  // turn one missing key into a whole-suite failure in environments whose seed
+  // does not carry the key yet.
+  const channels = cfg.channels as Record<string, { type?: string; enabled?: boolean }> | undefined;
+  if (!channels?.whatsapp || channels.whatsapp.type !== 'whatsapp') {
+    console.warn(
+      '[E2E global-setup] config.json has no seeded "channels": {"whatsapp": {"type": "whatsapp", "enabled": false}}.\n' +
+      'whatsapp-qr.spec.ts Case D enables the WhatsApp connector via the real REST API;\n' +
+      'since 151aa3af8 (M12) an enable requires an existing connector, so Case D will\n' +
+      '404 without this boot-time seed. The spec\'s BDD precondition is "initially disabled".\n' +
+      'FIX: add to config.json before starting the gateway:\n' +
+      '  "channels": { "whatsapp": { "type": "whatsapp", "enabled": false } }',
     );
   }
 
