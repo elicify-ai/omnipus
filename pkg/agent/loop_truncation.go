@@ -472,22 +472,23 @@ func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationCha
 	}
 	ts.mu.Lock()
 	pending := ts.continuationAccum
-	ts.continuationAccum = ""
+	ts.continuationAccum = answerText{}
 	ts.mu.Unlock()
 	if continuationChain != nil {
 		*continuationChain = nil
 	}
-	if pending == "" {
+	if pending.content == "" {
 		return nil
 	}
 	restoreAccounting := ts.holdFollowingCallAccounting()
 	defer restoreAccounting()
-	ts.appendIntermediateAssistantTranscript(pending)
+	ts.appendIntermediateAssistantTranscript(pending.content)
 	if !ts.opts.NoHistory && ts.agent != nil && ts.agent.Sessions != nil {
-		if err := ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", pending); err != nil {
+		if err := ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", pending.content); err != nil {
 			return err
 		}
 	}
+	ts.recordTaskModelAnswer(pending.modelContent)
 	return nil
 }
 

@@ -190,7 +190,8 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		// The executor receives only this turn's real assistant output, including
 		// pre-tool text. Framework notices remain in the chat/history above but
 		// cannot become task results, regardless of their wording.
-		finalContent = strings.Join(rz.rc.rx.rr.rq.ri.rf.rt.taskModelAnswerParts, "\n\n")
+		rz.rc.rx.rr.rq.ri.rf.rt.ts.recordTaskModelAnswer(rz.rc.rx.taskModelFinalAnswer)
+		finalContent = rz.rc.rx.rr.rq.ri.rf.rt.ts.taskModelAnswerContent()
 	}
 	return turnResult{
 		finalContent: finalContent,

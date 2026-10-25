@@ -32,10 +32,6 @@ type agentLoopRunTurn struct {
 	iteration                int
 	llmOpts                  map[string]any
 	llmModel                 string
-	// taskModelAnswerParts contains only successful provider responses from
-	// this task turn, before framework notices can replace the final reply.
-	// Ordinary chat and Judge turns do not collect an executor answer.
-	taskModelAnswerParts []string
 	// A streaming-capable provider already tried this channel. Do not retry
 	// a declined factory merely to finalize the plain fallback response.
 	streamerLookupDeclined bool
@@ -136,9 +132,12 @@ type agentLoopRunTurnTools struct {
 	// notice. A truncation outcome is kept separately with its mark when
 	// a late follow-up continues the turn (keepAnswerBeforeSteering).
 	finalIsModelAnswer bool
-	midTurnGuardErr    error
-	ret0               turnResult
-	ret1               error
+	// taskModelFinalAnswer is the model-only view of the logical final message
+	// already assembled by the conversation's continuation machinery.
+	taskModelFinalAnswer string
+	midTurnGuardErr      error
+	ret0                 turnResult
+	ret1                 error
 }
 
 // agentLoopRunTurnConductor carries the shared state of runTurn across its stages.

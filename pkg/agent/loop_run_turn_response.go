@@ -992,6 +992,9 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 	if err := rr.rq.ri.rf.rt.ts.callAccountingError(); err != nil {
 		return err
 	}
+	if rr.rq.ri.rf.responseFromModel {
+		rr.rq.ri.rf.rt.ts.recordTaskModelAnswer(rr.rq.ri.rf.response.Content)
+	}
 	if rr.rq.ri.rf.response.Content != "" {
 		// The narration is now in the transcript. If this round's streamer
 		// ends up being finalized (the turn exits via max_tool_iterations
