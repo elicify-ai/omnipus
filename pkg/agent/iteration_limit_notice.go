@@ -26,6 +26,7 @@ func (ts *turnState) recordIterationLimitNotice(content string, messageBus *bus.
 		ID: uuid.NewString(), Type: session.EntryTypeSystem, Role: "system",
 		Content: content, Timestamp: time.Now().UTC(), TurnID: ts.turnID,
 		AgentID: ts.resolveActiveAgentID(), GoalID: ts.goalID,
+		Status: "interrupted", InterruptionReason: string(session.InterruptionToolLimit),
 		ViewMembership: session.ViewMembershipChat,
 	}
 	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
@@ -55,6 +56,7 @@ func (ts *turnState) recordIterationLimitNotice(content string, messageBus *bus.
 		frame := generated.ReplayMessageFrame{
 			Type: string(generated.WsFrameTypeReplayMessage), SessionId: ts.transcriptSessionID,
 			Role: entry.Role, Content: content, Id: &entry.ID, Timestamp: &stamp, TurnId: &entry.TurnID,
+			Status: &entry.Status, InterruptionReason: &entry.InterruptionReason,
 		}
 		if entry.GoalID != "" {
 			frame.GoalId = &entry.GoalID

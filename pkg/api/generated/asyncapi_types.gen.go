@@ -1096,6 +1096,8 @@ type ReplayMessageFrame struct {
 	// Hub-assigned per-session sequence number. Present on live publication and its incremental catch-up copies; absent on unsequenced transcript/snapshot projections. Only frames carrying seq advance the session cursor.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
+	// Completion status recorded on the persisted chat entry, using the same vocabulary as Message.status. Copied unchanged to live and replay frames. Omitted for legacy or unstamped entries; absence is not a successful outcome.
+	Status *string `json:"status,omitempty"`
 	// Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence (for example the tool-iteration-limit notice) written after the turn's earlier narration was already persisted. Live, the gateway closes the narration bubble with done(<narration id>) before this entry arrives, so it is a separate message; the replay stream has no such boundary, so the SPA must start a new message for this frame instead of merging it into the preceding same-turn assistant entry. Absent on every other frame, including entries written before this field existed.
 	TerminalOutcome *bool   `json:"terminal_outcome,omitempty"`
 	Timestamp       *string `json:"timestamp,omitempty"`

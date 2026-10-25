@@ -618,6 +618,7 @@ export const ReplayMessageFrame = z
     model: z.string().max(256).optional(),
     turn_id: z.string().optional(),
     goal_id: z.string().optional(),
+    status: z.enum(["ok", "error", "interrupted"]).optional(),
     interruption_reason: z.enum(["tool_limit", "reconciliation_required"]).optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),

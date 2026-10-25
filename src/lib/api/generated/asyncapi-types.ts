@@ -591,6 +591,7 @@ export interface ReplayMessageFrame {
   model?: string;
   turn_id?: string;
   goal_id?: string;
+  status?: "ok" | "error" | "interrupted";
   interruption_reason?: "tool_limit" | "reconciliation_required";
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";

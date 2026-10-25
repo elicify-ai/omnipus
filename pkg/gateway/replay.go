@@ -1028,6 +1028,10 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		terminalCopy := true
 		sr.msgFrame.TerminalOutcome = &terminalCopy
 	}
+	if entry.Status != "" {
+		status := entry.Status
+		sr.msgFrame.Status = &status
+	}
 	if entry.InterruptionReason != "" {
 		reason := entry.InterruptionReason
 		sr.msgFrame.InterruptionReason = &reason

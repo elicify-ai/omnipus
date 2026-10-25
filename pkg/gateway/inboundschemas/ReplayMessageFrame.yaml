@@ -132,6 +132,17 @@ properties:
       replay must retain the SAME association so the SPA joins each bubble to its
       own exact keyed goal criteria. Absent means UNKNOWN association; a later
       goal's frame must never rebind an earlier replayed message.
+  status:
+    type: string
+    readOnly: true
+    enum:
+      - ok
+      - error
+      - interrupted
+    description: >
+      Completion status recorded on the persisted chat entry, using the same
+      vocabulary as Message.status. Copied unchanged to live and replay frames.
+      Omitted for legacy or unstamped entries; absence is not a successful outcome.
   interruption_reason:
     type: string
     readOnly: true
