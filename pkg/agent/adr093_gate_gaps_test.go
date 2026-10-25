@@ -504,20 +504,31 @@ func TestAdr093StopDuringRevivedTurn_LaunchPublishesUnstampedChild(t *testing.T)
 	}
 	release()
 	select {
-	case <-errCh:
+	case enqueueErr := <-errCh:
+		if enqueueErr != nil {
+			t.Fatalf("enqueue of the revived message errored: %v", enqueueErr)
+		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("the revived turn did not return after Stop")
 	}
 
+	// SYNCHRONIZATION (test-side fix, 2026-10-25): the enqueue goroutine
+	// returns at ENQUEUE time, not at turn end, so draining errCh joins
+	// nothing. The dying turn's owner lands the stop asynchronously (its
+	// landing Mutate shares the parent's shard lock with the launch below),
+	// and a parent snapshot taken before that landing races it — exactly the
+	// false D1 failure the green run reported. Join the owner's ACTUAL
+	// landing on the observable state (stopped, same generation, fence
+	// cleared, durable note), the established steering fixture bound — never
+	// a sleep — and take the D1 before-snapshot only after it.
+	landed := awaitSteeringRepairStopped(t, al, parentID, previous.Generation)
+
 	// Characterisation of the state the ruling speaks to: the cascade covered
-	// the revived generation.
-	parent := adr093Load(t, al, parentID)
-	if parent.Generation != previous.Generation {
-		t.Fatalf("parent generation = %d, want %d (the same-generation revival that the newer Stop covers)", parent.Generation, previous.Generation)
+	// the revived generation and has fully landed.
+	if landed.State != session.LifecycleStopped || landed.Generation != previous.Generation || landed.StopNote == nil {
+		t.Fatalf("parent after the concurrent Stop = gen %d state %q note %+v, want the landed stopped shape on the revived generation (the newer Stop covers it)", landed.Generation, landed.State, landed.StopNote)
 	}
-	if !parent.Stopped() && !parent.Terminal() {
-		t.Fatalf("parent after the concurrent Stop is generation %d state %q with no current Stop — the newer Stop must cover that generation", parent.Generation, parent.State)
-	}
+	parent := landed
 
 	// The ruled outcome: the launch publishes, unstamped — the race may run
 	// once (Q1 option A); the parent record stays as the cascade left it.
