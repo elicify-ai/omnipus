@@ -23,7 +23,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { DEFAULT, MIA, OMNIPUS, OMNIPUS_MAIN, SALES, SALES_MAIN, session } from '../../../tests/omnipus-l1-ui-red/fixtures'
-import { expectValidPage, page, pos } from '../../../tests/chat-history-paging/fixtures'
+import { expectValidFrame, expectValidPage, page, pos, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 
 // Module namespaces / props are test-only, not wire formats. This QA branch
 // predates these modules. An absent module fails the named case loudly, never
@@ -164,6 +164,25 @@ async function mountEntry() {
   render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>)
   return { router, onOpened, group: await screen.findByRole('group', { name: 'Omnipus' }) }
 }
+function completeConnectedHistory() {
+  const selected = page([BEFORE], { sessionId: OMNIPUS_MAIN })
+  expectValidPage(selected, [pos(1)], 1)
+  const incoming: ServerFrame[] = [
+    { ...snapshot(selected), seq: 1, boot_id: 'omnipus-single-boot' },
+    { type: 'session_state', session_id: OMNIPUS_MAIN, user_id: 'single-conversation-reader', pending_approvals: [],
+      emitted_at: BEFORE.timestamp, history_state: { status: 'available' } },
+    replay(BEFORE, OMNIPUS_MAIN),
+    { type: 'done', session_id: OMNIPUS_MAIN },
+    { type: 'catch_up_complete', session_id: OMNIPUS_MAIN, seq: 1, boot_id: 'omnipus-single-boot', mode: 'snapshot' },
+  ]
+  incoming.forEach(expectValidFrame)
+  act(() => incoming.forEach(frame => useChatStore.getState().handleFrame(frame)))
+  expect(useChatStore.getState().sessionsById[OMNIPUS_MAIN].history.historyLoaded,
+    'D6/D7: the connected first page really committed through snapshot ownership').toBe(true)
+}
+function messagesReads() {
+  return requests.filter(request => request.method === 'GET' && request.path.split('?')[0] === `/api/v1/sessions/${OMNIPUS_MAIN}/messages`)
+}
 async function mountScreen() {
   const load = screenModules['./OmnipusChatScreen.tsx']
   if (!load) expect.fail('BLOCKED: OmnipusChatScreen not implemented — spec FR-005/100 and chief /omnipus ruling')
@@ -174,7 +193,9 @@ async function mountScreen() {
   render(<QueryClientProvider client={queryClient}><RouterProvider router={router} /></QueryClientProvider>)
   const composer = await screen.findByTestId('chat-input')
   expect(composer).toBeEnabled()
+  completeConnectedHistory()
   expect(await screen.findByText(BEFORE.content!)).toBeVisible()
+  expect(messagesReads(), 'D6: connected opening never starts a parallel initial REST history read').toStrictEqual([])
   await waitFor(() => expect(queryClient.isFetching()).toBe(0))
   expect(router.state.location.pathname).toBe('/omnipus')
   return { router, composer }
@@ -292,7 +313,7 @@ describe('Omnipus one-conversation guarantee at its reachable UI', () => {
     act(() => { useChatStore.getState().handleFrame(receipt); useChatStore.getState().handleFrame(done) })
     expect(await screen.findByTestId('clear-context-divider')).toHaveTextContent('Conversation context cleared')
     expect(screen.queryByText(BEFORE.content!)).not.toBeInTheDocument()
-    expect(requests.filter((request) => request.path === `/api/v1/sessions/${OMNIPUS_MAIN}/messages`).length).toBeGreaterThanOrEqual(2)
+    expect(messagesReads(), 'D6: only the explicit clear refresh reads a page; connected opening used its snapshot').toHaveLength(1)
     expect(router.state.location.pathname).toBe('/omnipus')
     expectSameSessionNoCreation()
     expect(frames.filter((frame) => frame.type === 'message')).toEqual([sent])
