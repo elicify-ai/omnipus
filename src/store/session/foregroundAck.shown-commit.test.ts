@@ -22,8 +22,10 @@ import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
 import type { Session } from '@/lib/api'
 import type { ServerFrame, WsConnection } from '@/lib/ws'
+import type { SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
 import { noteForegroundAttach } from './foregroundAck'
 import { availableHistoryDetail } from '../../../tests/chat-history-paging/legacy-fixtures'
+import { expectValidFrame, expectValidPage, page, snapshot } from '../../../tests/chat-history-paging/fixtures'
 
 /** Real loaded session metadata as the sidebar's ['sessions'] query holds it. */
 function mainSession(id: string, overrides: Partial<Session> = {}): Session {
@@ -54,7 +56,7 @@ function chatSession(id: string): Session {
 }
 
 /** Generated SessionStateFrame attach answer; the bound is optional per the contract. */
-function stateFrame(sid: string, attentionBound?: number): ServerFrame {
+function stateFrame(sid: string, attentionBound?: number): SessionStateFrame {
   return {
     type: 'session_state',
     user_id: '',
@@ -62,7 +64,7 @@ function stateFrame(sid: string, attentionBound?: number): ServerFrame {
     emitted_at: '2026-10-10T00:00:00Z',
     session_id: sid,
     ...(attentionBound === undefined ? {} : { attention_bound: attentionBound }),
-  } as unknown as ServerFrame
+  }
 }
 
 function catchUpComplete(sid: string): ServerFrame {
@@ -100,13 +102,11 @@ function shownForeground(sid: string, loaded: Session[]): void {
 }
 
 function snapshotFrame(sid: string): ServerFrame {
-  return {
-    type: 'session_snapshot',
-    session_id: sid,
-    seq: 3,
-    boot_id: 'boot-s',
-    reason: 'unknown_position',
-  } as unknown as ServerFrame
+  const history = page([], { sessionId: sid })
+  expectValidPage(history, [], 0)
+  const frame: ServerFrame = { ...snapshot(history), seq: 4, boot_id: 'boot-s' }
+  expectValidFrame(frame)
+  return frame
 }
 
 beforeEach(() => {
@@ -270,7 +270,12 @@ describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the
     shownForeground(sid, [mainSession(sid)])
 
     useChatStore.getState().handleFrame(snapshotFrame(sid))
-    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    const current: ServerFrame = { ...stateFrame(sid, 7), history_state: { status: 'available' } }
+    expectValidFrame(current)
+    useChatStore.getState().handleFrame(current)
+    const replayDone: ServerFrame = { type: 'done', session_id: sid }
+    expectValidFrame(replayDone)
+    useChatStore.getState().handleFrame(replayDone)
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete',
       session_id: sid,
