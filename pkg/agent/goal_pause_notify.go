@@ -1,11 +1,11 @@
 package agent
 
-import "log/slog"
+import "errors"
 
 // GoalPausedEvent is an internal report to the gateway's existing bell producer.
 // Owner is read successfully from the actual session, never inferred from a
-// missing/unreadable record. Reason contains only the bounded claim explanation
-// or a fixed brake reason, not the final response or a pending question.
+// missing/unreadable record. Reason is the claim explanation or a fixed brake
+// reason, not the final response or a pending question; the gateway bounds it.
 // not-wire-format
 type GoalPausedEvent struct {
 	SessionID string
@@ -40,14 +40,15 @@ func (al *AgentLoop) notifyGoalPaused(sessionID, goalID, cause, reason string) {
 	}
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {
-		slog.Error("agent: goal pause session metadata unavailable; bell not delivered", "session_id", sessionID, "goal_id", goalID)
+		al.reportGoalReadError(sessionID, "deliver goal-pause bell warning (notification not sent)", errors.New("chat ownership metadata is unavailable"))
 		return
 	}
 	meta, err := store.GetMeta(sessionID)
 	if err != nil || meta == nil {
 		// An unreadable owner must never become an all-accounts notification.
-		// Do not copy the failed metadata or claim text into diagnostics.
-		slog.Error("agent: could not read goal pause session metadata; bell not delivered", "session_id", sessionID, "goal_id", goalID)
+		// Use the existing error surface without copying failed metadata or
+		// claim/question/output text into the diagnostic.
+		al.reportGoalReadError(sessionID, "deliver goal-pause bell warning (notification not sent)", errors.New("chat ownership metadata could not be read"))
 		return
 	}
 	if reason == "" {

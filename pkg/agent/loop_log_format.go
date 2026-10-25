@@ -2,9 +2,10 @@ package agent
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/utils"
-	"strings"
 )
 
 // formatMessagesForLog formats messages for logging
