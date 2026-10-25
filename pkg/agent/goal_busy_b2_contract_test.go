@@ -459,7 +459,7 @@ func b2CompositionNewGoal(t *testing.T) {
 	oldID := h.goalID
 	oldInput := b2DraftTakeDue(t, h, p, first.Add(b2SpecStall))
 	_, err := resolveGoalRecordStore().Update(oldID, func(g *goal.Goal) error {
-		return g.Terminate(generated.GoalStateFailed, "fixture replaced goal", time.Now())
+		return g.Terminate(generated.GoalStateCleared, "fixture replaced goal", time.Now())
 	})
 	require.NoError(t, err)
 	h.arm(t)
