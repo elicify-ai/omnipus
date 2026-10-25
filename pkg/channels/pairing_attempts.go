@@ -223,7 +223,15 @@ func (s *PairingAttempts) Admit(instance string, kind PairingAdmission, owner *P
 	return order.Admit(kind, owner)
 }
 
-func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context, kind PairingAdmission, owner *PairingOwner) (PairingAttempt, error) {
+// admitOrdered decides and reserves under one ordering boundary (M2). The
+// caller holds the channel order; the caller-supplied currentRevision, when
+// non-nil, is read HERE — under that same guard, never from an earlier
+// snapshot — so a stale-ready decision always compares against the currently
+// accepted configuration (security review F1). A granted admission applies
+// the stale-ready close in the same critical section; a refused one applies
+// nothing, so a foreign Retry whose own ownership check would refuse
+// interrupts nothing.
+func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context, kind PairingAdmission, owner *PairingOwner, currentRevision func() (string, bool), notifyInterrupted func(PairingProgress)) (PairingAttempt, error) {
 	instance := order.instance
 	if err := ctx.Err(); err != nil {
 		return PairingAttempt{}, err
@@ -231,24 +239,69 @@ func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context,
 	if instance == "" || (kind != PairingAdmissionEnable && (owner == nil || owner.SessionID == "" || owner.RequestID == "")) {
 		return PairingAttempt{}, ErrPairingConflict
 	}
+	// gate r5 R5-A05/r6: a ready attempt committed at another revision than
+	// the current accepted configuration can never start (TakeReady demands
+	// the exact revision). Read the current revision while the channel order
+	// is held and before the state mutex: config writers that could move the
+	// revision (CommitPairing, the ordered config writers, a saved-config
+	// read) all take the same channel order first.
+	stale := false
+	if currentRevision != nil && order.connector.latest != nil && order.connector.latest.Phase == PairingPhaseReady {
+		if rev, ok := currentRevision(); ok && order.connector.latest.Revision != rev {
+			stale = true
+		}
+	}
 	s.mu.Lock()
 	c := order.connector
 	var err error
 	switch {
 	case c.deleting:
 		err = ErrPairingDeleting
-	case c.hasStopping(), c.latest != nil && inFlight(c.latest.Phase):
+	case c.hasStopping():
 		err = ErrPairingConflict
-	case kind == PairingAdmissionRetry && !retryEligible(c.latest, *owner):
+	case c.latest != nil && inFlight(c.latest.Phase) && !stale:
 		err = ErrPairingConflict
+	case kind == PairingAdmissionRetry:
+		if stale {
+			// The close would leave latest terminal and interrupted: this
+			// Retry must own that exact attempt, or nothing is interrupted.
+			post := *c.latest
+			post.Phase, post.Outcome = PairingPhaseTerminal, PairingOutcomeInterrupted
+			if !retryEligible(&post, *owner) {
+				err = ErrPairingConflict
+			}
+		} else if !retryEligible(c.latest, *owner) {
+			err = ErrPairingConflict
+		}
+	}
+	var interrupted *PairingProgress
+	if err == nil && stale {
+		c.latest.Phase, c.latest.Outcome = PairingPhaseTerminal, PairingOutcomeInterrupted
+		// The interruption's envelope is stamped NOW, while the closed attempt
+		// is still the connector's latest and current-generation — the only
+		// state in which progressLocked assigns it a public sequence.
+		closed := copyAttempt(c.latest)
+		p := order.progressLocked(closed, PairingStatusError, "", PairingInterruptedMessage)
+		interrupted = &p
+	}
+	if err != nil {
+		s.mu.Unlock()
+		return PairingAttempt{}, err
 	}
 	hook := s.afterCheck
 	s.mu.Unlock()
-	if err != nil {
-		return PairingAttempt{}, err
-	}
 	if hook != nil {
 		hook() // ordering guard held; short state mutex is not held
+	}
+	// The interruption is emitted HERE — after the close, before the new
+	// attempt's reservation advances the generation. Delivery revalidates
+	// every frame against the connector's current latest (AcceptsProgress);
+	// an interruption emitted after the reservation would carry a superseded
+	// generation and never reach its chat. The callback must not block and
+	// must not re-enter any pairing lock: it only emits an already-accepted
+	// immutable envelope onto the (drop-on-full) event bus and the audit log.
+	if interrupted != nil && notifyInterrupted != nil {
+		notifyInterrupted(*interrupted)
 	}
 	if err := ctx.Err(); err != nil {
 		return PairingAttempt{}, err

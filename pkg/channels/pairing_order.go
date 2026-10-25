@@ -129,7 +129,21 @@ func (o *PairingOrder) Admit(kind PairingAdmission, owner *PairingOwner) (Pairin
 }
 
 func (o *PairingOrder) AdmitContext(ctx context.Context, kind PairingAdmission, owner *PairingOwner) (PairingAttempt, error) {
-	return o.store.admitOrdered(o, ctx, kind, owner)
+	return o.store.admitOrdered(o, ctx, kind, owner, nil, nil)
+}
+
+// AdmitClosingStaleReady admits like AdmitContext and, under the SAME held
+// ordering boundary, closes a ready attempt whose committed revision differs
+// from currentRevision() — read inside the boundary, never an earlier
+// snapshot (security review F1) — as interrupted, and emits the interruption
+// while the closed attempt is still the connector's latest: the caller's
+// notifyInterrupted callback runs between the eligibility check and the new
+// attempt's reservation, and must not block or re-enter any pairing lock.
+// The close is applied only when this very admission is granted: a refused
+// admission (a foreign Retry its ownership check refuses) interrupts
+// nothing. The caller must hold this order (LockChannel).
+func (o *PairingOrder) AdmitClosingStaleReady(ctx context.Context, kind PairingAdmission, owner *PairingOwner, currentRevision func() (string, bool), notifyInterrupted func(PairingProgress)) (PairingAttempt, error) {
+	return o.store.admitOrdered(o, ctx, kind, owner, currentRevision, notifyInterrupted)
 }
 
 func (o *PairingOrder) MarkReady(attemptID, revision string) bool {

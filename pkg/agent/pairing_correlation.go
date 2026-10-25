@@ -43,16 +43,31 @@ func (al *AgentLoop) admitPairing(channelID string, kind channels.PairingAdmissi
 	if store == nil {
 		return "", ErrPairingUnavailable
 	}
-	// gate r5 R5-A05 / r6: a ready attempt committed at another revision than
-	// the connector's current configuration can never start. The next
-	// admission closes it as interrupted — telling its chat — and is accepted;
-	// an older reload is never the one that decides.
-	if cfg := al.GetConfig(); cfg != nil {
-		if closed, ok := store.InterruptStaleReady(channelID, channels.ChannelRevision(cfg, channelID)); ok {
-			al.publishInterrupted(closed)
-		}
-	}
-	rec, err := store.Admit(channelID, kind, owner)
+	// gate r5 R5-A05/r6; security review F1: the stale-ready decision and the
+	// admission run under ONE ordering boundary. The current revision is read
+	// inside that boundary — while the channel order is held, matching the
+	// guard → al.mu direction of CommitPairing — never from a snapshot taken
+	// earlier, so an older snapshot can never interrupt a newer ready
+	// attempt. The close is applied only when this very admission is granted:
+	// a foreign Retry whose own ownership check would refuse interrupts
+	// nothing. The interruption is emitted inside the boundary, before the
+	// new attempt's reservation advances the generation — later, delivery
+	// revalidation (AcceptsProgress) would drop it as superseded. The
+	// emission is drop-on-full event-bus work plus the audit log, never a
+	// pairing lock.
+	order := store.LockChannel(channelID)
+	rec, err := order.AdmitClosingStaleReady(context.Background(), kind, owner,
+		func() (string, bool) {
+			cfg := al.GetConfig()
+			if cfg == nil {
+				return "", false
+			}
+			return channels.ChannelRevision(cfg, channelID), true
+		},
+		func(progress channels.PairingProgress) {
+			al.PublishPairingProgress([]channels.PairingProgress{progress})
+		})
+	order.Unlock()
 	if err != nil {
 		return "", err
 	}
