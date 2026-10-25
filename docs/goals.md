@@ -110,7 +110,29 @@ A reply on its own is no progress: if an automatic reminder completes without a 
 
 Send a normal reply to resume the goal and reset that count. This is a pause, not a failed or ended goal. The same rule applies before and after the agent writes its working goal record; there is no separate two-nudge fallback.
 
-Omnipus does not send another reminder or advance this count while the goal session's background commands, dispatched tasks or plans, or delegated helpers are still working. Their output or completion counts as progress. A Stop, an unanswered question or a blocked claim also holds automatic reminders. If a Stop is accepted before a waiting reminder is admitted, that reminder does not start. An ended goal receives none.
+Ordinary automatic reminders wait while the goal session's background commands, dispatched tasks or plans, or delegated helpers are still working. Their output or completion counts as progress. An ordinary reminder that has already finished also waits for that work before its outcome is assessed. The stalled-work check-in below is the one exception. A Stop, an unanswered question or a blocked or waiting-on-you claim still holds automatic reminders, including check-ins. If a Stop is accepted before a waiting reminder is admitted, that reminder does not start. An ended goal receives none.
+
+### A bell notice when a goal pauses
+
+The notification bell shows a warning when the goal first pauses after five completed reminders without progress, after three failed automatic reminders in a row, or when the agent claims it is blocked or waiting for your reply. The warning names the chat and a short reason. Clicking it marks it read and opens that chat. It is not a Judge verdict.
+
+There is at most one **unread** warning for the same goal in each recipient's saved bell history. A later pause updates that unread item rather than stacking another one. After you mark it read, a genuinely later pause can create a new item. Replying to resume the goal does **not** mark the warning read or remove it; read it or use the bell's mark-as-read control separately.
+
+For a chat with a recorded owner, only that owner receives the warning. A genuinely shared or unowned chat notifies the configured accounts. With no accounts configured, it is a live-only broadcast to connected clients: there is no per-account saved item to recover after reload. If the chat's ownership metadata cannot be read, Omnipus logs the delivery problem instead of treating the chat as shared.
+
+Saving a bell item can fail independently of pausing the goal. Omnipus logs that failure and still sends a live warning, but that live-only item cannot be recovered from saved history. Pausing and saving the bell item are not one transaction: a crash between them can leave a pause without a bell warning, and retrying an already-saved brake pause does not recreate its warning. Use the chat and goal status to check the goal itself; the bell is a notification, not its authoritative state.
+
+### One check-in for stalled background work
+
+While the goal's own background work is still busy, Omnipus observes the same progress signals listed above. After **30 minutes without new progress**, measured from the first busy observation or the last fresh progress observation, it can start one system check-in on the same goal. This is not a message from you and grants no extra permissions. The agent is asked to inspect the listed work's actual status and available output, then choose whether to keep waiting, fix it or stop it—not start replacement work in parallel or replace the goal.
+
+The check-in lists at most ten owned work identifiers, plus a count of any remaining items. It does not copy command lines, tool output, questions or approval requests, and preparing the list does not consume a background command's buffered output. The list is not proof that every helper or job was detected.
+
+A successfully sent check-in is not repeated for the same observed stall. Fresh real progress re-arms it; an old retained progress signal does not restart the clock on every poll. If sending the check-in actually fails, a later check can try again. This tracking is in memory only: after a server restart the observation clock starts again, which can delay a check-in and can allow an extra one for work that had already been checked.
+
+The check-in is a real reminder turn, not just a notification. Only after the whole turn has finished is it assessed under the ordinary progress and failure rules—even if the background work is still busy. A completed check-in without progress adds to the five-reminder count; a failed check-in uses the separate failure count. A real tool call during the check-in counts as progress under the same rule as any other reminder. Sending it or merely finishing its answer does not itself spend an outcome.
+
+A helper still in the middle of a live turn is **not** covered by this check-in. The existing suppression remains even if that turn appears wedged: Omnipus warns in the server log after its stall grace, but does not start a check-in, cancel it or start replacement work from that branch. Stop, pending questions, claim pauses and either reminder brake continue to take precedence.
 
 ## What controls a goal
 
@@ -122,6 +144,7 @@ These numbers shape a goal's life:
 | Task attempts | 3 by default | On the task |
 | Question rounds | 1 per goal | Fixed |
 | Automatic-reminder pause | 5 consecutive completed reminders without progress, or 3 consecutive failed reminder turns; no lifetime reminder limit | Fixed |
+| Stalled-background-work check-in | 30 minutes without new progress; one per observed stall, re-armed by fresh progress | Fixed |
 | Idle expiry | 7 days, never while work is running | Server setting |
 | Active chat goals | 16 at a time | Server setting; tasks count separately |
 

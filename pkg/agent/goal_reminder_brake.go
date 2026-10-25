@@ -245,6 +245,9 @@ func (al *AgentLoop) resumeGoalRemindersForHuman(opts processOptions) {
 	work.pending = nil
 	work.failedReminders = 0
 	work.lastAssessedRunID = ""
+	work.checkIn = nil
+	work.checkInSent = false
+	work.stallSince = time.Time{}
 	consumeGoalReminderProgress(fresh.GoalID, work, time.Now().UTC())
 	al.goalMarkIdleSettling(fresh.GoalID, false)
 	if wasPaused {
@@ -274,7 +277,7 @@ func (al *AgentLoop) savedGoalWakeHeld(msg bus.InboundMessage, sessionID, messag
 		if rec == nil || rec.GoalID != inboundMetadata(msg, "goal_id") {
 			return true, nil
 		}
-		return al.primeGoalReminderObservation(sessionID, rec)
+		return al.primeGoalReminderObservation(sessionID, rec, messageID)
 	}
 	return false, nil
 }

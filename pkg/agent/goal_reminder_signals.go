@@ -18,8 +18,10 @@ import (
 // collectGoalReminderProgress observes the current window while work.mu is held.
 // Busy is separate from progress: unchanged running presence never resets the
 // streak, and unknown sources never become an unproductive assessment.
-func (al *AgentLoop) collectGoalReminderProgress(sessionID string, rec *goal.Goal, work *goalReminderWork, since time.Time) (goalReminderProgress, bool, error) {
+func (al *AgentLoop) collectGoalReminderProgress(sessionID string, rec *goal.Goal, work *goalReminderWork, since, observedAt time.Time) (goalReminderProgress, bool, error) {
 	var progress goalReminderProgress
+	work.busyLabels = work.busyLabels[:0]
+	work.busyLabelCount = 0
 	if since.IsZero() {
 		since = goalReminderInitialBoundary(rec)
 		if since.IsZero() {
@@ -62,6 +64,7 @@ func (al *AgentLoop) collectGoalReminderProgress(sessionID string, rec *goal.Goa
 	if err != nil {
 		return progress, false, err
 	}
+	observeGoalBusyStall(work, busy, progress, observedAt)
 	if goalReminderMadeProgress(progress) {
 		work.observedProgress = true
 	}

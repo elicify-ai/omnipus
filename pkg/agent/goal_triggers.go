@@ -1389,7 +1389,7 @@ func (al *AgentLoop) goalQuietWindowSettle(now time.Time) {
 // independently testable.
 func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, s *session.UnifiedMeta, rec *goal.Goal) {
 	sessionID := s.ID
-	if !al.retryGoalReminderOutcome(sessionID, rec) {
+	if !al.retryGoalReminderOutcome(sessionID, rec, now) {
 		return
 	}
 
@@ -1451,9 +1451,6 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, s *session.UnifiedMeta, 
 	if last.IsZero() {
 		return // nothing to compare against; skip rather than guess
 	}
-	if now.Sub(last) < goalIdleQuietWindow {
-		return // quiet window not yet elapsed
-	}
 
 	// ADR-088 D6a/FR-013: a live turn for this goal's session — its own root
 	// turn OR any delegated descendant — counts as activity. Idle settlement
@@ -1483,6 +1480,9 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, s *session.UnifiedMeta, 
 	// "a quiet goal is never judged without a claim" is untouched, and this
 	// branch's `return` is the same one it always had.
 	if live, fp := al.goalLiveTurnWorkFingerprint(sessionID); live {
+		if now.Sub(last) < goalIdleQuietWindow {
+			return
+		}
 		frozenFor := al.observeGoalLiveTurnWork(rec.GoalID, fp, now)
 		if frozenFor < goalLiveTurnStallGrace {
 			logger.InfoCF("agent", "goal idle settle: suppressed, turn in flight",
@@ -1534,7 +1534,7 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, s *session.UnifiedMeta, 
 		// ADR-088 D3/FR-014/D6c: a RECORDLESS goal (active ∧ empty record) is
 		// NEVER judged at idle — there is nothing to adjudicate. The keeper's
 		// only action is the nudge ladder.
-		al.settleRecordlessGoal(sessionID, rec)
+		al.settleRecordlessGoal(sessionID, rec, now, goalIdleQuietWindow)
 		return
 	}
 
@@ -1548,26 +1548,35 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, s *session.UnifiedMeta, 
 	// to the SAME action (a bounded continue-push) — this is that
 	// unification, not a behavior change to which recorded goals get
 	// pushed. settleGoalNormally is unconditional now.
-	al.settleGoalNormally(sessionID, rec)
+	al.settleGoalNormally(sessionID, rec, now)
 }
 
 // settleGoalNormally dispatches one accounted reminder after real work is
 // quiet. Only the completed turn's assessment can advance the shared streak.
-func (al *AgentLoop) settleGoalNormally(sessionID string, rec *goal.Goal) {
-	if !al.prepareGoalReminderDispatch(sessionID, rec) {
+func (al *AgentLoop) settleGoalNormally(sessionID string, rec *goal.Goal, now time.Time) {
+	ready, checkIn := al.prepareGoalReminderDispatch(sessionID, rec, now, goalIdleQuietWindow)
+	if !ready {
 		return
 	}
-	al.dispatchGoalAsyncFollowUp(sessionID, rec.GoalID, goalIdleSettleSourceKind, goalContinuePushPrompt(rec.Prompt))
+	content := goalContinuePushPrompt(rec.Prompt)
+	if checkIn != nil {
+		content = checkIn.prompt
+	}
+	al.dispatchGoalAsyncFollowUpReserved(sessionID, rec.GoalID, goalIdleSettleSourceKind, content, checkIn)
 }
 
 // settleRecordlessGoal uses the same observation, reservation and brake as a
-// recorded goal. Registration stays the working agent's job, never a fallback
-// compiler's job after a separate nudge quota.
-func (al *AgentLoop) settleRecordlessGoal(sessionID string, rec *goal.Goal) {
-	if !al.prepareGoalReminderDispatch(sessionID, rec) {
+// recorded goal. Registration stays the working agent's job.
+func (al *AgentLoop) settleRecordlessGoal(sessionID string, rec *goal.Goal, now time.Time, quietWindow time.Duration) {
+	ready, checkIn := al.prepareGoalReminderDispatch(sessionID, rec, now, quietWindow)
+	if !ready {
 		return
 	}
-	al.dispatchGoalAsyncFollowUp(sessionID, rec.GoalID, goalIdleSettleSourceKind, goalNudgePrompt(rec.Prompt))
+	content := goalNudgePrompt(rec.Prompt)
+	if checkIn != nil {
+		content = checkIn.prompt
+	}
+	al.dispatchGoalAsyncFollowUpReserved(sessionID, rec.GoalID, goalIdleSettleSourceKind, content, checkIn)
 }
 
 // markGoalIdleFired records that THIS idle check is about to take an action
@@ -1881,6 +1890,16 @@ func (al *AgentLoop) idleSteerDeliverer(sessionID, goalID, sourceKind string) fu
 // claim-path steer (goalID's marker was never set by markGoalIdleFired for
 // this call) clears a marker that was already absent — a harmless no-op.
 func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, content string) {
+	al.dispatchGoalAsyncFollowUpReserved(sessionID, goalID, sourceKind, content, nil)
+}
+
+func (al *AgentLoop) dispatchGoalAsyncFollowUpReserved(sessionID, goalID, sourceKind, content string, checkIn *goalBusyCheckIn) {
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			rollbackGoalCheckIn(goalID, checkIn)
+		}
+	}()
 	if content == "" || al.asyncNotifier == nil {
 		al.goalMarkIdleSettling(goalID, false)
 		return
@@ -1889,7 +1908,8 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 	// reached the way every other input reaches it — a steered system wake
 	// for its current generation (the same shape finishSteeredGoalTurn's
 	// goal follow-up uses) — never through a channel route it cannot have.
-	if handled := al.dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, content); handled {
+	if handled, published := al.dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, content, checkIn); handled {
+		handedOff = published
 		return
 	}
 	route, readErr := goalTriggers().routeFor(sessionID)
@@ -1935,6 +1955,11 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 		al.goalMarkIdleSettling(goalID, false)
 		return
 	}
+	if bindErr := bindOrdinaryGoalCheckInWake(sessionID, goalID, checkIn, metadata); bindErr != nil {
+		al.reportGoalReadError(sessionID, "bind goal check-in wake", bindErr)
+		al.goalMarkIdleSettling(goalID, false)
+		return
+	}
 	metadata["goal_reminder"] = sourceKind == goalIdleSettleSourceKind
 	notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1954,6 +1979,8 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 		// marker downstream. Un-wedge the keeper so the next idle cycle
 		// gets another chance instead of wedging forever.
 		al.goalMarkIdleSettling(goalID, false)
+	} else {
+		handedOff = true
 	}
 }
 
@@ -2184,16 +2211,22 @@ func (al *AgentLoop) bumpGoalActivityOnTurn(goalID string) time.Time {
 
 // dispatchSteeredGoalFollowUp delivers a goal follow-up to a steered
 // session as a steered system wake. It reports whether sessionID is a
-// steered session (handled), whatever the delivery outcome; a failed
-// delivery is logged and un-wedges the keeper for its next cycle.
-func (al *AgentLoop) dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, content string) bool {
+// steered session (handled) and whether publication succeeded. A failed
+// delivery is logged and releases both keeper and private check-in reservations.
+func (al *AgentLoop) dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, content string, checkIn *goalBusyCheckIn) (bool, bool) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
-		return false
+		return false, false
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil || rec.SteeredBy == nil {
-		return false
+		return false, false
+	}
+	messageID := uuid.NewString()
+	if bindErr := bindGoalCheckInWake(goalID, checkIn, messageID, al.executionClaimFor(rec)); bindErr != nil {
+		al.reportGoalReadError(sessionID, "bind steered goal check-in wake", bindErr)
+		al.goalMarkIdleSettling(goalID, false)
+		return true, false
 	}
 	notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -2206,7 +2239,7 @@ func (al *AgentLoop) dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, 
 		SenderCanonicalID:   goalLoopFollowUpSenderID,
 		Content:             content,
 		Metadata: map[string]any{
-			"steer_message_id": uuid.NewString(),
+			"steer_message_id": messageID,
 			"steer_generation": rec.Generation,
 			"goal_id":          goalID,
 			"goal_reminder":    sourceKind == goalIdleSettleSourceKind,
@@ -2215,6 +2248,7 @@ func (al *AgentLoop) dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, 
 		logger.WarnCF("agent", "goal: follow-up wake to the steered session failed",
 			map[string]any{"session_id": sessionID, "goal_id": goalID, "error": err.Error()})
 		al.goalMarkIdleSettling(goalID, false)
+		return true, false
 	}
-	return true
+	return true, true
 }

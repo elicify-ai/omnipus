@@ -219,6 +219,9 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 	if err := al.admission.attachExecution(sessionID, d); err != nil {
 		return ordinaryExecutionPreparation{}, err
 	}
+	if opts.goalWake != nil && opts.goalWake.reminder {
+		noteGoalCheckInExecution(opts.goalWake.goalID, opts.goalWake.messageID, claim)
+	}
 	return ordinaryExecutionPreparation{execution: d}, nil
 }
 

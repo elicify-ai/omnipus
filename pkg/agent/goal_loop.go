@@ -1054,7 +1054,7 @@ func (al *AgentLoop) maybeNudgeUnregisteredGoal(sessionID string, rec *goal.Goal
 	}
 	logger.InfoCF("agent", "goal: record not registered on the turn; nudging immediately",
 		map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID})
-	al.settleRecordlessGoal(sessionID, rec)
+	al.settleRecordlessGoal(sessionID, rec, time.Now().UTC(), 0)
 }
 
 // goalVerdictReasonText builds a human-readable summary of the judge's unmet

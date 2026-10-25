@@ -84,6 +84,9 @@ func (al *AgentLoop) runOrdinaryGoalFollowUp(ctx context.Context, agent *AgentIn
 	}
 	msg.SessionID, msg.SessionKey = opts.TranscriptSessionID, opts.SessionKey
 	response, _, runErr := al.runInboundTurnWithRevival(ctx, agent, msg, opts)
+	if runErr != nil {
+		rollbackUnadmittedGoalCheckIn(opts.TranscriptSessionID, opts.goalWake)
+	}
 	if errors.Is(runErr, errOrdinaryGoalWakeIgnored) {
 		al.goalMarkIdleSettling(opts.goalWake.goalID, false)
 		return "", nil
@@ -139,7 +142,7 @@ func (al *AgentLoop) checkOrdinaryGoalWake(rec *session.LifecycleRecord, wake *o
 		return errOrdinaryGoalWakeIgnored
 	}
 	if wake.reminder {
-		held, err := al.primeGoalReminderObservation(rec.SessionID, g)
+		held, err := al.primeGoalReminderObservation(rec.SessionID, g, wake.messageID)
 		if err != nil {
 			return err
 		}

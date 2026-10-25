@@ -947,6 +947,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		claim = executionClaim{SessionID: sessionID, Generation: generation, RunID: wakeRunID, BootSeq: wakeBootSeq}
 		if inboundMetadata(msg, "goal_reminder") == "true" && msg.Sender.CanonicalID == goalLoopFollowUpSenderID {
 			noteGoalReminderExecution(inboundMetadata(msg, "goal_id"), wakeRunID)
+			noteGoalCheckInExecution(inboundMetadata(msg, "goal_id"), messageID, claim)
 		}
 		admitted, _, _ := gate.tryAdmitRun(sessionID, generation, wakeRunID, wakeBootSeq)
 		if !admitted {

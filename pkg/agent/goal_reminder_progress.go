@@ -61,6 +61,11 @@ type goalReminderWork struct {
 	events              map[string]time.Time
 	processes           map[string]*tools.ProcessSession
 	reminderRuns        map[string]bool
+	stallSince          time.Time
+	checkInSent         bool
+	checkIn             *goalBusyCheckIn
+	busyLabels          []string
+	busyLabelCount      int
 }
 
 func goalReminderWorkFor(goalID string) *goalReminderWork {

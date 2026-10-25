@@ -58,7 +58,7 @@ func (al *AgentLoop) goalReminderHeld(sessionID, goalID string) bool {
 
 // retryGoalReminderOutcome runs before the idle-in-flight marker: a failed
 // observation/write must be retried, not bypassed by dispatching another turn.
-func (al *AgentLoop) retryGoalReminderOutcome(sessionID string, rec *goal.Goal) bool {
+func (al *AgentLoop) retryGoalReminderOutcome(sessionID string, rec *goal.Goal, observedAt time.Time) bool {
 	if goalReminderBrakePaused(rec) {
 		al.reportGoalReminderAssessment(sessionID, rec, nil)
 		return false
@@ -72,7 +72,7 @@ func (al *AgentLoop) retryGoalReminderOutcome(sessionID string, rec *goal.Goal) 
 		work.mu.Unlock()
 		return true
 	}
-	updated, busy, err := al.assessGoalReminderLocked(sessionID, rec, work)
+	updated, busy, err := al.assessGoalReminderLocked(sessionID, rec, work, observedAt)
 	work.mu.Unlock()
 	al.reportGoalReminderAssessment(sessionID, updated, err)
 	return err == nil && !busy && !goalReminderBrakePaused(updated)
@@ -80,7 +80,7 @@ func (al *AgentLoop) retryGoalReminderOutcome(sessionID string, rec *goal.Goal) 
 
 // assessGoalReminderLocked consumes only a settled actual reminder outcome.
 // Successful and failed turns have separate streaks; busy progress stays latched.
-func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, work *goalReminderWork) (*goal.Goal, bool, error) {
+func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, work *goalReminderWork, observedAt time.Time) (*goal.Goal, bool, error) {
 	var assessedRunID string
 	if work.pending != nil {
 		settled, err := goalReminderExecutionSettled(work.pending.execution)
@@ -88,6 +88,7 @@ func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, 
 			work.lastAssessedTurn = work.pending.turnID
 			work.lastAssessedRunID = ""
 			work.pending = nil
+			work.checkIn = nil
 			al.goalMarkIdleSettling(rec.GoalID, false)
 			return rec, false, nil
 		}
@@ -100,12 +101,12 @@ func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, 
 		}
 		assessedRunID = claim.RunID
 	}
-	observedAt := time.Now().UTC()
-	progress, busy, err := al.collectGoalReminderProgress(sessionID, rec, work, goalReminderWatermark(rec.GoalID))
+	progress, busy, err := al.collectGoalReminderProgress(sessionID, rec, work, goalReminderWatermark(rec.GoalID), observedAt)
 	if err != nil {
 		return rec, busy, err
 	}
-	if busy {
+	checkInOutcome := goalCheckInOutcome(work)
+	if busy && !checkInOutcome {
 		updated, resetErr := resetBusyGoalReminderProgress(sessionID, rec, work, progress, observedAt)
 		return updated, true, resetErr
 	}
@@ -128,9 +129,12 @@ func (al *AgentLoop) assessGoalReminderLocked(sessionID string, rec *goal.Goal, 
 	work.lastAssessedTurn = work.pending.turnID
 	work.lastAssessedRunID = assessedRunID
 	work.pending = nil
+	if checkInOutcome {
+		work.checkIn = nil
+	}
 	consumeGoalReminderProgress(rec.GoalID, work, observedAt)
 	al.goalMarkIdleSettling(rec.GoalID, false)
-	return updated, false, nil
+	return updated, busy, nil
 }
 
 // A compute handle disappearing is not completion of its output/continuation
@@ -170,7 +174,7 @@ func (al *AgentLoop) reportGoalReminderAssessment(sessionID string, rec *goal.Go
 // prepareGoalReminderDispatch observes work before reserving the existing idle
 // marker. It never increments the streak. A write/read failure retains the
 // current assessment window and prevents an unaccountable extra reminder.
-func (al *AgentLoop) prepareGoalReminderDispatch(sessionID string, rec *goal.Goal) bool {
+func (al *AgentLoop) prepareGoalReminderDispatch(sessionID string, rec *goal.Goal, observedAt time.Time, quietWindow time.Duration) (bool, *goalBusyCheckIn) {
 	work := goalReminderWorkFor(rec.GoalID)
 	work.mu.Lock()
 	current, err := activeGoalForSession(sessionID)
@@ -180,30 +184,40 @@ func (al *AgentLoop) prepareGoalReminderDispatch(sessionID string, rec *goal.Goa
 	if err != nil || goalReminderBrakePaused(current) || al.goalReminderHeld(sessionID, rec.GoalID) {
 		work.mu.Unlock()
 		al.reportGoalReminderAssessment(sessionID, current, err)
-		return false
+		return false, nil
 	}
-	observedAt := time.Now().UTC()
-	progress, busy, err := al.collectGoalReminderProgress(sessionID, current, work, goalReminderWatermark(rec.GoalID))
+	progress, busy, err := al.collectGoalReminderProgress(sessionID, current, work, goalReminderWatermark(rec.GoalID), observedAt)
 	if err != nil || work.pending != nil {
 		work.mu.Unlock()
 		al.reportGoalReminderAssessment(sessionID, current, err)
-		return false
+		return false, nil
 	}
+	var checkIn *goalBusyCheckIn
 	if busy {
 		current, err = resetBusyGoalReminderProgress(sessionID, current, work, progress, observedAt)
-		work.mu.Unlock()
-		al.reportGoalReminderAssessment(sessionID, current, err)
-		return false
+		if err != nil || work.checkInSent || work.checkIn != nil || work.stallSince.IsZero() ||
+			observedAt.Sub(work.stallSince) < goalStalledWorkCheckInAfter || len(work.busyLabels) == 0 {
+			work.mu.Unlock()
+			al.reportGoalReminderAssessment(sessionID, current, err)
+			return false, nil
+		}
+		checkIn = &goalBusyCheckIn{sessionID: sessionID, prompt: goalBusyCheckInPrompt(work), stallAt: work.stallSince}
+	} else {
+		last := effectiveGoalActivity(current)
+		if last.IsZero() || observedAt.Sub(last) < quietWindow {
+			work.mu.Unlock()
+			return false, nil
+		}
+		progress.background = progress.background || work.observedProgress
+		current, err = updateGoalReminderStreak(sessionID, rec.GoalID, goalReminderMadeProgress(progress), false)
+		if err != nil {
+			work.mu.Unlock()
+			al.reportGoalReminderAssessment(sessionID, current, fmt.Errorf("prepare reminder accounting: %w", err))
+			return false, nil
+		}
 	}
-	progress.background = progress.background || work.observedProgress
-	current, err = updateGoalReminderStreak(sessionID, rec.GoalID, goalReminderMadeProgress(progress), false)
-	if err != nil {
-		work.mu.Unlock()
-		al.reportGoalReminderAssessment(sessionID, current, fmt.Errorf("prepare reminder accounting: %w", err))
-		return false
-	}
-	// Reserve exactly once; publication happens outside work.mu because the
-	// real notifier may immediately run and complete the admitted turn.
+	// Reserve exactly once; publish outside work.mu. The actual handoff's
+	// failure releases this private reservation as well as the idle marker.
 	s := goalTriggers()
 	s.mu.Lock()
 	reserved := !s.idleSettling[rec.GoalID]
@@ -212,11 +226,14 @@ func (al *AgentLoop) prepareGoalReminderDispatch(sessionID string, rec *goal.Goa
 	}
 	s.mu.Unlock()
 	if reserved {
+		if checkIn != nil {
+			work.checkIn, work.checkInSent = checkIn, true
+		}
 		consumeGoalReminderProgress(rec.GoalID, work, observedAt)
 		al.markGoalIdleFired(rec.GoalID, observedAt)
 	}
 	work.mu.Unlock()
-	return reserved
+	return reserved, checkIn
 }
 
 // rearmAbnormalGoalReminder retains actual failed reminder turns from ordinary

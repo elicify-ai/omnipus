@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -157,13 +158,22 @@ func (al *AgentLoop) reminderBackgroundProcesses(scope *goalReminderScope, work 
 		}
 	}
 	busy, progress := false, false
-	for id, process := range work.processes {
+	ids := make([]string, 0, len(work.processes))
+	for id := range work.processes {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		process := work.processes[id]
 		if !scope.sessions[process.OwnerSessionID] {
 			delete(work.processes, id)
 			continue
 		}
 		running := !process.IsDone()
 		busy = busy || running
+		if running {
+			noteGoalBusyLabel(work, "process", id)
+		}
 		at := process.LastActivityAt()
 		if !since.IsZero() && at.After(since) {
 			key := "process:" + id + ":" + at.Format(time.RFC3339Nano)
@@ -183,6 +193,7 @@ func (al *AgentLoop) reminderOwnedJobs(root string, scope *goalReminderScope, wo
 		if id != root {
 			if active, _ := al.sessionWorkInFlight(id); active {
 				busy = true
+				noteGoalBusyLabel(work, "session", id)
 			}
 		}
 	}
@@ -196,11 +207,9 @@ func (al *AgentLoop) reminderOwnedJobs(root string, scope *goalReminderScope, wo
 		if !owned && !queued {
 			continue
 		}
-		if al.taskExecutor != nil && al.taskExecutor.holdsRun(item.ID) {
+		if (al.taskExecutor != nil && al.taskExecutor.holdsRun(item.ID)) || (queued && item.Status == task.StatusInProgress) {
 			busy = true
-		}
-		if queued && item.Status == task.StatusInProgress {
-			busy = true
+			noteGoalBusyLabel(work, "task", item.ID)
 		}
 		if owned && item.CompletedAt != "" {
 			at, err := parseReminderTime(item.CompletedAt)
@@ -217,6 +226,7 @@ func (al *AgentLoop) reminderOwnedJobs(root string, scope *goalReminderScope, wo
 		if engine := GetPlanEngine(al); engine != nil {
 			if active, _ := engine.planWorkInFlight(item.ID); active {
 				busy = true
+				noteGoalBusyLabel(work, "plan", item.ID)
 			}
 		} else if item.ActiveLoop {
 			return false, false, errors.New("goal reminder: owned plan has no work registry")
