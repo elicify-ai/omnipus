@@ -49,7 +49,9 @@ The chat's model picker remembers the model you picked **for that one conversati
 
 The picker also marks the conversation agent's **default model**: the row that carries the **Default** chip is the model the agent uses when you have not picked one. The chip follows the provider too: when the agent's default was saved together with a provider, only that provider's row for the model carries the chip — the same model name under a second provider is not marked. If the agent's model was saved without a provider, the chip marks the model name under every provider that offers it. To go back to the default, pick the **Default**-marked row deliberately; the conversation then keeps that choice like any other.
 
-The remembered choice is a per-browser convenience, not a server-side setting, and it covers **every** chat — workspace chats and unfiled chats (a chat outside any workspace, opened by link) alike. A chat you open on another device starts from the conversation's last answered model or the agent's default instead.
+The remembered choice is a per-browser convenience, not a server-side setting, and it covers **every** chat — workspace chats and unfiled chats (a chat outside any workspace, opened by link) alike. If you choose a model before a new chat has been saved, Omnipus saves that choice when the first message receives its conversation ID. You do not need to wait for an answer before reloading. A chat you open on another device starts from the conversation's last answered model or the agent's default instead.
+
+If browser storage fails, a warning explains whether Omnipus could not **save** or **read** your model choices; damaged saved data is reported as invalid rather than treated as no choice. Choices made in the current page are still kept when you switch chats and return, but may be lost on reload. Check your browser's storage space and permissions. After fixing storage, select the model again to save it. The warning stays until you dismiss it, and does not stop you from using the selected model.
 
 Two limits to know:
 

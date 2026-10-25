@@ -17,15 +17,17 @@ import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { clearPendingAutoApproveOnSessionChange, readPersistedSessionByWorkspace, useSessionStore } from '@/store/session'
 
-export type WorkspaceEntryView =
+export type WorkspaceEntryView = (
   | { status: 'exact'; acknowledged: false }
   | WelcomeEntry
   | EmptyTeamEntry
   | Extract<EntryResult, { status: 'unavailable' }>
   | FailedAttempt
+) & { linkedSessionId?: string } // not-wire-format: preserves an explicit browser-link target for Retry
 
 let navigationIntent = 0
-const inFlight = new Map<string, Promise<void>>()
+const inFlight = new Map<string, { linkedSessionId: string | undefined; job: Promise<void> }>()
+const resolvingIntent = new Map<string, number>()
 const visibilityWaiters = new Set<() => void>()
 let resumeQueuedSends: (() => void) | null = null
 
@@ -208,20 +210,22 @@ function applyEntry(
   result: EntryResult,
   sessions: Session[],
   token: number,
+  linkedSessionId?: string,
 ): void {
   if (!navigationIntentCurrent(token)) return
   const stillViewing = useWorkspacesStore.getState().activeWorkspaceId === workspaceId
+  const linkedTarget = linkedSessionId ? { linkedSessionId } : {}
 
   if (result.status === 'failed-attempt') {
     if (stillViewing) {
-      useSessionStore.setState({ workspaceEntry: result })
+      useSessionStore.setState({ workspaceEntry: { ...result, ...linkedTarget } })
       useUiStore.getState().addToast({
         message: 'Could not restore your last conversation. Retry to try again.',
         variant: 'warning',
         action: {
           label: 'Retry',
           onClick: () => {
-            void runWorkspaceEntry(workspaceId)
+            void (linkedSessionId ? runWorkspaceEntry(workspaceId, linkedSessionId) : runWorkspaceEntry(workspaceId))
           },
         },
       })
@@ -231,7 +235,7 @@ function applyEntry(
 
   if (result.status === 'unavailable' || result.status === 'empty-team') {
     if (!stillViewing) return
-    useSessionStore.setState({ workspaceEntry: result })
+    useSessionStore.setState({ workspaceEntry: { ...result, ...linkedTarget } })
     if (useSessionStore.getState().activeSessionId !== null) {
       useSessionStore.getState().setActiveSession(null)
     }
@@ -265,7 +269,7 @@ function applyEntry(
       retry: true,
       fellBack: false,
     }
-    useSessionStore.setState({ workspaceEntry: failed })
+    useSessionStore.setState({ workspaceEntry: { ...failed, ...linkedTarget } })
     return
   }
   const view: WorkspaceEntryView = result.status === 'exact'
@@ -290,19 +294,22 @@ async function execute(workspaceId: string, linkedSessionId?: string): Promise<v
   const token = supersedeNavigationIntent()
   const state = useSessionStore.getState()
   const memoryDescriptor = state.sessionByWorkspace[workspaceId]
+  // An explicit address wins BEFORE the already-attached shortcut. An older
+  // committed chat is not proof that a different linked target was adopted.
+  const linked = linkedPointer(linkedSessionId)
+  const remembered = linked ?? rememberedId(workspaceId)
   if (
     memoryDescriptor
     && memoryDescriptor.id !== '__pending'
     && memoryDescriptor.id === state.activeSessionId
+    && remembered === state.activeSessionId
+    && !workspaceEntryBlocksSend(state, workspaceId)
   ) {
     return
   }
   const descriptorAtStart = memoryDescriptor
   const committed = committedNow()
-  // #1437: a linked address names the chat exactly; it overrides the
-  // workspace's remembered pointer for this entry. Without it, the pointer
-  // stays whatever this browser last decided (memory, then persisted state).
-  const remembered = linkedPointer(linkedSessionId) ?? rememberedId(workspaceId)
+  resolvingIntent.set(workspaceId, token)
   useSessionStore.setState((current) => ({
     resolvingSessionForWorkspace: { ...current.resolvingSessionForWorkspace, [workspaceId]: true },
   }))
@@ -318,16 +325,21 @@ async function execute(workspaceId: string, linkedSessionId?: string): Promise<v
     }
     if (!navigationIntentCurrent(token)) return
     if (useSessionStore.getState().sessionByWorkspace[workspaceId] !== descriptorAtStart) return
-    const result = resolveWorkspaceEntry({
-      workspaceId,
-      entryKind: 'cold-reload',
-      rememberedSessionId: remembered,
-      pointerVerdict: loaded.pointerVerdict,
-      sessions: loaded.sessions,
-      team: loaded.team,
-      committed,
-    })
-    applyEntry(workspaceId, result, loaded.sessions, token)
+    // A missing explicit link is an error, not permission to open the team's
+    // main chat. Ordinary remembered-pointer entry keeps its existing fallback.
+    const linkedUnavailable = linked && ['deleted', 'hidden', 'forbidden'].includes(loaded.pointerVerdict)
+    const result: EntryResult = linkedUnavailable
+      ? { status: 'unavailable', sessionId: null, sendEnabled: false, acknowledged: false, retry: true }
+      : resolveWorkspaceEntry({
+        workspaceId,
+        entryKind: 'cold-reload',
+        rememberedSessionId: remembered,
+        pointerVerdict: loaded.pointerVerdict,
+        sessions: loaded.sessions,
+        team: loaded.team,
+        committed,
+      })
+    applyEntry(workspaceId, result, loaded.sessions, token, linked ?? undefined)
   } catch (error) {
     // Not a network failure (loadInputs absorbs those): something threw. Never
     // leave the entry silently unresolved — show the same unavailable state with Retry.
@@ -337,11 +349,16 @@ async function execute(workspaceId: string, linkedSessionId?: string): Promise<v
     })
     if (navigationIntentCurrent(token) && useWorkspacesStore.getState().activeWorkspaceId === workspaceId) {
       useSessionStore.setState({
-        workspaceEntry: { status: 'unavailable', sessionId: null, sendEnabled: false, acknowledged: false, retry: true },
+        workspaceEntry: { status: 'unavailable', sessionId: null, sendEnabled: false, acknowledged: false, retry: true, ...(linked ? { linkedSessionId: linked } : {}) },
       })
     }
   } finally {
-    clearResolving(workspaceId)
+    // A superseded request for the same workspace must not clear its newer
+    // linked target's loading/send gate.
+    if (resolvingIntent.get(workspaceId) === token) {
+      resolvingIntent.delete(workspaceId)
+      clearResolving(workspaceId)
+    }
     if (navigationIntentCurrent(token) && useWorkspacesStore.getState().activeWorkspaceId === workspaceId) {
       resumeWorkspaceEntryQueue()
     }
@@ -349,11 +366,12 @@ async function execute(workspaceId: string, linkedSessionId?: string): Promise<v
 }
 
 export function runWorkspaceEntry(workspaceId: string, linkedSessionId?: string): Promise<void> {
+  const linked = linkedPointer(linkedSessionId) ?? undefined
   const existing = inFlight.get(workspaceId)
-  if (existing) return existing
-  const job = execute(workspaceId, linkedSessionId)
-  inFlight.set(workspaceId, job)
+  if (existing && existing.linkedSessionId === linked) return existing.job
+  const job = execute(workspaceId, linked)
+  inFlight.set(workspaceId, { linkedSessionId: linked, job })
   return job.finally(() => {
-    if (inFlight.get(workspaceId) === job) inFlight.delete(workspaceId)
+    if (inFlight.get(workspaceId)?.job === job) inFlight.delete(workspaceId)
   })
 }

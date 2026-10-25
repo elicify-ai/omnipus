@@ -7,8 +7,24 @@ import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchProviders } from '@/lib/api'
 import { isProviderUsable } from '@/lib/providerStatus'
 import { resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
-import { readSessionModelChoice, writeSessionModelChoice } from '@/store/chat/model-choice'
+import { readSessionModelChoice, writeSessionModelChoice, type ModelChoiceStorageFailure } from '@/store/chat/model-choice'
+import { logDiagnostic } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
+
+function warnModelChoiceStorageFailure(failure: ModelChoiceStorageFailure | null | undefined): void {
+  if (!failure) return
+  console.warn('[chat] model choice storage failed', failure)
+  logDiagnostic('sessionModelChoiceStorageFailed', { ...failure })
+  const ui = useUiStore.getState()
+  const message = failure.operation === 'write'
+    ? 'Could not save your model choice. It is kept in this page, but may be lost on reload. Check browser storage space and permissions.'
+    : failure.reason === 'invalid'
+      ? 'Saved model choices could not be read because browser storage is invalid. Choices made in this page are kept until reload. Select a model to save it again.'
+      : 'Could not read saved model choices. Choices made in this page are kept until reload. Check browser storage permissions.'
+  if (!ui.toasts.some((toast) => toast.testId === 'model-choice-storage-warning')) {
+    ui.addToast({ message, variant: 'warning', testId: 'model-choice-storage-warning', duration: 0 })
+  }
+}
 
 /**
  * ModelPicker — the per-message model selector + its data wiring.
@@ -142,7 +158,16 @@ export function ModelPicker({
     // default and fail to carry to the next message). Genuine navigation —
     // opening/switching to a real session, or New Chat ('' target) — still
     // re-seeds from that target's last-used model.
-    if (activeSessionId === '__pending' || prevSession === '__pending') return
+    if (activeSessionId === '__pending') return
+    if (prevSession === '__pending' && activeSessionId) {
+      // The explicit draft pick had no durable key. Save its current pair as
+      // soon as the server gives this same conversation its real identity.
+      if (modelSelectionSource.current === 'user') {
+        const { nextModel: model, nextModelProvider: provider } = useChatStore.getState()
+        if (model) warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, { model, provider }))
+      }
+      return
+    }
     if (activeSessionId !== prevSession) {
       // Genuine navigation to a different conversation — any explicit pick
       // was scoped to the conversation it was made in, so it is released and
@@ -162,7 +187,8 @@ export function ModelPicker({
     // here, including a deliberate re-selection of the agent's default. The
     // transcript/default seed below applies only to a session with NO stored
     // choice.
-    const storedChoice = readSessionModelChoice(activeSessionId)
+    const { choice: storedChoice, failure } = readSessionModelChoice(activeSessionId)
+    warnModelChoiceStorageFailure(failure)
     if (storedChoice) {
       setNextModel(storedChoice.model, storedChoice.provider)
       return
@@ -192,7 +218,7 @@ export function ModelPicker({
     // send or assistant response required. An empty pick hands the session
     // back to auto-follow, so its stored choice (if any) is cleared and the
     // transcript/agent-default seed applies again.
-    writeSessionModelChoice(activeSessionId, model ? { model, provider: null } : null)
+    warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, model ? { model, provider: null } : null))
     if (model === '') {
       addToast({ message: 'Reverted to agent default for next message', variant: 'default' })
     }
@@ -211,7 +237,7 @@ export function ModelPicker({
     // #1436: the grouped pick's (provider, model) pair is the recorded
     // identity — restoring it lands the check on exactly the row it was
     // chosen under, even when the slug is served by more than one provider.
-    writeSessionModelChoice(activeSessionId, { model: pair.model, provider: pair.provider })
+    warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, { model: pair.model, provider: pair.provider }))
   }
 
   return (

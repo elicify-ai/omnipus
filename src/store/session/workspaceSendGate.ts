@@ -22,7 +22,10 @@ export function blockSendForWorkspaceEntry(operation: 'send' | 'drain' | 'resend
       ? 'Could not restore your last conversation. Retry to try again.'
       : 'This chat is unavailable right now'
   const action = !resolving && workspaceId
-    ? { label: 'Retry', onClick: () => { void runWorkspaceEntry(workspaceId) } }
+    ? { label: 'Retry', onClick: () => {
+      const linked = state.workspaceEntry?.linkedSessionId
+      void (linked ? runWorkspaceEntry(workspaceId, linked) : runWorkspaceEntry(workspaceId))
+    } }
     : undefined
   const ui = useUiStore.getState()
   const visibleWarning = ui.toasts.find((toast) => toast.variant === 'warning' && toast.message === message)

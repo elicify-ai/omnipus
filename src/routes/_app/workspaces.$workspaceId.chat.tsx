@@ -5,6 +5,7 @@ import { getPanelDefinition } from '@/components/panel-shell/registry'
 import { usePanelDeepLink } from '@/components/panel-shell/usePanelDeepLink'
 import type { PanelId } from '@/components/panel-shell/types'
 import { useSessionStore } from '@/store/session'
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 
 // Chat tab — the workspace's default front view (chat-first). Agent picker is
 // scoped to the workspace team; sessions are filtered by this workspace_id.
@@ -55,32 +56,30 @@ function WorkspaceChatRoute() {
 // chat the user is looking at. Strictly bounded to addresses that already
 // carry the key: ordinary chat addresses never gain it, so every flow that
 // does not start from a session link keeps its exact current address
-// behaviour. Two guards keep the sync out of the way:
-// - the mount pass records a baseline and writes nothing — a store a mount
-//   STARTS with is not this mount's change to project (the same pattern
-//   usePanelDeepLink's projection uses);
-// - while the workspace entry is resolving, the adoption is still landing —
-//   rewriting now could drop the key before it drove the entry.
+// behaviour. A link must first be adopted before later session changes may
+// project into it. Failed/unavailable entry never erases the requested target.
 function useSyncOpenSearchKey(workspaceId: string, open: string | undefined): void {
   const navigate = useNavigate()
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
-  const resolving = useSessionStore((s) => s.resolvingSessionForWorkspace[workspaceId] === true)
-  const mountedRef = useRef(false)
+  const blocked = useSessionStore((s) => workspaceEntryBlocksSend(s, workspaceId))
+  const linkRef = useRef({ workspaceId, open, adopted: false })
   useEffect(() => {
-    if (!mountedRef.current) {
-      mountedRef.current = true
-      return
+    if (linkRef.current.workspaceId !== workspaceId || linkRef.current.open !== open) {
+      linkRef.current = { workspaceId, open, adopted: false }
     }
-    if (open === undefined) return
-    if (resolving) return
+    if (open === undefined || blocked) return
     const live =
       activeSessionId && activeSessionId !== '__pending' ? activeSessionId : undefined
-    if (live === open) return
+    if (live === open) {
+      linkRef.current.adopted = true
+      return
+    }
+    if (!linkRef.current.adopted) return
     navigate({
       search: ((prev: Record<string, unknown>) => ({ ...prev, open: live })) as never,
       replace: true,
     })
-  }, [activeSessionId, open, resolving, navigate])
+  }, [workspaceId, activeSessionId, open, blocked, navigate])
 }
 
 export const Route = createFileRoute('/_app/workspaces/$workspaceId/chat')({

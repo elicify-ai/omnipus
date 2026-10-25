@@ -27,51 +27,85 @@ export interface SessionModelChoice { // not-wire-format: browser-local UI prefe
 
 type ChoiceMap = Record<string, SessionModelChoice>
 
-function readAll(): ChoiceMap {
+export interface ModelChoiceStorageFailure { // not-wire-format: browser persistence outcome only
+  operation: 'read' | 'write'
+  reason: 'unavailable' | 'invalid'
+  errorName: string
+}
+
+// Saved choices are cached for failed reads; unsaved choices also outrank stale
+// storage during ordinary navigation. Healthy reads still see other tabs' writes.
+const pageChoices = new Map<string, SessionModelChoice | null>()
+const unsavedChoices = new Set<string>()
+
+type ChoiceRead = { choices: ChoiceMap; failure?: ModelChoiceStorageFailure }
+
+function storageFailure(operation: 'read' | 'write', reason: ModelChoiceStorageFailure['reason'], error: unknown): ModelChoiceStorageFailure {
+  return { operation, reason, errorName: error instanceof Error ? error.name : 'UnknownError' }
+}
+
+function isChoice(value: unknown): value is SessionModelChoice {
+  if (!value || typeof value !== 'object') return false
+  const choice = value as Partial<SessionModelChoice>
+  return typeof choice.model === 'string' && choice.model.trim() !== ''
+    && (choice.provider === null || (typeof choice.provider === 'string' && choice.provider.trim() !== ''))
+}
+
+function readAll(): ChoiceRead {
+  let raw: string | null
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return {}
+    raw = localStorage.getItem(STORAGE_KEY)
+  } catch (error) {
+    return { choices: {}, failure: storageFailure('read', 'unavailable', error) }
+  }
+  if (raw === null) return { choices: {} }
+  try {
     const parsed: unknown = JSON.parse(raw)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as ChoiceMap
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Object.values(parsed).every(isChoice)) {
+      throw new TypeError('Invalid saved model choices')
     }
-    return {}
-  } catch {
-    // Corrupt JSON or storage unavailable (private mode, quota) — degrade to
-    // "no session has an explicit choice"; the picker falls back to today's
-    // transcript/agent-default seeding. Never crash the composer over a
-    // restore convenience.
-    return {}
+    return { choices: parsed as ChoiceMap }
+  } catch (error) {
+    return { choices: {}, failure: storageFailure('read', 'invalid', error) }
   }
 }
 
-/** The stored explicit choice for a session, or null when it has none (or
- *  storage is unreadable). */
-export function readSessionModelChoice(sessionId: string | null | undefined): SessionModelChoice | null {
-  if (!sessionId || sessionId === '__pending') return null
-  const choice = readAll()[sessionId]
-  if (!choice || typeof choice.model !== 'string' || choice.model.trim() === '') return null
-  return choice
+/** A missing choice and an unreadable preference are different outcomes.
+ *  The current page's cache preserves choices if persistence fails. */
+export function readSessionModelChoice(sessionId: string | null | undefined): {
+  choice: SessionModelChoice | null
+  failure?: ModelChoiceStorageFailure
+} {
+  if (!sessionId || sessionId === '__pending') return { choice: null }
+  const loaded = readAll()
+  const choice = loaded.failure || unsavedChoices.has(sessionId)
+    ? pageChoices.get(sessionId) ?? null
+    : Object.hasOwn(loaded.choices, sessionId) ? loaded.choices[sessionId] : null
+  pageChoices.set(sessionId, choice)
+  return { choice, failure: loaded.failure }
 }
 
-/** Record (choice) or clear (null) a session's explicit model choice.
- *  No-op for a pending/absent session id. */
+/** Cache before saving so a failed write cannot discard the choice on A→B→A.
+ *  Pending/absent ids are handed off by the picker when the chat materializes. */
 export function writeSessionModelChoice(
   sessionId: string | null | undefined,
   choice: SessionModelChoice | null,
-): void {
-  if (!sessionId || sessionId === '__pending') return
+): ModelChoiceStorageFailure | null {
+  if (!sessionId || sessionId === '__pending') return null
+  pageChoices.set(sessionId, choice)
+  unsavedChoices.add(sessionId)
+  const loaded = readAll()
+  const all = { ...loaded.choices }
+  for (const [id, cached] of pageChoices) {
+    if (!loaded.failure && !unsavedChoices.has(id)) continue
+    if (cached) all[id] = cached
+    else delete all[id]
+  }
   try {
-    const all = readAll()
-    if (choice) {
-      all[sessionId] = choice
-    } else {
-      delete all[sessionId]
-    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(all))
-  } catch {
-    // localStorage write failed (quota/private mode) — the in-memory
-    // nextModel the caller just set is still correct for this page life;
-    // only the NEXT reload's restore degrades to transcript/default seeding.
+    unsavedChoices.clear()
+    return loaded.failure ?? null
+  } catch (error) {
+    return storageFailure('write', 'unavailable', error)
   }
 }
