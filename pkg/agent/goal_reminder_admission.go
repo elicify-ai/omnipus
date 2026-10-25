@@ -82,6 +82,16 @@ func (al *AgentLoop) runOrdinaryGoalFollowUp(ctx context.Context, agent *AgentIn
 	if opts.goalWake.reminder {
 		opts.goalReminderGoalID = opts.goalWake.goalID
 	}
+	// An accepted duplicate is not a new admission. Check its actual saved
+	// receipt before waiting for the still-running producer's full owner;
+	// retain the same fresh receipt check at the final admission cut too.
+	accepted, receiptErr := ordinaryGoalWakeRecorded(opts.TranscriptStore, opts.TranscriptSessionID, opts.goalWake.messageID)
+	if receiptErr != nil {
+		return al.failOrdinaryGoalPreTurn(opts, receiptErr)
+	}
+	if accepted {
+		return "", nil
+	}
 	msg.SessionID, msg.SessionKey = opts.TranscriptSessionID, opts.SessionKey
 	response, _, runErr := al.runInboundTurnWithRevival(ctx, agent, msg, opts)
 	if runErr != nil {
@@ -113,14 +123,12 @@ func (al *AgentLoop) checkOrdinaryGoalWake(rec *session.LifecycleRecord, wake *o
 	if store == nil {
 		return fmt.Errorf("goal reminder: transcript store for %q is unavailable", rec.SessionID)
 	}
-	entries, err := store.ReadTranscript(rec.SessionID)
+	accepted, err := ordinaryGoalWakeRecorded(store, rec.SessionID, wake.messageID)
 	if err != nil {
-		return fmt.Errorf("goal reminder: read acceptance receipt: %w", err)
+		return err
 	}
-	for _, entry := range entries {
-		if entry.ID == goalReminderEntryID(wake.messageID) {
-			return errOrdinaryGoalWakeIgnored
-		}
+	if accepted {
+		return errOrdinaryGoalWakeIgnored
 	}
 	g, err := activeGoalForSession(rec.SessionID)
 	if err != nil {
@@ -154,6 +162,19 @@ func (al *AgentLoop) checkOrdinaryGoalWake(rec *session.LifecycleRecord, wake *o
 }
 
 func goalReminderEntryID(messageID string) string { return "goal-reminder-" + messageID }
+
+func ordinaryGoalWakeRecorded(store *session.UnifiedStore, sessionID, messageID string) (bool, error) {
+	entries, err := store.ReadTranscript(sessionID)
+	if err != nil {
+		return false, fmt.Errorf("goal reminder: read acceptance receipt: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.ID == goalReminderEntryID(messageID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
 
 // The immutable chat event is also the ordinary wake's durable acceptance
 // receipt. One append avoids a private instruction masquerading as a user
