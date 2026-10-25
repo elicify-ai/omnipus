@@ -18,8 +18,9 @@
 #      The performance machine and every tier machine are
 #      refused — a targeted run there contends with whole gates, and the
 #      2026-10-11 full-e2e-on-shared starvation was exactly such a placement
-#      error. `auto` picks the first eligible spare; an explicit id must be
-#      a spare.
+#      error. An ALREADY-STARTED machine is refused too — this script only
+#      ever runs on a machine it started itself. `auto` picks the first
+#      eligible stopped spare; an explicit id must be a spare.
 #   2. NEVER beside a gate: a machine whose /tmp/runci.lock is held (flock
 #      probe) or that is running a runci.sh / another targeted payload is
 #      refused, not queued. A machine we just started cannot have a held lock —
@@ -40,13 +41,15 @@
 #   6. The command's REAL exit code comes back inside the log as an explicit
 #      FLY_TARGETED_EXIT marker. The `fly ssh console` wrapper's exit code is
 #      recorded but never trusted (wrapper-exit-code false-green, trap 2).
-#   7. Evidence first: the console stream is captured to the local log WHILE the
-#      command runs, so the evidence is local before any stop. An owned machine
-#      is stopped when the verdict is known (command finished, or never started),
-#      and on abort (Ctrl-C); if the marker is MISSING (SSH drop — the remote
-#      command may still be running), the machine is LEFT RUNNING with
-#      hand-retrieval instructions. A machine that was already up when we
-#      arrived is used but never stopped — another session owns it.
+#   7. ALWAYS STOPPED (chief contract, 2026-10-25): a machine this run STARTED
+#      is stopped on every exit path, without exception — success, command
+#      failure, refusal, abort (Ctrl-C), AND a missing verdict. On a missing
+#      verdict (SSH drop, machine stopped under the run, payload killed
+#      mid-flight) the payload's own log on the persistent /cache volume is
+#      copied back first, and the exit is loud: FLY_TARGETED_NO_VERDICT with
+#      the saved log path. The only stop-time declines are for runs that are
+#      NOT ours to kill: a foreign gate or another dispatcher's marker active
+#      on the machine (loud warning naming it).
 #   8. One lane, one machine: a local per-machine lock refuses a second
 #      fly-targeted run on the same machine while the first holds it.
 #
@@ -55,7 +58,9 @@
 #        the SUMMARY line; an N of 2 is printed explicitly so it cannot be
 #        mistaken for the refusal code below)
 #   1    evidence incomplete or untrusted: no FLY_TARGETED_VERDICT/EXIT marker
-#        (SSH drop), a missing/non-numeric exit marker, or a HEAD mismatch
+#        (SSH drop — the remote log is copied back and the machine is stopped
+#        anyway, with a loud FLY_TARGETED_NO_VERDICT warning), a
+#        missing/non-numeric exit marker, or a HEAD mismatch
 #   2    usage error or pre-flight refusal: unpushed ref, forbidden machine,
 #        local lock held, machine state unreadable, remote busy, payload deploy
 #        failed (md5 mismatch — sftp put has produced empty files before), or a
@@ -110,7 +115,6 @@ OWNER_MARKER_PATH="/tmp/fly-targeted-owner"
 # --- run state (globals: cleanup runs after main returned) ---------------------------------
 MACHINE=""        # resolved machine id, set as soon as a claim begins
 OWNED=0           # 1 = THIS run started the machine (the only one it may stop)
-LEAVE_RUNNING=0   # 1 = verdict unknown (SSH drop) — an owned machine is left up
 REF=""
 SHORT_SHA=""
 CMD_STRING=""
@@ -201,56 +205,48 @@ machine_state() { # $1 machine-id; prints e.g. "started"; empty if unreadable
     | tr -d '\r' | sed -n 's/^State:[[:space:]]*\([a-z]*\).*/\1/p' | head -1
 }
 
-# A started machine is not immediately SSH-able: poll a trivial remote command
-# until the wrapper itself succeeds (for a probe the wrapper's exit code IS the
-# signal — connection failure is the only failure mode of `true`).
+# A started machine is not immediately SSH-able: poll until a trivial remote
+# command ACTUALLY RUNS — the probe requires its output, not the wrapper's
+# exit code. flyctl's console AUTO-STARTS a stopped machine and can return 0
+# before any command executed (documented in deploy/ci-worker/CLAUDE.md, and
+# observed live 2026-10-25: probes passed at 0s while mkdir/sftp failed for
+# the whole boot window — a bare `true` probe cannot see that).
 probe_until_reachable() { # $1 machine-id
-  local id="$1" waited=0
+  local id="$1" waited=0 out
   while [ "$waited" -lt "$START_TIMEOUT" ]; do
-    if fly ssh console --app "$APP" --machine "$id" -C true >/dev/null 2>&1; then
-      info "machine $id reachable after ${waited}s"
-      return 0
-    fi
+    out="$(fly ssh console --app "$APP" --machine "$id" -C 'echo probe-ok' 2>/dev/null | tr -d '\r')"
+    case "$out" in
+      *probe-ok*)
+        info "machine $id reachable after ${waited}s"
+        return 0
+        ;;
+    esac
     sleep "$PROBE_INTERVAL"
     waited=$((waited + PROBE_INTERVAL))
   done
   return 1
 }
 
-# For a machine that is ALREADY up: is a gate or another targeted run holding
-# it? Prints nothing; 0 = free, 1 = busy, 2 = CANNOT TELL (refuse — unknown is
-# never treated as free).
-# NOTE on `fly ssh console -C`: flyctl word-splits the string shell-style and
-# execs it DIRECTLY — there is NO shell, so redirections, `||`, `;` etc. only
-# work inside an explicit `sh -c '...'` (verified on the live cluster
-# 2026-10-25; ci-cluster.sh's write_owner_marker carries the same wrapper).
-remote_busy_probe() { # $1 machine-id
-  local id="$1" out probe_rc
-  out="$(fly ssh console --app "$APP" --machine "$id" -C \
-    "sh -c 'if command -v flock >/dev/null 2>&1; then flock -w0 /tmp/runci.lock true 2>/dev/null || echo BUSY_LOCK; else echo LOCK_ERROR; fi; pgrep -f \"/cache/[r]unci.sh\" >/dev/null 2>&1 && echo BUSY_RUNCI; pgrep -f \"$REMOTE_CACHE/fly-targeted/\" >/dev/null 2>&1 && echo BUSY_TARGETED; echo PROBE_DONE'" 2>/dev/null \
-    | tr -d '\r')"
-  probe_rc=$?
-  case "$out" in
-    *LOCK_ERROR*) return 2 ;;
-    *BUSY_*)      return 1 ;;
-    *PROBE_DONE*) return 0 ;;
-    *)
-      # An empty or partial answer (ssh failure) is "cannot tell".
-      warn "lock probe on machine $id returned no PROBE_DONE (ssh rc $probe_rc) — treating as cannot-tell"
-      return 2
-      ;;
-  esac
-}
-
 # True when a gate or another targeted payload is executing on the machine —
 # used at STOP time so we never halt a machine under someone else's run.
+# (The pre-flight busy probe was removed with the always-stop contract: only
+# machines this run STARTED are used, and a just-started machine cannot hold
+# a lock — Fly destroys /tmp when a machine stops; the payload re-checks the
+# lock after start anyway. NOTE on `fly ssh console -C`: flyctl word-splits
+# the string shell-style and execs it DIRECTLY — there is NO shell, so
+# redirections, `||`, `;` etc. only work inside an explicit `sh -c '...'`,
+# verified on the live cluster 2026-10-25.)
 machine_is_busy() { # $1 machine-id
-  # `fly-targete[d]/` bracket trick (same as ci-cluster's `/cache/[r]unci.sh`):
+  # Busy = a FOREIGN run only: a gate (runci.sh), or a targeted payload from
+  # ANOTHER run. Our OWN payload — its cmdline carries OUR RUN_ID — is not
+  # foreign: after an SSH drop it may still be executing on the machine, and
+  # the always-stop contract (chief, 2026-10-25) requires stopping the
+  # machine under it anyway (halting the VM is what ends the orphan).
+  # `fly-targete[d]/` bracket trick (ci-cluster's `/cache/[r]unci.sh` shape):
   # without it the probe's own `sh -c` command line carries the pattern text
-  # and pgrep matches ITSELF — the machine always looks busy and is never
-  # stopped (observed live 2026-10-25).
+  # and pgrep matches ITSELF — observed live 2026-10-25.
   fly ssh console --app "$APP" --machine "$1" \
-    -C "sh -c 'pgrep -f \"/cache/[r]unci.sh\" >/dev/null 2>&1 || pgrep -f \"$REMOTE_CACHE/fly-targete[d]/\" >/dev/null 2>&1'" \
+    -C "sh -c 'pgrep -f \"/cache/[r]unci.sh\" >/dev/null 2>&1 && exit 0; pgrep -af \"$REMOTE_CACHE/fly-targete[d]/\" 2>/dev/null | grep -v \"/$RUN_ID/\" | grep -q .'" \
     >/dev/null 2>&1
 }
 
@@ -351,24 +347,22 @@ claim_machine() { # $1 id $2 mode(named|auto)
         # lock lives there) when a machine stops. The payload re-checks anyway.
         if ! fly machine start "$id" --app "$APP" >/dev/null 2>&1; then
           refuse="fly machine start $id failed"
-        elif ! probe_until_reachable "$id"; then
-          refuse="machine $id not SSH-reachable within ${START_TIMEOUT}s (fly machine status $id --app $APP)"
         else
+          # OWNED is set the moment the start succeeds — NOT after the
+          # reachability probe (chief contract, 2026-10-25: a machine this
+          # run started is always stopped, so a start followed by a failed
+          # probe must still be owned and stopped by cleanup).
           OWNED=1
+          if ! probe_until_reachable "$id"; then
+            refuse="machine $id not SSH-reachable within ${START_TIMEOUT}s (fly machine status $id --app $APP)"
+          fi
         fi
         ;;
       started|starting)
-        info "machine $id already $state — using it, will NOT stop it (owned by whoever started it)"
-        if ! probe_until_reachable "$id"; then
-          refuse="machine $id not SSH-reachable within ${START_TIMEOUT}s"
-        else
-          remote_busy_probe "$id"
-          case $? in
-            0) : ;;
-            1) refuse="machine $id is busy: a gate holds the runci lock or another targeted run is active" ;;
-            *) refuse="machine $id: the lock probe failed — cannot confirm it is free (refusing, not guessing)" ;;
-          esac
-        fi
+        # Never run on a machine this script did not start: another session
+        # owns it, and a targeted verdict on someone else's machine is not
+        # ours to produce (or to stop). Refuse; `auto` moves to the next spare.
+        refuse="machine $id is already $state — fly-targeted only runs on machines it started itself (another session owns it)"
         ;;
       *)
         refuse="machine $id is in state '$state' — refusing (fly machine status $id --app $APP)"
@@ -406,15 +400,31 @@ build_payload() { # $1 full sha
 # fly-targeted payload $RUN_ID — generated by deploy/ci-worker/fly-targeted.sh; do not edit.
 set -uo pipefail
 SHA=$(shell_quote "$sha")
-WT=$(shell_quote "$PAYLOAD_DIR_REMOTE")
+# The worktree lives INSIDE this run's dir, one level down: the run dir also
+# holds payload.sh and run.log (the no-verdict copy-back evidence), and the
+# worktree removal must take ONLY the worktree, never the evidence.
+WT=$(shell_quote "$PAYLOAD_DIR_REMOTE/worktree")
 REPO=$(shell_quote "$REMOTE_REPO")
 CACHE=$(shell_quote "$REMOTE_CACHE")
 CI_USER=$(shell_quote "$CI_USER")
 RUNUSER_BIN=$(shell_quote "$RUNUSER")
 CMD=$(shell_quote "$CMD_STRING")
 RUN_PATH=$(shell_quote "/usr/local/go/bin:$REMOTE_CACHE/go/bin:/usr/local/gobin:/usr/local/bin:/usr/bin:/bin")
+LOGF=$(shell_quote "$PAYLOAD_DIR_REMOTE/run.log")
 
-fail() { printf 'FLY_TARGETED_VERDICT=%s\nFLY_TARGETED_EXIT=%s\n' "\$1" "\$2"; exit 0; }
+# The payload keeps its OWN log on the persistent volume (/cache survives a
+# machine stop): if the console stream dies mid-run, the local side has no
+# verdict, and the no-verdict path copies THIS file back before stopping.
+: >"\$LOGF" 2>/dev/null || LOGF=/dev/null
+# Retention: keep the newest 5 run dirs (this run's dir is the newest — it
+# was created before this payload started).
+( cd "\$CACHE/fly-targeted" 2>/dev/null && ls -1t | tail -n +6 | xargs -r rm -rf -- ) >/dev/null 2>&1 || true
+
+# Console AND payload log (the local side parses the console; the log is the
+# copy-back evidence when the console stream dies).
+flog() { printf '%s\n' "\$*"; printf '%s\n' "\$*" >>"\$LOGF" 2>/dev/null || true; }
+
+fail() { printf 'FLY_TARGETED_VERDICT=%s\nFLY_TARGETED_EXIT=%s\n' "\$1" "\$2"; printf 'FLY_TARGETED_VERDICT=%s\nFLY_TARGETED_EXIT=%s\n' "\$1" "\$2" >>"\$LOGF" 2>/dev/null || true; exit 0; }
 cleanup() {
   rc=\$?
   git -C "\$REPO" worktree remove --force "\$WT" >/dev/null 2>&1 || rm -rf "\$WT" >/dev/null 2>&1 || true
@@ -439,7 +449,7 @@ if pgrep -f "\$CACHE/fly-targeted/" 2>/dev/null | grep -qv "^\$\$\$"; then fail 
 git config --global --add safe.directory '*' >/dev/null 2>&1 || true
 cd "\$REPO" || fail no-repo 91
 if ! git fetch --all --prune --quiet >/dev/null 2>&1; then
-  echo "WARNING: git fetch failed on the worker — continuing with the clone's existing objects"
+  flog "WARNING: git fetch failed on the worker — continuing with the clone's existing objects"
 fi
 git cat-file -e "\$SHA^{commit}" 2>/dev/null || fail no-commit 92
 if ! git worktree add --detach --quiet "\$WT" "\$SHA" >/dev/null 2>&1; then
@@ -447,7 +457,7 @@ if ! git worktree add --detach --quiet "\$WT" "\$SHA" >/dev/null 2>&1; then
   rm -rf "\$WT" 2>/dev/null || true
   git worktree add --detach --quiet "\$WT" "\$SHA" >/dev/null 2>&1 || fail no-commit 92
 fi
-echo "FLY_TARGETED_HEAD=\$(git -C "\$WT" rev-parse --short HEAD)"
+flog "FLY_TARGETED_HEAD=\$(git -C "\$WT" rev-parse --short HEAD)"
 
 # SPA embed stub — pkg/gateway/spa is gitignored; compile work needs it non-empty
 # (runci.sh ensure_spa_stub, root CLAUDE.md "SPA embed stub trap").
@@ -468,15 +478,24 @@ done
 printf '[safe]\n\tdirectory = *\n' > "/home/\$CI_USER/.gitconfig" 2>/dev/null \
   && chown "\$CI_USER:\$CI_USER" "/home/\$CI_USER/.gitconfig" 2>/dev/null || true
 
-echo "FLY_TARGETED_VERDICT=command"
 cd "\$WT" || fail no-commit 92
+# The VERDICT/EXIT pair is written ONLY after the command finished: anything
+# that dies before it — an SSH drop, the machine being stopped under the run,
+# the payload being killed mid-flight — leaves the local side with NO verdict,
+# which routes to the copy-back-then-stop path. The command's output streams
+# live to the console AND lands in \$LOGF for the copy-back.
 RC=0
 if [ "\$(id -u)" = "0" ] && [ "\$RUNUSER_BIN" != "none" ]; then
-  \$RUNUSER_BIN -u "\$CI_USER" -- env HOME="/home/\$CI_USER" PATH="\$RUN_PATH" GOCACHE="\$CACHE/go-build" GOPATH="\$CACHE/go" CGO_ENABLED=0 TMPDIR="\$CACHE/tmp" bash -c "\$CMD" || RC=\$?
+  \$RUNUSER_BIN -u "\$CI_USER" -- env HOME="/home/\$CI_USER" PATH="\$RUN_PATH" GOCACHE="\$CACHE/go-build" GOPATH="\$CACHE/go" CGO_ENABLED=0 TMPDIR="\$CACHE/tmp" bash -c "\$CMD" 2>&1 | tee -a "\$LOGF"
+  p=\${PIPESTATUS[0]}
 else
-  env HOME="/home/\$CI_USER" PATH="\$RUN_PATH" GOCACHE="\$CACHE/go-build" GOPATH="\$CACHE/go" CGO_ENABLED=0 TMPDIR="\$CACHE/tmp" bash -c "\$CMD" || RC=\$?
+  env HOME="/home/\$CI_USER" PATH="\$RUN_PATH" GOCACHE="\$CACHE/go-build" GOPATH="\$CACHE/go" CGO_ENABLED=0 TMPDIR="\$CACHE/tmp" bash -c "\$CMD" 2>&1 | tee -a "\$LOGF"
+  p=\${PIPESTATUS[0]}
 fi
+[ "\$p" -ne 0 ] && RC=\$p
+flog "FLY_TARGETED_VERDICT=command"
 echo "FLY_TARGETED_EXIT=\$RC"
+echo "FLY_TARGETED_EXIT=\$RC" >>"\$LOGF" 2>/dev/null || true
 exit "\$RC"
 EOF
 }
@@ -488,16 +507,22 @@ EOF
 # whole deploy retries once after a short wait — a machine seconds into its
 # first boot answers SSH but can drop the next call (observed live 2026-10-25).
 deploy_payload() {
-  local try
-  for try in 1 2; do
+  # 3 attempts with growing backoff (5s, 10s): a freshly resumed machine
+  # answers the reachability probe but can drop the next real SSH calls
+  # (observed live 2026-10-25 — 3s was not enough between boot and deploy).
+  local try deployed=0
+  for try in 1 2 3; do
     if fly ssh console --app "$APP" --machine "$MACHINE" -C "mkdir -p '$PAYLOAD_DIR_REMOTE'" >/dev/null 2>&1 \
       && fly ssh sftp put "$PAYLOAD_LOCAL" "$PAYLOAD_REMOTE" --app "$APP" --machine "$MACHINE" >/dev/null 2>&1; then
+      deployed=1
       break
     fi
-    warn "payload deploy (attempt $try/2) failed at mkdir/sftp on machine $MACHINE"
-    [ "$try" -eq 2 ] && return 1
-    sleep 3
+    warn "payload deploy (attempt $try/3) failed at mkdir/sftp on machine $MACHINE"
+    if [ "$try" -lt 3 ]; then sleep $((try * 5)); fi
   done
+  if [ "$deployed" -ne 1 ]; then
+    return 1
+  fi
   local want got
   want="$(md5_of "$PAYLOAD_LOCAL")" || return 1
   got="$(fly ssh console --app "$APP" --machine "$MACHINE" \
@@ -538,11 +563,23 @@ stop_owned_machine() { # $1 reason
     warn "machine $id carries another dispatcher's owner marker — NOT stopping it"
     return 0
   fi
-  if fly machine stop "$id" --app "$APP" >/dev/null 2>&1; then
-    info "machine $id stopped ($1)"
-  else
-    warn "could NOT stop machine $id — STOP IT MANUALLY, it is billing: fly machine stop $id --app $APP"
+  # The stop is the contract — retry it: the Fly API has transient EOF/flake
+  # failures (observed live 2026-10-25), and a single failed stop attempt
+  # would leave exactly the orphan this script exists to prevent.
+  local try=0
+  while [ "$try" -lt 3 ]; do
+    if fly machine stop "$id" --app "$APP" >/dev/null 2>&1; then
+      info "machine $id stopped ($1)"
+      return 0
+    fi
+    try=$((try + 1))
+    [ "$try" -lt 3 ] && sleep 3
+  done
+  if [ "$(machine_state "$id")" = "stopped" ]; then
+    info "machine $id is stopped (the stop command errored, but the state confirms)"
+    return 0
   fi
+  warn "could NOT stop machine $id after 3 attempts — STOP IT MANUALLY, it is billing: fly machine stop $id --app $APP"
 }
 
 cleanup() {
@@ -550,22 +587,12 @@ cleanup() {
   trap - EXIT INT TERM
   release_local_lock
   if [ "$OWNED" -eq 1 ]; then
-    case "$rc" in
-      130|143)
-        # An abort: the operator killed this lane, so the remote run dies with it.
-        stop_owned_machine "run aborted"
-        ;;
-      *)
-        if [ "$LEAVE_RUNNING" -eq 1 ]; then
-          warn "machine $MACHINE LEFT RUNNING — the run's verdict never arrived (SSH drop, or the machine was stopped under it); the remote command may still be executing."
-          warn "Inspect, then stop by hand — a running machine costs money; destroyed evidence costs a night:"
-          echo "  fly ssh console --app $APP --machine $MACHINE -C 'ps aux | grep -E \"fly-targeted|runci.sh\"'" >&2
-          echo "  fly machine stop $MACHINE --app $APP   # once inspected" >&2
-        else
-          stop_owned_machine "run finished"
-        fi
-        ;;
-    esac
+    # Contract (chief, 2026-10-25): a machine this run STARTED is ALWAYS
+    # stopped, on every exit path without exception. stop_owned_machine still
+    # declines when a FOREIGN gate or another dispatcher's owner marker is
+    # live on the machine — killing someone else's active run is a different
+    # failure class, and gets a loud warning naming the machine instead.
+    stop_owned_machine "this run exited (rc $rc)"
   fi
   exit "$rc"
 }
@@ -635,9 +662,18 @@ main() {
   run_payload
   parse_markers
   if [ -z "$VERDICT" ]; then
-    warn "no FLY_TARGETED_VERDICT marker in the log — the run did not complete (SSH drop, or the machine was stopped under it)"
-    warn "partial log: $LOG_FILE"
-    LEAVE_RUNNING=1
+    # No verdict = the run never completed (SSH drop, machine stopped under
+    # it, payload killed mid-flight). Evidence first, then stop ANYWAY —
+    # contract (chief, 2026-10-25): a machine this run started is always
+    # stopped, without exception. The payload keeps its own log on the
+    # persistent volume; copy back whatever exists before the stop.
+    warn "FLY_TARGETED_NO_VERDICT: no verdict marker in the log — the run did not complete; machine $MACHINE will be STOPPED anyway (always-stop contract)"
+    if fly ssh sftp get "$PAYLOAD_DIR_REMOTE/run.log" "$LOG_DIR/remote-run.log" --app "$APP" --machine "$MACHINE" >/dev/null 2>&1 && [ -s "$LOG_DIR/remote-run.log" ]; then
+      warn "FLY_TARGETED_NO_VERDICT: remote log copied back to $LOG_DIR/remote-run.log"
+    else
+      warn "FLY_TARGETED_NO_VERDICT: no remote log could be copied back from $PAYLOAD_DIR_REMOTE/run.log (machine unreachable, or the payload died before creating it)"
+    fi
+    warn "FLY_TARGETED_NO_VERDICT: partial local log: $LOG_FILE"
     return 1
   fi
   case "$VERDICT" in

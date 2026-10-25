@@ -12,17 +12,20 @@
 #   usage   argument handling: no args, missing selector, missing '--',
 #           empty command, --help
 #   ref     an unpushed ref is refused before any machine is touched
-#   machine the performance machine, tier machines and unknown ids are refused;
-#           an unreadable machine state is refused (named) / skipped (auto)
+#   machine the performance machine, tier machines, unknown ids, the
+#           #1266-dedicated d8d3977c946558 and ALREADY-STARTED machines are
+#           refused; an unreadable machine state is refused (named) /
+#           skipped (auto)
 #   lock    the local per-machine lock blocks a second lane; auto skips a
-#           locked spare; a held remote runci lock is refused; the payload's
-#           own flock re-check refuses a lock that appeared after the claim
+#           locked spare; the payload's own flock re-check refuses a lock
+#           that appeared after the claim
 #   auto    picks the first eligible stopped spare; skips locked/unreadable;
 #           refuses when no spare is eligible
-#   stop    an owned machine is stopped on success AND on a failing command,
-#           on an abort (SIGTERM), and after a refused/failed dispatch; a
-#           machine that was already running is used but NEVER stopped; an
-#           SSH drop (no verdict marker) leaves an owned machine running
+#   stop    an owned machine is ALWAYS stopped — on success, on a failing
+#           command, on an abort (SIGTERM), after a refused/failed dispatch,
+#           when start succeeds but reachability fails, and when no verdict
+#           arrives (the remote log is copied back first, loud
+#           FLY_TARGETED_NO_VERDICT warning)
 #   verdict the command's REAL exit code is propagated from the marker (never
 #           the wrapper's); a HEAD mismatch is a refusal; an empty/truncated
 #           sftp put is caught by the md5 verify; the generated payload is
@@ -100,13 +103,14 @@ case "$cmd" in
     ;;
   ssh)
     mode="$1"; shift
-    machine=""; ccmd=""; local_path=""; remote_path=""
+    machine=""; ccmd=""; local_path=""; remote_path=""; action=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --app)     shift 2 ;;
         --machine) machine="$2"; shift 2 ;;
         -C)        ccmd="$2"; shift 2 ;;
-        put)       local_path="$2"; remote_path="$3"; shift 3 ;;
+        put)       action="put"; local_path="$2"; remote_path="$3"; shift 3 ;;
+        get)       action="get"; remote_path="$2"; local_path="$3"; shift 3 ;;
         *)         shift ;;
       esac
     done
@@ -114,7 +118,14 @@ case "$cmd" in
       console)
         rec "console $machine :: $ccmd"
         case "$ccmd" in
-          true) exit 0 ;;
+          *probe-ok*)
+            # the reachability probe: simulate an unreachable machine on demand
+            if [ "${FLY_STUB_FAIL_PROBE:-0}" = "1" ]; then
+              printf 'booting-no-command-output\n'
+            else
+              printf 'probe-ok\n'
+            fi
+            ;;
           *fly-targeted-owner*)
             case "$ccmd" in
               cat\ *)
@@ -130,15 +141,6 @@ case "$cmd" in
                 printf '%s\n' "$(printf '%s' "$ccmd" | sed -n "s/.* echo \(fly-targeted:[^ ]*\) >.*/\1/p")" >"$STATE_DIR/owner-marker"
                 ;;
             esac
-            ;;
-          *PROBE_DONE*)
-            if [ "${FLY_STUB_REMOTE_BUSY:-0}" = "1" ]; then
-              printf 'BUSY_LOCK\nPROBE_DONE\n'
-            elif [ "${FLY_STUB_PROBE_UNKNOWN:-0}" = "1" ]; then
-              printf 'unparseable-noise\n'
-            else
-              printf 'PROBE_DONE\n'
-            fi
             ;;
           *pgrep*)
             if [ "${FLY_STUB_REMOTE_BUSY:-0}" = "1" ]; then exit 0; else exit 1; fi
@@ -167,12 +169,29 @@ case "$cmd" in
         esac
         ;;
       sftp)
-        rec "sftp put $local_path -> $remote_path"
-        case "${FLY_STUB_SFTP_MODE:-normal}" in
-          fail)     exit 1 ;;
-          empty)    mkdir -p "$(dirname "$remote_path")"; : >"$remote_path" ;;
-          truncate) mkdir -p "$(dirname "$remote_path")"; printf 'x' >"$remote_path" ;;
-          *)        cp "$local_path" "$remote_path" ;;
+        # $action distinguishes put (LOCAL REMOTE) from get (REMOTE LOCAL)
+        case "$action" in
+          put) rec "sftp put $local_path -> $remote_path" ;;
+          get) rec "sftp get $remote_path -> $local_path" ;;
+        esac
+        case "$action" in
+          get)
+            # copy-back: the payload's remote log is a REAL sandbox file —
+            # copy it, honoring the failure/empty modes for the refusal tests
+            case "${FLY_STUB_SFTP_MODE:-normal}" in
+              fail)  exit 1 ;;
+              empty) mkdir -p "$(dirname "$local_path")"; : >"$local_path" ;;
+              *)     mkdir -p "$(dirname "$local_path")"; cp "$remote_path" "$local_path" ;;
+            esac
+            ;;
+          *)
+            case "${FLY_STUB_SFTP_MODE:-normal}" in
+              fail)     exit 1 ;;
+              empty)    mkdir -p "$(dirname "$remote_path")"; : >"$remote_path" ;;
+              truncate) mkdir -p "$(dirname "$remote_path")"; printf 'x' >"$remote_path" ;;
+              *)        cp "$local_path" "$remote_path" ;;
+            esac
+            ;;
         esac
         ;;
       *) echo "FLY_STUB: unhandled ssh sub: $mode" >&2; exit 3 ;;
@@ -295,21 +314,15 @@ teardown() {
   ! grep -q 'machine start' "$FLY_STUB_LOG"
 }
 
-@test "lock: a held remote runci lock refuses an already-running machine" {
+@test "machine: an ALREADY-STARTED machine is refused and never touched (chief contract, 2026-10-25)" {
+  # fly-targeted only ever runs on a machine it started itself: another
+  # session owns a started machine, so it is refused — not used, not stopped.
   printf started >"$STATE_DIR/spare1"
-  export FLY_STUB_REMOTE_BUSY=1
   run bash "$SCRIPT" "$SHORT_SHA" spare1 -- echo hi
   [ "$status" -eq 2 ]
-  grep -q 'busy' <<<"$output"
-  ! grep -q 'machine stop' "$FLY_STUB_LOG"   # not ours — never stopped
-}
-
-@test "lock: an unreadable lock probe refuses (cannot-tell is never free)" {
-  printf started >"$STATE_DIR/spare1"
-  export FLY_STUB_PROBE_UNKNOWN=1
-  run bash "$SCRIPT" "$SHORT_SHA" spare1 -- echo hi
-  [ "$status" -eq 2 ]
-  grep -q 'cannot confirm it is free' <<<"$output"
+  grep -q 'only runs on machines it started itself' <<<"$output"
+  ! grep -q 'machine start' "$FLY_STUB_LOG"
+  ! grep -q 'machine stop' "$FLY_STUB_LOG"
   ! grep -q 'payload-run' "$FLY_STUB_LOG"
 }
 
@@ -370,13 +383,17 @@ teardown() {
   grep -q 'targeted-boom' "$FLY_TARGETED_LOG_DIR/run.log"
 }
 
-@test "stop: an already-running machine is used but NEVER stopped" {
-  printf started >"$STATE_DIR/spare1"
+@test "stop: start-then-unreachable still stops the machine it started" {
+  # chief contract, 2026-10-25: ownership begins at the successful START, not
+  # after the reachability probe — a machine we started and cannot reach is
+  # still ours to stop. (Red against the old code, which set OWNED after the
+  # probe and left the machine running on this path.)
+  export FLY_STUB_FAIL_PROBE=1
   run bash "$SCRIPT" "$SHORT_SHA" spare1 -- echo hi
-  [ "$status" -eq 0 ]
-  grep -q 'will NOT stop it' <<<"$output"
-  ! grep -q 'machine start' "$FLY_STUB_LOG"
-  ! grep -q 'machine stop' "$FLY_STUB_LOG"
+  [ "$status" -eq 2 ]
+  grep -q 'not SSH-reachable' <<<"$output"
+  grep -q 'machine start spare1' "$FLY_STUB_LOG"
+  grep -q 'machine stop spare1' "$FLY_STUB_LOG"
 }
 
 @test "stop: SIGTERM mid-run aborts and stops the owned machine" {
@@ -396,13 +413,21 @@ teardown() {
   grep -q 'machine stop spare1' "$FLY_STUB_LOG"
 }
 
-@test "stop: a missing verdict marker (SSH drop) leaves the owned machine running" {
+@test "stop: a missing verdict copies back the remote log and STOPS the owned machine" {
+  # chief contract, 2026-10-25: no verdict ⇒ evidence first (the payload's
+  # own log on the persistent volume is copied back), then stop anyway, with
+  # a loud FLY_TARGETED_NO_VERDICT warning carrying the saved log path.
+  # (Red against the old code, which left the owned machine RUNNING here.)
   export FLY_STUB_PARTIAL=1
   run bash "$SCRIPT" "$SHORT_SHA" spare1 -- echo hi
   [ "$status" -eq 1 ]
-  grep -q 'did not complete' <<<"$output"
-  grep -q 'LEFT RUNNING' <<<"$output"
-  ! grep -q 'machine stop' "$FLY_STUB_LOG"
+  grep -q 'FLY_TARGETED_NO_VERDICT' <<<"$output"
+  grep -q 'will be STOPPED anyway' <<<"$output"
+  grep -q 'machine stop spare1' "$FLY_STUB_LOG"
+  # the copy-back exists, is non-empty, and carries the payload's own markers
+  [ -s "$FLY_TARGETED_LOG_DIR/remote-run.log" ]
+  grep -q 'FLY_TARGETED_HEAD=' "$FLY_TARGETED_LOG_DIR/remote-run.log"
+  grep -q 'FLY_TARGETED_EXIT=0' "$FLY_TARGETED_LOG_DIR/remote-run.log"
 }
 
 @test "stop: an sftp put that delivers an empty file is caught by the md5 verify" {
@@ -446,8 +471,10 @@ teardown() {
   payload="$FLY_TARGETED_LOG_DIR/payload.sh"
   [ -f "$payload" ]
   bash -n "$payload"
-  # the per-run worktree was removed from the cluster clone after the run
-  [ ! -e "$CACHE/fly-targeted" ] || [ -z "$(ls -A "$CACHE/fly-targeted" 2>/dev/null)" ]
+  # the per-run worktree was removed from the cluster clone after the run;
+  # the run dir itself REMAINS (payload.sh + run.log are the copy-back
+  # evidence, pruned to the newest 5 by the payload) — only the worktree dies
+  [ -z "$(find "$CACHE/fly-targeted" -maxdepth 2 -type d -name worktree 2>/dev/null)" ]
   # `/fly-targeted/` with slashes: the sandbox dir is named fly-targeted-test.*,
   # which must not match its own assertion
   ! git -C "$CLONE" worktree list | grep -q '/fly-targeted/'

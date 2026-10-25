@@ -119,11 +119,17 @@ the machine's own `/cache/omnipus` clone — the clone is never reset, so runci 
 untouched, and the payload's `FLY_TARGETED_HEAD=` line is asserted against the requested
 sha (stale-checkout trap 1); **real exit code from the log marker** (`FLY_TARGETED_EXIT=`,
 never the ssh wrapper's — trap 2); **command as `ci`, CGO_ENABLED=0**, runci's cache env;
-**evidence before stop** — the log streams to a local file while the command runs, an
-owned machine is stopped when the verdict is known and on Ctrl-C, but a MISSING verdict
-(SSH drop, command possibly still running) leaves it running with hand-retrieval lines;
+**always stopped** (chief contract, 2026-10-25) — a machine this run STARTED is
+stopped on every exit path without exception: success, command failure, refusal,
+abort (Ctrl-C), start-then-unreachable, AND a missing verdict. The payload keeps
+its own log on the persistent volume; on a missing verdict the local side first
+copies that log back, then stops, printing a loud `FLY_TARGETED_NO_VERDICT`
+warning with the saved log path. An ALREADY-STARTED machine is refused, never
+used — this script only runs on machines it started itself; the only stop-time
+declines are for runs that are not ours to kill (a foreign gate or another
+dispatcher's marker active on the machine — loud warning naming it);
 **one lane, one machine** via a local per-machine lock (`${TMPDIR:-/tmp}/fly-targeted-locks`).
-An already-running machine is used but never stopped — another session owns it. The
+The
 payload is `fly ssh sftp put`-ed and **md5-verified before execution** (sftp put has
 produced empty files here before). Exit codes: the command's real code, `1` = evidence
 incomplete/untrusted, `2` = refusal. First use on a spare needs its clone to exist
