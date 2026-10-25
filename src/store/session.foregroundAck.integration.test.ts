@@ -24,6 +24,8 @@ import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { useWorkspacesStore } from './workspacesStore'
 import { reattachActiveSession } from '@/components/chat/OmnipusRuntimeProvider'
+import type { ServerFrame } from '@/lib/api/generated/asyncapi-types'
+import { expectValidFrame, expectValidPage, page, snapshot } from '../../tests/chat-history-paging/fixtures'
 
 type Signal = 'on' | 'off' | 'unknown'
 
@@ -147,24 +149,25 @@ function show(sessionId: string) {
   // ['sessions'] query) — seed this scenario's loaded list there, where the
   // acknowledgement reads it. The seam mock above still judges the session.
   queryClient.setQueryData(['sessions'], [...loadedSessions])
-  useChatStore.getState().handleFrame({
-    type: 'catch_up_complete',
-    session_id: sessionId,
-    seq: 4,
-    boot_id: 'boot-1',
-    mode: 'snapshot',
-  })
+  const frames: ServerFrame[] = [
+    { type: 'done', session_id: sessionId },
+    { type: 'catch_up_complete', session_id: sessionId, seq: 4, boot_id: 'boot-1', mode: 'snapshot' },
+  ]
+  frames.forEach(expectValidFrame)
+  frames.forEach(frame => useChatStore.getState().handleFrame(frame))
 }
 
 function deliverBound(sessionId: string, attentionBound?: number) {
-  const frame: Record<string, unknown> = {
-    type: 'session_snapshot',
-    session_id: sessionId,
-    seq: 3,
-    reason: 'unknown_position',
-  }
-  if (attentionBound !== undefined) frame.attention_bound = attentionBound
-  useChatStore.getState().handleFrame(frame as never)
+  const history = page([], { sessionId })
+  expectValidPage(history, [], 0)
+  const frames: ServerFrame[] = [
+    { ...snapshot(history), seq: 4, boot_id: 'boot-1' },
+    { type: 'session_state', session_id: sessionId, user_id: 'attention-reader',
+      emitted_at: '2026-10-10T00:00:00Z', pending_approvals: [], history_state: { status: 'available' },
+      ...(attentionBound === undefined ? {} : { attention_bound: attentionBound }) },
+  ]
+  frames.forEach(expectValidFrame)
+  frames.forEach(frame => useChatStore.getState().handleFrame(frame))
 }
 
 describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
@@ -201,7 +204,7 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
       },
     ])
     expect(seam.attentionBoundOfFrame).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'session_snapshot',
+      type: 'session_state',
       session_id: main.id,
       attention_bound: 1,
     }))
@@ -233,7 +236,7 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
 
     expect(acks(send)).toEqual([])
     expect(seam.attentionBoundOfFrame).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'session_snapshot',
+      type: 'session_state',
       session_id: main.id,
     }))
     expect(seam.attachAckFields).not.toHaveBeenCalled()
