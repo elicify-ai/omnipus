@@ -12,6 +12,7 @@ import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
+import { queryClient } from '@/lib/queryClient'
 
 function sentFrames(): unknown[] {
   const sent: unknown[] = []
@@ -33,6 +34,7 @@ function lastWarning(): { message: string; variant: string } | undefined {
 }
 
 beforeEach(() => {
+  queryClient.clear()
   useSessionStore.setState({ activeSessionId: null, activeAgentId: null } as never)
   useChatStore.setState({
     sessionsById: {},
@@ -102,11 +104,11 @@ describe('a __pending retry (a mint retry) names its agent too (K16)', () => {
 
     expect(sent).toHaveLength(0)
     const bucket = useChatStore.getState().sessionsById['__pending']
-    // The row keeps its failed state — Retry remains available once an agent
-    // is picked — and the refusal is visible.
+    // This synthetic row has no retained first-send request or canonical owner;
+    // foreground agent selection cannot authorize a generic Retry.
     expect(bucket?.messagesById['u1']?.deliveryStatus).toBe('failed')
     const warning = lastWarning()
-    expect(warning?.variant).toBe('warning')
-    expect(warning?.message).toContain('no default agent')
+    expect(warning?.variant).toBe('error')
+    expect(warning?.message).toContain("conversation's agent is not loaded")
   })
 })

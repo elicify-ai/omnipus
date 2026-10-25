@@ -5,7 +5,7 @@ description: Baseline procedure for every Omnipus dev-team role — the fifteen 
 
 # Omnipus Shared Rules
 
-Last reviewed: 2026-10-06
+Last reviewed: 2026-10-23 — approved delivery-process rollout
 
 Root `CLAUDE.md` is the authority on project facts and hard constraints — the *what*.
 This skill is the *how*: the working procedure every dev-team role shares. It never
@@ -22,7 +22,7 @@ to the section instead of copying it, so there is one source per fact.
    red, green, an isolated re-run, and a mutation probe may each repeat this command
    serially — never two local test processes running at once. Frontend: one
    `npx vitest run <file>` or `npx playwright test <x>.spec.ts` at a time; never bare
-   `npm test`, `vitest` or `playwright test` (`npm run typecheck` is exempt — rule 3).
+   `npm test`, `vitest` or `playwright test` (`npm run typecheck` is exempt from the one-test-file limit, not the slot runner — rule 3).
    CI is the authority for Go results. Exact command shape and the SPA-embed-stub trap:
    `CLAUDE.md` ("Build, test, and quality gates").
 3. `npm run typecheck` is the only TypeScript gate that means anything — never bare
@@ -37,14 +37,16 @@ to the section instead of copying it, so there is one source per fact.
 7. Commits are authored as the human running the work — never as an agent, never with
    an AI co-author trailer. Verify authorship before every push (`CLAUDE.md`, "Git
    commit authorship (MANDATORY)").
-8. One worktree per writer — never two writers in one working copy. Same-file overlap
-   between parallel streams is fine (parallel branches, conflict resolved at merge);
-   sharing a working copy is not — the stash stack is shared across worktrees, so never bare `git stash`. # agent-guard: allow
+8. One worktree per writer — never two writers in one working copy. Apply root
+   `CLAUDE.md` ("Feature ownership"): agree the owner with team-lead before writing;
+   a second worktree is not permission to split one area by finding.
+   Sharing a working copy is forbidden — the stash stack is shared across worktrees, so never bare `git stash`. # agent-guard: allow
    Commit frequently on the working branch; never merge to `main` without human approval
    (`CLAUDE.md`, "Merging to main (MANDATORY)"). Specialists commit and push only their
    own work branch — never push to, merge into or land on the integration branch or
-   `main`; landing belongs to team-lead (or a separate-session squad lead under the
-   landing lock). A brief asking for it is a rule-15 blocked report.
+   `main`; chief-owned integration and standalone landing rights are in root
+   `CLAUDE.md` ("Landing trains"). A brief asking a specialist to land is a rule-15
+   blocked report.
 9. Run GitNexus impact analysis before editing any symbol; warn on HIGH/CRITICAL blast
    radius before proceeding (`CLAUDE.md`, "Code intelligence: GitNexus"). If GitNexus is
    unavailable or this checkout isn't indexed, say so, do a Grep sweep for the symbol's
@@ -85,10 +87,23 @@ to the section instead of copying it, so there is one source per fact.
 - What may run locally vs. what CI owns, the build-tag/SPA-stub traps, and the
   TypeScript gate: `CLAUDE.md` ("Build, test, and quality gates") — do not duplicate
   those commands here, read them there.
-- Heavy gates run on the remote CI cluster: `deploy/ci-worker/ci-cluster.sh <ref>`
-  (detail: `deploy/ci-worker/CLAUDE.md`, `docs/internal/architecture/ci-cluster-design.md`).
-  Parse the log for `RESULT:` / `GATE FAILURE(S)` lines — the ssh wrapper's own exit
-  code is not the gate's result.
+- Before a lane check, select only its own tests and the minimal regression; do not
+  create a lane draft PR to obtain full CI. Candidate CI and founder-approved Fly
+  scope come from root `CLAUDE.md` ("CI scope and remote pre-flight").
+- Before a Fly window, record the pushed SHA, founder OK and passing local typecheck
+  and relevant compile receipts. Text-only work needs no Fly window; record that
+  no compile/typecheck was needed rather than claiming either ran. Keep Go compiles
+  narrow within the standing local limits.
+- Put heavy local commands (including typecheck, narrow tests and compiles) through
+  the installed slot runner. Locate it from the personal-layer procedure and verify
+  its current invocation; if unavailable, report the block, never run heavy work bare.
+  Use the release-pinned Go toolchain for live builds and record the actual version.
+- For an approved cluster run, use `deploy/ci-worker/ci-cluster.sh <ref>` (detail:
+  `deploy/ci-worker/CLAUDE.md`, `docs/internal/architecture/ci-cluster-design.md`). Parse
+  `RESULT:` / `GATE FAILURE(S)` in saved logs, never the ssh wrapper's exit code.
+- Match any qualified quarantine verdict to the single tracked list and issue links
+  under root `CLAUDE.md` ("CI quarantine"). Until that mechanism is evidenced, retain
+  the raw red result; do not turn an exception into an unqualified green.
 - Reading results honestly: capture exit codes directly (`cmd > log 2>&1; echo "exit=$?"`
   — never through a pipe); confirm the test actually ran (count named `--- PASS`/`--- FAIL`
   lines, not just `ok`); a bare trailing `FAIL` with zero `--- FAIL` lines is hang or
@@ -137,7 +152,10 @@ to the section instead of copying it, so there is one source per fact.
 
 ## Headless dispatches
 
-- A headless worker (`claude -p`, `claudez`, `claudeg`) ends when its turn ends — no
+- Apply root `CLAUDE.md` ("Running CLI agents") at start/resume: verify live ownership
+  and load, and retain quota/balance and saved-state receipts for tier changes.
+
+- A headless worker ends when its turn ends — no
   completion notification resumes it. Finish inside the one turn: run long gates in the
   foreground with a timeout, never backgrounded while waiting for their completion
   notification, and commit and push your work branch before ending the turn. A turn

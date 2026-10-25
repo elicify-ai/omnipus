@@ -1,7 +1,7 @@
 title: ReplayMessageFrame
 description: >
-  Server → client. One replayed turn entry emitted during a session replay
-  (attach_session). Each entry corresponds to a user, assistant, or system
+  Server → client. One persisted chat entry delivered live or during a session
+  replay (attach_session). Each entry corresponds to a user, assistant, or system
   transcript entry. The SPA reconstructs the conversation from these frames.
   This is a CHAT PROJECTION of the session's single append-only archive, not
   a provider-message or raw-storage type (session-core C-ARCHIVE / U2;
@@ -163,6 +163,14 @@ properties:
       frame means the reason is not recorded: readers do not default it to
       "cancelled" or to anything else (session-core DEL-F36).
     example: "max_output_tokens"
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >-
+      Hub-assigned per-session sequence number. Present on live publication and
+      its incremental catch-up copies; absent on unsequenced transcript/snapshot
+      projections. Only frames carrying seq advance the session cursor.
   terminal_outcome:
     type: boolean
     description: >

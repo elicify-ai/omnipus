@@ -18,6 +18,8 @@ import { useToolApprovalStore } from '@/store/toolApproval'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { ChatScreen } from './ChatScreen'
+import { queryClient as storeQueryClient } from '@/lib/queryClient'
+import { seedCanonicalSession } from '../../../tests/unit/fixtures/canonical-session'
 
 // Oracle: release-UAT dispatch D3, validator/report-v.md V5/V5b / D5.
 // Enter after Stop must SEND "continue and say what you did" in the selected
@@ -49,6 +51,7 @@ const sender = { send: vi.fn<WsConnection['send']>() }
 let originalScrollIntoView: PropertyDescriptor | undefined
 
 function resetStores() {
+  storeQueryClient.clear()
   act(() => {
     useSessionStore.setState(useSessionStore.getInitialState(), true)
     useChatStore.setState(useChatStore.getInitialState(), true)
@@ -97,6 +100,7 @@ afterEach(() => {
 })
 
 function seedParentAndHelper() {
+  seedCanonicalSession(PARENT, 'jim', WORKSPACE)
   act(() => {
     // A helper already visited by this browser has its own real bucket. Its
     // scoped frames must never become the foreground parent's transcript.

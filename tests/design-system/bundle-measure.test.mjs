@@ -145,18 +145,22 @@ test('CLI writes reports exclusively, creates parent directories and requires --
   assert.equal(JSON.parse(await readFile(output, 'utf8')).revision, 'forced')
 })
 
-// Oracle: founder-authorised raise 2026-10-15, commit dfb91456f ("Raise to ~600 KB"):
-// scripts/design-system/bundle-audit.mjs::TOTAL_RAW_BUDGET_BYTES = 600064 (586 KiB)
-// for the L1 landing. see #1183. Supersedes the 2026-10-08/09 allowance of 493568 bytes.
-// Keep these boundary inputs literal: deriving them from the production constant
-// would let an unauthorized cap change move both the implementation and its oracle.
-// Synthetic report fixtures use arbitrary 100-byte gzip / 1000-byte raw baselines;
-// they exercise the real comparator, not a claimed production build or measurement.
-test('AB1 accepts the founder-approved literal 600064-byte total raw delta', () => {
+// Oracle: founder decision Q4=A (2026-10-22). The raw-growth allowance is 2 MiB:
+// 2 * 1024 * 1024 = 2097152. That accepts full Mermaid 12, including the
+// 1,462,909-byte lazy ELK engine. One byte over that allowance is 2097153.
+// Frozen baseline, the 25600-byte initial-gzip allowance (25 * 1024), provenance
+// validation and emitted assets stay unchanged. Supersedes the 2026-10-15
+// allowance of 600064 bytes. These boundary inputs are literals from that
+// decision, never read from TOTAL_RAW_BUDGET_BYTES: deriving them from the
+// production constant would let an unauthorized cap change move both the
+// implementation and its oracle. Synthetic report fixtures use arbitrary
+// 100-byte gzip / 1000-byte raw baselines; they exercise the real comparator,
+// not a claimed production build or measurement.
+test('Q4=A accepts the founder-approved literal 2097152-byte total raw delta', () => {
   const baseline = { initial: { gzipBytes: 100 }, total: { rawBytes: 1_000 } }
   const candidate = {
     initial: { gzipBytes: 100 },
-    total: { rawBytes: 1_000 + 600064 },
+    total: { rawBytes: 1_000 + 2097152 },
     storybook: { clean: true },
     assets: [{ path: 'assets/app.js', sha256: 'ab1-fixture-hash' }],
   }
@@ -164,9 +168,9 @@ test('AB1 accepts the founder-approved literal 600064-byte total raw delta', () 
 
   const report = compareProductionBundles(baseline, candidate, provenance)
 
-  assert.equal(report.pass, true, 'AB1 permits exactly 600064 bytes of cumulative raw growth')
-  assert.equal(report.deltas.totalRawBytes, 600064, 'raw growth is measured against the supplied baseline')
-  assert.equal(report.budgets.totalRawBytes, 600064, 'the raw allowance is the founder-approved literal, not an implementation-derived oracle')
+  assert.equal(report.pass, true, 'Q4=A permits exactly 2097152 bytes of cumulative raw growth')
+  assert.equal(report.deltas.totalRawBytes, 2097152, 'raw growth is measured against the supplied baseline')
+  assert.equal(report.budgets.totalRawBytes, 2097152, 'the raw allowance is the founder-approved literal, not an implementation-derived oracle')
   assert.deepEqual(report.checks, {
     storybookOutputScanClean: true,
     storybookModuleProvenanceClean: true,
@@ -176,11 +180,11 @@ test('AB1 accepts the founder-approved literal 600064-byte total raw delta', () 
   }, 'the approved raw boundary does not bypass any other production check')
 })
 
-test('AB1 rejects the literal 600065-byte total raw delta', () => {
+test('Q4=A rejects the literal 2097153-byte total raw delta', () => {
   const baseline = { initial: { gzipBytes: 100 }, total: { rawBytes: 1_000 } }
   const candidate = {
     initial: { gzipBytes: 100 },
-    total: { rawBytes: 1_000 + 600065 },
+    total: { rawBytes: 1_000 + 2097153 },
     storybook: { clean: true },
     assets: [{ path: 'assets/app.js', sha256: 'ab1-fixture-hash' }],
   }
@@ -188,9 +192,9 @@ test('AB1 rejects the literal 600065-byte total raw delta', () => {
 
   const report = compareProductionBundles(baseline, candidate, provenance)
 
-  assert.equal(report.pass, false, 'AB1 rejects 600065 bytes: one byte above the approved cumulative raw allowance')
-  assert.equal(report.deltas.totalRawBytes, 600065, 'the failing delta remains the literal one-byte-over boundary')
-  assert.equal(report.budgets.totalRawBytes, 600064, 'rejection uses the founder-approved raw allowance')
+  assert.equal(report.pass, false, 'Q4=A rejects 2097153 bytes: one byte above the approved cumulative raw allowance')
+  assert.equal(report.deltas.totalRawBytes, 2097153, 'the failing delta remains the literal one-byte-over boundary')
+  assert.equal(report.budgets.totalRawBytes, 2097152, 'rejection uses the founder-approved raw allowance')
   assert.deepEqual(report.checks, {
     storybookOutputScanClean: true,
     storybookModuleProvenanceClean: true,

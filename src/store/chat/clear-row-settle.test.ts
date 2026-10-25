@@ -54,6 +54,7 @@ import { pendingClearRefetches } from './runtime-state'
 import { useUiStore } from '@/store/ui'
 import type { ServerFrame } from '@/lib/ws'
 import type { ChatMessage } from './types'
+import { seedCanonicalSession } from '../../../tests/unit/fixtures/canonical-session'
 
 const requestMock = vi.hoisted(() => vi.fn())
 
@@ -166,6 +167,7 @@ beforeEach(() => {
   toasts = []
   requestMock.mockReset()
   queryClient.removeQueries()
+  seedCanonicalSession(SID, 'jim')
   delete pendingClearRefetches[SID]
   vi.spyOn(useUiStore.getState(), 'addToast').mockImplementation(((t: { message: string }) => { toasts.push(t.message) }) as never)
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'jim', activeAgentType: null })

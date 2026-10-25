@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,18 @@ func TestI1R1OriginTriggers(t *testing.T) {
 				h.id, h.provider.id = meta.ID, meta.ID
 				owner, ws := "d2b-owner", testHarnessWorkspaceMembershipID
 				require.NoError(t, h.al.GetSessionStore().SetMeta(h.id, session.MetaPatch{Owner: &owner, WorkspaceID: &ws}))
+				if kind == "channel" {
+					// The no-ID input must select the same creation-time pair
+					// from real instance configuration, not only late metadata.
+					cfg := h.al.GetConfig()
+					if cfg.Channels == nil {
+						cfg.Channels = make(map[string]config.ChannelInstanceConfig)
+					}
+					cfg.Channels["telegram"] = config.ChannelInstanceConfig{
+						Type: "telegram", Enabled: true, WorkspaceID: ws,
+						Identity: &config.ChannelIdentity{Kind: "agent", ID: testDefaultAgentID},
+					}
+				}
 				for _, e := range h.prior {
 					require.NoError(t, h.al.GetSessionStore().AppendTranscript(h.id, e))
 				}
@@ -86,7 +99,16 @@ func TestI1R1OriginTriggers(t *testing.T) {
 			case "chat":
 				response, err = h.humanTurn(t, prompt)
 			case "channel":
-				response, _, err = h.al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "i1-restart-peer", Content: prompt, UserInitiated: true, Sender: bus.SenderInfo{CanonicalID: "telegram:i1-owner"}, Metadata: map[string]string{"agent_id": testDefaultAgentID, "workspace_id": testHarnessWorkspaceMembershipID}})
+				inbound := bus.InboundMessage{Channel: "telegram", ChatID: "i1-restart-peer", Content: prompt, UserInitiated: true, Sender: bus.SenderInfo{CanonicalID: "telegram:i1-owner"}, Metadata: map[string]string{"agent_id": testDefaultAgentID, "workspace_id": testHarnessWorkspaceMembershipID}}
+				// No-ID channel registration uses the resolved route scope, not
+				// the owner-qualified session key used by direct chat inputs.
+				// Select the probe address before execution; keep the independent
+				// durable SessionID/new-execution assertions below unchanged.
+				scope, owner, routed := h.al.resolveSteeringTarget(inbound)
+				require.True(t, routed, "instrument: the configured channel has a real route")
+				require.Equal(t, testDefaultAgentID, owner)
+				h.provider.registrationKey = scope
+				response, _, err = h.al.processMessageAsPrimaryForTest(context.Background(), inbound)
 			default:
 				response, err = h.scheduledTurn(kind, prompt)
 			}
@@ -95,6 +117,9 @@ func TestI1R1OriginTriggers(t *testing.T) {
 			calls := h.provider.calls()
 			require.Len(t, calls, 1, "next trigger must execute exactly one provider round")
 			require.NoError(t, calls[0].readErr)
+			require.NotNil(t, calls[0].record)
+			assert.Equal(t, h.id, calls[0].record.SessionID, "provider observes the intended original session")
+			assert.True(t, calls[0].registered, "the same session, not a newly minted channel conversation, owns the provider round")
 			require.NotNil(t, calls[0].record.ExecutionID)
 			assert.Equal(t, before.Generation, calls[0].record.Generation, "restart continuation preserves this generation")
 			assert.Equal(t, session.LifecycleRunning, calls[0].record.State)
@@ -108,6 +133,7 @@ func TestI1R1OriginTriggers(t *testing.T) {
 			raw, readErr := os.ReadFile(filepath.Join(reopened.Dir(), h.id+".jsonl"))
 			require.NoError(t, readErr)
 			assert.Greater(t, len(raw), len(journal), "a real fresh execution must extend its durable history")
+			h.assertHistoryPreserved(t, journal)
 		})
 	}
 }

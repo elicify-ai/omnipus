@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
+import { expect } from 'storybook/test'
 
 import type { AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
 import { AgentColor } from '@/lib/api/generated/schemas'
@@ -92,6 +93,39 @@ export const Size40: Story = { args: { size: 40 } }
 export const Size48: Story = { args: { size: 48 } }
 export const MotionNone: Story = { args: { motion: 'none' } }
 export const Thinking: Story = { args: { motion: 'thinking' } }
-export const Working: Story = { args: { motion: 'working' } }
+export const Working: Story = {
+  // Leave reducedMotion omitted so the browser's system preference owns all three loops.
+  args: { motion: 'working' },
+  parameters: {
+    designSystem: {
+      ...designSystemParameters,
+      motionTargets: ['[data-ink]', '[data-glow]', '[data-agent-icon-sheen]'],
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const icon = canvasElement.querySelector<HTMLElement>('[data-testid="agent-icon"]')!
+    const sheen = icon.querySelector<HTMLElement>('[data-agent-icon-sheen]')!
+    await expect(sheen).not.toBeNull()
+    const clip = sheen.parentElement!
+    await expect(clip, 'only the sheen has a clipping wrapper').not.toBe(icon)
+    await expect(getComputedStyle(clip).overflowX).toBe('hidden')
+    await expect(getComputedStyle(clip).overflowY).toBe('hidden')
+    await expect(clip.getBoundingClientRect().toJSON(), 'the clip matches the icon box').toEqual(icon.getBoundingClientRect().toJSON())
+    await expect(getComputedStyle(sheen).animationName).toBe('agent-icon-sheen')
+    await expect(getComputedStyle(sheen).animationDuration).toBe('2.4s')
+
+    for (const selector of ['[data-ink]', '[data-glow]']) {
+      const layer = icon.querySelector<HTMLElement>(selector)!
+      await expect(layer).not.toBeNull()
+      await expect(getComputedStyle(layer).animationName, `${selector} animates before the system requests reduced motion`).not.toBe('none')
+      await expect(layer.getAnimations()).toHaveLength(1)
+      await expect(clip, 'ink and glow are outside the clip').not.toContainElement(layer)
+      for (let ancestor: HTMLElement | null = layer; ancestor && ancestor !== icon.parentElement; ancestor = ancestor.parentElement) {
+        await expect(getComputedStyle(ancestor).overflowX, `${selector} must not be clipped`).toBe('visible')
+        await expect(getComputedStyle(ancestor).overflowY, `${selector} must not be clipped`).toBe('visible')
+      }
+    }
+  },
+}
 export const Waiting: Story = { args: { motion: 'waiting' } }
 export const ReducedMotion: Story = { args: { motion: 'thinking', reducedMotion: true } }

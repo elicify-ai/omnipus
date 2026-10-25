@@ -1066,7 +1066,7 @@ type ReplayErrorPayload struct {
 	LlmError LLMErrorReplay `json:"llm_error"`
 }
 
-// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path. A CHAT PROJECTION of the session's single append-only archive, not a provider-message or raw-storage type (session-core C-ARCHIVE / U2; FR-004/FR-005): the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance and its disk/byte/view marks are disk-only and are never emitted on this frame, and entries that belong to the model view only are not replayed.
+// ReplayMessageFrame — Server → client persisted chat entry, delivered live or during session replay. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); live publication uses the session hub, and transcript/snapshot projections remain unsequenced. A CHAT PROJECTION of the session's single append-only archive, not a provider-message or raw-storage type (session-core C-ARCHIVE / U2; FR-004/FR-005): the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance and its disk/byte/view marks are disk-only and are never emitted on this frame, and entries that belong to the model view only are not replayed.
 type ReplayMessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	// #823 catch-up redesign §4.7. Present on a replayed user entry persisted with a client-supplied id. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
@@ -1092,8 +1092,10 @@ type ReplayMessageFrame struct {
 	ReplyToParticipant *ChatParticipant `json:"reply_to_participant,omitempty"`
 	Role               string           `json:"role"`
 	// Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry.
-	RoomRef   *RoomRef `json:"room_ref,omitempty"`
-	SessionId string   `json:"session_id"`
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
+	// Hub-assigned per-session sequence number. Present on live publication and its incremental catch-up copies; absent on unsequenced transcript/snapshot projections. Only frames carrying seq advance the session cursor.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
 	// Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence (for example the tool-iteration-limit notice) written after the turn's earlier narration was already persisted. Live, the gateway closes the narration bubble with done(<narration id>) before this entry arrives, so it is a separate message; the replay stream has no such boundary, so the SPA must start a new message for this frame instead of merging it into the preceding same-turn assistant entry. Absent on every other frame, including entries written before this field existed.
 	TerminalOutcome *bool   `json:"terminal_outcome,omitempty"`
 	Timestamp       *string `json:"timestamp,omitempty"`

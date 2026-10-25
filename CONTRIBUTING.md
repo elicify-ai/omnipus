@@ -263,7 +263,7 @@ Prefer small, reviewable PRs. A PR that changes 200 lines across 5 files is much
 
 A PR can only be merged when all of the following are satisfied:
 
-1. **CI passes** — All GitHub Actions jobs (typecheck, wire-types-lint, verify-contracts, lint, vuln\_check, test, security, perf-smoke, playwright) must be green.
+1. **CI passes** — All required jobs must be green, or carry only the mechanically reported, founder-approved exceptions defined in `CLAUDE.md` ("CI quarantine"). A raw red run is not a qualified pass.
 2. **Reviewer approval** — At least one maintainer has approved the PR.
 3. **No unresolved review comments** — All review threads must be resolved.
 4. **PR template is complete** — Including AI disclosure and test environment.
@@ -291,7 +291,7 @@ When a version is ready, maintainers cut a `release/x.y` branch from `main`. Aft
 
 If you believe a fix in `main` should be backported to a release branch, note it in the PR description or open a separate issue. The decision rests with the maintainers.
 
-Release branches have stricter protections than `main` and are never directly pushed to under any circumstances.
+Integration-branch pushes follow `CLAUDE.md` ("Landing trains") and the planning skill's approval/lock procedure. Specialists push only their own work branches; chief-owned integration is distinct from the human-only merge to `main`.
 
 ---
 
@@ -317,15 +317,17 @@ Review for:
 
 Be constructive and specific. "This could have a race condition if two goroutines call this concurrently — consider using a mutex here" is better than "this looks wrong".
 
-### Agent-assisted review gate (5 reviewers)
+### Agent-assisted delivery and review
 
-When work is done with Claude Code, a **5-reviewer quality gate** runs over the change **after each completed feature and again on the whole epic** before the final merge — all five must be clean or every finding deferred with a tracked issue:
+Last reviewed: 2026-10-23
 
-1–3. The mandatory `pr-review-toolkit` agents — code-reviewer, silent-failure-hunter, pr-test-analyzer. (`comment-analyzer`, `code-simplifier` and `type-design-analyzer` are the same plugin's remaining reviewers; dispatched only on explicit request, not part of the standing gate.)
-4. An **architect pass** — correctness, security, error handling, testing quality, observability, overcomplexity, and spec/task compliance where a spec exists.
-5. A **security-lead pass** — standing member of the feature-size gate.
-
-See `CLAUDE.md` → "Change sizes and the review gate" for the canonical definition.
+The canonical rules are in `CLAUDE.md` ("Subagent Workflow": "Feature ownership",
+"Change sizes and the review gate", "Landing trains"; plus "Build, test, and quality
+gates" and "Running CLI agents"). They define the combined feature/train review
+scope, candidate-only full CI, exact-version hands-on evidence and the agent-text
+review exception. Follow the linked planning/shared procedures rather than running a
+review and full CI for each lane or finding. Human approval before landing and a
+human-performed merge to `main` remain required.
 
 ---
 

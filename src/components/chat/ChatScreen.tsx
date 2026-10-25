@@ -121,6 +121,13 @@ function placementOf(message: ChatMessage): DelegationPlacementMessage {
   }
 }
 
+function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
+  // The assistant row owns both inline and trailing events using its live-call
+  // projection. Splitting again from the unbaked message would draw them twice.
+  if (message.role === 'assistant' && message.type !== 'judge_verdict' && !(ROOMS_ENABLED && message.roomRef)) return []
+  return splitAnchoredDelegationEvents(events, message.id, placementOf(message)).trailing
+}
+
 // ── Skill-aware message content renderer (R2/F1/F7/F9) ───────────────────────
 
 // renderSkillAwareContent — shared helper used by both the live AssistantUI
@@ -1127,10 +1134,10 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     () => splitMessageParts(message.content ?? '', positionedToolCalls),
     [message.content, positionedToolCalls],
   )
-  const inlineByCall = splitAnchoredDelegationEvents(delegationEvents, message.id, {
+  const delegationSplit = splitAnchoredDelegationEvents(delegationEvents, message.id, {
     spans: message.spans,
     toolCalls: positionedToolCalls,
-  }).byCall
+  })
 
   // D-fix: this row is also used by PlainMessageList (the ResizeObserver-
   // unavailable fallback), which — unlike VirtualizedMessageListInner — does
@@ -1199,7 +1206,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // (ChatConnectionStatusLine / UnavailableChatNotice).
   const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || !!message.isStreaming)
 
-  return (
+  const row = (
     <div
       data-testid="assistant-message"
       data-message-role="assistant"
@@ -1279,7 +1286,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             return renderHistoricalToolCall({
               tc,
               callId,
-              inlineEvents: inlineByCall.get(callId),
+              inlineEvents: delegationSplit.byCall.get(callId),
               activeSessionId,
               verboseChatEnabled,
               goalRecordEmpty,
@@ -1333,6 +1340,12 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
       </div>
     </div>
   )
+  return (
+    <>
+      {row}
+      <DelegationEventLineList events={delegationSplit.trailing} />
+    </>
+  )
 })
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
@@ -1385,7 +1398,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
           } else {
             row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
           }
-          const trailing = splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing
+          const trailing = delegationEventsOutsideRow(delegationEvents, msg)
           return (
             <React.Fragment key={msg.id}>
               {row}
@@ -1625,7 +1638,7 @@ function VirtualizedMessageListInner({
                 >
                   {rowForMessage(msg)}
                   <DelegationEventLineList
-                    events={splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing}
+                    events={delegationEventsOutsideRow(delegationEvents, msg)}
                   />
                 </div>
               )

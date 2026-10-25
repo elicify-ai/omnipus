@@ -184,12 +184,12 @@ func TestWS_IterationCap_AfterStreamedNarration_DeliversTerminalMessage(t *testi
 	const narration = "I will run the probe."
 	const normalAnswer = "The probe completed."
 	cases := []struct {
-		name          string
-		narration     string
-		maxIterations int
-		wantTerminal  string
-		wantCalls     int32
-		wantFailed    bool
+		name            string
+		narration       string
+		maxIterations   int
+		wantTerminal    string
+		wantCalls       int32
+		wantInterrupted bool
 	}{
 		{"silent_tool_round_at_cap_control", "", 1, terminalMessageCapNotice, 1, true},
 		{"narrated_round_then_final_answer_control", narration, 2, normalAnswer, 2, false},
@@ -239,15 +239,30 @@ func TestWS_IterationCap_AfterStreamedNarration_DeliversTerminalMessage(t *testi
 
 			frames := collectWSFrames(t, conn, 2*time.Second, busDeliveryTimeout)
 			var liveText strings.Builder
+			var systemNotices []generated.ReplayMessageFrame
 			var doneCount int
 			var failedDone bool
+			var interruptedDone bool
 			for _, frame := range frames {
 				switch frame.Type {
 				case "token":
 					var token generated.TokenFrame
 					require.NoError(t, json.Unmarshal(frame.Raw, &token))
 					assert.Equal(t, meta.ID, token.SessionId)
+					assert.NotContains(t, token.Content, terminalMessageCapNotice, "runtime limit prose is never model-output tokens")
 					liveText.WriteString(token.Content)
+				case "replay_message":
+					var notice generated.ReplayMessageFrame
+					require.NoError(t, json.Unmarshal(frame.Raw, &notice))
+					if notice.Content == terminalMessageCapNotice {
+						assert.Equal(t, meta.ID, notice.SessionId)
+						assert.Equal(t, "system", notice.Role)
+						assert.Nil(t, notice.Model)
+						require.NotNil(t, notice.Id)
+						require.NotNil(t, notice.TurnId)
+						systemNotices = append(systemNotices, notice)
+						liveText.WriteString(notice.Content)
+					}
 				case "error":
 					var notice generated.ErrorFrame
 					require.NoError(t, json.Unmarshal(frame.Raw, &notice))
@@ -260,20 +275,38 @@ func TestWS_IterationCap_AfterStreamedNarration_DeliversTerminalMessage(t *testi
 					if done.Stats != nil && done.Stats.TurnFailed != nil && *done.Stats.TurnFailed {
 						failedDone = true
 					}
+					if done.Stats != nil && done.Stats.InterruptionReason != nil {
+						assert.Equal(t, "tool_limit", *done.Stats.InterruptionReason)
+						interruptedDone = true
+					}
 				}
 			}
 			require.Positive(t, doneCount, "fixture: the client must observe completion, not a collection timeout")
-			assert.Equal(t, tc.wantFailed, failedDone, "fixture: cap exit versus normal completion")
+			// Spec change: DESIGN Decision 1 / DoneStats: the cap is nonfatal
+			// Interrupted(tool_limit); neither a cap nor a final answer is generic Failed.
+			assert.False(t, failedDone, "ceiling exhaustion is not a generic failed turn")
+			assert.Equal(t, tc.wantInterrupted, interruptedDone, "fixture: cap exit versus normal completion")
 			assert.Equal(t, tc.narration+tc.wantTerminal, liveText.String(),
 				"LIVE terminal message must follow narration exactly once; frames=%v", collectedFrameTypes(frames))
 
 			entries, err := store.ReadTranscript(meta.ID)
 			require.NoError(t, err)
-			var assistantText []string
+			var contents []string
+			var savedNotices []session.TranscriptEntry
 			var toolCalls int
 			for _, entry := range entries {
-				if entry.Role == "assistant" && entry.Content != "" {
-					assistantText = append(assistantText, entry.Content)
+				if (entry.Role == "assistant" && entry.Content != "") || entry.Content == tc.wantTerminal {
+					contents = append(contents, entry.Content)
+				}
+				if entry.Content == tc.wantTerminal {
+					if tc.wantInterrupted {
+						assert.Equal(t, session.EntryTypeSystem, entry.Type)
+						assert.Equal(t, "system", entry.Role)
+						assert.Empty(t, entry.Model)
+						savedNotices = append(savedNotices, entry)
+					} else {
+						assert.Equal(t, "assistant", entry.Role, "the successful answer is still model output")
+					}
 				}
 				toolCalls += len(entry.ToolCalls)
 			}
@@ -282,8 +315,17 @@ func TestWS_IterationCap_AfterStreamedNarration_DeliversTerminalMessage(t *testi
 			if tc.narration != "" {
 				wantText = []string{tc.narration, tc.wantTerminal}
 			}
-			assert.Equal(t, wantText, assistantText,
+			assert.Equal(t, wantText, contents,
 				"TRANSCRIPT must preserve narration then the terminal message, without duplicate narration")
+			if tc.wantInterrupted {
+				require.Len(t, savedNotices, 1, "one durable system outcome")
+				require.Len(t, systemNotices, 1, "one live system outcome")
+				assert.Equal(t, savedNotices[0].ID, *systemNotices[0].Id, "live and durable notice identities agree")
+				assert.Equal(t, savedNotices[0].TurnID, *systemNotices[0].TurnId, "notice stays on its original turn")
+			} else {
+				assert.Empty(t, savedNotices)
+				assert.Empty(t, systemNotices, "a successful answer has no harness limit notice")
+			}
 		})
 	}
 }

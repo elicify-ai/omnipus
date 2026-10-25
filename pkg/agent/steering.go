@@ -58,6 +58,9 @@ type steeringTerminalTransition struct {
 type steeringQueueItem struct {
 	message providers.Message
 	wake    *steeringWake
+	// resumeOnly carries one post-ceiling continuation of input already in
+	// model history. It never re-injects the text or repeats its receipt.
+	resumeOnly bool
 	// correlationID is issue #870's steering_receipt carrier: set on every
 	// item EnqueueSteeringMessage creates (caller-supplied, or server-
 	// assigned when blank — see enqueueSteeringMessage), empty for a bare
@@ -1254,7 +1257,8 @@ func (al *AgentLoop) dequeueSteeringItemsForScopeWithFallbackResult(scope string
 //
 // The third return value, consumedItems, is the ORIGINAL steeringQueueItem
 // for every index i that made it into msgs/correlationIDs — wake field and
-// all — so a caller that later needs to restore what it just consumed (e.g.
+// all — plus any resume-only continuation (which has no new model message).
+// A caller that later needs to restore what it just consumed (e.g.
 // Continue on a post-dequeue turn failure, or abandonQueuedSteering's own
 // panic recovery) can call steeringQueue.prependItemsScope with the SAME
 // item shape that was dequeued, rather than reconstructing an approximation
@@ -1272,6 +1276,10 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 	correlationIDs := make([]string, 0, len(items))
 	consumedItems := make([]steeringQueueItem, 0, len(items))
 	for i, item := range items {
+		if item.resumeOnly {
+			consumedItems = append(consumedItems, item)
+			continue
+		}
 		if item.steerControlID != "" {
 			// D4: a delegate steer is delivered once its exact text is durable
 			// in the session transcript; only then is it handed to the turn
@@ -1719,11 +1727,8 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 	}
 
 	actualScope, consumedItems, steeringMsgs, steeringCorrelationIDs, consumeErr := al.dequeueSteeringItemsForScopeWithFallbackResult(sessionKey)
-	if consumeErr != nil && len(steeringMsgs) == 0 {
+	if len(steeringMsgs) == 0 && !hasSteeringContinuation(consumedItems) {
 		return "", consumeErr
-	}
-	if len(steeringMsgs) == 0 {
-		return "", nil
 	}
 
 	if tool, ok := agent.Tools.Get("send_message"); ok {

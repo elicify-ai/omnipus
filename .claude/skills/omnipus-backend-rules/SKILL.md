@@ -5,13 +5,17 @@ description: Go-specific operational detail for backend-lead only — build/test
 
 # Omnipus Backend Rules
 
-Last reviewed: 2026-09-26
+Last reviewed: 2026-10-23 — approved delivery-process rollout
 
 Backend-lead only. Read `omnipus-shared-rules` first — this skill adds Go-specific
 detail on top of it, never repeats it. Root `CLAUDE.md` stays authoritative on the facts
 this restates.
 
 ## Build and test
+
+Use `omnipus-shared-rules` ("Build and test") for slot-runner use, targeted lane
+checks and Fly pre-flight receipts. Root `CLAUDE.md` owns the candidate-only full-CI
+rule and the live-build toolchain pin; this skill does not authorize a lane CI run.
 
 - Build tags are always `goolm,stdjson`; `CGO_ENABLED=0`. `make test`/`make build` add
   the tags, but `make test` is the whole suite — CI only, never run it locally.
@@ -35,10 +39,13 @@ this restates.
 
 ## Tests
 
-- Never edit or rewrite test files — not even to reconcile legacy assertions with the
+- In feature-size work, leave test files to the feature's one test author — including
+  corrections to legacy assertions that contradict the spec. Standard work keeps tests
+  with the code under root `CLAUDE.md` ("Feature ownership"). Never weaken assertions
+  to reconcile them with the
   current spec. Loosening an assertion to make it pass (exact match → `strings.Contains`)
   is forbidden. A legacy test that contradicts the spec goes back to qa-lead, who owns
-  test files; implementers change production code, never tests.
+  test files in that feature flow; its implementer changes production code, not the test pack.
 
 ## Contracts
 

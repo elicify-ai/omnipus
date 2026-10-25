@@ -33,6 +33,7 @@ type agentLoopRunTurnToolsFlow int
 
 // finalizeTurn chooses final content, persists it, and completes the turn result.
 func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
+	iterationLimitNotice := false
 	if rz.rc.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 		rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
 		return rz.rc.rx.rr.rq.ri.rf.rt.al.abortTurn(rz.rc.rx.rr.rq.ri.rf.rt.ts, "turn_finalize", hardInterruptAbortReason)
@@ -48,7 +49,9 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() >= rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations && rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations > 0 {
 			// A ceiling ends this execution, not a generic failure.
 			rz.rc.rx.finalContent = toolLimitResponse
+			iterationLimitNotice = true
 			rz.rc.rx.rr.rq.ri.rf.rt.ts.markInterrupted(session.InterruptionToolLimit)
+			rz.rc.rx.rr.rq.ri.deferUnansweredSteering()
 		} else {
 			// The engine fell through without an LLM response and uses the
 			// caller-supplied DefaultResponse as the content.  Only mark as
@@ -65,7 +68,9 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseFinalizing)
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setFinalContent(rz.rc.rx.finalContent)
-	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory {
+	// Harness notices are chat-only. A hidden system-role model slot would be
+	// sanitized away and break later archive-address mapping and context relief.
+	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && !iterationLimitNotice {
 		finalMsg := providers.Message{Role: "assistant", Content: rz.rc.rx.finalContent}
 		// #1178 (amendment §4.2): a failed final write is a failed turn,
 		// never a false success. Wrap with the existing assistant
@@ -109,11 +114,29 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	// empty and Finalize would skip the write. We hand finalContent to the
 	// streamer via SetFinalContent so it can fall back to that text.
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.SetFinalContent(rz.rc.rx.finalContent)
+	if !iterationLimitNotice {
+		if streamErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.ensureFinalWebchatStreamer(rz.rc.rx.rr.rq.ri.rf.rt.al.bus, rz.rc.rx.rr.rq.ri.rf.rt.streamerLookupDeclined); streamErr != nil {
+			notSaved := &messageNotSavedError{role: "assistant", cause: streamErr}
+			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			return turnResult{}, notSaved
+		}
+	}
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.mu.RLock()
 	hasActiveStreamer := rz.rc.rx.rr.rq.ri.rf.rt.ts.lastStreamer != nil
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.mu.RUnlock()
 	truncReason := rz.rc.rx.rr.rq.ri.rf.rt.ts.getTruncationReason()
-	if !hasActiveStreamer {
+	if iterationLimitNotice {
+		if noticeErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.recordIterationLimitNotice(rz.rc.rx.finalContent, rz.rc.rx.rr.rq.ri.rf.rt.al.bus); noticeErr != nil {
+			// The strict chat-only write failed. Do not offer its synthetic
+			// prose to the deferred assistant finalizer; keep real narration.
+			rz.rc.rx.rr.rq.ri.rf.rt.ts.SetFinalContent("")
+			notSaved := &messageNotSavedError{role: "system", cause: noticeErr}
+			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			return turnResult{}, notSaved
+		}
+	} else if !hasActiveStreamer {
 		// ADR-087 D4a/D4b: this is the non-streaming write choke point.
 		// When the turn was truncated, stamp Truncated/TruncationReason in
 		// the SAME write as the content — see
@@ -357,7 +380,7 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	// report surfaced memories and the loop can emit op:cited counter events
 	// when the LLM references them by ID/title. Nil for the main gateway agent
 	// (no memory store); WithCitationTracker is a no-op in that case.
-	rc.rx.rr.citationTracker = newCitationTracker(rc.rx.rr.rq.ri.rf.rt.ts.agent.ContextBuilder.Memory())
+	rc.rx.rr.citationTracker = newCitationTracker(rc.rx.rr.rq.ri.rf.rt.ts.agent.ContextBuilder.Memory(), rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID)
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithCitationTracker(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.citationTracker)
 
 	rc.rx.rr.rq.ri.rf.rt.al.registerActiveTurn(rc.rx.rr.rq.ri.rf.rt.ts)
@@ -1284,13 +1307,17 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 	}
 
 	if ri.rf.rt.iteration > 1 {
-		if steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringMessagesForScope(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if _, items, steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringItemsForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+			ri.rf.rt.al.noteConsumedOriginsForScope(ri.rf.rt.ts.sessionKey, items)
+			ri.noteInTurnSteering(items)
 			ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 			ri.pendingMessages = append(ri.pendingMessages, steerMsgs...)
 			ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}
 	} else if !ri.rf.rt.ts.opts.SkipInitialSteeringPoll {
-		if steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringMessagesForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if _, items, steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringItemsForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+			ri.rf.rt.al.noteConsumedOriginsForScope(ri.rf.rt.ts.sessionKey, items)
+			ri.noteInTurnSteering(items)
 			ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 			ri.pendingMessages = append(ri.pendingMessages, steerMsgs...)
 			ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, steerCorrelationIDs...)
@@ -1320,7 +1347,6 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 			&offloadSink{workDir: ri.wsDir}, ri.turnCatalog, ri.turnRefcounter,
 			ri.rf.rt.ts.opts.WorkspaceID,
 		)
-		ri.rf.rt.ts.protectWindowControls(resolvedPending)
 		totalContentLen := 0
 		for i, pm := range ri.pendingMessages {
 			// Persist original compact media refs before using the resolved
@@ -1344,6 +1370,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 			if !include {
 				continue
 			}
+			ri.rf.rt.ts.protectWindowControls(resolvedPending[i : i+1])
 			ri.messages = append(ri.messages, resolvedPending[i])
 			totalContentLen += len(pm.Content)
 			logger.InfoCF("agent", "Injected steering message into context",

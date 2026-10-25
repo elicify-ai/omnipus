@@ -2,8 +2,9 @@
  * #1081 R3 — B-60, MAJ-CW-010/011; ADR "Context budget and tool-result
  * routing", amendment §18.4; tool-iteration-limit spec exact terminal text.
  *
- * Outcome oracle: one narrated iteration-cap failure, one actual completed tool
- * round, one failed completion, one failed lifecycle diagnostic, one distinct
+ * Spec change: crash-recovery DESIGN Decision 1 / DoneStats.turn_failed.
+ * Outcome oracle: one narrated nonfatal Interrupted(tool_limit), one completed tool
+ * round, one interrupted completion and lifecycle diagnostic, one distinct
  * durable terminal entry, and exactly one terminal sentence with Verbose OFF.
  * All observations join on the SAME session/turn and durable message identity.
  * The Go companion observes the actual EventBus TurnEndPayload, not a log copy.
@@ -101,7 +102,7 @@ test.describe('terminal outcome agrees across real surfaces', () => {
         const ends = turnRows.filter((row) => row.event_kind === 'turn_end');
         expect.soft(ends, 'one actual lifecycle diagnostic for this observed turn').toHaveLength(1);
         expect.soft(ends[0].agent_id, 'diagnostic producer matches this session').toBe(agent.id);
-        expect.soft(ends[0].status, 'failed-done and lifecycle must BOTH classify cap as error').toBe('error');
+        expect.soft(ends[0].status, 'typed Interrupted is nonfatal, not a generic error diagnostic').not.toBe('error');
         expect.soft(ends[0].iterations_total, 'one actual provider/tool round exhausted cap=1').toBe(1);
         const operations = turnRows.filter((row) => row.event_kind === 'tool_exec_end');
         expect(operations.map((row) => ({ tool: row.tool, is_error: row.is_error })),
@@ -119,7 +120,8 @@ test.describe('terminal outcome agrees across real surfaces', () => {
           expect(done.type).toBe('done');
           if (done.type !== 'done') throw new Error('BLOCKED: completion instrument selected a non-done frame');
           // Part B's PASS precondition is independent of failed-flag selection.
-          expect(done.stats?.turn_failed, 'real failed-done precondition').toBe(true);
+          expect(done.stats?.turn_failed, 'the ceiling is not a generic failed turn').not.toBe(true);
+          expect(done.stats?.interruption_reason, 'typed incomplete-outcome precondition').toBe('tool_limit');
           expect.soft(done.turn_id, 'done and actual lifecycle diagnostic identify the SAME turn').toBe(turnId);
         } else {
           expect(completion(), 'no completion was delivered to the closed browser before reconnect').toEqual([]);
@@ -129,21 +131,33 @@ test.describe('terminal outcome agrees across real surfaces', () => {
         }
         const detail = await terminalTranscript(page, gw.baseURL, session.id);
         expect.soft(detail.session.id, 'read the SAME durable session').toBe(session.id);
-        const assistants = detail.messages.filter((entry) => entry.role === 'assistant' && entry.content);
-        expect.soft(assistants.map((entry) => entry.content), 'prior narration cannot substitute for terminal outcome')
+        expect.soft(detail.session.lifecycle_state, 'the durable ceiling is Interrupted, not Failed').toBe('interrupted');
+        expect.soft(detail.session.interruption_reason, 'reload retains the typed incomplete cause').toBe('tool_limit');
+        // Approved Notice mandate: narration is model-authored; the distinct cap notice is system-authored.
+        const outcomes = detail.messages.filter((entry) =>
+          (entry.role === 'assistant' || entry.role === 'system') && entry.content);
+        expect.soft(outcomes.map((entry) => entry.content), 'prior narration cannot substitute for terminal outcome')
           .toEqual([TERMINAL_NARRATION, TERMINAL_CAP_NOTICE]);
-        expect.soft(assistants.map((entry) => entry.turn_id), 'durability belongs to the SAME lifecycle turn')
+        expect.soft(outcomes.map((entry) => entry.role), 'only narration is an assistant model answer')
+          .toEqual(['assistant', 'system']);
+        expect.soft(outcomes.map((entry) => entry.turn_id), 'durability belongs to the SAME lifecycle turn')
           .toEqual([turnId, turnId]);
-        expect.soft(assistants.map((entry) => entry.agent_id), 'durable producer identity agrees')
+        expect.soft(outcomes.map((entry) => entry.agent_id), 'durable producer identity agrees')
           .toEqual([agent.id, agent.id]);
-        const terminalEntries = assistants.filter((entry) => entry.content === TERMINAL_CAP_NOTICE);
-        expect.soft(terminalEntries, 'exactly one distinct durable terminal entry').toHaveLength(1);
+        const terminalEntries = detail.messages.filter((entry) => entry.content === TERMINAL_CAP_NOTICE);
+        expect.soft(terminalEntries, 'exactly one distinct durable terminal entry across all roles').toHaveLength(1);
+        expect.soft(terminalEntries.map((entry) => entry.role), 'the terminal entry must have system role')
+          .toEqual(['system']);
+        expect.soft(terminalEntries.map((entry) => entry.type), 'the terminal entry must have system type')
+          .toEqual(['system']);
+        expect.soft(terminalEntries.map((entry) => entry.model), 'a harness notice has no model attribution')
+          .toEqual([undefined]);
         if (!disconnected) {
           const live = terminalLiveEntries(traffic.frames, session.id, turnId);
           expect.soft(live.map((entry) => entry.content), 'live content has the independently specified pair')
             .toEqual([TERMINAL_NARRATION, TERMINAL_CAP_NOTICE]);
           expect.soft(live, 'live and durable entries share stable IDs AND exact contents')
-            .toEqual(assistants.map(({ id, content }) => ({ id, content })));
+            .toEqual(outcomes.map(({ id, content }) => ({ id, content })));
         }
         await assertTerminalRendering(page, info, disconnected ? 'reconnected-after-terminal' : 'live', terminalEntries);
         // Re-opening the already-active session sends no attach by design, so
@@ -174,9 +188,14 @@ test.describe('terminal outcome agrees across real surfaces', () => {
       } finally {
         mock.finishToolRound();
         try {
-          if (gw) await gw.stop();
+          // Evidence and strict console checks above finish before this page's polling is stopped.
+          await page.close();
         } finally {
-          await mock.close();
+          try {
+            if (gw) await gw.stop();
+          } finally {
+            await mock.close();
+          }
         }
       }
     });

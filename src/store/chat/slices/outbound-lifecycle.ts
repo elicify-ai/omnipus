@@ -14,7 +14,9 @@ import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 // call, which references every REST schema and defeats tree-shaking
 // (bundle-budget incident, PR #860).
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/ws-schemas'
-import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
+import type { CancelFrame, MessageFrame } from '@/lib/api/generated/asyncapi-types'
+import type { components } from '@/lib/api/generated/openapi-types'
+import { queryClient } from '@/lib/queryClient'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { isOmnipusAgentId } from '@/lib/omnipus'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -35,9 +37,10 @@ import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
 
 /** FR-122 (omnipus-system-agent K16): there is no default agent — a NEW chat
  * names its agent on the minting frame, and the gateway refuses an agent-less
- * one with the error frame "an agent must be named". Both mint sites (a fresh
- * sendMessage and a '__pending' delivery retry) refuse here instead: visible
- * warning, nothing put on the wire. Returns true when the caller must stop.
+ * one with the error frame "an agent must be named". A fresh sendMessage
+ * refuses here instead: visible warning, nothing put on the wire. Retained
+ * first-send retries reuse their original named-agent payload. Returns true
+ * when the caller must stop.
  * (Follow-up frames on a REAL session are unaffected — the gateway routes
  * those to the session's canonical owner.) */
 function refuseAgentlessNewChat(agentId: string | null | undefined, where: string): boolean {
@@ -238,9 +241,23 @@ function performResendMessage(
     logDiagnostic('chatRecipientResendBlockedNoSession', { agentName: addressCheck.addressed.agentName })
     return
   }
-  // A '__pending' retry mints a NEW chat, so it names its agent too (K16) —
-  // refused before the 'sending' reset so the row keeps its failed state.
-  if (targetSid === '__pending' && refuseAgentlessNewChat(useSessionStore.getState().activeAgentId, 'resend')) return
+  // A background Retry belongs to its target session, not the foreground
+  // agent. If its owner is not loaded, keep the failed row retriable and
+  // explain how to recover instead of guessing or minting another chat.
+  const targetSession = loadedOutboundSession(targetSid)
+  const targetAgentId = targetSession?.agent_id
+  if (!targetAgentId?.trim()) {
+    logDiagnostic('chatResendBlockedOwnerUnavailable', {
+      sessionId: targetSid,
+      messageId,
+      reason: targetSession ? 'missing_or_blank_owner' : 'session_metadata_unavailable',
+    })
+    useUiStore.getState().addToast({
+      message: 'Could not retry this message — the conversation\'s agent is not loaded. Reopen the conversation and try again.',
+      variant: 'error',
+    })
+    return
+  }
 
   // Reset the SAME message in place first — 'sending' — never a second
   // bubble, unlike the pre-fix `sendMessage(content)` call this replaces.
@@ -265,12 +282,14 @@ function performResendMessage(
     return
   }
 
+  const workspaceId = targetSid === '__pending' ? '' : outboundWorkspaceId(targetSid)
   const payload = {
     type: 'message' as const,
     content,
     session_id: targetSid === '__pending' ? undefined : targetSid,
     client_message_id: messageId,
-    agent_id: useSessionStore.getState().activeAgentId ?? undefined,
+    agent_id: targetAgentId,
+    ...(workspaceId ? { metadata: { workspace_id: workspaceId } } : {}),
     ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
     // Recipient re-derived from the kept content at resend time. A '__pending'
     // target has no session for the pair to ride on, so the recipient is
@@ -348,38 +367,35 @@ function clearCatchUpSideChannelsOnDisconnect(): void {
   }
 }
 
-/**
- * The workspace id a message frame carries as `metadata.workspace_id`.
- */
-function outboundWorkspaceId(): string {
-  // M4 workspace→turn binding (BLOCKER 1). When the user is chatting inside
-  // a workspace, the active workspace id is the single source of truth in
-  // useWorkspacesStore (set by WorkspaceTabContainer from the route param;
-  // null on the global/inbox chat). We forward it as `metadata.workspace_id`
-  // so the server stamps the session with this workspace and any task the
-  // agent creates this turn (task_create / delegation) lands on THIS
-  // workspace's board instead of the agent's default workspace. Absent (or
-  // empty) when not in a workspace, matching the backend's default-workspace
-  // fallback. The contract caps it at 128 chars; an over-length id is dropped
-  // rather than sent (the outbound Zod validator would otherwise toast every
-  // turn for a malformed local id).
-  const activeWorkspaceIdRaw = useWorkspacesStore.getState().activeWorkspaceId
-  // omnipus-system-agent FR-003 / OSA-9.1: Omnipus's one chat lives in the
-  // default workspace whatever workspace is active (its entry never
-  // switches it, FR-100). Its frames carry NO workspace_id — the server
-  // refuses a frame that would re-bind the Omnipus chat to another
-  // workspace (pkg/gateway/websocket_chat.go, sessionIsOmnipusChat), and
-  // an absent value leaves the session's own binding as-is. The workspace
-  // a workflow acts on travels as `workflow_start` target data instead.
-  const inOmnipusChat = isOmnipusAgentId(useSessionStore.getState().activeAgentId)
-  return (
-    !inOmnipusChat &&
-    typeof activeWorkspaceIdRaw === 'string' &&
-    activeWorkspaceIdRaw.length > 0 &&
-    activeWorkspaceIdRaw.length <= 128
-      ? activeWorkspaceIdRaw
-      : ''
-  )
+/** Canonical identity from the validated saved-chat detail or sidebar list. */
+function loadedOutboundSession(sessionId: string): Pick<components['schemas']['Session'], 'id' | 'agent_id' | 'workspace_id'> | undefined {
+  const detail = queryClient.getQueryData<components['schemas']['SessionDetail']>(['session-detail', sessionId])
+  if (detail?.session?.id === sessionId) return detail.session
+  const sessions = queryClient.getQueryData<components['schemas']['Session'][]>(['sessions'])
+  return Array.isArray(sessions) ? sessions.find((candidate) => candidate.id === sessionId) : undefined
+}
+
+/** The immutable session binding, never the ambient workspace for a follow-up. */
+function outboundWorkspaceId(sessionId: string | null): string {
+  let workspaceId: components['schemas']['Session']['workspace_id'] | null
+  if (sessionId && sessionId !== '__pending') {
+    // These validated reads already back the saved-chat route and sidebar.
+    // Resolve by the TARGET id so a background message's Retry cannot borrow
+    // the foreground session's binding. Missing metadata, like a known
+    // workspace-less session, omits the field: the server retains its binding.
+    workspaceId = loadedOutboundSession(sessionId)?.workspace_id
+  } else {
+    // Only a NEW chat has no session binding yet. Keep its creation context
+    // (and the retained first-send payload's retry context) unchanged.
+    // Omnipus's one chat lives in the default workspace; workflow_start,
+    // not this metadata, names the workspace its workflow acts on.
+    if (isOmnipusAgentId(useSessionStore.getState().activeAgentId)) return ''
+    workspaceId = useWorkspacesStore.getState().activeWorkspaceId
+  }
+  // Preserve the MessageFrame contract's workspace-id bound.
+  return typeof workspaceId === 'string' && workspaceId.length > 0 && workspaceId.length <= 128
+    ? workspaceId
+    : ''
 }
 
 export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
@@ -481,8 +497,10 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelNameRaw = opts?.model_name
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
-      // M4 workspace→turn binding and the Omnipus-chat exception: see outboundWorkspaceId.
-      const workspaceId = outboundWorkspaceId()
+      const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
+      // Ordinary sends, mid-turn steering and new-answer requests share the
+      // attached session's canonical binding; only a first send uses context.
+      const workspaceId = outboundWorkspaceId(rawActiveSessionId)
       // K8 (FR-012): target data naming the workflow a screen button started.
       const workflowStartFrame = opts?.workflowStart ? { workflow_start: opts.workflowStart } : {}
 
@@ -490,12 +508,11 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // two payload build sites below stay in sync. The frame omits `metadata`
       // entirely when neither field is present (an empty object would be sent
       // otherwise, which the server treats the same but is noise on the wire).
-      const metadata: { model_name?: string; workspace_id?: string } = {}
+      const metadata: NonNullable<MessageFrame['metadata']> = {}
       if (modelName.length > 0) metadata.model_name = modelName
       if (workspaceId.length > 0) metadata.workspace_id = workspaceId
       const metadataFrame = Object.keys(metadata).length > 0 ? { metadata } : {}
       const { connection, isConnected } = useConnectionStore.getState()
-      const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
       const { isStreaming } = get()
       // Composer guard: a '__pending' sentinel with no in-flight
       // stream is a STUCK state, not a real session — a turn started under

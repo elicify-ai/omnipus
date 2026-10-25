@@ -29,7 +29,11 @@ export const INITIAL_GZIP_BUDGET_BYTES = 25 * 1024
 // unchanged; the unfinished panel still requires its own build and measurement.
 // founder-approved repo-wide allowance 2026-10-08/09 (482 KiB): covers Tasks panel + release-train drift + Wave-1
 // Founder-authorised raise (2026-10-15): raised 482 KiB to 586 KiB to cover L1 stage 1: Omnipus/WU-10 screens + generated contract code, measured +549,263. see #1183.
-export const TOTAL_RAW_BUDGET_BYTES = 600064
+// Founder decision Q4=A (2026-10-22): accept Mermaid 12 including its lazy
+// ELK engine (+1,462,909 raw bytes); release growth measured +1,955,396.
+// Raise the raw-growth allowance to 2 MiB; keep the frozen baseline and
+// the initial-gzip allowance unchanged.
+export const TOTAL_RAW_BUDGET_BYTES = 2097152
 
 export function compareProductionBundles(baseline, candidate, provenance = null) {
   const initialGzipDelta = candidate.initial.gzipBytes - baseline.initial.gzipBytes

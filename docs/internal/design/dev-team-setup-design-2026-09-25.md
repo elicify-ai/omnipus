@@ -9,6 +9,11 @@
 
 **One-line summary:** we replace six stale, sometimes harmful agent instruction files with an **eleven-role** development team built around one orchestrator (team-lead, ~95% orchestration, small steps itself) that runs work directly **and through squads** — in-session `squad-lead` subagents (nesting verified) that **hand back fully gated branches** for team-lead to land, plus, across the founder's sessions, a founder-named **chief** aligning squad leads through a **coordination ledger directory** outside the repo whose **landing lock** serialises integration-branch pushes, separate-session squads landing themselves under it — delivered by a shared skill, role-specific skills and a **mandatory planning-orchestration skill**, with **developer and reviewer discipline** carried in the body of every developer-side and reviewer-side agent file (evidence tables ending every report, claims untrue until re-verified, findings only with failure scenarios) and reaching the six plugin reviewers through a short dispatch template that has them **load the shared skill with the Skill tool**; a three-size change flow (feature = RED/GREEN/CHECK into a 5-reviewer gate — 3 mandatory pr-review-toolkit reviewers plus architect and security-lead; type-design-analyzer, comment-analyzer and code-simplifier demoted to on-request-only by founder decision 2026-09-29, code-simplifier still the one reviewer allowed to edit the branch under review, with a follow-up code-reviewer pass on its diff, whenever it is dispatched); an auditor-and-reviewer security-lead inside that gate and on demand (backend-lead implements security code); skill-based failure handling with no ci-triage role; event-driven status updates with **batched landing asks**; parallelism capped by no width number but held by a machine-capacity monitor that counts active dispatches from the ledger; a single **all-at-once rollout** preceded by a full dry-run pass; and a CI guard — now also banning `model:` lines in agent files — that keeps the agent files and skills honest as the repo moves.
 
+**Current-process notice (2026-10-23):** the dated amendment at the end of this document
+supersedes the original topology, ownership, capacity, review-scope and landing text
+where they differ. The body above/below preserves the original design record; use
+root `CLAUDE.md` and the linked procedures for current operation.
+
 ---
 
 ## 1. Purpose and scope
@@ -1168,3 +1173,49 @@ The committed settings file reaches every worktree of this repo and every sessio
 | The founder's personal delegation layer starts unattended workers | Verified as lead-confirmed review finding | Interview Round 6 note + the independent review's verified summary; handled by the override requirement in 5.3 — outside this repo, so not independently checkable here |
 | No `scripts/hooks/` directory and no active hooks exist today; the coordination directory does not exist yet | Verified | Directory listings, 2026-09-25 — both are created at rollout (10.1) |
 | Founder decisions as recorded (Rounds 1–16, plus the final-review resolutions) | Verified | Read of `uat/agent-refresh/INTERVIEW.md`, 2026-09-25 — this revision's binding input; the round mapping and every review disposition live in the companion decisions file |
+
+---
+
+## Amendment — 2026-10-23: founder-approved delivery-process rollout
+
+Last reviewed: 2026-10-23
+
+Decision source: the founder-approved
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/process-review-20261023/ROLLOUT-MANDATE.md`,
+with `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/process-review-20261023/NAV-INPUT.md`
+and the dated correction note in
+`/Users/danielpiatkowski/AI-Agent-Workspace/claude-code-notes/delivery-process-review-20261023.html`.
+Founder: "the founder questions are actually ok, but i want that we role it out it
+needs to be reflected in skills, prompts an operating prociedures claude.mds etc what
+ever we use here".
+
+This amendment adopts proposals **1–7, 9 and 10**, with proposal 3 in its refined
+combined-feature form. Proposal **8 is not adopted**: the existing founder interview,
+question, escalation and explicit landing-approval rules remain unchanged. Preserve
+the historical sections above; this table points to the current canonical rules,
+not a second copy of them.
+
+| Approved item | Canonical current rule | Procedure |
+|---|---|---|
+| 1 — landing trains and standalone candidates | Root `CLAUDE.md`, "Landing trains" | Planning skill, `knowledge/landing-trains.md`; ledger sequence in `knowledge/coordination-ledger.md` |
+| 2 — whole-area ownership, one test author, independent CHECK/validation | Root `CLAUDE.md`, "Feature ownership" | Planning skill, `knowledge/parallel-planning.md`; qa-lead's RED/CHECK duties |
+| 3 — one combined-feature gate; small/standard combined train review | Root `CLAUDE.md`, "Change sizes and the review gate" | Planning skill, `knowledge/landing-trains.md`; plugin-reviewer dispatch scope |
+| 4 — issue-tracked, founder-controlled qualified CI quarantine | Root `CLAUDE.md`, "CI quarantine", read with Hard Constraint #7 | Shared skill, "Build and test" |
+| 5 — spec-time rows and paired, exact-version hands-on pipeline | Root `CLAUDE.md`, "Definition of Done" | Planning skill, `knowledge/landing-trains.md`; plan-spec template; qa-lead and UAT role files |
+| 6 — chief performs mechanical merges/integration | Root `CLAUDE.md`, "Landing trains" | Planning skill, candidate and ledger procedures |
+| 7 — candidate-only full CI; targeted lanes and Fly pre-flight | Root `CLAUDE.md`, "CI scope and remote pre-flight" | Shared skill, "Build and test"; CI-worker guidance |
+| 9 — controller safety, heavy-command slots and live-build pin | Root `CLAUDE.md`, "Running CLI agents" and "Build, test, and quality gates" | Planning skill, `knowledge/dispatch-and-watch.md` and `knowledge/capacity-check.md`; shared skill |
+| 10 — provider pre-flight and saved-state capability routing | Root `CLAUDE.md`, "Running CLI agents" | Planning skill, `knowledge/dispatch-and-watch.md`; model specifics stay in the personal layer outside the repo |
+| Squad leads retired for new in-session work | Root `CLAUDE.md`, "Subagent Workflow" | team-lead coordinates specialists directly; squad-lead is only a separate directly addressable independent stream; existing #1266 is retained |
+
+The whole-epic gate before `main`, on-demand security review, independent CHECK and
+UAT validation, the two delivery claims, the landing lock and human-only `main` merge
+remain. This amendment supersedes contrary original text in §§3–5, 6.1, 6.5–6.6 and
+7.1–7.7 on the approved topics; it does not revive the historical code-simplifier
+write exception (removed 2026-10-06).
+
+**Text rollout is not tooling acceptance.** Quarantine reporting and full-CI workflow
+triggers need the separate backend implementation. Controller locking, process-group
+stop and load refusal, and the exact-version standing-instance rebuild script need
+their own execution receipts before being reported active. Until then, report gaps
+and raw CI results honestly; no new exception or founder-question shortcut is granted.

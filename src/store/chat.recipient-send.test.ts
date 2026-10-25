@@ -29,6 +29,7 @@ import { queryClient } from '@/lib/queryClient'
 import type { WsConnection } from '@/lib/ws'
 import type { Agent } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
+import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
 
 const TEST_SESSION_ID = 'sess_recipient_test'
 const WORKSPACE_ID = 'ws_recipient_test'
@@ -40,6 +41,8 @@ const agentFixtures: Agent[] = [
 ]
 
 function resetStores() {
+  queryClient.removeQueries({ queryKey: ['session-detail'] })
+  queryClient.removeQueries({ queryKey: ['sessions'] })
   act(() => {
     useChatStore.getState().clearStreamingState()
     useChatStore.setState({
@@ -250,6 +253,8 @@ describe('the outbound queue holds an @-addressed message while no session exist
 })
 
 describe('resendMessage (Retry) re-derives the recipient from the kept content', () => {
+  beforeEach(() => seedCanonicalSession(TEST_SESSION_ID, 'jim', WORKSPACE_ID))
+
   it('a retried @-message carries the recipient again', () => {
     act(() => { useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'jim' }) })
     // A send that FAILS marks the user bubble 'error' with the Retry affordance.

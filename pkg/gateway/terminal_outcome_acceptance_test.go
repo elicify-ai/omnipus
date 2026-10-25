@@ -45,20 +45,27 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 	const narration = "I will run the acceptance probe."
 	const answer = "The acceptance probe completed."
 	cases := []struct {
-		name       string
-		narration  string
-		limit      int
-		wantText   string
-		wantCalls  int32
-		wantFailed bool
-		wantStatus agent.TurnEndStatus
+		name            string
+		narration       string
+		limit           int
+		wantText        string
+		wantCalls       int32
+		wantFailed      bool
+		wantInterrupted bool
+		wantStatus      agent.TurnEndStatus
 	}{
-		{"narrated_cap", narration, 1, terminalAcceptanceCapNotice, 1, true, agent.TurnEndStatusError},
-		{"silent_cap_control", "", 1, terminalAcceptanceCapNotice, 1, true, agent.TurnEndStatusError},
-		{"second_round_success_control", narration, 2, answer, 2, false, agent.TurnEndStatusCompleted},
+		// Spec change: DESIGN Decision 1 / DoneStats: a ceiling is Interrupted,
+		// with tool_limit rather than generic turn failure, on every joined surface.
+		{"narrated_cap", narration, 1, terminalAcceptanceCapNotice, 1, false, true, ""},
+		{"silent_cap_control", "", 1, terminalAcceptanceCapNotice, 1, false, true, ""},
+		{"second_round_success_control", narration, 2, answer, 2, false, false, agent.TurnEndStatusCompleted},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			wantRole := "assistant"
+			if tc.wantInterrupted {
+				wantRole = "system"
+			}
 			// No parallelism: logging is process-global. Restore it only after
 			// the real loop and relay have been joined by fixture cleanup.
 			oldLevel := logger.GetLevel()
@@ -100,6 +107,12 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 			// Part B precondition must PASS before the lifecycle assertion. Do
 			// not select the done frame by TurnFailed: that would hide a mutant.
 			require.Equal(t, tc.wantFailed, failed, "done.stats.turn_failed must carry this turn's outcome")
+			if tc.wantInterrupted {
+				require.NotNil(t, done.Stats.InterruptionReason)
+				assert.Equal(t, "tool_limit", *done.Stats.InterruptionReason)
+			} else {
+				assert.Nil(t, done.Stats.InterruptionReason, "a completed final answer has no interruption cause")
+			}
 			t.Logf("DONE VERIFIED: session=%s turn=%s done.stats.turn_failed=%t", meta.ID, *done.TurnId, failed)
 
 			end := terminalAcceptanceTurnEnd(t, sub)
@@ -111,23 +124,40 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 			assert.Equal(t, int(tc.wantCalls), payload.Iterations, "lifecycle iteration count agrees with actual rounds")
 			t.Logf("JOINT OUTCOME: turn=%s done.stats.turn_failed=%t turn.end.status=%s expected_status=%s",
 				end.Meta.TurnID, failed, payload.Status, tc.wantStatus)
-			assert.Equal(t, tc.wantStatus, payload.Status,
-				"same-turn contradiction: done.stats.turn_failed=%t but turn.end.status=%s", failed, payload.Status)
+			if tc.wantInterrupted {
+				// The canonical lifecycle has Interrupted; the internal diagnostic
+				// enum has no such member. Keep its non-error/coherence invariant.
+				assert.NotEqual(t, agent.TurnEndStatusError, payload.Status)
+				lifecycle := handler.agentLoop.GetSessionLifecycleStore()
+				require.NotNil(t, lifecycle)
+				record, err := lifecycle.Load(meta.ID)
+				require.NoError(t, err)
+				assert.Equal(t, session.LifecycleInterrupted, record.State)
+				assert.Equal(t, session.InterruptionToolLimit, record.InterruptionReason)
+			} else {
+				assert.Equal(t, tc.wantStatus, payload.Status,
+					"same-turn contradiction: done.stats.turn_failed=%t but turn.end.status=%s", failed, payload.Status)
+			}
 			assert.Zero(t, handler.agentLoop.EventDrops(agent.EventKindTurnEnd), "lifecycle observation must not be lossy")
-			terminalAcceptanceAssertLog(t, logPath, end, tc.wantStatus, tc.wantText)
+			terminalAcceptanceAssertLog(t, logPath, end, payload.Status, tc.wantText)
 
 			entries, err := store.ReadTranscript(meta.ID)
 			require.NoError(t, err)
 			var contents []string
 			var terminalEntries []session.TranscriptEntry
 			for _, entry := range entries {
-				if entry.Role != "assistant" || entry.Content == "" {
+				if entry.Content != tc.wantText && (entry.Role != "assistant" || entry.Content == "") {
 					continue
 				}
-				assert.Equal(t, end.Meta.TurnID, entry.TurnID, "durable assistant entry belongs to the SAME turn")
+				assert.Equal(t, end.Meta.TurnID, entry.TurnID, "durable narration/outcome belongs to the SAME turn")
 				assert.Equal(t, agentID, entry.AgentID, "durable producer matches actual lifecycle producer")
 				contents = append(contents, entry.Content)
 				if entry.Content == tc.wantText {
+					assert.Equal(t, wantRole, entry.Role, "cutoff is system prose; a successful answer stays model-authored")
+					if tc.wantInterrupted {
+						assert.Equal(t, session.EntryTypeSystem, entry.Type)
+						assert.Empty(t, entry.Model)
+					}
 					terminalEntries = append(terminalEntries, entry)
 				}
 			}
@@ -140,13 +170,13 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 			live, liveByID := terminalAcceptanceLiveText(t, frames, meta.ID, end.Meta.TurnID)
 			assert.Len(t, liveByID, len(wantContents), "live message count agrees with the independent outcome oracle")
 			for _, entry := range entries {
-				if entry.Role == "assistant" && entry.Content != "" {
+				if (entry.Role == "assistant" && entry.Content != "") || entry.Content == tc.wantText {
 					assert.Equal(t, entry.Content, liveByID[entry.ID], "live and durable content share the SAME entry identity")
 				}
 			}
 			assert.Equal(t, tc.narration+tc.wantText, live, "live wire must carry the same narration and final outcome as durability")
 			assert.Equal(t, 1, strings.Count(live, tc.wantText), "live terminal notice appears exactly once")
-			if !tc.wantFailed {
+			if !tc.wantInterrupted {
 				assert.NotContains(t, live, terminalAcceptanceCapNotice, "success must not inherit a failed outcome")
 			}
 
@@ -158,7 +188,7 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 				sendWSAuthFrameDevMode(t, replayConn)
 				require.NoError(t, replayConn.WriteJSON(generated.AttachSessionFrame{Type: "attach_session", SessionId: meta.ID}))
 				replayed := terminalAcceptanceCollect(t, replayConn)
-				terminalAcceptanceAssertReplay(t, replayed, meta.ID, end.Meta.TurnID, contents, terminalEntries, tc.wantText)
+				terminalAcceptanceAssertReplay(t, replayed, meta.ID, end.Meta.TurnID, contents, terminalEntries, tc.wantText, wantRole)
 			}
 		})
 	}
@@ -236,7 +266,7 @@ func terminalAcceptanceAssertLog(t *testing.T, path string, end agent.Event, wan
 
 func terminalAcceptanceAssertReplay(
 	t *testing.T, frames []collectedFrame, sessionID, turnID string,
-	contents []string, terminalEntries []session.TranscriptEntry, wantText string,
+	contents []string, terminalEntries []session.TranscriptEntry, wantText, wantRole string,
 ) {
 	t.Helper()
 	var replayContents, terminalIDs []string
@@ -246,13 +276,17 @@ func terminalAcceptanceAssertReplay(
 		}
 		var replay generated.ReplayMessageFrame
 		require.NoError(t, json.Unmarshal(frame.Raw, &replay))
-		if replay.SessionId != sessionID || replay.Role != "assistant" || replay.Content == "" {
+		if replay.SessionId != sessionID || replay.Content == "" || (replay.Role != "assistant" && replay.Content != wantText) {
 			continue
 		}
 		require.NotNil(t, replay.TurnId, "real replay must preserve the lifecycle turn identity")
 		assert.Equal(t, turnID, *replay.TurnId)
 		replayContents = append(replayContents, replay.Content)
 		if replay.Content == wantText {
+			assert.Equal(t, wantRole, replay.Role, "replay preserves the independently expected outcome role")
+			if wantRole == "system" {
+				assert.Nil(t, replay.Model)
+			}
 			require.NotNil(t, replay.Id, "replay outcome must preserve the durable entry identity")
 			terminalIDs = append(terminalIDs, *replay.Id)
 		}
