@@ -17,23 +17,45 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 )
 
+// The external clock wrapper is installed exactly once, in init, before the
+// test binary owns any goroutine: that single write of the zerolog global is
+// ordered before every possible reader (whatsmeow's background event goroutines
+// read this clock on every pkg/logger line), and the per-test park below is
+// published through an atomic afterwards. A plain swap of the global per test
+// raced exactly those readers (train-3 CI cause E); this never writes the
+// global again, so the hold stays synchronization-safe.
+func init() {
+	plain := zerolog.TimestampFunc
+	zerolog.TimestampFunc = func() time.Time {
+		if hold, ok := fix1ReconnectClockHold.Load().(func()); ok && hold != nil {
+			hold()
+		}
+		return plain()
+	}
+}
+
+// fix1ReconnectClockHold carries the active test's park, or a no-op. The
+// atomic keeps concurrent loggers race-free against the swap.
+var fix1ReconnectClockHold atomic.Value
+
 // The logger's external clock callback is a passive stage acknowledgement:
 // reconnectWithBackoff logs immediately AFTER capturing its concrete client
 // and BEFORE calling Connect. No native method/return/lock is replaced. Holding
 // this callback leaves the logger's shared read lock available to Stop's logs.
 // This precise window is necessary: holding the network handshake instead
 // would hold whatsmeow's socket lock, so Disconnect would not yet reach its
-// bounded native join. The clock returns its original value after release.
+// bounded native join. Holding deeper instead — inside connectNative's
+// channel-order check — would keep c.mu held and starve the competing QR
+// completion this test choreographs behind the same guard.
 func fix1HoldCapturedReconnect(t *testing.T) (<-chan struct{}, func()) {
 	t.Helper()
-	original := zerolog.TimestampFunc
 	held, resume := make(chan struct{}), make(chan struct{})
 	var claimed atomic.Bool
 	var once sync.Once
 	release := func() { once.Do(func() { close(resume) }) }
-	zerolog.TimestampFunc = func() time.Time {
+	fix1ReconnectClockHold.Store(func() {
 		var pcs [32]uintptr
-		n := runtime.Callers(2, pcs[:])
+		n := runtime.Callers(3, pcs[:])
 		frames := runtime.CallersFrames(pcs[:n])
 		for {
 			frame, more := frames.Next()
@@ -46,9 +68,11 @@ func fix1HoldCapturedReconnect(t *testing.T) (<-chan struct{}, func()) {
 				break
 			}
 		}
-		return original()
-	}
-	t.Cleanup(func() { release(); zerolog.TimestampFunc = original })
+	})
+	t.Cleanup(func() {
+		release()
+		fix1ReconnectClockHold.Store(func() {})
+	})
 	return held, release
 }
 
