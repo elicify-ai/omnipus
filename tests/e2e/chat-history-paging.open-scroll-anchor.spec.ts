@@ -151,7 +151,7 @@ test('T16 B09: a real delayed image growing above the reader preserves the visib
     await page.mouse.wheel(0, 160);
     await settled(page);
     const saved = await anchor(page);
-    const image = page.getByRole('img', { name: 'Deferred history image' });
+    const image = page.getByRole('button', { name: 'View: Deferred history image', exact: true });
     const before = await image.evaluate((el) => el.getBoundingClientRect().height);
     release();
     await expect.poll(() => image.evaluate((el) => (el as HTMLImageElement).naturalHeight)).toBe(640);
