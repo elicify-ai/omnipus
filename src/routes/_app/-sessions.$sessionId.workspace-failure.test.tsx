@@ -140,4 +140,35 @@ describe('workspace lookup failure and shared producers', () => {
     expect(await screen.findByText(/^Waiting for the connection to find this chat's workspace\./u)).toBeTruthy()
     expect(screen.queryByText(/Couldn't find this chat's workspace/u)).toBeNull()
   })
+
+  it('a failed replacement stays a terminal error with Retry and inline chat, never a successful empty list', async () => {
+    const key = activeWorkspacesQueryOptions.queryKey
+    const failureMessage = "Couldn't find this chat's workspace, so the chat is open here instead. Retry to move it into its workspace."
+    render(<QueryClientProvider client={client}><SessionRoute /></QueryClientProvider>)
+    await waitFor(() => expect(lookups, 'the initial real request started').toHaveLength(1))
+    lookups[0].settle(forbidden())
+    const firstAlert = await screen.findByRole('alert')
+    expect(firstAlert).toHaveTextContent(failureMessage)
+    expect(client.getQueryState(key)).toMatchObject({ status: 'error', fetchStatus: 'idle', error: { status: 403 } })
+    const firstError = client.getQueryState(key)?.error
+
+    await userEvent.click(within(firstAlert).getByRole('button', { name: /^Retry$/u }))
+    await waitFor(() => expect(lookups, 'Retry starts the replacement real request').toHaveLength(2))
+    expect(client.getQueryState(key)?.fetchStatus).toBe('fetching')
+    expect(screen.queryByText(failureMessage), 'the previous failure is not the replacement outcome').toBeNull()
+    lookups[1].settle(forbidden())
+
+    await waitFor(() => expect({ status: client.getQueryState(key)?.status, fetchStatus: client.getQueryState(key)?.fetchStatus },
+      'r13 m03: the SECOND request failed; never normalize it into successful empty data')
+      .toStrictEqual({ status: 'error', fetchStatus: 'idle' }))
+    expect(client.getQueryState(key)?.error).toMatchObject({ status: 403 })
+    expect(client.getQueryState(key)?.error, 'the replacement has its own terminal error, not the old one').not.toBe(firstError)
+    expect(client.getQueryState(key)?.data, 'neither failure is an empty successful workspace list').toBeUndefined()
+    const replacementAlert = await screen.findByRole('alert')
+    expect(replacementAlert).toHaveTextContent(failureMessage)
+    expect(replacementAlert).toBeVisible()
+    expect(within(replacementAlert).getByRole('button', { name: /^Retry$/u })).toBeVisible()
+    expect(screen.getByTestId('inline-chat-screen'), 'failed replacement keeps the chat open inline').toBeVisible()
+    expect(lookups, 'both403 outcomes are non-retryable; no hidden third request').toHaveLength(2)
+  })
 })
