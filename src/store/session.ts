@@ -477,13 +477,24 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const priorTaskTitle = get().attachedTaskTitle
     set((state) => {
       const keep = keepAttachedOwner(state, sessionId)
+      // #1428: re-pointing at the session that is ALREADY active (the WS
+      // reconnect's reattachActiveSession re-seed, or a re-emitted
+      // session_started echoing the same id) is not a chat change — the
+      // attach kind and task title survive it. Clearing them here is what
+      // downgraded a reattached main's workspace descriptor to an untitled
+      // chat: the second same-session call captured priorSessionType as
+      // null (the first call had already nulled it) and wrote type 'chat'/
+      // title null, which relabelled the header strip "Extra chat" and
+      // unmounted the main chat's Add participant control. A genuinely
+      // different session (or null) still clears both, exactly as before.
+      const sameSession = sessionId != null && sessionId === state.activeSessionId
       return {
         ...state,
         activeSessionId: sessionId,
         activeAgentId: keep ? state.activeAgentId : (agentId ?? state.activeAgentId),
         activeAgentType: keep ? state.activeAgentType : (agentType ?? state.activeAgentType),
-        attachedSessionType: null,
-        attachedTaskTitle: null,
+        attachedSessionType: sameSession ? state.attachedSessionType : null,
+        attachedTaskTitle: sameSession ? state.attachedTaskTitle : null,
         ...clearRetiredSelection(),
       }
     })

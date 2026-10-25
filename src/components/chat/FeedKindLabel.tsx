@@ -33,6 +33,7 @@ import { fetchAgents, fetchSessions } from '@/lib/api'
 import type { Session } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { feedKindLabel, feedParentLabel } from '@/lib/nav/chatKindLabel'
+import type { FeedKindSource } from '@/lib/nav/chatKindLabel'
 import { isMainSession } from '@/lib/nav/sessionCoreSeam'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -54,14 +55,33 @@ export function FeedKindLabel() {
   const sessionByWorkspace = useSessionStore((s) => s.sessionByWorkspace)
   const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
   const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
+  const activeAgentId = useSessionStore((s) => s.activeAgentId)
 
   // Live agents roster — current display names only; the derivation happens
   // per render in feedKindLabel/sessionDisplayTitle.
   const { data: agents = [], isPending: agentsPending, isError: agentsError } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
   const descriptor = activeWorkspaceId != null ? sessionByWorkspace[activeWorkspaceId] : undefined
-  const activeIsChild = descriptor != null && descriptor.id === activeSessionId
-    && (descriptor.type === 'delegate' || descriptor.type === 'task')
+  // #1428 (chief brief 2026-10-24): the strip names THIS tab's attached
+  // session — the same session the composer and the rows render. The
+  // workspace descriptor is a browser-persisted snapshot whose shared
+  // localStorage copy another same-account tab can rewrite, so the live
+  // attach kind outranks it, and a live attach with no matching descriptor
+  // still names itself instead of rendering nothing. The descriptor keeps
+  // one job: the non-main title snapshot (an extra's title is user-set).
+  const descriptorMatches = descriptor != null && descriptor.id === activeSessionId
+  const liveAttach = activeSessionId != null && attachedSessionType != null
+  const kind: Session['type'] | undefined =
+    attachedSessionType ?? (descriptorMatches ? descriptor.type : undefined)
+  const source: FeedKindSource | null = descriptorMatches
+    ? { id: descriptor.id, type: kind ?? descriptor.type, title: descriptor.title ?? '', agentId: descriptor.agentId }
+    : liveAttach && attachedSessionType !== 'task'
+      // Attached with no matching descriptor (e.g. a recordForWorkspace:false
+      // attach): derive from this tab's own attach context, never from the
+      // shared snapshot. A task keeps the dedicated "Task:" fallback below.
+      ? { id: activeSessionId, type: attachedSessionType, title: attachedTaskTitle ?? '', agentId: activeAgentId }
+      : null
+  const activeIsChild = source != null && (source.type === 'delegate' || source.type === 'task')
   // Child chats only (helper / task run): the shared flat session list (same
   // key and fetch as the search modal) names the direct parent. Nothing is
   // fetched for any other session kind.
@@ -71,28 +91,28 @@ export function FeedKindLabel() {
     enabled: activeIsChild,
   })
 
-  if (descriptor != null && activeSessionId != null && descriptor.id === activeSessionId) {
-    const main = isMainSession(descriptor)
+  if (source != null) {
+    const main = isMainSession(source)
     // A main's title is derived from the LIVE roster — never from the
     // descriptor's persisted title snapshot (it can predate a rename).
     // While the roster is still loading there is nothing honest to show.
     if (main && agentsPending) return null
-    const agentName = descriptor.agentId != null
-      ? agents.find((agent) => agent.id === descriptor.agentId)?.name
+    const agentName = source.agentId != null
+      ? agents.find((agent) => agent.id === source.agentId)?.name
       : undefined
     const label = feedKindLabel({
-      id: descriptor.id,
-      type: descriptor.type,
+      id: source.id,
+      type: source.type,
       // The derivation ignores this for a main (steer 2026-10-12) — the
       // persisted snapshot is never shown there; extras keep it.
-      title: descriptor.title ?? '',
+      title: source.title,
       agentName,
-      agentId: descriptor.agentId,
+      agentId: source.agentId,
     })
     // A main with neither a resolvable name nor an id (a failed roster and a
     // descriptor predating agent ids) shows nothing rather than a guess.
     if (label == null) {
-      noteHeaderUnavailable(descriptor.id)
+      noteHeaderUnavailable(source.id)
       return null
     }
     // R2-S4-03: an id fallback is the ruling's accepted stand-in, but it
@@ -101,8 +121,8 @@ export function FeedKindLabel() {
     // "unavailable" signal the search modal shows for the identical trigger.
     // A failed REFETCH whose retained data still names the agent keeps the
     // plain name: nothing fell back, so there is nothing to disclaim.
-    const rosterNameResolved = descriptor.agentId != null
-      && agents.some((agent) => agent.id === descriptor.agentId && agent.name.trim() !== '')
+    const rosterNameResolved = source.agentId != null
+      && agents.some((agent) => agent.id === source.agentId && agent.name.trim() !== '')
     const namesUnavailable = main && agentsError && !rosterNameResolved
     // Founder decision 2026-10-20 ("Breadcrumb"): a child chat reads
     // "<parent title> › Helper" and the parent part opens the parent. The
@@ -111,7 +131,7 @@ export function FeedKindLabel() {
     // keeps the plain kind label with no link; a name is never fabricated.
     let parentCrumb: { parent: Session, label: string } | null = null
     if (activeIsChild) {
-      const parentId = allSessions?.find((s) => s.id === descriptor.id)?.parent_session_id
+      const parentId = allSessions?.find((s) => s.id === source.id)?.parent_session_id
       const parent = parentId ? allSessions?.find((s) => s.id === parentId) : undefined
       if (parent != null && !(parent.type === 'main' && agentsPending)) {
         const parentAgentName = parent.agent_id != null
