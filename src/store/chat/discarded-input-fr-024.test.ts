@@ -17,6 +17,7 @@ import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import type { ServerFrame } from '@/lib/ws'
+import { emptySessionState } from './session'
 
 const SID = 'sess-discarded-fr024'
 
@@ -80,7 +81,7 @@ describe('FR-024 — replay_message maps input_disposition onto the bubble deliv
       sessionsById: {
         ...s.sessionsById,
         [SID]: {
-          ...(s.sessionsById[SID] ?? ({} as never)),
+          ...(s.sessionsById[SID] ?? emptySessionState()),
           messageOrder: ['client-live-1'],
           messagesById: {
             'client-live-1': { id: 'client-live-1', role: 'user', content: 'summarize the quarter', timestamp: '2026-10-11T10:00:00Z', deliveryStatus: 'sending' },
@@ -130,7 +131,7 @@ describe('FR-024 — replay_message maps input_disposition onto the bubble deliv
       sessionsById: {
         ...s.sessionsById,
         [SID]: {
-          ...(s.sessionsById[SID] ?? ({} as never)),
+          ...(s.sessionsById[SID] ?? emptySessionState()),
           messageOrder: ['client-abc'],
           messagesById: {
             'client-abc': { id: 'client-abc', role: 'user', content: 'check my tasks', timestamp: '2026-10-11T10:00:00Z', deliveryStatus: 'sending' },
