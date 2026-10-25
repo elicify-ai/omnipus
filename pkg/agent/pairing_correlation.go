@@ -43,6 +43,15 @@ func (al *AgentLoop) admitPairing(channelID string, kind channels.PairingAdmissi
 	if store == nil {
 		return "", ErrPairingUnavailable
 	}
+	// gate r5 R5-A05 / r6: a ready attempt committed at another revision than
+	// the connector's current configuration can never start. The next
+	// admission closes it as interrupted — telling its chat — and is accepted;
+	// an older reload is never the one that decides.
+	if cfg := al.GetConfig(); cfg != nil {
+		if closed, ok := store.InterruptStaleReady(channelID, channels.ChannelRevision(cfg, channelID)); ok {
+			al.publishInterrupted(closed)
+		}
+	}
 	rec, err := store.Admit(channelID, kind, owner)
 	if err != nil {
 		return "", err
