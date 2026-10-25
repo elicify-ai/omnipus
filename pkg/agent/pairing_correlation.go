@@ -50,24 +50,23 @@ func (al *AgentLoop) admitPairing(channelID string, kind channels.PairingAdmissi
 	// earlier, so an older snapshot can never interrupt a newer ready
 	// attempt. The close is applied only when this very admission is granted:
 	// a foreign Retry whose own ownership check would refuse interrupts
-	// nothing. The interruption is emitted inside the boundary, before the
-	// new attempt's reservation advances the generation — later, delivery
-	// revalidation (AcceptsProgress) would drop it as superseded. The
-	// emission is drop-on-full event-bus work plus the audit log, never a
-	// pairing lock.
+	// nothing. The interruption envelope is stamped inside the boundary and
+	// published AFTER the order is released (security review F3): the event
+	// bus's synchronous gateway tap re-enters this same order, so publishing
+	// under it would self-deadlock.
 	order := store.LockChannel(channelID)
-	rec, err := order.AdmitClosingStaleReady(context.Background(), kind, owner,
+	rec, interrupted, err := order.AdmitClosingStaleReady(context.Background(), kind, owner,
 		func() (string, bool) {
 			cfg := al.GetConfig()
 			if cfg == nil {
 				return "", false
 			}
 			return channels.ChannelRevision(cfg, channelID), true
-		},
-		func(progress channels.PairingProgress) {
-			al.PublishPairingProgress([]channels.PairingProgress{progress})
 		})
 	order.Unlock()
+	if interrupted != nil {
+		al.PublishPairingProgress([]channels.PairingProgress{*interrupted})
+	}
 	if err != nil {
 		return "", err
 	}

@@ -230,14 +230,19 @@ func (s *PairingAttempts) Admit(instance string, kind PairingAdmission, owner *P
 // accepted configuration (security review F1). A granted admission applies
 // the stale-ready close in the same critical section; a refused one applies
 // nothing, so a foreign Retry whose own ownership check would refuse
-// interrupts nothing.
-func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context, kind PairingAdmission, owner *PairingOwner, currentRevision func() (string, bool), notifyInterrupted func(PairingProgress)) (PairingAttempt, error) {
+// interrupts nothing. The closed attempt's interruption envelope is stamped
+// under the lock (while it is still the connector's latest, the only state
+// progressLocked sequences) and RETURNED; the caller publishes it after
+// releasing the order — the event bus's synchronous gateway tap re-enters
+// this same order (security review F3), so nothing may publish while it is
+// held.
+func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context, kind PairingAdmission, owner *PairingOwner, currentRevision func() (string, bool)) (PairingAttempt, *PairingProgress, error) {
 	instance := order.instance
 	if err := ctx.Err(); err != nil {
-		return PairingAttempt{}, err
+		return PairingAttempt{}, nil, err
 	}
 	if instance == "" || (kind != PairingAdmissionEnable && (owner == nil || owner.SessionID == "" || owner.RequestID == "")) {
-		return PairingAttempt{}, ErrPairingConflict
+		return PairingAttempt{}, nil, ErrPairingConflict
 	}
 	// gate r5 R5-A05/r6: a ready attempt committed at another revision than
 	// the current accepted configuration can never start (TakeReady demands
@@ -277,34 +282,26 @@ func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context,
 	var interrupted *PairingProgress
 	if err == nil && stale {
 		c.latest.Phase, c.latest.Outcome = PairingPhaseTerminal, PairingOutcomeInterrupted
-		// The interruption's envelope is stamped NOW, while the closed attempt
-		// is still the connector's latest and current-generation — the only
-		// state in which progressLocked assigns it a public sequence.
+		// Stamp NOW, while the closed attempt is still the connector's latest
+		// and current-generation — the only state in which progressLocked
+		// assigns it a public sequence. Publication happens in the caller,
+		// after the order is released (security review F3: the bus's
+		// synchronous gateway tap takes this same order).
 		closed := copyAttempt(c.latest)
 		p := order.progressLocked(closed, PairingStatusError, "", PairingInterruptedMessage)
 		interrupted = &p
 	}
 	if err != nil {
 		s.mu.Unlock()
-		return PairingAttempt{}, err
+		return PairingAttempt{}, nil, err
 	}
 	hook := s.afterCheck
 	s.mu.Unlock()
 	if hook != nil {
 		hook() // ordering guard held; short state mutex is not held
 	}
-	// The interruption is emitted HERE — after the close, before the new
-	// attempt's reservation advances the generation. Delivery revalidates
-	// every frame against the connector's current latest (AcceptsProgress);
-	// an interruption emitted after the reservation would carry a superseded
-	// generation and never reach its chat. The callback must not block and
-	// must not re-enter any pairing lock: it only emits an already-accepted
-	// immutable envelope onto the (drop-on-full) event bus and the audit log.
-	if interrupted != nil && notifyInterrupted != nil {
-		notifyInterrupted(*interrupted)
-	}
 	if err := ctx.Err(); err != nil {
-		return PairingAttempt{}, err
+		return PairingAttempt{}, nil, err
 	}
 	id := newAttemptID()
 	s.mu.Lock()
@@ -318,7 +315,7 @@ func (s *PairingAttempts) admitOrdered(order *PairingOrder, ctx context.Context,
 	}
 	c.retired = false // an accepted explicit create/connect may recreate an id
 	c.publish(rec)
-	return copyAttempt(rec), nil
+	return copyAttempt(rec), interrupted, nil
 }
 
 func retryEligible(latest *pairingAttemptRecord, owner PairingOwner) bool {
