@@ -362,16 +362,19 @@ func TestManager_RevokedAdmissionNeverRestarts(t *testing.T) {
 	// Fixture: the direct ready admission carries its accepted config identity,
 	// as the real writer does (the ec98acab8 sibling pattern).
 	finalManagerAcceptedSnapshot(t, store, cfg, "gate-r4-revoked", admitted.AttemptID)
-	m.RequestRestart("gate-r4-revoked", admitted.AttemptID)
 	_, revoked := store.BeginStop(admitted)
 	require.True(t, revoked, "the chat's Stop revokes the ready admission")
 
-	// Fixture: absorb the stamp's generation change into a legitimate idle
-	// start first (the ec98acab8 sibling pattern) — without it, the published
-	// reload's ABA restart rides along and the revoked admission's dropped
-	// restart is no longer observable on its own.
-	m.RequestRestart("gate-r4-revoked", "")
+	// Fixture: absorb the stamp's generation change with one bare reload —
+	// BEFORE the attempt-scoped restart is queued. Security r3 F5: one queued
+	// intent per connector, so an unconditional restart queued after the
+	// attempt-scoped one would REPLACE the operation under test and consume it
+	// before the assertion; with nothing queued yet this reload has no queued
+	// operation to disturb, and the negative assertion below observes the
+	// revoked admission's own restart being dropped.
 	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
+
+	m.RequestRestart("gate-r4-revoked", admitted.AttemptID)
 
 	before := len(built())
 	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
