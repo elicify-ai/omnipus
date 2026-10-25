@@ -162,9 +162,13 @@ func TestCrashRecovery_ActualCeilingProducesTruthfulStateEndAndSavedMessage(t *t
 	own, err := h.al.GetSessionStore().ReadTranscript(child.SessionID)
 	require.NoError(t, err)
 	var final int
+	// Spec reconciliation: the release ceiling notice is system-role/chat-only;
+	// DESIGN Decision 1 still requires Interrupted/tool_limit metadata. Select
+	// the notice independently of that metadata so missing stamping fails here.
 	for _, entry := range own {
-		if entry.Role == "assistant" && crashFields(t, entry)["interruption_reason"] == "tool_limit" {
+		if entry.Role == "system" && entry.Content == toolLimitResponse {
 			final++
+			t.Logf("CEILING_METADATA surface=saved-helper role=%s status=%q interruption_reason=%q", entry.Role, entry.Status, entry.InterruptionReason)
 			assert.Equal(t, "interrupted", entry.Status)
 			assert.Equal(t, "tool_limit", crashFields(t, entry)["interruption_reason"])
 		}
