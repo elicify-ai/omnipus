@@ -21,7 +21,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
 import { SessionHistoryResponse as PageSchema } from '@/lib/api/generated/schemas'
 
-type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage>; cancellations: Set<string> } // not-wire-format: transient projection ownership
+type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage>; cancellations: Set<string>; priorBootId: string | undefined } // not-wire-format: transient projection ownership
 
 /** Local classification only; never carries source data or exception details. */
 class SnapshotProtocolError extends Error {
@@ -119,7 +119,7 @@ function settleRecoveredSnapshotInput(bucket: SessionChatState, page: SessionHis
   }
 }
 
-function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryPage, baseline: Record<string, ChatMessage>, bootMismatch: boolean): { bucket: SessionChatState; page: SessionHistoryPage } {
+function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryPage, baseline: Record<string, ChatMessage>, bootChanged: boolean): { bucket: SessionChatState; page: SessionHistoryPage } {
   if (bucket.history.serverState?.status !== 'available' || bucket.activeTurnId) return { bucket, page }
   const messagesById = { ...bucket.messagesById }
   const settledTurns = new Set<string>()
@@ -156,7 +156,7 @@ function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryP
       ...bucket, messagesById, isStreaming: stillOpen ? bucket.isStreaming : false,
       // A changed boot retains the personally witnessed-cut check. A normal
       // completed snapshot must not relabel its completed answer as unfinished.
-      wipedOpenTurnIds: bootMismatch ? bucket.wipedOpenTurnIds : bucket.wipedOpenTurnIds?.filter(id => !settledTurns.has(id)),
+      wipedOpenTurnIds: bootChanged ? bucket.wipedOpenTurnIds : bucket.wipedOpenTurnIds?.filter(id => !settledTurns.has(id)),
     },
     page: { ...page, entries },
   }
@@ -214,7 +214,11 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
         older: { status: 'idle', error: null, attempt: 0 }, newer: { status: 'idle', error: null, attempt: 0 }, refresh: { status: 'idle', error: null, attempt: 0 } } } }))
     const bucket = context.get().sessionsById[frame.session_id]
     stages.set(frame.session_id, { frame, groups: new Map(), generation: bucket.history.viewGeneration, baseline: { ...bucket.messagesById }, invalid: false,
-      progressive: isProgressiveAttachFrame(frame), published: false, cancellations: new Set(), priorOrder: bucket.messageOrder.slice(), priorHistory: bucket.history, publishedRows: {} })
+      progressive: isProgressiveAttachFrame(frame), published: false, cancellations: new Set(), priorOrder: bucket.messageOrder.slice(), priorHistory: bucket.history, publishedRows: {},
+      // The live cursor's boot before this snapshot (undefined: no cursor yet,
+      // so no boot to compare). A different snapshot boot means the gateway
+      // restarted, whatever the snapshot reason says.
+      priorBootId: bucket.cursor?.bootId })
   }
   function collect(frame: ServerFrame, sid: string, stage: Stage, reduce: (frame: ServerFrame) => void): void {
     const origin = 'history_origin' in frame ? frame.history_origin : undefined
@@ -275,7 +279,12 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
         // the immediate prior reader so that failure is still transactional.
         beforeCommit = original
         const recovered = settleRecoveredSnapshotInput(original, page)
-        const { bucket: b, page: completedPage } = settleCompletedSnapshot(recovered, page, baseline, frame.reason === 'boot_mismatch')
+        // A restarted gateway keeps the witnessed-cut check, also when the
+        // snapshot reason is unknown_position: the boot the live stream ran
+        // on is gone, so a witnessed open turn did not finish there. Same
+        // definition as the catch_up_complete reducer's bootChanged.
+        const bootChanged = frame.reason === 'boot_mismatch' || (stage.priorBootId !== undefined && frame.boot_id !== undefined && frame.boot_id !== stage.priorBootId)
+        const { bucket: b, page: completedPage } = settleCompletedSnapshot(recovered, page, baseline, bootChanged)
         const completion = b === original ? {} : { isStreaming: b.isStreaming, wipedOpenTurnIds: b.wipedOpenTurnIds, recoveredFirstSend: b.recoveredFirstSend }
         if (b.history.viewMode === 'historical') {
           const needed = new Set(retainedPending(b).map(row => row.id))
