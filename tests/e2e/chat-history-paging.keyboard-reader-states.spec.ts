@@ -100,7 +100,9 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
       // This tests reflow; it does not pretend deviceScaleFactor changes CSS zoom.
       await page.setViewportSize({ width: 640, height: 500 });
     }
-    await history.seed({ label: 'a11y', count: 40, clearAt: [19] });
+    // D1/D5: 300 post-clear groups exceed two maximum-100 pages, leaving
+    // real older content for automatic prefetch and the distinct Enter request.
+    await history.seed({ label: 'a11y', count: 320, clearAt: [19] });
     await history.authenticate();
     await history.open();
     await page.evaluate(() => {
