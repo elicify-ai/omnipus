@@ -2702,6 +2702,7 @@ function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
 export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean }) {
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
+  const workspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
   const rateLimitEvent = useChatStore((s) => s.rateLimitEvent)
   const clearRateLimitEvent = useChatStore((s) => s.clearRateLimitEvent)
   const providerRetryEvent = useChatStore((s) => s.providerRetryEvent)
