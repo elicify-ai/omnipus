@@ -335,6 +335,8 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 		}
 	}
 	er.cn.rc.rx.rr.rq.ri.rf.response = retryResp
+	// Apply the normal response cleanup before retry text enters answer assembly.
+	er.cn.rc.rx.rr.orphanMarkup, er.cn.rc.rx.rr.hasOrphanMarkup = stripOrphanToolCallMarkup(retryResp)
 	er.cn.rc.rx.rr.rq.ri.rf.rt.ts.markTaskModelResponse(er.cn.rc.rx.rr.rq.ri.rf.responseFromModel)
 	er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.Content
 	if er.cn.responseContent == "" && er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
