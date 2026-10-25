@@ -863,7 +863,9 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// settlement SUPPRESSED while the pause holds (goalIsWaitingOnUser,
 		// checked in maybeSettleGoalIdle). Explicit Non-Behavior: only this
 		// typed marker counts — never a prose classifier.
-		gl.al.goalSetWaitingOnUser(gl.rec.GoalID, true)
+		if !gl.al.goalSetWaitingOnUser(gl.rec.GoalID, true) {
+			gl.al.notifyGoalPaused(gl.sessionID, gl.rec.GoalID, "waiting_on_user", gl.toolEvidence)
+		}
 		// The claim — its status and the worker's one-line question, when it
 		// gave one — is recorded on the goal record through the one claim
 		// writer a task run uses too (GOAL-FR-013/FR-014).
@@ -889,7 +891,9 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// toolFound branch above). Distinct from waiting_on_user in what it
 		// asks of the operator: "I cannot proceed and it is not something
 		// you can answer directly" rather than "I need an answer".
-		gl.al.goalSetBlocked(gl.rec.GoalID, true)
+		if !gl.al.goalSetBlocked(gl.rec.GoalID, true) {
+			gl.al.notifyGoalPaused(gl.sessionID, gl.rec.GoalID, "blocked", gl.toolEvidence)
+		}
 		// The one-line reason the worker gave (goal_claim carries it as
 		// evidence for blocked) is kept so the operator can see why — through
 		// the one claim writer a task run uses too (GOAL-FR-013).

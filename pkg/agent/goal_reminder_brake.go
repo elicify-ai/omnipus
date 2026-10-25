@@ -170,6 +170,13 @@ func (al *AgentLoop) commitGoalReminderPause(sessionID, goalID, assessedTurn, no
 // acceptance lock. It does not take that lock itself and does not decide the
 // pause again. enqueueGoalReminderPause takes the lock on its own.
 func (al *AgentLoop) finishGoalReminderPauseDelivery(sessionID string, accepted *goalReminderPauseAcceptance) error {
+	if accepted.written {
+		reason := "no progress after 5 reminders"
+		if accepted.content == goalReminderFailedTurnNotice {
+			reason = "3 reminder turns failed in a row"
+		}
+		al.notifyGoalPaused(sessionID, accepted.goalID, "reminder_brake", reason)
+	}
 	if al.audienceFor(context.Background(), steer.BoundaryFinalReply, sessionID) != steer.AudienceUser {
 		if accepted.written {
 			al.deliverGoalParkUpward(sessionID, false, accepted.content)

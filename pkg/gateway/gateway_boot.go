@@ -1359,6 +1359,8 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// listener accepts connections. Interval 0 means FR-038a's six-hour default:
 	// there is no config key for it yet, and KnowledgeLifecycleOptions.DriftInterval
 	// is where one would be passed in.
+	stg.agentLoop.SetGoalPausedHook(goalPausedNotifier(stg.runningServices.notifStore, stg.agentLoop, stg.agentLoop.GetConfig))
+
 	startKnowledgeLifecycle(stg.homePath, stg.wsHandler, 0,
 		knowledgeDriftNotifier(stg.runningServices.notifStore, stg.agentLoop, stg.agentLoop.GetConfig))
 
