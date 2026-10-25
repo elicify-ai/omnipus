@@ -229,8 +229,9 @@ describe('Q33: real REST reload and classified replay', () => {
         'C1: real snapshot committed all selected sources before rendering').toBe(true)
     })
     await waitFor(() => expect(useChatStore.getState().isReplaying).toBe(false))
-    expect.soft(useChatStore.getState().sessionsById[SID]?.lastReceivedEventTime,
-      'a hidden replay diagnostic still advances the original timestamp cursor').toBe(NOTICE_TIME)
+    expect.soft(useChatStore.getState().sessionsById[SID]?.cursor,
+      'completed live/control catch-up mints the seq cursor; hidden diagnostic replay does not advance it per frame')
+      .toStrictEqual({ bootId: 'q33-history-boot', seq: 5 })
     await renderHistoryThread()
     await expectRetainedVerboseToggle(kind)
     expect(getApiSchemaErrorCount()).toBe(0)

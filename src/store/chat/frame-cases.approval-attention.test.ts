@@ -12,7 +12,7 @@
  * (its cached state reads isInvalidated) and no attach frame is sent from
  * this path at all.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
@@ -20,6 +20,7 @@ import { queryClient } from '@/lib/queryClient'
 import type { Session } from '@/lib/api'
 import type { ServerFrame, WsConnection } from '@/lib/ws'
 import { noteForegroundAttach } from '@/store/session/foregroundAck'
+import { loadFixtureHistory } from '../../../tests/chat-history-paging/load-fixture-history'
 
 const SID = 'helper-session-1'
 const MAIN_SID = 'main-approval-check'
@@ -56,6 +57,7 @@ function stateFrame(sessionId: string, attentionBound: number): ServerFrame {
     pending_approvals: [],
     emitted_at: '2026-10-10T00:00:00Z',
     session_id: sessionId,
+    history_state: { status: 'available' },
     attention_bound: attentionBound,
   } as unknown as ServerFrame
 }
@@ -104,6 +106,7 @@ beforeEach(() => {
 afterEach(() => {
   queryClient.removeQueries({ queryKey: ['sessions'] })
   useConnectionStore.setState({ connection: null } as never)
+  vi.unstubAllGlobals()
 })
 
 describe('approval frames refresh the session list (U11 N2)', () => {
@@ -117,13 +120,14 @@ describe('approval frames refresh the session list (U11 N2)', () => {
     expect(queryClient.getQueryState(['sessions'])?.isInvalidated).toBe(true)
   })
 
-  it('approval frames never trigger the shown main’s acknowledgement early; the shown completion still acks with the frozen bound', () => {
+  it('approval frames never trigger the shown main’s acknowledgement early; the shown completion still acks with the frozen bound', async () => {
     // The claimed scenario, actually built: a real LOADED MAIN is the active
     // shown foreground, its bound (7) has arrived, catch-up has NOT completed.
     // Approval frames for a helper must produce no acknowledgement keyed off
     // any of it; only the shown completion may ack, with the frozen bound.
     useSessionStore.setState({ activeSessionId: MAIN_SID })
     queryClient.setQueryData(['sessions'], [mainSession(MAIN_SID)])
+    await loadFixtureHistory(useChatStore, MAIN_SID)
     noteForegroundAttach(MAIN_SID)
     useChatStore.getState().handleFrame(stateFrame(MAIN_SID, 7))
 
@@ -138,9 +142,10 @@ describe('approval frames refresh the session list (U11 N2)', () => {
     ])
   })
 
-  it('approval frames naming the loaded MAIN itself still refresh the roster and send nothing — the frame id is never matched against mains', () => {
+  it('approval frames naming the loaded MAIN itself still refresh the roster and send nothing — the frame id is never matched against mains', async () => {
     useSessionStore.setState({ activeSessionId: MAIN_SID })
     queryClient.setQueryData(['sessions'], [mainSession(MAIN_SID)])
+    await loadFixtureHistory(useChatStore, MAIN_SID)
     noteForegroundAttach(MAIN_SID)
     useChatStore.getState().handleFrame(stateFrame(MAIN_SID, 7))
 
