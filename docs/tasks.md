@@ -145,7 +145,7 @@ A settings reload is not a gateway restart. A task that is already running keeps
 
 An agent's `set_todos` scratchpad is a separate checklist card, not another execution of the task it is working on. If the agent uses the task's title for its scratchpad, two cards can have the same title: the assigned task and its working checklist. Creating the checklist does not start another task run.
 
-A confirmed wrong model (`bad_model`), or a named connection that cannot be set up (`model_route_unavailable`), ends a task **Failed** without consuming an attempt or restarting unchanged. The result names the failing provider/model and the settings to fix. Correct the model/provider pair or the provider's credentials and endpoint settings, then run the task again. These configuration failures are not temporary provider outages.
+A named connection that cannot be set up (`model_route_unavailable`), and a confirmed wrong model (`bad_model`) that no backup could absorb — the agent has no backup model, or every model in its chain was rejected this way — end a task **Failed** without consuming an attempt or restarting unchanged. With a backup model configured, a `bad_model` primary does not fail the task: the run continues on the backup, and a fallback notice names both models. The result names the failing provider/model and the settings to fix. Correct the model/provider pair or the provider's credentials and endpoint settings, then run the task again. These configuration failures are not temporary provider outages.
 
 - **A task with no agent cannot run.** The engine skips unassigned tasks; assign one before starting.
 - **The assigned agent must be on the workspace team** — its core members plus anyone reachable through delegation. See [workspaces](workspaces.md).

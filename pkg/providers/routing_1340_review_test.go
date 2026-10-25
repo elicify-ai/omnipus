@@ -3,7 +3,6 @@ package providers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -36,27 +35,49 @@ func TestRouting1340_ReviewClassificationEvidence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cause := &common.ProviderError{Status: 400, Body: tc.body}
 			got := ClassifyError(cause, "openrouter", tc.model)
-			if got == nil || got.Reason != tc.want || got.IsRetriable() || got.Status != 400 {
-				t.Fatalf("classification=%+v, want non-retriable %s/status400", got, tc.want)
+			if got == nil || got.Reason != tc.want || got.Status != 400 {
+				t.Fatalf("classification=%+v, want %s/status400", got, tc.want)
+			}
+			// Spec change (founder Q70, 2026-10-24): bad_model is now
+			// retriable (falls back to the backup, rule 1); format stays
+			// terminal (rule 4). Evidence classification itself is unchanged.
+			if wantRetriable := tc.want != FailoverFormat; got.IsRetriable() != wantRetriable {
+				t.Fatalf("retriability=%t, want %t for %s", got.IsRetriable(), wantRetriable, tc.want)
 			}
 		})
 	}
 }
 
-func TestRouting1340_ExplicitBadModelNeverFallsBackOnProse(t *testing.T) {
+// Spec change (founder Q70, 2026-10-24): OLD —
+// TestRouting1340_ExplicitBadModelNeverFallsBackOnProse required structured
+// model_not_found evidence to STOP the chain (bad_model was terminal), whatever
+// incidental words rode along. NEW — the classifier verdict is unchanged
+// (still bad_model; incidental words neither create nor destroy the verdict),
+// and the chain now moves to the backup, which answers (rule 1).
+func TestRouting1340_ExplicitBadModelEvidenceFallsBackToBackup(t *testing.T) {
 	for _, word := range []string{"expired", "timeout", "rate limit"} {
 		t.Run(word, func(t *testing.T) {
+			// Evidence oracle (unchanged): the structured code, not the
+			// incidental word, decides the verdict.
+			body := `{"error":{"code":"model_not_found","message":"` + word + ` model not found"}}`
+			fe := ClassifyError(&common.ProviderError{Status: 400, Body: body}, "openrouter", "missing")
+			if fe == nil || fe.Reason != FailoverReason("bad_model") {
+				t.Fatalf("structured verdict lost for %q: %+v", word, fe)
+			}
+			// Chain oracle (NEW): that same verdict now falls back (rule 1).
 			var attempted []string
-			_, err := NewFallbackChain(NewCooldownTracker()).Execute(context.Background(), []FallbackCandidate{{Provider: "openrouter", Model: "missing"}, {Provider: "other", Model: "good"}}, func(_ context.Context, p, m string) (*LLMResponse, error) {
+			result, err := NewFallbackChain(NewCooldownTracker()).Execute(context.Background(), []FallbackCandidate{{Provider: "openrouter", Model: "missing"}, {Provider: "other", Model: "good"}}, func(_ context.Context, p, m string) (*LLMResponse, error) {
 				attempted = append(attempted, p+"/"+m)
 				if p == "other" {
-					return &LLMResponse{Content: "must not rescue a wrong model"}, nil
+					return &LLMResponse{Content: "answered by the backup"}, nil
 				}
-				return nil, &common.ProviderError{Status: 400, Body: `{"error":{"code":"model_not_found","message":"` + word + ` model not found"}}`}
+				return nil, &common.ProviderError{Status: 400, Body: body}
 			})
-			var fe *FailoverError
-			if !errors.As(err, &fe) || fe.Reason != FailoverReason("bad_model") || !reflect.DeepEqual(attempted, []string{"openrouter/missing"}) {
-				t.Fatalf("bad-model evidence fell through: attempted=%v error=%v", attempted, err)
+			if err != nil || result == nil || result.Response == nil || result.Response.Content != "answered by the backup" || result.Provider != "other" {
+				t.Fatalf("explicit bad_model evidence must fall back to the backup: result=%+v err=%v", result, err)
+			}
+			if !reflect.DeepEqual(attempted, []string{"openrouter/missing", "other/good"}) {
+				t.Fatalf("chain must try the primary, then the backup: %v", attempted)
 			}
 		})
 	}

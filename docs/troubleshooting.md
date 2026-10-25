@@ -136,7 +136,7 @@ For an HTTP 400 rejection, the failure notice distinguishes a wrong model from a
 
 | Notice | Meaning and next step |
 |---|---|
-| `bad_model`, naming the provider and model | The provider specifically reported that the model was not found or is not offered. Choose a model offered by that provider in the agent's settings. Omnipus does not try another provider for this failure. |
+| `bad_model`, naming the provider and model | The provider specifically reported that the model was not found or is not offered. When the agent has a backup model configured, Omnipus answers from it and a fallback notice names both models; if no backup exists, or every model in the chain is rejected this way, the failure stops the chat turn or task. Choose a model offered by that provider in the agent's settings. |
 | `HTTP 400: Bad Request; format`, naming the provider and model | The provider rejected the request, but did not identify a more specific cause. This does **not** prove the model is unavailable. Enable **Verbose chat** before reproducing it to inspect the available technical detail. |
 
 A confirmed wrong-model error stops all attachment recovery too: removing an image or converting a PDF cannot make a missing model exist. For availability prose, Omnipus reads the clause's **subject** — what is unavailable — rather than searching for the word “model”.

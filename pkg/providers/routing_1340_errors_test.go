@@ -50,8 +50,11 @@ func TestRouting1340_CodexStructuredErrors(t *testing.T) {
 	}
 }
 
-// R3: wrong-model evidence on400 stops this request. Other statuses and
-// existing400 overrides retain their independent routing decisions.
+// R3: wrong-model evidence on400 is classified bad_model. Spec change
+// (founder Q70, 2026-10-24): OLD — bad_model was retriable=false and stopped
+// the request. NEW — bad_model is retriable and falls back to the backup
+// (rule 1); format and context overflow stay retriable=false (rule 4). Every
+// other row's classification and retriability are unchanged.
 func TestRouting1340_Classification(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -60,11 +63,11 @@ func TestRouting1340_Classification(t *testing.T) {
 		want      FailoverReason
 		retriable bool
 	}{
-		{"bad_model_code", 400, `{"error":{"code":"model_not_found"}}`, "bad_model", false},
-		{"bad_model_message", 400, `{"error":{"message":"Model 'missing' not found"}}`, "bad_model", false},
-		{"bad_model_named_unquoted", 400, `{"error":{"message":"Model requested-model not found"}}`, "bad_model", false},
-		{"invalid_model_id", 400, `{"error":{"message":"missing is not a valid model ID"}}`, "bad_model", false},
-		{"not_offered", 400, `{"error":{"message":"Model 'missing' is not available on this provider"}}`, "bad_model", false},
+		{"bad_model_code", 400, `{"error":{"code":"model_not_found"}}`, "bad_model", true},
+		{"bad_model_message", 400, `{"error":{"message":"Model 'missing' not found"}}`, "bad_model", true},
+		{"bad_model_named_unquoted", 400, `{"error":{"message":"Model requested-model not found"}}`, "bad_model", true},
+		{"invalid_model_id", 400, `{"error":{"message":"missing is not a valid model ID"}}`, "bad_model", true},
+		{"not_offered", 400, `{"error":{"message":"Model 'missing' is not available on this provider"}}`, "bad_model", true},
 		{"empty400", 400, "", FailoverFormat, false},
 		{"arbitrary400", 400, `{"error":{"message":"account header missing"}}`, FailoverFormat, false},
 		{"unrelated_not_found", 400, `{"error":{"message":"file not found for model input"}}`, FailoverFormat, false},
@@ -98,20 +101,29 @@ func TestRouting1340_Classification(t *testing.T) {
 
 func TestRouting1340_UnquotedSelectedModel(t *testing.T) {
 	got := ClassifyError(&common.ProviderError{Status: 400, Body: `{"error":{"message":"Model gpt-6.1 not found"}}`}, "openai-chatgpt", "gpt-6.1")
-	if got == nil || got.Reason != FailoverReason("bad_model") || got.IsRetriable() {
-		t.Fatalf("positive evidence naming the requested model must be bad_model: %+v", got)
+	// Spec change (founder Q70, 2026-10-24): the verdict is still bad_model,
+	// and it is now retriable (falls back to the backup); OLD: non-retriable.
+	if got == nil || got.Reason != FailoverReason("bad_model") || !got.IsRetriable() {
+		t.Fatalf("positive evidence naming the requested model must be retriable bad_model: %+v", got)
 	}
 }
 
 func TestRouting1340_TypedClassification(t *testing.T) {
 	cause := &FailoverError{Reason: "bad_model", Status: 400, Provider: "openrouter", Model: "missing"}
 	got := ClassifyError(fmt.Errorf("wrapped: %w", cause), "", "")
-	if got == nil || got.Reason != FailoverReason("bad_model") || got.Status != 400 || got.Provider != "openrouter" || got.Model != "missing" || got.IsRetriable() {
+	// Spec change (founder Q70, 2026-10-24): the typed verdict still survives
+	// reclassification, and is now retriable (falls back); OLD: non-retriable.
+	if got == nil || got.Reason != FailoverReason("bad_model") || got.Status != 400 || got.Provider != "openrouter" || got.Model != "missing" || !got.IsRetriable() {
 		t.Fatalf("typed routing verdict was lost on reclassification: %+v", got)
 	}
 }
 
-func TestRouting1340_BadModelFailsFast(t *testing.T) {
+// Spec change (founder Q70, 2026-10-24): OLD — TestRouting1340_BadModelFailsFast
+// required a typed bad_model to stop the chain without calling the next
+// candidate. NEW (rule 1) — bad_model moves to the next candidate and the
+// backup answers. Single-candidate and all-candidates terminal behaviour is
+// pinned by TestBadModelFallback_* in badmodel_fallback_test.go.
+func TestRouting1340_BadModelFallsBackToBackup(t *testing.T) {
 	var attempted []string
 	fc := NewFallbackChain(NewCooldownTracker())
 	result, err := fc.Execute(context.Background(), []FallbackCandidate{
@@ -119,15 +131,14 @@ func TestRouting1340_BadModelFailsFast(t *testing.T) {
 	}, func(_ context.Context, provider, model string) (*LLMResponse, error) {
 		attempted = append(attempted, provider+"/"+model)
 		if provider == "other" {
-			return &LLMResponse{Content: "must not fall through"}, nil
+			return &LLMResponse{Content: "answered by the backup"}, nil
 		}
 		return nil, &common.ProviderError{Status: 400, Body: `{"error":{"code":"model_not_found"}}`}
 	})
-	var fe *FailoverError
-	if result != nil || !errors.As(err, &fe) || fe.Reason != FailoverReason("bad_model") || fe.IsRetriable() {
-		t.Fatalf("wrong model must fail fast as typed bad_model, result=%+v err=%v", result, err)
+	if err != nil || result == nil || result.Response == nil || result.Response.Content != "answered by the backup" || result.Provider != "other" || result.Model != "good" {
+		t.Fatalf("typed bad_model must fall back to the named backup, result=%+v err=%v", result, err)
 	}
-	if !reflect.DeepEqual(attempted, []string{"openrouter/bad"}) {
-		t.Fatalf("wrong model called another provider: %v", attempted)
+	if !reflect.DeepEqual(attempted, []string{"openrouter/bad", "other/good"}) {
+		t.Fatalf("chain must try the primary, then the backup: %v", attempted)
 	}
 }
