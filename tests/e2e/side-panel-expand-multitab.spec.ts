@@ -8,12 +8,12 @@
  * W5 Clicking the toggle again focuses the app-opened tab; no second tab.
  * W7 A manually opened full-page tab is not duplicated; the affordance shows.
  */
+import { createHash } from 'node:crypto'
 import { expect, type Page, type TestInfo } from '@playwright/test'
 import type { WorkspaceCreateRequest } from '../../src/lib/api/generated/openapi-types'
 import { readDockSnapshot, dockViolations, toggleWorkspacePanel, type DockPanel } from './fixtures/side-panel-docking'
 import { test } from './fixtures/console-errors'
 import { newAdminApiContext } from './fixtures/admin-api'
-import { softSkip } from './fixtures/skip-tracking'
 
 async function createWorkspace(): Promise<string> {
   const ctx = await newAdminApiContext()
@@ -72,12 +72,67 @@ test('W5 — a second Library toggle focuses the existing tab and does not open 
 })
 
 test('W7 — a manually opened Library tab is not duplicated; the switch affordance shows', async ({ page, context }) => {
-  // Temporary quarantine: the current CI run failed before passing on retry.
-  // https://github.com/elicify-ai/omnipus/issues/1180 — expires 2026-10-17.
-  softSkip(test, 'W7 current CI failure on first attempt: https://github.com/elicify-ai/omnipus/issues/1180; expires 2026-10-17')
+  // #1180 race fix (was quarantined): the manual tab announces its Library
+  // presence over BroadcastChannel only from its route's mount effect — AFTER
+  // the goto() below has resolved. The switch click's already-open decision
+  // reads whatever announcements have arrived in THIS tab
+  // (panelTabPresence.ts resolveExistingPanelTab), so clicking before the
+  // announcement lands docks the panel instead of showing the affordance, and
+  // the assertion can never recover (the toast renders only at click time).
+  // Synchronize on the announcement itself: record presence messages by
+  // wrapping this tab's own monitor subscription, so a recorded announcement
+  // and the product's presence-state update happen in the SAME dispatch, and
+  // wait for this workspace's library identity before clicking. No sleeps,
+  // no thresholds.
+  await page.addInitScript(() => {
+    const channelName = 'omnipus-panel-tab-presence'
+    const seen: { key: string; sentAt: number }[] = []
+    ;(window as unknown as { __e2ePanelPresenceAnnouncements?: { key: string; sentAt: number }[] })
+      .__e2ePanelPresenceAnnouncements = seen
+    const proto = BroadcastChannel.prototype as unknown as {
+      addEventListener: (
+        this: BroadcastChannel,
+        type: string,
+        listener: EventListenerOrEventListenerObject | null,
+        options?: boolean | AddEventListenerOptions,
+      ) => void
+    }
+    const originalAddEventListener = proto.addEventListener
+    proto.addEventListener = function (type, listener, options) {
+      if (type === 'message' && this.name === channelName && typeof listener === 'function') {
+        const wrapped: EventListener = (event: Event) => {
+          const data = (event as MessageEvent).data as
+            | { type?: string; identityKey?: string; sentAt?: number }
+            | null
+          if (data && data.type === 'presence' && typeof data.identityKey === 'string') {
+            seen.push({ key: data.identityKey, sentAt: typeof data.sentAt === 'number' ? data.sentAt : 0 })
+          }
+          listener.call(this, event)
+        }
+        return originalAddEventListener.call(this, type, wrapped, options)
+      }
+      return originalAddEventListener.call(this, type, listener, options)
+    }
+  })
   await page.goto(`/#/workspaces/${workspaceId}/chat`)
   const manual = await context.newPage()
   await manual.goto(`/#/library?workspace=${workspaceId}`)
+  // The announcement's identityKey is sha256("library:<workspaceId>") — the
+  // panelPresenceKey over panelIdentityKey in src/lib/panelTabPresence.ts.
+  // 15 s is the suite-wide expect timeout (playwright.config.ts), reused as
+  // the synchronization ceiling; the wait resolves the moment the manual
+  // tab's announcement reaches this tab's monitor.
+  const expectedKey = createHash('sha256').update(`library:${workspaceId}`).digest('hex')
+  await page.waitForFunction(
+    (key) => {
+      const seen = (
+        window as unknown as { __e2ePanelPresenceAnnouncements?: { key: string }[] | undefined }
+      ).__e2ePanelPresenceAnnouncements
+      return Array.isArray(seen) && seen.some((m) => m.key === key)
+    },
+    expectedKey,
+    { timeout: 15_000 },
+  )
   await page.bringToFront()
   await page.getByRole('button', { name: /^library$/i }).click()
   await expect(page.getByText(/already open/i)).toBeVisible()

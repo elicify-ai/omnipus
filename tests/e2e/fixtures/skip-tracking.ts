@@ -170,12 +170,6 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
     note: 'Intermittent CI hang, root cause not found: a real Playwright failure captured on a related run was "locator.click: Test timeout of 720000ms exceeded" (the test\'s own 720s test.setTimeout firing while stuck inside a click call). Founder-ruled 2026-09-28 to stop investigating and disable instead, rather than leave the suite red/flaky. Unrelated to #613 (see the note above this array). The until date is a forced re-look, not a resolution promise, matching this file\'s convention for the other entry above — extend with justification if #1015 is still open by then.',
   },
   {
-    test: 'W7 — a manually opened Library tab is not duplicated; the switch affordance shows',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/1180',
-    until: '2026-11-14',
-    note: 'Temporary quarantine: current CI attempt failed before passing on retry. W4 and W5 remain enabled; this is not restored coverage. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
-  },
-  {
     test: 'UAT-13 — video is smooth, and it is really video',
     issue: 'https://github.com/elicify-ai/omnipus/issues/1142',
     until: '2026-11-14',
@@ -199,17 +193,12 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
     until: '2026-11-14',
     note: 'Temporary quarantine: current CI live-browser agent handback failure; ownership tests remain enabled. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
   },
-  {
-    test: 'D-106 — the same token URL opened as its own tab is refused, carries the isolation policy, and never renders the page',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/1181',
-    until: '2026-11-14',
-    note: 'Temporary isolation-webkit-only quarantine: current CI D-106 top-level refusal failure. Chromium and Firefox remain enabled; security verification gap accepted, not evidence isolation works. Extended 2026-10-10 -> 2026-10-17 by founder decision (2026-10-10): the fix is queued behind session-core; the extension is a forced re-look, not a resolution.',
-  },
 ];
 
 
 // Extended 2026-10-17 by founder ruling (land-now batch): the six expiries lapsed at 2026-10-17T00:00Z and reddened all CI; renewal continues the existing quarantines unchanged under their issues.
 // Extended 2026-10-24 -> 2026-11-14 by founder ruling (Q80, 'extend 3 weeks'): the same six entries reached their 2026-10-24 re-look date and reddened every CI run (seen on #1266 CI run 40066452208); #1142, #1180 and #1181 remain open and are the tracked issues. This is a forced re-look, not a resolution.
+// Removed 2026-10-24: the #1180 (W7) and #1181 (D-106) entries — the tests were fixed, not renewed. W7 now synchronizes its switch click on the manual tab's BroadcastChannel presence announcement (recorded from the monitor's own subscription dispatch); D-106 navigates the token URL from a neutral page in the same context instead of the just-loaded SPA page, whose router started competing navigations that broke WebKit's cross-document goto. The refusals and affordance assertions are unchanged.
 // ── Validation ──────────────────────────────────────────────────────────────────
 //
 // Runs at module load time. Any malformed SKIP_ALLOWLIST entry causes an
