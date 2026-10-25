@@ -157,6 +157,11 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 					if tc.wantInterrupted {
 						assert.Equal(t, session.EntryTypeSystem, entry.Type)
 						assert.Empty(t, entry.Model)
+						// Release system/chat-only provenance does not remove DESIGN
+						// Decision 1's status/cause on the saved ceiling notice.
+						t.Logf("CEILING_METADATA surface=saved-gateway role=%s status=%q interruption_reason=%q", entry.Role, entry.Status, entry.InterruptionReason)
+						assert.Equal(t, "interrupted", entry.Status, "saved system ceiling notice status")
+						assert.Equal(t, "tool_limit", entry.InterruptionReason, "saved system ceiling notice cause")
 					}
 					terminalEntries = append(terminalEntries, entry)
 				}
@@ -167,6 +172,9 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 			}
 			assert.Equal(t, wantContents, contents, "durable narration must not substitute for the distinct terminal outcome")
 			assert.Len(t, terminalEntries, 1, "exactly one durable outcome for this turn")
+			if tc.wantInterrupted {
+				terminalAcceptanceAssertCeilingMetadata(t, frames, meta.ID, end.Meta.TurnID, tc.wantText, "live")
+			}
 			live, liveByID := terminalAcceptanceLiveText(t, frames, meta.ID, end.Meta.TurnID)
 			assert.Len(t, liveByID, len(wantContents), "live message count agrees with the independent outcome oracle")
 			for _, entry := range entries {
@@ -189,9 +197,40 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 				require.NoError(t, replayConn.WriteJSON(generated.AttachSessionFrame{Type: "attach_session", SessionId: meta.ID}))
 				replayed := terminalAcceptanceCollect(t, replayConn)
 				terminalAcceptanceAssertReplay(t, replayed, meta.ID, end.Meta.TurnID, contents, terminalEntries, tc.wantText, wantRole)
+				if tc.wantInterrupted {
+					terminalAcceptanceAssertCeilingMetadata(t, replayed, meta.ID, end.Meta.TurnID, tc.wantText, "reload-replay")
+				}
 			}
 		})
 	}
+}
+
+// Inspect actual LIVE and generic attach/replay JSON. ReplayMessageFrame.status
+// is not generated at the RED baseline, so decoding through that struct could
+// discard the missing/new key. These maps observe bytes, not a parallel schema.
+func terminalAcceptanceAssertCeilingMetadata(t *testing.T, frames []collectedFrame, sessionID, turnID, content, surface string) {
+	t.Helper()
+	var notices int
+	for _, frame := range frames {
+		if frame.Type != "replay_message" {
+			continue
+		}
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(frame.Raw, &fields))
+		// Never select by the status or cause that the oracle must validate.
+		if fields["session_id"] != sessionID || fields["turn_id"] != turnID || fields["content"] != content {
+			continue
+		}
+		notices++
+		assert.Equal(t, "system", fields["role"], "%s ceiling notice provenance", surface)
+		id, ok := fields["id"].(string)
+		assert.True(t, ok, "%s notice has a string durable ID", surface)
+		assert.NotEmpty(t, id, "%s notice retains its durable ID", surface)
+		t.Logf("CEILING_METADATA surface=%s role=%v status=%v interruption_reason=%v", surface, fields["role"], fields["status"], fields["interruption_reason"])
+		assert.Equal(t, "interrupted", fields["status"], "%s system ceiling notice status", surface)
+		assert.Equal(t, "tool_limit", fields["interruption_reason"], "%s system ceiling notice cause", surface)
+	}
+	assert.Equal(t, 1, notices, "%s positive instrument: exactly one real notice, independent of status/cause", surface)
 }
 
 func terminalAcceptanceTurnDone(t *testing.T, frames []collectedFrame, sessionID string) generated.DoneFrame {
