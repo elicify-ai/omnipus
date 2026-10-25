@@ -43,7 +43,11 @@ func TestSetTodosDescriptionQ2Exact(t *testing.T) {
 	if _, topLevel := properties["active_form"]; topLevel {
 		t.Error("active_form must not become a top-level parameter")
 	}
-	if !reflect.DeepEqual(items["required"], []string{"text"}) {
-		t.Errorf("active_form must remain optional, got required=%#v", items["required"])
+	// SPEC CHANGE 2026-10-24: OLD — active_form optional; NEW — required on
+	// every todo item (founder decision). The Description fixture above still
+	// pins the pre-decision founder-approved text; it is updated when the
+	// prompt engineer's required-form text lands (coordinate via the chief).
+	if !reflect.DeepEqual(items["required"], []string{"text", "active_form"}) {
+		t.Errorf("active_form must be required, got required=%#v, want [text active_form]", items["required"])
 	}
 }
