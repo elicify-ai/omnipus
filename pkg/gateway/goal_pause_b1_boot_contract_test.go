@@ -94,7 +94,7 @@ func (p *b1CompProvider) Chat(ctx context.Context, messages []providers.Message,
 		return nil, b1CompFailure
 	}
 	if mode == "output" && round == 1 {
-		return &providers.LLMResponse{FinishReason: "tool_calls", ToolCalls: []providers.ToolCall{{ID: "b1-output-proof", Name: b1CompOutputToolName, Arguments: map[string]any{}}}}, nil
+		return &providers.LLMResponse{FinishReason: "tool_calls", ToolCalls: []providers.ToolCall{{ID: "b1-output-load", Name: "ToolSearch", Arguments: map[string]any{"names": []string{b1CompOutputToolName}}}, {ID: "b1-output-proof", Name: b1CompOutputToolName, Arguments: map[string]any{}}}}, nil
 	}
 	if (mode == "blocked" || mode == "waiting_on_user") && round == 1 {
 		calls := []providers.ToolCall{{ID: fmt.Sprintf("b1-real-claim-%d", p.f.seq), Name: "goal_claim", Arguments: map[string]any{"status": mode, "evidence": evidence}}}
@@ -338,10 +338,13 @@ func (f *b1CompFixture) arm(t *testing.T) {
 	require.NoError(t, err)
 	gs := goal.NewStore(f.home)
 	require.NoError(t, gs.Create(g))
-	_, err = gs.Update(g.GoalID, func(cur *goal.Goal) error { return cur.Activate(f.sid, time.Now().UTC()) })
+	_, err = gs.Update(g.GoalID, func(cur *goal.Goal) error {
+		cur.SetRoute("webchat", f.chat)
+		return cur.Activate(f.sid, time.Now().UTC())
+	})
 	require.NoError(t, err)
 	f.gid = g.GoalID
-	f.user(t, "text", "") // actual goal entry captures its real webchat routing.
+	f.user(t, "text", "") // Genuine input uses the same stored activation routing; no manual authority bits.
 }
 func (f *b1CompFixture) age(t *testing.T) {
 	t.Helper()
