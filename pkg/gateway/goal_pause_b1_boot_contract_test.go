@@ -150,6 +150,9 @@ func b1CompBoot(t *testing.T, shared, accountless bool) *b1CompFixture {
 	slog.Error("B1 existing bridge instrument control", "error", controlErr)
 	require.Equal(t, 1, b1CompActualErrorCount(t, nativePath, controlErr), "SETUP: actual error severity and structured error must survive the existing boot bridge")
 	cfg := seededBootConfig(t)
+	// Bind the existing deterministic provider model through normal config;
+	// do not clear or bypass the real model-assignment/readiness gates.
+	cfg.Agents.Defaults.DefaultModel.Model = (&b1CompProvider{}).GetDefaultModel()
 	cfg.Agents.Defaults.Home = filepath.Join(home, "agents")
 	cfg.Gateway.Host = "127.0.0.1"
 	cfg.Gateway.Port = 0
