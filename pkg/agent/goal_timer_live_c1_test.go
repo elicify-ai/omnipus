@@ -174,7 +174,7 @@ func c1LiveDue(t *testing.T, h *grHarness, pe *PlanEngine, clock *fakePlanClock,
 	case msg := <-h.al.bus.InboundChan():
 		require.Equal(t, h.id, msg.AsyncTranscriptSessionID)
 		require.Equal(t, testDefaultAgentID, msg.AsyncOriginAgentID)
-		require.Equal(t, "system", msg.Sender.CanonicalID)
+		require.Equal(t, goalLoopFollowUpSenderID, msg.Sender.CanonicalID)
 		require.Equal(t, "true", msg.Metadata["goal_reminder"])
 		return msg
 	default:
