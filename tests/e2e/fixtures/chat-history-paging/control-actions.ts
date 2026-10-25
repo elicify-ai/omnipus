@@ -204,11 +204,13 @@ export async function assertSessionStopped(history: HistoryHarness) {
   }, { message: 'real server lifecycle, not a hidden Stop button, records stopped' }).toBe('stopped');
 }
 export async function floodRealJournal(producer: Page, traffic: Traffic, sessionId: string, agentId: string) {
-  // Five valid256-KiB USER messages exceed the real1-MiB session journal.
-  // They are sent through the already authenticated real client socket, not
-  // fabricated incoming frames or an internal hub-size test override.
+  // ADR-066 bounds USER input at 64,000 Unicode codepoints, not UTF-8 bytes.
+  // Five 60,000-codepoint non-emoji CJK messages fit that admission contract
+  // while their four-byte encoding exceeds the unchanged real 1-MiB journal.
+  // Actual authenticated socket sends, canonical echoes and bytes are required.
   for (let i = 0; i < 5; i++) {
-    const content = `HISTORY_JOURNAL_FILL_${i} ` + 'x'.repeat(256 * 1024);
+    const content = `HISTORY_JOURNAL_FILL_${i} ` + '\u{20000}'.repeat(60_000);
+    expect([...content].length, 'journal fixture fits the shipped 64,000-codepoint user admission bound').toBeLessThanOrEqual(64_000);
     const frame = { type: 'message', session_id: sessionId, agent_id: agentId,
       client_message_id: `history-journal-fill-${i}`, content } satisfies ClientFrame;
     const schemas = await import('../../../../src/lib/api/generated/ws-schemas');

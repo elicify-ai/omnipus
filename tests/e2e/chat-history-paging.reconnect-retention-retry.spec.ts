@@ -134,7 +134,9 @@ test('T24 B47 B10: failed range refresh keeps cached rows/out-of-date/anchor, pa
     const retry = await holdPage(page, (url) => url.searchParams.has('window_start'));
     try {
       const button = alert.getByRole('button', { name: 'Retry', exact: true });
-      await button.focus();
+      // Focus the real recovery control without native focus scrolling away
+      // from the saved reader. The keyboard action is still a genuine Enter.
+      await button.evaluate(element => (element as HTMLElement).focus({ preventScroll: true }));
       await page.keyboard.press('Enter');
       await retry.requested;
       await expect(button).toBeFocused();
@@ -222,11 +224,20 @@ for (const survival of ['anchor-kept', 'anchor-gone', 'none'] as const) {
     const before = history.traffic.frames.length;
     await history.gateway.kill9();
     history.gateway.assertStoppedForFixture();
-    // Actual rollover exists before aging. Only the real retention owner deletes
-    // the chosen rolled files and updates the real index; no fabricated frames.
-    ageRolledHistoryPartitions(history.gateway, history.sessionId, expired.map((n) => days[n].day), new Date(Date.now() - 60 * 24 * 60 * 60 * 1000));
-    const receipt = await sweepChatHistoryFixture(history.gateway, 30);
-    expect(receipt.removed_partitions).toBe(expired.length);
+    // Actual rollover exists before aging. D1a refuses 65+ unpublished deletion
+    // facts, so create separate real expiry cohorts BEFORE each real sweep,
+    // never chunk-recover an already-existing over-bound gap or rebuild an index.
+    const receipts: Awaited<ReturnType<typeof sweepChatHistoryFixture>>[] = [];
+    const cohortSize = 32; // Half D1a's 64 combined-item bound; no other writer runs.
+    for (let start = 0; start < expired.length; start += cohortSize) {
+      const cohort = expired.slice(start, start + cohortSize);
+      ageRolledHistoryPartitions(history.gateway, history.sessionId, cohort.map(n => days[n].day), new Date(Date.now() - 60 * 24 * 60 * 60 * 1000));
+      const receipt = await sweepChatHistoryFixture(history.gateway, 30);
+      expect(receipt.removed_partitions, 'each actual retention pass removes exactly its newly aged cohort').toBe(cohort.length);
+      receipts.push(receipt);
+    }
+    expect(receipts.reduce((sum, receipt) => sum + receipt.removed_partitions, 0),
+      'all originally selected partitions really expired through the retention owner').toBe(expired.length);
     await history.gateway.restart({ relogin: false });
     await waitForConnected(page);
     await expect.poll(() => history.traffic.frames.slice(before).filter((f) => f.type === 'catch_up_complete').length).toBe(1);
@@ -251,7 +262,7 @@ for (const survival of ['anchor-kept', 'anchor-gone', 'none'] as const) {
     }
     await expect(page.getByLabel('Conversation history', { exact: true })).toBeFocused();
     expect(history.traffic.sends).toEqual([]);
-    await history.record(`range-expiry-${survival}`, { receipt });
+    await history.record(`range-expiry-${survival}`, { receipts });
   });
 }
 
