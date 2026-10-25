@@ -523,3 +523,129 @@ describe('the acknowledging attach is cheap: it carries the bucket cursor', () =
     })
   })
 })
+
+// r19 a/b/d negative controls. D7a: server history availability is not proof
+// of a loaded client page. D10/D11: contradictory page metadata is an error,
+// not successful empty history. All pre-existing cases/helpers stay intact.
+function c2OpenWithoutHistory(sid: string, isMain = true): void {
+  useSessionStore.setState({ ...useSessionStore.getInitialState(), activeSessionId: sid }, true)
+  useChatStore.setState(useChatStore.getInitialState(), true)
+  useConnectionStore.setState({ ...useConnectionStore.getInitialState(), connection: connectionThat(true), isConnected: true }, true)
+  queryClient.setQueryData(['sessions'], [isMain ? mainSession(sid) : chatSession(sid)])
+  hiddenSpy.mockReturnValue(false)
+  useChatStore.getState().resetSessionForReplay(sid)
+  noteForegroundAttach(sid)
+  expect(useChatStore.getState().sessionsById[sid].history.historyLoaded,
+    'instrument: no page was preloaded for this negative control').toBe(false)
+  expect(useChatStore.getState().sessionsById[sid].replayCompletedForSession).toBeNull()
+}
+
+function c2FeedAvailable(sid: string): void {
+  const frame = stateFrame(sid, 7)
+  expectValidFrame(frame)
+  useChatStore.getState().handleFrame(frame)
+}
+
+function c2CompleteLive(sid: string, cut: number): void {
+  const frame: ServerFrame = { type: 'catch_up_complete', session_id: sid, seq: cut, boot_id: 'c2-negative-boot', mode: 'incremental' }
+  expectValidFrame(frame)
+  useChatStore.getState().handleFrame(frame)
+}
+
+function c2CaptureHistoryReads(sid: string, body: ReturnType<typeof page>): string[] {
+  const reads: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), 'http://localhost')
+    const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+    reads.push(`${method} ${url.pathname}${url.search}`)
+    if (method !== 'GET' || url.pathname !== `/api/v1/sessions/${sid}/messages`) {
+      throw new Error(`Undeclared C2 HTTP request: ${method} ${url.pathname}`)
+    }
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }))
+  return reads
+}
+
+// Each named case is the exact selector handed to the independent a/b/d
+// probes. These current-implementation controls are not self-CHECK kills.
+describe('C2 r19 missing-scenario negative controls through real history and acknowledgement owners', () => {
+  it('r19-a: an available incremental completion never acknowledges an unloaded main; the real page permits exactly bound 7', async () => {
+    const sid = 'c2-r19-a-unloaded-main'
+    c2OpenWithoutHistory(sid)
+    c2FeedAvailable(sid)
+    expect(useChatStore.getState().sessionsById[sid].history.serverState).toStrictEqual({ status: 'available' })
+    c2CompleteLive(sid, 8)
+
+    expect(sent, 'D7/D7a: server availability plus COMPLETE is not a shown history page, so no seen write').toStrictEqual([])
+    const valid = page([], { sessionId: sid })
+    expectValidPage(valid, [], 0)
+    const reads = c2CaptureHistoryReads(sid, valid)
+    await useChatStore.getState().loadLatestHistory(sid)
+    expect(reads).toStrictEqual([`GET /api/v1/sessions/${sid}/messages?limit=40&min_rows=20`])
+    expect(useChatStore.getState().sessionsById[sid].history.historyLoaded).toBe(true)
+    c2CompleteLive(sid, 9)
+
+    expect(sent, 'positive control: an actual loaded page permits the same foreground open to acknowledge exactly its server bound').toStrictEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+  })
+
+  it('r19-b: incremental COMPLETE commits live controls and cursor but cannot invent historyLoaded or replay completion', () => {
+    const sid = 'c2-r19-b-unloaded-chat'
+    c2OpenWithoutHistory(sid, false)
+    c2FeedAvailable(sid)
+    expect(useChatStore.getState().sessionsById[sid].isReplaying).toBe(true)
+    c2CompleteLive(sid, 8)
+
+    const state = useChatStore.getState().sessionsById[sid]
+    expect(state.cursor, 'D7: successful live/control catch-up commits its exact W independently of historical proof').toStrictEqual({ bootId: 'c2-negative-boot', seq: 8 })
+    expect(state.awaitingCatchUp).toBe(false)
+    expect(state.isReplaying).toBe(false)
+    expect(state.history.liveControlsReady).toBe(true)
+    expect(state.history.serverState).toStrictEqual({ status: 'available' })
+    expect(state.history.historyLoaded, 'D7a: COMPLETE cannot manufacture a page that was never delivered').toBe(false)
+    expect(state.replayCompletedForSession, 'D7a: live readiness is not successful history reconstruction').toBeNull()
+    expect(state.history.readerPositions).toStrictEqual([])
+    expect(state.messageOrder).toStrictEqual([])
+  })
+
+  it('r19-d: contradictory HTTP page source count fails visibly without history or ack; valid explicit Retry recovers', async () => {
+    const sid = 'c2-r19-d-bad-page-count'
+    c2OpenWithoutHistory(sid)
+    c2FeedAvailable(sid)
+    const valid = page([], { sessionId: sid })
+    expectValidPage(valid, [], 0)
+    const contradictory = { ...valid, page_info: { ...valid.page_info, source_group_count: 1 } }
+    const { SessionHistoryResponse: GeneratedPage } = await import('@/lib/api/generated/schemas')
+    expect(GeneratedPage.safeParse(contradictory).success,
+      'instrument: generated structure accepts this deliberate semantic contradiction; real production validation must still reject it').toBe(true)
+    expect(contradictory.entries).toStrictEqual([])
+    expect(contradictory.page_info.source_group_count).toBe(1)
+    const rejectedReads = c2CaptureHistoryReads(sid, contradictory)
+
+    await useChatStore.getState().loadLatestHistory(sid)
+    const rejected = useChatStore.getState().sessionsById[sid]
+    expect(rejectedReads).toStrictEqual([`GET /api/v1/sessions/${sid}/messages?limit=40&min_rows=20`])
+    expect(rejected.history.requests.latest, 'D8/D10/D11: impossible page metadata is an action-owned visible latest failure').toStrictEqual({
+      status: 'error', error: 'Could not load latest messages.', attempt: 1,
+    })
+    expect(rejected.history.historyLoaded).toBe(false)
+    expect(rejected.history.readerPositions).toStrictEqual([])
+    expect(rejected.messageOrder).toStrictEqual([])
+    expect(rejected.replayCompletedForSession).toBeNull()
+    c2CompleteLive(sid, 8)
+    expect(sent, 'invalid history plus a valid live COMPLETE still cannot write the seen mark').toStrictEqual([])
+    expect(useChatStore.getState().sessionsById[sid].history.requests.latest.error).toBe('Could not load latest messages.')
+
+    const retryReads = c2CaptureHistoryReads(sid, valid)
+    await useChatStore.getState().retryHistory(sid, 'latest')
+    const recovered = useChatStore.getState().sessionsById[sid]
+    expect(retryReads, 'Retry repeats only the bounded latest read').toStrictEqual([`GET /api/v1/sessions/${sid}/messages?limit=40&min_rows=20`])
+    expect(recovered.history.requests.latest).toStrictEqual({ status: 'idle', error: null, attempt: 2 })
+    expect(recovered.history.historyLoaded).toBe(true)
+    c2CompleteLive(sid, 9)
+    expect(sent).toStrictEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+  })
+})
