@@ -56,6 +56,7 @@ export function installSessionReturnNetwork(options: {
   workspaces?: Workspace[]
   sessions?: Session[]
   sessionListStatus?: () => number
+  sessionListResponse?: () => Promise<Response>
   deletedSessionIds?: string[]
 } = {}) {
   const unexpectedRequests: string[] = []
@@ -82,6 +83,7 @@ export function installSessionReturnNetwork(options: {
         } satisfies import('@/lib/api/generated/openapi-types').SandboxStatus)
         case '/api/v1/workspaces': return Response.json(workspaces)
         case '/api/v1/sessions': {
+          if (options.sessionListResponse) return options.sessionListResponse()
           const status = options.sessionListStatus?.() ?? 200
           return status === 200
             ? Response.json({ sessions })
