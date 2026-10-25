@@ -248,6 +248,8 @@ test('T16 B12: traversal past500 groups keeps the new prepend readable and can r
     // The final readability movement legitimately starts one more automatic
     // fill. Account for its boundary/IDs/anchor too; never discard that response.
     await commitHeldPage(28);
+    await scrollToDistance(page, 0);
+    await expect(historyRow(page, firstId), 'B12: the final automatic page is readable after the reader moves to its top').toBeVisible();
   } finally { held.release(); await held.dispose(); }
   expect(seen.size, 'positive traversal control actually crossed the500 source-group edge').toBeGreaterThan(500);
   const beforeForward = history.traffic.pages.length;
