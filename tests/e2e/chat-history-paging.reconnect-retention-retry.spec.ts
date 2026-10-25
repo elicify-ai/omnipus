@@ -24,6 +24,7 @@ test('T24 B04:transport loss after real replay but before complete retains the p
   const completeHeld = new Promise<void>((resolve) => { held = resolve; });
   let interruptedRoute: WebSocketRoute | undefined;
   let upstreamCompletions = 0;
+  const deliveredToPage: WsFrame[] = [];
   // Real server forwarding is explicit. Only DELIVERY of its actual final
   // frame is held; no generated snapshot/replay/control frame is fabricated.
   await page.routeWebSocket((url) => url.origin.replace(/^ws/, 'http') === history.gateway.baseURL, (socket) => {
@@ -34,13 +35,18 @@ test('T24 B04:transport loss after real replay but before complete retains the p
         upstreamCompletions++;
         interruptedRoute = socket;
         held();
-      } else socket.send(message);
+      } else {
+        socket.send(message);
+        deliveredToPage.push(frame); // Native server receipt is NOT page delivery.
+      }
     });
   });
   await history.open();
+  expect(deliveredToPage.filter(frame => frame.type === 'catch_up_complete' && frame.session_id === history.sessionId),
+    'positive delivery instrument sees the initial completion actually forwarded to the page').toHaveLength(1);
   await scrollToDistance(page, (await geometry(page)).H);
   const saved = await anchor(page);
-  const before = history.traffic.frames.length;
+  const before = deliveredToPage.length;
   armed = true;
   await history.gateway.kill9();
   await history.gateway.restart({ relogin: false });
@@ -53,7 +59,7 @@ test('T24 B04:transport loss after real replay but before complete retains the p
     if (!interruptedRoute) throw new Error('real attach completion was not intercepted');
     await interruptedRoute.close({ code: 1001, reason: 'history-acceptance-transport-loss' });
     await settled(page);
-    expect(history.traffic.frames.slice(before).filter((f) => f.type === 'catch_up_complete' && f.session_id === history.sessionId),
+    expect(deliveredToPage.slice(before).filter((f) => f.type === 'catch_up_complete' && f.session_id === history.sessionId),
       'undelivered control catch-up cannot manufacture successful complete').toEqual([]);
     await expectAnchor(page, saved);
     await expect(historyRow(page, saved.id)).toBeVisible();

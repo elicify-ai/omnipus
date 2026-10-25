@@ -1,11 +1,11 @@
 import { expect, type Page } from '@playwright/test';
 import { SessionDetail } from '../../../../src/lib/api/generated/schemas';
-import type { WsFrame } from '../../../../src/lib/api/generated/ws-schemas';
+import { WsFrame } from '../../../../src/lib/api/generated/ws-schemas';
 import type { ClientFrame } from '../../../../src/lib/api/generated/asyncapi-types';
 import { chatInput, waitForConnected } from '../selectors';
 import { terminalLogRows } from '../terminal-outcome-acceptance';
 import { dropSocket } from './actions';
-import { type HistoryHarness, type Traffic, UNAVAILABLE } from './harness';
+import { HistoryHarness, type Traffic, UNAVAILABLE } from './harness';
 import { CONTROL_COMMAND, CONTROL_QUESTION, CONTROL_RUNNING, type HistoryControlProvider } from './control-provider';
 
 // not-wire-format: fixture state referencing generated, actually received frames.
@@ -48,7 +48,7 @@ export async function waitForPendingControl(history: HistoryHarness): Promise<Pe
 }
 export function pendingAction(page: Page, pending: PendingHistoryControl) {
   return pending.kind === 'approval'
-    ? page.getByRole('dialog').getByRole('button', { name: 'Approve Once', exact: true })
+    ? page.getByRole('region', { name: 'Tool Approval Required', exact: true }).getByRole('button', { name: 'Approve Once', exact: true })
     : page.getByRole('group', { name: `Questions from ${pending.frame.card.agent_id}`, exact: true }).getByRole('button', { name: /^Plain text/ });
 }
 export async function assertRestoredControl(history: HistoryHarness, pending: PendingHistoryControl, start: number, unavailable: boolean) {
@@ -121,19 +121,80 @@ export async function stopRunningControlTurn(history: HistoryHarness) {
   await assertSessionStopped(history);
   expect(provider.failures()).toEqual([]);
 }
-export async function stopPendingControl(history: HistoryHarness, pending: PendingHistoryControl) {
-  const before = controlProvider(history).calls();
-  if (pending.kind === 'approval') {
-    // Existing modal Cancel is the documented cancel_turn/owner-Stop path.
-    // Do not force-click the background Stop through an approval focus trap.
-    await history.page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
-    await expect.poll(() => history.traffic.frames.some((f) => f.type === 'tool_approval_resolved' && f.approval_id === pending.frame.approval_id && f.state === 'denied_cancel')).toBe(true);
-  } else {
-    await history.page.getByTestId('stop-btn').click();
-    await expect.poll(() => history.traffic.frames.some((f) => f.type === 'ask_user_question' && f.card.card_id === pending.frame.card.card_id && f.card.status === 'cancelled')).toBe(true);
+async function startRunningTurnWithPendingQuestion(history: HistoryHarness, pending: Extract<PendingHistoryControl, { kind: 'question' }>) {
+  const provider = controlProvider(history);
+  const questionEnds = () => terminalLogRows(history.logPath).filter(row => row.event_kind === 'tool_exec_end' && row.tool === 'AskUserQuestion');
+  await expect.poll(questionEnds, { message: 'PREREQUISITE: actual question tool execution is recorded exactly once' }).toHaveLength(1);
+  const questionTurnId = questionEnds()[0].turn_id;
+  if (typeof questionTurnId !== 'string' || !questionTurnId) throw new Error('PREREQUISITE: genuine question audit turn identity missing');
+  await expect.poll(() => terminalLogRows(history.logPath).filter(row => row.event_kind === 'turn_end' && row.turn_id === questionTurnId).length,
+    { message: 'PREREQUISITE: the question turn has actually parked before the independent producer input' }).toBe(1);
+  const producer = await history.page.context().newPage(); // Reuse the same current cookie; never log in again.
+  try {
+  const viewer = new HistoryHarness(producer, history.gateway, history.ids, history.provider, history.info, history.logPath);
+  await viewer.open(history.sessionId, { currentControlMayLockComposer: true });
+  const callsBefore = provider.calls();
+  const input = { type: 'message', session_id: history.sessionId, agent_id: history.ids.agent.id,
+    client_message_id: 'history-keep-question-running',
+    content: 'HISTORY_KEEP_QUESTION_PENDING: continue the draft without choosing an output format until I press Stop.' } satisfies ClientFrame;
+  const send = async (frame: ClientFrame) => {
+    WsFrame.parse(frame);
+    await producer.evaluate(payload => {
+      const socket = (window as unknown as { __ws_instances?: WebSocket[] }).__ws_instances?.find(candidate =>
+        candidate.readyState === WebSocket.OPEN && new URL(candidate.url).pathname === '/api/v1/chat/ws');
+      if (!socket) throw new Error('PREREQUISITE: auxiliary producer has no real authenticated chat socket');
+      socket.send(JSON.stringify(payload));
+    }, frame);
+  };
+  await send(input);
+  await expect.poll(() => viewer.traffic.sends.filter(frame => frame.client_message_id === input.client_message_id).length,
+    { message: 'PREREQUISITE: auxiliary input is separately observed exactly once, not hidden in the original send count' }).toBe(1);
+  await expect.poll(() => viewer.traffic.frames.filter(frame => frame.type === 'user_message' &&
+    frame.session_id === history.sessionId && frame.client_message_id === input.client_message_id).length,
+    { message: 'PREREQUISITE: the actual gateway durably echoes the auxiliary input' }).toBe(1);
+  await expect(history.page.getByText(CONTROL_RUNNING, { exact: true }), 'PREREQUISITE: a new genuine provider turn is running').toBeVisible();
+  await expect.poll(() => provider.calls(), { message: 'one independently requested model turn, not a rerun of the question' }).toBe(callsBefore + 1);
+  await expect.poll(() => provider.heldCount(), { message: 'the actual auxiliary model HTTP call is held open' }).toBe(1);
+  const stateStart = viewer.traffic.frames.length;
+  await send({ type: 'attach_session', session_id: history.sessionId });
+  await expect.poll(() => viewer.traffic.frames.slice(stateStart).some(frame => frame.type === 'session_state' &&
+    frame.session_id === history.sessionId && frame.active_turn !== undefined),
+    { message: 'PREREQUISITE: fresh authoritative state must expose the genuinely running turn' }).toBe(true);
+  const state = [...viewer.traffic.frames.slice(stateStart)].reverse().find(frame => frame.type === 'session_state' && frame.session_id === history.sessionId);
+  if (state?.type !== 'session_state' || !state.active_turn) throw new Error('PREREQUISITE: active turn missing from authoritative current state');
+  expect(state.active_turn.turn_id, 'the running input is not the already parked question turn').not.toBe(questionTurnId);
+  expect(state.pending_asks?.filter(card => card.card_id === pending.frame.card.card_id).map(card => ({ id: card.card_id, status: card.status })),
+    'the original real question stays pending, not implicitly answered or cancelled by fixture setup')
+    .toEqual([{ id: pending.frame.card.card_id, status: 'pending' }]);
+  expect(terminalLogRows(history.logPath).filter(row => row.event_kind === 'turn_end' && row.turn_id === state.active_turn!.turn_id),
+    'the independently running turn has not already ended or parked').toEqual([]);
+  await expect(pendingAction(history.page, pending)).toBeEnabled();
+  await expect(history.page.getByTestId('stop-btn'), 'PREREQUISITE: real running engine exposes Stop while the old question remains pending').toBeVisible();
+  await history.record('pending-question-with-independent-running-turn', {
+    auxiliaryInput: input, auxiliarySends: viewer.traffic.sends, activeTurn: state.active_turn, pendingCard: pending.frame.card.card_id,
+  });
+  return producer;
+  } catch (error) {
+    await producer.close();
+    throw error;
   }
-  await assertSessionStopped(history);
-  expect(controlProvider(history).calls(), 'Stop does not approve/answer/resume another model turn').toBe(before);
+}
+
+export async function stopPendingControl(history: HistoryHarness, pending: PendingHistoryControl) {
+  const producer = pending.kind === 'question' ? await startRunningTurnWithPendingQuestion(history, pending) : undefined;
+  const before = controlProvider(history).calls();
+  try {
+    if (pending.kind === 'approval') {
+      // The current inline approval region exposes the same cancel_turn path.
+      await history.page.getByRole('region', { name: 'Tool Approval Required', exact: true }).getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect.poll(() => history.traffic.frames.some((f) => f.type === 'tool_approval_resolved' && f.approval_id === pending.frame.approval_id && f.state === 'denied_cancel')).toBe(true);
+    } else {
+      await stopRunningControlTurn(history);
+      await expect.poll(() => history.traffic.frames.some((f) => f.type === 'ask_user_question' && f.card.card_id === pending.frame.card.card_id && f.card.status === 'cancelled')).toBe(true);
+    }
+    await assertSessionStopped(history);
+    expect(controlProvider(history).calls(), 'Stop does not approve/answer/resume another model turn').toBe(before);
+  } finally { if (producer) await producer.close(); }
 }
 export async function assertSessionStopped(history: HistoryHarness) {
   await expect.poll(async () => {

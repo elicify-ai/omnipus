@@ -41,8 +41,8 @@ test('T41 B55 B56: provider-accounted46323 survives REAL reload and fresh route;
   await absoluteCarriers(reload);
   await reload.record('same-recorded-46323-after-real-reload');
 
-  // Re-enter through the shipped standalone route after leaving the document;
-  // no hand-built store or cached footer object is supplied to the application.
+  // Re-enter through the shipped standalone route via same-document hash
+  // navigation; no hand-built store or cached footer object is supplied.
   await reload.page.goto(`${reload.gateway.baseURL}/#/`);
   await reload.ready();
   expect(await reload.counter(SESSION_TOKENS, 'T41: fresh addressed route preserves46323')).toEqual(live);
