@@ -1054,6 +1054,12 @@ test(
       })
     }
     await seedTranscript(sessionId, entries)
+    // Offline canonical seeding deliberately leaves about:blank. Install the
+    // observer only after restoring a real connected app document, otherwise
+    // the next full navigation discards it and cannot observe any transition.
+    await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+    await waitForWsConnected(page)
 
     // ── Navigate to the session and immediately check send button state ──
     // Traces to: Scenario 10 When "user types in the input → send button is disabled".
@@ -1128,7 +1134,8 @@ test(
     // addressed directly via the app's deep-link route (see openSession's
     // doc comment above for why this is the current real seam, not a
     // workaround).
-    await page.goto(`/#/sessions/${sessionId}`)
+    const navigation = await page.goto(`/#/sessions/${sessionId}`)
+    expect(navigation, 'PREREQUISITE: same-document navigation preserves the already installed replay observer').toBeNull()
 
     // Poll the observer trace from the test side. We accept anything that proves
     // the disabled state was true at least once between click and done. expect.poll
