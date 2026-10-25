@@ -7,24 +7,8 @@ import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchProviders } from '@/lib/api'
 import { isProviderUsable } from '@/lib/providerStatus'
 import { resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
-import { readSessionModelChoice, writeSessionModelChoice, type ModelChoiceStorageFailure } from '@/store/chat/model-choice'
-import { logDiagnostic } from '@/lib/telemetry'
+import { readSessionModelChoice, writeSessionModelChoice, warnModelChoiceStorageFailure } from '@/store/chat/model-choice'
 import { cn } from '@/lib/utils'
-
-function warnModelChoiceStorageFailure(failure: ModelChoiceStorageFailure | null | undefined): void {
-  if (!failure) return
-  console.warn('[chat] model choice storage failed', failure)
-  logDiagnostic('sessionModelChoiceStorageFailed', { ...failure })
-  const ui = useUiStore.getState()
-  const message = failure.operation === 'write'
-    ? 'Could not save your model choice. It is kept in this page, but may be lost on reload. Check browser storage space and permissions.'
-    : failure.reason === 'invalid'
-      ? 'Saved model choices could not be read because browser storage is invalid. Choices made in this page are kept until reload. Select a model to save it again.'
-      : 'Could not read saved model choices. Choices made in this page are kept until reload. Check browser storage permissions.'
-  if (!ui.toasts.some((toast) => toast.testId === 'model-choice-storage-warning')) {
-    ui.addToast({ message, variant: 'warning', testId: 'model-choice-storage-warning', duration: 0 })
-  }
-}
 
 /**
  * ModelPicker — the per-message model selector + its data wiring.
@@ -145,29 +129,25 @@ export function ModelPicker({
   // "navigation".
   const lastSeedKey = useRef<string>('')
   const modelSelectionSource = useRef<'auto' | 'user'>('auto')
+  const pendingMessageId = useRef<string | null>(null)
   useEffect(() => {
     const seedKey = `${activeSessionId ?? ''}::${activeAgentId ?? ''}`
     if (seedKey === lastSeedKey.current) return
     const prevSession = lastSeedKey.current.split('::')[0]
     lastSeedKey.current = seedKey
-    // Materialization guard: a fresh chat's first send creates a transient
-    // '__pending' bucket that then becomes the real session id
-    // ('' → '__pending' → realId). That is the SAME conversation continuing,
-    // NOT a navigation to a different session, so it must not clobber the model
-    // the user just picked for this message (which would otherwise reset to the
-    // default and fail to carry to the next message). Genuine navigation —
-    // opening/switching to a real session, or New Chat ('' target) — still
-    // re-seeds from that target's last-used model.
-    if (activeSessionId === '__pending') return
-    if (prevSession === '__pending' && activeSessionId) {
-      // The explicit draft pick had no durable key. Save its current pair as
-      // soon as the server gives this same conversation its real identity.
-      if (modelSelectionSource.current === 'user') {
-        const { nextModel: model, nextModelProvider: provider } = useChatStore.getState()
-        if (model) warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, { model, provider }))
-      }
+    if (activeSessionId === '__pending') {
+      pendingMessageId.current = useChatStore.getState().pendingFirstSend?.clientMessageId ?? null
       return
     }
+    const wasOrdinaryFirstSend = pendingMessageId.current !== null
+    pendingMessageId.current = null
+    // Non-ordinary kickoff materialization retains its existing in-page pair.
+    // Ordinary first sends instead save through their correlated receipt, so
+    // every destination is restored below, including a chat opened while the
+    // draft's receipt is still outstanding. A pending→real transition alone
+    // never authorizes a preference write.
+    if (prevSession === '__pending' && activeSessionId && !wasOrdinaryFirstSend
+      && useSessionStore.getState().attachedSessionType === null) return
     if (activeSessionId !== prevSession) {
       // Genuine navigation to a different conversation — any explicit pick
       // was scoped to the conversation it was made in, so it is released and
@@ -208,7 +188,7 @@ export function ModelPicker({
   function onPickerChange(model: string) {
     // provider clears here (omitted second arg → null); a grouped pick's
     // onPairChange (below) immediately re-sets it in the same handler tick.
-    setNextModel(model || null)
+    setNextModel(model || null, null, 'user')
     // Either a non-empty pick (pin this model) or an explicit revert to ''
     // (hand back to auto-follow) is the user's OWN action, not a derived
     // seed — record which, so the re-seed effect above knows whether a later
@@ -233,7 +213,7 @@ export function ModelPicker({
   // contract gains `metadata.provider`.
   function onPickerPairChange(pair: { model: string; provider: string }) {
     if (!pair.model) return
-    setNextModel(pair.model, pair.provider)
+    setNextModel(pair.model, pair.provider, 'user')
     // #1436: the grouped pick's (provider, model) pair is the recorded
     // identity — restoring it lands the check on exactly the row it was
     // chosen under, even when the slug is served by more than one provider.
