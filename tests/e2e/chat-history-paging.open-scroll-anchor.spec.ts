@@ -117,7 +117,9 @@ test('T16 B08 B09: pending prepend, reader movement and loader-to-error-to-Retry
     const retry = await holdPage(page, (url) => url.searchParams.has('before'));
     try {
       const beforeRetry = await anchor(page);
-      await alert.getByRole('button', { name: 'Retry', exact: true }).click();
+      const retryButton = alert.getByRole('button', { name: 'Retry', exact: true });
+      await retryButton.evaluate(element => (element as HTMLElement).focus({ preventScroll: true }));
+      await page.keyboard.press('Enter');
       await retry.requested;
       await expectAnchor(page, beforeRetry);
       const requestedBoundary = new URL(held.requests[0]).searchParams.get('before');
