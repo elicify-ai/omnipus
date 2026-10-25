@@ -52,10 +52,11 @@ properties:
       hub as the single chokepoint through which every session-scoped frame is published,
       after the turn's transcript entry has been durably persisted (persist-before-publish
       — the invariant done(T) <= seq W implies T's final entry is in any transcript read
-      taken after that point). Optional: absent on an unsequenced copy of this frame. The
-      client stores the highest seq it has applied per session and sends it back as
-      since_seq on attach_session; frames at or below that cursor are ignored, which makes
-      re-delivery idempotent.
+      taken after that point). Optional: absent on an unsequenced copy of this frame. this seq is dedup state, never itself the resume cursor: the client's cursor is
+      committed only by a completed catch-up (catch_up_complete) and is sent back as
+      since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier
+      sentence here described per-frame cursor advance, which was stale). Frames at
+      or below that cursor are ignored, which makes re-delivery idempotent.
   room_ref:
     $ref: './RoomRef.yaml'
     description: >
