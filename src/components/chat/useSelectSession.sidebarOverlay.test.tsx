@@ -81,6 +81,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import { fetchAgents, fetchSessions, fetchWorkspaces } from '@/lib/api'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { SearchModal } from '@/components/search/SearchModal'
+import { AgentRowMenu } from '@/components/layout/sidebar/AgentRowMenu'
+import { ActivityBar } from '@/components/chat/ActivityBar'
 
 const WORKSPACE: Workspace = {
   id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0, task_count: 0,
@@ -103,6 +105,14 @@ function renderShell() {
     <QueryClientProvider client={client}>
       <Sidebar />
       <SearchModal />
+      {/* The real History entry control for Mia's row, and the chat's own
+          Activity bar, which opened the modal Activity panel after Open. */}
+      <AgentRowMenu workspace={WORKSPACE} agent={AGENT} agentId="mia" agentName="Mia" />
+      <main aria-label="Chat">
+        <ActivityBar />
+        {/* Composer stand-in: the target of the user's next click. */}
+        <textarea aria-label="Message input" />
+      </main>
     </QueryClientProvider>,
   )
 }
@@ -112,7 +122,8 @@ const realAttach = useSessionStore.getState().attachToSession
 
 beforeEach(() => {
   navigate.mockReset()
-  attachToSession.mockReset().mockReturnValue(true)
+  // Like the real attach, a successful one makes the session the active chat.
+  attachToSession.mockReset().mockImplementation((id) => { useSessionStore.setState({ activeSessionId: id as string }); return true })
   vi.mocked(fetchWorkspaces).mockReset().mockResolvedValue([WORKSPACE])
   vi.mocked(fetchSessions).mockReset().mockResolvedValue([SESSION])
   vi.mocked(fetchAgents).mockReset().mockResolvedValue([AGENT])
@@ -125,11 +136,36 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   act(() => {
+    useSessionStore.setState({ activeSessionId: null })
     useSidebarStore.setState({ isOpen: false, isPinned: false })
     useUiStore.getState().closeSearchModal()
     useSessionStore.setState({ attachToSession: realAttach })
   })
 })
+
+async function openSessionFromHistory() {
+  // The History entry point: the agent row's More actions menu → History opens
+  // the same SearchModal filtered to this workspace and agent.
+  renderShell()
+  const user = userEvent.setup()
+  await user.click(screen.getByRole('button', { name: 'More actions for Mia' }))
+  await user.click(await screen.findByRole('menuitem', { name: 'History' }))
+  expect(useUiStore.getState()).toMatchObject({ searchModalOpen: true, searchModalWorkspaceFilter: 'ws-1', searchModalAgentFilter: 'mia' })
+  await user.click(await screen.findByRole('button', { name: /^Open Q81 overlay check/ }))
+}
+
+async function expectStraightToChat() {
+  // Founder ruling ("Straight to the chat"): after Open nothing modal covers
+  // the chat, so the user's very next click lands in it.
+  await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
+  await act(async () => { await Promise.resolve() })
+  expect(document.querySelector('[role="dialog"][aria-modal="true"]'), 'no modal layer is open').toBeNull()
+  expect(document.body.style.pointerEvents, 'outside pointers are not locked').not.toBe('none')
+  expect(screen.queryByText('No background activity yet.'), 'the Activity panel did not open by itself').toBeNull()
+  const composer = screen.getByRole('textbox', { name: 'Message input' })
+  await userEvent.setup().click(composer)
+  expect(composer).toHaveFocus()
+}
 
 async function openSessionFromSearchModal() {
   // The Sessions entry point: the sidebar's own search action opens the
@@ -208,5 +244,25 @@ describe('Q81: opening a session from the search modal closes the unpinned sideb
     expect(useUiStore.getState().searchModalOpen).toBe(false)
     await waitFor(() => expect(clickCatcher(), 'M5: History must close the same unpinned overlay as Sessions').toBeNull())
     expect(useSidebarStore.getState()).toMatchObject({ isOpen: false, isPinned: false })
+  })
+})
+
+describe('Founder ruling: Open from Sessions or History goes straight to the chat', () => {
+  it('Sessions → Open: no panel opens by itself and the next click focuses the composer', async () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    await openSessionFromSearchModal()
+    expect(useSessionStore.getState().activeSessionId).toBe('session-q81')
+    expect(clickCatcher()).toBeNull()
+    await expectStraightToChat()
+  })
+
+  it('History → Open: no panel opens by itself, no sidebar click-catcher, and the next click focuses the composer', async () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    await openSessionFromHistory()
+    expect(attachToSession).toHaveBeenCalledTimes(1)
+    expect(useSessionStore.getState().activeSessionId).toBe('session-q81')
+    await waitFor(() => expect(clickCatcher()).toBeNull())
+    expect(useSidebarStore.getState()).toMatchObject({ isOpen: false, isPinned: false })
+    await expectStraightToChat()
   })
 })
