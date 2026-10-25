@@ -194,19 +194,61 @@ test('T16 B12: traversal past500 groups keeps the new prepend readable and can r
   await history.seed({ label: 'window', count: 1000 });
   await history.authenticate();
   await history.open();
+  const schemas = await import('../../src/lib/api/generated/schemas');
+  const openingResponse = history.traffic.pages.filter(reply => reply.status === 200).at(-1);
+  const openingPage = openingResponse ? schemas.SessionHistoryResponse.parse(openingResponse.body) : undefined;
+  const openingReplay = history.traffic.frames.find(frame => frame.type === 'replay_message' && frame.session_id === history.sessionId);
+  const openingFirst = openingPage?.entries[0]?.id ?? (openingReplay?.type === 'replay_message' ? openingReplay.id : undefined);
+  expect(openingFirst, 'PREREQUISITE: actual opening carrier identifies its first source row').toBeDefined();
+  if (!openingFirst) throw new Error('Actual opening first row missing');
+  let firstId = openingFirst;
+  // next_before is the generated carrier's top-level continuation field.
+  let nextBefore = openingPage ? openingPage.next_before : history.snapshot().next_before;
   const seen = new Set<string>();
-  for (let boundary = 0; boundary < 28; boundary++) {
+  let held = await holdPage(page, url => url.searchParams.has('before'));
+  async function commitHeldPage(boundary: number) {
     const before = history.traffic.pages.length;
-    await scrollToDistance(page, 0);
+    const route = await held.requested;
+    expect(new URL(route.request().url()).searchParams.get('before'),
+      'B12: every older request continues exactly the previous successful page boundary').toBe(nextBefore);
+    await expect(historyRow(page, firstId), 'the previous page first row is mounted at the reader top before commit').toBeVisible();
+    const prior = (await geometry(page)).rows.find(row => row.id === firstId);
+    expect(prior, 'the previous page first row has independently observed pre-commit geometry').toBeDefined();
+    if (!prior) throw new Error('Previous page first-row geometry missing');
+    held.release();
     await expect.poll(() => history.traffic.pages.length, { message: `boundary${boundary} must actually fetch older retained content` }).toBeGreaterThan(before);
-    const response = history.traffic.pages.slice(before).find((r) => r.status === 200);
+    const responses = history.traffic.pages.slice(before);
+    expect(responses, 'held physical request commits one page, never an unexamined extra fill').toHaveLength(1);
+    const response = responses.find((r) => r.status === 200);
     expect(response, 'a failed request is not a successful500-group traversal').toBeDefined();
     if (!response) throw new Error('No successful history page');
-    const parsed = (await import('../../src/lib/api/generated/schemas')).SessionHistoryResponse.parse(response.body);
-    for (const entry of parsed.entries) seen.add(entry.id);
-    await expect(historyRow(page, parsed.entries[0].id), 'new prepend must not be immediately discarded by the old oldest-drop ring').toBeAttached();
+    const parsed = schemas.SessionHistoryResponse.parse(response.body);
+    expect(parsed.entries.length, 'a successful traversal page contains retained source rows').toBeGreaterThan(0);
+    for (const entry of parsed.entries) {
+      expect(seen.has(entry.id), `B12: new page source ${entry.id} is disjoint from every previously fetched page`).toBe(false);
+      seen.add(entry.id);
+    }
+    await expect(historyRow(page, firstId), 'B12: the previous page first row stays mounted through the prepend').toBeAttached();
+    await expectAnchor(page, prior); // Same <=1px oracle, never the new offscreen row.
+    firstId = parsed.entries[0].id;
+    nextBefore = parsed.next_before;
     await settled(page);
+    await held.dispose();
   }
+  try {
+    await scrollToDistance(page, 0);
+    for (let boundary = 0; boundary < 28; boundary++) {
+      await commitHeldPage(boundary);
+      // Hold the next real fill BEFORE user movement, so it cannot race the
+      // newly prepended first row's actual readability judgment.
+      held = await holdPage(page, url => url.searchParams.has('before'));
+      await scrollToDistance(page, 0);
+      await expect(historyRow(page, firstId), 'B12: the new prepend is readable after the reader moves to its top').toBeVisible();
+    }
+    // The final readability movement legitimately starts one more automatic
+    // fill. Account for its boundary/IDs/anchor too; never discard that response.
+    await commitHeldPage(28);
+  } finally { held.release(); await held.dispose(); }
   expect(seen.size, 'positive traversal control actually crossed the500 source-group edge').toBeGreaterThan(500);
   const beforeForward = history.traffic.pages.length;
   await historyScroller(page).evaluate((el) => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
