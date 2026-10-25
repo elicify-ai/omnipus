@@ -6510,6 +6510,22 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/ChatMessageList.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/HistoryBoundary.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useChatHistory.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useHistoryViewport.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ChatThread.tsx",
       "lane": 3
     },

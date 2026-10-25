@@ -182,7 +182,15 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expect(client.getQueryState(workspaceKey)?.error).toBe(failure)
     expect(client.getQueryState(workspaceKey)?.fetchStatus).toBe('idle')
     expect(await screen.findByTestId('inline-chat-screen'), 'a failed lookup cannot strand an empty chat area').toBeTruthy()
-    expect(screen.queryByRole('status')).toBeNull()
+    // The Retry button owns a legitimate empty live-announcement status;
+    // reject only the opening/loading states, not that accessibility region.
+    const statusText = screen.queryAllByRole('status').map(status => status.textContent ?? '').join('\n')
+    expect(statusText, 'no opening status remains after failure').not.toMatch(/Opening chat(?:…|\.\.\.)/u)
+    expect(statusText, 'no loading status remains after failure').not.toMatch(/\bLoading\b/iu)
+    expect(screen.queryByText('Opening chat…', { exact: true }), 'the opening status is gone after failure').toBeNull()
+    expect(screen.queryByText(/^Loading\b/iu), 'no loading status text remains after failure').toBeNull()
+    expect(screen.getByText("Couldn't find this chat's workspace, so the chat is open here instead. Retry to move it into its workspace.", { exact: true })).toBeVisible()
+    expect(screen.getByRole('button', { name: /^Retry$/u }), 'the failed lookup keeps a visible recovery action').toBeVisible()
     expect(edges.navigate).not.toHaveBeenCalled()
     expect(edges.fetchWorkspaces).toHaveBeenCalledExactlyOnceWith({ status: 'active', signal: expect.any(AbortSignal) })
   })

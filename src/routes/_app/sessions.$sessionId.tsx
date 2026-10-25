@@ -74,7 +74,7 @@ function SessionRoute() {
   }, [sessionId, detail?.session.id, detail?.session.total_tokens])
 
   // Fetch active workspaces to verify the session's workspace_id.
-  const { data: workspaces = [], isPending: workspacesPending, isPaused: workspacesPaused, isError: workspacesFailed, refetch: refetchWorkspaces } = useQuery({
+  const { data: workspaces = [], isPending: workspacesPending, isPaused: workspacesPaused, isFetching: workspacesFetching, isError: workspacesFailed, refetch: refetchWorkspaces } = useQuery({
     // Shared definition: its signal reaches the request whichever component
     // started it, so cancelling the query really aborts a stalled lookup.
     ...activeWorkspacesQueryOptions,
@@ -294,7 +294,10 @@ function SessionRoute() {
   // The bounded wait ended (or the lookup is paused offline) while the
   // workspace is still unresolved: open inline, but say so, and offer a Retry
   // that replaces the stalled lookup. The later automatic move is announced.
-  if (wsId && workspacesPending) {
+  // State comes from the LOOKUP, not from what the cached list contains: a
+  // stale list without this workspace that is being refreshed is still a
+  // lookup in progress, and a failed refresh is a failure even if a list is cached.
+  if (wsId && (workspacesFetching || workspacesPaused)) {
     return (
       <div className="absolute inset-0 flex flex-col">
         <WorkspaceLookupNotice paused={workspacesPaused} onRetry={() => { void retryWorkspaceLookup() }} />
@@ -309,7 +312,7 @@ function SessionRoute() {
 
   // The lookup failed (e.g. 403, or 503s outlasting their retries): the chat
   // is open here, but say why it did not move and offer a real Retry.
-  if (wsId && workspacesFailed && !workspaces.length) {
+  if (wsId && workspacesFailed && !workspacesFetching && !workspacesPaused) {
     return (
       <div className="absolute inset-0 flex flex-col">
         <div className="px-[var(--space-3)] py-[var(--space-1)]">
