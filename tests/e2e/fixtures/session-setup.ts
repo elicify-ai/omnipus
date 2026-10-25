@@ -13,6 +13,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Locator, type Page } from '@playwright/test'
+import { canonicalHistoryContext } from './canonical-history-context'
+import { seedCanonicalLegacyTranscript } from './chat-history'
 import {
   agentRowGroup,
   chatInput,
@@ -25,9 +27,7 @@ import {
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
-const OMNIPUS_HOME =
-  process.env.OMNIPUS_HOME ||
-  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test')
+function sessionSetupBaseURL() { return canonicalHistoryContext()?.gateway.baseURL ?? BASE_URL }
 
 // ── Transcript entry types (mirrors replay-fidelity.spec.ts) ──────────────────
 
@@ -62,12 +62,12 @@ export interface TranscriptEntry {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 function getStoredAuthToken(): string | null {
-  const authFile = process.env.OMNIPUS_AUTH_FILE
+  const authFile = canonicalHistoryContext()?.authFile ?? (process.env.OMNIPUS_AUTH_FILE
     ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
     : path.join(
         path.dirname(new URL(import.meta.url).pathname),
         '.auth/admin.json',
-      )
+      ))
   if (!fs.existsSync(authFile)) return null
   try {
     const raw = fs.readFileSync(authFile, 'utf-8')
@@ -105,7 +105,7 @@ async function apiHeaders(page: Page): Promise<Record<string, string>> {
 }
 
 async function createSession(page: Page): Promise<string> {
-  const resp = await page.request.post(`${BASE_URL}/api/v1/sessions`, {
+  const resp = await page.request.post(`${sessionSetupBaseURL()}/api/v1/sessions`, {
     headers: await apiHeaders(page),
     // 'mia' — the seeded default of the 4-base roster. The historical
     // 'main' id no longer resolves to any agent, which makes the session
@@ -122,7 +122,7 @@ async function createSession(page: Page): Promise<string> {
 }
 
 async function renameSession(page: Page, sessionId: string, title: string): Promise<void> {
-  const resp = await page.request.put(`${BASE_URL}/api/v1/sessions/${sessionId}`, {
+  const resp = await page.request.put(`${sessionSetupBaseURL()}/api/v1/sessions/${sessionId}`, {
     headers: await apiHeaders(page),
     data: { title },
   })
@@ -132,17 +132,8 @@ async function renameSession(page: Page, sessionId: string, title: string): Prom
   }
 }
 
-function seedTranscript(sessionId: string, entries: TranscriptEntry[]): void {
-  const sessionDir = path.join(OMNIPUS_HOME, 'sessions', sessionId)
-  if (!fs.existsSync(sessionDir)) {
-    throw new Error(
-      `Session directory does not exist: ${sessionDir}. ` +
-        'Create the session via REST API before seeding the transcript.',
-    )
-  }
-  const transcriptPath = path.join(sessionDir, 'transcript.jsonl')
-  const lines = entries.map((e) => JSON.stringify({ view_membership: 'chat', ...e })).join('\n') + '\n'
-  fs.writeFileSync(transcriptPath, lines, { encoding: 'utf-8' })
+async function seedTranscript(sessionId: string, entries: TranscriptEntry[]): Promise<void> {
+  await seedCanonicalLegacyTranscript(sessionId, entries)
 }
 
 export async function waitForWsConnected(page: Page): Promise<void> {
@@ -523,7 +514,7 @@ export async function seedAndOpenSession(
   const sessionTitle = `${namePrefix}-${Date.now()}`
   await renameSession(page, sessionId, sessionTitle)
 
-  seedTranscript(sessionId, entries)
+  await seedTranscript(sessionId, entries)
 
   await openSessionByDeepLink(page, sessionId)
 

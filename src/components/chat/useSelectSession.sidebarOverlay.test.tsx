@@ -9,7 +9,7 @@
 // wrappers are replaced. The session lives in the ALREADY-ACTIVE workspace, so
 // the route path does not change: a route-change listener could not catch it.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -18,6 +18,7 @@ import { useSidebarStore } from '@/store/sidebar'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { makeAgent } from '@/test/factories'
 
 // Wide window (1440px in the UAT capture): the sidebar can dock, so an
 // unpinned sidebar is the overlay and a pinned one is docked.
@@ -212,6 +213,38 @@ describe('Q81: opening a session from the search modal closes the unpinned sideb
     expect(useUiStore.getState().searchModalOpen).toBe(true)
     expect(useSidebarStore.getState()).toMatchObject({ isOpen: true, isPinned: false })
     expect(clickCatcher()).not.toBeNull()
+  })
+
+  it('agent History uses its real scoped menu and leaves no click-catcher after same-workspace Open', async () => {
+    const main: Session = { ...SESSION, id: 'q81-mia-main', title: 'Mia main', type: 'main', needs_attention: false }
+    const otherAgent: Session = { ...SESSION, id: 'q81-jim-other-history', title: 'Jim-only history control', agent_id: 'jim', active_agent_id: 'jim' }
+    const withMember: Workspace = { ...WORKSPACE, core_team: ['mia'], member_configs: { mia: { main_session_id: main.id } } }
+    vi.mocked(fetchWorkspaces).mockResolvedValue([withMember])
+    vi.mocked(fetchAgents).mockResolvedValue([
+      makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), makeAgent({ id: 'jim', name: 'Jim', type: 'core' }),
+    ])
+    vi.mocked(fetchSessions).mockResolvedValue([main, SESSION, otherAgent])
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    const user = userEvent.setup()
+    renderShell()
+
+    const actions = await within(screen.getByRole('navigation', { name: 'Main navigation' }))
+      .findByRole('button', { name: 'More actions for Mia' })
+    expect(clickCatcher(), 'instrument: this real History path starts with an open sidebar backdrop').not.toBeNull()
+    await user.click(actions)
+    await user.click(await screen.findByRole('menuitem', { name: 'History', exact: true }))
+    const row = await screen.findByRole('button', { name: /^Open Q81 overlay check/ })
+    expect(useUiStore.getState()).toMatchObject({ searchModalOpen: true, searchModalWorkspaceFilter: 'ws-1', searchModalAgentFilter: 'mia' })
+    expect(screen.queryByRole('button', { name: /^Open Jim-only history control/ }), 'the real agent filter excludes another owner').toBeNull()
+    expect(clickCatcher(), 'the backdrop must not have vanished before the History selection under test').not.toBeNull()
+    await user.click(row)
+
+    expect(attachToSession).toHaveBeenCalledTimes(1)
+    expect(attachToSession.mock.calls[0][0]).toBe('session-q81')
+    expect(navigate).toHaveBeenCalledWith(expect.objectContaining({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } }))
+    expect(useUiStore.getState().searchModalOpen).toBe(false)
+    await waitFor(() => expect(clickCatcher(), 'M5: History must close the same unpinned overlay as Sessions').toBeNull())
+    expect(useSidebarStore.getState()).toMatchObject({ isOpen: false, isPinned: false })
   })
 })
 

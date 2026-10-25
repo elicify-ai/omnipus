@@ -140,14 +140,22 @@ func TestHistoryRepairCommand_GuardedApplyRechecksNativeRootAndSource(t *testing
 				require.NoError(t, os.WriteFile(daemon.PIDPath(f.source), []byte("0"), 0o600))
 				class = "stopped_evidence_unknown"
 			case "root_object_replaced":
-				oldObject, err := os.Stat(f.source)
-				require.NoError(t, err)
 				moved := filepath.Join(t.TempDir(), "original-root-object")
 				require.NoError(t, os.Rename(f.source, moved))
 				repairCopy(t, moved, f.source)
+				// Compare the ORIGINAL object at its new path against the
+				// recreated directory, never a FileInfo captured at the
+				// original path: Go's Windows os.SameFile resolves file IDs
+				// lazily by path (os/types_windows.go sameFile ->
+				// loadFileId), so a pre-rename FileInfo would identify
+				// whatever now sits at the old path and compare the
+				// recreated directory with itself (measured windows-latest,
+				// run 40065143594). Same evidence, path-stable on every OS.
+				movedObject, err := os.Stat(moved)
+				require.NoError(t, err)
 				newObject, err := os.Stat(f.source)
 				require.NoError(t, err)
-				require.False(t, os.SameFile(oldObject, newObject), "instrument really replaced directory identity")
+				require.False(t, os.SameFile(movedObject, newObject), "instrument really replaced directory identity")
 				require.Equal(t, repairFullCopyFacts(t, moved), repairFullCopyFacts(t, f.source), "bytes/mode/mtime equality alone must not hide replaced root")
 			case "canonical_drift":
 				require.NoError(t, os.WriteFile(filepath.Join(f.source, "uploads", "évidence.txt"), []byte("changed after verified backup"), 0o600))
