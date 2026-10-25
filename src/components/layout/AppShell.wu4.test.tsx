@@ -1,6 +1,7 @@
 // WU-4 screen dispatch; omnipus-system-agent K1/K3/K4/K5/K7, FR-074/079/251,
-// §6.18. Real route tree, AppShell, ChatScreen, modal, stores and transport.
-// Only the HTTP/socket/browser edges are doubled by the existing harness.
+// §6.18. Real route tree, AppShell, ChatScreen, the inline approval card,
+// stores and transport. Only the HTTP/socket/browser edges are doubled by the
+// existing harness.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -9,13 +10,14 @@ import type {
   SessionStateFrame, SessionStateSecretRequest,
 } from '@/lib/api/generated/asyncapi-types'
 import { parseFrameSafe } from '@/lib/ws'
+import { queryClient } from '@/lib/queryClient'
 import { useSecretRequestStore } from '@/store/secretRequests'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { json, MAIN_ID, NOW, WS } from '../../../tests/l1-room-ui/harness'
 import {
-  approval, emitFromGateway, mountStage1App, resetStage1App, SETTINGS_PATH,
+  approval, emitFromGateway, MAIN_PATH, mountStage1App, resetStage1App,
   settledMainChat, Stage1Network, stopStage1App,
 } from '../../../tests/l1-room-ui/stage1-harness'
 
@@ -74,7 +76,15 @@ function secretRequests() {
   return net.requests.filter((request) => /^\/api\/v1\/(?:secrets|secret-requests)(?:\/|$)/.test(request.path))
 }
 
-function approvalOriginFrame(carrier: 'live' | 'session_state', origin: string | undefined, stub = false): ServerFrame {
+// Bundle B3 re-aim (tests/train3-b3-logs/REAIM.md; commit d52b70bdc ships
+// INLINE_TOOL_APPROVALS_ENABLED): the app-wide "Tool Approval Required" modal is
+// retired by design, so the origin pins target the inline card in the approval's
+// root chat (tool-approval-thread-tail → tool-approval-panel, origin via
+// data-testid="tool-approval-origin") at the same strength, acting from the
+// open main chat — the re-aimed AppShell.stage1.test.tsx pattern. The wire can
+// no longer produce an incomplete reconnect stub (SessionStatePendingApproval
+// requires tool_call_id/turn_id/args), so the stub fixture is gone with it.
+function approvalOriginFrame(carrier: 'live' | 'session_state', origin: string | undefined): ServerFrame {
   const frame = approval({
     origin_label: origin, root_session_id: MAIN_ID,
     ...(origin === 'for group Sales' ? { room_ref: { room_id: 'sales-group', room_name: 'Sales', request_id: 'room-ask', role: 'request' } } : {}),
@@ -84,7 +94,7 @@ function approvalOriginFrame(carrier: 'live' | 'session_state', origin: string |
   void _type
   return {
     type: 'session_state', session_id: MAIN_ID, user_id: 'stage1-tester', emitted_at: NOW,
-    pending_approvals: [{ ...pending, ...(stub ? { tool_call_id: undefined, turn_id: undefined, args: undefined } : {}) }],
+    pending_approvals: [pending],
   }
 }
 
@@ -92,24 +102,54 @@ async function emitApprovalOrigin(
   socket: Parameters<typeof emitFromGateway>[0],
   carrier: 'live' | 'session_state',
   origin: string | undefined,
-  stub = false,
 ) {
-  await emitFromGateway(socket, approvalOriginFrame(carrier, origin, stub))
+  expect(screen.queryAllByRole('dialog', { hidden: true })).toEqual([])
+  await emitFromGateway(socket, approvalOriginFrame(carrier, origin))
   await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual(['stage1-approval']))
-  return await screen.findByRole('dialog', { name: stub ? 'Approval Details Unavailable' : 'Tool Approval Required' })
+  // The card is the inline thread tail in the root chat — never the modal.
+  const card = await screen.findByTestId('tool-approval-thread-tail')
+  expect(card).toBeVisible()
+  const panel = within(card).getByTestId('tool-approval-panel')
+  // R6 (inline, not a dialog): appearance must not move focus — the retired
+  // modal pinned focus ON Deny; the card pins the opposite, per the amendment.
+  expect(within(panel).getByRole('button', { name: 'Deny' })).not.toHaveFocus()
+  // The retired surface stays gone — counting hidden nodes, so a renamed
+  // dialog cannot hide behind accessibility isolation.
+  expect(screen.queryAllByRole('dialog', { hidden: true })).toEqual([])
+  return panel
 }
 
-describe.each(['live', 'session_state'] as const)('WU-4 — release modal origin from %s', (carrier) => {
+async function settledReads() {
+  // Query settlement, not an elapsed-time absence oracle. All issued reads are
+  // recorded synchronously even if their responses have not yet settled. The
+  // agents read warms the ['agents'] cache the card resolves its acting-agent
+  // name from (D-87), so the description oracle below is deterministic.
+  await waitFor(() => expect(queryClient.isFetching()).toBe(0))
+  expect(net.requests.some((request) => request.method === 'GET' && request.path === '/api/v1/agents')).toBe(true)
+  expect(net.requests.some((request) => request.method === 'GET' && request.path === '/api/v1/workspaces')).toBe(true)
+}
+
+describe.each(['live', 'session_state'] as const)('WU-4 — release approval-card origin from %s', (carrier) => {
   it.each(['for group Sales', 'while answering Anna on Telegram', 'asked by Jim'])(
     'K7 / FR-251: displays the exact server origin "%s" without navigation or an implicit decision',
     async (origin) => {
-      const { router, socket } = await mountStage1App(SETTINGS_PATH)
-      const modal = await emitApprovalOrigin(socket, carrier, origin)
-      expect(within(modal).getByTestId('tool-approval-origin').textContent).toBe(origin)
-      expect(modal).toHaveAccessibleDescription(`Mia is requesting permission to run a tool. ${origin}`)
-      expect(within(modal).getByRole('button', { name: 'Deny' })).toHaveFocus()
-      expect(within(modal).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
-      expect(router.state.location.pathname).toBe('/settings')
+      const { router, socket } = await mountStage1App()
+      await settledMainChat(socket)
+      await settledReads()
+      const panel = await emitApprovalOrigin(socket, carrier, origin)
+      // Exact origin at its dedicated element (K7), plus the exact request
+      // sentence on the describedby element — the origin is a separate
+      // labelled element on the card, so together these are the same oracle
+      // the modal's combined description gave, now with the origin pinned
+      // at its own node.
+      expect(within(panel).getByTestId('tool-approval-origin').textContent).toBe(origin)
+      expect(panel).toHaveAccessibleDescription('Mia is requesting permission to run a tool.')
+      // Focus flip is the SPEC, not a weakening: the retired modal grabbed
+      // focus (pinned toHaveFocus); the inline card must not (R6, pinned in
+      // emitApprovalOrigin as not.toHaveFocus).
+      expect(within(panel).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
+      // No navigation, no session/workspace side effect, no implicit decision.
+      expect(router.state.location.pathname).toBe(MAIN_PATH)
       expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
       expect(useWorkspacesStore.getState().activeWorkspaceId).toBe(WS)
       expect(net.writes()).toEqual([])
@@ -117,11 +157,14 @@ describe.each(['live', 'session_state'] as const)('WU-4 — release modal origin
   )
 
   it('K7: omitted origin renders no empty label or guessed origin', async () => {
-    const { socket } = await mountStage1App(SETTINGS_PATH)
-    const modal = await emitApprovalOrigin(socket, carrier, undefined)
-    expect(within(modal).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
-    expect(within(modal).queryByTestId('tool-approval-origin')).toBeNull()
-    expect(modal).toHaveAccessibleDescription('Mia is requesting permission to run a tool.')
+    const { router, socket } = await mountStage1App()
+    await settledMainChat(socket)
+    await settledReads()
+    const panel = await emitApprovalOrigin(socket, carrier, undefined)
+    expect(within(panel).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
+    expect(within(panel).queryByTestId('tool-approval-origin')).toBeNull()
+    expect(panel).toHaveAccessibleDescription('Mia is requesting permission to run a tool.')
+    expect(router.state.location.pathname).toBe(MAIN_PATH)
     expect(net.writes()).toEqual([])
   })
 
@@ -132,24 +175,22 @@ describe.each(['live', 'session_state'] as const)('WU-4 — release modal origin
   })
 })
 
-it('K7: an incomplete reconnect approval keeps its supplied origin and still offers Deny only', async () => {
-  const { socket } = await mountStage1App(SETTINGS_PATH)
-  const origin = 'asked by Jim'
-  const modal = await emitApprovalOrigin(socket, 'session_state', origin, true)
-  expect(within(modal).getByTestId('tool-approval-origin').textContent).toBe(origin)
-  expect(modal).toHaveAccessibleDescription(`This page can't show what's being asked — see below. ${origin}`)
-  expect(within(modal).getByRole('button', { name: 'Deny' })).toBeEnabled()
-  for (const name of ['Approve Once', 'Always Allow', 'Cancel']) {
-    expect(within(modal).queryByRole('button', { name })).toBeNull()
-  }
-  expect(net.writes()).toEqual([])
-})
+// RETIRED with its subject (bundle B3): "an incomplete reconnect approval keeps
+// its supplied origin and still offers Deny only". The wire can no longer
+// produce an incomplete reconnect approval — SessionStatePendingApproval now
+// REQUIRES tool_call_id/turn_id/args (commit d52b70bdc; the stub rendering
+// branches were deleted in 8f740826e) — so its Deny-only/"Approval Details
+// Unavailable" assertions are unreachable from real traffic. Its surviving
+// current-wire equivalent — a session_state restore keeps the supplied origin
+// and offers the full approvable card — is pinned by the session_state-carrier
+// exact-origin cases above. Full disposition: tests/train3-b3-logs/REAIM.md.
 
 it('K7: origin text is literal text, never executable markup', async () => {
-  const { socket } = await mountStage1App(SETTINGS_PATH)
+  const { socket } = await mountStage1App()
+  await settledMainChat(socket)
   const origin = 'for group <img src=x onerror="alert(1)">'
-  const modal = await emitApprovalOrigin(socket, 'live', origin)
-  const label = within(modal).getByTestId('tool-approval-origin')
+  const panel = await emitApprovalOrigin(socket, 'live', origin)
+  const label = within(panel).getByTestId('tool-approval-origin')
   expect(label.textContent).toBe(origin)
   expect(label.children).toHaveLength(0)
   expect(net.writes()).toEqual([])
