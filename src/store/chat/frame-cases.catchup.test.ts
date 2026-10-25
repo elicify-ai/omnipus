@@ -14,8 +14,12 @@ import { emptySessionState } from './session'
 import { gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, replayErrorRetryAttempts, replayErrorRetryTimers } from './runtime-state'
 import type { ChatMessage } from './types'
 import type { ServerFrame } from '@/lib/ws'
+import { loadFixtureHistory } from '../../../tests/chat-history-paging/load-fixture-history'
+import { expectValidFrame } from '../../../tests/chat-history-paging/fixtures'
 
 const SID = 'session-catchup-1'
+
+afterEach(() => vi.unstubAllGlobals())
 
 beforeEach(() => {
   useSessionStore.setState({ activeSessionId: SID })
@@ -133,12 +137,20 @@ describe('catch_up_complete (§4.1/§6.2)', () => {
     expect(bucket().isReplaying).toBe(false)
   })
 
-  it('D2: sets the cursor, clears isReplaying and awaitingCatchUp', () => {
+  it('D2: sets the cursor, clears isReplaying and awaitingCatchUp', async () => {
+    await loadFixtureHistory(useChatStore, SID)
+    const loaded = bucket()
     useChatStore.setState({
       sessionsById: {
-        [SID]: { ...emptySessionState(), isReplaying: true, awaitingCatchUp: true },
+        [SID]: { ...loaded, isReplaying: true, awaitingCatchUp: true, replayCompletedForSession: null },
       },
-    } as never)
+    })
+    const current: ServerFrame = { type: 'session_state', session_id: SID, user_id: 'catchup-reader', pending_approvals: [],
+      emitted_at: '2026-10-10T00:00:00Z', history_state: { status: 'available' } }
+    expectValidFrame(current)
+    useChatStore.getState().handleFrame(current)
+    expect(bucket().history.historyLoaded, 'D7/D7a: the incremental attach starts with a genuinely loaded page').toBe(true)
+    expect(bucket().replayCompletedForSession, 'the tested COMPLETE must still establish readiness').toBeNull()
 
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete',

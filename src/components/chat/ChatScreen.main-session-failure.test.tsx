@@ -16,6 +16,9 @@ import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { JIM, MIA, workspace } from '../../../tests/omnipus-l1-ui-red/fixtures'
 import { ChatScreen } from './ChatScreen'
+import type { ServerFrame } from '@/lib/api/generated/asyncapi-types'
+import { expectValidFrame, expectValidPage, page, snapshot } from '../../../tests/chat-history-paging/fixtures'
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
 
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock())
 vi.mock('@tanstack/react-router', () => ({
@@ -30,7 +33,7 @@ vi.mock('@/lib/api', async (original) => ({
   fetchWorkspaces: vi.fn().mockResolvedValue([]),
   fetchSessions: vi.fn().mockResolvedValue([]),
   fetchAgents: vi.fn().mockResolvedValue([]),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
+  fetchSessionMessages: vi.fn<HistoryReadPort>(async sessionId => emptyHistoryPage(sessionId)),
   fetchCommands: vi.fn().mockResolvedValue([]),
   fetchSkills: vi.fn().mockResolvedValue([]),
   fetchProviders: vi.fn().mockResolvedValue([]),
@@ -91,11 +94,17 @@ async function enter(id = WS) {
 }
 
 function finishReplay() {
-  act(() => {
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: MAIN, seq: 0, boot_id: 'row4-boot', mode: 'snapshot',
-    })
-  })
+  const history = page([], { sessionId: MAIN })
+  expectValidPage(history, [], 0)
+  const frames: ServerFrame[] = [
+    { ...snapshot(history), seq: 1, boot_id: 'row4-boot' },
+    { type: 'session_state', session_id: MAIN, user_id: 'row4-reader', pending_approvals: [],
+      emitted_at: '2026-10-10T00:00:00Z', history_state: { status: 'available' } },
+    { type: 'done', session_id: MAIN },
+    { type: 'catch_up_complete', session_id: MAIN, seq: 1, boot_id: 'row4-boot', mode: 'snapshot' },
+  ]
+  frames.forEach(expectValidFrame)
+  act(() => frames.forEach(frame => useChatStore.getState().handleFrame(frame)))
 }
 
 describe('Train 1 Row 4 — honest failed member main', () => {
