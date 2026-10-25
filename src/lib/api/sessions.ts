@@ -25,6 +25,7 @@ import type {
   JudgeVerdict,
   Message as WireMessage,
 } from '@/lib/api/generated/openapi-types'
+import type { SubagentEndFrame, SubagentMessageFrame, SubagentStartFrame, SubagentStateFrame } from '@/lib/api/generated/asyncapi-types'
 import { ApiSchemaError, _recordApiSchemaError, request } from './http'
 import { historyProtocolError, validateHistoryPage } from './history-validation'
 import type { HistoryPosition, SessionHistoryReadOptions, SessionDetailReadOptions, SessionHistoryPage, SessionHistoryEntry, SessionDetail, AvailableSessionDetail, UnavailableSessionDetail } from './history-types'
@@ -355,6 +356,14 @@ export interface AssistantMessage extends MessageBase { // not-wire-format: SPA-
   /** 'streaming' — turn in progress. 'done' — complete. 'error' — agent error. 'interrupted' — user cancelled. */
   status?: 'streaming' | 'done' | 'error' | 'interrupted'
   tool_calls?: ToolCall[]
+  /**
+   * A persisted subagent_start/state/message/end source entry (ADR-091
+   * D7/I-4), carried as its generated frame. The row itself draws nothing;
+   * paged history settles the frame onto the span's start row
+   * (store/chat/history-merge.ts::settleHistorySpans), for REST pages and
+   * snapshot replay alike.
+   */
+  historySpanFrame?: HistorySpanFrame
 }
 
 export interface SystemMessage extends MessageBase { // not-wire-format: SPA-internal system/banner message.
@@ -520,6 +529,10 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
   goal_outcome?: WireGoalOutcome
   system_subtype?: WireMessage['system_subtype']
   helper_event?: WireMessage['helper_event']
+  subagent_start?: WireMessage['subagent_start']
+  subagent_state?: WireMessage['subagent_state']
+  subagent_message?: WireMessage['subagent_message']
+  subagent_end?: WireMessage['subagent_end']
   /**
    * Judge verdict payload — present on a `type: judge_verdict, role: system`
    * entry (contracts/components/schemas/JudgeVerdict.yaml, wire
@@ -588,6 +601,32 @@ function rawToToolCall(raw: RawToolCall): ToolCall {
   }
 }
 
+/** Persisted subagent_* lifecycle frames a history entry can carry. */ // not-wire-format: union of generated frame types, no new wire shape
+export type HistorySpanFrame = SubagentStartFrame | SubagentStateFrame | SubagentMessageFrame | SubagentEndFrame
+
+/** The generated frame a persisted subagent_* source entry carries, matched on its stamped subtype. */
+function historySpanFrameOf(raw: RawMessage): HistorySpanFrame | undefined {
+  switch (raw.system_subtype) {
+    case 'subagent_start': return raw.subagent_start
+    case 'subagent_state': return raw.subagent_state
+    case 'subagent_message': return raw.subagent_message
+    case 'subagent_end': return raw.subagent_end
+    default: return undefined
+  }
+}
+
+/** A persisted sub-agent lifecycle entry is a silent source row, exactly like
+ * the socket's staged row for the same position; paged history settles its
+ * frame onto the span's start row. */
+function spanSourceMessage(raw: RawMessage): AssistantMessage | undefined {
+  const spanFrame = historySpanFrameOf(raw)
+  if (!spanFrame) return undefined
+  return {
+    id: raw.id, session_id: undefined, role: 'assistant', content: '', timestamp: raw.timestamp,
+    agentId: raw.agent_id || undefined, status: 'done', historySpanFrame: spanFrame,
+  }
+}
+
 function rawToMessage(raw: RawMessage): Message {
   if (raw.type === 'context_window_notice') {
     return {
@@ -603,6 +642,8 @@ function rawToMessage(raw: RawMessage): Message {
       contextWindowNotice: raw.context_window_notice,
     } satisfies SystemMessage
   }
+  const spanRow = spanSourceMessage(raw)
+  if (spanRow) return spanRow
   const role = raw.role ?? 'assistant'
   const baseStatus = raw.status === 'ok' ? ('done' as const) : raw.status
   // #3: construct the correct discriminated variant based on role.

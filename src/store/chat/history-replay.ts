@@ -15,7 +15,7 @@ import { useSessionStore } from '@/store/session'
 import { cursorFromTerminalFrame, isPendingTailMessage } from './cursor'
 import { findFirstSendMessage } from './first-send'
 import { abortHistoryReads, registerHistoryRelease } from './history'
-import { applyHistoryPageToBucket, HistoryPageProtocolError } from './history-merge'
+import { applyHistoryPageToBucket, HistoryPageProtocolError, releaseHistorySpanFacts } from './history-merge'
 import { ApiSchemaError } from '@/lib/api/http'
 import { logDiagnostic } from '@/lib/telemetry'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
@@ -189,10 +189,23 @@ function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryP
   }
 }
 
+/** A persisted span fact is its own silent source row. Reducing it alone in
+ * its isolated group could never meet the span's start (another position,
+ * possibly another page); the page commit settles it onto the start row
+ * (history-merge.ts::settleHistorySpans), exactly as REST pages do. */
+function stageSpanFact(stage: Stage, frame: ServerFrame, entryId: string | undefined, position: string, previous: SessionChatState): boolean {
+  if (frame.type !== 'subagent_start' && frame.type !== 'subagent_state' && frame.type !== 'subagent_message' && frame.type !== 'subagent_end') return false
+  const id = entryId ?? `history-${position}`
+  const row: ChatMessage = { id, role: 'assistant', content: '', timestamp: '1970-01-01T00:00:00Z', status: 'done', historyPosition: position, historySpanFrame: frame }
+  stage.groups.set(position, { ...previous, messagesById: { [id]: row }, messageOrder: [id] })
+  return true
+}
+
 export function createHistoryFrameOwner(context: HistorySliceContext) {
   const stages = new Map<string, Stage>()
   const discardedSnapshots = new Set<string>()
   registerHistoryRelease(sid => {
+    releaseHistorySpanFacts(sid ?? undefined)
     if (!sid) { for (const [id, stage] of stages) restorePublishedProjection(context, id, stage); stages.clear(); discardedSnapshots.clear(); return }
     const stage = stages.get(sid)
     if (stage) { restorePublishedProjection(context, sid, stage); discardedSnapshots.add(sid) }
@@ -254,6 +267,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     try { position = historyPosition(origin.position, 'WS history', ['history_origin', 'position']) } catch { stage.invalid = true; return }
     if (frame.type === 'replay_message' && frame.role === 'turn_canceled') stage.cancellations.add(position)
     const previous = stage.groups.get(position) ?? { ...emptySessionState(), isReplaying: true, awaitingCatchUp: true }
+    if (stageSpanFact(stage, frame, origin.entry_id, position, previous)) { publishProgressiveProjection(context, sid, stage); return }
     active = { sid, bucket: previous, staging: true }
     // A tool-only owning source is a real non-prose group, not the preceding
     // assistant bubble. The ordinary tool adapters then retain exact offsets.
