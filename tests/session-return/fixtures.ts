@@ -52,14 +52,24 @@ export function session(id: string, type: Session['type'] = 'chat'): Session {
 }
 
 /** HTTP is the substitute boundary; real query functions and validators run. */
-export function installSessionReturnNetwork() {
+export function installSessionReturnNetwork(options: {
+  workspaces?: Workspace[]
+  sessions?: Session[]
+  sessionListStatus?: () => number
+  deletedSessionIds?: string[]
+} = {}) {
   const unexpectedRequests: string[] = []
-  const sessions = [session(MAIN_SESSION, 'main'), session(SESSION_A), session(SESSION_B)]
+  const workspaces = options.workspaces ?? [workspace]
+  const sessions = options.sessions ?? [session(MAIN_SESSION, 'main'), session(SESSION_A), session(SESSION_B)]
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://localhost')
     const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
     if (method === 'GET') {
       switch (url.pathname) {
+        case '/api/v1/state': return Response.json({
+          onboarding_complete: true, dev_mode_bypass: true,
+          identity: { mode: 'local', edition: 'core', signed_in: true },
+        } satisfies import('@/lib/api/generated/openapi-types').AppState)
         case '/api/v1/agents': return Response.json([agent])
         case '/api/v1/providers': return Response.json(providers)
         case '/api/v1/commands': return Response.json([])
@@ -70,9 +80,19 @@ export function installSessionReturnNetwork() {
           policy_applied: false, seccomp_enabled: false, bind_ports_count: 0,
           kernel_sandbox_active: false, auto_approve_effective: false,
         } satisfies import('@/lib/api/generated/openapi-types').SandboxStatus)
-        case '/api/v1/workspaces': return Response.json([workspace])
-        case `/api/v1/workspaces/${WORKSPACE_ID}`: return Response.json(workspace)
-        case '/api/v1/sessions': return Response.json({ sessions })
+        case '/api/v1/workspaces': return Response.json(workspaces)
+        case '/api/v1/sessions': {
+          const status = options.sessionListStatus?.() ?? 200
+          return status === 200
+            ? Response.json({ sessions })
+            : Response.json({ message: 'Session list temporarily unavailable' }, { status })
+        }
+      }
+      const targetWorkspace = workspaces.find((item) => url.pathname === `/api/v1/workspaces/${item.id}`)
+      if (targetWorkspace) return Response.json(targetWorkspace)
+      if (workspaces.some((item) => url.pathname === `/api/v1/workspaces/${item.id}/rooms`)) return Response.json([])
+      if (options.deletedSessionIds?.some((id) => url.pathname === `/api/v1/sessions/${id}` || url.pathname === `/api/v1/sessions/${id}/messages`)) {
+        return Response.json({ message: 'This chat no longer exists' }, { status: 404 })
       }
       const target = sessions.find((item) => url.pathname === `/api/v1/sessions/${item.id}`)
       if (target) return Response.json({ session: target, messages: [], agent_removed: false })

@@ -3,8 +3,9 @@
 // REAL: picker, selector, query functions/validation, stores, browser storage.
 // Substitute only HTTP and missing jsdom facilities. No application mocks.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { ClientFrame, WsConnection } from '@/lib/ws'
 import {
   agent, DEFAULT_MODEL, FIRST_CHOICE, LATEST_CHOICE, SESSION_A, SESSION_B, WORKSPACE_ID,
   installSessionReturnBrowser, installSessionReturnNetwork,
@@ -183,6 +184,102 @@ describe('#1436 — unfiled chats keep their latest model without a workspace', 
 
     expect(page.useWorkspacesStore.getState().activeWorkspaceId, 'restoration must not silently bind a workspace').toBeNull()
     expect(page.useSessionStore.getState().activeSessionId).toBe(SESSION_A)
+    await expectChoice(FIRST_CHOICE)
+  })
+})
+
+describe('#1436 review gaps — draft choices and storage failure', () => {
+  it('R1 keeps the draft model through the real first-send acknowledgement and reload before an answer', async () => {
+    const { useConnectionStore } = await import('@/store/connection')
+    const { useOmnipusRuntime } = await import('@/lib/omnipus-runtime')
+    const frames: ClientFrame[] = []
+    const transport = { send: (frame: ClientFrame) => { frames.push(frame); return true }, close: vi.fn(), isConnected: true }
+    useConnectionStore.setState({ connection: transport as unknown as WsConnection, isConnected: true })
+    act(() => page.useSessionStore.getState().setActiveSession(null, agent.id))
+    const mounted = await renderPicker()
+    const runtime = renderHook(() => useOmnipusRuntime())
+    await choose(FIRST_CHOICE)
+    expect(page.useSessionStore.getState().activeSessionId, 'the choice starts before a server session exists').toBeNull()
+    await act(async () => {
+      runtime.result.current.thread.composer.setText('First message with my chosen model')
+      await runtime.result.current.thread.composer.send()
+    })
+    expect(page.useSessionStore.getState().activeSessionId).toBe('__pending')
+    const sent = frames.find((frame) => frame.type === 'message')
+    expect(sent).toMatchObject({ type: 'message', metadata: { model_name: FIRST_CHOICE } })
+    if (!sent || sent.type !== 'message') throw new Error('The real composer did not send the first message')
+    act(() => page.useChatStore.getState().handleFrame({
+      type: 'session_started', session_id: SESSION_A, agent_id: agent.id, client_message_id: sent.client_message_id,
+    }))
+    expect(page.useSessionStore.getState().activeSessionId).toBe(SESSION_A)
+    expect(page.useChatStore.getState().messages.filter((message) => message.role === 'assistant' && (message.content.trim() || message.model)), 'no assistant answer/model has arrived').toEqual([])
+    mounted.unmount()
+    runtime.unmount()
+    for (const client of clients.splice(0)) client.clear()
+    const oldStore = page.useChatStore
+    vi.resetModules()
+    page = await loadPageModules()
+    expect(page.useChatStore).not.toBe(oldStore)
+    const reloadedConnection = await import('@/store/connection')
+    reloadedConnection.useConnectionStore.setState({ connection: transport as unknown as WsConnection, isConnected: true })
+    act(() => {
+      page.useWorkspacesStore.getState().setActiveWorkspaceId(WORKSPACE_ID)
+      page.useSessionStore.getState().setActiveSession(SESSION_A, agent.id)
+    })
+    await renderPicker()
+    await expectChoice(FIRST_CHOICE)
+    await openPicker()
+    expect(modelOption(FIRST_CHOICE, 'OpenRouter')).toHaveAttribute('data-chosen', 'true')
+    fireEvent.click(screen.getByTestId('composer-model-selector'))
+    const reloadedRuntimeModule = await import('@/lib/omnipus-runtime')
+    const nextRuntime = renderHook(() => reloadedRuntimeModule.useOmnipusRuntime())
+    await act(async () => {
+      nextRuntime.result.current.thread.composer.setText('Next message after reload')
+      await nextRuntime.result.current.thread.composer.send()
+    })
+    expect(frames.filter((frame) => frame.type === 'message').at(-1)).toMatchObject({
+      type: 'message', session_id: SESSION_A, metadata: { model_name: FIRST_CHOICE },
+    })
+  })
+
+  it.each(['QuotaExceededError', 'SecurityError'])('R4 warns and retains in-page choices when storage throws %s', async (errorName) => {
+    const { ToastContainer } = await import('@/components/ui/toast-container')
+    render(<ToastContainer />)
+    await renderPicker()
+    const nativeSetItem = Storage.prototype.setItem
+    const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === 'omnipus.sessionModelChoice.v1') throw new DOMException('Model choice write rejected', errorName)
+      nativeSetItem.call(this, key, value)
+    })
+    try {
+      await choose(FIRST_CHOICE)
+      const warnings = [...screen.queryAllByRole('status'), ...screen.queryAllByRole('alert')]
+        .filter((element) => /model|choice|preference|storage/i.test(element.textContent ?? '') && /sav|remember|persist|storage|permission/i.test(element.textContent ?? ''))
+      expect.soft(warnings.length, 'a rejected model-choice write must produce a visible user warning').toBeGreaterThan(0)
+      for (const warning of warnings) expect.soft(warning).toBeVisible()
+      await visit(SESSION_B)
+      await choose(LATEST_CHOICE)
+      await visit(SESSION_A)
+      await expectChoice(FIRST_CHOICE)
+    } finally {
+      storage.mockRestore()
+    }
+  })
+
+  it('R4 warns on malformed preference JSON and keeps the current page choice on return', async () => {
+    const { ToastContainer } = await import('@/components/ui/toast-container')
+    render(<ToastContainer />)
+    await renderPicker()
+    await choose(FIRST_CHOICE)
+    expect(screen.queryAllByRole('alert')).toEqual([])
+    localStorage.setItem('omnipus.sessionModelChoice.v1', '{malformed preference JSON')
+    await visit(SESSION_B)
+    const warnings = [...screen.queryAllByRole('status'), ...screen.queryAllByRole('alert')]
+      .filter((element) => /model|choice|preference|storage/i.test(element.textContent ?? '') && /read|load|corrupt|invalid|storage|sav|remember/i.test(element.textContent ?? ''))
+    expect.soft(warnings.length, 'malformed JSON must be visibly distinguishable from an absent preference').toBeGreaterThan(0)
+    for (const warning of warnings) expect.soft(warning).toBeVisible()
+    await choose(LATEST_CHOICE)
+    await visit(SESSION_A)
     await expectChoice(FIRST_CHOICE)
   })
 })
