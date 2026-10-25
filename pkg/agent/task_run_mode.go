@@ -180,14 +180,16 @@ func (te *TaskExecutor) launchMainTaskRun(ctx context.Context, t *task.Task, occ
 	return launched.SessionID, nil
 }
 
-// mapLaunchRefusal turns a launcher refusal into the task surface's error: the
-// plain steering sentence for an unavailable conversation (cause kept
-// identifiable), otherwise a wrapped error.
+// mapLaunchRefusal turns a launcher refusal into the task surface's error:
+// a steering-unavailable dispatch refusal (the three typed sentinels) is
+// logged and returned raw — ADR-093 amendment 2026-10-23 (Decision 2)
+// deleted the D5 sentence wrapper, so the sentinel's own short text becomes
+// the stored failure reason; anything else is a wrapped error.
 func (te *TaskExecutor) mapLaunchRefusal(t *task.Task, sessionID, stage string, err error) error {
 	if steer.IsSteeringUnavailable(err) {
-		logger.ErrorCF("agent", "adr093: task "+stage+" refused (session not available)",
+		logger.ErrorCF("agent", "adr093: task "+stage+" refused (session not dispatchable)",
 			map[string]any{"task_id": t.ID, "session_id": sessionID, "error": err.Error()})
-		return newSteeringRefusalError(err)
+		return err
 	}
 	return fmt.Errorf("task_executor: main run %s: %w", stage, err)
 }

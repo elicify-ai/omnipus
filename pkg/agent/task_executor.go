@@ -1274,31 +1274,6 @@ func (te *TaskExecutor) releaseReservedRunSlot(taskID string) {
 	}
 }
 
-// steeringRefusalError is the task path's ADR-093 D5 surface: Error() is the
-// plain sentence, Unwrap() the original typed refusal — the plain-error
-// equivalent of the delegate tool's ErrorResult(sentence).WithError(cause).
-// It keeps the real refusal cause machine-readable (errors.Is reaches
-// ErrSteeringStopped, ErrSteeringRevivalFailed and the dispatch sentinels)
-// while the string a caller stores as the task's failure reason carries no
-// machinery text (gate SFH#7).
-type steeringRefusalError struct {
-	sentence string
-	cause    error
-}
-
-func (e *steeringRefusalError) Error() string { return e.sentence }
-func (e *steeringRefusalError) Unwrap() error { return e.cause }
-
-// newSteeringRefusalError maps a typed steering refusal to the task surface's
-// plain sentence, keeping the original error identifiable (gate SFH#7).
-func newSteeringRefusalError(err error) error {
-	sentence := steer.SteeringUnavailableMessage
-	if errors.Is(err, steer.ErrSteeringRevivalFailed) {
-		sentence = steer.SteeringRevivalFailedMessage
-	}
-	return &steeringRefusalError{sentence: sentence, cause: err}
-}
-
 // startTaskNowViaLauncherAs is startTaskNowViaLauncher carrying the
 // already-authorized initiator (nil = a person or the scheduler) onto the
 // launch request, so the child's record carries InitiatedBy.
@@ -1314,16 +1289,46 @@ func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.T
 		if lifecycle := te.getLifecycleStore(); lifecycle != nil {
 			if rec, err := lifecycle.Load(t.SessionID); err == nil {
 				generation = rec.Generation
+				if te.agentLoop != nil {
+					// ADR-093 amendment 2026-10-23 (case 6): an IN-FLIGHT stop
+					// fence — stop stamped, dying turn not yet exited — still
+					// refuses the restart visibly until the stop lands: that work
+					// WAS in flight at the Stop, so the ruling keeps this refusal.
+					// The task is not failed by it: the visible retry succeeds
+					// once the stop lands.
+					if fenceErr := te.agentLoop.inboundStopFenceInFlight(t.SessionID); fenceErr != nil {
+						return "", fenceErr
+					}
+					// ADR-093 amendment 2026-10-23 (cases 6 and 7): the bound
+					// session is revived BEFORE its re-dispatch, so a leftover
+					// stop marker can never refuse a user-initiated restart. The
+					// same revival mutation the chat resume path uses — a landed
+					// stop clears on the SAME generation, a terminal record
+					// mints the NEXT generation via resumed_from (transcript
+					// continuity kept); no new marker-clearing machinery.
+					if rec.Terminal() || rec.State == session.LifecycleStopped {
+						newGeneration, reviveErr := te.agentLoop.steerCanceller().Revive(ctx, t.SessionID,
+							steer.Principal{Kind: steer.PrincipalKindHuman})
+						if reviveErr != nil {
+							return "", fmt.Errorf("task_executor: StartTaskNow: revive bound session %q: %w", t.SessionID, reviveErr)
+						}
+						// MIN-002: the record must agree with the screen after a
+						// revival, as on every other revival path.
+						te.agentLoop.resetUnifiedMetaStatusActive(t.SessionID)
+						generation = newGeneration
+					}
+				}
 			}
 		}
 		if _, err := te.launcher.Dispatch(ctx, t.SessionID, generation); err != nil {
-			// Gate SFH#7: map a dispatch refusal for an existing task session
-			// the same way as the launch refusal — sentence surface, cause
-			// kept identifiable, logged before mapping.
+			// ADR-093 amendment 2026-10-23 (Decision 2): a dispatch refusal
+			// for an existing task session still fails the task — the right
+			// outcome — and the stored reason is the typed sentinel's own
+			// text; the D5 sentence wrapper is deleted. The log stays.
 			if steer.IsSteeringUnavailable(err) {
 				logger.ErrorCF("agent", "adr093: task dispatch refused (session not dispatchable — cancelled, terminal, or stale generation)",
 					map[string]any{"task_id": t.ID, "session_id": t.SessionID, "error": err.Error()})
-				return "", newSteeringRefusalError(err)
+				return "", te.failTaskBeforeDispatch(t.ID, err)
 			}
 			return "", fmt.Errorf("task_executor: StartTaskNow: dispatch existing session: %w", err)
 		}

@@ -7,20 +7,18 @@
 // replacement for the synchronous processMessage call the gate's architect
 // pass flagged (CC-1: the reply was discarded; F1: the call blocked Run's
 // message pump for a whole turn; silent-failure-hunter #1: a turn that
-// already ran could be queued a second time) — plus the revival-failure
-// memory the D2 launch backstop consults so a refusal after a failed resume
-// tells the truth (silent-failure-hunter #6).
+// already ran could be queued a second time). (The revival-failure memory
+// the deleted D2 launch backstop consulted lived here too and was removed
+// with the backstop — ADR-093 amendment 2026-10-23.)
 package agent
 
 import (
 	"context"
-	"errors"
 	"runtime/debug"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // revivedTurnHandoffBudget bounds how long a revived ordinary-root turn
@@ -51,66 +49,6 @@ func (al *AgentLoop) inboundRunContext() context.Context {
 		return al.loopCtx
 	}
 	return context.Background()
-}
-
-// revivalFailure is one recorded failed resume attempt: when it happened and
-// what failed. Recorded on the AgentLoop (not the lifecycle record — the
-// store write that recording needs is exactly what is failing) and cleared
-// by the next successful revive of the same session.
-type revivalFailure struct {
-	at    time.Time
-	cause error
-}
-
-// markRevivalFailure records that sessionID's most recent resume attempt
-// failed with cause, so the D2 launch backstop can distinguish "stopped,
-// and the next message would revive it" from "stopped, and the resume
-// attempt itself is failing" (silent-failure-hunter #6: the second state
-// must not tell the user to send another message).
-func (al *AgentLoop) markRevivalFailure(sessionID string, cause error) {
-	if al == nil || sessionID == "" || cause == nil {
-		return
-	}
-	if errors.Is(cause, steer.ErrStaleGeneration) {
-		// Another execution won the selection race; no revival/store write
-		// failed. Drop older diagnostic memory rather than poison a later
-		// stopped-parent refusal with the revival-failed sentinel.
-		al.clearRevivalFailure(sessionID)
-		return
-	}
-	al.revivalFailures.Store(sessionID, revivalFailure{at: time.Now(), cause: cause})
-}
-
-// lastRevivalFailure reports the session's recorded failed resume attempt,
-// if one is still recorded. Entries are cleared only by a successful revive
-// (clearRevivalFailure); a stale entry for a session that later revived
-// elsewhere is overwritten by the next failure and never read once the
-// record is live again — the launch backstop consults it only for a
-// terminal/stopped parent, where a stale entry would otherwise mislabel a
-// genuine stop.
-func (al *AgentLoop) lastRevivalFailure(sessionID string) (revivalFailure, bool) {
-	if al == nil || sessionID == "" {
-		return revivalFailure{}, false
-	}
-	v, ok := al.revivalFailures.Load(sessionID)
-	if !ok {
-		return revivalFailure{}, false
-	}
-	rf, isRF := v.(revivalFailure)
-	if !isRF {
-		return revivalFailure{}, false
-	}
-	return rf, true
-}
-
-// clearRevivalFailure drops the session's recorded resume failure after a
-// successful revive, so a later, genuine stop-refusal is not mislabelled as
-// a revival failure.
-func (al *AgentLoop) clearRevivalFailure(sessionID string) {
-	if al == nil || sessionID == "" {
-		return
-	}
-	al.revivalFailures.Delete(sessionID)
 }
 
 // runRevivedOrdinaryTurn runs a revived ordinary-root inbound turn DETACHED:

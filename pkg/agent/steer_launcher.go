@@ -402,11 +402,11 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 // launchSteered is Launch's steered path (I-1): the child's record is
 // published under the steering session's own record lock via
 // PublishChildUnderParentLock (pkg/session/lifecycle.go) — the primitive
-// that closes the atomicity gap between reading a parent's Stop status and
-// a child coming to exist. The depth decision,
-// Stop-marker stamp, and mandatory child writes run inside that callback, so
+// that closes the atomicity gap between reading the parent's record and
+// a child coming to exist. The depth decision and the mandatory child
+// writes run inside that callback, so
 // a concurrent Stop cascade against the same steering session cannot land
-// between "read the parent's Stop status" and "the child exists." Ancestor
+// between "read the parent's record" and "the child exists." Ancestor
 // records are loaded before the callback because lifecycle shard locks are
 // not re-entrant; the callback revalidates the direct edge before publishing.
 func (l *SteerLauncher) launchSteered(
@@ -459,29 +459,16 @@ func (l *SteerLauncher) launchSteered(
 			if existed != preParentExisted || (existed && !sameSteeringEdge(parentRec, preParent)) {
 				return nil, fmt.Errorf("steering edge changed while launch was acquiring the parent lock")
 			}
-			// ADR-093 D2: a launch whose steering conversation is not active
-			// is refused outright, under the parent lock, before anything is
-			// created — no child lifecycle record, no unified session, no
-			// goal record. The sentinel is steer.ErrSteeringStopped (never a
-			// store invariant text); the tool layer maps it to D5's plain
-			// sentence telling the model a new message resumes the
-			// conversation.
-			if (parentRec.Terminal() || parentRec.Stopped()) && !isMainTaskChildLaunch(req) {
-				// Gate SFH#6: a session whose most recent revive attempt itself
-				// failed is a different refusal state from a session that is
-				// merely stopped. The standard D5 sentence tells the user to
-				// send a new message to resume — the exact action that just
-				// failed — so return the typed revival-failed sentinel wrapped
-				// around the revive cause (double %w keeps BOTH the sentinel
-				// and the underlying cause identifiable with errors.Is) and
-				// let the tool layer map it to the truthful variant sentence.
-				// Still before any write, so D2's other invariants hold.
-				if rf, ok := l.al.lastRevivalFailure(req.SteeringSessionID); ok {
-					return nil, fmt.Errorf("%w: last resume attempt failed: %w",
-						steer.ErrSteeringRevivalFailed, rf.cause)
-				}
-				return nil, steer.ErrSteeringStopped
-			}
+			// ADR-093 amendment 2026-10-23 (founder decision): D2's launch-time
+			// backstop is removed — a launch under a terminal-record or
+			// stopped-record steering conversation PUBLISHES the child,
+			// unstamped (Q1 option A: in the rare launch-after-cascade race a
+			// helper may run once). What guarantees "a session that ended can
+			// not fire anything" is the turn, not the record (Decision 3):
+			// only an explicit Stop ends a turn early, and no turn means no
+			// delegate call reaches this launcher. The parent's record is
+			// still not written here (D1 stands: PublishChildUnderParentLock
+			// appends the parent only on mint).
 			steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)
 			if metaErr != nil {
 				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %w",
@@ -1313,16 +1300,4 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 	}
 	logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — no queued items remain",
 		map[string]any{"session_id": sessionID, "generation": gen, "attempts": continueDrainMaxRetries})
-}
-
-// isMainTaskChildLaunch is the FR-018 stopped-main exemption: a task-origin
-// launch whose steering session is the TARGET agent's own computed main may be
-// admitted under that main even while it is stopped. The exemption only lets the
-// child be published; it does not revive the main, write its state or dispatch
-// it (zero main-model wake), and the general stopped-parent guard stays for
-// every other launch — delegate helpers, extra-chat helpers, and tasks whose
-// parent is not the target's own main.
-func isMainTaskChildLaunch(req steer.LaunchRequest) bool {
-	_, agent, ok := session.SplitMainSessionID(req.SteeringSessionID)
-	return ok && req.Origin.Kind == steer.OriginKindTask && agent == req.TargetAgentID
 }

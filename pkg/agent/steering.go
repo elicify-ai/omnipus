@@ -792,22 +792,13 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	}
 	newGeneration, rerr := al.steerCanceller().Revive(ctx, sessionID, by)
 	if rerr != nil {
-		// Gate SFH#6: record the failed revive so the D2 launch backstop
-		// refuses truthfully instead of send-a-new-message — the user's
-		// revive attempt itself just failed, so pointing at "send another
-		// message" repeats the failure. Sibling site:
-		// reviveRecordForHumanTurn.
-		al.markRevivalFailure(sessionID, rerr)
 		return false, fmt.Errorf("steer: revive %q: %w", sessionID, rerr)
 	}
 	// ADR-093 MIN-002 (gate SFH#5): the child revive now resets the
 	// session-list status to active with the same helper the human-message
 	// path uses, so a resumed child no longer stays "interrupted" in the
 	// session list while it runs. Failures are error-logged, never
-	// success-pretended (gate SFH#4). The failed-revive memory is dropped
-	// too: the session IS live again, so a later refusal must not be
-	// mislabelled (gate SFH#6).
-	al.clearRevivalFailure(sessionID)
+	// success-pretended (gate SFH#4).
 	al.resetUnifiedMetaStatusActive(sessionID)
 	// NEW-5/NEW-6: the hold now names the turn that will consume it, so only that
 	// turn (reaching the holder, or ending) retires it; a failed dispatch below

@@ -569,16 +569,6 @@ type AgentLoop struct {
 	// loopCancel cancels loopCtx. Called by Stop() and Close(); idempotent.
 	loopCancel context.CancelFunc
 
-	// revivalFailures remembers the most recent failed revive attempt per
-	// session id (revive_support.go::revivalFailure). The D2 launch backstop
-	// (steer_launcher.go::launchSteered) consults it so a refusal for a
-	// session whose resume attempt is itself failing tells the truth
-	// ("resuming this conversation failed: <plain cause>") instead of the
-	// send-a-new-message sentence that just failed (ADR-093 gate fix,
-	// silent-failure-hunter #6). Entries are cleared on the next successful
-	// revive; nothing here is authoritative — the lifecycle record is.
-	revivalFailures sync.Map
-
 	// cancelAbuse is the shared abuse detector used by RequestCancel across all
 	// four cancel entry points (web, Tier A /cancel, Tier B text-parsing, CLI).
 	// Initialized in NewAgentLoop; always non-nil after construction.

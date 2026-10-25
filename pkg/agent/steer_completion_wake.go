@@ -137,7 +137,6 @@ func (al *AgentLoop) replayPostFinishWake(sessionID, messageID string) error {
 			steer.Principal{Kind: steer.PrincipalKindAgent, ID: rec.AgentID}); reviveErr != nil {
 			return fmt.Errorf("steer: post-finish wake: revive recipient %q: %w", sessionID, reviveErr)
 		}
-		al.clearRevivalFailure(sessionID)
 		al.resetUnifiedMetaStatusActive(sessionID)
 		rec, err = lifecycle.Load(sessionID)
 		if err != nil {
