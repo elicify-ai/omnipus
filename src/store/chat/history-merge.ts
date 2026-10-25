@@ -4,6 +4,7 @@ import type { ChatMessage, SessionChatState } from './types'
 import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
 import { isClearContextMarker } from '@/lib/clearMarker'
 import { mergeRecordedSessionTokens } from './session-usage'
+import { fallbackPairKey } from './slices/provider-frames'
 
 /** Expected contradiction in a page's relation to the current reader. */
 export class HistoryPageProtocolError extends Error {}
@@ -80,8 +81,14 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   }))
   const hasEarlier = action === 'older' || action === 'latest' ? page.has_earlier : (trimmed || history.hasEarlier === true)
   const hasLater = action === 'newer' || action === 'latest' ? page.has_later : (trimmed || history.hasLater === true)
+  // PF=A / seams Q4: a REST-loaded fallback note seeds the existing D17
+  // once-per-chat pair guard, exactly as its replay carrier does, but only
+  // when BOTH recorded models are known. Never inferred from the note text.
+  const knownPairs = incoming.flatMap(row => row.providerFallbackNote?.answeredModel && row.providerFallbackNote.unavailableModel
+    ? [fallbackPairKey(row.providerFallbackNote.unavailableModel, row.providerFallbackNote.answeredModel)] : [])
   return {
     ...patch, historyNotice: undefined, historyNeedsSnapshot: false, hasEarlierMessages: hasEarlier,
+    ...(knownPairs.length ? { providerFallbackPairsSeen: new Set([...(bucket.providerFallbackPairsSeen ?? []), ...knownPairs]) } : {}),
     sessionTokens: mergeRecordedSessionTokens(bucket.sessionTokens, page.session_tokens_total),
     history: {
       ...patch.history!, historyLoaded: true, serverState: { status: 'available' }, pageMetadata: historyMetadata(page),
