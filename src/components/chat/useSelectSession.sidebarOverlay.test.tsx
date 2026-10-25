@@ -9,7 +9,7 @@
 // wrappers are replaced. The session lives in the ALREADY-ACTIVE workspace, so
 // the route path does not change: a route-change listener could not catch it.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
@@ -228,7 +228,8 @@ describe('Q81: opening a session from the search modal closes the unpinned sideb
     const user = userEvent.setup()
     renderShell()
 
-    const actions = await screen.findByRole('button', { name: 'More actions for Mia' })
+    const actions = await within(screen.getByRole('navigation', { name: 'Main navigation' }))
+      .findByRole('button', { name: 'More actions for Mia' })
     expect(clickCatcher(), 'instrument: this real History path starts with an open sidebar backdrop').not.toBeNull()
     await user.click(actions)
     await user.click(await screen.findByRole('menuitem', { name: 'History', exact: true }))
