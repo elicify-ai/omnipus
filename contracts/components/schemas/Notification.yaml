@@ -21,6 +21,7 @@ properties:
     enum:
       - schedule_failed
       - knowledge_drift
+      - goal_paused
     description: >
       The event class. Extensible; consumers must tolerate unknown values.
 

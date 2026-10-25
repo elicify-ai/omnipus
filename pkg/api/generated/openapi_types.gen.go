@@ -7030,6 +7030,7 @@ func (e NotificationSeverity) Valid() bool {
 
 // Defines values for NotificationType.
 const (
+	NotificationTypeGoalPaused     NotificationType = "goal_paused"
 	NotificationTypeKnowledgeDrift NotificationType = "knowledge_drift"
 	NotificationTypeScheduleFailed NotificationType = "schedule_failed"
 )
@@ -7037,6 +7038,8 @@ const (
 // Valid indicates whether the value is a known member of the NotificationType enum.
 func (e NotificationType) Valid() bool {
 	switch e {
+	case NotificationTypeGoalPaused:
+		return true
 	case NotificationTypeKnowledgeDrift:
 		return true
 	case NotificationTypeScheduleFailed:
@@ -7069,6 +7072,7 @@ func (e NotificationListNotificationsSeverity) Valid() bool {
 
 // Defines values for NotificationListNotificationsType.
 const (
+	NotificationListNotificationsTypeGoalPaused     NotificationListNotificationsType = "goal_paused"
 	NotificationListNotificationsTypeKnowledgeDrift NotificationListNotificationsType = "knowledge_drift"
 	NotificationListNotificationsTypeScheduleFailed NotificationListNotificationsType = "schedule_failed"
 )
@@ -7076,6 +7080,8 @@ const (
 // Valid indicates whether the value is a known member of the NotificationListNotificationsType enum.
 func (e NotificationListNotificationsType) Valid() bool {
 	switch e {
+	case NotificationListNotificationsTypeGoalPaused:
+		return true
 	case NotificationListNotificationsTypeKnowledgeDrift:
 		return true
 	case NotificationListNotificationsTypeScheduleFailed:

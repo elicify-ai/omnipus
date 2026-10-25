@@ -6381,6 +6381,7 @@ components:
           enum:
           - schedule_failed
           - knowledge_drift
+          - goal_paused
         title:
           type: string
           minLength: 1
