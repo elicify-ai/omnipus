@@ -163,6 +163,16 @@ const (
 	// EventKindHelperEvent follows a durable immutable helper-event chat row.
 	EventKindHelperEvent
 
+	// EventKindUserMessagePersisted (#1442) is emitted by ProcessScheduled
+	// immediately AFTER a scheduled/heartbeat prompt's transcript append
+	// succeeds. The gateway's session-hub sync tap translates it into exactly
+	// one user_message frame — id, content and attribution taken verbatim
+	// from the carried entry — for the viewers bound to that session, so the
+	// run's live view shows the prompt without a reload. Interactive turns
+	// never emit it: their echo stays websocket_chat.go's publishUserMessage,
+	// so no turn can be echoed twice.
+	EventKindUserMessagePersisted
+
 	eventKindCount
 )
 
@@ -208,6 +218,7 @@ var eventKindNames = [...]string{
 	"provider_retry",
 	"provider_fallback",
 	"helper_event",
+	"user_message_persisted",
 }
 
 // String returns the stable string form of an EventKind.
@@ -960,6 +971,16 @@ type SubagentMessagePayload struct {
 	MessageID string
 	// Frame is the wire shape itself, identical to the persisted entry's.
 	Frame generated.SubagentMessageFrame
+}
+
+// UserMessagePersistedPayload is EventKindUserMessagePersisted's payload
+// (#1442): the transcript entry ALREADY persisted for the scheduled prompt.
+// The entry is carried verbatim so the gateway frame's id, content, timestamp
+// and agent attribution ARE the persisted ones by construction — never
+// re-derived.
+type UserMessagePersistedPayload struct {
+	SessionID string
+	Entry     session.TranscriptEntry
 }
 
 // ProviderFallbackPayload is EventKindProviderFallback's payload

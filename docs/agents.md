@@ -305,7 +305,7 @@ A heartbeat is a scheduled check-in for one agent in one workspace. The same age
 4. Write the **Heartbeat body**, which is the prompt the agent receives at each check-in. For example: "Check the inbox and start a task for anything new."
 5. Click **Save heartbeat**. The agent now runs the prompt on that interval.
 
-If nothing needs attention, the agent records an all-clear. The sidebar lists chat agents, not individual heartbeat sessions. Heartbeat check-ins use that agent's main chat. After a successful check-in, the next interval is counted from that check-in's completion, in the same heartbeat conversation; no gateway restart is needed between check-ins. Scheduled task work is a different feature; the [calendar](calendar.md) page covers it.
+If nothing needs attention, the agent records an all-clear. The sidebar lists chat agents, not individual heartbeat sessions. Heartbeat check-ins use that agent's main chat. If you have that chat open, a check-in appears live: the check-in prompt is inserted as it is saved and the answer streams in as it is written, without a reload. After a successful check-in, the next interval is counted from that check-in's completion, in the same heartbeat conversation; no gateway restart is needed between check-ins. Scheduled task work is a different feature; the [calendar](calendar.md) page covers it.
 
 ## Limits and things to watch
 

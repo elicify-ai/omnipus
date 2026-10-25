@@ -1526,6 +1526,11 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 //     "agent:<owner>:session:<id>" form, collision-free across isolated runs.
 //   - It sets AutoDenyAsk so any `ask`-policy tool call is denied without
 //     blocking for approval (FR-009) — no operator is present.
+//   - It marks the turn WebchatLiveStream so viewers bound to the session see
+//     the prompt (EventKindUserMessagePersisted) and the streamed answer live
+//     (#1442) — with Channel/ChatID still empty, so every channel-keyed
+//     behavior (goal routing, connector intake/egress, tool media, response
+//     sends) is unchanged.
 //
 // The caller (the gateway's scheduled-job runner) resolves the owner + picks
 // the session per session_mode and supplies a concrete sessionID; it imposes
@@ -1595,6 +1600,19 @@ func (al *AgentLoop) ProcessScheduled(
 		return "", fmt.Errorf("scheduled run: transcript write failed for session %q: %w", sessionID, err)
 	}
 
+	// #1442: the prompt is persisted — publish it live. The event's only
+	// consumer is the gateway's session-hub sync tap, which turns it into
+	// exactly one user_message frame (id, content, attribution = userEntry)
+	// for the viewers bound to this session. Emitted strictly after the
+	// append so the live frame can never precede its durable copy (the
+	// interactive path's publish-after-append rule), and before the turn
+	// runs so the frame is numbered ahead of every answer token. Interactive
+	// turns never emit this — their echo is publishUserMessage — so no turn
+	// is echoed twice.
+	al.emitEvent(EventKindUserMessagePersisted,
+		EventMeta{AgentID: ownerAgentID, SessionKey: sessionKey, Source: "ProcessScheduled"},
+		UserMessagePersistedPayload{SessionID: sessionID, Entry: userEntry})
+
 	// FIX 1 (re-review): WorkspaceID was never threaded here, so any tool
 	// media a scheduled/heartbeat-fired run produces silently degraded to the
 	// private/global room (bus.OutboundMediaMessage.WorkspaceID stays "")
@@ -1641,6 +1659,11 @@ func (al *AgentLoop) ProcessScheduled(
 		TranscriptStore:     transcriptStore,
 		WorkspaceID:         workspaceID,
 		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
+		// #1442: the session renders in the web UI like any chat, so the
+		// answer streams live to its viewers — through streamerChannel ONLY;
+		// Channel stays "" so goal routing, connector intake/egress, tool
+		// media and response sends keep treating the run as channel-less.
+		WebchatLiveStream: true,
 	})
 	if err == nil && ctx.Err() == context.DeadlineExceeded {
 		// A deadline-forced hard abort (pkg/gateway/schedules.go's

@@ -10,7 +10,7 @@ import (
 // durable/live identity as streamed answers. It sends that already-available
 // text once before done; no provider request or tool operation is repeated.
 func (ts *turnState) ensureFinalWebchatStreamer(messageBus *bus.MessageBus, lookupDeclined bool) error {
-	if lookupDeclined || ts.opts.Channel != "webchat" || ts.transcriptSessionID == "" || messageBus == nil {
+	if lookupDeclined || ts.streamerChannel() != "webchat" || ts.transcriptSessionID == "" || messageBus == nil {
 		return nil
 	}
 	ts.mu.RLock()
@@ -23,7 +23,7 @@ func (ts *turnState) ensureFinalWebchatStreamer(messageBus *bus.MessageBus, look
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	streamer, ok := messageBus.GetStreamer(ctx, ts.opts.Channel, ts.opts.ChatID, ts.transcriptSessionID)
+	streamer, ok := messageBus.GetStreamer(ctx, ts.streamerChannel(), ts.opts.ChatID, ts.transcriptSessionID)
 	if !ok {
 		return nil
 	}
