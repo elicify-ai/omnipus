@@ -81,8 +81,7 @@ import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { fetchAgents, fetchCommands, fetchSkills } from '@/lib/api'
 import { MainChatAddParticipant } from './AddParticipant'
-import { AGENT_PRIVATE_SECRETS_ENABLED, INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
-import { RoomTrafficMessage } from './RoomTrafficEntry'
+import { INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,

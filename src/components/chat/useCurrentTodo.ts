@@ -38,6 +38,32 @@ function latestTurnChecklist(messages: readonly Message[], turnId: string): Tool
   return null
 }
 
+// Saved history is paged (#1266), so recovery walks backwards from the latest
+// page with `before` until it finds the current turn's newest checklist write,
+// reaches the turn's start (an entry owned by an earlier turn), or runs out of
+// earlier history. The walk is bounded: at 100 source groups per page the cap
+// covers a 1,000-group turn. Past the cap no checklist is shown — an older
+// write from the same turn could be stale, so showing nothing beats a guess.
+const TURN_HISTORY_PAGE_LIMIT = 100
+export const TURN_HISTORY_PAGE_CAP = 10
+
+type TurnChecklistRead = { call: ToolCall | null; capped: boolean }
+
+async function readTurnChecklist(sessionId: string, turnId: string): Promise<TurnChecklistRead> {
+  let before: string | undefined
+  for (let read = 0; read < TURN_HISTORY_PAGE_CAP; read++) {
+    const page = await fetchSessionMessages(sessionId, { limit: TURN_HISTORY_PAGE_LIMIT, ...(before ? { before } : {}) })
+    // Pages are ascending and read newest-first, so the first page holding a
+    // write for this turn holds its newest one.
+    const call = latestTurnChecklist(page.entries, turnId)
+    if (call) return { call, capped: false }
+    const reachedTurnStart = page.entries.some((entry) => entry.turnId !== undefined && entry.turnId !== turnId)
+    if (reachedTurnStart || !page.has_earlier || !page.next_before) return { call: null, capped: false }
+    before = page.next_before
+  }
+  return { call: null, capped: true }
+}
+
 // The tool's successful write is authoritative. Its optional/empty status
 // defaults to pending. These guards only establish that accepted data can be
 // displayed as literal text; they do not invent a second wire type or limit.
@@ -87,7 +113,7 @@ export function useCurrentTodo(enabled: boolean) {
     // Recovery is optional: its data/error state must never replace the main
     // chat-history query or unmount an otherwise usable conversation.
     queryKey: ['current-todo-history', sessionId, turnId],
-    queryFn: () => fetchSessionMessages(sessionId!),
+    queryFn: () => readTurnChecklist(sessionId!, turnId!),
     enabled: !!sessionId && !!turnId,
     staleTime: 0,
     refetchOnMount: 'always',
@@ -100,7 +126,8 @@ export function useCurrentTodo(enabled: boolean) {
   // not by borrowing an uncorrelated preceding replay bubble. New live writes
   // win over a history snapshot that was read earlier in the same turn.
   const live = active && bucket ? latestLiveChecklist(bucket) : null
-  const recovered = turnId && !history.isError ? latestTurnChecklist(history.data ?? [], turnId) : null
+  const recovered = turnId && !history.isError ? history.data?.call ?? null : null
+  const capped = !!turnId && !history.isError && history.data?.capped === true
   const call = active ? live ?? recovered : null
   const display = useMemo(() => checklistDisplay(call), [call])
   const reported = useRef(new Set<string>())
@@ -125,6 +152,16 @@ export function useCurrentTodo(enabled: boolean) {
     console.warn('chat.current_todo_history_failed', fields)
     logDiagnostic('chatCurrentTodoHistoryFailed', fields)
   }, [sessionId, turnId, history.isError, history.error])
+
+  useEffect(() => {
+    if (!sessionId || !turnId || !capped) return
+    const key = JSON.stringify(['history-cap', sessionId, turnId])
+    if (reported.current.has(key)) return
+    reported.current.add(key)
+    const fields = { sessionId, turnId, pageCap: TURN_HISTORY_PAGE_CAP }
+    console.warn('chat.current_todo_history_capped', fields)
+    logDiagnostic('chatCurrentTodoHistoryCapped', fields)
+  }, [sessionId, turnId, capped])
 
   return { activeForm: display.activeForm }
 }
