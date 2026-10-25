@@ -96,6 +96,14 @@ function validateOrSeedGatewayConfig(): void {
         audit_log: true,
         tool_policies: { delegate: 'allow' },
       },
+      // whatsapp-qr.spec.ts case D enables the connector with an ordinary
+      // (bodyless) PUT /channels/whatsapp/enable, which since the pairing
+      // ownership model (151aa3af8) requires the instance to already exist —
+      // an enable never creates a missing or deleted connector. Seeded
+      // disabled, matching the pr.yml "Seed gateway config" step.
+      channels: {
+        whatsapp: { type: 'whatsapp', enabled: false },
+      },
     };
     fs.writeFileSync(configPath, JSON.stringify(minimalConfig, null, 2), { mode: 0o600 });
     console.warn(
