@@ -182,6 +182,11 @@ export class ReloadHarness {
   }
 }
 
+function killOwnedNativeProcess(pid: number) {
+  try { process.kill(pid, 'SIGKILL'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+}
+
 export const test = base.extend<{ reload: ReloadHarness }>({
   reload: async ({ page }, use, info) => {
     const provider = await startReloadProvider();
@@ -235,8 +240,7 @@ export const test = base.extend<{ reload: ReloadHarness }>({
           const receipt = fixture.nativeProcess()!;
           await info.attach('owned-native-process-cleanup', { contentType: 'application/json',
             body: JSON.stringify({ receipt, reason: 'teardown only; never accepted as the tested UI Stop' }) });
-          try { process.kill(receipt.pid, 'SIGKILL'); }
-          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+          killOwnedNativeProcess(receipt.pid);
         }
         if (gateway) await gateway.stop();
       } finally { await provider.close(); }
