@@ -125,8 +125,9 @@ case "$cmd" in
                 fi
                 ;;
               *)
-                # extract the token (3rd word) so a later read matches ours
-                printf '%s\n' "$(printf '%s' "$ccmd" | awk '{print $3}')" >"$STATE_DIR/owner-marker"
+                # extract the token (the word after `echo` in the sh -c
+                # payload) so a later read matches ours
+                printf '%s\n' "$(printf '%s' "$ccmd" | sed -n "s/.* echo \(fly-targeted:[^ ]*\) >.*/\1/p")" >"$STATE_DIR/owner-marker"
                 ;;
             esac
             ;;
@@ -262,6 +263,17 @@ teardown() {
   run bash "$SCRIPT" "$SHORT_SHA" no-such-machine -- echo hi
   [ "$status" -eq 2 ]
   grep -q 'not an eligible spare' <<<"$output"
+  [ ! -f "$FLY_STUB_LOG" ]
+}
+
+@test "machine: d8d3977c946558 is NOT in the default spare set (dedicated to #1266)" {
+  # pins the shipped default (chief, 2026-10-25): with FLY_TARGETED_SPARES
+  # unset, the #1266-dedicated machine is refused before fly is ever called.
+  unset FLY_TARGETED_SPARES
+  run bash "$SCRIPT" "$SHORT_SHA" d8d3977c946558 -- echo hi
+  [ "$status" -eq 2 ]
+  grep -q 'not an eligible spare' <<<"$output"
+  grep -q '48ee71eb1e9768' <<<"$output"   # the remaining default spare is named
   [ ! -f "$FLY_STUB_LOG" ]
 }
 

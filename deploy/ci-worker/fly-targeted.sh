@@ -13,8 +13,9 @@
 # What it guarantees — each rule exists because the cluster already bit on its
 # absence (deploy/ci-worker/CLAUDE.md, traps and the machine-ownership rules):
 #
-#   1. ONLY the spare shared machines are eligible (defaults: d8d3977c946558,
-#      48ee71eb1e9768). The performance machine and every tier machine are
+#   1. ONLY the spare shared machine is eligible by default (48ee71eb1e9768).
+#      d8d3977c946558 is EXCLUDED — dedicated to #1266 (chief, 2026-10-25).
+#      The performance machine and every tier machine are
 #      refused — a targeted run there contends with whole gates, and the
 #      2026-10-11 full-e2e-on-shared starvation was exactly such a placement
 #      error. `auto` picks the first eligible spare; an explicit id must be
@@ -63,7 +64,8 @@
 #
 # Env (all optional):
 #   FLY_TARGETED_APP            Fly app (default ci-omnipus-1)
-#   FLY_TARGETED_SPARES         eligible machine ids (default: the two shared spares)
+#   FLY_TARGETED_SPARES         eligible machine ids (default: 48ee71eb1e9768;
+#                               d8d3977c946558 is excluded — dedicated to #1266)
 #   FLY_TARGETED_PERF_MACHINE   always-refused id (default 080d74db170408, performance)
 #   CI_CLUSTER_GO_MACHINE / _NODE_ / _XPLAT_ / CI_CLUSTER_TIERS
 #                               tier map, same vars and defaults as ci-cluster.sh —
@@ -88,7 +90,8 @@ APP="${FLY_TARGETED_APP:-ci-omnipus-1}"
 START_TIMEOUT="${FLY_TARGETED_START_TIMEOUT:-180}"
 PROBE_INTERVAL=5
 PERF_MACHINE="${FLY_TARGETED_PERF_MACHINE:-080d74db170408}"
-SPARES="${FLY_TARGETED_SPARES:-d8d3977c946558 48ee71eb1e9768}"
+# d8d3977c946558 is deliberately NOT here: dedicated to #1266 (chief, 2026-10-25).
+SPARES="${FLY_TARGETED_SPARES:-48ee71eb1e9768}"
 REMOTE_CACHE="${FLY_TARGETED_REMOTE_CACHE:-/cache}"
 REMOTE_REPO="${FLY_TARGETED_REMOTE_REPO:-/cache/omnipus}"
 CI_USER="${FLY_TARGETED_CI_USER:-ci}"
@@ -129,7 +132,8 @@ Usage:
   deploy/ci-worker/fly-targeted.sh origin/release/v0.1.1 auto -- \
     go test -tags goolm,stdjson -run '^TestX$' -p 1 ./pkg/foo/
 
-Only the two spare shared machines are eligible; the performance machine and
+Only the spare shared machines are eligible (default 48ee71eb1e9768;
+d8d3977c946558 is excluded — dedicated to #1266); the performance machine and
 the go/node/xplat tier machines are refused. `auto` picks the first spare that
 is stopped, unlocked and not busy; an explicit id must be a spare. The ref must
 be pushed. The command runs as the non-root `ci` user with CGO_ENABLED=0 in a
@@ -216,10 +220,14 @@ probe_until_reachable() { # $1 machine-id
 # For a machine that is ALREADY up: is a gate or another targeted run holding
 # it? Prints nothing; 0 = free, 1 = busy, 2 = CANNOT TELL (refuse — unknown is
 # never treated as free).
+# NOTE on `fly ssh console -C`: flyctl word-splits the string shell-style and
+# execs it DIRECTLY — there is NO shell, so redirections, `||`, `;` etc. only
+# work inside an explicit `sh -c '...'` (verified on the live cluster
+# 2026-10-25; ci-cluster.sh's write_owner_marker carries the same wrapper).
 remote_busy_probe() { # $1 machine-id
   local id="$1" out probe_rc
   out="$(fly ssh console --app "$APP" --machine "$id" -C \
-    "if command -v flock >/dev/null 2>&1; then flock -w0 /tmp/runci.lock true 2>/dev/null || echo BUSY_LOCK; else echo LOCK_ERROR; fi; pgrep -f '/cache/[r]unci.sh' >/dev/null 2>&1 && echo BUSY_RUNCI; pgrep -f '$REMOTE_CACHE/fly-targeted/' >/dev/null 2>&1 && echo BUSY_TARGETED; echo PROBE_DONE" 2>/dev/null \
+    "sh -c 'if command -v flock >/dev/null 2>&1; then flock -w0 /tmp/runci.lock true 2>/dev/null || echo BUSY_LOCK; else echo LOCK_ERROR; fi; pgrep -f \"/cache/[r]unci.sh\" >/dev/null 2>&1 && echo BUSY_RUNCI; pgrep -f \"$REMOTE_CACHE/fly-targeted/\" >/dev/null 2>&1 && echo BUSY_TARGETED; echo PROBE_DONE'" 2>/dev/null \
     | tr -d '\r')"
   probe_rc=$?
   case "$out" in
@@ -237,8 +245,12 @@ remote_busy_probe() { # $1 machine-id
 # True when a gate or another targeted payload is executing on the machine —
 # used at STOP time so we never halt a machine under someone else's run.
 machine_is_busy() { # $1 machine-id
+  # `fly-targete[d]/` bracket trick (same as ci-cluster's `/cache/[r]unci.sh`):
+  # without it the probe's own `sh -c` command line carries the pattern text
+  # and pgrep matches ITSELF — the machine always looks busy and is never
+  # stopped (observed live 2026-10-25).
   fly ssh console --app "$APP" --machine "$1" \
-    -C "pgrep -f '/cache/[r]unci.sh' >/dev/null 2>&1 || pgrep -f '$REMOTE_CACHE/fly-targeted/' >/dev/null 2>&1" \
+    -C "sh -c 'pgrep -f \"/cache/[r]unci.sh\" >/dev/null 2>&1 || pgrep -f \"$REMOTE_CACHE/fly-targete[d]/\" >/dev/null 2>&1'" \
     >/dev/null 2>&1
 }
 
@@ -253,8 +265,10 @@ marker_is_foreign() { # $1 machine-id
 }
 
 write_owner_marker() { # $1 machine-id
+  # `sh -c` wrapper required: -C applies no shell, so `>` needs one (same
+  # construct as ci-cluster.sh's write_owner_marker).
   fly ssh console --app "$APP" --machine "$1" \
-    -C "printf '%s\n' $OWNER_TOKEN > $OWNER_MARKER_PATH" >/dev/null 2>&1 \
+    -C "sh -c 'echo $OWNER_TOKEN > $OWNER_MARKER_PATH'" >/dev/null 2>&1 \
     || warn "could not write the owner marker on machine $1 (it is still stopped at exit unless busy or foreign)"
 }
 
@@ -300,9 +314,16 @@ resolve_pushed_ref() { # $1 ref; prints full sha
   if [ -z "$list" ]; then
     die "origin lists no refs — cannot confirm '$ref' is pushed"
   fi
-  if ! printf '%s\n' "$list" | grep -q "^$target"; then
-    die "ref '$ref' resolves to $target locally, but that commit is NOT on origin — push it first (fly-targeted only runs pushed refs)"
-  fi
+  # Membership via `case`, NOT `printf | grep -q`: on a big ls-remote (this
+  # repo has ~1900 refs) grep -q exits at the first match, printf gets SIGPIPE
+  # on the rest, and pipefail turns the pipeline non-zero — a VALID pushed ref
+  # gets refused (observed 2026-10-25 on the first live run). A 40-hex sha
+  # matching as a substring means the same sha at a line start, so the looser
+  # match is exact in practice.
+  case "$list" in
+    *"$target"*) : ;;
+    *) die "ref '$ref' resolves to $target locally, but that commit is NOT on origin — push it first (fly-targeted only runs pushed refs)" ;;
+  esac
   printf '%s' "$target"
 }
 
@@ -410,7 +431,9 @@ trap 'exit 129' HUP
 if ! command -v flock >/dev/null 2>&1; then fail lock-error 95; fi
 if ! flock -w0 /tmp/runci.lock true 2>/dev/null; then fail busy 90; fi
 if pgrep -f "\$CACHE/[r]unci.sh" >/dev/null 2>&1; then fail busy 90; fi
-if pgrep -f "\$CACHE/fly-targeted/" >/dev/null 2>&1; then fail busy 90; fi
+# Another targeted payload = busy, but NOT this payload itself: its own path
+# contains the pattern, so exclude our own pid (\$\$) from the match.
+if pgrep -f "\$CACHE/fly-targeted/" 2>/dev/null | grep -qv "^\$\$\$"; then fail busy 90; fi
 
 [ -d "\$REPO/.git" ] || fail no-repo 91
 git config --global --add safe.directory '*' >/dev/null 2>&1 || true
@@ -460,18 +483,31 @@ EOF
 
 # Deploy the payload with sftp put — which has silently produced EMPTY and
 # truncated files on this cluster before — and VERIFY the copy by md5 before
-# anything executes it. A mismatch is a hard refusal, never a shrug.
+# anything executes it. A mismatch is a hard refusal, never a shrug. Each step
+# names itself on failure (a silent "deploy failed" teaches nothing), and the
+# whole deploy retries once after a short wait — a machine seconds into its
+# first boot answers SSH but can drop the next call (observed live 2026-10-25).
 deploy_payload() {
-  fly ssh console --app "$APP" --machine "$MACHINE" -C "mkdir -p '$PAYLOAD_DIR_REMOTE'" >/dev/null 2>&1 \
-    || return 1
-  fly ssh sftp put "$PAYLOAD_LOCAL" "$PAYLOAD_REMOTE" --app "$APP" --machine "$MACHINE" >/dev/null 2>&1 \
-    || return 1
+  local try
+  for try in 1 2; do
+    if fly ssh console --app "$APP" --machine "$MACHINE" -C "mkdir -p '$PAYLOAD_DIR_REMOTE'" >/dev/null 2>&1 \
+      && fly ssh sftp put "$PAYLOAD_LOCAL" "$PAYLOAD_REMOTE" --app "$APP" --machine "$MACHINE" >/dev/null 2>&1; then
+      break
+    fi
+    warn "payload deploy (attempt $try/2) failed at mkdir/sftp on machine $MACHINE"
+    [ "$try" -eq 2 ] && return 1
+    sleep 3
+  done
   local want got
   want="$(md5_of "$PAYLOAD_LOCAL")" || return 1
   got="$(fly ssh console --app "$APP" --machine "$MACHINE" \
-    -C "md5sum '$PAYLOAD_REMOTE' 2>/dev/null || md5 -q '$PAYLOAD_REMOTE' 2>/dev/null" 2>/dev/null \
+    -C "sh -c 'md5sum \"$PAYLOAD_REMOTE\" 2>/dev/null || md5 -q \"$PAYLOAD_REMOTE\" 2>/dev/null'" 2>/dev/null \
     | tr -d '\r' | grep -oE '[0-9a-f]{32}' | head -1)"
-  [ -n "$got" ] && [ "$got" = "$want" ]
+  if [ -z "$got" ] || [ "$got" != "$want" ]; then
+    warn "payload deploy failed at md5 verify (remote '${got:-none}' vs local '$want')"
+    return 1
+  fi
+  return 0
 }
 
 # --- run + verdict (markers, never the wrapper's exit code) ----------------------------------

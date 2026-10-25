@@ -108,7 +108,8 @@ deploy/ci-worker/fly-targeted.sh origin/release/v0.1.1 auto -- \
 ```
 
 Guarantees (each enforced, and each covered by `fly-targeted_test.bats`): **spares only**
-(default `d8d3977c946558 48ee71eb1e9768`; the performance machine and every tier machine
+(default `48ee71eb1e9768`; `d8d3977c946558` is EXCLUDED — dedicated to #1266, chief
+2026-10-25; the performance machine and every tier machine
 are refused — the 2026-10-11 shared-machine starvation was a placement error, and this
 makes that placement impossible); **never beside a gate** (a held `/tmp/runci.lock`, a
 running `runci.sh`, or another targeted payload refuses the run — an unknowable probe
@@ -127,6 +128,14 @@ payload is `fly ssh sftp put`-ed and **md5-verified before execution** (sftp put
 produced empty files here before). Exit codes: the command's real code, `1` = evidence
 incomplete/untrusted, `2` = refusal. First use on a spare needs its clone to exist
 (`run_gates` there once, or the payload refuses with `no-repo`).
+
+**flyctl auth wrapper.** flyctl v0.4.104 on the founder's Mac reports "no access token
+available" although `~/.fly/config.yml` holds a valid token (its own lookup fails, not
+the credential). When you see that error, run Fly commands through
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/nav-bundle/provision/flyauth.sh`,
+which exports the config token as `FLY_ACCESS_TOKEN` and execs your command — e.g.
+`flyauth.sh deploy/ci-worker/fly-targeted.sh origin/release/v0.1.1 auto -- <command>`.
+The token is never printed.
 
 **`all-no-e2e` gate (setup once, three parallel groups).** `all` minus `go-race` and `e2e`,
 restructured so the shared setup is paid once per run instead of once per gate. Measured
