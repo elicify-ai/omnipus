@@ -11,6 +11,12 @@
 //   after a short correlated deadline, without stopping the agent."
 //   Chief brief: "an idle /cancel shows 'nothing to cancel'".
 //
+// Chief reconciliation, 2026-10-25: composers are per chat. A merely typed
+// draft stays in A and B's current composer is empty. The ownership case
+// below starts Send in A BEFORE navigation, then awaits that captured intent;
+// it never asks B's composer to send A's invisible draft. Queue cases likewise
+// enqueue in A before navigating. The separate no-leak oracle is unchanged.
+//
 // Harness: real stores, real useOmnipusRuntime + installed AssistantUI
 // composer, real frame reducer. Only the process edge is controlled: the
 // WsConnection transport (a recorded vi.fn) and, where a deadline is
@@ -107,17 +113,18 @@ afterEach(() => {
 })
 
 describe('issue #1428 — a draft is sent only to the conversation it was written in', () => {
-  it('draft typed in A is delivered to A, never to the helper attached before Send', async () => {
+  it('Send started in A is delivered to A, never to the helper attached before dispatch', async () => {
     const { result } = renderHook(() => useOmnipusRuntime())
     act(() => result.current.thread.composer.setText(TEXT))
     expect(result.current.thread.composer.getState().text).toBe(TEXT)
-    // The Activity-row Enter case: opening the helper attaches its session
-    // while the app-wide composer still holds A's draft.
-    act(() => {
+    await act(async () => {
+      // Press Send while A is current. Capture the real in-flight send before
+      // navigation; B's current (empty) composer is never asked to send it.
+      const sendIntentFromA = result.current.thread.composer.send()
       expect(useSessionStore.getState().attachToSession(SID_B, 'delegate', 'Helper B', 'worker')).toBe(true)
+      expect(useSessionStore.getState().activeSessionId).toBe(SID_B)
+      await sendIntentFromA
     })
-    expect(useSessionStore.getState().activeSessionId).toBe(SID_B)
-    await act(async () => { await result.current.thread.composer.send() })
 
     const frames = sentMessageFrames()
     expect(frames, 'exactly one message goes on the wire').toHaveLength(1)
