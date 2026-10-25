@@ -7,7 +7,7 @@ test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, 
 test.describe.configure({ retries: 0 });
 test.setTimeout(240_000);
 
-const cancelledRow = (page: Page) => page.locator('[data-testid="tool-call-badge"][data-tool="bash"]')
+const cancelledRow = (page: Page) => page.locator('[data-testid="bash-output-toggle"][data-tool="bash"]')
   .filter({ has: page.getByText('Cancelled', { exact: true }) });
 
 async function runAndStop(reload: ReloadHarness) {
@@ -40,10 +40,12 @@ async function sameCancelledCall(reload: ReloadHarness) {
   await expect(row, 'T40/#1418: reload must retain the SAME one named Cancelled native tool row, not only interrupted text').toHaveCount(1);
   await expect(row).toBeVisible();
   await expect(row).toHaveAttribute('data-tool', 'bash');
-  await row.getByTestId('tool-call-toggle').click();
-  await expect(row.locator('code')).toHaveText('bash');
-  expect(JSON.parse(await row.locator('pre').first().innerText()), 'D16: original parameters survive with the original call')
-    .toEqual({ command: CANCELLED_COMMAND, timeout_seconds: 300 });
+  await expect(row.getByText('bash', { exact: true })).toBeVisible();
+  await row.click();
+  await expect(row.locator('../..').getByRole('region', { name: 'Command', exact: true }),
+    'D16: the specialized bash renderer retains the exact original command').toHaveText(CANCELLED_COMMAND);
+  // The complete parameter object (including timeout) is asserted exactly in
+  // the real REST projection below; bash does not render a generic JSON badge.
   await expect(reload.page.getByText('(interrupted)', { exact: false }), 'the interrupted assistant reply remains separate from its tool row').toBeVisible();
   await reload.counter(EARLIER_TOKENS, 'T40: same live recorded total after reload');
   const body = await reload.read(100);

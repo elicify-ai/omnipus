@@ -1,7 +1,7 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import type { Message, SessionCreateRequest } from '../../src/lib/api/generated/openapi-types';
-import { Session } from '../../src/lib/api/generated/schemas';
+import { Agent, Session } from '../../src/lib/api/generated/schemas';
 import { test as canonicalTest } from './fixtures/canonical-history';
 import { seedCanonicalLegacyTranscript } from './fixtures/chat-history';
 import { observeTraffic } from './fixtures/chat-history-paging/harness';
@@ -48,22 +48,13 @@ for (const { name, payload } of xssPayloads) {
       data: { name: agentName, description: payload, model: 'scripted-model' },
     });
 
-    // If the agent was rejected by the server (validation error) that is acceptable
-    // defense-in-depth. Skip DOM rendering for that payload.
-    if (!createResp.ok()) {
-      test.info().annotations.push({
-        type: 'skip-reason',
-        description: `Server rejected payload ${name} with ${createResp.status()} — server-side defense active`,
-      });
-      return;
-    }
-
-    const created = await createResp.json() as { id?: string };
+    // A rejected or malformed setup is not evidence of safe DOM rendering.
+    // Both prerequisites must fail loudly before any escaping claim is made.
+    expect(createResp.ok(),
+      `PREREQUISITE: create description-XSS agent ${name}; HTTP ${createResp.status()}: ${await createResp.text()}`).toBe(true);
+    const created = Agent.parse(await createResp.json());
     const agentId = created.id;
-    if (!agentId) {
-      // No id in response — treat as rejection.
-      return;
-    }
+    expect(agentId.trim().length, `PREREQUISITE: created description-XSS agent ${name} has a nonempty id`).toBeGreaterThan(0);
 
     try {
       // Navigate to the agent profile page where description is rendered.
