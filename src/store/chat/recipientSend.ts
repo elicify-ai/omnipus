@@ -22,6 +22,7 @@ import { resolveSendRecipient } from '@/lib/recipientAddress'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import type { OutboundTarget } from './types'
 
 export interface AddressedAgent {
   recipient: OutboundRecipient
@@ -46,11 +47,11 @@ function currentSessionId(): string | null {
  * at send time, never a captured render value. Returns null when the text
  * carries no exact leading "@<Name>" address (the ordinary-text case).
  */
-export function resolveAddressedAgent(content: string): AddressedAgent | null {
+export function resolveAddressedAgent(content: string, target?: OutboundTarget): AddressedAgent | null {
   if (!content.startsWith('@')) return null
   const agents = queryClient.getQueryData<Agent[]>(['agents']) ?? []
-  const { activeAgentId } = useSessionStore.getState()
-  const { activeWorkspaceId } = useWorkspacesStore.getState()
+  const activeAgentId = target ? target.agentId : useSessionStore.getState().activeAgentId
+  const activeWorkspaceId = target ? target.workspaceId : useWorkspacesStore.getState().activeWorkspaceId
   const recipient = resolveSendRecipient({ content, agents, activeAgentId, activeWorkspaceId })
   if (!recipient) return null
   const agentName = agents.find((agent) => agent.id === recipient.agent_id)?.name ?? recipient.agent_id
@@ -79,7 +80,7 @@ export type AddressCheck =
   | { kind: 'unresolvable'; nameGuess: string }
   | { kind: 'failed'; nameGuess: string }
 
-export function checkAddressedAgent(content: string): AddressCheck {
+export function checkAddressedAgent(content: string, target?: OutboundTarget): AddressCheck {
   if (!content.startsWith('@')) return { kind: 'plain' }
   if (queryClient.getQueryData<Agent[]>(['agents']) === undefined) {
     // The raw first token after "@" — copy material only, never a
@@ -90,7 +91,7 @@ export function checkAddressedAgent(content: string): AddressCheck {
     }
     return { kind: 'unresolvable', nameGuess }
   }
-  const addressed = resolveAddressedAgent(content)
+  const addressed = resolveAddressedAgent(content, target)
   return addressed ? { kind: 'addressed', addressed } : { kind: 'plain' }
 }
 
@@ -218,16 +219,16 @@ export function recipientAddressBlocked(content: string): AddressedAgent | 'unre
  * only ever released by real roster data — releasing it into an
  * unaddressed send would be the silent drop C8 forbids.
  */
-export function recipientAddressHoldsQueue(content: string | undefined): boolean {
+export function recipientAddressHoldsQueue(content: string | undefined, target?: OutboundTarget): boolean {
   if (!content) return false
-  const check = checkAddressedAgent(content)
+  const check = checkAddressedAgent(content, target)
   if (check.kind === 'plain') return false
   const message = check.kind === 'unresolvable'
     ? recipientAddressUnresolvedBlockMessage(check.nameGuess)
     : check.kind === 'failed'
       ? recipientAddressFailedBlockMessage(check.nameGuess)
       : recipientAddressBlockMessage(check.addressed.agentName)
-  if (check.kind === 'addressed' && currentSessionId()) return false
+  if (check.kind === 'addressed' && (target ? target.sessionId && target.sessionId !== '__pending' : currentSessionId())) return false
   const ui = useUiStore.getState()
   const alreadyShown = ui.toasts.some((toast) => toast.variant === 'warning' && toast.message === message)
   if (!alreadyShown) {

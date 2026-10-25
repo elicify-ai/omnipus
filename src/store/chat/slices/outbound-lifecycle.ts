@@ -16,7 +16,6 @@ import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/ws-schemas'
 import type { CancelFrame, MessageFrame } from '@/lib/api/generated/asyncapi-types'
 import type { components } from '@/lib/api/generated/openapi-types'
-import { queryClient } from '@/lib/queryClient'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { isOmnipusAgentId } from '@/lib/omnipus'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -26,9 +25,12 @@ import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
 import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddressResendBlockMessage, recipientAddressUnresolvedBlockMessage, resolveAddressedAgent, retryAgentsRoster } from '../recipientSend'
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
-import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
+import type { ChatMessage, ChatStore, MediaAttachment, OutboundTarget, PositionedToolCall, SendMessageOptions, SessionChatState } from '../types'
+import { captureOutboundTarget, loadedOutboundSession, outboundTargetIsForeground, resolveOutboundTarget } from '../outbound-target'
 import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
+import { armMessageDeliveryDeadline, remainingDeliveryDelay } from '../delivery-deadline'
+import { armQueuedDeliveryDeadline, bindQueuedProvisionalChat, retryQueuedMessage } from '../outbound-queue'
 
 /** Accepted sends request a fresh current window; failures never move a reader. */
 function followAcceptedHistorySend(get: () => ChatStore, sid: string): void {
@@ -65,10 +67,11 @@ function refuseAgentlessNewChat(agentId: string | null | undefined, where: strin
 /** Resolves the client-generated correlation id + queued timestamp for a
  * send, defaulting both when the caller (a fresh sendMessage call, not a
  * queue replay) didn't supply them. */
-function beginSend(content: string, opts?: { clientMessageId?: string; queuedAt?: string }) {
+function beginSend(content: string, target: OutboundTarget, opts?: SendMessageOptions) {
   const clientMessageId = opts?.clientMessageId ?? generateId()
   const queuedAt = opts?.queuedAt ?? new Date().toISOString()
-  return { clientMessageId, queuedAt, queuedMessage: { id: clientMessageId, content, timestamp: queuedAt } }
+  const options = { mediaRefs: opts?.mediaRefs, attachments: opts?.attachments, model_name: opts?.model_name, workflowStart: opts?.workflowStart }
+  return { clientMessageId, queuedAt, queuedMessage: { id: clientMessageId, content, timestamp: queuedAt, target, options, deadlineAt: opts?.deliveryDeadlineAt } }
 }
 
 /** Builds the optimistic user bubble for a send, carrying the correlation id
@@ -167,8 +170,8 @@ function armClearRefreshForSend(sessionId: string, clientMessageId: string, get:
  * session-carrying payloads; the composer's own visible block
  * (ChatScreen's recipientAddressBlocked) is what stops an @-addressed
  * submit in a brand-new chat long before this line. */
-function outgoingRecipient(content: string): { workspace_id: string; agent_id: string } | null {
-  return resolveAddressedAgent(content)?.recipient ?? null
+function outgoingRecipient(content: string, target?: OutboundTarget): { workspace_id: string; agent_id: string } | null {
+  return resolveAddressedAgent(content, target)?.recipient ?? null
 }
 
 /** Review finding 17: resends messageId IN PLACE — same id, original
@@ -277,6 +280,7 @@ function performResendMessage(
     if (m) {
       m.status = 'done'
       m.deliveryStatus = 'sending'
+      delete m.deliveryUnconfirmed
     }
     // A new answer was requested for this question: it is no longer unanswered.
     if (draft.unansweredLastUserMessageId === messageId) draft.unansweredLastUserMessageId = null
@@ -312,6 +316,7 @@ function performResendMessage(
     })() : {}),
   }
   get()._validateOutboundFrame(payload, targetSid)
+  if (!isClearCommandText(content)) armMessageDeliveryDeadline(get, withBucket, targetSid, messageId, () => get().drainOutboundQueue())
   const sent = connection.send(payload)
   if (!sent) {
     withBucket(targetSid, (b) => produce(b, (draft) => {
@@ -379,16 +384,8 @@ function clearCatchUpSideChannelsOnDisconnect(): void {
   }
 }
 
-/** Canonical identity from the validated saved-chat detail or sidebar list. */
-function loadedOutboundSession(sessionId: string): Pick<components['schemas']['Session'], 'id' | 'agent_id' | 'workspace_id'> | undefined {
-  const detail = queryClient.getQueryData<components['schemas']['SessionDetail']>(['session-detail', sessionId])
-  if (detail?.session?.id === sessionId) return detail.session
-  const sessions = queryClient.getQueryData<components['schemas']['Session'][]>(['sessions'])
-  return Array.isArray(sessions) ? sessions.find((candidate) => candidate.id === sessionId) : undefined
-}
-
 /** The immutable session binding, never the ambient workspace for a follow-up. */
-function outboundWorkspaceId(sessionId: string | null): string {
+function outboundWorkspaceId(sessionId: string | null, target?: OutboundTarget): string {
   let workspaceId: components['schemas']['Session']['workspace_id'] | null
   if (sessionId && sessionId !== '__pending') {
     // These validated reads already back the saved-chat route and sidebar.
@@ -401,8 +398,8 @@ function outboundWorkspaceId(sessionId: string | null): string {
     // (and the retained first-send payload's retry context) unchanged.
     // Omnipus's one chat lives in the default workspace; workflow_start,
     // not this metadata, names the workspace its workflow acts on.
-    if (isOmnipusAgentId(useSessionStore.getState().activeAgentId)) return ''
-    workspaceId = useWorkspacesStore.getState().activeWorkspaceId
+    if (isOmnipusAgentId(target ? target.agentId : useSessionStore.getState().activeAgentId)) return ''
+    workspaceId = target ? target.workspaceId : useWorkspacesStore.getState().activeWorkspaceId
   }
   // Preserve the MessageFrame contract's workspace-id bound.
   return typeof workspaceId === 'string' && workspaceId.length > 0 && workspaceId.length <= 128
@@ -418,6 +415,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       if (current.length >= MAX_QUEUE) {
         return false
       }
+      if (queuedMessage) armQueuedDeliveryDeadline(get, set, queuedMessage)
       set({ outboundQueue: [...current, queuedMessage ?? content] })
       return true
     },
@@ -499,20 +497,21 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     },
 
     sendMessage: (content, opts) => {
-      if (blockSendForWorkspaceEntry('send')) return
+      const target = resolveOutboundTarget(opts?.target ?? captureOutboundTarget(get()), get())
+      if (outboundTargetIsForeground(target) && blockSendForWorkspaceEntry('send')) return false
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
-      const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, opts)
+      const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, target, opts)
       // Phase 1 / FR-010: per-turn model override. Trim and strip empty
       // strings so absent and "" are equivalent (the WS frame is omitted
       // entirely when no model was picked this session, per spec §18 Q3).
       const modelNameRaw = opts?.model_name
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
-      const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
+      const { sessionId: rawActiveSessionId, agentId: activeAgentId } = target
       // Ordinary sends, mid-turn steering and new-answer requests share the
       // attached session's canonical binding; only a first send uses context.
-      const workspaceId = outboundWorkspaceId(rawActiveSessionId)
+      const workspaceId = outboundWorkspaceId(rawActiveSessionId, target)
       // K8 (FR-012): target data naming the workflow a screen button started.
       const workflowStartFrame = opts?.workflowStart ? { workflow_start: opts.workflowStart } : {}
 
@@ -525,42 +524,13 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       if (workspaceId.length > 0) metadata.workspace_id = workspaceId
       const metadataFrame = Object.keys(metadata).length > 0 ? { metadata } : {}
       const { connection, isConnected } = useConnectionStore.getState()
-      const { isStreaming } = get()
-      // Composer guard: a '__pending' sentinel with no in-flight
-      // stream is a STUCK state, not a real session — a turn started under
-      // '__pending' ended (rejected, rolled back, or otherwise never got its
-      // session_started ack) without activeSessionId ever being reset back
-      // to null. Sending
-      // `session_id: '__pending'` on the wire is a protocol violation the
-      // gateway answers with a terminal "session not found" error. Treat it
-      // exactly like "no active session yet" instead — an ordinary fresh
-      // turn, no session_id on the wire — rather than propagating the
-      // sentinel. A '__pending' session that IS still streaming (a first
-      // message is actively in flight) is untouched here; that
-      // case is handled by the existing mid-turn-steering '__pending' branch
-      // below.
+      const isStreaming = outboundTargetIsForeground(target) ? get().isStreaming : rawActiveSessionId ? get().sessionsById[rawActiveSessionId]?.isStreaming ?? false : false
+      // A stale, idle __pending sentinel cannot cross the wire. A live
+      // provisional chat keeps its own queue until its correlated save arrives.
       const activeSessionId = (rawActiveSessionId === '__pending' && !isStreaming) ? null : rawActiveSessionId
 
-      // Mid-turn steering (bugfixes3 gate 4): sendMessage USED to hard-return
-      // here with a 'Please wait — a response is still generating.' toast
-      // whenever isStreaming was true — the SPA composer was the only surface
-      // in the app that couldn't send mid-turn; channels already deliver
-      // mid-turn messages today, and the gateway queues them per-scope,
-      // injecting each one into the turn that's already RUNNING (between
-      // tool calls — any still-in-flight tool calls for that turn are
-      // skipped server-side with "Skipped due to queued user message"). See
-      // the `if (isStreaming)` branch inside the `activeSessionId !== null`
-      // block below for how a mid-turn send differs from a new-turn send (no
-      // second assistant placeholder is minted; `isStreaming` is left alone).
-      //
-      // The offline check immediately below intentionally still runs FIRST,
-      // unconditional on isStreaming: mid-turn steering must NOT bypass
-      // offline buffering — if the socket is down, a message typed mid-turn
-      // queues into outboundQueue exactly like an idle-state message and
-      // drains once drainOutboundQueue() reconnects (maybeDrainNext still
-      // waits for !isStreaming before popping that queue — untouched,
-      // separate mechanism from this steering path).
-      if (!connection || !isConnected) {
+      // A steer targets its own running turn; disconnected sends still queue.
+      if (!connection || !isConnected || ((!rawActiveSessionId || rawActiveSessionId === '__pending') && !outboundTargetIsForeground(target))) {
         // WS is disconnected — buffer the message for when the connection
         // recovers rather than losing it silently or showing a hard error.
         const enqueued = get().enqueueOutboundMessage(content, queuedMessage)
@@ -569,40 +539,22 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
           )
         }
-        return
+        return enqueued
       }
 
       // An uncertain ordinary send owns __pending until confirmed or abandoned.
       if (getPendingFirstSend(get()) && (rawActiveSessionId === null || rawActiveSessionId === '__pending')) {
-        if (!get().enqueueOutboundMessage(content, queuedMessage)) {
+        const enqueued = get().enqueueOutboundMessage(content, queuedMessage)
+        if (!enqueued) {
           useConnectionStore.getState().setConnectionError('Queue full (5 messages max) — confirm delivery or start a new chat.')
         }
-        return
+        return enqueued
       }
       if (activeSessionId !== null) {
         const userMsg: ChatMessage = buildQueuedUserMessage(activeSessionId, content, clientMessageId, queuedAt, attachments, mediaRefs)
 
-        // Mid-turn steering send: a turn is already streaming, so this
-        // message does NOT start a new turn — the gateway injects it into
-        // the turn that's already running (between tool calls). The existing
-        // streaming assistant bubble (the last message in the thread) stays
-        // live and keeps receiving content for THAT SAME turn. This path
-        // therefore:
-        //   - appends ONLY the user bubble (no second assistant placeholder —
-        //     minting one here would render a second, permanently-empty
-        //     "streaming" bubble that never receives tokens, since the
-        //     backend keeps streaming into the FIRST one, not this one);
-        //   - leaves `isStreaming` untouched (already true; resetting it here
-        //     would race the in-flight turn's own done/error frame);
-        //   - skips the prevAssistantIdx tool_calls-baking logic below — that
-        //     logic finalizes tool_calls onto a turn that has ALREADY ENDED
-        //     (it bakes the live toolCalls state onto the previous assistant
-        //     message right as a NEW turn begins); this turn hasn't ended,
-        //     so there is nothing to finalize yet.
-        // The appended user message lands AFTER the still-streaming assistant
-        // message in message order, which is the correct chronology for a
-        // steering message — it was sent while that assistant turn was still
-        // producing output.
+        // A steer adds only its user row. It never creates a second assistant
+        // placeholder or changes whether the existing turn is running.
         if (isStreaming) {
           // Mid-turn steering during the '__pending' session window: the
           // FIRST message of a brand new chat streams under the optimistic
@@ -629,7 +581,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
                 'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
               )
             }
-            return
+            return enqueued
           }
 
           withBucket(activeSessionId, (b) => {
@@ -650,11 +602,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             // steer always carries a real session_id ('__pending' steers are
             // enqueued above, never put on the wire).
             ...(() => {
-              const recipient = outgoingRecipient(content)
+              const recipient = outgoingRecipient(content, target)
               return recipient ? { recipient } : {}
             })(),
           }
           get()._validateOutboundFrame(steerPayload, activeSessionId)
+          if (!isClearCommandText(content)) armMessageDeliveryDeadline(get, withBucket, activeSessionId, userMsg.id, maybeDrainNext, remainingDeliveryDelay(opts?.deliveryDeadlineAt))
           const steerSent = connection.send(steerPayload)
 
           if (!steerSent) {
@@ -671,7 +624,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             // unconditionally alongside the append broke the assertion this
             // branch's own pre-existing test pins).
             handleFailedSteerSend(withBucket, activeSessionId, userMsg.id)
-            return
+            return true
           }
 
           // Only this send owns its clear confirmation or explicit follow request.
@@ -709,7 +662,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
               bakeOwnedCallsAtSteerClose(draft, openId)
             }) as Partial<SessionChatState>
           })
-          return
+          return true
         }
 
         const assistantMsg: ChatMessage = {
@@ -796,11 +749,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           // @-addressed ordinary send (founder 2026-10-11 Q1 B): the pair
           // rides WITH this session_id, never alone.
           ...(() => {
-            const recipient = outgoingRecipient(content)
+            const recipient = outgoingRecipient(content, target)
             return recipient ? { recipient } : {}
           })(),
         }
         get()._validateOutboundFrame(payload, activeSessionId)
+        if (!isClearCommandText(content)) armMessageDeliveryDeadline(get, withBucket, activeSessionId, userMsg.id, maybeDrainNext, remainingDeliveryDelay(opts?.deliveryDeadlineAt))
         const sent = connection.send(payload)
 
         // Sticky model selection: the user's picked model PERSISTS after a
@@ -840,9 +794,10 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           else followAcceptedHistorySend(get, activeSessionId)
         }
       } else {
-        if (refuseAgentlessNewChat(activeAgentId, 'send')) return
+        if (refuseAgentlessNewChat(activeAgentId, 'send')) return false
         runtime.agentIdAtLastMintSend = activeAgentId ?? null
         const autoApproveChoice = get().pendingAutoApproveChoice
+        set(state => ({ outboundQueue: bindQueuedProvisionalChat(state.outboundQueue, target, clientMessageId), pendingDrainQueue: bindQueuedProvisionalChat(state.pendingDrainQueue, target, clientMessageId) }))
         startOrdinaryFirstSend({ set, get, withBucket }, {
           type: 'message',
           content,
@@ -851,14 +806,17 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
           ...(autoApproveChoice !== null ? { auto_approve: autoApproveChoice } : {}),
-        }, queuedAt, workspaceId || null, attachments)
+        }, queuedAt, workspaceId || null, attachments, opts?.deliveryDeadlineAt)
       }
+      return true
   },
 
     // Review finding 17: see performResendMessage's doc comment (module
     // scope, above) for the bug this replaces and why the body lives there
     // rather than here.
-    resendMessage: (messageId) => performResendMessage(get, getActiveSid, withBucket, messageId),
+    resendMessage: (messageId) => {
+      if (!retryQueuedMessage(get, set, messageId)) performResendMessage(get, getActiveSid, withBucket, messageId)
+    },
 
     cancelStream: (sessionId, scope) => {
       const { connection } = useConnectionStore.getState()

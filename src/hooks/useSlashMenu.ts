@@ -53,6 +53,8 @@ import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { useChatAgents } from '@/hooks/useChatAgents'
 import { logDiagnostic } from '@/lib/telemetry'
+import { useChatStore } from '@/store/chat'
+import { isGoalRunning } from '@/lib/goalActivity'
 
 // ── Slash/skill/agent palette item shape ────────────────────────────────────
 
@@ -490,7 +492,10 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
     // confirmation window, no second activation. The caller wires the
     // tree-scoped cancel into this (historically named) parameter — see
     // UseSlashMenuParams.cancelIfStreaming.
+    const before = useChatStore.getState()
+    const idle = !before.isStreaming && !isGoalRunning(before.goalStatus)
     cancelIfStreaming()
+    if (idle) useUiStore.getState().addToast({ message: 'Nothing to cancel in this chat.', variant: 'default' })
     return true
   }
 

@@ -8,9 +8,13 @@ import { useSessionStore } from "@/store/session";
 import type { ChatMessage, MediaAttachment } from "@/store/chat";
 import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
-import { omnipusAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
+import { ownedAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
 import { takeLibraryAttachments, mediaRefURL } from "@/lib/library-attachment";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
+import { useWorkspacesStore } from '@/store/workspacesStore';
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry';
+import { captureOutboundTarget } from '@/store/chat/outbound-target';
+import { useConversationDrafts } from '@/lib/conversation-drafts';
 
 type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: internal Zustand store type enriching ToolCall with a required call_id; never emitted to the backend
 
@@ -279,9 +283,22 @@ export function useOmnipusRuntime() {
   // on the next session reopen (per spec §18 Q3).
   const nextModel = useChatStore((s) => s.nextModel);
 
-  return useExternalStoreRuntime<ChatMessage>({
+  const workspaceId = useWorkspacesStore(s => s.activeWorkspaceId);
+  const activeAgentId = useSessionStore(s => s.activeAgentId);
+  const generation = useChatStore(s => s.firstSendGeneration);
+  const firstSendId = useChatStore(s => s.pendingFirstSend?.clientMessageId);
+  const boundFirstSendId = useChatStore(s => activeSessionId && activeSessionId !== '__pending'
+    ? Object.values(s.sessionsById[activeSessionId]?.messagesById ?? {}).find(m => m.role === 'user' && m.firstSendStatus)?.clientMessageId
+    : undefined);
+  const draftKey = activeSessionId === '__pending' && firstSendId ? `pending:${firstSendId}`
+    : activeSessionId ?? `draft:${workspaceId}:${activeAgentId}:${generation}`;
+  const adoptDraftFrom = boundFirstSendId ? `pending:${boundFirstSendId}` : undefined;
+  const sendDisabled = useSessionStore(s => workspaceEntryBlocksSend(s, workspaceId));
+  const target = captureOutboundTarget(useChatStore.getState());
+  const runtime = useExternalStoreRuntime<ChatMessage>({
     messages,
     isRunning: isStreaming,
+    isSendDisabled: sendDisabled,
     convertMessage: (msg) => {
       // Check if this is the last assistant message — live tool calls from
       // the store are attached only to the last assistant message.
@@ -293,7 +310,8 @@ export function useOmnipusRuntime() {
       // Native attachment handling — uploads files to /api/v1/uploads and yields
       // a media:// ref, which onNew threads into our WS transport. Replaces the
       // old hand-rolled upload bridge in ChatScreen.
-      attachments: omnipusAttachmentAdapter,
+      attachments: ownedAttachmentAdapter(target),
+      threadList: { threadId: draftKey },
     },
     onNew: async (message: AppendMessage) => {
       // message.content carries ONLY the user's typed text (AssistantUI keeps
@@ -353,12 +371,15 @@ export function useOmnipusRuntime() {
         return;
       }
 
-      if (mediaRefs.length > 0) {
-        sendMessage(text, { mediaRefs, attachments, ...(nextModel ? { model_name: nextModel } : {}) });
-      } else {
-        sendMessage(text, nextModel ? { model_name: nextModel } : undefined);
-      }
+      const accepted = sendMessage(text, {
+        target,
+        ...(mediaRefs.length > 0 ? { mediaRefs, attachments } : {}),
+        ...(nextModel ? { model_name: nextModel } : {}),
+      });
+      if (accepted === false) restoreDraft(draftKey, text, message.attachments);
     },
     onCancel: async () => { cancelStream() },
   });
+  const restoreDraft = useConversationDrafts(runtime, draftKey, adoptDraftFrom);
+  return runtime;
 }

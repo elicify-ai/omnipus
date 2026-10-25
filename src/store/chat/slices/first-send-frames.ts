@@ -6,6 +6,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useConnectionStore } from '@/store/connection'
 import { cursorFromTerminalFrame } from '../cursor'
 import { emptySessionState } from '../session'
+import { bindQueuedFirstSend } from '../outbound-queue'
 import {
   attachRecoveredFirstSend,
   findFirstSendMessage,
@@ -56,6 +57,8 @@ function confirmFirstSend(context: FirstSendFrameContext, pending: PendingFirstS
     if (sourceSid !== sid) delete sessionsById[sourceSid]
     return {
       sessionsById,
+      outboundQueue: bindQueuedFirstSend(state.outboundQueue, pending.clientMessageId, sid),
+      pendingDrainQueue: bindQueuedFirstSend(state.pendingDrainQueue, pending.clientMessageId, sid),
       pendingFirstSend: recovered ? { ...pending, sessionId: sid, status: 'checking_chat' } : null,
       ...(foreground ? { pendingAutoApproveChoice: null } : {}),
     }

@@ -16,7 +16,6 @@ import type {
 } from '@/lib/api/generated/asyncapi-types'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { logDiagnostic } from '@/lib/telemetry'
-import { normalizeTruncationReason } from '@/lib/truncation'
 import { isClearCommandText } from '@/lib/clearMarker'
 import {
   getLLMErrorDisplay,
@@ -26,7 +25,6 @@ import {
 } from '@/lib/llm-error'
 import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, endTurnState, evictMessageFromBucket, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
-import { mergeRecordedSessionTokens } from '../session-usage'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { flushHeldClearProjection, forgetClearRefreshForSend, settleClearRefetchAfterTurn } from '../clear-refetch'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
@@ -41,6 +39,8 @@ import { handleRoomFrame } from './room-frames'
 import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
+import { completeDoneTurn, doneAlreadyApplied, doneOwnsRunningTurn } from '../turn-completion'
+import { cancelDeliveryDeadline, releaseUnstartedSend } from '../delivery-deadline'
 import { appendErrorNotice, handleJudgeConclusionErrorFrame } from './error-notice-frames'
 
 
@@ -88,32 +88,13 @@ type TokenFrameType = Extract<Parameters<ChatStore['handleFrame']>[0], { type: '
 // failure still marks the row for Retry, and (delta re-review C1) a DISCARDED
 // is a settle outcome too: the row must resolve, never wait for a marker the
 // discarded clear can never write.
-/**
- * A send the server failed or discarded never starts a turn. Drop the empty
- * optimistic "thinking" placeholder sendMessage put right after the user row,
- * then release the busy flag only if nothing else backs it (another running
- * turn, a streaming bubble, a running tool). A mid-turn steer has no
- * placeholder, so its discard removes nothing and never stops the running turn.
- */
-function releaseUnstartedSend(draft: SessionChatState, userMessageId: string): void {
-  const idx = draft.messageOrder.indexOf(userMessageId)
-  const nextId = idx === -1 ? undefined : draft.messageOrder[idx + 1]
-  const next = nextId ? draft.messagesById[nextId] : undefined
-  const ownsLiveTool = !!nextId && Object.values(draft.toolCallOwnerMessageId ?? {}).includes(nextId)
-  const isOptimisticPlaceholder =
-    !!next && next.role === 'assistant' && (next.isStreaming || next.status === 'streaming') &&
-    !next.content && !next.turnId && !next.agentId && !next.tool_calls?.length && !next.spans?.length && !next.media?.length && !ownsLiveTool
-  if (nextId && isOptimisticPlaceholder) {
-    delete draft.messagesById[nextId]
-    draft.messageOrder.splice(idx + 1, 1)
-  }
-  if (busyFlagIsUnbacked(draft)) draft.isStreaming = false
-}
 
 function applyMessageStatusFrame(bucket: SessionChatState, frame: MessageStatusFrame): Partial<SessionChatState> {
   return produce(bucket, (draft) => {
     const message = draft.messagesById[frame.client_message_id] ?? findFirstSendMessage(draft, frame.client_message_id)
     if (!message || message.role !== 'user') return
+    cancelDeliveryDeadline(`message:${frame.session_id}:${frame.client_message_id}`)
+    delete message.deliveryUnconfirmed
     if (frame.state === 'failed' || frame.state === 'discarded') releaseUnstartedSend(draft, message.id)
     // Only the IN-FLIGHT states early-return for a /clear row — the founder
     // ruling pins the queued look while the clear is in flight, not after it
@@ -1535,11 +1516,13 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // F-S3: this session's cancellation (if any) has now been
             // terminally acknowledged — stop treating it as "pending" so a
             // later, unrelated untagged frame doesn't get misattributed here.
-            pendingCancelAckSids.delete(sid)
-            // A done ends the turn a pending redirect was aimed at: never carry it on.
-            pendingRedirectSids.delete(sid)
             const priorBucket = get().sessionsById[sid] ?? EMPTY_BUCKET
-            const wasReplaying = priorBucket.isReplaying
+            if (doneAlreadyApplied(priorBucket, frame.turn_id)) break
+            if (doneOwnsRunningTurn(priorBucket, frame.turn_id)) {
+              pendingCancelAckSids.delete(sid)
+              pendingRedirectSids.delete(sid)
+            }
+            const wasReplaying = priorBucket.isReplaying && doneOwnsRunningTurn(priorBucket, frame.turn_id)
             const elapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
             // FR-I-014: scheduleReplayingClear mirrors the same
             // MIN_REPLAY_DISPLAY_MS setReplaying (store.ts) uses — both code
@@ -1596,171 +1579,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               maybeDrainNext()
               break
             }
-            // ADR-087 D2 (finding #10) — live-path counterpart of the
-            // `replayTruncated`/`replayTruncationReason` pair computed for
-            // 'replay_message' above. Same `normalizeTruncationReason`
-            // legacy-default rule, same wire shape, different carrier
-            // (DoneStats instead of ReplayMessageFrame) so a turn truncated
-            // while the user is watching renders the suffix immediately.
-            const doneTruncated = doneStats?.truncated === true
-            const doneTruncationReason = normalizeTruncationReason(
-              doneStats?.truncated,
-              doneStats?.truncation_reason,
-            )
-            withBucket(sid, (b) => {
-              return produce(b, (draft) => {
-                // #823 catch-up redesign, Opus review round 2 (§6.3:
-                // "done(turn_id): close every bubble of that turn"): find the
-                // bubble by turn_id FIRST — this is the turn-keyed
-                // counterpart of the 'token' case's own
-                // resolveTokenBubbleByMessageId/findBubbleIdForMessageId. A
-                // turn can register more than one message_id onto the SAME
-                // bubble (F1's msg-1 + tool call + msg-2, merged via
-                // mergedReplayIds), so `frame.message_id` naming that bubble
-                // directly can no longer be assumed — turn_id is the
-                // reliable key now. Falls back to the pre-#823
-                // message_id/lastMsgId heuristic when the frame carries no
-                // turn_id, or names one with no matching bubble (the
-                // webchatChannel.Send no-stream fallback, which has neither).
-                const doneTurnId = frame.turn_id
-                const turnBubbleId = doneTurnId
-                  ? (() => {
-                      for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                        const id = draft.messageOrder[i]
-                        const m = draft.messagesById[id]
-                        if (m?.role === 'assistant' && m.turnId === doneTurnId) return id
-                      }
-                      return null
-                    })()
-                  : null
-                const lastMsgId =
-                  turnBubbleId ??
-                  (frame.message_id && draft.messagesById[frame.message_id]
-                    ? frame.message_id
-                    : findLastAssistantMessageId(draft.messageOrder, draft.messagesById))
-                // Sweep the UNION of {the last assistant message} (unchanged
-                // — always normalized exactly as before, even when it isn't
-                // flagged "streaming" at all, e.g. a replay-reconstructed
-                // bubble whose `isStreaming` is `undefined` rather than
-                // `true`/`false` — see the 'replay_message' case's own doc
-                // comment on why replay bubbles are finalized the instant
-                // they're created) ∪ {every OTHER still-streaming assistant
-                // message in the bucket} (defense-in-depth addition —
-                // mirrors clearStreamingState's own sweep, used on a hard
-                // WS-drop, see the identical backward-scan loop there). A
-                // mid-turn steer (sendMessage's `isStreaming` branch) appends
-                // the steering text as a new USER message AFTER the
-                // still-open assistant bubble, so that bubble is no longer
-                // "the last message" by the time `done` arrives — finalizing
-                // only the last assistant message would leave the ORIGINAL
-                // bubble permanently stuck at isStreaming:true (permanent
-                // shimmer, Copy bar suppressed) even though the turn is over.
-                for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                  const id = draft.messageOrder[i]
-                  const m = draft.messagesById[id]
-                  if (m?.role !== 'assistant') continue
-                  if (id !== lastMsgId && !m.isStreaming && m.status !== 'streaming') continue
-                  // FR-21 / T21–T25: do NOT overwrite 'interrupted' status with 'done'.
-                  //
-                  // 'error' is preserved for the same reason, and it is not a
-                  // theoretical case: a failed turn emits its typed `error`
-                  // frame and then, microseconds later, the streamer's
-                  // deferred finalize emits `done` for the SAME session. The
-                  // error bubble IS lastMsgId, so the `continue` above does not
-                  // protect it, and demoting it to 'done' silently erased every
-                  // bit of the error treatment the frame had just earned:
-                  // the "Error" label, the Retry button (AssistantUI maps
-                  // 'error' → incomplete), and the verbose "Technical details"
-                  // disclosure. errorCode was left set, so the bubble ended in
-                  // a state no renderer can act on — status 'done' carrying an
-                  // errorCode, while every renderer gates on status === 'error'.
-                  //
-                  // A terminal status is terminal. `done` means "the turn is
-                  // over", which is already true of an errored turn; it must
-                  // never be read as "the turn succeeded". The rendering layer
-                  // owns this property rather than inheriting it from whatever
-                  // order the backend happens to emit its frames in.
-                  m.isStreaming = false
-                  m.status =
-                    m.status === 'interrupted' || m.status === 'error' ? m.status : 'done'
-                  // Clear the tool-call text-boundary marker on finalize. If the
-                  // turn's last event was a tool call with no trailing narration
-                  // token before `done`, pendingTextBoundary would otherwise be
-                  // left `true` on a message with no next token coming — a
-                  // representable-but-meaningless state for a finalized bubble.
-                  m.pendingTextBoundary = false
-                  // ADR-087 D2 (finding #10): the live `done` frame carries the
-                  // same truncation signal ReplayMessageFrame carries on
-                  // reattach (DoneStats.truncated/truncation_reason mirror
-                  // Message.truncated/truncation_reason). Stamp it on the
-                  // bubble the turn actually finished on (lastMsgId) so a
-                  // turn cut off at the output limit — or cancelled — renders
-                  // its suffix immediately, without waiting for a reload or a
-                  // reconnect to replay it in. Only lastMsgId: the other
-                  // still-streaming bubbles this sweep also finalizes (the
-                  // mid-turn-steer defense-in-depth case above) are not the
-                  // entry the backend actually marked truncated.
-                  if (id === lastMsgId && doneTruncated) {
-                    m.truncated = true
-                    m.truncationReason = doneTruncationReason
-                  }
-                }
-                // Bake any pending tool calls into the last assistant message so
-                // VirtualAssistantMessageRow can render them from message.tool_calls.
-                // This covers two cases:
-                //   1. Replay: replay_message coalesces into the empty placeholder and
-                //      returns before baking; done is the only signal that all frames
-                //      for the final entry are complete.
-                //   2. Live turns: tool calls stay in toolCallOrder until the next
-                //      sendMessage bakes them, causing them to disappear the moment
-                //      isStreaming goes false and the message moves to the historical
-                //      renderer (VirtualAssistantMessageRow reads message.tool_calls, not
-                //      the bucket live map). Confirmed: ChatScreen.tsx switches to
-                //      VirtualAssistantMessageRow at isStreaming=false, so baking at
-                //      done is required for live turns too (hotfix/v0.1.1 aff2caa).
-                // Routed via toolCallOwnerMessageId (falling back to
-                // lastMsgId for unmapped/legacy calls) rather than blindly
-                // "the last message" — a turn can now legitimately produce
-                // more than one assistant bubble (Fix 5a; the sync/await-
-                // mode delegate attribution fix), and each tool call must
-                // land on the bubble that actually issued it, not whichever
-                // bubble happens to be last when the turn ends.
-                if (draft.toolCallOrder.length > 0) {
-                  bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, lastMsgId, draft.textAtToolCallStart)
-                  draft.toolCalls = {}
-                  draft.toolCallOrder = []
-                  draft.textAtToolCallStart = {}
-                  draft.toolCallOwnerMessageId = {}
-                }
-                const costDelta = frame.stats?.cost ?? 0
-                draft.isStreaming = false
-                // Recorded session usage only; replay terminators returned above.
-                draft.sessionTokens = mergeRecordedSessionTokens(draft.sessionTokens, frame.stats?.session_tokens_total)
-                draft.sessionCost = draft.sessionCost + costDelta
-                draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
-                draft.cancelStage = null
-                // ADR-082 D4 (FR-009 "finalize once"), review S1/S2: this is
-                // the turn's OWN done — the isReplayTerminatorDone branch
-                // above always `break`s before reaching here, so every path
-                // that gets here carries real turn stats (or is the
-                // stats-less outbound-publish fallback done, which is also
-                // always a real turn's own completion — see
-                // pkg/gateway/webchat_channel.go). The announced turn, if
-                // any, is now finalized: record its id as finished BEFORE
-                // clearing so a stale/racing session_state.active_turn that
-                // re-announces this same turn_id later (S2) is recognized
-                // and ignored rather than re-opening streaming state with no
-                // second done ever coming to close it. Then clear
-                // activeTurnId/activeTurnAgentId so a later, unrelated
-                // replay-terminating done for this session never mistakes a
-                // stale id for a still-open turn.
-                markTurnFinished(sid, draft.activeTurnId)
-                endTurnState(draft)
-                if (clearReplayingNow) {
-                  draft.isReplaying = false
-                }
-              }) as Partial<SessionChatState>
-            })
+            withBucket(sid, b => completeDoneTurn(b, sid, frame, clearReplayingNow))
             // FR-030/031 (U10b): settle what this turn means for the /clear
             // transcript re-read — BEFORE the drain below can put another
             // message on the wire and arm a different operation (the intent

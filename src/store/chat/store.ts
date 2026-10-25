@@ -4,8 +4,10 @@ import { create } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { recipientAddressHoldsQueue, setRosterReleaseDrain } from './recipientSend'
+import { resolveOutboundTarget } from './outbound-target'
 import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -32,11 +34,15 @@ const chatRuntime = { unknownFrameCount: 0, agentIdAtLastMintSend: null as strin
  * for a QueuedOutboundMessage (a legacy plain-string entry has neither).
  * Module scope so it doesn't count against maybeDrainNext's/create()'s
  * grandfathered line budget (scripts/budgets/functions.txt). */
-function drainQueuedMessage(get: () => ChatStore, next: OutboundQueueItem): void {
+function drainQueuedMessage(get: () => ChatStore, set: (patch: Partial<ChatStore>) => void, next: OutboundQueueItem): void {
   if (typeof next === 'string') {
     get().sendMessage(next)
   } else {
-    get().sendMessage(next.content, { clientMessageId: next.id, queuedAt: next.timestamp })
+    const accepted = get().sendMessage(next.content, { ...next.options, target: next.target, clientMessageId: next.id, queuedAt: next.timestamp, deliveryDeadlineAt: next.deadlineAt })
+    if (accepted === false) {
+      set({ pendingDrainQueue: [{ ...next, deliveryStatus: 'failed' }, ...get().pendingDrainQueue] })
+      useUiStore.getState().addToast({ message: 'Queued message not delivered. Your message was kept in its chat; return there and retry.', variant: 'error' })
+    }
   }
 }
 
@@ -238,10 +244,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // send (recipient is valid only together with session_id, and dropping
     // the addressing silently is forbidden). The hold releases as soon as a
     // session exists, and the message then drains WITH its recipient.
-    if (recipientAddressHoldsQueue(typeof pendingDrainQueue[0] === 'string' ? pendingDrainQueue[0] : pendingDrainQueue[0]?.content)) return
-    const [next, ...rest] = pendingDrainQueue
-    set({ pendingDrainQueue: rest })
-    drainQueuedMessage(get, next)
+    const index = pendingDrainQueue.findIndex(item => typeof item === 'string' || item.deliveryStatus !== 'failed')
+    if (index === -1) return
+    const next = pendingDrainQueue[index]
+    const target = typeof next !== 'string' && next.target ? resolveOutboundTarget(next.target, get()) : undefined
+    if (target?.sessionId && get().sessionsById[target.sessionId]?.isStreaming) return
+    if (recipientAddressHoldsQueue(typeof next === 'string' ? next : next.content, target)) return
+    set({ pendingDrainQueue: pendingDrainQueue.filter((_, i) => i !== index) })
+    drainQueuedMessage(get, set, next)
   }
 
   const historyFrames = createHistoryFrameOwner({ set, get, withBucket })

@@ -54,6 +54,7 @@ import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
 import { AgentReplyLabel, ParticipantMessageRow, useParticipantLabelParts } from './ParticipantLabels'
 import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
+import { outboundTargetIsForeground, resolveOutboundTarget } from '@/store/chat/outbound-target'
 import { pendingRedirectSids } from '@/store/chat/runtime-state'
 import { stampToolCallOffset } from '@/store/chat/session'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
@@ -269,6 +270,7 @@ export function UserMessage() {
             content={storeMessage.content}
             state={storeMessage.deliveryStatus}
             firstSendStatus={storeMessage.firstSendStatus}
+            deliveryUnconfirmed={storeMessage.deliveryUnconfirmed}
             agentName={agentName}
             latest
             isClearCommand={isClearCommandText(storeMessage.content)}
@@ -959,6 +961,7 @@ export function VirtualUserMessageRow({
             content={message.content}
             state={message.deliveryStatus}
             firstSendStatus={message.firstSendStatus}
+            deliveryUnconfirmed={message.deliveryUnconfirmed}
             agentName={agentName}
             latest={latest}
             isClearCommand={isClearCommandText(message.content)}
@@ -2717,10 +2720,12 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const messages = useChatStore((s) => s.messages)
   const outboundQueue = useChatStore((s) => s.outboundQueue)
   const pendingDrainQueue = useChatStore((s) => s.pendingDrainQueue)
+  const draftGeneration = useChatStore((s) => s.firstSendGeneration)
   const queuedMessages = useMemo(() => {
     const existingIds = new Set(messages.map((message) => message.id))
     return [...pendingDrainQueue, ...outboundQueue]
-      .filter((item): item is QueuedOutboundMessage => typeof item !== 'string' && !existingIds.has(item.id))
+      .filter((item): item is QueuedOutboundMessage => typeof item !== 'string' && !existingIds.has(item.id)
+        && (!item.target || outboundTargetIsForeground(resolveOutboundTarget(item.target, useChatStore.getState()))))
       .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
       .map((item): ChatMessage => ({
         id: item.id,
@@ -2729,9 +2734,10 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         content: item.content,
         timestamp: item.timestamp,
         status: 'done',
-        deliveryStatus: 'queued',
+        deliveryStatus: item.deliveryStatus ?? 'queued',
+        ...(item.options?.attachments?.length ? { media: item.options.attachments } : {}),
       }))
-  }, [activeSessionId, messages, outboundQueue, pendingDrainQueue])
+  }, [activeSessionId, activeAgentId, workspaceId, draftGeneration, messages, outboundQueue, pendingDrainQueue])
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   // One presentation gate for live, REST and replay, before either list renders.
   // Hidden diagnostics remain in the bucket, with no empty virtualized row.

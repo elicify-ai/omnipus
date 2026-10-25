@@ -195,6 +195,8 @@ export type ChatMessage = Message & {
    * bounded wait that produced the latter) are deleted.
    */
   deliveryStatus?: UserDeliveryState
+  /** Local acknowledgement deadline expired; not proof of a server refusal. */
+  deliveryUnconfirmed?: boolean
   media?: MediaAttachment[]
   /**
    * Review finding 17 — the `media://` refs (opts.mediaRefs) this user
@@ -389,10 +391,35 @@ export type ChatMessage = Message & {
   }
 }
 
+// not-wire-format: immutable client-side send ownership, never serialized.
+export interface OutboundTarget {
+  sessionId: string | null
+  agentId: string | null
+  workspaceId: string | null
+  firstSendClientMessageId?: string
+  draftGeneration?: number
+}
+
 export interface QueuedOutboundMessage {
   id: string
   content: string
   timestamp: string
+  target?: OutboundTarget
+  options?: Pick<SendMessageOptions, 'mediaRefs' | 'attachments' | 'model_name' | 'workflowStart'>
+  deliveryStatus?: 'queued' | 'failed'
+  deadlineAt?: number
+}
+
+// not-wire-format: client dispatch options; the payload still uses MessageFrame.
+export interface SendMessageOptions {
+  mediaRefs?: string[]
+  attachments?: MediaAttachment[]
+  model_name?: string
+  clientMessageId?: string
+  queuedAt?: string
+  deliveryDeadlineAt?: number
+  workflowStart?: WorkflowStart
+  target?: OutboundTarget
 }
 
 /** Strings remain readable for persisted/test state created before #823. */
@@ -1118,7 +1145,7 @@ export interface ChatStore extends HistorySlice {
    * button attaches to its message into Omnipus's main (W1 create an agent,
    * W18 set up a team, for a named workspace). Never an instruction.
    */
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; clientMessageId?: string; queuedAt?: string; workflowStart?: WorkflowStart }) => void
+  sendMessage: (content: string, opts?: SendMessageOptions) => boolean
   /**
    * Review finding 17 — "Try again" on a failed user message used to call
    * `sendMessage(content)` with a brand-new id, which left the FAILED

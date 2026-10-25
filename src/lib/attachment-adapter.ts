@@ -28,6 +28,8 @@ import { useSessionStore } from "@/store/session";
 import { useUiStore } from "@/store/ui";
 import { useWorkspacesStore } from "@/store/workspacesStore";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
+import type { OutboundTarget } from '@/store/chat/types';
+import { outboundTargetIsForeground } from '@/store/chat/outbound-target';
 
 /** A resolved upload: the agent-facing media ref plus display metadata. */
 export interface ResolvedUpload { // not-wire-format: internal client-side upload state (media ref + display metadata) drained by onNew; never serialized across the gateway/SPA boundary
@@ -67,10 +69,15 @@ function stashResolvedUpload(id: string, upload: ResolvedUpload): void {
 // Ensure a session exists before uploading. send() runs once per attachment and
 // AssistantUI dispatches them concurrently, so memoize the in-flight creation to
 // avoid racing multiple createSession calls.
-let sessionEnsure: Promise<string> | null = null;
-async function ensureSession(): Promise<string> {
-  const { activeSessionId, activeAgentId, setActiveSession } = useSessionStore.getState();
+const sessionEnsures = new Map<string, Promise<string>>();
+async function ensureSession(target?: OutboundTarget): Promise<string> {
+  const state = useSessionStore.getState();
+  const activeSessionId = target ? target.sessionId : state.activeSessionId;
+  const activeAgentId = target ? target.agentId : state.activeAgentId;
+  const workspaceId = target ? target.workspaceId : useWorkspacesStore.getState().activeWorkspaceId;
   if (activeSessionId && activeSessionId !== "__pending") return activeSessionId;
+  const key = `${workspaceId}:${activeAgentId}:${target?.draftGeneration ?? ''}:${target?.firstSendClientMessageId ?? ''}`;
+  let sessionEnsure = sessionEnsures.get(key);
   if (!sessionEnsure) {
     sessionEnsure = (async () => {
       if (!activeAgentId) throw new Error("Select an agent before sending files");
@@ -87,15 +94,20 @@ async function ensureSession(): Promise<string> {
       // correct: no workspace is not a default one.
       const created = await createSession(
         activeAgentId,
-        useWorkspacesStore.getState().activeWorkspaceId ?? undefined,
+        workspaceId ?? undefined,
       );
-      setActiveSession(created.id, created.agent_id, null);
+      if (target ? outboundTargetIsForeground(target) : useSessionStore.getState().activeSessionId === activeSessionId) {
+        useSessionStore.getState().setActiveSession(created.id, created.agent_id, null);
+      }
       return created.id;
     })().finally(() => {
-      sessionEnsure = null;
+      sessionEnsures.delete(key);
     });
+    sessionEnsures.set(key, sessionEnsure);
   }
-  return sessionEnsure;
+  const sessionId = await sessionEnsure;
+  if (target) target.sessionId = sessionId;
+  return sessionId;
 }
 
 /** G16: Maximum file size accepted by the upload endpoint. */
@@ -192,7 +204,7 @@ export const omnipusAttachmentAdapter = {
     };
   },
 
-  async send(attachment): Promise<CompleteAttachment> {
+  async send(attachment, target?: OutboundTarget): Promise<CompleteAttachment> {
     // CompleteAttachment with no ref stashed — used when upload/registration
     // fails so the composer doesn't throw and lose the user's typed text.
     const failedComplete: CompleteAttachment = {
@@ -201,9 +213,10 @@ export const omnipusAttachmentAdapter = {
       content: [],
     };
 
+    const workspaceId = (target ? target.workspaceId : useWorkspacesStore.getState().activeWorkspaceId) ?? undefined;
     let sessionId: string;
     try {
-      sessionId = await ensureSession();
+      sessionId = await ensureSession(target);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       useUiStore.getState().addToast({ message: `Could not send "${attachment.name}": ${msg}`, variant: "error" });
@@ -218,7 +231,6 @@ export const omnipusAttachmentAdapter = {
 
     let uploadResult: Awaited<ReturnType<typeof uploadFiles>>;
     try {
-      const workspaceId = useWorkspacesStore.getState().activeWorkspaceId ?? undefined;
       uploadResult = await uploadFiles(sessionId, [attachment.file], workspaceId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -275,3 +287,8 @@ export const omnipusAttachmentAdapter = {
     resolvedUploads.delete(attachment.id);
   },
 } satisfies AttachmentAdapter;
+
+/** The upload and its later message share one captured chat destination. */
+export function ownedAttachmentAdapter(target: OutboundTarget): AttachmentAdapter {
+  return { ...omnipusAttachmentAdapter, send: attachment => omnipusAttachmentAdapter.send(attachment, target) };
+}

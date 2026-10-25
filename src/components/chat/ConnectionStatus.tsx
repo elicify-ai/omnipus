@@ -232,6 +232,7 @@ export function UserMessageDeliveryStatus({
   firstSendStatus,
   onGenerateAgain,
   isClearCommand = false,
+  deliveryUnconfirmed = false,
 }: {
   state: UserDeliveryState
   agentName: string
@@ -243,6 +244,7 @@ export function UserMessageDeliveryStatus({
    * it (delta re-review C1): the generic "not delivered" wording says the
    * text was never read, which is false for a held-then-discarded /clear. */
   isClearCommand?: boolean
+  deliveryUnconfirmed?: boolean
 }) {
   const connected = useConnectionStore((s) => s.isConnected)
   const busy = useChatStore((s) => s.isStreaming || s.isReplaying)
@@ -285,13 +287,13 @@ export function UserMessageDeliveryStatus({
         <StatusActionButton
           onClick={onRetry}
           testId="user-message-retry"
-          label="Couldn't be sent. Try again"
-          tooltip="This message couldn't be delivered. Your text is kept — click to try again."
+          label={deliveryUnconfirmed ? 'Delivery not confirmed. Retry' : "Couldn't be sent. Try again"}
+          tooltip={deliveryUnconfirmed ? 'No receipt arrived within 15 seconds. Your message is kept. Retry resends the same message; it does not stop the agent.' : "This message couldn't be delivered. Your text is kept — click to try again."}
         >
           <ArrowClockwise size={14} aria-hidden="true" />
-          <span>Couldn't be sent</span>
+          <span>{deliveryUnconfirmed ? 'Delivery not confirmed' : "Couldn't be sent"}</span>
           <span aria-hidden="true">{' · '}</span>
-          <span>Try again</span>
+          <span>{deliveryUnconfirmed ? 'Retry' : 'Try again'}</span>
         </StatusActionButton>
       </div>
     )

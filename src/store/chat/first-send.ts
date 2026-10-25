@@ -6,6 +6,8 @@ import { generateId } from '@/lib/constants'
 import type { MessageFrame } from '@/lib/api/generated/asyncapi-types'
 import type { WsConnection } from '@/lib/ws'
 import { applyMessageArray } from './session'
+import { busyFlagIsUnbacked } from './messages'
+import { armDeliveryDeadline, remainingDeliveryDelay } from './delivery-deadline'
 import type { ChatMessage, ChatStore, FirstSendStatus, MediaAttachment, PendingFirstSend, SessionChatState } from './types'
 
 // Internal store wiring, not a gateway wire format.
@@ -65,7 +67,7 @@ export function setFirstSendStatus(context: FirstSendContext, pending: PendingFi
       message.deliveryStatus = hasFirstSendReceipt(message) ? 'received' : status === 'not_saved' ? 'failed' : 'sending'
     }
     removeFirstSendPlaceholder(draft, pending.assistantPlaceholderId)
-    draft.isStreaming = false
+    if (status !== 'unconfirmed' || busyFlagIsUnbacked(draft)) draft.isStreaming = false
     draft.isReplaying = status === 'checking_chat'
     draft.awaitingCatchUp = status === 'checking_chat'
   }) as Partial<SessionChatState>)
@@ -97,12 +99,23 @@ export function attachRecoveredFirstSend(context: FirstSendContext, sender?: Pic
   return sent
 }
 
+function armFirstSendDeadline(context: FirstSendContext, attempt: PendingFirstSend, deadlineAt?: number): void {
+  armDeliveryDeadline(`first:${attempt.clientMessageId}`, () => {
+    const pending = getPendingFirstSend(context.get())
+    if (!pending || pending.clientMessageId !== attempt.clientMessageId || pending.attemptGeneration !== attempt.attemptGeneration) return
+    if (pending.status !== 'sending' && pending.status !== 'retrying') return
+    const user = findFirstSendMessage(context.get().sessionsById[pending.sessionId ?? '__pending'], pending.clientMessageId)
+    if (!hasFirstSendReceipt(user)) setFirstSendStatus(context, pending, 'unconfirmed')
+  }, remainingDeliveryDelay(deadlineAt))
+}
+
 export function startOrdinaryFirstSend(
   context: FirstSendContext,
   outbound: MessageFrame & { client_message_id: string },
   queuedAt: string,
   workspaceId: string | null,
   attachments: MediaAttachment[],
+  deadlineAt?: number,
 ): void {
   const payload = structuredClone(outbound)
   const attemptGeneration = context.get().firstSendGeneration + 1
@@ -146,6 +159,7 @@ export function startOrdinaryFirstSend(
   }))
   useSessionStore.getState().setActiveSession('__pending', payload.agent_id)
   context.get()._validateOutboundFrame(payload, '__pending')
+  armFirstSendDeadline(context, pending, deadlineAt)
   if (!useConnectionStore.getState().connection?.send(payload)) {
     setFirstSendStatus(context, pending, 'unconfirmed')
     useConnectionStore.getState().setConnectionError('Delivery not confirmed — reconnect and press Retry.')
@@ -173,6 +187,7 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
       set({ firstSendGeneration: attemptGeneration, pendingFirstSend: retrying })
       setFirstSendStatus(context, retrying, 'retrying')
       get()._validateOutboundFrame(pending.payload, '__pending')
+      armFirstSendDeadline(context, retrying)
       if (!connection.send(pending.payload)) {
         setFirstSendStatus(context, retrying, 'unconfirmed')
         useConnectionStore.getState().setConnectionError('Delivery not confirmed — reconnect and press Retry.')
