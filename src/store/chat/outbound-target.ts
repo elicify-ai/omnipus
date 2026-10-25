@@ -18,9 +18,7 @@ export function captureOutboundTarget(state: ChatStore): OutboundTarget {
   return {
     sessionId: activeSessionId,
     agentId: activeAgentId,
-    workspaceId: activeSessionId && activeSessionId !== '__pending'
-      ? loadedOutboundSession(activeSessionId)?.workspace_id || null
-      : useWorkspacesStore.getState().activeWorkspaceId || null,
+    workspaceId: useWorkspacesStore.getState().activeWorkspaceId || null,
     ...(activeSessionId === null ? { draftGeneration: state.firstSendGeneration } : {}),
     ...(activeSessionId === '__pending' && state.pendingFirstSend
       ? { firstSendClientMessageId: state.pendingFirstSend.clientMessageId }

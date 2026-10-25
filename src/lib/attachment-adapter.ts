@@ -29,7 +29,7 @@ import { useUiStore } from "@/store/ui";
 import { useWorkspacesStore } from "@/store/workspacesStore";
 import { isImageAttachment } from "@/components/chat/AttachmentCard";
 import type { OutboundTarget } from '@/store/chat/types';
-import { outboundTargetIsForeground } from '@/store/chat/outbound-target';
+import { loadedOutboundSession, outboundTargetIsForeground } from '@/store/chat/outbound-target';
 
 /** A resolved upload: the agent-facing media ref plus display metadata. */
 export interface ResolvedUpload { // not-wire-format: internal client-side upload state (media ref + display metadata) drained by onNew; never serialized across the gateway/SPA boundary
@@ -213,7 +213,9 @@ export const omnipusAttachmentAdapter = {
       content: [],
     };
 
-    const workspaceId = (target ? target.workspaceId : useWorkspacesStore.getState().activeWorkspaceId) ?? undefined;
+    const workspaceId = target?.sessionId && target.sessionId !== '__pending'
+      ? loadedOutboundSession(target.sessionId)?.workspace_id ?? undefined
+      : (target ? target.workspaceId : useWorkspacesStore.getState().activeWorkspaceId) ?? undefined;
     let sessionId: string;
     try {
       sessionId = await ensureSession(target);
