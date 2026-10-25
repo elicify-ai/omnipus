@@ -13,6 +13,22 @@ export function drawnHistoryRows(message: ChatMessage, verbose: boolean): number
   const tools = message.tool_calls?.filter(call => shouldRenderToolCall(call.tool, call.params, verbose, call.status === 'error')).length ?? 0
   return Number(!!message.content || (tools === 0 && message.role !== 'assistant')) + tools
 }
+/**
+ * A row's unrounded layout (border-box) height. Unlike offsetHeight it keeps
+ * the fractional part, so many measured rows do not add up to a prefix that is
+ * off by their rounding (D5: a 111.48px row read as 111 made 40 rows 19px
+ * short). Unlike a DOMRect of a translateY-placed virtual row it does not move
+ * with the row's offset (#185). Falls back to offsetHeight where layout gives
+ * no number (no stylesheet, display:contents).
+ */
+export function historyLayoutHeight(element: HTMLElement): number {
+  const style = getComputedStyle(element)
+  const height = Number.parseFloat(style.height)
+  if (!Number.isFinite(height)) return element.offsetHeight
+  if (style.boxSizing === 'border-box') return height
+  const edges = [style.paddingTop, style.paddingBottom, style.borderTopWidth, style.borderBottomWidth]
+  return height + edges.reduce((sum, value) => sum + (Number.parseFloat(value) || 0), 0)
+}
 type Anchor = { position: string; offset: number; alternatives: { position: string; screenTop: number }[] } // not-wire-format
 
 function bindReaderIntent(scroller: HTMLElement, enter: () => void, dragging: { current: boolean }): () => void {
@@ -177,12 +193,12 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
       // with its offset (685.234375 vs 685.23388671875 near 10,000px), so an
       // unchanged row changed A -> virtualizer.measure() -> new translateY ->
       // new A, until React's update-depth limit (#185) unmounted the list.
-      const height = element.offsetHeight
+      const height = historyLayoutHeight(element)
       if (!Number.isFinite(height) || height < 0) { stablePositions.delete(position); heights.current.delete(position); continue }
       heights.current.set(position, height)
       if (height === 0) { stablePositions.delete(position); continue }
       // One complete tool row includes its expanded body, not only a toggle.
-      const tools = [...element.querySelectorAll<HTMLElement>('[data-history-tool-row]')].map(node => ({ key: node.dataset.historyToolRow!, height: node.offsetHeight })).filter(row => Number.isFinite(row.height) && row.height > 0)
+      const tools = [...element.querySelectorAll<HTMLElement>('[data-history-tool-row]')].map(node => ({ key: node.dataset.historyToolRow!, height: historyLayoutHeight(node) })).filter(row => Number.isFinite(row.height) && row.height > 0)
       const toolHeight = tools.reduce((sum, tool) => sum + tool.height, 0)
       const overhead = !message.content && tools.length ? Math.max(0, height - toolHeight) / tools.length : 0
       for (const tool of tools) samples.current.observe(`${position}:tool:${tool.key}`, tool.height + overhead)
@@ -272,9 +288,11 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
       capture()
     }
     if (state.history.requests.refresh.status !== 'idle') return
-    if (historyPixelTrigger(scroller.scrollTop - prefix, scroller.clientHeight, !document.hidden)) void requestFill('older', opening.current)
+    // D5 Dtop: distance from the viewport top to the earliest loaded content
+    // boundary INCLUDING the prefix controls above the first row, i.e. scrollTop.
+    if (historyPixelTrigger(scroller.scrollTop, scroller.clientHeight, !document.hidden)) void requestFill('older', opening.current)
     else if (historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden) && state.history.hasLater) void requestFill('newer')
-  }, [capture, correct, prefix, requestFill, scrollRef])
+  }, [capture, correct, requestFill, scrollRef])
   useLayoutEffect(() => {
     samples.current.reset(); heights.current.clear(); anchor.current = null; settledTop.current = null; ownedTop.current = null; opening.current = true
     priorFocus.current = null; priorWidth.current = 0; lastTop.current = 0; setAverage(80); setPrefix(0)

@@ -17,7 +17,7 @@ import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { SystemMessage, VirtualSystemMessageRow } from './SystemMessageRows'
 import { placementOf, useSkillChipData, VirtualUserMessageRow, VirtualAssistantMessageRow, StreamingDelegation, VirtualizerAutoFollow, UserMessage, AssistantMessage } from './ChatScreen'
 import { FloatingReturnToLatest, HistoryBoundary, HistoryReaderStatus } from './HistoryBoundary'
-import { drawnHistoryRows, useHistoryViewport } from './useHistoryViewport'
+import { drawnHistoryRows, historyLayoutHeight, useHistoryViewport } from './useHistoryViewport'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 
 function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
@@ -194,8 +194,16 @@ function VirtualizedMessageListInner({
     // A virtualizer size adjustment is an application-owned placement: it must
     // not read as the reader scrolling away from the live end.
     scrollToFn: (offset, options, instance) => { elementScroll(offset, options, instance); viewport.claimScroll() },
-    // measureElement default (rounded ResizeObserver border box, else offsetHeight) is
-    // correct; useHistoryViewport samples the same transform-independent layout size.
+    // The default measureElement rounds every row to whole pixels, so D5
+    // prefixes drifted by the sum of that rounding. Measure the same unrounded,
+    // transform-independent layout size useHistoryViewport samples; like the
+    // default, a call without an observer entry keeps an existing measurement.
+    measureElement: (element, entry, instance) => {
+      const box = entry?.borderBoxSize?.[0]
+      if (box) return box.blockSize
+      const cached = instance.itemSizeCache.get(instance.options.getItemKey(instance.indexFromElement(element)))
+      return cached ?? historyLayoutHeight(element as HTMLElement)
+    },
   })
 
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => !viewport.historical
