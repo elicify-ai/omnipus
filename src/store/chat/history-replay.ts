@@ -119,6 +119,33 @@ function settleRecoveredSnapshotInput(bucket: SessionChatState, page: SessionHis
   }
 }
 
+/** A reply this tab watched streaming whose turn the server's current state
+ * no longer runs, and that the committed page does not hold, did not survive
+ * on the server (a restart cut it before it was saved). Dropping it at the
+ * snapshot commit restores the pre-paging rebuild: the question it answered is
+ * the last row again and the witnessed-cut sweep reads the real transcript.
+ * A turn the server still reports active, any row the page holds (also via a
+ * merged replay id), and every user row stay untouched. */
+function dropDeadWitnessedStreams(bucket: SessionChatState, page: SessionHistoryPage): SessionChatState {
+  const witnessed = new Set(bucket.wipedOpenTurnIds ?? [])
+  if (!witnessed.size) return bucket
+  const onPage = new Set(page.entries.map(entry => entry.id))
+  const dead = new Set([...new Set([...bucket.messageOrder, ...(bucket.historyLiveOrder ?? [])])].filter(id => {
+    const row = bucket.messagesById[id]
+    return row?.role === 'assistant' && (row.isStreaming || row.status === 'streaming') && !row.historyPosition &&
+      !!row.turnId && witnessed.has(row.turnId) && row.turnId !== bucket.activeTurnId &&
+      !onPage.has(row.id) && !row.mergedReplayIds?.some(id => onPage.has(id))
+  }))
+  if (!dead.size) return bucket
+  const messagesById = { ...bucket.messagesById }
+  for (const id of dead) delete messagesById[id]
+  // With the dead reply gone, the chat streams only if a row still does or the
+  // server reports a turn; a stale flag would read as "still running".
+  const stillStreaming = !!bucket.activeTurnId || Object.values(messagesById).some(row => row.isStreaming || row.status === 'streaming')
+  return { ...bucket, messagesById, isStreaming: bucket.isStreaming && stillStreaming,
+    messageOrder: bucket.messageOrder.filter(id => !dead.has(id)), historyLiveOrder: bucket.historyLiveOrder?.filter(id => !dead.has(id)) }
+}
+
 function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryPage, baseline: Record<string, ChatMessage>, bootChanged: boolean): { bucket: SessionChatState; page: SessionHistoryPage } {
   if (bucket.history.serverState?.status !== 'available' || bucket.activeTurnId) return { bucket, page }
   const messagesById = { ...bucket.messagesById }
@@ -302,7 +329,8 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
           return { ...patch, ...completion, messageOrder: b.messageOrder, historyLiveOrder: liveOrder, historyNeedsSnapshot: false,
             history: { ...patch.history!, tailEntries: capacity ? tail.slice(-capacity) : [], pageMetadata: historyMetadata(completedPage), historyLoaded: true } }
         }
-        return { ...applyHistoryPageToBucket(b, completedPage, 'latest', baseline), ...completion }
+        const live = dropDeadWitnessedStreams(b, completedPage)
+        return { ...applyHistoryPageToBucket(live, completedPage, 'latest', baseline), ...completion, ...(live !== b ? { isStreaming: live.isStreaming } : {}) }
       })
       return true
     } catch (error) {
