@@ -941,9 +941,12 @@ export interface ChatStore {
    * outgoing message. The composer model selector writes the picker's
    * value here; the AssistantUI runtime reads it in `onNew` and threads
    * it into `sendMessage` as `model_name` (forwarded to the server as
-   * `metadata.model_name` in the WS frame). Cleared after each send
-   * so the next session reopen re-derives the default from transcript
-   * history or the agent's `model` config (per spec §18 Q3).
+   * `metadata.model_name` in the WS frame). Never cleared after a send —
+   * a pick stays sticky for the conversation's page life; on navigating
+   * away and back (or a reload), the picker restores the session's latest
+   * explicit choice (#1436, src/store/chat/model-choice.ts) or, when the
+   * session has none, re-derives the seed from transcript history or the
+   * agent's `model` config (per spec §18 Q3).
    */
   nextModel: string | null
   /**
@@ -952,7 +955,10 @@ export interface ChatStore {
    * picker shows the check on ONLY the picked provider's row when two
    * providers serve the same model slug. null = the value was seeded from
    * transcript/agent-default, not picked; the picker then derives the
-   * display provider via the first-provider lookup. Today this is consumed
+   * display provider via `resolveUniqueModelProvider` — a row only when
+   * exactly ONE usable provider serves the slug, no row when several do
+   * (H6 R2: the old first-provider lookup presented list order as if it
+   * were a recorded choice). Today this is consumed
    * by the DISPLAY only — `MessageFrame.metadata` has no provider sibling
    * for `model_name` on the wire; if the contract gains one
    * (`metadata.provider`), this is the value to send with it.

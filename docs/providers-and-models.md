@@ -43,9 +43,19 @@ The model pickers — next to the chat message box, on an agent's profile, and o
 
 The same model name can appear under more than one provider, for example when a local proxy serves models that a subscription provider also offers. When that happens, the check mark appears only under the provider whose row you actually picked — by mouse or by keyboard — and picking the same model under a different provider moves the check mark to that provider's row.
 
+### The model a chat keeps
+
+The chat's model picker remembers the model you picked **for that one conversation**. Leave the conversation and come back, switch to another chat and back, or reload the browser — the picker shows the model you last chose there, and that is the model the next message uses. The choice is kept per browser until you pick a different model in that conversation.
+
+The picker also marks the conversation agent's **default model**: the row that carries the **Default** chip is the model the agent uses when you have not picked one. The chip follows the provider too: when the agent's default was saved together with a provider, only that provider's row for the model carries the chip — the same model name under a second provider is not marked. If the agent's model was saved without a provider, the chip marks the model name under every provider that offers it. To go back to the default, pick the **Default**-marked row deliberately; the conversation then keeps that choice like any other.
+
+The remembered choice is a per-browser convenience, not a server-side setting, and it covers **every** chat — workspace chats and unfiled chats (a chat outside any workspace, opened by link) alike. If you choose a model before a new chat has been saved, Omnipus saves that choice when the first message receives its conversation ID. You do not need to wait for an answer before reloading. A chat you open on another device starts from the conversation's last answered model or the agent's default instead.
+
+If browser storage fails, a warning explains whether Omnipus could not **save** or **read** your model choices; damaged saved data is reported as invalid rather than treated as no choice. Choices made in the current page are still kept when you switch chats and return, but may be lost on reload. Check your browser's storage space and permissions. After fixing storage, select the model again to save it. The warning stays until you dismiss it, and does not stop you from using the selected model.
+
 Two limits to know:
 
-- A value restored from a saved setting or conversation rather than picked in this session carries no provider record (for example a recap model saved earlier, or the model a conversation was last answered with). When exactly one provider offers that model, its row is marked; when several providers offer it, no row is marked, because the UI cannot know which one served it.
+- Some values the picker restores rather than you picking carry no provider record — for example the recap model saved under Settings → Memory (that setting stores the bare model name), or the model a conversation was last answered with. For such a value, when exactly one provider offers that model, its row is marked; when several providers offer it, no row is marked, because the UI cannot know which one served it. A restored default that was saved together with a provider does carry it, and that provider's row is marked.
 - In the chat composer the provider choice is currently display-only: the message is sent with the model name only, and the server decides which provider serves it. The agent profile, the **Default model** card, and fallback entries do save the chosen provider. There is no create form in the app: new agents are created by asking Omnipus or through the REST API (see [agents](agents.md)).
 
 ## Model requirements

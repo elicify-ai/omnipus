@@ -7,7 +7,24 @@ import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchProviders } from '@/lib/api'
 import { isProviderUsable } from '@/lib/providerStatus'
 import { resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
+import { readSessionModelChoice, writeSessionModelChoice, type ModelChoiceStorageFailure } from '@/store/chat/model-choice'
+import { logDiagnostic } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
+
+function warnModelChoiceStorageFailure(failure: ModelChoiceStorageFailure | null | undefined): void {
+  if (!failure) return
+  console.warn('[chat] model choice storage failed', failure)
+  logDiagnostic('sessionModelChoiceStorageFailed', { ...failure })
+  const ui = useUiStore.getState()
+  const message = failure.operation === 'write'
+    ? 'Could not save your model choice. It is kept in this page, but may be lost on reload. Check browser storage space and permissions.'
+    : failure.reason === 'invalid'
+      ? 'Saved model choices could not be read because browser storage is invalid. Choices made in this page are kept until reload. Select a model to save it again.'
+      : 'Could not read saved model choices. Choices made in this page are kept until reload. Check browser storage permissions.'
+  if (!ui.toasts.some((toast) => toast.testId === 'model-choice-storage-warning')) {
+    ui.addToast({ message, variant: 'warning', testId: 'model-choice-storage-warning', duration: 0 })
+  }
+}
 
 /**
  * ModelPicker — the per-message model selector + its data wiring.
@@ -141,7 +158,16 @@ export function ModelPicker({
     // default and fail to carry to the next message). Genuine navigation —
     // opening/switching to a real session, or New Chat ('' target) — still
     // re-seeds from that target's last-used model.
-    if (activeSessionId === '__pending' || prevSession === '__pending') return
+    if (activeSessionId === '__pending') return
+    if (prevSession === '__pending' && activeSessionId) {
+      // The explicit draft pick had no durable key. Save its current pair as
+      // soon as the server gives this same conversation its real identity.
+      if (modelSelectionSource.current === 'user') {
+        const { nextModel: model, nextModelProvider: provider } = useChatStore.getState()
+        if (model) warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, { model, provider }))
+      }
+      return
+    }
     if (activeSessionId !== prevSession) {
       // Genuine navigation to a different conversation — any explicit pick
       // was scoped to the conversation it was made in, so it is released and
@@ -152,6 +178,19 @@ export function ModelPicker({
       // model pick survives an agent change, exactly like an explicit AGENT
       // pick survives a session-derived hint under session.ts's AGENT
       // PRECEDENCE RULE.
+      return
+    }
+    // #1436: the session's own latest explicit choice outranks the transcript
+    // and the agent default. A pick is recorded per session (per browser) the
+    // moment it is made — no assistant response or send required — so
+    // navigation and a full reload both restore exactly what the user chose
+    // here, including a deliberate re-selection of the agent's default. The
+    // transcript/default seed below applies only to a session with NO stored
+    // choice.
+    const { choice: storedChoice, failure } = readSessionModelChoice(activeSessionId)
+    warnModelChoiceStorageFailure(failure)
+    if (storedChoice) {
+      setNextModel(storedChoice.model, storedChoice.provider)
       return
     }
     // H6 R2 (review round 1 — F3): the seed's provider depends on its SOURCE.
@@ -175,6 +214,11 @@ export function ModelPicker({
     // seed — record which, so the re-seed effect above knows whether a later
     // agent-only change is allowed to overwrite it.
     modelSelectionSource.current = model ? 'user' : 'auto'
+    // #1436: persist the session's latest explicit choice at pick time — no
+    // send or assistant response required. An empty pick hands the session
+    // back to auto-follow, so its stored choice (if any) is cleared and the
+    // transcript/agent-default seed applies again.
+    warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, model ? { model, provider: null } : null))
     if (model === '') {
       addToast({ message: 'Reverted to agent default for next message', variant: 'default' })
     }
@@ -190,6 +234,10 @@ export function ModelPicker({
   function onPickerPairChange(pair: { model: string; provider: string }) {
     if (!pair.model) return
     setNextModel(pair.model, pair.provider)
+    // #1436: the grouped pick's (provider, model) pair is the recorded
+    // identity — restoring it lands the check on exactly the row it was
+    // chosen under, even when the slug is served by more than one provider.
+    warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, { model: pair.model, provider: pair.provider }))
   }
 
   return (
@@ -213,6 +261,11 @@ export function ModelPicker({
         valueProvider={nextModelProvider ?? resolveUniqueModelProvider(usableProviders, nextModel ?? '')}
         onChange={onPickerChange}
         onPairChange={onPickerPairChange}
+        // #1436: mark the agent's default row so the user can see which model
+        // is the default and switch back to it deliberately. The mark follows
+        // the (provider, model) pair, not the bare slug.
+        defaultModel={activeAgentModel}
+        defaultProvider={activeAgentProvider}
         placeholder={activeAgentModel ?? 'Select a model…'}
         providerGroups={providerGroups}
         triggerTestId="composer-model-selector"

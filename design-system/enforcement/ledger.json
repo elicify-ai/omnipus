@@ -5177,6 +5177,16 @@
   ],
   "reviewedBoundaries": [
     {
+      "path": "src/components/chat/composer/ModelPicker.session-return.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1436: mounts the existing application-classified ToastContainer to assert real visible storage-failure warnings alongside the real picker and stores. This host depends on application state and has no public library export; no production import, scanner rule, or QA assertion is changed."
+    },
+    {
+      "path": "src/routes/_app/-sessions.$sessionId.reload-return.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1437: mounts the existing application-classified ToastContainer with the real router/runtime to exercise the user-visible Retry action. This is the application host, not a new primitive; no production import, public export, scanner rule, or QA assertion is changed."
+    },
+    {
       "path": "src/components/skills/WhatsAppNativeNotice.serverStates.test.tsx",
       "kind": "test",
       "reason": "real chat/Connectors error alerts via catalogued ToastContainer; test-only, no public export"
