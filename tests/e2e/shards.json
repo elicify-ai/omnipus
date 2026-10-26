@@ -69,7 +69,8 @@
         "tests/e2e/burst-resilience.spec.ts",
         "tests/e2e/side-panel-deeplink.spec.ts",
         "tests/e2e/nav-wave1.spec.ts",
-        "tests/e2e/chat-history-paging.return-to-latest.spec.ts"
+        "tests/e2e/chat-history-paging.return-to-latest.spec.ts",
+        "tests/e2e/xss-history-paths.spec.ts"
       ]
     },
     {
