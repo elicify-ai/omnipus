@@ -569,6 +569,38 @@ func (al *AgentLoop) processSystemMessage(
 
 	transcriptSessionID, transcriptStore := al.resolveSystemMessageTranscript(msg)
 
+	// SEC-1 (ADR-093 round 2, founder Q88): an AUTOMATIC wake — a system
+	// message with no steer_message_id and no new human instruction — never
+	// resumes a STOPPED root. The D2 launch-backstop removal left this path
+	// able to start a fresh turn on the dead generation, and that turn could
+	// launch and dispatch unstamped helpers under the stopped parent — beyond
+	// Q1's accepted in-flight-launch race. What restarts a stopped
+	// conversation is a NEW HUMAN instruction (founder case 6), never a wake
+	// (MIN-004 / the 2026-10-06 stopped-root rule). A TERMINAL record is not
+	// stopped: completed and failed roots keep receiving their wakes, which
+	// run without reviving the record exactly as before. An unreadable record
+	// refuses the wake too (fail-closed, same posture as the fence check) —
+	// a missing record is the ordinary no-record case and passes.
+	if transcriptSessionID != "" {
+		if store := al.GetSessionLifecycleStore(); store != nil {
+			rec, loadErr := store.Load(transcriptSessionID)
+			switch {
+			case loadErr == nil:
+				if rec.State == session.LifecycleStopped || lifecycleInFlightStopFence(rec) {
+					logger.WarnCF("agent", "adr093: automatic wake into a stopped conversation refused — a wake never resumes a stopped root; a new human instruction restarts the conversation",
+						map[string]any{"session_id": transcriptSessionID, "state": string(rec.State), "chat_id": msg.ChatID})
+					return "", fmt.Errorf("adr093: automatic wake into stopped session %q refused (a new human instruction restarts the conversation)", transcriptSessionID)
+				}
+			case errors.Is(loadErr, session.ErrLifecycleNotFound):
+				// No record: nothing stopped, nothing to refuse.
+			default:
+				logger.ErrorCF("agent", "adr093: automatic wake dropped — the conversation's lifecycle record could not be read",
+					map[string]any{"session_id": transcriptSessionID, "error": loadErr.Error()})
+				return "", fmt.Errorf("adr093: automatic wake into session %q refused: read lifecycle record: %w", transcriptSessionID, loadErr)
+			}
+		}
+	}
+
 	// A-I4 round 6, Priority 2: scope the reconstructed turn's SessionKey to
 	// the SPECIFIC originating session (mirroring agentSessionKey's
 	// "agent:<id>:session:<sid>" convention every regular routed turn

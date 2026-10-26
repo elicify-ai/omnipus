@@ -210,6 +210,20 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 func (te *TaskExecutor) completeTaskWithResult(
 	t *task.Task, taskSessionID string, expected task.Status, success bool, result string, run *activeRun,
 ) (applied bool) {
+	return te.completeTaskWithResultCancel(t, taskSessionID, expected, success, result, run, "")
+}
+
+// completeTaskWithResultCancel is completeTaskWithResult carrying an optional
+// CancelReason in the SAME terminal compare-and-swap write (ADR-093 round 2,
+// gate CR C2 control): the store accepts a cancel reason only alongside
+// status=failed, so a user-stopped task's disposition cannot be stamped as a
+// separate earlier write. A stopped task lands failed+stopped_by_user, which
+// keeps the paired goal record ACTIVE (GoalStateForTerminalTask's MAJ-003
+// mapping) and marks the restartable stopped shape. An empty cancelReason
+// writes exactly what completeTaskWithResult always wrote.
+func (te *TaskExecutor) completeTaskWithResultCancel(
+	t *task.Task, taskSessionID string, expected task.Status, success bool, result string, run *activeRun, cancelReason task.CancelReason,
+) (applied bool) {
 	status := task.StatusDone
 	if !success {
 		status = task.StatusFailed
@@ -220,11 +234,15 @@ func (te *TaskExecutor) completeTaskWithResult(
 	}
 	sessStore := te.agentLoop.GetSessionStore()
 	now := time.Now().UTC().Format(time.RFC3339)
-	final, uerr := te.store.UpdateIfStatus(t.ID, expected, task.Patch{
+	patch := task.Patch{
 		Status:      &status,
 		Result:      &result,
 		CompletedAt: &now,
-	})
+	}
+	if cancelReason != "" {
+		patch.CancelReason = &cancelReason
+	}
+	final, uerr := te.store.UpdateIfStatus(t.ID, expected, patch)
 	if uerr != nil {
 		if errors.Is(uerr, task.ErrStatusConflict) {
 			logger.WarnCF("task_executor",

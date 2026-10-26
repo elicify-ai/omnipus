@@ -105,7 +105,7 @@ The Board has one column per status; the List has a Status column.
 | Next | Triaged and ready | You move it, or an agent does |
 | In Progress | A run is working on it | You start it, or a plan reaches it |
 | Blocked | A dependency is unmet | Set and cleared automatically |
-| Done | The last run passed | Final — a passing run or you set it |
+| Done | The last run passed | Final for a task with no conversation left; a done task that still owns its run conversation can be started again as a continuation of that same conversation |
 | Failed | The last run failed, was stopped, or a queued start was refused | Retry opens a fresh run |
 
 A task you stop shows as orange **Cancelled** rather than red **Failed**, inside the same Failed column.
@@ -136,6 +136,7 @@ Click or tap a card or List row and the task detail panel slides in. The separat
 - Change the status, assign a different agent, or move the task to another plan.
 - Edit the goal, priority, tags, dependencies, due date, and checklist.
 - Press **Start Task** while it is idle, **Retry** after a failure, or **Stop/Clear goal loop** while it runs. Stop and Delete both ask for confirmation.
+- **Restarting and continuing.** **Start Task** on a done task that still owns its run conversation continues that same conversation — the next run picks up where the last one ended, at a new generation, and is judged fresh. A done task whose conversation is gone cannot be started again. **Retry** after a failure works the same way: the failed run's conversation continues, and its paired goal is reactivated so the run can finish normally. A task you stopped shows orange **Cancelled**, keeps its goal active, and restarts into the same conversation once the stop has landed. Starting a task while its stop is still in flight is refused with “retry once the stop has landed” — wait for the stop to finish, then start it again.
 - Press **Open in Chat** to read the run's conversation, once it has run.
 - Read the **Run history**: one row per attempt, its outcome, and a link into that run's chat. Above it sit the latest verdicts on each acceptance criterion, with the evidence behind them — the judge is explained in [goals](goals.md).
 

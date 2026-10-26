@@ -285,7 +285,13 @@ func (te *TaskExecutor) finishRunTurn(
 			reason := "Stopped: " + turnErrorUserText(turnErr)
 			logger.InfoCF("task_executor", "task run: the worker's turn was stopped — ending the task, no attempt used, no restart",
 				map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
-			te.endTaskWithoutAttempt(t, taskSessionID, reason, run)
+			// ADR-093 round 2 (gate CR C2 control): a stop is not an
+			// adjudication. The stopped-by-user disposition rides the SAME
+			// terminal compare-and-swap write (the store accepts a cancel
+			// reason only alongside status=failed), so
+			// GoalStateForTerminalTask keeps the paired goal record ACTIVE
+			// and the failed[stopped_by_user] restart shape is recognised.
+			te.endTaskWithoutAttemptCancel(t, taskSessionID, reason, run, task.CancelReasonStoppedByUser)
 			return runStepEnded, "", ""
 		}
 
@@ -850,9 +856,18 @@ func (te *TaskExecutor) recordRunClaim(
 // goal's outcome line into the run's session exactly once. Ending the goal
 // here instead would bypass that hook and leave no outcome line.
 func (te *TaskExecutor) endTaskWithoutAttempt(t *task.Task, taskSessionID, reason string, run *activeRun) {
+	te.endTaskWithoutAttemptCancel(t, taskSessionID, reason, run, "")
+}
+
+// endTaskWithoutAttemptCancel is endTaskWithoutAttempt carrying an optional
+// CancelReason into the same terminal write (ADR-093 round 2, gate CR C2
+// control): a user-stopped task lands failed+stopped_by_user, which keeps the
+// paired goal record ACTIVE — a stop is not an adjudication — and marks the
+// store's restartable stopped shape.
+func (te *TaskExecutor) endTaskWithoutAttemptCancel(t *task.Task, taskSessionID, reason string, run *activeRun, cancelReason task.CancelReason) {
 	logger.InfoCF("task_executor", "goal: task ended Failed with no attempt used",
 		map[string]any{"task_id": t.ID, "reason": reason})
-	te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, false, reason, run)
+	te.completeTaskWithResultCancel(t, taskSessionID, task.StatusInProgress, false, reason, run, cancelReason)
 }
 
 // holdsRun reports whether the executor currently holds taskID's run.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -44,9 +45,16 @@ func (te *TaskExecutor) boundSessionRetryable(t *task.Task) error {
 		return nil
 	}
 	if _, err := ls.Load(t.SessionID); err != nil {
-		return fmt.Errorf(
-			"task_executor: task %q is bound to session %q whose runtime classification was never persisted "+
-				"(a prior dispatch failed before it could start); Rerun the task", t.ID, t.SessionID)
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return fmt.Errorf(
+				"task_executor: task %q is bound to session %q whose runtime classification was never persisted "+
+					"(a prior dispatch failed before it could start); Rerun the task", t.ID, t.SessionID)
+		}
+		// ADR-093 round 2 (gate SFH SF-1): any OTHER read failure is a storage
+		// fault, not a missing classification — surface it as the typed
+		// bound-session read error so it stays diagnosable, and let the task
+		// keep its status (the restart is admitted once the record reads).
+		return fmt.Errorf("task_executor: read bound session %q: %w", t.SessionID, err)
 	}
 	if t.Status == task.StatusFailed {
 		reason := t.Result

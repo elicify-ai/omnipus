@@ -1555,8 +1555,16 @@ func (tp *taskPatch) launchIfStarted() bool {
 	if tp.req.Status != nil &&
 		tp.updated.Status == task.StatusInProgress &&
 		tp.preUpdateStatus != task.StatusInProgress &&
-		tp.updated.AgentID != "" &&
-		tp.updated.SessionID == "" {
+		tp.updated.AgentID != "" {
+		// ADR-093 round 2 (gate CR C1 / ARCH A1 / PRT F1 / SFH SF-4): the
+		// bound-session continuation dispatches here too — a Start Task on a
+		// task that already owns a conversation (including the authorized
+		// Done-task restart, which the store's done->in_progress carve-out
+		// admits only while the binding exists) continues THAT conversation
+		// (same session, next generation) via StartTaskNow's bound-session
+		// branch, instead of being silently skipped as it was when this guard
+		// required an empty binding. A task with no binding launches a fresh
+		// run exactly as before.
 		// buildLaunchRevertPatch assembles the revert-to-prior-state patch shared
 		// by both failure branches below (nil executor, StartTaskNow error).
 		buildLaunchRevertPatch := func() task.Patch {

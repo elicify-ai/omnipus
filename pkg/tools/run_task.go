@@ -89,8 +89,11 @@ func (t *TaskRunTool) Description() string {
 	return "Start a STANDALONE task now: marks it in_progress and launches its attempt loop (run, " +
 		"judge, retry with steering up to the attempt limit). Returns immediately with the run's " +
 		"session_id — it does not wait for the task to finish; poll the task or inspect the session " +
-		"for the outcome. The task must already have an assigned agent (assign one first). A done " +
-		"task cannot be re-run; a failed one can. A blocked task is rejected — it becomes runnable on " +
+		"for the outcome. The task must already have an assigned agent (assign one first). A failed " +
+		"task can be re-run; a done task is re-run only as a continuation of its own bound " +
+		"conversation (same session, next generation) — a done task with no bound conversation " +
+		"cannot be re-run. While a stop of the task is still in flight the start is refused — wait " +
+		"for the stop to land and retry. A blocked task is rejected — it becomes runnable on " +
 		"its own once its blockers complete. Calling this on an already-running task is a safe no-op " +
 		"returning the existing session. May fail if the global dispatch cap is exhausted — retry " +
 		"shortly. A task belonging to a plan is rejected: call execute_plan on the plan, which drives " +
@@ -153,12 +156,17 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 			taskID, existing.PlanID))
 	}
 
-	// `done` is the one genuinely frozen task status; `failed` is
-	// deliberately re-runnable (mirrors the board's "Play" affordance on a
-	// failed standalone task, and the store's own permissive transition
-	// policy — task.Task's `failed` is NOT terminal, unlike a Plan's).
-	if existing.Status == task.StatusDone {
-		return ErrorResult(fmt.Sprintf("task %q is already done; a completed task cannot be re-run via run_task", taskID))
+	// `done` is frozen EXCEPT for the authorized continuation restart: a done
+	// task that still owns its bound conversation is re-run as a continuation
+	// of that same conversation (ADR-093 round 2 — gate CR C1 / ARCH A1 / PRT
+	// F1 / SFH SF-4; the store's done->in_progress carve-out requires the
+	// binding too). A done task with no conversation left cannot be re-run;
+	// `failed` is deliberately re-runnable (mirrors the board's "Play"
+	// affordance on a failed standalone task, and the store's own permissive
+	// transition policy — task.Task's `failed` is NOT terminal, unlike a
+	// Plan's).
+	if existing.Status == task.StatusDone && existing.SessionID == "" {
+		return ErrorResult(fmt.Sprintf("task %q is already done and has no bound conversation to continue; a completed task cannot be re-run via run_task", taskID))
 	}
 	// `blocked` is a derived side-state (an unmet blocked_by dependency) —
 	// the store itself rejects a direct blocked->in_progress transition

@@ -1196,8 +1196,20 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, bool, error) {
 		// always allowed; done→in_progress is additionally allowed when t's
 		// trigger repeats (see validateTransition's doc comment).
 		repeatingTrigger := su.t.Trigger.IsRepeating()
-		if err := validateTransition(su.t.Status, *su.patch.Status, su.patch.allowBlockedSet, repeatingTrigger); err != nil {
-			return nil, true, err
+		// ADR-093 round 2 (gate CR C1 / ARCH A1 / PRT F1 / SFH SF-4): the one
+		// further done→in_progress carve-out — the authorized restart of a
+		// DONE task that still owns its bound conversation. The restart
+		// continues that same conversation (the executor's bound-session
+		// branch revives it at generation+1), so the transition back to
+		// in_progress MUST keep the binding; a done task with no binding
+		// stays frozen. Evaluated here, beside the repeating carve-out,
+		// because validateTransition's matrix is task-shape-agnostic.
+		boundSessionRestart := su.t.Status == StatusDone &&
+			*su.patch.Status == StatusInProgress && su.t.SessionID != ""
+		if !boundSessionRestart {
+			if err := validateTransition(su.t.Status, *su.patch.Status, su.patch.allowBlockedSet, repeatingTrigger); err != nil {
+				return nil, true, err
+			}
 		}
 		// ADR-052 FR-014/§6.4(b) Stop guarantee backstop: reject
 		// failed[stopped_by_user] -> done unconditionally, even though

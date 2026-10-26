@@ -1242,11 +1242,54 @@ func (te *TaskExecutor) StartTaskNowAs(ctx context.Context, taskID string, initi
 	// One task gets at most one running launch: claim the task's run slot
 	// atomically before anything is launched. A concurrent start finds the slot
 	// taken and gets the running session (or a refusal), never a second launch.
-	if !te.reserveRunSlot(t.ID) {
-		if fresh, rerr := te.store.Get(t.ID); rerr == nil && fresh.SessionID != "" {
+	//
+	// ADR-093 round 2, two gate corrections to the occupied-slot shortcut:
+	//   - (SFH SF-2) a genuinely stopping task's slot is held by its own
+	//     unwinding worker; the start must not answer idempotent success past
+	//     an in-flight stop fence — the visible "retry once the stop has
+	//     landed" refusal is the required answer.
+	//   - (CR C1) an occupied slot whose bound record is already terminal or
+	//     landed-stopped is the PREVIOUS run's unwinding tail, not a live run:
+	//     returning idempotent success there reported a restart that never
+	//     dispatched and never reached the revival seam. The start waits
+	//     (bounded) for the tail to release, then claims and starts for real.
+	//     A LIVE run's record (running/queued, no fence) still returns the
+	//     session immediately — the documented already-running no-op.
+	for {
+		if te.reserveRunSlot(t.ID) {
+			break
+		}
+		fresh, rerr := te.store.Get(t.ID)
+		if rerr != nil || fresh.SessionID == "" {
+			return "", fmt.Errorf("task_executor: StartTaskNow: task %q is already running (or starting)", t.ID)
+		}
+		if te.agentLoop != nil {
+			if fenceErr := te.agentLoop.inboundStopFenceInFlight(fresh.SessionID); fenceErr != nil {
+				return "", fenceErr
+			}
+		}
+		previousRunTail := false
+		if lifecycle := te.getLifecycleStore(); lifecycle != nil {
+			if rec, lerr := lifecycle.Load(fresh.SessionID); lerr == nil &&
+				(rec.Terminal() || rec.State == session.LifecycleStopped) {
+				previousRunTail = true
+			}
+		}
+		if !previousRunTail {
 			return fresh.SessionID, nil
 		}
-		return "", fmt.Errorf("task_executor: StartTaskNow: task %q is already running (or starting)", t.ID)
+		// The previous run's tail: wait (bounded — 5s at 50ms) for it to
+		// release, then claim and start for real. A tail that outlives the
+		// bound is reported visibly, never answered with a fake success.
+		released := false
+		for i := 0; i < 100 && !released; i++ {
+			time.Sleep(50 * time.Millisecond)
+			released = te.reserveRunSlot(t.ID)
+		}
+		if !released {
+			return "", fmt.Errorf("task_executor: StartTaskNow: task %q's previous run has not released its run slot; retry shortly", t.ID)
+		}
+		break
 	}
 	defer te.releaseReservedRunSlot(t.ID)
 	return te.startTaskNowViaLauncherAs(ctx, t, initiatedBy)
@@ -1287,36 +1330,59 @@ func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.T
 		}
 		generation := 1
 		if lifecycle := te.getLifecycleStore(); lifecycle != nil {
-			if rec, err := lifecycle.Load(t.SessionID); err == nil {
-				generation = rec.Generation
-				if te.agentLoop != nil {
-					// ADR-093 amendment 2026-10-23 (case 6): an IN-FLIGHT stop
-					// fence — stop stamped, dying turn not yet exited — still
-					// refuses the restart visibly until the stop lands: that work
-					// WAS in flight at the Stop, so the ruling keeps this refusal.
-					// The task is not failed by it: the visible retry succeeds
-					// once the stop lands.
-					if fenceErr := te.agentLoop.inboundStopFenceInFlight(t.SessionID); fenceErr != nil {
-						return "", fenceErr
+			rec, loadErr := lifecycle.Load(t.SessionID)
+			if loadErr != nil {
+				// ADR-093 round 2 (gate SFH SF-1): a bound session whose record
+				// cannot be read is a visible, typed storage error. Never a
+				// silent fallback to generation 1 — dispatch would then
+				// misreport the fault as a stale generation and persist it as a
+				// permanent task failure — and never a permanent task
+				// disposition here: the fault is the store's, and the restart
+				// is admitted once the record reads again.
+				logger.ErrorCF("agent", "task_executor: could not read the bound session's lifecycle record before restart",
+					map[string]any{"task_id": t.ID, "session_id": t.SessionID, "error": loadErr.Error()})
+				return "", fmt.Errorf("task_executor: read bound session %q: %w", t.SessionID, loadErr)
+			}
+			generation = rec.Generation
+			if te.agentLoop != nil {
+				// ADR-093 amendment 2026-10-23 (case 6): an IN-FLIGHT stop
+				// fence — stop stamped, dying turn not yet exited — still
+				// refuses the restart visibly until the stop lands: that work
+				// WAS in flight at the Stop, so the ruling keeps this refusal.
+				// The task is not failed by it: the visible retry succeeds
+				// once the stop lands.
+				if fenceErr := te.agentLoop.inboundStopFenceInFlight(t.SessionID); fenceErr != nil {
+					return "", fenceErr
+				}
+				// ADR-093 amendment 2026-10-23 (cases 6 and 7): the bound
+				// session is revived BEFORE its re-dispatch, so a leftover
+				// stop marker can never refuse a user-initiated restart. The
+				// same revival mutation the chat resume path uses — a landed
+				// stop clears on the SAME generation, a terminal record
+				// mints the NEXT generation via resumed_from (transcript
+				// continuity kept); no new marker-clearing machinery.
+				if rec.Terminal() || rec.State == session.LifecycleStopped {
+					newGeneration, reviveErr := te.agentLoop.steerCanceller().Revive(ctx, t.SessionID,
+						steer.Principal{Kind: steer.PrincipalKindHuman})
+					if reviveErr != nil {
+						return "", fmt.Errorf("task_executor: StartTaskNow: revive bound session %q: %w", t.SessionID, reviveErr)
 					}
-					// ADR-093 amendment 2026-10-23 (cases 6 and 7): the bound
-					// session is revived BEFORE its re-dispatch, so a leftover
-					// stop marker can never refuse a user-initiated restart. The
-					// same revival mutation the chat resume path uses — a landed
-					// stop clears on the SAME generation, a terminal record
-					// mints the NEXT generation via resumed_from (transcript
-					// continuity kept); no new marker-clearing machinery.
-					if rec.Terminal() || rec.State == session.LifecycleStopped {
-						newGeneration, reviveErr := te.agentLoop.steerCanceller().Revive(ctx, t.SessionID,
-							steer.Principal{Kind: steer.PrincipalKindHuman})
-						if reviveErr != nil {
-							return "", fmt.Errorf("task_executor: StartTaskNow: revive bound session %q: %w", t.SessionID, reviveErr)
-						}
-						// MIN-002: the record must agree with the screen after a
-						// revival, as on every other revival path.
-						te.agentLoop.resetUnifiedMetaStatusActive(t.SessionID)
-						generation = newGeneration
-					}
+					// MIN-002: the record must agree with the screen after a
+					// revival, as on every other revival path.
+					te.agentLoop.resetUnifiedMetaStatusActive(t.SessionID)
+					// ADR-093 round 2 (gate CR C2 / ARCH A2 / SFH SF-3): the
+					// restart reactivates the task's paired goal through the
+					// SAME activation path every fresh run uses — Reactivate
+					// gives a terminal (exhausted/met) record a fresh try
+					// budget, and a goal a user's Stop kept active is left
+					// alone by activateTaskGoal's already-active branch. A
+					// restarted run whose goal stayed terminal could never
+					// finish: goal_claim answers "no active goal". Best-effort,
+					// like every existing caller: the loud report inside names
+					// a broken pairing, and a goal-less task still runs
+					// (GOAL-FR-023 / DEL-18).
+					_ = te.activateTaskGoal(t, t.SessionID)
+					generation = newGeneration
 				}
 			}
 		}
