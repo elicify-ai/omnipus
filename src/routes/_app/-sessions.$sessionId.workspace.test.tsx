@@ -179,6 +179,7 @@ describe('SessionRoute — redirect resolution (workspace vs inline attach)', ()
         expect(mockNavigate).toHaveBeenCalledWith({
           to: '/workspaces/$workspaceId/chat',
           params: { workspaceId: 'ws-1' },
+          search: { open: mockSessionId },
           replace: true,
         })
       })
@@ -206,6 +207,7 @@ describe('SessionRoute — redirect resolution (workspace vs inline attach)', ()
         expect(mockNavigate).toHaveBeenCalledWith({
           to: '/workspaces/$workspaceId/chat',
           params: { workspaceId: 'ws-1' },
+          search: { open: mockSessionId },
           replace: true,
         })
       })
@@ -425,6 +427,7 @@ describe('SessionRoute — sessionByWorkspace handoff contract', () => {
         expect(mockNavigate).toHaveBeenCalledWith({
           to: '/workspaces/$workspaceId/chat',
           params: { workspaceId: 'ws-1' },
+          search: { open: mockSessionId },
           replace: true,
         })
       })
