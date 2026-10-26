@@ -21,6 +21,7 @@ import { GatewayProcess } from './fixtures/gateway-process';
 import { E2E_MODEL } from './fixtures/e2e-model';
 import { assistantMessages, chatInput, userMessages, waitForConnected } from './fixtures/selectors';
 import { openTerminalSession, terminalTranscript } from './fixtures/terminal-outcome-acceptance';
+import { assertSessionHistoryExcludes } from './fixtures/session-history';
 import {
   PARENT_WAKE_HELPER,
   PARENT_WAKE_PARTIAL,
@@ -100,10 +101,15 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
     await chatInput(page).press('Enter');
     await expect(assistantMessages(page).filter({ hasText: 'Launched' })).toHaveCount(1);
     await expect.poll(async () => (await terminalTranscript(page, gw!.baseURL, parent.id)).session.lifecycle_state).toBe('done');
-    await expect.poll(async () => (await terminalTranscript(page, gw!.baseURL, parent.id)).messages
-      .flatMap((message) => message.tool_calls ?? [])
-      .filter((call) => call.tool === 'delegate')
-      .map((call) => call.status), 'the actual delegate call succeeded, not just the scripted launch sentence').toEqual(['success']);
+    await expect.poll(async () => {
+      const detail = await terminalTranscript(page, gw!.baseURL, parent.id);
+      if (detail.history_state.status !== 'available' || detail.messages === undefined) {
+        throw new Error('Expected available parent history with messages before inspecting delegate completion');
+      }
+      return detail.messages.flatMap((message) => message.tool_calls ?? [])
+        .filter((call) => call.tool === 'delegate')
+        .map((call) => call.status);
+    }, 'the actual delegate call succeeded, not just the scripted launch sentence').toEqual(['success']);
     provider.releaseHelper();
 
     await expect(page.getByText(PARENT_WAKE_PARTIAL, { exact: false })).toBeVisible({ timeout: 90_000 });
@@ -111,9 +117,10 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
     expect(provider.failures(), 'scripted provider stayed on the delegate / helper / wake sequence').toEqual([]);
 
     // Browser login replaced gw's cookie session; use the browser's current cookies.
-    const otherMessages = await page.request.get(`${gw.baseURL}/api/v1/sessions/${other.id}/messages`);
-    expect(otherMessages.ok(), await otherMessages.text()).toBe(true);
-    expect(JSON.stringify(await otherMessages.json())).not.toContain(PARENT_WAKE_PARTIAL);
+    // HTTP success/shape/progress checks live in the shared real helper; the
+    // original absence assertion still covers the ENTIRE retained history.
+    const otherMessages = await assertSessionHistoryExcludes(page, gw.baseURL, other.id, PARENT_WAKE_PARTIAL);
+    expect(JSON.stringify(otherMessages)).not.toContain(PARENT_WAKE_PARTIAL);
 
     provider.releaseWake();
     await expect.poll(async () => (await terminalTranscript(page, gw!.baseURL, parent.id)).session.lifecycle_state).toBe('done');

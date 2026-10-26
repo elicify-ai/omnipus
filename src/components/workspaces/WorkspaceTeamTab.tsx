@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Graph, ListBullets, Plus, UsersThree } from '@phosphor-icons/react'
-import { fetchAgents, fetchWorkspaceDelegation, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
+import { fetchAgents, fetchWorkspaceDelegation, workspacesQueryKeys } from '@/lib/api'
 import { useOpenOmnipus } from '@/hooks/useOpenOmnipus'
 import { useUiStore } from '@/store/ui'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -18,6 +18,7 @@ import { AddAgentPicker, type PickerListState } from './team/AddAgentPicker'
 import { TeamGraphView } from './team/TeamGraphView'
 import { TeamListView, type TeamListLoad } from './team/TeamListView'
 import { useTeamMembership } from './team/useTeamMembership'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 // ── Team tab (omnipus-system-agent FR-102–FR-104, FR-109, FR-111, FR-112;
 // F:D20, F:D21; ADR-20261011 OSA-10 U6/U7) ───────────────────────────────────
@@ -60,8 +61,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     enabled: !!workspace.id,
   })
   const workspacesQuery = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
 

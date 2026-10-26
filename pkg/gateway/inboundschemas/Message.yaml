@@ -23,6 +23,17 @@ properties:
     type: string
     description: Unique message identifier.
     example: "msg_01HXYZ"
+  history_position:
+    type: string
+    readOnly: true
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: >
+      Same-session occurrence fingerprint (chat history paging D2), present on every
+      paged entry. Preserves the original recorded id separately. Stable across
+      appends/restarts and reconstruction of unchanged final canonical bytes;
+      opaque, not a live sequence, model ordinal, authorization grant or disk address.
   client_message_id:
     type: string
     minLength: 1
@@ -77,6 +88,7 @@ properties:
       - turn_canceled
       - judge_verdict
       - context_window_notice
+      - provider_fallback
     description: >
       Entry classification. Absent or empty means "message" (backwards compatible).
       "compaction" entries summarize pruned context; "system" entries are internal
@@ -91,6 +103,14 @@ properties:
       their `context_window_notice` payload; live and replay carry the same
       payload as ContextWindowNoticeFrame.notice with the original entry id,
       timestamp, agent_id and turn_id.
+      "provider_fallback" entries (chat-history paging spec D10 PF=A) are a
+      persisted provider-fallback note written by the real fallback chain after
+      its assistant answer: system-role system information with `content` equal
+      to the saved note text verbatim and the optional `model` /
+      `unavailable_model` / `unavailable_code` facts recorded at the time. The
+      same note replays as a `replay_provider_fallback` ProviderFallbackNote and
+      was announced live by the separate provider_fallback frame; a valid note
+      must never be degraded to the malformed-item placeholder.
     example: "message"
   view_membership:
     type: string
@@ -251,11 +271,26 @@ properties:
     type: string
     description: >
       Identifier of the model that produced this assistant turn (per-turn
-      record). Present on assistant entries only. Absent on legacy turns
-      recorded before the per-turn model field was added — those entries do
-      not display any model info in the UI (no placeholder). Empty string
-      is treated the same as absent for UI display.
+      record). Present on assistant entries, and on a provider_fallback note
+      it is the fallback model that actually answered (ProviderFallbackNote's
+      answered_model). Absent on legacy turns recorded before the per-turn
+      model field was added — those entries do not display any model info in
+      the UI (no placeholder). Empty string is treated the same as absent for
+      UI display.
     example: "z-ai/glm-5.2"
+  unavailable_model:
+    type: string
+    readOnly: true
+    minLength: 1
+    maxLength: 256
+    description: Recorded unavailable primary model on a provider_fallback note; omitted when unknown.
+  unavailable_code:
+    type: string
+    readOnly: true
+    enum:
+      - rate_limited
+      - model_retired
+    description: Recorded fallback condition; model_retired controls the existing model-settings hint.
   verdict:
     $ref: './JudgeVerdict.yaml'
   context_window_notice:
@@ -320,6 +355,15 @@ properties:
     $ref: './SubagentMessageFrame.yaml'
   subagent_end:
     $ref: './SubagentEndFrame.yaml'
+  terminal_outcome:
+    type: boolean
+    description: >
+      Present and true only on an assistant entry that is a turn's distinct
+      terminal outcome sentence, separate from its preceding narration. Same
+      value as ReplayMessageFrame.terminal_outcome; historical hydration must not
+      merge this entry into the preceding same-turn assistant message. Absent on
+      other entries, including older entries without this recorded field.
+    example: true
   room_ref:
     $ref: './RoomRef.yaml'
     description: >

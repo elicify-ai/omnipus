@@ -1,6 +1,7 @@
 // session.ts: Empty session construction and normalized message-array mutation
 
 import { useUiStore } from '@/store/ui'
+import { emptyHistoryState } from './history-state'
 import type { ToolCall } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { MAX_MESSAGES_PER_SESSION } from './messages'
@@ -9,6 +10,8 @@ import type { ChatMessage, PositionedToolCall, SessionChatState } from './types'
 
 export function emptySessionState(): SessionChatState {
   return {
+    history: emptyHistoryState(),
+    historyNeedsSnapshot: false,
     messagesById: {},
     messageOrder: [],
     trimmedCount: 0,
@@ -19,7 +22,7 @@ export function emptySessionState(): SessionChatState {
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: null,
-    sessionTokens: 0,
+    sessionTokens: undefined,
     sessionCost: 0,
     rateLimitEvent: null,
     providerRetryEvent: null,
@@ -277,7 +280,7 @@ export function applyMessageArray(
   let toolCallOwnerMessageIdPatch: Record<string, string> = { ...bucket.toolCallOwnerMessageId }
   let spanBySpanIdPatch: typeof bucket.spanBySpanId = { ...(bucket.spanBySpanId ?? {}) }
 
-  if (msgs.length > MAX_MESSAGES_PER_SESSION) {
+  if (msgs.length > MAX_MESSAGES_PER_SESSION && bucket.history.viewMode !== 'historical') {
     const evictCount = msgs.length - MAX_MESSAGES_PER_SESSION
     const evicted = msgs.slice(0, evictCount)
     finalMsgs = msgs.slice(evictCount)

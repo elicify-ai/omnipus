@@ -14,6 +14,11 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { fetchSessionMessages } from '@/lib/api'
 import type { Message } from '@/lib/api'
+import type { Message as WireMessage, SessionHistoryResponse } from '@/lib/api/generated/openapi-types'
+import { parseFrameSafe } from '@/lib/ws'
+import { expectValidPage, page, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
+import { fixtureHistoryPosition } from '../../../tests/chat-history-paging/legacy-wire'
+import { json, Network } from '../../../tests/l1-room-ui/harness'
 import { queryClient } from '@/lib/queryClient'
 import { ApiError } from '@/lib/api-error'
 import { __resetFinishedTurnIdsForTests } from '@/store/chat/frames'
@@ -25,16 +30,20 @@ vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
   Link: ({ children }: { children: ReactNode }) => children,
 }))
-vi.mock('@/lib/api', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/lib/api')>(),
-  fetchAgents: vi.fn().mockResolvedValue([]),
-  fetchSessionMessages: vi.fn().mockResolvedValue([]),
-  fetchAboutInfo: vi.fn().mockResolvedValue({}),
-  fetchProviders: vi.fn().mockResolvedValue([]),
-  fetchCommands: vi.fn().mockResolvedValue([]),
-  fetchSkills: vi.fn().mockResolvedValue([]),
-  fetchWorkspaces: vi.fn().mockResolvedValue([]),
-}))
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchAgents: vi.fn().mockResolvedValue([]),
+    // Call-through observer: page fixtures cross the real generated adapter.
+    fetchSessionMessages: vi.fn(actual.fetchSessionMessages),
+    fetchAboutInfo: vi.fn().mockResolvedValue({}),
+    fetchProviders: vi.fn().mockResolvedValue([]),
+    fetchCommands: vi.fn().mockResolvedValue([]),
+    fetchSkills: vi.fn().mockResolvedValue([]),
+    fetchWorkspaces: vi.fn().mockResolvedValue([]),
+  }
+})
 
 import { ChatScreen } from './ChatScreen'
 
@@ -43,8 +52,25 @@ const OTHER = 'working-on-other'
 // not-wire-format: independent Q10 fixture expectations, not gateway types.
 const q10Fixture: { source: string; cases: { name: string; input: string; expected: string; reject: boolean }[] } = JSON.parse(readFileSync(resolve('tests/fixtures/q10-active-form-normalization.json'), 'utf8'))
 let callNumber = 0
+const historyRead = vi.fn<(sessionId: string) => Promise<SessionHistoryResponse>>()
+let network: Network
+
+function workingHistoryPage(sessionId: string, messages: WireMessage[], limit = 100): SessionHistoryResponse {
+  const entries = messages.map(message => ({ ...message, history_position: fixtureHistoryPosition(sessionId, message.id) }))
+  // D4: one narration row plus each unique logical tool, not start + result.
+  const rows = entries.reduce((sum, message) => {
+    const tools = new Set(message.tool_calls?.map(call => call.id) ?? []).size
+    return sum + tools + Number(!!message.content || tools === 0)
+  }, 0)
+  const history = page(entries, { sessionId, rows, info: { limit } })
+  expectValidPage(history, entries.map(source => source.history_position), rows)
+  return history
+}
 
 function feed(frame: ServerFrame) {
+  const parsed = parseFrameSafe(frame)
+  expect(parsed, 'fixture must survive the real generated frame validator').toEqual(frame)
+  if (!parsed) throw new Error('Invalid checklist test frame')
   act(() => useChatStore.getState().handleFrame(frame))
 }
 
@@ -94,12 +120,20 @@ function expectLine(text: string) {
   return line
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+  vi.mocked(fetchSessionMessages).mockReset().mockImplementation(actual.fetchSessionMessages)
   callNumber = 0
   vi.spyOn(Math, 'random').mockReturnValue(0.2)
   __resetFinishedTurnIdsForTests()
   queryClient.clear()
-  vi.mocked(fetchSessionMessages).mockReset().mockResolvedValue([])
+  historyRead.mockReset().mockImplementation(async sessionId => workingHistoryPage(sessionId, []))
+  // Reuse the exact-route harness's generated session/activity/sandbox fixtures
+  // for ChatScreen's ordinary sibling reads; never swallow undeclared reads.
+  network = new Network()
+  for (const sessionId of [SID, OTHER]) {
+    network.respond('GET', `/api/v1/sessions/${sessionId}/messages`, async () => json(await historyRead(sessionId)))
+  }
   useChatStore.setState(useChatStore.getInitialState(), true)
   useSessionStore.setState({ ...useSessionStore.getInitialState(), activeSessionId: SID, activeAgentId: 'mia' }, true)
   useConnectionStore.setState({ ...useConnectionStore.getInitialState(), isConnected: true, liteMode: false }, true)
@@ -123,6 +157,7 @@ afterEach(() => {
   useChatStore.setState(useChatStore.getInitialState(), true)
   useSessionStore.setState(useSessionStore.getInitialState(), true)
   useConnectionStore.setState(useConnectionStore.getInitialState(), true)
+  expect(network.unexpected, 'a rejected optional read must not hide an undeclared network dependency').toEqual([])
 })
 
 describe('chat current todo in the existing status indicator', () => {
@@ -248,18 +283,33 @@ describe('chat current todo in the existing status indicator', () => {
   })
 })
 
-function savedList(turnId: string, text: string, callId: string): Message {
+function savedList(turnId: string, text: string, callId: string): WireMessage {
   return {
-    id: `saved-${callId}`, role: 'assistant', content: '', status: 'done',
-    timestamp: '2026-10-21T12:00:00Z', turnId,
-    tool_calls: [{ id: callId, tool: 'set_todos', status: 'success', params: { outcome: 'Prepare the report', todos: activeItem(text) } }],
+    id: `saved-${callId}`, type: 'message', role: 'assistant', agent_id: 'mia', content: '',
+    timestamp: '2026-10-21T12:00:00Z', turn_id: turnId,
+    tool_calls: [{ id: callId, tool: 'set_todos', status: 'success', content_state: 'full', parameters: { outcome: 'Prepare the report', todos: activeItem(text) }, result: { message: 'Checklist saved' } }],
+  }
+}
+
+function expectedChecklistPage(sessionId: string, turnId: string, text: string, callId: string) {
+  // Independent oracle from generated Message/ToolCall and seam J: metadata
+  // is unchanged; turn_id/parameters are normalized to turnId/params. This
+  // constructs expected data, never calls an adapter or reads its output.
+  return {
+    ...workingHistoryPage(sessionId, [savedList(turnId, text, callId)]),
+    entries: [{
+      id: `saved-${callId}`, role: 'assistant', content: '', status: 'done',
+      timestamp: '2026-10-21T12:00:00Z', agentId: 'mia', turnId,
+      historyPosition: fixtureHistoryPosition(sessionId, `saved-${callId}`),
+      tool_calls: [{ id: callId, tool: 'set_todos', status: 'success', params: { outcome: 'Prepare the report', todos: activeItem(text) }, result: { message: 'Checklist saved' } }],
+    }],
   }
 }
 
 function announceTurn(turnId: string | null, sessionId = SID) {
   feed({
     type: 'session_state', session_id: sessionId, user_id: 'operator', pending_approvals: [],
-    emitted_at: '2026-10-21T12:00:30Z',
+    emitted_at: '2026-10-21T12:00:30Z', history_state: { status: 'available' },
     ...(turnId ? { active_turn: { turn_id: turnId, agent_id: 'mia', started_at: '2026-10-21T12:00:00Z' } } : {}),
   })
 }
@@ -271,32 +321,56 @@ function completeCatchUp(mode: 'incremental' | 'snapshot', sessionId = SID) {
   expect(bucket.cursor?.seq).toBe(40)
 }
 
-function replayList(callId: string, text: string, sessionId = SID) {
-  feed({ type: 'tool_call_start', session_id: sessionId, tool: 'set_todos', call_id: callId, params: { outcome: 'Prepare the report', todos: activeItem(text) } })
-  finishList(callId, sessionId)
+function historyFrames(history: SessionHistoryResponse): ServerFrame[] {
+  return history.entries.flatMap(source => {
+    const history_origin = { position: source.history_position!, entry_id: source.id }
+    const frames: ServerFrame[] = [replay(source, history.session_id)]
+    for (const call of source.tool_calls ?? []) {
+      if (call.status !== 'success') throw new Error('Checklist replay fixture requires a confirmed saved write')
+      frames.push({ type: 'tool_call_start', session_id: history.session_id, tool: call.tool, call_id: call.id, params: call.parameters ?? {}, history_origin })
+      frames.push({ type: 'tool_call_result', session_id: history.session_id, tool: call.tool, call_id: call.id, status: 'success', result: call.result ?? null, history_origin })
+    }
+    return frames
+  })
 }
 
-function snapshotRestore(turnId: string | null, callId: string, text: string, sessionId = SID, narration = true) {
+function beginSnapshot(history: SessionHistoryResponse, turnId: string | null) {
+  const sessionId = history.session_id
   act(() => {
     useChatStore.getState().resetSessionForReplay(sessionId)
     useChatStore.getState().setReplaying(true)
   })
-  feed({ type: 'session_snapshot', session_id: sessionId, seq: 40, boot_id: 'todo-test-boot', reason: 'unknown_position' })
+  feed({ ...snapshot(history), seq: 40, boot_id: 'todo-test-boot' })
   announceTurn(turnId, sessionId)
-  feed({ type: 'replay_message', session_id: sessionId, role: 'assistant', id: 'old-answer', content: 'Finished earlier work', turn_id: 'old-turn' })
-  replayList('old-call', 'Never revive the old item', sessionId)
-  feed({ type: 'replay_message', session_id: sessionId, role: 'user', id: 'new-request', content: 'Continue the report' })
-  if (narration) {
-    feed({ type: 'replay_message', session_id: sessionId, role: 'assistant', id: 'current-narration', content: 'Starting this turn', turn_id: turnId ?? 'completed-turn' })
-  }
-  replayList(callId, text, sessionId)
+  const frames = historyFrames(history)
+  frames.forEach(feed)
+  return frames.length
+}
+
+function snapshotRestore(turnId: string | null, callId: string, text: string, sessionId = SID, narration = true) {
+  // D4: "Each persisted source entry's replayed content/tool/special/media
+  // frame carries `history_origin` naming that actual source occurrence."
+  const history = workingHistoryPage(sessionId, [
+    { ...savedList('old-turn', 'Never revive the old item', 'old-call'), id: 'old-answer', content: 'Finished earlier work' },
+    { id: 'new-request', role: 'user', agent_id: 'mia', content: 'Continue the report', timestamp: '2026-10-21T12:00:00Z' },
+    { ...savedList(turnId ?? 'completed-turn', text, callId), id: narration ? 'current-narration' : `saved-${callId}`, content: narration ? 'Starting this turn' : '' },
+  ])
+  const frames = beginSnapshot(history, turnId)
   expect(screen.queryByTestId('reply-current-todo')).not.toBeInTheDocument()
-  // Actual gateway order: persisted replay terminator, active projection, catch-up complete.
-  feed({ type: 'done', session_id: sessionId, stats: { frames_emitted: 7 } })
-  // The persisted message/call IDs were already replayed, so the gateway's
-  // active projection can legitimately contain no additional text frames.
+  feed({ type: 'done', session_id: sessionId, stats: { frames_emitted: frames } })
   completeCatchUp('snapshot', sessionId)
+  const restored = useChatStore.getState().sessionsById[sessionId]
   expect(useChatStore.getState().sessionsById[sessionId].toolCallOrder).toEqual([])
+  // Replay's tools are staged until COMPLETE, not leaked into the live tool
+  // cache. Keep finishList's status/arguments controls on the committed owners.
+  for (const source of history.entries) {
+    expect(restored.messagesById[source.id].turnId).toBe(source.turn_id)
+    for (const call of source.tool_calls ?? []) {
+      const saved = restored.messagesById[source.id].tool_calls?.find(item => item.id === call.id)
+      expect(saved?.status).toBe(call.status)
+      expect(saved?.params).toEqual(call.parameters)
+    }
+  }
 }
 
 describe('current item recovery and indicator design — round 1', () => {
@@ -304,7 +378,7 @@ describe('current item recovery and indicator design — round 1', () => {
     await renderChat()
     const callId = setList(activeItem('Resume the same item'))
     expectLine('Resume the same item')
-    vi.mocked(fetchSessionMessages).mockResolvedValue([savedList('turn-one', 'Resume the same item', callId)])
+    historyRead.mockImplementation(async sessionId => workingHistoryPage(sessionId, [savedList('turn-one', 'Resume the same item', callId)]))
     act(() => {
       useConnectionStore.setState({ isConnected: false })
       useChatStore.getState().clearStreamingState()
@@ -324,7 +398,7 @@ describe('current item recovery and indicator design — round 1', () => {
     expect(recovered.activeTurnId).toBe('turn-one')
     expect(recovered.isStreaming).toBe(true)
     expect(recovered.toolCallOrder).toEqual([])
-    expect(fetchSessionMessages).toHaveBeenCalledWith(SID)
+    expect(fetchSessionMessages).toHaveBeenCalledWith(SID, { limit: 100 })
     setList(activeItem('New live item after recovery'))
     expectLine('New live item after recovery')
   })
@@ -336,28 +410,28 @@ describe('current item recovery and indicator design — round 1', () => {
     cleanup()
     queryClient.clear()
     useChatStore.setState(useChatStore.getInitialState(), true)
-    vi.mocked(fetchSessionMessages).mockResolvedValue([
+    historyRead.mockImplementation(async sessionId => workingHistoryPage(sessionId, [
       savedList('old-turn', 'Never revive the old item', 'old-call'),
       savedList('reload-turn', 'Current item after reload', 'reload-call'),
-    ])
+    ]))
     await renderChat()
     snapshotRestore('reload-turn', 'reload-call', 'Current item after reload', SID, narration)
     await waitFor(() => expectLine('Current item after reload'))
     expect(useChatStore.getState().sessionsById[SID].activeTurnId).toBe('reload-turn')
-    expect(fetchSessionMessages).toHaveBeenCalledWith(SID)
+    expect(fetchSessionMessages).toHaveBeenCalledWith(SID, { limit: 100 })
   })
 
   it('attaches to another running chat and recovers only that chat\'s active-turn item', async () => {
     await renderChat()
     setList(activeItem('Original chat item'))
     expectLine('Original chat item')
-    vi.mocked(fetchSessionMessages).mockImplementation(async (sessionId) => sessionId === OTHER
+    historyRead.mockImplementation(async sessionId => workingHistoryPage(sessionId, sessionId === OTHER
       ? [savedList('old-turn', 'Never revive the old item', 'old-call'), savedList('attached-turn', 'Attached chat item', 'attached-call')]
-      : [])
+      : []))
     act(() => useSessionStore.getState().setActiveSession(OTHER, 'mia'))
     snapshotRestore('attached-turn', 'attached-call', 'Attached chat item', OTHER, false)
     await waitFor(() => expectLine('Attached chat item'))
-    expect(fetchSessionMessages).toHaveBeenCalledWith(OTHER)
+    expect(fetchSessionMessages).toHaveBeenCalledWith(OTHER, { limit: 100 })
     act(() => useSessionStore.getState().setActiveSession(SID, 'mia'))
     expectLine('Original chat item')
   })
@@ -366,12 +440,12 @@ describe('current item recovery and indicator design — round 1', () => {
     await renderChat()
     setList(activeItem('Keep the original chat item'))
     expectLine('Keep the original chat item')
-    let resolveHistory!: (messages: Message[]) => void
-    const pending = new Promise<Message[]>((resolve) => { resolveHistory = resolve })
-    vi.mocked(fetchSessionMessages).mockImplementation(async (sessionId) => sessionId === OTHER ? pending : [])
+    let resolveHistory!: (messages: WireMessage[]) => void
+    const pending = new Promise<WireMessage[]>((resolve) => { resolveHistory = resolve })
+    historyRead.mockImplementation(async sessionId => workingHistoryPage(sessionId, sessionId === OTHER ? await pending : []))
     act(() => useSessionStore.getState().setActiveSession(OTHER, 'mia'))
     snapshotRestore('late-turn', 'late-call', 'Late other-chat item', OTHER, false)
-    await waitFor(() => expect(fetchSessionMessages).toHaveBeenCalledWith(OTHER))
+    await waitFor(() => expect(fetchSessionMessages).toHaveBeenCalledWith(OTHER, { limit: 100 }))
     await waitFor(() => expect(queryClient.getQueryState(['current-todo-history', OTHER, 'late-turn'])?.fetchStatus).toBe('fetching'))
     act(() => useSessionStore.getState().setActiveSession(SID, 'mia'))
     expectLine('Keep the original chat item')
@@ -383,25 +457,22 @@ describe('current item recovery and indicator design — round 1', () => {
   it('never trusts replay-bubble ownership when REST identifies a tool-only call as an older turn', async () => {
     await renderChat()
     const turnId = 'current-turn-without-checklist'
-    vi.mocked(fetchSessionMessages).mockResolvedValue([
+    const history = workingHistoryPage(SID, [
       savedList('older-tool-only-turn', 'Old tool-only item', 'older-tool-only-call'),
-      { id: 'current-text', role: 'assistant', content: 'Current reply', status: 'done', timestamp: '2026-10-21T12:00:30Z', turnId },
+      { id: 'current-text', role: 'assistant', agent_id: 'mia', content: 'Current reply', timestamp: '2026-10-21T12:00:30Z', turn_id: turnId },
     ])
-    act(() => {
-      useChatStore.getState().resetSessionForReplay(SID)
-      useChatStore.getState().setReplaying(true)
-    })
-    feed({ type: 'session_snapshot', session_id: SID, seq: 40, boot_id: 'todo-test-boot', reason: 'unknown_position' })
-    announceTurn(turnId)
-    replayList('older-tool-only-call', 'Old tool-only item')
-    feed({ type: 'replay_message', session_id: SID, role: 'assistant', id: 'current-text', content: 'Current reply', turn_id: turnId })
-    // Positive control: tool frames lack turn_id, so replay's empty-bubble
-    // coalescing really did group the old call under a current-turn message.
+    historyRead.mockResolvedValue(history)
+    const frames = beginSnapshot(history, turnId)
+    feed({ type: 'done', session_id: SID, stats: { frames_emitted: frames } })
+    completeCatchUp('snapshot')
+    // D4: "A later result still joins its real call/owner, never whichever
+    // row precedes the page edge." The old wrong-turn coalescing control is
+    // replaced by exact source ownership, observed after D7's staged commit.
     const replayed = useChatStore.getState().sessionsById[SID]
     const grouped = replayed.messageOrder.map((id) => replayed.messagesById[id]).find((message) => message.tool_calls?.some((call) => call.id === 'older-tool-only-call'))
-    expect(grouped?.turnId).toBe(turnId)
-    feed({ type: 'done', session_id: SID, stats: { frames_emitted: 3 } })
-    completeCatchUp('snapshot')
+    expect(grouped?.turnId).toBe('older-tool-only-turn')
+    expect(grouped?.id).toBe('saved-older-tool-only-call')
+    expect(grouped?.historyPosition).toBe(fixtureHistoryPosition(SID, 'saved-older-tool-only-call'))
     await waitFor(() => {
       expect(queryClient.getQueryState(['current-todo-history', SID, turnId])?.status).toBe('success')
       expect(queryClient.getQueryState(['current-todo-history', SID, turnId])?.fetchStatus).toBe('idle')
@@ -410,7 +481,7 @@ describe('current item recovery and indicator design — round 1', () => {
   })
 
   it('does not revive a completed turn\'s saved item in a different running turn or from duplicate old frames', async () => {
-    vi.mocked(fetchSessionMessages).mockResolvedValue([savedList('completed-turn', 'Do not revive me', 'completed-call')])
+    historyRead.mockImplementation(async sessionId => workingHistoryPage(sessionId, [savedList('completed-turn', 'Do not revive me', 'completed-call')]))
     await renderChat()
     snapshotRestore(null, 'completed-call', 'Do not revive me')
     expect(screen.queryByTestId('reply-current-todo')).not.toBeInTheDocument()
@@ -423,7 +494,11 @@ describe('current item recovery and indicator design — round 1', () => {
       expect(queryClient.getQueryState(['current-todo-history', SID, 'new-turn-without-todos'])?.status).toBe('success')
       expect(queryClient.getQueryState(['current-todo-history', SID, 'new-turn-without-todos'])?.fetchStatus).toBe('idle')
     })
-    expect(queryClient.getQueryData(['current-todo-history', SID, 'new-turn-without-todos'])).toEqual([savedList('completed-turn', 'Do not revive me', 'completed-call')])
+    // D15 / lead ruling A: preserve the original raw-history oracle at the
+    // real adapter boundary; the private recovery cache is not a transcript.
+    await expect(vi.mocked(fetchSessionMessages).mock.results.at(-1)?.value).resolves.toEqual(
+      expectedChecklistPage(SID, 'completed-turn', 'Do not revive me', 'completed-call'),
+    )
     expect(useChatStore.getState().sessionsById[SID].activeTurnId).toBe('new-turn-without-todos')
     expect(useChatStore.getState().sessionsById[SID].toolCalls['completed-call']).toBeUndefined()
     expect(screen.queryByTestId('reply-current-todo')).not.toBeInTheDocument()
@@ -525,16 +600,23 @@ describe('checklist recovery error isolation — round 2', () => {
   it('uses fallback after a recovery refetch fails even when that optional cache retains an older item', async () => {
     await loadUsableChat()
     const history = [savedList('turn-one', 'Previously recovered form', 'previous-recovery')]
-    vi.mocked(fetchSessionMessages).mockResolvedValue(history)
+    historyRead.mockImplementation(async sessionId => workingHistoryPage(sessionId, history))
     announceTurn('turn-one')
     await waitFor(() => expectLine('Previously recovered form'))
     expect(useChatStore.getState().sessionsById[SID].toolCallOrder).toEqual([])
     const key = ['current-todo-history', SID, 'turn-one']
+    // D15 / lead ruling A: exact public data plus a before/after cache
+    // invariant, never an expected value copied from the private cache shape.
+    await expect(vi.mocked(fetchSessionMessages).mock.results.at(-1)?.value).resolves.toEqual(
+      expectedChecklistPage(SID, 'turn-one', 'Previously recovered form', 'previous-recovery'),
+    )
+    const successfulCache = queryClient.getQueryData(key)
+    expect(successfulCache, 'positive control: a successful recovery populated its cache').toBeDefined()
     const failure = new Error('Optional recovery refetch failed')
     vi.mocked(fetchSessionMessages).mockRejectedValue(failure)
     await act(async () => { await queryClient.refetchQueries({ queryKey: key, exact: true }) })
     await waitForHistoryFailure(failure)
-    expect(queryClient.getQueryData(key)).toEqual(history)
+    expect(queryClient.getQueryData(key), 'failed refetch retains the identical successful cache object').toBe(successfulCache)
     expect(queryClient.getQueryState(key)?.error).toBe(failure)
     expectLoadedChatUsable()
     expect(screen.getByTestId('reply-status-fallback')).toHaveTextContent('Processing your request…')
@@ -557,6 +639,9 @@ describe('checklist recovery error isolation — round 2', () => {
 
   it('still presents a genuine initial main-history failure instead of swallowing it as an optional read', async () => {
     const failure = new ApiError(403, 'History read forbidden')
+    // D6: "WS remains live-open authority; no parallel full initial REST
+    // read." Exercise the real disconnected initial fallback, not a live WS.
+    act(() => useConnectionStore.setState({ isConnected: false }))
     vi.mocked(fetchSessionMessages).mockRejectedValue(failure)
     await act(async () => {
       render(<QueryClientProvider client={queryClient}><ChatScreen /></QueryClientProvider>)
@@ -564,7 +649,13 @@ describe('checklist recovery error isolation — round 2', () => {
     expect(await screen.findByText('Could not load messages.')).toBeInTheDocument()
     expect(queryClient.getQueryState(['messages', SID])?.error).toBe(failure)
     expect(screen.getByRole('button', { name: /^Retry$/ })).toBeEnabled()
-    expect(screen.queryByTestId('composer-card')).not.toBeInTheDocument()
+    act(() => useConnectionStore.setState({ isConnected: true }))
+    expect(screen.getByText('Could not load messages.')).toBeInTheDocument()
+    expect(queryClient.getQueryState(['messages', SID])?.error).toBe(failure)
+    // D15: "A bad history read replaces only the history slot, not the
+    // whole thread/control shell." The old whole-screen removal is forbidden.
+    expect(screen.getByTestId('composer-card')).toBeInTheDocument()
+    expect(screen.getByTestId('composer-input')).toBeEnabled()
   })
 })
 
@@ -611,13 +702,36 @@ describe('Q10 normalized active-form copy in the rendered chat line', () => {
 
 const loadedHistory: Message[] = [{
   id: 'request', role: 'user', content: 'Prepare the report', status: 'done', timestamp: '2026-10-21T12:00:00Z',
+  historyPosition: fixtureHistoryPosition(SID, 'request'), agentId: 'mia',
 }]
 
+function loadedReader() {
+  const bucket = useChatStore.getState().sessionsById[SID]
+  return bucket.history.readerPositions.map(position => {
+    const source = Object.values(bucket.messagesById).find(message => message.historyPosition === position)
+    if (!source) throw new Error('Loaded history source is missing')
+    const { id, role, content, status, timestamp, historyPosition, agentId } = source
+    return { id, role, content, status, timestamp, historyPosition, agentId }
+  })
+}
+
+function expectedLoadedPage() {
+  // Seam J: metadata stays snake_case; only source payloads are normalized.
+  const history = workingHistoryPage(SID, [{ id: 'request', role: 'user', agent_id: 'mia', content: 'Prepare the report', timestamp: '2026-10-21T12:00:00Z' }], 40)
+  return { ...history, entries: loadedHistory }
+}
+
 async function loadUsableChat() {
-  vi.mocked(fetchSessionMessages).mockResolvedValue(loadedHistory)
+  // D6: "REST supplies bounded initial fallback"; establish that real
+  // disconnected fallback before reconnecting, rather than demanding a
+  // forbidden parallel main-history read while the socket is connected.
+  historyRead.mockImplementation(async sessionId => workingHistoryPage(sessionId, [{ id: 'request', role: 'user', agent_id: 'mia', content: 'Prepare the report', timestamp: '2026-10-21T12:00:00Z' }], 40))
+  act(() => useConnectionStore.setState({ isConnected: false }))
   await renderChat()
   await waitFor(() => expect(queryClient.getQueryState(['messages', SID])?.status).toBe('success'))
-  expect(queryClient.getQueryData(['messages', SID])).toEqual(loadedHistory)
+  expect(queryClient.getQueryData(['messages', SID])).toEqual(expectedLoadedPage())
+  expect(loadedReader()).toEqual(loadedHistory)
+  act(() => useConnectionStore.setState({ isConnected: true }))
   expect(screen.getByText('Starting the report')).toBeInTheDocument()
   expect(screen.getByTestId('stop-btn')).toBeEnabled()
 }
@@ -636,8 +750,11 @@ function expectLoadedChatUsable() {
   expect(screen.getByTestId('stop-btn')).toBeEnabled()
   expect(screen.getByText('Starting the report')).toBeInTheDocument()
   expect(screen.queryByText('Could not load messages.')).not.toBeInTheDocument()
+  // Seam K: the main query retains the complete page, never a bare array.
   expect(queryClient.getQueryState(['messages', SID])?.status).toBe('success')
-  expect(queryClient.getQueryData(['messages', SID])).toEqual(loadedHistory)
+  expect(queryClient.getQueryData(['messages', SID])).toEqual(expectedLoadedPage())
+  expect(useChatStore.getState().sessionsById[SID].history.historyLoaded).toBe(true)
+  expect(loadedReader()).toEqual(loadedHistory)
   expect(useChatStore.getState().sessionsById[SID].isStreaming).toBe(true)
   expect(useChatStore.getState().sessionsById[SID].activeTurnId).toBe('turn-one')
 }

@@ -1700,6 +1700,65 @@ components:
       payload:
         $ref: '#/components/schemas/RoomMetaFrame'
   schemas:
+    HistoryEntryOrigin:
+      title: HistoryEntryOrigin
+      type: object
+      description: >
+        Local ownership of an entry-derived historical replay frame (chat history paging
+        D2/D4). Required by the producer for every frame derived from a selected persisted
+        entry; optional on general frame schemas because live, unsequenced non-history and
+        session-only rehydration copies can have no persisted source. Not a transport cursor,
+        authorization grant or reversible archive address. No frame ordinals or manifest.
+      required:
+        - position
+      additionalProperties: false
+      properties:
+        position:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: Same-session occurrence fingerprint; canonical unpadded base64url SHA-256.
+        entry_id:
+          type: string
+          minLength: 1
+          description: Original recorded entry ID when nonempty and valid; otherwise omitted.
+    SessionHistoryState:
+      title: SessionHistoryState
+      type: object
+      description: >
+        Server history readiness, not proof that this client loaded a page (chat history
+        paging D7a/D10). status=available omits reason and message. status=unavailable
+        requires both reason and a fixed sanitized message. Producers and consumers must
+        reject any other combination. No preparing state or successful empty-history
+        fallback. Current authorized live controls and canonical sends remain independent.
+      required:
+        - status
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum:
+            - available
+            - unavailable
+        reason:
+          type: string
+          enum:
+            - index_missing
+            - index_inconsistent
+            - catchup_limit
+            - storage_error
+            - projection_error
+          description: Present only for unavailable history, after the bounded recovery attempt.
+        message:
+          type: string
+          minLength: 1
+          description: >
+            Required only when unavailable. Fixed sanitized copy, never an underlying cause,
+            path, raw position or query. For index_missing/index_inconsistent/catchup_limit:
+            "Session history is unavailable. Retry after the operator restores its index."
+            Other required storage/projection failures retain the fixed redacted session-storage
+            error behavior in D11. Not a turn-ending ErrorFrame.
     RoomRef:
       title: RoomRef
       description: >
@@ -2829,15 +2888,25 @@ components:
           const: pong
     AttachSessionFrame:
       title: AttachSessionFrame
-      description: >-
-        Client → server request to attach to a session and catch it up to the present.
-        #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor
-        (`since`, removed). Keep in sync by hand with
-        contracts/components/schemas/AttachSessionFrame.yaml.
+      description: >
+        Client → server. Requests the server to attach to a session and catch it up to the
+        present. A snapshot replays a bounded latest page; an authorized history-only
+        failure can instead deliver typed history_state=unavailable and live_only control
+        catch-up, never a successful history snapshot. Authenticate and resolve session
+        syntax/access/existence before validating history_limit, then history_min_rows,
+        before bind/wipe. Keep inbound-validation on/off refusal parity. #823 catch-up
+        redesign: since_seq/boot_id replace the retired timestamp cursor
+        (`since`, removed). The server answers with the full servable incremental journal
+        (session_state, journal entries after since_seq, catch_up_complete) or a bounded
+        latest snapshot (session_snapshot, current session_state, selected historical
+        frames, one replay done, uncovered active projection, catch_up_complete). Held
+        live frames follow complete in order; replay done alone never completes attach.
+        SessionSnapshotFrame explains why a snapshot is selected. A historical reader
+        keeps/revalidates its own interval instead of passively jumping to the new tail.
       type: object
       required:
-      - type
-      - session_id
+        - type
+        - session_id
       additionalProperties: false
       properties:
         type:
@@ -2847,37 +2916,81 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+          description: Session ID to attach to and catch up.
+        history_limit:
+          type: integer
+          minimum: 20
+          maximum: 100
+          default: 40
+          description: >
+            Optional snapshot-only drawn-row target; never cuts a servable incremental
+            journal. Validate after session access and before history_min_rows/bind/wipe.
+            Null, wrong type, fraction, overflow or out-of-range values are refused by
+            the session-scoped ErrorFrame message "history_limit must be an integer from
+            20 to 100", with no successful complete, in both inbound validation modes.
+        history_min_rows:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+          description: >
+            Optional snapshot-only advisory two-screen row floor, from 1 to effective
+            history_limit; default 20. Whole groups/floor override soft page bytes.
+            After a valid history_limit, invalid/null/fraction/overflow/wrong-type values
+            get "history_min_rows must be an integer from 1 to history_limit" before
+            bind/wipe, with no catch_up_complete in either inbound validation mode.
         since_seq:
           type: integer
           format: int64
           minimum: 1
           description: >-
-            #823 catch-up redesign. Highest per-session sequence number the SPA has
-            already applied for this session. Omit for a first load or an unknown
-            cursor — the server then answers with a snapshot.
+            #823 catch-up redesign. Highest per-session sequence number the SPA has already
+            applied for this session. The server serves only frames with a strictly greater
+            seq ("from since_seq + 1"), so re-attaching is idempotent and O(missed window)
+            instead of O(full session history). Works for every session the client knows
+            about, including ones that were not open in the UI during the outage — the client
+            keeps one cursor per session. Omit for a first load or whenever the session's
+            cursor is not known: the server then answers with a bounded latest snapshot
+            (reason unknown_position). When the requested position can no longer be served
+            from the retained journal, it likewise answers with session_snapshot (reason
+            retention_exceeded or cursor_ahead). First open/follow-latest replaces its staged
+            history page on complete; a historical reader preserves/revalidates its own
+            bounded interval separately. Neither policy alters transport cursor semantics.
         boot_id:
           type: string
-          description: >-
-            #823 review finding 7. The gateway boot ID the SPA last saw for this
-            session. A mismatch forces a snapshot (reason boot_mismatch) regardless of
-            since_seq.
+          description: >
+            #823 review finding 7 — the gateway boot ID the SPA last saw for this
+            session (from a prior session_state frame's own boot_id), sent back so
+            the server can tell a genuinely-servable since_seq apart from one that
+            only LOOKS servable because a restarted gateway's counter has not yet
+            caught back up past it. Omit when unknown (a first load, or an older
+            SPA build that predates this field): the server then falls back to
+            since_seq alone, same as before this field existed. When present and it
+            does not match the server's current boot_id, the server answers with a
+            session_snapshot (reason boot_mismatch) regardless of what since_seq
+            says — a numeric position from a previous gateway process carries no
+            meaning against the current one's counter. Keep in sync by hand with
+            contracts/asyncapi.yaml's inline AttachSessionFrame.
         ack_attention:
           type: boolean
           default: false
           description: >
             Optional. True means this attach is an acknowledgement of what was
             shown. It does not choose the bound. Defaults to false. A failed,
-            background, or reconnect attach does not write the seen mark. Keep in sync by hand with
-            contracts/components/schemas/AttachSessionFrame.yaml.
+            background, or reconnect attach does not write the seen mark.
+            Keep in sync by hand with contracts/asyncapi.yaml's inline
+            AttachSessionFrame.
         attention_bound:
           type: integer
           format: int64
           minimum: 0
           description: >
-            Optional integer on the acknowledging attach. The saved
-            outcome/entry order, not a new counter. Absent means do not write
-            the seen mark and do not substitute the current order. Keep in sync by hand with
-            contracts/components/schemas/AttachSessionFrame.yaml.
+            Optional integer on the acknowledging attach. The saved outcome/entry
+            order, not a new counter. When an acknowledgement carries this number,
+            the server advances the one shared seen mark to the lesser of this
+            number and the current saved order (never lowering it). Absent means do
+            not write the seen mark and do not substitute the current order. Keep in sync by hand with contracts/asyncapi.yaml's inline
+            AttachSessionFrame.
     DevicePairingResponseFrame:
       title: DevicePairingResponseFrame
       description: Client → server device pairing decision.
@@ -3077,8 +3190,9 @@ components:
             Keep in sync by hand with contracts/components/schemas/TokenFrame.yaml.
     DoneStats:
       title: DoneStats
-      description: 'Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted,
-        orphan_count, etc.).
+      description: 'Per-turn statistics in a done frame, with an optional absolute session_tokens_total when authoritative
+        usage is available. Omitted session_tokens_total means unknown, never zero. additionalProperties are allowed for
+        replay extras (frames_emitted, orphan_count, etc.).
 
         '
       type: object
@@ -3087,6 +3201,16 @@ components:
         tokens:
           type: number
           minimum: 0
+        session_tokens_total:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: >
+            Authoritative absolute session-wide consumed-token total, with the same
+            meaning as SessionStats.tokens_total. Present on live turn completion when
+            authoritative usage is available; omitted on replay-terminating done frames.
+            Omitted means unknown, never zero. Not a per-turn delta: tokens remains
+            per-turn usage, and frames_emitted remains replay-only diagnostics.
         cost:
           type: number
           minimum: 0
@@ -3765,6 +3889,8 @@ components:
       - params
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: tool_call_start
@@ -4173,6 +4299,8 @@ components:
       - status
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: tool_call_result
@@ -4188,8 +4316,8 @@ components:
           type: string
           minLength: 1
         result:
-          description: 'Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult,
-            MarshalErrorResult, and ToolResultRef are alternative shapes.
+          description: 'Tool return value. Any JSON type or null (null is the contract for error frames and cancelled calls
+            with no admitted result). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes.
 
 
             Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf`
@@ -4287,6 +4415,7 @@ components:
           enum:
           - success
           - error
+          - cancelled
         duration_ms:
           type: integer
         error:
@@ -4319,6 +4448,8 @@ components:
       - task_label
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: subagent_start
@@ -4376,6 +4507,8 @@ components:
       - status
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: subagent_end
@@ -4440,6 +4573,8 @@ components:
         - created_at
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: subagent_message
@@ -4519,6 +4654,8 @@ components:
         - created_at
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: subagent_state
@@ -4713,6 +4850,8 @@ components:
       - role
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         room_ref:
           $ref: '#/components/schemas/RoomRef'
           description: >
@@ -4873,6 +5012,8 @@ components:
       - message
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: replay_error
@@ -5148,6 +5289,8 @@ components:
         - notice
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: context_window_notice
@@ -5259,6 +5402,8 @@ components:
       - message
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: replay_provider_fallback
@@ -5372,6 +5517,8 @@ components:
       - parts
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: media
@@ -5789,6 +5936,8 @@ components:
         - card
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: ask_user_question
@@ -5972,6 +6121,12 @@ components:
       - emitted_at
       additionalProperties: false
       properties:
+        history_state:
+          $ref: '#/components/schemas/SessionHistoryState'
+          description: >
+            Required on attach's session-scoped emit; absent on the unscoped connection-open
+            emit. Describes server readiness, never proof that the client loaded a page.
+            Unavailable history leaves authorized current controls independent.
         secret_requests:
           type: array
           maxItems: 1000
@@ -6010,6 +6165,16 @@ components:
             ADR-082 (review CR3) — the transcript session this snapshot
             describes; absent on the connection-open emit. Keep in sync by
             hand with components/schemas/SessionStateFrame.yaml.
+        session_tokens_total:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: >
+            Authoritative absolute session-wide consumed-token total, with the same
+            meaning as SessionStats.tokens_total. Present when authoritative usage is
+            available on an authorized session-scoped attach, including live_only;
+            omitted on unscoped connection-open state. Omitted means unknown, never zero.
+            Independent of history readiness; not a per-turn delta.
         attention_bound:
           type: integer
           format: int64
@@ -7843,6 +8008,8 @@ components:
         - judge_agent_id
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: judge_verdict
@@ -8004,6 +8171,8 @@ components:
         - text
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: browser_handover_notice
@@ -8080,6 +8249,8 @@ components:
         - message_id
         - helper_event
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: helper_event
@@ -8175,6 +8346,8 @@ components:
         - outcome
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: goal_outcome
@@ -8499,21 +8672,287 @@ components:
           minimum: 1
           maximum: 9007199254740991
 
-    SessionSnapshotFrame:
-      title: SessionSnapshotFrame
-      description: >-
-        Server → client. #823 catch-up redesign. Answers attach_session when since_seq
-        can no longer be served incrementally. The client must replace its history for
-        this session: followed by session_state, a full unsequenced replay, then exactly
-        one catch_up_complete frame whose seq matches this frame's seq. Keep in sync by
-        hand with contracts/components/schemas/SessionSnapshotFrame.yaml.
+    SessionHistoryContext:
+      title: SessionHistoryContext
       type: object
+      description: >
+        Bounded public dependencies of selected history groups (chat history paging D4/D10).
+        Resolve only selected/current relevant spans and duplicate identities, never all
+        session spans. Each optional lifecycle payload is the actual recorded generated
+        public frame, not a fabricated start, running state or success. No competing
+        cancellation/disposition value, private archive mark or copied content store.
       required:
-      - type
-      - session_id
-      - seq
+        - spans
+        - duplicate_ids
       additionalProperties: false
       properties:
+        spans:
+          type: array
+          items:
+            type: object
+            required:
+              - span_id
+            additionalProperties: false
+            properties:
+              span_id:
+                type: string
+                minLength: 1
+              start:
+                $ref: '#/components/schemas/SubagentStartFrame'
+                x-go-type: SubagentStartFrame
+              state:
+                $ref: '#/components/schemas/SubagentStateFrame'
+                x-go-type: SubagentStateFrame
+              message:
+                $ref: '#/components/schemas/SubagentMessageFrame'
+                x-go-type: SubagentMessageFrame
+              end:
+                $ref: '#/components/schemas/SubagentEndFrame'
+                x-go-type: SubagentEndFrame
+              has_run:
+                type: boolean
+                description: Present only when proven by actual persisted lifecycle facts.
+          description: Non-null array of relevant actual span facts; empty when none are needed.
+        duplicate_ids:
+          type: array
+          items:
+            type: object
+            required:
+              - kind
+              - id
+              - canonical_position
+              - occurrence_count
+            additionalProperties: false
+            properties:
+              kind:
+                type: string
+                enum:
+                  - message
+                  - tool
+              id:
+                type: string
+                minLength: 1
+              canonical_position:
+                type: string
+                minLength: 47
+                maxLength: 47
+                pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+              occurrence_count:
+                type: integer
+                minimum: 2
+          description: Non-null selected/current relevant duplicate-ID canonical ownership facts.
+    SessionHistoryPageInfo:
+      title: SessionHistoryPageInfo
+      type: object
+      description: >
+        Shared metadata/context for REST messages, bounded latest session detail and the
+        selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are
+        opaque same-session occurrence selectors, never lexically ordered or live cursors.
+        Cross-field invariants are checked by producers and consumers: min_rows <= limit;
+        source_group_count matches selected groups and is at most 100; first/last positions
+        exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget
+        stop cannot underfill min_rows. No optional absence is serialized as null.
+      required:
+        - mode
+        - limit
+        - min_rows
+        - row_count
+        - source_group_count
+        - soft_byte_budget
+        - projected_bytes
+        - byte_budget_exceeded
+        - stop_reason
+        - retention_generation
+        - context
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum:
+            - latest
+            - older
+            - newer
+            - window_refresh
+          description: window_refresh continuation describes only the requested closed interval.
+        limit:
+          type: integer
+          minimum: 20
+          maximum: 100
+          description: Effective requested drawn-row target, not a frame count; default 40.
+        min_rows:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: >
+            Effective advisory two-screen row floor, at most limit; default 20. Whole
+            groups and this floor take precedence over the soft byte budget. Not proof
+            of viewport geometry or a hard defense against large authenticated requests.
+        row_count:
+          type: integer
+          minimum: 0
+          description: Drawn-row weight; a whole atomic group can exceed the row target or 100.
+        source_group_count:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Number of selected whole source groups, not the number of replay frames.
+        soft_byte_budget:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            Server-owned soft projected-page budget, currently 4194304 bytes (4 MiB).
+            Positive integer, deliberately not a one-value enum or a hard response cap.
+        projected_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            Larger of prepared public REST and historical WS encodings at this cut/context.
+            Excludes diagnostic accounting fields themselves, transport headers and separate
+            live controls/projection. Required projection failure is an error, never an estimate.
+        byte_budget_exceeded:
+          type: boolean
+          description: True iff projected bytes exceed the soft budget; requires budget_override.
+        stop_reason:
+          type: string
+          enum:
+            - row_target
+            - source_cap
+            - clear
+            - end
+            - range_end
+            - byte_budget
+          description: >
+            Actual selection boundary. row_target/source_cap take precedence when their
+            boundary coincides with bytes. True end, closed clear/range or source cap may
+            underfill; bytes alone may not cut below min_rows or split a whole group.
+        budget_override:
+          type: string
+          enum:
+            - height_floor
+            - atomic_group
+          description: Present iff the soft budget was exceeded to keep the floor or an atomic group.
+        first_position:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: First selected occurrence in ascending acceptance order; absent iff empty.
+        last_position:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: Last selected occurrence in ascending acceptance order; absent iff empty.
+        stopped_at_clear:
+          type: boolean
+          description: >
+            Optional indication that selection reached a protected exact clear marker.
+            Earlier retained groups remain reachable only through explicit clear crossing.
+        latest_clear:
+          type: object
+          required:
+            - entry_id
+            - history_position
+          additionalProperties: false
+          properties:
+            entry_id:
+              type: string
+              minLength: 1
+            history_position:
+              type: string
+              minLength: 47
+              maxLength: 47
+              pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: Actual latest clear identity, even when its marker lies outside this page.
+        retention_generation:
+          type: string
+          minLength: 1
+          description: Opaque retained-set generation; changes on actual expiry, not a failed removal.
+        context:
+          $ref: '#/components/schemas/SessionHistoryContext'
+          x-go-type: SessionHistoryContext
+    SessionSnapshotFrame:
+      title: SessionSnapshotFrame
+      description: >
+        Server to client. Bounded latest-page metadata when attach_session cannot serve
+        the requested live position (chat history paging D7/D10). Read the page before
+        announcing replacement. Follow with current session_state, selected entry-derived
+        history/tool/special/media frames carrying local history_origin, one replay done,
+        uncovered active projection, then catch_up_complete(mode=snapshot) at this seq;
+        held live frames follow in sequence order. No second entries array or manifest.
+        First-open/follow-latest clients stage and commit this page once on completion.
+        A historical reader instead keeps its rows, anchor, focus and measurements, stages
+        the page into its separate bounded tail cache, refreshes authoritative controls,
+        and revalidates only its already-held interval after complete. A reason does not
+        authorize a passive jump to latest. A classified history-only failure sends no
+        snapshot/wipe and may complete live_only controls instead. Partial failed control
+        or socket delivery never acknowledges a successful catch-up.
+      type: object
+      required:
+        - type
+        - session_id
+        - seq
+        - has_earlier
+        - has_later
+        - page_info
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_snapshot
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Session whose latest history page and current controls follow.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            Live high-water W at bind/read cut, mirrored on catch_up_complete. Commit
+            only after the full selected-page/current-control catch-up completes; not a
+            history position. Subsequent held live frames continue at seq greater than W.
+        boot_id:
+          type: string
+          description: >
+            Gateway process identity, stored with the successfully completed live cursor;
+            same role as SessionStateFrame.boot_id / AttachSessionFrame.boot_id.
+        has_earlier:
+          type: boolean
+          description: Actual retained earlier groups; a reached closed clear needs explicit crossing.
+        has_later:
+          type: boolean
+          description: Actual eligible retained later groups at this same page cut.
+        next_before:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: Present iff has_earlier, equal to page_info.first_position.
+        next_after:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: Present iff has_later, equal to page_info.last_position.
+        page_info:
+          $ref: '#/components/schemas/SessionHistoryPageInfo'
+          description: Same latest-mode metadata/context/range as the shared REST reader; no entries array.
+        reason:
+          type: string
+          enum:
+            - cursor_ahead
+            - retention_exceeded
+            - unknown_position
+            - boot_mismatch
+          description: >
+            Why snapshot replaces incremental catch-up: cursor_ahead is beyond the hub,
+            retention_exceeded is an unservable retained journal range, unknown_position
+            means no known cursor, boot_mismatch is a different gateway process and wins
+            before ordinary servability checks. None forces a historical reader to latest.
         secret_requests:
           type: array
           maxItems: 1000
@@ -8525,53 +8964,25 @@ components:
             restores its true state. Always an array when present, never null;
             absence of a request is never read as success. Optional: an emit that
             carries no secret-request state omits it.
-        type:
-          type: string
-          const: session_snapshot
-        session_id:
-          type: string
-          minLength: 1
-          maxLength: 255
-        seq:
-          type: integer
-          format: int64
-          minimum: 1
-          description: >-
-            The session's high-water sequence number at snapshot time. Mirrored on the
-            terminal catch_up_complete frame.
-        boot_id:
-          type: string
-          description: The gateway process that produced this snapshot.
-        has_earlier_messages:
-          type: boolean
-          description: >-
-            True when the replay that follows starts at the session's last /clear marker
-            and earlier transcript entries exist before it (cleared context). Absent (or
-            false) when the replay is the whole transcript.
-        reason:
-          type: string
-          enum:
-          - cursor_ahead
-          - retention_exceeded
-          - unknown_position
-          - boot_mismatch
-          description: >-
-            Why a snapshot was sent instead of an incremental catch-up. boot_mismatch is
-            checked first and always wins over the other three reasons.
     CatchUpCompleteFrame:
       title: CatchUpCompleteFrame
-      description: >-
-        Server → client. #823 catch-up redesign. Terminal frame of an attach_session
-        response, sent once, after every frame the catch-up needed (incremental journal
-        tail, or full snapshot replay plus projection) has been enqueued. Frames
-        published live during the attach are held and flushed only after this frame.
-        Keep in sync by hand with contracts/components/schemas/CatchUpCompleteFrame.yaml.
+      description: >
+        Server → client. #823 catch-up redesign. Terminal frame of an attach_session response,
+        sent exactly once, after every frame the catch-up needed to send (the incremental
+        journal tail, selected snapshot-page replay plus projection, or live-only controls)
+        has already been enqueued to
+        this connection. Frames published live while the attach was in progress are held (never
+        dropped) and are flushed to the connection only after this frame, so they always arrive
+        strictly after catch-up in seq order. The client uses this frame to: set its cursor for
+        the session to seq; stop treating incoming frames as catch-up; and, when mode is
+        snapshot, resolve whether the interrupted answer (if any) should show "couldn't be
+        finished · Generate again" (see mode).
       type: object
       required:
-      - type
-      - session_id
-      - seq
-      - mode
+        - type
+        - session_id
+        - seq
+        - mode
       additionalProperties: false
       properties:
         type:
@@ -8581,20 +8992,39 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+          description: Session this catch-up response was for.
         seq:
           type: integer
           format: int64
           minimum: 1
-          description: The session's high-water sequence number this attach was answered at.
+          description: >
+            The session's high-water sequence number at the moment this attach was answered
+            (the same value as the preceding session_snapshot frame's seq on the snapshot path,
+            or the hub's head at bind time on the incremental path). The client's cursor for
+            this session becomes exactly this value.
         boot_id:
           type: string
-          description: The gateway process that answered this attach.
+          description: >
+            The gateway process that answered this attach — same role as
+            SessionStateFrame.boot_id / AttachSessionFrame.boot_id, stored alongside the seeded
+            seq cursor above.
         mode:
           type: string
           enum:
-          - incremental
-          - snapshot
-          description: Which catch-up path produced this response.
+            - incremental
+            - snapshot
+            - live_only
+          description: >
+            incremental delivers the complete servable journal tail, unaffected by history
+            page limits. snapshot completes the selected bounded history page plus current
+            projection, not lifetime history. live_only completes only authorized current
+            controls/projection and the live cursor after an explicit history-only failure:
+            keep cached history out-of-date, never wipe or claim history reconstruction,
+            replayCompletedForSession, history-loaded/restart/unanswered sweep, successful
+            first-send proof or attention seen acknowledgement. A later incremental catch-up
+            while history_state remains unavailable still is not history-loaded proof.
+            No mode completes if state/projection/socket delivery failed. Held live seq>W
+            follows this frame in order. Replay done is not attach completion.
     UserMessageFrame:
       title: UserMessageFrame
       description: >-

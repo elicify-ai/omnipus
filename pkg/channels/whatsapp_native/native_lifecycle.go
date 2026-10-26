@@ -162,10 +162,14 @@ func (c *WhatsAppNativeChannel) disposeNative(resource *nativeLifecycle, store *
 	if replacement.AttemptID != "" {
 		completed, finished = store.FinishReplacement(instance, replacement.AttemptID, replacement.StopGeneration, resource.err)
 	}
-	close(resource.done) // cancellation + known work + final disposal, never just a timeout
+	// The interrupted notice is published BEFORE done releases the Stop caller:
+	// a caller that moves on (Retry, restart) must never overtake it and leave
+	// the chat on the stopping notice. The stopping notice above already runs
+	// on this goroutine before done, so this adds no new lock dependency.
 	if finished {
 		c.emitAttempt(completed.AttemptID, channels.PairingStatusError, "", channels.PairingInterruptedMessage)
 	}
+	close(resource.done) // cancellation + known work + final disposal, never just a timeout
 }
 
 // connectNative is shared by initial pairing, linked starts, reconnect and

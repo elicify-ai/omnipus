@@ -2,7 +2,7 @@ title: ToolCallResultFrame
 description: >
   Server → client. Emitted at the end of a tool execution with the result and
   final status. The SPA updates the corresponding tool call badge from "running"
-  to "success" or "error".
+  to "success", "error", or "cancelled".
 type: object
 required:
   - type
@@ -13,6 +13,9 @@ required:
   - status
 additionalProperties: false
 properties:
+  history_origin:
+    $ref: './HistoryEntryOrigin.yaml'
+    x-go-type: HistoryEntryOrigin
   type:
     type: string
     const: tool_call_result
@@ -33,8 +36,9 @@ properties:
     description: >
       The tool's return value. May be any non-sentinel JSON value (object, array,
       string, number, boolean, or null). null is the documented contract for
-      error-status frames (status="error") — the SPA handles result as unknown
-      and does not crash on null. When the result exceeded 1 MiB the value is a
+      error-status frames (status="error") and cancelled calls with no admitted
+      result — the SPA handles result as unknown and does not crash on null.
+      When the result exceeded 1 MiB the value is a
       TruncatedResult sentinel. When marshaling the result failed the value is a
       MarshalErrorResult sentinel.
 
@@ -69,6 +73,7 @@ properties:
     enum:
       - success
       - error
+      - cancelled
     description: Final execution status. Normalised from empty to "success" by the server.
   duration_ms:
     type: integer
@@ -95,7 +100,8 @@ properties:
       increasing and gap-free within the session, assigned by the gateway's per-session
       hub as the single chokepoint through which every session-scoped frame is published.
       Optional: absent on an unsequenced copy of this frame (for example a broadcast
-      delivered to a tab that is not bound to this session) — the client only advances its
-      per-session cursor for frames that carry seq. The client stores the highest seq it
-      has applied per session and sends it back as since_seq on attach_session; frames at
+      delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is
+      committed only by a completed catch-up (catch_up_complete) and is sent back as
+      since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier
+      sentence here described per-frame cursor advance, which was stale). Frames at
       or below that cursor are ignored, which makes re-delivery idempotent.

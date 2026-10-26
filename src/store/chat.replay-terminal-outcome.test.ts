@@ -13,6 +13,7 @@ import { act } from 'react'
 import { getMessages, useChatStore } from './chat'
 import { WsFrame } from '@/lib/api/generated/ws-schemas'
 import { useSessionStore } from './session'
+import { entry, expectValidPage, page, pos, replay as historyReplay, snapshot } from '../../tests/chat-history-paging/fixtures'
 
 const SID = 'sess-terminal-outcome'
 const TURN = 'turn-1'
@@ -69,8 +70,9 @@ const SYSTEM_NOTICE = {
 
 function applyValidatedFrame(raw: unknown) {
   const frame = WsFrame.parse(raw)
-  if (frame.type !== 'replay_message' && frame.type !== 'session_snapshot' && frame.type !== 'catch_up_complete') {
-    throw new Error('BLOCKED: replay sequence fixture did not produce a replay or snapshot frame')
+  if (frame.type !== 'replay_message' && frame.type !== 'session_snapshot' && frame.type !== 'catch_up_complete'
+    && frame.type !== 'session_state' && frame.type !== 'done') {
+    throw new Error('BLOCKED: replay sequence fixture did not produce a current history-sequence frame')
   }
   act(() => useChatStore.getState().handleFrame(frame))
 }
@@ -81,6 +83,20 @@ function noticeRows() {
 }
 
 const EXPECTED_NOTICE = [{ id: SYSTEM_NOTICE.id, role: 'system', content: SYSTEM_NOTICE.content }]
+
+function historicalNotice() {
+  const source = entry(1, { id: SYSTEM_NOTICE.id, role: 'system', content: SYSTEM_NOTICE.content,
+    agent_id: AGENT, turn_id: TURN })
+  const history = page([source], { sessionId: SID })
+  expectValidPage(history, [pos(1)], 1)
+  applyValidatedFrame({ ...snapshot(history), seq: 5, boot_id: 'bundle2-boot' })
+  applyValidatedFrame({ type: 'session_state', session_id: SID, user_id: 'sequence-reader', pending_approvals: [],
+    emitted_at: '2026-10-01T12:00:00Z', history_state: { status: 'available' } })
+  applyValidatedFrame(historyReplay(source, SID))
+  applyValidatedFrame({ type: 'done', session_id: SID })
+  applyValidatedFrame({ type: 'catch_up_complete', session_id: SID, mode: 'snapshot', seq: 5, boot_id: 'bundle2-boot' })
+}
+
 
 describe('generated ReplayMessageFrame sequence contract', () => {
   it('accepts the minimum positive integer seq', () => {
@@ -112,10 +128,14 @@ describe('system replay notice cursor and overlap', () => {
     applyValidatedFrame({
       type: 'catch_up_complete', session_id: SID, mode: 'incremental', seq: 5, boot_id: 'bundle2-boot',
     })
-    applyValidatedFrame({
-      type: 'session_snapshot', session_id: SID, reason: 'unknown_position', seq: 5, boot_id: 'bundle2-boot',
-    })
+    const history = page([], { sessionId: SID })
+    expectValidPage(history, [], 0)
+    applyValidatedFrame({ ...snapshot(history), seq: 5, boot_id: 'bundle2-boot' })
     expect(useChatStore.getState().sessionsById[SID].cursor).toEqual({ bootId: 'bundle2-boot', seq: 5 })
+    applyValidatedFrame({ type: 'session_state', session_id: SID, user_id: 'sequence-reader', pending_approvals: [],
+      emitted_at: '2026-10-01T12:00:00Z', history_state: { status: 'available' } })
+    applyValidatedFrame({ type: 'done', session_id: SID })
+    applyValidatedFrame({ type: 'catch_up_complete', session_id: SID, mode: 'snapshot', seq: 5, boot_id: 'bundle2-boot' })
   })
 
   it('a numbered notice advances the session cursor and retains one exact entry', () => {
@@ -131,7 +151,7 @@ describe('system replay notice cursor and overlap', () => {
   })
 
   it('snapshot/live same-ID overlap advances before ID dedup and old-seq redelivery never adds a row', () => {
-    applyValidatedFrame(SYSTEM_NOTICE)
+    historicalNotice()
     expect(noticeRows()).toEqual(EXPECTED_NOTICE)
     expect(useChatStore.getState().sessionsById[SID].cursor).toEqual({ bootId: 'bundle2-boot', seq: 5 })
     applyValidatedFrame({ ...SYSTEM_NOTICE, seq: 6 })

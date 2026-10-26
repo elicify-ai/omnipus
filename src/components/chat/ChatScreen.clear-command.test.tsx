@@ -26,6 +26,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import * as React from 'react'
 import { useChatStore } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import type { WsConnection } from '@/lib/ws'
@@ -109,7 +110,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (Array.isArray(key) && key[0] === 'commands' && key[1] === 'web') {
         return { data: serverCommands, isError: false, isLoading: false, refetch: vi.fn() }
       }
-      return { data: [], isError: false, isLoading: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, isLoading: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -122,12 +123,14 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
@@ -150,6 +153,7 @@ function resetStores() {
   act(() => {
     sentFrames = []
     composerText = ''
+    const defaults = emptySessionState()
     // A mid-stream turn: the last message is a streaming assistant bubble,
     // which is what routes Enter through the mid-turn send branch.
     useChatStore.setState((s) => ({
@@ -157,7 +161,7 @@ function resetStores() {
       sessionsById: {
         ...s.sessionsById,
         [SID]: {
-          ...(s.sessionsById ?? {})[SID],
+          ...defaults,
           messagesById: { 'assistant-live': { id: 'assistant-live', role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true } },
           messageOrder: ['assistant-live'],
           isStreaming: true,
@@ -172,6 +176,7 @@ function resetStores() {
       },
       messages: [],
       messagesById: {},
+      history: defaults.history,
       isStreaming: true,
       isReplaying: false,
       replayCompletedForSession: SID,

@@ -1,6 +1,8 @@
 // types.ts: Chat, attachment, subagent-span, rate-limit, and per-session state contracts
 
 import type { Message, ToolCall } from '@/lib/api'
+import type { StoreApi } from 'zustand'
+import type { SessionHistoryQuery, SessionHistoryMetadata, SessionHistoryEntry, HistoryPosition } from '@/lib/api/history-types'
 import type { WsConnection } from '@/lib/ws'
 import type {
   GoalStatusFrame,
@@ -369,26 +371,8 @@ export type ChatMessage = Message & {
    * the de-dup key, there is no separate domain id to carry.
    */
   browserHandoverNoticeId?: string
-  /**
-   * provider-messages spec US-6/FB-1…FB-4 — set ONLY on the synthetic
-   * `role: 'system'` ChatMessage the provider-frames handler inserts for a
-   * `provider_fallback` frame (live) or a `replay_provider_fallback` note
-   * (persisted transcript carrier). Purely a render-time discriminator
-   * (mirrors `goalAckGoalId`/`browserHandoverNoticeId`'s identical role) so
-   * ChatScreen's two system-row renderers can draw the grey event line with
-   * the exact §6 copy. The message id is the transcript entry's own id on
-   * the replay path (stable dedup across replays); on the live path it is
-   * SPA-generated — a reconnect wipes history (session_snapshot) and the
-   * replay carrier re-inserts the persisted note, so no duplicate survives.
-   * Never serialized to the wire — this field is SPA bookkeeping; the note
-   * itself comes off the wire in both directions.
-   */
-  providerFallbackNote?: {
-    /** The exact §6 one-liner — SPA-assembled from the live frame's models, server-assembled on the replay carrier. */
-    message: string
-    /** D12 — true when `unavailable_code` is `model_retired`; adds the pick-a-new-model hint line. */
-    pickNewModelHint?: boolean
-  }
+  // providerFallbackNote is declared once on the API-normalized Message
+  // (src/lib/api/sessions.ts::ProviderFallbackNoteMarker); ChatMessage inherits it.
 }
 
 export interface QueuedOutboundMessage {
@@ -443,6 +427,15 @@ export interface ProviderRetryEventData {
 
 /** All per-session chat state for one concurrent session. */
 export interface SessionChatState {
+  history: SessionHistoryState
+  historyNotice?: string
+  /** Release retains the live cursor, but the next visible attach needs a fresh page. */
+  historyNeedsSnapshot?: boolean
+  /** Body-free source/display aliases and hidden current-tail order, released on leave. */
+  historySourceAliases?: Record<string, string>
+  historyLiveOrder?: string[]
+  /** Private source hydration only: a synthetic tool owner is not yet narration coverage. */
+  historyPendingNarrationId?: string
   // Map-indexed ring buffer. Use getMessages(bucket) to get the ordered array.
   messagesById: Record<string, ChatMessage>
   messageOrder: string[]
@@ -523,15 +516,10 @@ export interface SessionChatState {
    */
   snapshotWasBootMismatch?: boolean
   /**
-   * Founder ruling 2026-10-11 (until #1266): true when this session's chat
-   * view starts at its last /clear marker and earlier transcript entries
-   * exist before it — the cleared context. Read from every carrier the
-   * server sends it on (SessionDetail.has_earlier_messages,
-   * SessionSnapshotFrame.has_earlier_messages, the messages read's
-   * X-Has-Earlier-Messages header) and rendered ONLY as the quiet
-   * "Earlier messages are saved." line above the clear divider
-   * (components/chat/ClearContextDivider.tsx). Never a control, never a
-   * pager — scroll-back of the earlier messages is #1266.
+   * Compatibility display hint for the clear-divider UI, updated with the
+   * committed history projection. Paging authority, source boundaries and
+   * explicit clear-crossing controls belong to the existing history slice;
+   * this display field does not define selectors or request ordering.
    */
   hasEarlierMessages?: boolean
   /**
@@ -554,7 +542,7 @@ export interface SessionChatState {
   restartNoticeDismissed?: boolean
   /** Narrow recovery flag: unknown_position alone does not mean interrupted. */
   recoveredFirstSend?: { clientMessageId: string; attemptGeneration: number; reconciled: boolean }
-  sessionTokens: number
+  sessionTokens: number | undefined
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
   /**
@@ -850,7 +838,48 @@ export function evictSpanIndexEntries<T extends { messageId: string }>(
   return next
 }
 
-export interface ChatStore {
+export type HistoryActionKind = 'older' | 'newer' | 'latest' | 'refresh'
+export type HistoryPageSizing = Required<Pick<SessionHistoryQuery, 'limit' | 'min_rows'>>
+export type SessionHistoryRange = Required<Pick<SessionHistoryQuery, 'window_start' | 'window_end'>>
+export type HistoryRequestState = { status: 'idle' | 'loading' | 'error'; error: string | null; attempt: number }
+export type SessionHistoryState = {
+  viewGeneration: number
+  viewMode: 'latest' | 'historical'
+  serverState: import('@/lib/api/generated/openapi-types').SessionDetail['history_state'] | null
+  historyLoaded: boolean
+  liveControlsReady: boolean
+  pageMetadata: SessionHistoryMetadata | null
+  readerRange: SessionHistoryRange | null
+  readerPositions: HistoryPosition[]
+  tailEntries: SessionHistoryEntry[]
+  openedClearPositions: HistoryPosition[]
+  hasEarlier: boolean | null
+  hasLater: boolean | null
+  olderBoundary: HistoryPosition | null
+  newerBoundary: HistoryPosition | null
+  requests: Record<HistoryActionKind, HistoryRequestState>
+}
+export interface HistorySlice {
+  loadLatestHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  loadOlderHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  loadNewerHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  showEarlierHistory(sessionId: string, clearPosition: HistoryPosition, sizing?: HistoryPageSizing): Promise<void>
+  returnToLatestHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  refreshLoadedHistory(sessionId: string): Promise<void>
+  retryHistory(sessionId: string, action: HistoryActionKind): Promise<void>
+  enterHistoryReading(sessionId: string): void
+  releaseSessionHistory(sessionId: string): void
+}
+export type HistorySliceContext = {
+  get: StoreApi<import('@/store/chat/types').ChatStore>['getState']
+  set: StoreApi<import('@/store/chat/types').ChatStore>['setState']
+  withBucket: (sessionId: string | null, updater: (bucket: import('@/store/chat/types').SessionChatState) => Partial<import('@/store/chat/types').SessionChatState>) => void
+}
+
+export interface ChatStore extends HistorySlice {
+  acceptHistoryFallback(sessionId: string, page: import('@/lib/api/sessions').SessionHistoryPage, generation: number, baseline?: Record<string, ChatMessage>): void
+  history: SessionHistoryState
+  historyNotice?: string
   /** Per-session state buckets keyed by session_id. */
   sessionsById: Record<string, SessionChatState>
 
@@ -915,7 +944,7 @@ export interface ChatStore {
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>
-  sessionTokens: number
+  sessionTokens: number | undefined
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
   /** provider-messages spec §8 — foreground projection of the session's `provider_retry` slot. Optional — see the SessionChatState field's doc comment. */
@@ -1016,12 +1045,10 @@ export interface ChatStore {
   cancelToolCall: (callId: string) => void
 
   updateSessionStats: (tokens: number, cost: number) => void
-  /**
-   * Seed sessionTokens from the persisted total_tokens on a historic session
-   * attach. Only sets the value when the bucket is fresh (sessionTokens === 0)
-   * so live deltas from the `done` frame are never double-counted.
+  /** Merge recorded absolute usage without lowering a newer observation.
+   * Explicit session IDs keep metadata hydration out of unrelated foregrounds.
    */
-  seedSessionTokens: (total: number) => void
+  seedSessionTokens: (total: number | undefined, sessionId?: string) => void
   setRateLimitEvent: (event: RateLimitEventData) => void
   clearRateLimitEvent: () => void
 

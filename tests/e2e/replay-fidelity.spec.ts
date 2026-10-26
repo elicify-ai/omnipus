@@ -19,7 +19,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
-import { test } from './fixtures/console-errors'
+import { test, canonicalHistoryAuthFile } from './fixtures/canonical-history'
+import { seedCanonicalLegacyTranscript } from './fixtures/chat-history'
 import { expectA11yClean } from './fixtures/a11y'
 // No verbose-chat opt-in anywhere in this file: ADR-091 D7/AC-7 makes a
 // delegation visible in the DEFAULT, non-verbose thread (the delegate/spawn
@@ -28,19 +29,24 @@ import { expectA11yClean } from './fixtures/a11y'
 // asserts the default policy directly — see its own comment.
 import { assistantMessages, chatInput, sendButton, waitForConnected } from './fixtures/selectors'
 import { assistantReplyChallenge } from './fixtures/assistant-reply-acceptance'
+import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
+let BASE_URL: string
+let OMNIPUS_HOME: string
+test.beforeEach(async ({ canonicalGateway }) => {
+  BASE_URL = canonicalGateway.baseURL
+  OMNIPUS_HOME = canonicalGateway.homeDir
+  AUTH_FILE = canonicalHistoryAuthFile()
+})
 
 /**
  * OMNIPUS_HOME: the gateway's workspace directory.
  * Must match the directory the running gateway is using.
  * Override via env var when the gateway is started with a non-default home.
  */
-const OMNIPUS_HOME =
-  process.env.OMNIPUS_HOME ||
-  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test')
+// OMNIPUS_HOME is bound above to this test's real, privately owned gateway.
 
 // ── Transcript helpers ─────────────────────────────────────────────────────────
 
@@ -70,17 +76,8 @@ interface TranscriptEntry {
  * The gateway reads this file when the browser sends attach_session.
  * Precondition: the session directory must already exist (created via POST /api/v1/sessions).
  */
-function seedTranscript(sessionId: string, entries: TranscriptEntry[]): void {
-  const sessionDir = path.join(OMNIPUS_HOME, 'sessions', sessionId)
-  if (!fs.existsSync(sessionDir)) {
-    throw new Error(
-      `Session directory does not exist: ${sessionDir}. ` +
-        'Create the session via REST API before seeding the transcript.',
-    )
-  }
-  const transcriptPath = path.join(sessionDir, 'transcript.jsonl')
-  const lines = entries.map((e) => JSON.stringify({ view_membership: 'chat', ...e })).join('\n') + '\n'
-  fs.writeFileSync(transcriptPath, lines, { encoding: 'utf-8' })
+async function seedTranscript(sessionId: string, entries: TranscriptEntry[]): Promise<void> {
+  await seedCanonicalLegacyTranscript(sessionId, entries)
 }
 
 /**
@@ -91,12 +88,7 @@ function seedTranscript(sessionId: string, entries: TranscriptEntry[]): void {
 function getStoredAuthToken(): string | null {
   // Respect OMNIPUS_AUTH_FILE env var set by isolated test runs (e.g. port 6062)
   // to avoid using a token minted for a different gateway instance.
-  const authFile = process.env.OMNIPUS_AUTH_FILE
-    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-    : path.join(
-        path.dirname(new URL(import.meta.url).pathname),
-        'fixtures/.auth/admin.json',
-      )
+  const authFile = canonicalHistoryAuthFile()
   if (!fs.existsSync(authFile)) {
     return null
   }
@@ -278,7 +270,7 @@ test(
     // Seed the transcript: one user message + one assistant reply with two tool calls.
     // Dataset D1 (shell tool) + D4 (agent_id="ray") from spec.
     // Traces to: BDD Scenario 1 (tool-call fidelity), Scenario 3 (agent label).
-    seedTranscript(sessionId, [
+    await seedTranscript(sessionId, [
       {
         id: 'entry-user-1',
         role: 'user',
@@ -394,13 +386,13 @@ test(
  * and replay silently falls back to the reconstructed, child_session_id-less
  * frame instead.
  */
-function appendPersistedSubagentStart(
+async function appendPersistedSubagentStart(
   parentSessionId: string,
   childSessionId: string,
   callId: string,
   taskLabel: string,
   agentId: string,
-): void {
+): Promise<void> {
   const sessionDir = path.join(OMNIPUS_HOME, 'sessions', parentSessionId)
   if (!fs.existsSync(sessionDir)) {
     throw new Error(
@@ -444,11 +436,7 @@ function appendPersistedSubagentStart(
       },
     },
   ]
-  fs.appendFileSync(
-    path.join(sessionDir, 'transcript.jsonl'),
-    entries.map((e) => JSON.stringify({ view_membership: 'chat', ...e })).join('\n') + '\n',
-    { encoding: 'utf-8' },
-  )
+  await seedCanonicalLegacyTranscript(parentSessionId, entries, true)
 }
 
 /**
@@ -599,7 +587,7 @@ test(
     // frames are withheld by `stillActive` anyway, and recording a "success"
     // for a call the transcript also says is still open would be an
     // incoherent fixture.
-    seedTranscript(sessionId, [
+    await seedTranscript(sessionId, [
       {
         id: 'entry-asst-spawn',
         role: 'assistant',
@@ -634,7 +622,7 @@ test(
         ],
       },
     ])
-    appendPersistedSubagentStart(sessionId, childSessionId, callId, taskLabel, 'mia')
+    await appendPersistedSubagentStart(sessionId, childSessionId, callId, taskLabel, 'mia')
 
     await openSession(page, sessionId)
     await waitForReplayDone(page)
@@ -666,12 +654,7 @@ test(
 
 // Respect OMNIPUS_AUTH_FILE env var set by isolated test runs (e.g. port 6062)
 // to avoid using a token minted for a different gateway instance.
-const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
-  ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-  : path.join(
-      path.dirname(new URL(import.meta.url).pathname),
-      'fixtures/.auth/admin.json',
-    )
+let AUTH_FILE: string
 
 test(
   '(c) attach-during-active-turn: second browser context receives all events without loss',
@@ -717,72 +700,91 @@ test(
       `At the very end of your reply, on its own line: ${challenge.instruction}`
     expect(prompt, 'the expected assistant nonce must not appear in the user prompt').not.toContain(nonce)
 
-    const input = chatInput(page)
-    await expect(input).toBeEnabled({ timeout: 10_000 })
-    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
-    // see waitForConnected's doc comment in fixtures/selectors.ts).
-    await waitForConnected(page, { timeout: 10_000 })
-    await input.fill(prompt)
-    const sendStart = Date.now()
-    await input.press('Enter')
-
-    // The user message should appear immediately (echoed by WS).
-    const userMsgs = page.locator('[data-message-id].flex-row-reverse')
-    await expect(userMsgs).toHaveCount(1, { timeout: 5_000 })
-
-    // ── Step 3: while the agent is still streaming, attach page2 ──
-    // Wait ~800ms after send so we are reliably mid-stream but well before
-    // the assistant message completes.
-    await page.waitForTimeout(800)
+    // Cold boot is not part of the active-turn attach experiment. Prepare
+    // the real second viewer first, and gate its existing ROOT banner check
+    // on that root's actual addressed completion. The unfiled target route
+    // intentionally has no banner; its own completion is required below.
     const context2 = await browser.newContext({ storageState: AUTH_FILE, baseURL: BASE_URL })
     const page2 = await context2.newPage()
-
+    const readiness2 = observeAddressedAttachReadiness(page2)
+    const rootReady = readiness2.arm()
     try {
-      await page2.goto('/')
-      await expect(page2.getByRole('banner')).toBeVisible({ timeout: 15_000 })
-      await waitForWsConnected(page2)
-      await openSession(page2, sessionId)
-      await waitForReplayDone(page2)
+      try {
+        await page2.goto('/')
+        const rootProof = await rootReady.wait()
+        await expect(page2.locator(`[data-active-session-id="${rootProof.completion.session_id}"]`),
+          'PREREQUISITE: second viewer renders the session whose root attach actually completed').toBeVisible()
+        await expect(page2.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+        await waitForWsConnected(page2)
+      } finally { rootReady.cancel() }
 
-      // page2 must replay the user message that page1 sent before page2 attached.
-      const userMsgs2 = page2.locator('[data-message-id].flex-row-reverse')
-      await expect(userMsgs2).toHaveCount(1, { timeout: 10_000 })
+      const input = chatInput(page)
+      await expect(input).toBeEnabled({ timeout: 10_000 })
+      // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+      // see waitForConnected's doc comment in fixtures/selectors.ts).
+      await waitForConnected(page, { timeout: 10_000 })
+      await input.fill(prompt)
+      const sendStart = Date.now()
+      await input.press('Enter')
 
-      // ── Step 4: both contexts receive the final assistant message ──
-      // Only completed assistant rows may satisfy the delivery oracle; user
-      // input, a running placeholder or a system cancellation notice cannot.
-      // Page2 first — it attached mid-turn so it's the harder case (FR-I-009).
-      const reply1 = assistantMessages(page).filter({ hasText: nonce })
-      const reply2 = assistantMessages(page2).filter({ hasText: nonce })
-      await expect(reply2, 'second context receives one completed assistant answer').toHaveCount(1, { timeout: 60_000 })
-      await expect(reply1, 'first context receives the same completed assistant answer').toHaveCount(1, { timeout: 60_000 })
-      await expect(page2.locator('body')).toContainText(nonce, { timeout: 60_000 })
-      await expect(page.locator('body')).toContainText(nonce, { timeout: 60_000 })
+      // The user message should appear immediately (echoed by WS).
+      const userMsgs = page.locator('[data-message-id].flex-row-reverse')
+      await expect(userMsgs).toHaveCount(1, { timeout: 5_000 })
 
-      // page2 attached AFTER the turn started, so the only way it could see the
-      // assistant message is if live forwarding picked up where replay left off
-      // — that's what FR-I-009 demands and what we're verifying. We require at
-      // least 1.5s of wall-clock since send to confirm we observed a real
-      // mid-turn attach (the 800ms attach delay + page2 setup means anything
-      // above that floor proves page2 attached *after* the user message but
-      // *during* the turn). The previous 3s floor failed when GLM-5v-turbo
-      // streamed the 600-word reply in <3s, even though the mid-turn-attach
-      // contract was still satisfied (page2 attached at 800ms, well within
-      // the streaming window).
-      const wallClock = Date.now() - sendStart
-      expect(wallClock).toBeGreaterThanOrEqual(1_500)
+      // ── Step 3: while the agent is still streaming, attach page2 ──
+      // Wait ~800ms after send so we are reliably mid-stream but well before
+      // the assistant message completes.
+      await page.waitForTimeout(800)
+      const targetReady = readiness2.arm(sessionId)
+      try {
+        const [, targetProof] = await Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()])
+        expect(targetProof.request.session_id, 'the warm second viewer actually requests the target session').toBe(sessionId)
+        expect(targetProof.completion.session_id, 'the real target catch-up completes before replay assertions').toBe(sessionId)
+        await expect(page2.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({ timeout: 15_000 })
+        await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
+        await waitForReplayDone(page2)
 
-      // Final-state agreement: both browser contexts must show the same nonce.
-      // The body-text contains check above proved both saw it; belt-and-suspenders
-      // verifies the matched bubble text agrees character-for-character.
-      const text1 = await reply1.locator(`text=${nonce}`).first().innerText()
-      const text2 = await reply2.locator(`text=${nonce}`).first().innerText()
-      expect(text2.trim()).toBe(text1.trim())
-      const replyId = await reply1.getAttribute('data-message-id')
-      expect(replyId, 'the assistant answer has a stable entry identity').toEqual(expect.any(String))
-      expect(replyId).not.toBe('')
-      expect(await reply2.getAttribute('data-message-id'), 'both contexts render the SAME assistant entry').toBe(replyId)
+        // page2 must replay the user message that page1 sent before page2 attached.
+        const userMsgs2 = page2.locator('[data-message-id].flex-row-reverse')
+        await expect(userMsgs2).toHaveCount(1, { timeout: 10_000 })
+
+        // ── Step 4: both contexts receive the final assistant message ──
+        // Only completed assistant rows may satisfy the delivery oracle; user
+        // input, a running placeholder or a system cancellation notice cannot.
+        // Page2 first — it attached mid-turn so it's the harder case (FR-I-009).
+        const reply1 = assistantMessages(page).filter({ hasText: nonce })
+        const reply2 = assistantMessages(page2).filter({ hasText: nonce })
+        await expect(reply2, 'second context receives one completed assistant answer').toHaveCount(1, { timeout: 60_000 })
+        await expect(reply1, 'first context receives the same completed assistant answer').toHaveCount(1, { timeout: 60_000 })
+        await expect(page2.locator('body')).toContainText(nonce, { timeout: 60_000 })
+        await expect(page.locator('body')).toContainText(nonce, { timeout: 60_000 })
+
+        // page2 attached AFTER the turn started, so the only way it could see the
+        // assistant message is if live forwarding picked up where replay left off
+        // — that's what FR-I-009 demands and what we're verifying. We require at
+        // least 1.5s of wall-clock since send to confirm we observed a real
+        // mid-turn attach (the 800ms attach delay + page2 setup means anything
+        // above that floor proves page2 attached *after* the user message but
+        // *during* the turn). The previous 3s floor failed when GLM-5v-turbo
+        // streamed the 600-word reply in <3s, even though the mid-turn-attach
+        // contract was still satisfied (page2 attached at 800ms, well within
+        // the streaming window).
+        const wallClock = Date.now() - sendStart
+        expect(wallClock).toBeGreaterThanOrEqual(1_500)
+
+        // Final-state agreement: both browser contexts must show the same nonce.
+        // The body-text contains check above proved both saw it; belt-and-suspenders
+        // verifies the matched bubble text agrees character-for-character.
+        const text1 = await reply1.locator(`text=${nonce}`).first().innerText()
+        const text2 = await reply2.locator(`text=${nonce}`).first().innerText()
+        expect(text2.trim()).toBe(text1.trim())
+        const replyId = await reply1.getAttribute('data-message-id')
+        expect(replyId, 'the assistant answer has a stable entry identity').toEqual(expect.any(String))
+        expect(replyId).not.toBe('')
+        expect(await reply2.getAttribute('data-message-id'), 'both contexts render the SAME assistant entry').toBe(replyId)
+      } finally { targetReady.cancel() }
     } finally {
+      readiness2.dispose()
       await context2.close()
     }
   },
@@ -818,7 +820,7 @@ test(
 
     // Seed a simple multi-entry transcript (no tool calls — validates text replay + continuation).
     // Traces to: BDD Scenario 8 (replay → live continuation), Scenario 4 (user message replay).
-    seedTranscript(sessionId, [
+    await seedTranscript(sessionId, [
       {
         id: 'entry-user-d1',
         role: 'user',
@@ -939,7 +941,7 @@ test(
     // This mirrors the JSONL that the gateway writes during a real tool turn
     // (ADR-036 renamed exec/workspace_shell/workspace_shell_bg to the unified
     // "bash" tool; a fresh session's transcript now records tool: "bash").
-    seedTranscript(sessionId, [
+    await seedTranscript(sessionId, [
       {
         id: 'entry-user-f1',
         role: 'user',
@@ -1071,7 +1073,13 @@ test(
         ],
       })
     }
-    seedTranscript(sessionId, entries)
+    await seedTranscript(sessionId, entries)
+    // Offline canonical seeding deliberately leaves about:blank. Install the
+    // observer only after restoring a real connected app document, otherwise
+    // the next full navigation discards it and cannot observe any transition.
+    await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+    await waitForWsConnected(page)
 
     // ── Navigate to the session and immediately check send button state ──
     // Traces to: Scenario 10 When "user types in the input → send button is disabled".
@@ -1146,7 +1154,8 @@ test(
     // addressed directly via the app's deep-link route (see openSession's
     // doc comment above for why this is the current real seam, not a
     // workaround).
-    await page.goto(`/#/sessions/${sessionId}`)
+    const navigation = await page.goto(`/#/sessions/${sessionId}`)
+    expect(navigation, 'PREREQUISITE: same-document navigation preserves the already installed replay observer').toBeNull()
 
     // Poll the observer trace from the test side. We accept anything that proves
     // the disabled state was true at least once between click and done. expect.poll

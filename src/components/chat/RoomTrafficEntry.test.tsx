@@ -17,6 +17,7 @@ import userEvent from '@testing-library/user-event'
 import type { Message as WireMessage } from '@/lib/api/generated/openapi-types'
 import type { RoomRef } from '@/lib/api/generated/asyncapi-types'
 import type { WsConnection } from '@/lib/ws'
+import { wireHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
 import { ChatThread } from './ChatThread'
 import {
   connectSocket, json, MAIN_ID, mountAt, Network, NOW, requiredExport,
@@ -102,7 +103,7 @@ describe('K33 carriers go through the real main-chat parser/store/renderer', () 
 
   it.each(['request', 'answer'] as const)('[FR-202/215; K33 REST Message] cold history keeps the %s room reference through the real transform', async (role) => {
     const wire: WireMessage = { id: `main-room-${role}`, role: role === 'request' ? 'user' : 'assistant', content: text, timestamp: NOW, agent_id: 'mia', room_ref: { ...roomRef, role } }
-    net.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json([wire]))
+    net.respond('GET', `/api/v1/sessions/${MAIN_ID}/messages`, () => json(wireHistoryPage(MAIN_ID, [wire], 1)))
     await mountAt(<ChatThread sessionId={MAIN_ID} />)
     await screen.findByTestId('room-traffic-toggle')
     expectCollapsed()

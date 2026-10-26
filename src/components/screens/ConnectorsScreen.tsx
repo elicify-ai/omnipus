@@ -52,6 +52,7 @@ import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { logError } from '@/lib/telemetry'
 import { formatDateTime } from '@/lib/dateFormat'
 import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 const WEBCHAT_ID = 'webchat'
 
@@ -463,8 +464,7 @@ function CreateChannelSheet({
   // section uses (active workspaces for picking; agent must be a non-worker
   // member of the chosen workspace's core team, per ADR-029).
   const { data: workspaces = [] } = useQuery({
-    queryKey: ['workspaces', { status: 'active' }],
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     enabled: open,
   })
   const { data: agents = [] } = useQuery({

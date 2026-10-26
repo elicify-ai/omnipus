@@ -46,6 +46,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
+import { emptySessionState } from './session'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
@@ -54,6 +55,8 @@ import { pendingClearRefetches } from './runtime-state'
 import { useUiStore } from '@/store/ui'
 import type { ServerFrame } from '@/lib/ws'
 import type { ChatMessage } from './types'
+import { clearHistoryPage, wireHistoryPage, type FixtureHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
+import { narrationHistoryPage } from '../../../tests/chat-history-paging/legacy-fixtures'
 import { seedCanonicalSession } from '../../../tests/unit/fixtures/canonical-session'
 
 const requestMock = vi.hoisted(() => vi.fn())
@@ -81,12 +84,12 @@ function rawSystem(id: string, content: string, ts: string): Record<string, unkn
 }
 
 /** The server's post-clear view: the marker first, then the reply. */
-function rawPostClearProjection(n: number): Record<string, unknown>[] {
+function rawPostClearProjection(n: number): FixtureHistoryPage {
   const t = (s: number) => `2026-10-11T00:00:0${s}Z`
-  return [
+  return clearHistoryPage(SID, [
     rawSystem(`srv-clear-marker-${n}`, MARKER_TEXT, t(0)),
     rawAssistant(`srv-a-reply-${n}`, SUCCESS_REPLY, t(1)),
-  ]
+  ], 2)
 }
 
 function localMessage(partial: Partial<ChatMessage> & Pick<ChatMessage, 'id' | 'role' | 'content'>): ChatMessage {
@@ -113,6 +116,7 @@ function seedBucket(messages: ChatMessage[], opts: { isStreaming?: boolean; acti
     sessionsById: {
       ...s.sessionsById,
       [SID]: {
+        ...emptySessionState(),
         ...(s.sessionsById ?? {})[SID],
         messagesById: Object.fromEntries(messages.map((m) => [m.id, m])),
         messageOrder: messages.map((m) => m.id),
@@ -312,10 +316,10 @@ describe('C1 — the /clear row exits on every settle outcome', () => {
     // cannot settle this operation yet. Under the ruling there is NO bound:
     // the row stays queued and every later turn end re-reads, until a wire
     // signal (marker or failed) resolves the operation.
-    requestMock.mockImplementation(async () => [
+    requestMock.mockImplementation(async () => wireHistoryPage(SID, [
       rawUser('srv-u-refused', sentClientMessageId(0), '/clear', '2026-10-11T00:00:00Z'),
       rawAssistant('srv-a-refused', 'The clear was refused.', '2026-10-11T00:00:01Z'),
-    ])
+    ], 2))
     useChatStore.getState().sendMessage('/clear')
     const cmid = sentClientMessageId(0)
 
@@ -430,9 +434,9 @@ describe('C6 — a failed post-clear re-read is visible, with the screen Retry c
     // read populated the shared entry) when the /clear re-read fails. A
     // failed re-read of a data-bearing entry must still surface — not hide
     // behind the cached data.
-    queryClient.setQueryData(['messages', SID], [
-      rawUser('srv-u-loaded', undefined, 'earlier question', '2026-10-10T23:00:00Z'),
-    ])
+    queryClient.setQueryData(['messages', SID], narrationHistoryPage(SID, [
+      { id: 'srv-u-loaded', role: 'user', content: 'earlier question', timestamp: '2026-10-10T23:00:00Z', agentId: 'jim', status: 'done' },
+    ]))
     requestMock.mockImplementation(async () => {
       throw new ApiError(404, 'session gone')
     })

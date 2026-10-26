@@ -15,6 +15,8 @@ import { useToolApprovalStore } from '@/store/toolApproval'
 import { SecretRequestThreadTail } from './SecretRequestCard'
 import { deferred, installNetwork, jsonResponse, labelledControl, observableText, queryLabelledControl, requests, resetSharedState, socketSends } from '../../../tests/l1-ui-red-u23/support'
 
+import { wireHistoryPage, wireHistorySnapshot } from '../../../tests/chat-history-paging/legacy-wire'
+
 const SENTINEL = 'SF01_SECRET_VALUE_NOT_FOR_CHAT'
 const WARNING = "Saved, but the agent's next step is not confirmed. Reopen this chat to retry. Your values will not be sent again."
 const frame: SecretRequestFrame = {
@@ -196,7 +198,8 @@ const carriers = ['session_snapshot', 'session_state'] as const
 
 function deliverProjection(carrier: typeof carriers[number], request: SessionStateSecretRequest) {
   const message: SessionSnapshotFrame | SessionStateFrame = carrier === 'session_snapshot'
-    ? { type: carrier, session_id: frame.session_id, seq: 1, reason: 'unknown_position', secret_requests: [request] }
+    // D3/D10: current secrets are control projection, not historical rows.
+    ? wireHistorySnapshot(wireHistoryPage(frame.session_id, [], 0), { seq: 1, reason: 'unknown_position', secret_requests: [request] })
     : { type: carrier, session_id: frame.session_id, user_id: 'l1-red-user', pending_approvals: [], emitted_at: saved.updated_at, secret_requests: [request] }
   // Exercise the real generated validator as well as the dispatcher: a
   // schema that dropped the new field would fail this exact-shape assertion.

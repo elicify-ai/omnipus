@@ -5782,6 +5782,11 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
+      "path": "src/components/chat/useSelectSession.sidebarOverlay.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test suffix) for founder Q81. Its framer-motion and router Link stand-ins forward the real Sidebar's className unchanged so the click-catcher keeps its production markup; the test renders no control or color of its own and is not imported by any non-test source."
+    },
+    {
       "path": "src/components/connectors/EmailMailboxPanel.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -5820,6 +5825,11 @@
       "path": "src/components/layout/Sidebar.focus-trap.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/layout/Sidebar.workspace-lookup-abort.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Its router, dropdown-menu and framer-motion stand-ins (raw button/aside, test-only class names) are copied from Sidebar.kb5.test.tsx to mount the real Sidebar; test-only, never imported by non-test source."
     },
     {
       "path": "src/components/layout/Sidebar.kb5.test.tsx",

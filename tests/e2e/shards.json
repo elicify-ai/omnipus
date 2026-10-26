@@ -68,7 +68,9 @@
         "tests/e2e/auth.spec.ts",
         "tests/e2e/burst-resilience.spec.ts",
         "tests/e2e/side-panel-deeplink.spec.ts",
-        "tests/e2e/nav-wave1.spec.ts"
+        "tests/e2e/nav-wave1.spec.ts",
+        "tests/e2e/chat-history-paging.return-to-latest.spec.ts",
+        "tests/e2e/xss-history-paths.spec.ts"
       ]
     },
     {
@@ -80,7 +82,8 @@
         "tests/e2e/calendar.spec.ts",
         "tests/e2e/contract-counters.spec.ts",
         "tests/e2e/sidebar-agent-row-menu.spec.ts",
-        "tests/e2e/side-panel-signin-return.spec.ts"
+        "tests/e2e/side-panel-signin-return.spec.ts",
+        "tests/e2e/chat-composer-focus-replay.spec.ts"
       ]
     },
     {
@@ -132,7 +135,8 @@
         "tests/e2e/csp-assumptions.spec.ts",
         "tests/e2e/preview-pdf.spec.ts",
         "tests/e2e/truncation-notice.spec.ts",
-        "tests/e2e/stop-scope-tree.spec.ts"
+        "tests/e2e/stop-scope-tree.spec.ts",
+        "tests/e2e/chat-history-paging.open-scroll-anchor.spec.ts"
       ]
     },
     {
@@ -144,6 +148,7 @@
         "tests/e2e/api-errors.spec.ts",
         "tests/e2e/fresh-install.spec.ts",
         "tests/e2e/iframe-preview-warmup.spec.ts",
+        "tests/e2e/chat-history-paging.keyboard-reader-states.spec.ts",
         "tests/e2e/omnipus-retired-surfaces.spec.ts",
         "tests/e2e/room-history-paging.spec.ts"
       ]
@@ -156,7 +161,9 @@
         "tests/e2e/mcp-add.spec.ts",
         "tests/e2e/onboarding.spec.ts",
         "tests/e2e/profile-fontsize.spec.ts",
-        "tests/e2e/providers.spec.ts"
+        "tests/e2e/providers.spec.ts",
+        "tests/e2e/chat-history-paging.reconnect-retention-retry.spec.ts",
+        "tests/e2e/chat-history-paging.cancelled-tool-reload.spec.ts"
       ]
     },
     {
@@ -167,7 +174,9 @@
         "tests/e2e/settings-gateway.spec.ts",
         "tests/e2e/version-drift.spec.ts",
         "tests/e2e/web-serve-canonical.spec.ts",
-        "tests/e2e/web-serve-malformed.spec.ts"
+        "tests/e2e/web-serve-malformed.spec.ts",
+        "tests/e2e/chat-history-paging.soft-budget-screen-coverage.spec.ts",
+        "tests/e2e/chat-history-paging.usage-reload.spec.ts"
       ]
     },
     {
@@ -178,7 +187,9 @@
         "tests/e2e/whatsapp-qr.spec.ts",
         "tests/e2e/channel-instance-crud.spec.ts",
         "tests/e2e/channel-routing.spec.ts",
-        "tests/e2e/tool-iteration-limit.spec.ts"
+        "tests/e2e/tool-iteration-limit.spec.ts",
+        "tests/e2e/chat-history-paging.unavailable-history-live-controls.spec.ts",
+        "tests/e2e/sidebar-session-backdrop.spec.ts"
       ]
     },
     {
@@ -258,7 +269,8 @@
         "tests/e2e/multi-turn-render.spec.ts",
         "tests/e2e/replay-fidelity.spec.ts",
         "tests/e2e/retention.spec.ts",
-        "tests/e2e/settings-memory.spec.ts"
+        "tests/e2e/settings-memory.spec.ts",
+        "tests/e2e/chat-history-paging.prefix-and-real-session-evidence.spec.ts"
       ]
     },
     {

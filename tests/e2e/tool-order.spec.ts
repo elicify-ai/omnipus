@@ -105,15 +105,12 @@
 
 import { expect, type Locator, type Page } from '@playwright/test'
 import * as fs from 'fs'
-import * as path from 'path'
-import { test } from './fixtures/console-errors'
+import { test, canonicalHistoryAuthFile } from './fixtures/canonical-history'
+import { seedCanonicalLegacyTranscript } from './fixtures/chat-history'
 import { chatInput, assistantMessages, waitForConnected } from './fixtures/selectors'
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-
-const OMNIPUS_HOME =
-  process.env.OMNIPUS_HOME ||
-  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test')
+let BASE_URL: string
+test.beforeEach(async ({ canonicalGateway }) => { BASE_URL = canonicalGateway.baseURL })
 
 // One transcript.jsonl entry. Mirrors session-setup.ts's TranscriptEntry /
 // TranscriptToolCall shapes (pkg/session.TranscriptEntry / ToolCall Go json
@@ -146,9 +143,7 @@ interface OrderedEntry {
 // openSession() helper.
 
 function getStoredAuthToken(): string | null {
-  const authFile = process.env.OMNIPUS_AUTH_FILE
-    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-    : path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures/.auth/admin.json')
+  const authFile = canonicalHistoryAuthFile()
   if (!fs.existsSync(authFile)) return null
   try {
     const raw = fs.readFileSync(authFile, 'utf-8')
@@ -196,17 +191,8 @@ async function createSession(page: Page): Promise<string> {
   return meta.id
 }
 
-function seedTranscript(sessionId: string, entries: OrderedEntry[]): void {
-  const sessionDir = path.join(OMNIPUS_HOME, 'sessions', sessionId)
-  if (!fs.existsSync(sessionDir)) {
-    throw new Error(
-      `Session directory does not exist: ${sessionDir}. ` +
-        'Create the session via REST API before seeding the transcript.',
-    )
-  }
-  const transcriptPath = path.join(sessionDir, 'transcript.jsonl')
-  const lines = entries.map((e) => JSON.stringify({ view_membership: 'chat', ...e })).join('\n') + '\n'
-  fs.writeFileSync(transcriptPath, lines, { encoding: 'utf-8' })
+async function seedTranscript(sessionId: string, entries: OrderedEntry[]): Promise<void> {
+  await seedCanonicalLegacyTranscript(sessionId, entries)
 }
 
 /**
@@ -359,7 +345,7 @@ test('single tool call stays interleaved between its true text neighbors, after 
   ]
 
   const sessionId = await createSession(page)
-  seedTranscript(sessionId, entries)
+  await seedTranscript(sessionId, entries)
 
   const parts: Part[] = [
     { kind: 'text', marker: markerA },
@@ -483,7 +469,7 @@ test('two tool calls in one turn stay interleaved with all three text segments, 
   ]
 
   const sessionId = await createSession(page)
-  seedTranscript(sessionId, entries)
+  await seedTranscript(sessionId, entries)
 
   const parts: Part[] = [
     { kind: 'text', marker: markerA },

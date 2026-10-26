@@ -400,6 +400,14 @@ export class GatewayProcess {
     }
   }
 
+  /** Test-only offline mutation guard (chat-history seam F). A requested kill
+   * or kill9()'s backstop is not evidence that this owned child really exited. */
+  assertStoppedForFixture(): void {
+    if (!this.proc || (this.proc.exitCode === null && this.proc.signalCode === null)) {
+      throw new Error('GatewayProcess.assertStoppedForFixture: owned gateway has not actually exited; refusing offline fixture mutation');
+    }
+  }
+
   /** Graceful shutdown (SIGTERM) + best-effort OMNIPUS_HOME cleanup. */
   async stop(): Promise<void> {
     if (this.proc && this.proc.exitCode === null && !this.proc.killed) {

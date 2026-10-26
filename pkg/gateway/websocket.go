@@ -356,12 +356,15 @@ type WSHandler struct {
 }
 
 type wsConn struct {
-	conn           *websocket.Conn
-	sendCh         chan []byte // writePump's hot window; see ws_conn_queue.go
-	doneCh         chan struct{}
-	closeOnce      sync.Once
-	inboundDropped atomic.Int32 // inbound items dropped: schema validation failures + invalid/oversized media refs
-	userID         string       // username resolved at auth time; used for session_state scoping (FR-073)
+	conn                *websocket.Conn
+	sendCh              chan []byte // writePump's hot window; see ws_conn_queue.go
+	doneCh              chan struct{}
+	closeOnce           sync.Once
+	inboundDropped      atomic.Int32 // inbound items dropped: schema validation failures + invalid/oversized media refs
+	userID              string       // username resolved at auth time; used for session_state scoping (FR-073)
+	historyStateMu      sync.Mutex
+	historyStateSession string
+	historyReadiness    *generated.SessionHistoryState
 
 	// Per-connection ordered outbound queue (#823 BE-DESIGN.md §2.1,
 	// ws_conn_queue.go). Guarded by qmu. q holds frames that did not fit in
@@ -1224,7 +1227,7 @@ wsHandlerReadLoopLoop1:
 		// Per-frame JSON Schema validation (mirrors REST decodeAndValidate).
 		// Gated by gateway.validate_inbound; when false the check is a no-op.
 		validateEnabled := wh.h.agentLoop.GetConfig().Gateway.ValidateInbound
-		if validateEnabled {
+		if validateEnabled && peek.Type != string(generated.WsFrameTypeAttachSession) {
 			schemaName := wsFrameSchemaName(peek.Type)
 			if schemaName != "" {
 				if errMsg, serverErr := ValidateInboundFrameJSON(schemaName, data); errMsg != "" {
@@ -1358,24 +1361,7 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 	case string(generated.WsFrameTypeCancel), string(generated.WsFrameTypeRedirect):
 		return wh.handleTurnControlFrame(data, peek.Type)
 	case string(generated.WsFrameTypeAttachSession):
-		var f generated.AttachSessionFrame
-		if err := json.Unmarshal(data, &f); err != nil {
-			slog.Warn("ws: malformed attach_session frame", "error", err)
-			return wsHandlerReadLoopContinue
-		}
-		slog.Info("ws: attach_session frame received",
-			"chat_id", wh.chatID,
-			"requested_session_id", f.SessionId,
-		)
-		if f.SessionId != "" {
-			// #823: the client's cursor for this session ({since_seq, boot_id})
-			// decides incremental catch-up vs snapshot (BE-DESIGN.md §3.3/§4).
-			wh.h.handleAttachSessionWithAck(wh.ctx, wh.chatID, f.SessionId,
-				&attachCursor{SinceSeq: f.SinceSeq, BootID: f.BootId},
-				&attachAck{Ack: f.AckAttention != nil && *f.AckAttention, Bound: f.AttentionBound}, wh.wc)
-		} else {
-			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
-		}
+		return wh.handleHistoryAttachFrame(data)
 	case string(generated.WsFrameTypeSessionModeUpdate):
 		return wh.handleSessionModeUpdateFrame(data)
 	case string(generated.WsFrameTypeAttachRoom):

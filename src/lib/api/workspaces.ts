@@ -47,9 +47,9 @@ export const workspacesQueryKeys = {
   media: (workspaceId: string) => ['workspaces', workspaceId, 'media'] as const,
 }
 
-export function fetchWorkspaces(params?: { status?: string }): Promise<Workspace[]> {
+export function fetchWorkspaces(params?: { status?: string; signal?: AbortSignal }): Promise<Workspace[]> {
   const qs = params?.status ? '?' + new URLSearchParams({ status: params.status }).toString() : ''
-  return request<Workspace[]>(`/workspaces${qs}`, undefined, z.array(WorkspaceSchema) as ZodType<Workspace[]>)
+  return request<Workspace[]>(`/workspaces${qs}`, params?.signal ? { signal: params.signal } : undefined, z.array(WorkspaceSchema) as ZodType<Workspace[]>)
 }
 
 /**

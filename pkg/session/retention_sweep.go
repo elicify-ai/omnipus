@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -264,6 +265,10 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// released here, BEFORE the goal retention pass — never nested inside
 	// lockAllSessionShards's hold, in either direction.
 	unlock()
+
+	// Reconcile persisted catalogs even after a zero-removal pass, outside all
+	// session shards so suffix content I/O never holds canonical writers.
+	expiryErr = errors.Join(expiryErr, us.reconcileExistingChatHistory(context.Background()))
 
 	// FR-007: tell each session whose window moved. Written after the shards
 	// are released (the append takes its own shard).

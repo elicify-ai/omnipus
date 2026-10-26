@@ -2,7 +2,8 @@ title: CatchUpCompleteFrame
 description: >
   Server → client. #823 catch-up redesign. Terminal frame of an attach_session response,
   sent exactly once, after every frame the catch-up needed to send (the incremental
-  journal tail, or the full snapshot replay plus projection) has already been enqueued to
+  journal tail, selected snapshot-page replay plus projection, or live-only controls)
+  has already been enqueued to
   this connection. Frames published live while the attach was in progress are held (never
   dropped) and are flushed to the connection only after this frame, so they always arrive
   strictly after catch-up in seq order. The client uses this frame to: set its cursor for
@@ -45,10 +46,15 @@ properties:
     enum:
       - incremental
       - snapshot
+      - live_only
     description: >
-      Which catch-up path produced this response: incremental (the client's since_seq was
-      servable — only the journal tail after it was sent) or snapshot (the client's
-      history for this session was wiped and fully rebuilt — see SessionSnapshotFrame's
-      reason for why). The client uses this to decide, together with whether a done frame
-      for the active turn has since been applied, whether an in-flight answer at catch-up
-      time is still genuinely in progress or must be shown as unfinished.
+      incremental delivers the complete servable journal tail, unaffected by history
+      page limits. snapshot completes the selected bounded history page plus current
+      projection, not lifetime history. live_only completes only authorized current
+      controls/projection and the live cursor after an explicit history-only failure:
+      keep cached history out-of-date, never wipe or claim history reconstruction,
+      replayCompletedForSession, history-loaded/restart/unanswered sweep, successful
+      first-send proof or attention seen acknowledgement. A later incremental catch-up
+      while history_state remains unavailable still is not history-loaded proof.
+      No mode completes if state/projection/socket delivery failed. Held live seq>W
+      follows this frame in order. Replay done is not attach completion.

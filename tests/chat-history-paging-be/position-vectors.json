@@ -1,0 +1,8 @@
+[
+  {"name":"empty-id","session_id":"session-a","partition_key":"2026-01-01","byte_offset":"0","entry_id":"","expected":"hp1_dmkNI4NT3KaP3UE0-X0T7s15SseqnJUYIWdSQ16R1s4"},
+  {"name":"utf8","session_id":"sesja-żółć","partition_key":"2026-10-21","byte_offset":"257","entry_id":"wiadomość-雪","expected":"hp1_yE5guIwgoGPf2QL2l244WlQjhwUHg5Iv_hfV4epg5bk"},
+  {"name":"large-offset","session_id":"session-a","partition_key":"2026-01-01-1","byte_offset":"9007199254740993","entry_id":"duplicate-id","expected":"hp1_t8DU2G1WkqROZWHt5DfaEH1Pl01nfcymD0NNk3iiBy8"},
+  {"name":"same-id-first","session_id":"session-a","partition_key":"2026-01-01","byte_offset":"0","entry_id":"duplicate-id","expected":"hp1_MRWRkYOpx_PB9gSOlxDBDRc06kCWZi04825pioVWeN4"},
+  {"name":"same-id-next","session_id":"session-a","partition_key":"2026-01-01","byte_offset":"100","entry_id":"duplicate-id","expected":"hp1_X7mztuqgRbFx1MSdWgpBzZEbTpdo_M14hvDdZ0ei-dw"},
+  {"name":"foreign-session","session_id":"session-b","partition_key":"2026-01-01","byte_offset":"0","entry_id":"duplicate-id","expected":"hp1_vm_B-KI40klUbz9y31N2UQ9UHHOrcl-OK14s90PfnQM"}
+]

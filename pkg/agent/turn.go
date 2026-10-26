@@ -96,6 +96,8 @@ type turnState struct {
 	approvalOrigin   approvalOrigin
 
 	mu sync.RWMutex
+	// startedTool is installed only at actual dispatch; guarded by mu.
+	startedTool *startedToolOutcome
 
 	// userInputInWindow is set by assembleMessages when this turn's re-read
 	// instruction is already the newest line of the model window.
@@ -186,11 +188,12 @@ type turnState struct {
 
 	// Cancel dedup / callback fields (FR-10, FR-11, FR-15).
 	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
-	cancelMu       sync.Mutex
-	cancelFired    atomic.Bool               // true once handleCancel has claimed this turn
-	stopRequested  atomic.Bool               // non-terminal Stop: preserve session and goal on disposal
-	abandoned      atomic.Bool               // true once a controller detaches a stuck turn goroutine
-	onCancelFinish func(cancelMethod string) // called exactly once by Finish when cancelFired
+	cancelMu        sync.Mutex
+	cancelFired     atomic.Bool               // true once handleCancel has claimed this turn
+	stopRequested   atomic.Bool               // non-terminal Stop: preserve session and goal on disposal
+	abandoned       atomic.Bool               // true once a controller detaches a stuck turn goroutine
+	onCancelFinish  func(cancelMethod string) // called exactly once by Finish when cancelFired
+	onCancelPersist *cancelDisplayOutcome     // durable display metadata, before abandonment or Finish
 
 	// cancelling was the GATE half of the chain-reaction cancellation fix
 	// (ADR-057 FR-024, superseded 2026-08-04): set true by markTurnsCancelling

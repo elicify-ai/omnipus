@@ -7,11 +7,12 @@
 //
 // The fix under test: a CONFIRMED 404 from the history read is the one
 // truthful "this session is gone" signal, and it puts the surface into the
-// existing read-only state — the agent-removed banner visible above the
-// history-error screen, whose branch already replaces the whole
-// thread+composer (so no send can fail as a turn error against a
-// nonexistent session). A transport failure (network, 5xx) is NOT deletion
-// and must NOT produce the banner.
+// existing read-only state. Paging D15 now confines a history-read failure
+// to the history slot: the composer stays mounted, with a confirmed missing
+// session disabled/read-only. D6 uses disconnected bounded REST fallback
+// for these HTTP-error cases; connected opening is WS-authoritative.
+// A transport failure (network, 5xx) is NOT deletion and must NOT produce
+// the read-only banner.
 //
 // Boundary note: the REAL react-query (QueryClientProvider, retry off) runs
 // ChatScreen's history query and the REAL isApiError classifies its error; the
@@ -29,7 +30,12 @@ import type { ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { ApiError } from '@/lib/api-error'
-import { fetchSessionMessages } from '@/lib/api'
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+import { emptySessionState } from '@/store/chat/session'
+
+const { historyRead } = vi.hoisted(() => ({
+  historyRead: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
+}))
 
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock())
 
@@ -44,7 +50,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: historyRead,
     fetchAboutInfo: vi.fn().mockResolvedValue({}),
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
@@ -83,7 +89,7 @@ function seedBucket(messages: ChatMessage[]): void {
     ...s,
     sessionsById: {
       [SID]: {
-        ...((s.sessionsById ?? {})[SID] ?? {}),
+        ...emptySessionState(),
         ...bucket,
         isStreaming: false,
         isReplaying: false,
@@ -123,7 +129,8 @@ async function renderScreen(): Promise<HTMLElement> {
 describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5)', () => {
   beforeEach(() => {
     useConnectionStore.setState({
-      isConnected: true,
+      // D6: exercise the real bounded HTTP fallback, not connected startup.
+      isConnected: false,
       liteMode: false,
       reconnectPhase: null,
       reconnectAttempt: 0,
@@ -131,8 +138,7 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
       connection: null,
     })
     vi.unstubAllGlobals()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).ResizeObserver = undefined
+    vi.stubGlobal('ResizeObserver', undefined)
   })
 
   afterEach(() => {
@@ -141,28 +147,28 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
 
   it('a 404 history read shows the read-only banner; the composer is unreachable (no turn-error sends)', async () => {
     seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
-    vi.mocked(fetchSessionMessages).mockRejectedValue(new ApiError(404, 'session not found'))
+    historyRead.mockRejectedValue(new ApiError(404, 'session not found'))
 
     const container = await renderScreen()
 
     expect(container.querySelector('[data-testid="agent-removed-banner"]'), 'the read-only banner is visible').toBeTruthy()
-    // The history-error branch replaces the whole thread+composer with the
-    // Retry screen — there is no input to type a doomed send into.
+    // D15 keeps the control shell mounted, but a confirmed missing chat
+    // remains read-only: no doomed send becomes possible.
     expect(container.textContent).toContain('Could not load messages.')
-    expect(container.querySelector('[data-testid="composer-input"]')).toBeNull()
+    expect(container.querySelector('[data-testid="composer-input"]')).toBeDisabled()
   })
 
   it('a transport failure (status 0) is NOT deletion — no read-only banner', async () => {
     seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
-    vi.mocked(fetchSessionMessages).mockRejectedValue(new ApiError(0, 'Network unavailable. Check your connection.'))
+    historyRead.mockRejectedValue(new ApiError(0, 'Network unavailable. Check your connection.'))
 
     const container = await renderScreen()
 
     expect(container.querySelector('[data-testid="agent-removed-banner"]')).toBeNull()
-    // The error screen itself is shown (renderScreen waited for it), so the
-    // absent composer is the history-error branch, not a branch that stopped rendering.
+    // D15 confines transport/history failure to the history slot. The
+    // composer stays mounted; offline connection disabling is independent.
     expect(container.textContent).toContain('Could not load messages.')
-    expect(container.querySelector('[data-testid="composer-input"]')).toBeNull()
+    expect(container.querySelector('[data-testid="composer-input"]')).toBeVisible()
   })
 
   // C10 (R3 delta re-review): the banner said "Agent removed" for ANY
@@ -172,7 +178,7 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
   // 404s again — so a missing chat gets no Retry.
   it('a missing chat (404, no agent_removed signal) says so plainly and offers no doomed Retry', async () => {
     seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
-    vi.mocked(fetchSessionMessages).mockRejectedValue(new ApiError(404, 'session not found'))
+    historyRead.mockRejectedValue(new ApiError(404, 'session not found'))
 
     const container = await renderScreen()
 
@@ -188,7 +194,7 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
     // agentRemoved PROP, which the deep-link route feeds from
     // fetchSessionDetail().agent_removed (sessions.$sessionId.tsx). That prop
     // is the only path ChatScreen reads the signal through.
-    vi.mocked(fetchSessionMessages).mockResolvedValue([])
+    historyRead.mockResolvedValue(emptyHistoryPage(SID))
     let container!: HTMLElement
     await act(async () => {
       const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -205,7 +211,7 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
 
   it('a transport failure keeps Retry (only a confirmed 404 loses it)', async () => {
     seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
-    vi.mocked(fetchSessionMessages).mockRejectedValue(new ApiError(0, 'Network unavailable. Check your connection.'))
+    historyRead.mockRejectedValue(new ApiError(0, 'Network unavailable. Check your connection.'))
 
     const container = await renderScreen()
 

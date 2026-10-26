@@ -56,6 +56,7 @@ type agentLoopRunTurnToolsExecute struct {
 	admitted          admittedToolResult
 	toolResultMsg     providers.Message
 	tcRecord          session.ToolCall
+	started           *startedToolOutcome
 	ret0              agentLoopRunTurnToolsFlow
 }
 
@@ -112,6 +113,7 @@ func (rx *agentLoopRunTurnTools) executeToolCalls() agentLoopRunTurnToolsFlow {
 	ex.setGoalSucceededThisRound = false
 agentLoopRunTurnToolsExecuteLoop1:
 	for i, tc := range ex.rx.rr.normalizedToolCalls {
+		ex.started = nil
 		switch ex.validateCall(i, tc) {
 		case agentLoopRunTurnToolsExecuteReturn:
 			return ex.ret0
@@ -1410,6 +1412,12 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		// and record exactly one tool.auto_approved row.
 		execCtx = tools.WithAutoApproved(execCtx, tools.AutoPinForVerdict(ex.toolName, ex.autoPin))
 		ex.rx.rr.rq.ri.rf.rt.al.emitToolAutoApprovedAudit(execCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.autoPin)
+	}
+	if !ex.beginStartedTool(tc, toolStart) {
+		ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
+		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurn(ex.rx.rr.rq.ri.rf.rt.ts, "before_tool_exec", hardInterruptAbortReason)
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
 	}
 	ex.toolResult = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.ExecuteWithContext(
 		execCtx,

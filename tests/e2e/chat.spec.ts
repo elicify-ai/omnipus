@@ -3,6 +3,8 @@ import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, assistantMessages, userMessages, selectAgent, tokenCounter, waitForConnected } from './fixtures/selectors';
 import { freshChat, originOf } from './fixtures/session-setup';
+import { sessionMessages } from './fixtures/session-history';
+import { installPaintAttachInput, replayPaintFrames } from './fixtures/attach-replay-paint';
 import type { ClientFrame, ServerFrame } from '../../src/lib/api/generated/asyncapi-types';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
@@ -13,6 +15,9 @@ test('attach replay paints history once at the bottom without intermediate rows'
   test.setTimeout(90_000);
   await expect(chatInput(page)).toBeVisible();
   const { sessionId } = await freshChat(page, /Mia/i);
+  // Squad-lead test-setup decision Q1 A: this synthetic case tests replay
+  // painting, NOT automatic attach sizing/geometry (T07/T16/T28). Only the
+  // browser WS boundary sends explicit valid100/20; real consumers are untouched.
   const observations: Array<{ rows: number; running: number }> = [];
   let completed = false;
   await page.routeWebSocket(/\/api\/v1\/chat\/ws/, socket => {
@@ -20,16 +25,9 @@ test('attach replay paints history once at the bottom without intermediate rows'
       const request = JSON.parse(String(raw)) as ClientFrame;
       if (request.type === 'ping') { socket.send(JSON.stringify({ type: 'pong' })); return; }
       if (request.type !== 'attach_session' || request.session_id !== sessionId) return;
-      const frames: ServerFrame[] = [{ type: 'session_snapshot', session_id: sessionId, seq: 100, boot_id: 'replay-browser', reason: 'unknown_position' }];
-      for (let i = 0; i < 30; i++) {
-        frames.push(
-          { type: 'replay_message', session_id: sessionId, id: `question-${i}`, role: 'user', content: `Saved question ${i}` },
-          { type: 'tool_call_start', session_id: sessionId, call_id: `call-${i}`, tool: 'read_file', params: { path: 'note.txt' } },
-          { type: 'tool_call_result', session_id: sessionId, call_id: `call-${i}`, tool: 'read_file', status: 'success', result: { content: 'Saved result' } },
-          { type: 'replay_message', session_id: sessionId, id: `answer-${i}`, role: 'assistant', content: i === 29 ? 'REPLAY_LAST_ROW' : `Saved answer ${i}\n\n${'Historical paragraph. '.repeat(i % 3 === 0 ? 80 : 8)}` },
-        );
-      }
-      frames.push({ type: 'done', session_id: sessionId, stats: { frames_emitted: frames.length } });
+      // Generated request validation + captured-wire100/20 guard;60 source
+      // groups/90 logical rows, exactly the original122 observed deliveries.
+      const frames: ServerFrame[] = replayPaintFrames(request);
       for (const frame of frames) {
         socket.send(JSON.stringify(frame));
         await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
@@ -42,6 +40,9 @@ test('attach replay paints history once at the bottom without intermediate rows'
       completed = true;
     });
   });
+  // routeWebSocket installs a replacement WebSocket constructor on reload.
+  // Install the approved input wrapper AFTER that shim, not on the retired one.
+  await installPaintAttachInput(page, sessionId);
   await page.reload();
   await expect.poll(() => completed).toBe(true);
   // Positive control: the peer sent every frame and the final history really
@@ -71,27 +72,6 @@ test('attach replay paints history once at the bottom without intermediate rows'
  * @param page      Playwright page object
  * @param gapMs     How long to watch for the stop button to reappear (default 8s)
  */
-/**
- * S5-08: read a session's transcript straight from the gateway, so a test can
- * pin SERVER-side state instead of trusting the SPA's rendered view. Returns
- * the entries; a non-2xx is an honest red (contract: GET
- * /api/v1/sessions/{id}/messages → 200 with the transcript entries).
- */
-async function sessionMessages(
-  page: Page,
-  origin: string,
-  sessionId: string,
-): Promise<Array<{ role?: string; content?: string }>> {
-  const resp = await page.request.get(`${origin}/api/v1/sessions/${sessionId}/messages`);
-  if (!resp.ok()) {
-    throw new Error(
-      `GET /api/v1/sessions/${sessionId}/messages failed: ${resp.status()} ${await resp.text()}`,
-    );
-  }
-  const body = (await resp.json()) as Array<{ role?: string; content?: string }>;
-  return Array.isArray(body) ? body : [];
-}
-
 async function waitForTurnFullyDone(page: Page, gapMs = 8_000): Promise<void> {
   const stopBtn = page.locator('[data-testid="stop-btn"]');
   try {

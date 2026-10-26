@@ -155,12 +155,75 @@ type ModelTokens = {
 };
 type SessionDetail = {
   session: Session;
-  messages: Array<Message>;
-  has_earlier_messages?: boolean | undefined;
+  history_state: {
+    status: "available" | "unavailable";
+    reason?:
+      | (
+          | "index_missing"
+          | "index_inconsistent"
+          | "catchup_limit"
+          | "storage_error"
+          | "projection_error"
+        )
+      | undefined;
+    message?: string | undefined;
+  };
+  messages?: Array<Message> | undefined;
+  page_info?:
+    | {
+        mode: "latest" | "older" | "newer" | "window_refresh";
+        limit: number;
+        min_rows: number;
+        row_count: number;
+        source_group_count: number;
+        soft_byte_budget: number;
+        projected_bytes: number;
+        byte_budget_exceeded: boolean;
+        stop_reason:
+          | "row_target"
+          | "source_cap"
+          | "clear"
+          | "end"
+          | "range_end"
+          | "byte_budget";
+        budget_override?: ("height_floor" | "atomic_group") | undefined;
+        first_position?: string | undefined;
+        last_position?: string | undefined;
+        stopped_at_clear?: boolean | undefined;
+        latest_clear?:
+          | {
+              entry_id: string;
+              history_position: string;
+            }
+          | undefined;
+        retention_generation: string;
+        context: {
+          spans: Array<{
+            span_id: string;
+            start?: subagent_start | undefined;
+            state?: subagent_state | undefined;
+            message?: subagent_message | undefined;
+            end?: subagent_end | undefined;
+            has_run?: boolean | undefined;
+          }>;
+          duplicate_ids: Array<{
+            kind: "message" | "tool";
+            id: string;
+            canonical_position: string;
+            occurrence_count: number;
+          }>;
+        };
+      }
+    | undefined;
+  has_earlier?: boolean | undefined;
+  has_later?: boolean | undefined;
+  next_before?: string | undefined;
+  next_after?: string | undefined;
   agent_removed?: boolean | undefined;
 };
 type Message = {
   id: string;
+  history_position?: string | undefined;
   client_message_id?: string | undefined;
   input_disposition?:
     | {
@@ -179,6 +242,7 @@ type Message = {
         | "turn_canceled"
         | "judge_verdict"
         | "context_window_notice"
+        | "provider_fallback"
       )
     | undefined;
   view_membership?: ("chat" | "model" | "both") | undefined;
@@ -217,6 +281,8 @@ type Message = {
   cancel_method?: ("graceful" | "hard") | undefined;
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
+  unavailable_model?: string | undefined;
+  unavailable_code?: ("rate_limited" | "model_retired") | undefined;
   verdict?: JudgeVerdict | undefined;
   context_window_notice?: ContextWindowNotice | undefined;
   system_subtype?:
@@ -235,6 +301,7 @@ type Message = {
   helper_event?: HelperEvent | undefined;
   subagent_start?:
     | {
+        history_origin?: history_origin | undefined;
         type: "subagent_start";
         session_id: string;
         span_id: string;
@@ -247,6 +314,7 @@ type Message = {
     | undefined;
   subagent_state?:
     | {
+        history_origin?: history_origin | undefined;
         type: "subagent_state";
         session_id: string;
         child_session_id?: string | undefined;
@@ -286,6 +354,7 @@ type Message = {
     | undefined;
   subagent_message?:
     | {
+        history_origin?: history_origin | undefined;
         type: "subagent_message";
         session_id: string;
         child_session_id?: string | undefined;
@@ -314,6 +383,12 @@ type Message = {
     | undefined;
   subagent_end?:
     | {
+        history_origin?:
+          | {
+              position: string;
+              entry_id?: string | undefined;
+            }
+          | undefined;
         type: "subagent_end";
         session_id: string;
         span_id: string;
@@ -340,6 +415,7 @@ type Message = {
         seq?: number | undefined;
       }
     | undefined;
+  terminal_outcome?: boolean | undefined;
   room_ref?:
     | {
         room_id: string;
@@ -456,6 +532,167 @@ type HelperEvent = {
   text: string;
   goal_id?: string | undefined;
   created_at: string;
+};
+type history_origin = {
+  position: string;
+  entry_id?: string | undefined;
+};
+type subagent_start = {
+  history_origin?: history_origin | undefined;
+  type: "subagent_start";
+  session_id: string;
+  span_id: string;
+  parent_call_id: string;
+  task_label: string;
+  agent_id?: string | undefined;
+  child_session_id?: string | undefined;
+  seq?: number | undefined;
+};
+type subagent_state = {
+  history_origin?: history_origin | undefined;
+  type: "subagent_state";
+  session_id: string;
+  child_session_id?: string | undefined;
+  span_id: string;
+  state:
+    | "queued"
+    | "running"
+    | "needs_input"
+    | "stopped"
+    | "completed"
+    | "failed";
+  control_receipt?:
+    | {
+        seq: number;
+        control_id: string;
+        verb:
+          | "steer"
+          | "stop"
+          | "stop_all"
+          | "redirect"
+          | "resume"
+          | "respond"
+          | "clear_goal";
+        state: "queued" | "delivered" | "applied" | "superseded";
+        accepted_at: string;
+        delivered_at?: string | undefined;
+        applied_at?: string | undefined;
+        superseded_at?: string | undefined;
+        superseded_by_seq?: number | undefined;
+        reason?: string | undefined;
+        released_control_ids?: Array<string> | undefined;
+      }
+    | undefined;
+  created_at: string;
+  seq?: number | undefined;
+};
+type subagent_message = {
+  history_origin?: history_origin | undefined;
+  type: "subagent_message";
+  session_id: string;
+  child_session_id?: string | undefined;
+  span_id: string;
+  message_id: string;
+  kind:
+    | "progress"
+    | "checkpoint"
+    | "artifact"
+    | "blocker"
+    | "question"
+    | "error"
+    | "handback"
+    | "steer"
+    | "respond"
+    | "goal_status"
+    | "not_delivered";
+  text?: string | undefined;
+  pct?: number | undefined;
+  correlation_id?: string | undefined;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  created_at: string;
+  seq?: number | undefined;
+};
+type subagent_end = {
+  history_origin?:
+    | {
+        position: string;
+        entry_id?: string | undefined;
+      }
+    | undefined;
+  type: "subagent_end";
+  session_id: string;
+  span_id: string;
+  status:
+    | "success"
+    | "error"
+    | "cancelled"
+    | "interrupted"
+    | "timeout"
+    | "parked";
+  duration_ms?: number | undefined;
+  final_result?: string | undefined;
+  reason?:
+    | ("parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown")
+    | undefined;
+  agent_id?: string | undefined;
+  parent_call_id?: string | undefined;
+  message?: string | undefined;
+  seq?: number | undefined;
+};
+type SessionHistoryResponse = {
+  session_id: string;
+  session_tokens_total?: number | undefined;
+  entries: Array<Message>;
+  has_earlier: boolean;
+  has_later: boolean;
+  next_before?: string | undefined;
+  next_after?: string | undefined;
+  page_info: page_info;
+};
+type page_info = {
+  mode: "latest" | "older" | "newer" | "window_refresh";
+  limit: number;
+  min_rows: number;
+  row_count: number;
+  source_group_count: number;
+  soft_byte_budget: number;
+  projected_bytes: number;
+  byte_budget_exceeded: boolean;
+  stop_reason:
+    | "row_target"
+    | "source_cap"
+    | "clear"
+    | "end"
+    | "range_end"
+    | "byte_budget";
+  budget_override?: ("height_floor" | "atomic_group") | undefined;
+  first_position?: string | undefined;
+  last_position?: string | undefined;
+  stopped_at_clear?: boolean | undefined;
+  latest_clear?:
+    | {
+        entry_id: string;
+        history_position: string;
+      }
+    | undefined;
+  retention_generation: string;
+  context: {
+    spans: Array<{
+      span_id: string;
+      start?: subagent_start | undefined;
+      state?: subagent_state | undefined;
+      message?: subagent_message | undefined;
+      end?: subagent_end | undefined;
+      has_run?: boolean | undefined;
+    }>;
+    duplicate_ids: Array<{
+      kind: "message" | "tool";
+      id: string;
+      canonical_position: string;
+      occurrence_count: number;
+    }>;
+  };
 };
 type SessionPage = {
   sessions: Array<Session>;
@@ -3659,8 +3896,22 @@ export const HelperEvent: z.ZodType<HelperEvent> = z.object({
   goal_id: z.string().min(1).optional(),
   created_at: z.string().datetime({ offset: true }),
 });
+export const history_origin: z.ZodType<history_origin> = z.object({
+  position: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+  entry_id: z.string().min(1).optional(),
+});
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
+  history_position: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+    .optional(),
   client_message_id: z.string().min(1).max(128).optional(),
   input_disposition: z
     .object({
@@ -3679,6 +3930,7 @@ export const Message: z.ZodType<Message> = z.object({
       "turn_canceled",
       "judge_verdict",
       "context_window_notice",
+      "provider_fallback",
     ])
     .optional(),
   view_membership: z.enum(["chat", "model", "both"]).optional(),
@@ -3720,6 +3972,8 @@ export const Message: z.ZodType<Message> = z.object({
   cancel_method: z.enum(["graceful", "hard"]).optional(),
   descendants_canceled: z.array(z.string()).optional(),
   model: z.string().optional(),
+  unavailable_model: z.string().min(1).max(256).optional(),
+  unavailable_code: z.enum(["rate_limited", "model_retired"]).optional(),
   verdict: JudgeVerdict.optional(),
   context_window_notice: ContextWindowNotice.optional(),
   system_subtype: z
@@ -3738,6 +3992,7 @@ export const Message: z.ZodType<Message> = z.object({
   helper_event: HelperEvent.optional(),
   subagent_start: z
     .object({
+      history_origin: history_origin.optional(),
       type: z.literal("subagent_start"),
       session_id: z.string().min(1),
       span_id: z.string().min(1),
@@ -3750,6 +4005,7 @@ export const Message: z.ZodType<Message> = z.object({
     .optional(),
   subagent_state: z
     .object({
+      history_origin: history_origin.optional(),
       type: z.literal("subagent_state"),
       session_id: z.string().min(1),
       child_session_id: z.string().min(1).optional(),
@@ -3791,6 +4047,7 @@ export const Message: z.ZodType<Message> = z.object({
     .optional(),
   subagent_message: z
     .object({
+      history_origin: history_origin.optional(),
       type: z.literal("subagent_message"),
       session_id: z.string().min(1),
       child_session_id: z.string().min(1).optional(),
@@ -3820,6 +4077,16 @@ export const Message: z.ZodType<Message> = z.object({
     .optional(),
   subagent_end: z
     .object({
+      history_origin: z
+        .object({
+          position: z
+            .string()
+            .min(47)
+            .max(47)
+            .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+          entry_id: z.string().min(1).optional(),
+        })
+        .optional(),
       type: z.literal("subagent_end"),
       session_id: z.string().min(1),
       span_id: z.string().min(1),
@@ -3847,6 +4114,7 @@ export const Message: z.ZodType<Message> = z.object({
       seq: z.number().int().gte(1).optional(),
     })
     .optional(),
+  terminal_outcome: z.boolean().optional(),
   room_ref: z
     .object({
       room_id: z.string().min(1).max(128),
@@ -3856,15 +4124,314 @@ export const Message: z.ZodType<Message> = z.object({
     })
     .optional(),
 });
+export const subagent_start: z.ZodType<subagent_start> = z.object({
+  history_origin: history_origin.optional(),
+  type: z.literal("subagent_start"),
+  session_id: z.string().min(1),
+  span_id: z.string().min(1),
+  parent_call_id: z.string().min(1),
+  task_label: z.string().min(1).max(100),
+  agent_id: z.string().optional(),
+  child_session_id: z.string().min(1).optional(),
+  seq: z.number().int().gte(1).optional(),
+});
+export const subagent_state: z.ZodType<subagent_state> = z.object({
+  history_origin: history_origin.optional(),
+  type: z.literal("subagent_state"),
+  session_id: z.string().min(1),
+  child_session_id: z.string().min(1).optional(),
+  span_id: z.string().min(1),
+  state: z.enum([
+    "queued",
+    "running",
+    "needs_input",
+    "stopped",
+    "completed",
+    "failed",
+  ]),
+  control_receipt: z
+    .object({
+      seq: z.number().int().gte(0),
+      control_id: z.string().min(1),
+      verb: z.enum([
+        "steer",
+        "stop",
+        "stop_all",
+        "redirect",
+        "resume",
+        "respond",
+        "clear_goal",
+      ]),
+      state: z.enum(["queued", "delivered", "applied", "superseded"]),
+      accepted_at: z.string().datetime({ offset: true }),
+      delivered_at: z.string().datetime({ offset: true }).optional(),
+      applied_at: z.string().datetime({ offset: true }).optional(),
+      superseded_at: z.string().datetime({ offset: true }).optional(),
+      superseded_by_seq: z.number().int().gte(0).optional(),
+      reason: z.string().optional(),
+      released_control_ids: z.array(z.string()).optional(),
+    })
+    .optional(),
+  created_at: z.string().datetime({ offset: true }),
+  seq: z.number().int().gte(1).optional(),
+});
+export const subagent_message: z.ZodType<subagent_message> = z.object({
+  history_origin: history_origin.optional(),
+  type: z.literal("subagent_message"),
+  session_id: z.string().min(1),
+  child_session_id: z.string().min(1).optional(),
+  span_id: z.string().min(1),
+  message_id: z.string().min(1),
+  kind: z.enum([
+    "progress",
+    "checkpoint",
+    "artifact",
+    "blocker",
+    "question",
+    "error",
+    "handback",
+    "steer",
+    "respond",
+    "goal_status",
+    "not_delivered",
+  ]),
+  text: z.string().optional(),
+  pct: z.number().int().gte(0).lte(100).optional(),
+  correlation_id: z.string().optional(),
+  sender_identity: z.string().min(1),
+  untrusted_origin: z.boolean(),
+  created_at: z.string().datetime({ offset: true }),
+  seq: z.number().int().gte(1).optional(),
+});
+export const subagent_end: z.ZodType<subagent_end> = z.object({
+  history_origin: z
+    .object({
+      position: z
+        .string()
+        .min(47)
+        .max(47)
+        .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+      entry_id: z.string().min(1).optional(),
+    })
+    .optional(),
+  type: z.literal("subagent_end"),
+  session_id: z.string().min(1),
+  span_id: z.string().min(1),
+  status: z.enum([
+    "success",
+    "error",
+    "cancelled",
+    "interrupted",
+    "timeout",
+    "parked",
+  ]),
+  duration_ms: z.number().int().gte(0).optional(),
+  final_result: z.string().optional(),
+  reason: z
+    .enum([
+      "parent_timeout",
+      "parent_cancelled",
+      "parent_done_early",
+      "unknown",
+    ])
+    .optional(),
+  agent_id: z.string().optional(),
+  parent_call_id: z.string().optional(),
+  message: z.string().optional(),
+  seq: z.number().int().gte(1).optional(),
+});
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
-  messages: z.array(Message).max(100000),
-  has_earlier_messages: z.boolean().optional(),
+  history_state: z.object({
+    status: z.enum(["available", "unavailable"]),
+    reason: z
+      .enum([
+        "index_missing",
+        "index_inconsistent",
+        "catchup_limit",
+        "storage_error",
+        "projection_error",
+      ])
+      .optional(),
+    message: z.string().min(1).optional(),
+  }),
+  messages: z.array(Message).max(100).optional(),
+  page_info: z
+    .object({
+      mode: z.enum(["latest", "older", "newer", "window_refresh"]),
+      limit: z.number().int().gte(20).lte(100),
+      min_rows: z.number().int().gte(1).lte(100),
+      row_count: z.number().int().gte(0),
+      source_group_count: z.number().int().gte(0).lte(100),
+      soft_byte_budget: z.number().int().gte(1),
+      projected_bytes: z.number().int().gte(0),
+      byte_budget_exceeded: z.boolean(),
+      stop_reason: z.enum([
+        "row_target",
+        "source_cap",
+        "clear",
+        "end",
+        "range_end",
+        "byte_budget",
+      ]),
+      budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
+      first_position: z
+        .string()
+        .min(47)
+        .max(47)
+        .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+        .optional(),
+      last_position: z
+        .string()
+        .min(47)
+        .max(47)
+        .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+        .optional(),
+      stopped_at_clear: z.boolean().optional(),
+      latest_clear: z
+        .object({
+          entry_id: z.string().min(1),
+          history_position: z
+            .string()
+            .min(47)
+            .max(47)
+            .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+        })
+        .optional(),
+      retention_generation: z.string().min(1),
+      context: z.object({
+        spans: z.array(
+          z.object({
+            span_id: z.string().min(1),
+            start: subagent_start.optional(),
+            state: subagent_state.optional(),
+            message: subagent_message.optional(),
+            end: subagent_end.optional(),
+            has_run: z.boolean().optional(),
+          })
+        ),
+        duplicate_ids: z.array(
+          z.object({
+            kind: z.enum(["message", "tool"]),
+            id: z.string().min(1),
+            canonical_position: z
+              .string()
+              .min(47)
+              .max(47)
+              .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+            occurrence_count: z.number().int().gte(2),
+          })
+        ),
+      }),
+    })
+    .optional(),
+  has_earlier: z.boolean().optional(),
+  has_later: z.boolean().optional(),
+  next_before: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+    .optional(),
+  next_after: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+    .optional(),
   agent_removed: z.boolean().optional(),
 });
 export const SessionRenameRequest = z.object({
   title: z.string().min(1).max(256),
 });
+export const page_info: z.ZodType<page_info> = z.object({
+  mode: z.enum(["latest", "older", "newer", "window_refresh"]),
+  limit: z.number().int().gte(20).lte(100),
+  min_rows: z.number().int().gte(1).lte(100),
+  row_count: z.number().int().gte(0),
+  source_group_count: z.number().int().gte(0).lte(100),
+  soft_byte_budget: z.number().int().gte(1),
+  projected_bytes: z.number().int().gte(0),
+  byte_budget_exceeded: z.boolean(),
+  stop_reason: z.enum([
+    "row_target",
+    "source_cap",
+    "clear",
+    "end",
+    "range_end",
+    "byte_budget",
+  ]),
+  budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
+  first_position: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+    .optional(),
+  last_position: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+    .optional(),
+  stopped_at_clear: z.boolean().optional(),
+  latest_clear: z
+    .object({
+      entry_id: z.string().min(1),
+      history_position: z
+        .string()
+        .min(47)
+        .max(47)
+        .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+    })
+    .optional(),
+  retention_generation: z.string().min(1),
+  context: z.object({
+    spans: z.array(
+      z.object({
+        span_id: z.string().min(1),
+        start: subagent_start.optional(),
+        state: subagent_state.optional(),
+        message: subagent_message.optional(),
+        end: subagent_end.optional(),
+        has_run: z.boolean().optional(),
+      })
+    ),
+    duplicate_ids: z.array(
+      z.object({
+        kind: z.enum(["message", "tool"]),
+        id: z.string().min(1),
+        canonical_position: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+        occurrence_count: z.number().int().gte(2),
+      })
+    ),
+  }),
+});
+export const SessionHistoryResponse: z.ZodType<SessionHistoryResponse> =
+  z.object({
+    session_id: z.string().min(1).max(255),
+    session_tokens_total: z.number().int().gte(0).optional(),
+    entries: z.array(Message).max(100),
+    has_earlier: z.boolean(),
+    has_later: z.boolean(),
+    next_before: z
+      .string()
+      .min(47)
+      .max(47)
+      .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+      .optional(),
+    next_after: z
+      .string()
+      .min(47)
+      .max(47)
+      .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+      .optional(),
+    page_info: page_info,
+  });
 export const ConfigurationRevision = z.string();
 export const ConfigurationPersistenceStatus = z.enum([
   "complete",
@@ -13981,7 +14548,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/sessions/:id",
     alias: "getSession",
-    description: `Returns the session metadata and complete ordered transcript. Used by the SPA to render the chat history.
+    description: `Returns authorized session metadata and required history_state. When history is available, messages and canonical page_info/continuation describe the bounded latest page (limit 40, min_rows 20), never the complete lifetime. This endpoint accepts no paging selectors. When history is unavailable after the bounded known-prefix recovery attempt, return metadata-only SessionDetail with history_state.status&#x3D;unavailable, omitting messages, page_info and every continuation field. This is not successful empty history or a missing session; routing and authorized live attach remain usable. Authentication, session-ID syntax and addressed-session eligibility/existence precede history access. No lifetime rebuild, preparation state or 503 path.
 `,
     requestFormat: "json",
     parameters: [
@@ -14108,7 +14675,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/sessions/:id/messages",
     alias: "getSessionMessages",
-    description: `Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed. The list starts at the session&#x27;s last /clear marker (the marker itself is the first entry); the X-Has-Earlier-Messages response header says whether earlier entries exist before that point.
+    description: `Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; bytes alone cannot underfill the floor. An individual group&#x27;s drawn weight may exceed the row target or 100. No lifetime read/rebuild, 503/preparing state or full-history fallback.
 `,
     requestFormat: "json",
     parameters: [
@@ -14117,12 +14684,63 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
         type: "Path",
         schema: z.string(),
       },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().gte(20).lte(100).optional().default(40),
+      },
+      {
+        name: "min_rows",
+        type: "Query",
+        schema: z.number().int().gte(1).lte(100).optional().default(20),
+      },
+      {
+        name: "before",
+        type: "Query",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+          .optional(),
+      },
+      {
+        name: "after",
+        type: "Query",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+          .optional(),
+      },
+      {
+        name: "window_start",
+        type: "Query",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+          .optional(),
+      },
+      {
+        name: "window_end",
+        type: "Query",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+          .optional(),
+      },
     ],
-    response: z.array(Message),
+    response: SessionHistoryResponse,
     errors: [
       {
         status: 400,
-        description: `Bad request — missing or invalid field.`,
+        description: `Invalid paging input after session access. ErrorResponse.error is exactly &quot;limit must be an integer from 20 to 100&quot;, &quot;min_rows must be an integer from 1 to limit&quot;, &quot;invalid history position&quot; (malformed, duplicate, blank, badly encoded, wrong-version or non-47-character selector), or &quot;invalid history page range&quot; (before+after, unpaired/reversed endpoints, after with a range, or before outside it). Unknown/foreign well-formed positions resolve to 404 before range order checks. No latest-page substitution.
+`,
         schema: ErrorResponse,
       },
       {
@@ -14132,12 +14750,14 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       },
       {
         status: 404,
-        description: `Resource not found.`,
+        description: `Existing access/missing-session refusal &quot;session not found&quot; precedes paging. Otherwise an unknown/foreign well-formed position gives exactly &quot;history position not found&quot;; no foreign lookup, parent fallback or reset.
+`,
         schema: ErrorResponse,
       },
       {
         status: 500,
-        description: `Internal server error.`,
+        description: `Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly &quot;Session history is unavailable. Retry after the operator restores its index.&quot; A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress.
+`,
         schema: ErrorResponse,
       },
     ],
@@ -17237,6 +17857,21 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 
 export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "helper_event", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta"]);
 
+export const HistoryEntryOrigin = z
+  .object({
+    position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+    entry_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const SessionHistoryState = z
+  .object({
+    status: z.enum(["available", "unavailable"]),
+    reason: z.enum(["index_missing", "index_inconsistent", "catchup_limit", "storage_error", "projection_error"]).optional(),
+    message: z.string().min(1).optional(),
+  })
+  .strict();
+
 export const RoomRef = z
   .object({
     room_id: z.string().min(1).max(128),
@@ -17511,6 +18146,8 @@ export const AttachSessionFrame = z
   .object({
     type: z.literal("attach_session"),
     session_id: z.string().min(1).max(255),
+    history_limit: z.number().int().min(20).max(100).optional(),
+    history_min_rows: z.number().int().min(1).max(100).optional(),
     since_seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
     ack_attention: z.boolean().optional(),
@@ -17569,6 +18206,7 @@ export const TokenFrame = z
 export const DoneStats = z
   .object({
     tokens: z.number().min(0).optional(),
+    session_tokens_total: z.number().int().min(0).optional(),
     cost: z.number().min(0).optional(),
     duration_ms: z.number().min(0).optional(),
     frames_emitted: z.number().min(0).optional(),
@@ -17639,6 +18277,7 @@ export const ErrorFrame = z
 
 export const ToolCallStartFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("tool_call_start"),
     session_id: z.string().min(1).max(255),
     tool: z.string().min(1).max(128),
@@ -17735,12 +18374,13 @@ export const ToolResultRecallMark = z
 
 export const ToolCallResultFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("tool_call_result"),
     session_id: z.string().min(1).max(255),
     tool: z.string().min(1).max(128),
     call_id: z.string().min(1),
     result: z.unknown(),
-    status: z.enum(["success", "error"]),
+    status: z.enum(["success", "error", "cancelled"]),
     duration_ms: z.number().int().optional(),
     error: z.string().optional(),
     parent_call_id: z.string().optional(),
@@ -17751,6 +18391,7 @@ export const ToolCallResultFrame = z
 
 export const SubagentStartFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_start"),
     session_id: z.string().min(1),
     span_id: z.string().min(1),
@@ -17764,6 +18405,7 @@ export const SubagentStartFrame = z
 
 export const SubagentEndFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_end"),
     session_id: z.string().min(1),
     span_id: z.string().min(1),
@@ -17780,6 +18422,7 @@ export const SubagentEndFrame = z
 
 export const SubagentMessageFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_message"),
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
@@ -17798,6 +18441,7 @@ export const SubagentMessageFrame = z
 
 export const SubagentStateFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_state"),
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
@@ -17845,6 +18489,7 @@ export const TaskRunStatusFrame = z
 
 export const ReplayMessageFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     room_ref: RoomRef.optional(),
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
@@ -17877,6 +18522,7 @@ export const ReplayMessageFrame = z
 
 export const ReplayErrorFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("replay_error"),
     session_id: z.string().min(1),
     entry_id: z.string(),
@@ -17944,6 +18590,7 @@ export const ContextWindowNoticeFrameNotice = z
 
 export const ContextWindowNoticeFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("context_window_notice"),
     session_id: z.string().min(1).max(255),
     turn_id: z.string().min(1).max(128),
@@ -17969,6 +18616,7 @@ export const ProviderFallbackFrame = z
 
 export const ProviderFallbackNote = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("replay_provider_fallback"),
     session_id: z.string().min(1).max(255),
     entry_id: z.string().min(1).max(128),
@@ -18001,6 +18649,7 @@ export const MediaPart = z
 
 export const MediaFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("media"),
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
@@ -18091,6 +18740,7 @@ export const AskUserQuestionCard = z
 
 export const AskUserQuestionFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("ask_user_question"),
     card: AskUserQuestionCard,
   })
@@ -18142,12 +18792,14 @@ export const SessionStateActiveTurn = z
 
 export const SessionStateFrame = z
   .object({
+    history_state: SessionHistoryState.optional(),
     secret_requests: z.array(SessionStateSecretRequest).max(1000).optional(),
     type: z.literal("session_state"),
     user_id: z.string(),
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
+    session_tokens_total: z.number().int().min(0).optional(),
     attention_bound: z.number().int().min(0).optional(),
     auto_approve_modifier: z.boolean().nullable().optional(),
     active_turn: SessionStateActiveTurn.optional(),
@@ -18587,6 +19239,7 @@ export const PlanStatusFrame = z
 
 export const JudgeVerdictFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("judge_verdict"),
     id: z.string(),
     scope: z.enum(["task", "plan", "goal"]),
@@ -18623,6 +19276,7 @@ export const JudgeVerdictFrame = z
 
 export const BrowserHandoverNoticeFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("browser_handover_notice"),
     session_id: z.string().min(1),
     message_id: z.string().min(1),
@@ -18643,6 +19297,7 @@ export const HelperEventFrameEvent = z
 
 export const HelperEventFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("helper_event"),
     session_id: z.string().min(1),
     message_id: z.string().min(1),
@@ -18666,6 +19321,7 @@ export const GoalOutcomeFrameOutcome = z
 
 export const GoalOutcomeFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("goal_outcome"),
     session_id: z.string().min(1),
     message_id: z.string().min(1),
@@ -18749,15 +19405,68 @@ export const BrowserInputControlAckFrame = z
   })
   .strict();
 
+export const SessionHistoryContext = z
+  .object({
+    spans: z.array(z
+    .object({
+      span_id: z.string().min(1),
+      start: SubagentStartFrame.optional(),
+      state: SubagentStateFrame.optional(),
+      message: SubagentMessageFrame.optional(),
+      end: SubagentEndFrame.optional(),
+      has_run: z.boolean().optional(),
+    })
+    .strict()),
+    duplicate_ids: z.array(z
+    .object({
+      kind: z.enum(["message", "tool"]),
+      id: z.string().min(1),
+      canonical_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+      occurrence_count: z.number().int().min(2),
+    })
+    .strict()),
+  })
+  .strict();
+
+export const SessionHistoryPageInfo = z
+  .object({
+    mode: z.enum(["latest", "older", "newer", "window_refresh"]),
+    limit: z.number().int().min(20).max(100),
+    min_rows: z.number().int().min(1).max(100),
+    row_count: z.number().int().min(0),
+    source_group_count: z.number().int().min(0).max(100),
+    soft_byte_budget: z.number().int().min(1),
+    projected_bytes: z.number().int().min(0),
+    byte_budget_exceeded: z.boolean(),
+    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget"]),
+    budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
+    first_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    last_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    stopped_at_clear: z.boolean().optional(),
+    latest_clear: z
+    .object({
+      entry_id: z.string().min(1),
+      history_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+    })
+    .strict().optional(),
+    retention_generation: z.string().min(1),
+    context: SessionHistoryContext,
+  })
+  .strict();
+
 export const SessionSnapshotFrame = z
   .object({
-    secret_requests: z.array(SessionStateSecretRequest).max(1000).optional(),
     type: z.literal("session_snapshot"),
     session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
-    has_earlier_messages: z.boolean().optional(),
+    has_earlier: z.boolean(),
+    has_later: z.boolean(),
+    next_before: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    next_after: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    page_info: SessionHistoryPageInfo,
     reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position", "boot_mismatch"]).optional(),
+    secret_requests: z.array(SessionStateSecretRequest).max(1000).optional(),
   })
   .strict();
 
@@ -18767,7 +19476,7 @@ export const CatchUpCompleteFrame = z
     session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
-    mode: z.enum(["incremental", "snapshot"]),
+    mode: z.enum(["incremental", "snapshot", "live_only"]),
   })
   .strict();
 

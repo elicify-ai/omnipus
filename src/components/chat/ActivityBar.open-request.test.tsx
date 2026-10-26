@@ -1,12 +1,12 @@
-// Sessions Open (squad decision): selecting a session from Sessions requests
-// that session's Activity panel. ActivityBar opens the panel only after that
-// same session is the active chat, then clears the request. A request for a
-// different session must not open this chat's panel and must not be cleared.
-// Expectations come from that decision, not from observed output.
-// The empty-panel sentence is ActivityPanel's own idle copy.
+// Founder ruling 2026-10-25: Sessions/History Open goes straight to chat,
+// with no automatic panel. Q9/P3 explicitly retires the five unused
+// request/consume-API capability cases; manual Activity stays one click away.
+// Q8b removes only the remaining retired request-field dependencies. All
+// five cases keep their other assertions; successful Open is verified through
+// the real UI (no Activity panel and no dialog). Production removal is separate.
 
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render, screen, act } from '@testing-library/react'
 import { renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ActivityBar } from './ActivityBar'
@@ -54,21 +54,11 @@ function session(overrides: Partial<Session> = {}): Session {
 
 const workspace = { id: 'ws-1', name: 'My Workspace' } as Workspace
 
-function renderBar() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
-    <QueryClientProvider client={client}>
-      <ActivityBar />
-    </QueryClientProvider>,
-  )
-}
-
 describe('activity panel request', () => {
   const originalAttach = useSessionStore.getState().attachToSession
 
   beforeEach(() => {
     navigate.mockReset()
-    useUiStore.setState({ activityPanelRequest: null })
     useSessionStore.setState({ activeSessionId: null, attachToSession: originalAttach })
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
     useChatStore.setState({ messages: [] })
@@ -76,50 +66,9 @@ describe('activity panel request', () => {
 
   afterEach(() => {
     useSessionStore.setState({ attachToSession: originalAttach, activeSessionId: null })
-    useUiStore.setState({ activityPanelRequest: null })
   })
 
-  it('stores the requested session id', () => {
-    useUiStore.getState().requestActivityPanel(SESSION_ID)
-    expect(useUiStore.getState().activityPanelRequest).toBe(SESSION_ID)
-  })
-
-  it('replaces an older request so only the latest Open is pending', () => {
-    useUiStore.getState().requestActivityPanel(OTHER_ID)
-    useUiStore.getState().requestActivityPanel(SESSION_ID)
-    expect(useUiStore.getState().activityPanelRequest).toBe(SESSION_ID)
-  })
-
-  it('clears the request only when the consumed id is the one that was requested', () => {
-    useUiStore.getState().requestActivityPanel(SESSION_ID)
-    useUiStore.getState().consumeActivityPanelRequest(OTHER_ID)
-    expect(useUiStore.getState().activityPanelRequest).toBe(SESSION_ID)
-    useUiStore.getState().consumeActivityPanelRequest(SESSION_ID)
-    expect(useUiStore.getState().activityPanelRequest).toBeNull()
-  })
-
-  it('opens the Activity panel once the requested session is the active chat, then clears the request', async () => {
-    useSessionStore.setState({ activeSessionId: SESSION_ID })
-    useUiStore.getState().requestActivityPanel(SESSION_ID)
-    renderBar()
-    await waitFor(() => {
-      expect(screen.getByText('No background activity yet.')).toBeInTheDocument()
-    })
-    expect(useUiStore.getState().activityPanelRequest).toBeNull()
-  })
-
-  it('does not open the panel, and keeps the request, when the active chat is a different session', async () => {
-    useSessionStore.setState({ activeSessionId: SESSION_ID })
-    useUiStore.getState().requestActivityPanel(OTHER_ID)
-    renderBar()
-    await act(async () => {
-      await Promise.resolve()
-    })
-    expect(screen.queryByText('No background activity yet.')).not.toBeInTheDocument()
-    expect(useUiStore.getState().activityPanelRequest).toBe(OTHER_ID)
-  })
-
-  it.each([true, false])('wires origin-row Open through real attach, request store and ActivityBar when transport send=%s', async (sent) => {
+  it.each([false])('wires origin-row Open through real attach, request store and ActivityBar when transport send=%s', async (sent) => {
     // FR-036 / DEP-ACT: neither useSelectSession nor its onSelected callback
     // is mocked. Only the transport send and HTTP listing are external edges.
     const send = vi.fn(() => sent)
@@ -128,10 +77,6 @@ describe('activity panel request', () => {
     useUiStore.setState({ searchModalOpen: true, searchModalMode: 'sessions', searchModalWorkspaceFilter: null, toasts: [] })
     vi.mocked(fetchSessions).mockResolvedValue([session({ background_command_count: 2 })])
     vi.mocked(fetchWorkspaces).mockResolvedValue([workspace])
-    const requests: string[] = []
-    const unsubscribe = useUiStore.subscribe((current, previous) => {
-      if (current.activityPanelRequest !== previous.activityPanelRequest && current.activityPanelRequest) requests.push(current.activityPanelRequest)
-    })
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     try {
       render(<QueryClientProvider client={client}><SearchModal /><ActivityBar /></QueryClientProvider>)
@@ -140,46 +85,37 @@ describe('activity panel request', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Open Plan the release notes' }))
       expect(send).toHaveBeenCalledTimes(1)
       expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'attach_session', session_id: SESSION_ID }))
-      if (sent) {
-        expect(useSessionStore.getState().activeSessionId).toBe(SESSION_ID)
-        expect(requests).toEqual([SESSION_ID])
-        expect(await screen.findByText('No background activity yet.')).toBeInTheDocument()
-        expect(useUiStore.getState().activityPanelRequest).toBeNull()
-        expect(useUiStore.getState().searchModalOpen).toBe(false)
-      } else {
-        expect(requests).toEqual([])
-        expect(useSessionStore.getState().activeSessionId).toBe(OTHER_ID)
-        expect(useUiStore.getState().activityPanelRequest).toBeNull()
-        expect(screen.queryByText('No background activity yet.')).not.toBeInTheDocument()
-        expect(useUiStore.getState().searchModalOpen).toBe(true)
-        expect(useUiStore.getState().toasts.map((toast) => toast.message)).toContain("Connection lost — couldn't open that session. It will not be switched.")
-      }
+      expect(useSessionStore.getState().activeSessionId).toBe(OTHER_ID)
+      expect(screen.queryByText('No background activity yet.')).not.toBeInTheDocument()
+      expect(useUiStore.getState().searchModalOpen).toBe(true)
+      expect(useUiStore.getState().toasts.map((toast) => toast.message)).toContain("Connection lost — couldn't open that session. It will not be switched.")
     } finally {
-      unsubscribe()
       useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
     }
   })
 
-  it('does not consume a real origin-row request in the wrong chat and opens it only after the matching attach', async () => {
+
+  it('Sessions Open attaches successfully without requesting or opening the Activity panel', async () => {
     const send = vi.fn(() => true)
-    useConnectionStore.setState({ connection: { send } as unknown as NonNullable<ReturnType<typeof useConnectionStore.getState>['connection']>, isConnected: true })
-    useUiStore.setState({ searchModalOpen: true, searchModalMode: 'sessions', searchModalWorkspaceFilter: null })
+    useConnectionStore.setState({ connection: { send } as unknown as NonNullable<ReturnType<typeof useConnectionStore.getState>['connection']>, isConnected: true, connectionError: null })
+    useSessionStore.setState({ activeSessionId: OTHER_ID, attachToSession: originalAttach })
+    useUiStore.setState({ searchModalOpen: true, searchModalMode: 'sessions', searchModalWorkspaceFilter: null, searchModalAgentFilter: null, toasts: [] })
     vi.mocked(fetchSessions).mockResolvedValue([session({ background_command_count: 2 })])
     vi.mocked(fetchWorkspaces).mockResolvedValue([workspace])
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     try {
-      render(<QueryClientProvider client={client}><SearchModal /></QueryClientProvider>)
-      await userEvent.click(await screen.findByRole('button', { name: 'Open Plan the release notes' }))
-      expect(useUiStore.getState().activityPanelRequest).toBe(SESSION_ID)
-      act(() => { originalAttach(OTHER_ID, 'chat', 'Other chat', 'mia') })
-      renderBar()
+      render(<QueryClientProvider client={client}><SearchModal /><ActivityBar /></QueryClientProvider>)
+      expect(await screen.findByText('2 background commands running')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Open Plan the release notes' }))
       await act(async () => { await Promise.resolve() })
-      expect(screen.queryByText('No background activity yet.')).not.toBeInTheDocument()
-      expect(useUiStore.getState().activityPanelRequest).toBe(SESSION_ID)
-      act(() => { originalAttach(SESSION_ID, 'chat', 'Plan the release notes', 'mia') })
-      expect(await screen.findByText('No background activity yet.')).toBeInTheDocument()
-      expect(useUiStore.getState().activityPanelRequest).toBeNull()
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'attach_session', session_id: SESSION_ID }))
+      expect(useSessionStore.getState().activeSessionId, 'a no-panel check cannot pass because Open failed').toBe(SESSION_ID)
+      expect(useUiStore.getState().searchModalOpen).toBe(false)
+      expect(screen.queryByText('No background activity yet.'), 'Open must not open the Activity panel automatically').not.toBeInTheDocument()
+      expect(screen.queryByRole('dialog'), 'no modal panel is left over the opened chat').toBeNull()
     } finally {
+      client.clear()
       useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
     }
   })

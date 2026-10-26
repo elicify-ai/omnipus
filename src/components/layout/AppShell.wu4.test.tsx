@@ -16,6 +16,7 @@ import { useToolApprovalStore } from '@/store/toolApproval'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { json, MAIN_ID, NOW, WS } from '../../../tests/l1-room-ui/harness'
+import { wireHistoryPage, wireHistorySnapshot } from '../../../tests/chat-history-paging/legacy-wire'
 import {
   approval, emitFromGateway, MAIN_PATH, mountStage1App, resetStage1App,
   settledMainChat, Stage1Network, stopStage1App,
@@ -67,7 +68,8 @@ async function emitSecretSnapshot(
 ) {
   const frame: SessionStateFrame | SessionSnapshotFrame = carrier === 'session_state'
     ? { type: carrier, session_id: MAIN_ID, user_id: 'stage1-tester', emitted_at: NOW, pending_approvals: [], secret_requests: [entry] }
-    : { type: carrier, session_id: MAIN_ID, seq: 1, secret_requests: [entry] }
+    // D3/D10: complete empty history metadata; the secret is current state.
+    : wireHistorySnapshot(wireHistoryPage(MAIN_ID, [], 0), { seq: 1, secret_requests: [entry] })
   await emitFromGateway(socket, frame)
   await waitFor(() => expect(useSecretRequestStore.getState().byId[entry.request_id]?.request).toEqual(entry))
 }

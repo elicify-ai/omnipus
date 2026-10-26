@@ -459,16 +459,14 @@ func TestU18GetSession_DrillDownReachesRealDelegatedChildUnfiltered(t *testing.T
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "GET /sessions/{childID} must resolve a real delegated child; body=%s", w.Body.String())
 
-	var detail struct {
-		Session  map[string]any            `json:"session"`
-		Messages []session.TranscriptEntry `json:"messages"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
-	require.Len(t, detail.Messages, 1, "the child's own transcript must be returned in full, unfiltered")
-	assert.Equal(t, "delegated work result", detail.Messages[0].Content)
-	assert.Equal(t, child.ID, detail.Session["id"])
-	if psid, ok := detail.Session["parent_session_id"]; ok {
-		assert.Equal(t, parent.ID, psid, "the child's own session detail should surface its parent_session_id")
+	detail := historyMigrationDetail(t, child.ID, w.Body.Bytes(), false)
+	entries := *detail.Messages
+	require.Len(t, entries, 1, "the child's own transcript must be returned in full, unfiltered")
+	require.NotNil(t, entries[0].Content)
+	assert.Equal(t, "delegated work result", *entries[0].Content)
+	assert.Equal(t, child.ID, detail.Session.Id)
+	if detail.Session.ParentSessionId != nil {
+		assert.Equal(t, parent.ID, *detail.Session.ParentSessionId, "the child's own session detail should surface its parent_session_id")
 	}
 }
 

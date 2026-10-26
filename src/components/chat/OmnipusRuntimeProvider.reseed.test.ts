@@ -11,19 +11,22 @@ import { resolveLastActiveAgentId } from './OmnipusRuntimeProvider'
 import { queryClient } from '@/lib/queryClient'
 import { useSessionStore } from '@/store/session'
 import type { Session, SessionDetail } from '@/lib/api'
+import { availableHistoryDetail } from '../../../tests/chat-history-paging/legacy-fixtures'
 
 const SID = 'sess-handover'
 
 function makeSession(over: Partial<Session>): Session {
   return {
     id: SID,
+    agent_id: 'mia',
+    message_count: 0,
     title: 'T',
     type: 'chat',
     status: 'active',
     created_at: '2026-06-10T10:00:00Z',
     updated_at: '2026-06-10T10:05:00Z',
     ...over,
-  } as Session
+  }
 }
 
 describe('resolveLastActiveAgentId', () => {
@@ -35,27 +38,20 @@ describe('resolveLastActiveAgentId', () => {
   it('prefers the live store value over a stale session-detail cache (no live-handover regression)', () => {
     // Live handover already set the store to Jim; a stale cache still shows Mia.
     useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'jim', activeAgentType: 'core' })
-    queryClient.setQueryData(['session-detail', SID], {
-      session: makeSession({ agent_id: 'mia', active_agent_id: 'mia' }),
-      messages: [],
-    } satisfies SessionDetail)
+    queryClient.setQueryData(['session-detail', SID], availableHistoryDetail(
+      makeSession({ agent_id: 'mia', active_agent_id: 'mia' }),
+    ) satisfies SessionDetail)
     expect(resolveLastActiveAgentId(SID)).toBe('jim')
   })
 
   it('prefers active_agent_id from the session-detail cache (post-handover) when no live value', () => {
-    const detail: SessionDetail = {
-      session: makeSession({ agent_id: 'mia', active_agent_id: 'jim' }),
-      messages: [],
-    }
+    const detail: SessionDetail = availableHistoryDetail(makeSession({ agent_id: 'mia', active_agent_id: 'jim' }))
     queryClient.setQueryData(['session-detail', SID], detail)
     expect(resolveLastActiveAgentId(SID)).toBe('jim')
   })
 
   it('falls back to agent_id when active_agent_id is absent in session-detail', () => {
-    const detail: SessionDetail = {
-      session: makeSession({ agent_id: 'mia' }),
-      messages: [],
-    }
+    const detail: SessionDetail = availableHistoryDetail(makeSession({ agent_id: 'mia' }))
     queryClient.setQueryData(['session-detail', SID], detail)
     expect(resolveLastActiveAgentId(SID)).toBe('mia')
   })
