@@ -117,6 +117,8 @@ When the lifetime accounting baseline is known, the response also includes `sess
 
 The response entries keep `history_position` and their recorded `id`. `next_before` and `next_after` exist exactly when their corresponding continuation flag is true and equal the selected first and last positions. Empty and exactly-full terminal pages have no phantom cursor. URL-encode the returned position when using it as a query value.
 
+A saved `provider_fallback` note appears in `entries` — and in available detail's `messages` — as an ordinary entry with `type=provider_fallback`: its `content` is the saved note text verbatim, `model` names the fallback model that actually answered, and the optional `unavailable_model` / `unavailable_code` facts (`rate_limited` or `model_retired`) carry what was recorded when the note was written. Facts an older note never recorded stay omitted (unknown); they are never reconstructed from current settings, and only `model_retired` signals the existing pick-a-new-model hint. The same note replays over WebSocket as a `replay_provider_fallback` frame and was announced live by the separate `provider_fallback` event. A valid saved note is never replaced by the malformed-message placeholder; that placeholder still applies to a genuinely malformed record while its valid neighbours stay intact.
+
 `page_info` preserves effective sizing, logical `row_count`, `source_group_count`, mode, positions, clear/context boundaries, retention generation and bounded public dependencies. Source groups and drawn rows are different: a `turn_canceled` metadata entry keeps its occurrence identity but adds no narration row; a visible clear divider is a system row. The browser normalizes payloads but preserves metadata keys. It validates metadata before committing rows or flags: an invalid individual message with a usable position gets a stable visible placeholder, while contradictory page metadata fails the read.
 
 The browser measures actual drawn height and tops up contiguous pages toward four screens on opening and two new screens during prefetch, stopping at a clear boundary, retained end or visible failure. Range refreshes may need more than five physical pages. A shorter byte-limited page is not by itself proof that the screen-height goal was met.
@@ -159,6 +161,10 @@ While a turn is running, the agent loop emits typed events into the in-process e
 | **Channel / user-facing** | `whatsapp_pairing`, `notification` |
 | **Tasks, plans and goals** | `task_status_changed`, `plan_status_changed`, `goal_status_changed`, `loop_status_changed`, `task_run_status`, `goal_outcome`, `judge_verdict` |
 | **Helpers** | `subagent_message`, `subagent_state` |
+
+The `provider_fallback` event is emitted live when a fallback model answers, including ordinary chats and scheduled turns. Connected chat views receive it without a refresh. The saved fallback note is separate: it is written at turn end, after the assistant answer, once per session and unavailable/answering model pair. Repeated fallback events for that pair do not add duplicate visible notes.
+
+If an event cannot be published because its agent loop or event bus is missing, the server logs **Agent event suppressed: publisher is not initialized** at warning level. The `reason` is `nil_loop` or `nil_event_bus`; `event_kind`, `agent_id`, `turn_id` and `source` identify the attempted event. The `suppressed_total` field counts these suppressed emissions across the current server process. The warning does not include the event payload. It identifies a missing event publisher, not necessarily a failed model call.
 
 ### Who consumes the events
 

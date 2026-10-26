@@ -8,7 +8,6 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -84,30 +83,6 @@ func UseNameKeyedAgentIDsForTest(t interface{ Cleanup(fn func()) }) {
 		}
 		return strings.TrimSuffix(b.String(), "-")
 	})
-}
-
-// FailMCPCredentialRollbackForTest makes add_mcp_server's rollback delete of
-// a stored env credential fail, restoring the real delete when t ends.
-func FailMCPCredentialRollbackForTest(t interface{ Cleanup(f func()) }) {
-	prev := mcpCredentialDelete
-	mcpCredentialDelete = func(*credentials.Store, string) error { return errors.New("injected rollback delete failure") }
-	t.Cleanup(func() { mcpCredentialDelete = prev })
-}
-
-// FailMCPCredentialWriteAfterForTest makes add_mcp_server's env credential
-// writes succeed `ok` times and fail from then on, restoring the real writer
-// when t ends.
-func FailMCPCredentialWriteAfterForTest(t interface{ Cleanup(f func()) }, ok int) {
-	prev := mcpCredentialSet
-	calls := 0
-	mcpCredentialSet = func(store *credentials.Store, name, value string) error {
-		calls++
-		if calls > ok {
-			return errors.New("injected credential write failure")
-		}
-		return prev(store, name, value)
-	}
-	t.Cleanup(func() { mcpCredentialSet = prev })
 }
 
 // FailAgentMetadataReadBackForTest makes update_agent's metadata read-back

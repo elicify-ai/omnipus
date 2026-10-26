@@ -123,6 +123,14 @@ export interface AttachOptions { // not-wire-format: in-browser attach behaviour
   recordForWorkspace?: boolean
 }
 
+/** #1437: a chat address that names its session (`/sessions/{id}` deep links
+ *  redirect here with the id in the address). Present, it overrides the
+ *  workspace's remembered pointer for that entry — the linked chat wins even
+ *  after another tab changed what this browser last remembered. */
+export interface EnterWorkspaceChatOptions { // not-wire-format: in-browser entry directive; never sent to the gateway
+  linkedSessionId?: string
+}
+
 interface SessionStore {
   activeSessionId: string | null
   activeAgentId: string | null
@@ -254,7 +262,7 @@ interface SessionStore {
    * callers/tests can await the server round-trip in that last branch; every
    * other branch resolves immediately.
    */
-  enterWorkspaceChat: (workspaceId: string) => Promise<void>
+  enterWorkspaceChat: (workspaceId: string, options?: EnterWorkspaceChatOptions) => Promise<void>
   /**
    * Workspaces currently mid-flight verifying a remembered session against
    * the server (see `enterWorkspaceChat` / `resolveRememberedSessionFromServer`
@@ -677,5 +685,5 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   sessionByWorkspace: {},
   resolvingSessionForWorkspace: {},
 
-  enterWorkspaceChat: (workspaceId: string) => runWorkspaceEntry(workspaceId),
+  enterWorkspaceChat: (workspaceId, options) => runWorkspaceEntry(workspaceId, options?.linkedSessionId),
 }))

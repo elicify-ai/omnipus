@@ -10,10 +10,12 @@ on:
   # supported platform and its targets are gone). Keep `push:main` so a
   # successful merge still produces a build artifact for the
   # release-drafter / nightly tooling that depends on it.
-  pull_request: { }
+  # Draft and ready PRs qualify by BASE, not by source-branch naming.
+  pull_request:
+    branches: [main, release/v0.1.1]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches: [main, release/v0.1.1]
 
 jobs:
   build:

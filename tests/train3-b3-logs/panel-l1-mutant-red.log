@@ -1,0 +1,104 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f
+
+ ❯ src/components/agents/ToolApprovalPanel.l1.test.tsx (17 tests | 4 failed) 7560ms
+   × FR-092 / BDD-11.2 / R6: helper approval is inline in the Omnipus root while another workspace is active 51ms
+   × FR-240/251 / R2/R6: receiver root displays exact server origin "'while answering Anna on tg-1'" 33ms
+   × FR-240/251 / R2/R6: receiver root displays exact server origin "'asked by Mia'" 31ms
+   × FR-240/251 / R2/R6: receiver root displays exact server origin "'for group Sales'" 27ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/agents/ToolApprovalPanel.l1.test.tsx > FR-092 / BDD-11.2 / R6: helper approval is inline in the Omnipus root while another workspace is active
+Error: [2mexpect([22m[31melement[39m[2m).toHaveTextContent()[22m
+
+Expected element to have text content:
+[32m  asked by Omnipus[39m
+Received:
+[31m  Tool Approval RequiredSetup helper is requesting permission to run a tool.Asked from a helper or run in another session.Open runToolRun commandCommandnpm run build && git pushdir: workChained command — each part needs approvalPart 1writenpm run buildPart 2networkgit pushArguments{ "command": "npm run build && git push", "cwd": "work" }Expires in10m 0sAllow this exact commandAllow commands starting with npm run build, git pushApprove OnceDenyAlways AllowCancel[39m
+ ❯ src/components/agents/ToolApprovalPanel.l1.test.tsx:58:17
+     56|   expect(panel).toBeInTheDocument()
+     57|   expect(panel).toHaveTextContent('Setup helper')
+     58|   expect(panel).toHaveTextContent('asked by Omnipus')
+       |                 ^
+     59|   expect(screen.getByTestId('approval-open-run')).toHaveTextContent(/o…
+     60|   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  src/components/agents/ToolApprovalPanel.l1.test.tsx > FR-240/251 / R2/R6: receiver root displays exact server origin "'while answering Anna on tg-1'"
+Error: [2mexpect([22m[31melement[39m[2m).toHaveTextContent()[22m
+
+Expected element to have text content:
+[32m  while answering Anna on tg-1[39m
+Received:
+[31m  Tool Approval RequiredSetup helper is requesting permission to run a tool.Asked from a helper or run in another session.Open runToolRun commandCommandnpm run build && git pushdir: workChained command — each part needs approvalPart 1writenpm run buildPart 2networkgit pushArguments{ "command": "npm run build && git push", "cwd": "work" }Expires in10m 0sAllow this exact commandAllow commands starting with npm run build, git pushApprove OnceDenyAlways AllowCancel[39m
+ ❯ src/components/agents/ToolApprovalPanel.l1.test.tsx:95:53
+     93|   mount()
+     94|   enqueue({ ...request, root_session_id: 'receiver-main', origin_label…
+     95|   expect(screen.getByTestId('tool-approval-panel')).toHaveTextContent(…
+       |                                                     ^
+     96|   expect(screen.getByTestId('tool-approval-panel')).toHaveTextContent(…
+     97|   // K7 element-level pin (Train 3 CI cause F re-aim): the origin rend…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  src/components/agents/ToolApprovalPanel.l1.test.tsx > FR-240/251 / R2/R6: receiver root displays exact server origin "'asked by Mia'"
+Error: [2mexpect([22m[31melement[39m[2m).toHaveTextContent()[22m
+
+Expected element to have text content:
+[32m  asked by Mia[39m
+Received:
+[31m  Tool Approval RequiredSetup helper is requesting permission to run a tool.Asked from a helper or run in another session.Open runToolRun commandCommandnpm run build && git pushdir: workChained command — each part needs approvalPart 1writenpm run buildPart 2networkgit pushArguments{ "command": "npm run build && git push", "cwd": "work" }Expires in10m 0sAllow this exact commandAllow commands starting with npm run build, git pushApprove OnceDenyAlways AllowCancel[39m
+ ❯ src/components/agents/ToolApprovalPanel.l1.test.tsx:95:53
+     93|   mount()
+     94|   enqueue({ ...request, root_session_id: 'receiver-main', origin_label…
+     95|   expect(screen.getByTestId('tool-approval-panel')).toHaveTextContent(…
+       |                                                     ^
+     96|   expect(screen.getByTestId('tool-approval-panel')).toHaveTextContent(…
+     97|   // K7 element-level pin (Train 3 CI cause F re-aim): the origin rend…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  src/components/agents/ToolApprovalPanel.l1.test.tsx > FR-240/251 / R2/R6: receiver root displays exact server origin "'for group Sales'"
+Error: [2mexpect([22m[31melement[39m[2m).toHaveTextContent()[22m
+
+Expected element to have text content:
+[32m  for group Sales[39m
+Received:
+[31m  Tool Approval RequiredSetup helper is requesting permission to run a tool.Asked from a helper or run in another session.Open runToolRun commandCommandnpm run build && git pushdir: workChained command — each part needs approvalPart 1writenpm run buildPart 2networkgit pushArguments{ "command": "npm run build && git push", "cwd": "work" }Expires in10m 0sAllow this exact commandAllow commands starting with npm run build, git pushApprove OnceDenyAlways AllowCancel[39m
+ ❯ src/components/agents/ToolApprovalPanel.l1.test.tsx:95:53
+     93|   mount()
+     94|   enqueue({ ...request, root_session_id: 'receiver-main', origin_label…
+     95|   expect(screen.getByTestId('tool-approval-panel')).toHaveTextContent(…
+       |                                                     ^
+     96|   expect(screen.getByTestId('tool-approval-panel')).toHaveTextContent(…
+     97|   // K7 element-level pin (Train 3 CI cause F re-aim): the origin rend…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 13 passed (17)
+   Start at  21:31:31
+   Duration  11.23s (transform 1.15s, setup 341ms, import 1.45s, tests 7.56s, environment 1.61s)
+
+exit=1

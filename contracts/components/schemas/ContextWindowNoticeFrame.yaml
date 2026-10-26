@@ -3,7 +3,12 @@ description: >
   Server → client classified context-window diagnostic (ADR-066 MAJ-CW-009).
   Live and replay use the same frame with the original transcript entry_id
   and timestamp. Retained independently of the browser's Verbose chat
-  preference; hidden notices still advance the session cursor.
+  preference. Hidden notices do NOT advance the session cursor (2026-10-25,
+  architect ruling arch-q33 — the earlier sentence claiming they do was
+  stale pre-#823 wording): the client's resume point is the seq cursor
+  minted at catch_up_complete (CatchUpCompleteFrame.seq), and neither
+  snapshot replay frames nor hidden diagnostics move it. This frame's
+  required timestamp exists for row identity and dedup, not for resuming.
 type: object
 required:
   - type
@@ -51,7 +56,8 @@ properties:
       increasing and gap-free within the session, assigned by the gateway's per-session
       hub as the single chokepoint through which every session-scoped frame is published.
       Optional: absent on an unsequenced copy of this frame (for example a broadcast
-      delivered to a tab that is not bound to this session) — the client only advances its
-      per-session cursor for frames that carry seq. The client stores the highest seq it
-      has applied per session and sends it back as since_seq on attach_session; frames at
+      delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is
+      committed only by a completed catch-up (catch_up_complete) and is sent back as
+      since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier
+      sentence here described per-frame cursor advance, which was stale). Frames at
       or below that cursor are ignored, which makes re-delivery idempotent.

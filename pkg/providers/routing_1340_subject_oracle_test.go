@@ -108,8 +108,11 @@ func TestRouting1340_AvailabilitySubjectOracle(t *testing.T) {
 			if got == nil {
 				t.Fatal("ClassifyError returned nil for a 400 provider error")
 			}
-			if got.Status != 400 || got.IsRetriable() {
-				t.Errorf("ClassifyError status=%d retriable=%t, want status 400 and non-retriable for %q", got.Status, got.IsRetriable(), tc.message)
+			// Spec change (founder Q70, 2026-10-24): bad_model is now
+			// retriable (falls back to the backup); format stays terminal.
+			// The subject oracle above is unchanged.
+			if wantRetriable := tc.wantBadModel; got.Status != 400 || got.IsRetriable() != wantRetriable {
+				t.Errorf("ClassifyError status=%d retriable=%t, want status 400 and retriable=%t for %q", got.Status, got.IsRetriable(), wantRetriable, tc.message)
 			}
 			if got.Provider != "openrouter" || got.Model != tc.model {
 				t.Errorf("ClassifyError identity=%q/%q, want openrouter/%q (failing attempt must keep its identity)", got.Provider, got.Model, tc.model)

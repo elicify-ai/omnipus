@@ -122,6 +122,9 @@ function assistantMsg(id: string, model: string): ChatMessage {
 // ── Store reset ───────────────────────────────────────────────────────────────
 
 beforeEach(() => {
+  // Reused session ids represent independent tests, not a returning browser.
+  // Do not inherit another test's explicit per-session model choice.
+  localStorage.removeItem('omnipus.sessionModelChoice.v1')
   vi.clearAllMocks()
   act(() => {
     useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1' })

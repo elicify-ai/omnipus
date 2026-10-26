@@ -519,6 +519,13 @@ func (r *ToolRegistry) ExecuteWithContext(
 	channel, chatID string,
 	asyncCallback AsyncCallback,
 ) *ToolResult {
+	tool, ok := r.Get(name)
+	if ok {
+		// Rejected secret-shaped inputs never enter the args log below.
+		if refusal := ToolArgumentRefusal(tool, args); refusal != nil {
+			return refusal
+		}
+	}
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
 			"tool": name,
@@ -534,7 +541,6 @@ func (r *ToolRegistry) ExecuteWithContext(
 	mediaStore := r.mediaStore
 	r.mu.RUnlock()
 
-	tool, ok := r.Get(name)
 	if !ok {
 		if canonical, retired := retiredToolCanonicalNames[name]; retired {
 			logger.WarnCF("tool", "Tool call used a retired name",

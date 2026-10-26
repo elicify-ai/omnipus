@@ -74,6 +74,10 @@ import (
 // applies WITHIN an "allow" (Auto mode) or "ask" (Ask mode) ceiling, which
 // the upstream allow/ask/deny gate alone cannot express.
 type ExecToolDeps struct {
+	// PrivateEnv supplies the turn's agent-private variables (FR-076). They
+	// are appended after every managed environment layer. Nil = none.
+	PrivateEnv PrivateEnvSource
+
 	// GodMode reflects agent.GodModeActive(cfg), resolved ONCE at wiring time.
 	// When true, ApplyChildHardening/sandbox.Run are skipped entirely and the
 	// command runs with full host latitude (see runUnconstrained).
@@ -209,6 +213,9 @@ type ExecTool struct {
 	backgroundSweepFn func(ctx context.Context, command, cwd, baseDir string, started time.Time, result *ToolResult) *ToolResult
 
 	documentRuntime *documentruntime.Layout
+
+	// privateEnv: see ExecToolDeps.PrivateEnv.
+	privateEnv PrivateEnvSource
 }
 
 // SetDocumentRuntime makes the versioned document toolchain reachable from
@@ -280,6 +287,7 @@ func NewExecToolWithDeps(
 	tool.approvalRequester = deps.ApprovalRequester
 	tool.approvalGrants = deps.ApprovalGrants
 	tool.commandRules = deps.CommandRules
+	tool.privateEnv = deps.PrivateEnv
 	return tool, nil
 }
 
@@ -650,6 +658,14 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	default:
 		execEnv = composeExecutionEnv(scrubbedEnv(os.Environ()), docLayer, rtLayer)
 	}
+
+	// FR-076: the owner pair's selected private variables reach this child
+	// only, appended after every managed layer; never the gateway env.
+	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
+	for _, private := range privateVars {
+		execEnv = withPrivateVariable(execEnv, private.Name, private.Value)
+	}
+	turnNotice = joinNotice(turnNotice, privateNotice)
 
 	if runInBackground {
 		ownerSessionID := ToolTranscriptSessionID(ctx)

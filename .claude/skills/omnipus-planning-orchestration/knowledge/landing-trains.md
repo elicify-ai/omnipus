@@ -1,6 +1,6 @@
 # Landing trains — candidate preparation and verification
 
-Last reviewed: 2026-10-23
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 
 Root `CLAUDE.md` is the rule source: "Landing trains", "Feature ownership", "Change
 sizes and the review gate", "CI scope and remote pre-flight", "CI quarantine",
@@ -60,11 +60,14 @@ a pass. No full work/lane workflow, cancellation loop or per-fix full Fly tier i
 of this procedure. Use shared-rules "Build and test" for targeted checks and approved
 Fly pre-flight. Agent-text-only work retains the root reviewer exception.
 
-For quarantine, inspect the single tracked list and the machine-produced qualified
-verdict under root "CI quarantine". Retain issue links and distinguish every listed
-exception from an unlisted red. A manually interpreted red is not that verdict. If the
-backend mechanism or list is not available, state the gap; only the existing explicit
-founder deferral can accept a raw red, and nothing is reported as an unqualified green.
+For quarantine, use the implemented list and required **CI** aggregate linked from
+root `CLAUDE.md` ("CI implementation pointer", "CI quarantine"). Read its summary
+for exact exception scopes, issue links and dependent checks not run; leaf jobs and
+the overall workflow banner may stay red. An unlisted failure or missing evidence
+blocks that aggregate. Re-running failed jobs uses the latest attempt evidence;
+never describe retained earlier successes as freshly executed on the new commit.
+Use the pinned implementation guide when the release-based checkout predates that
+CI implementation; a missing mechanism in an older tree is not a qualified pass.
 
 ## 4. Run the hands-on pipeline on the candidate
 

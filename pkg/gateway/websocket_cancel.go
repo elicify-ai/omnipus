@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -183,22 +184,15 @@ func cancelIncompleteSubtreeSummary(report steer.CancelReport) string {
 	return summary + "; " + stillRunning
 }
 
-// sendCancelPartialNotice publishes the one-line PARTIAL-STOP notice as a
-// session error frame through the session hub (#823: every bound tab sees
-// it, numbered and journaled), with an unsequenced copy for an unbound
-// requester — the same delivery rule as the cancel_stage frame it
-// accompanies.
+// sendCancelPartialNotice persists and pushes the PARTIAL-STOP sentence as
+// a non-terminal, recipient-scoped header notice. Cascade facts remain on
+// cancel_stage; the notice must not finish this session's newer reply.
 func (h *WSHandler) sendCancelPartialNotice(wc *wsConn, sessionID string, report steer.CancelReport) {
 	message := cancelPartialSummary(report)
 	if message == "" {
 		return
 	}
-	sid := sessionID
-	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeError), generated.ErrorFrame{
-		Type:      string(generated.WsFrameTypeError),
-		SessionId: &sid,
-		Message:   message,
-	}, wc)
+	h.publishStopNotice(wc, sessionID, "partial", "Stop was incomplete", message, notifications.SeverityWarning)
 }
 
 func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, sessionID string, report steer.CancelReport) {
@@ -327,18 +321,13 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 		// a cancel that IS proceeding. Reusing "graceful" here (as the
 		// no-active-turn case just above does, deliberately, for the
 		// still-pending case) would claim progress that never happened —
-		// over-signaling in exactly the place this fix must not. ErrorFrame
-		// is the right existing wire type instead: it is documented as
-		// "session-scoped... SPA displays the message as a toast or inline
-		// error... does NOT terminate the WebSocket connection" — precisely
-		// "something the user asked for did not happen", with no enum to
-		// extend and no contract change required.
+		// over-signaling in exactly the place this fix must not. These are
+		// operational Stop outcomes, not chat-turn exits: use the persisted,
+		// recipient-scoped notification path so a later reply stays intact.
 		OnStopSettled: func(sid string, err error) {
 			if err != nil && wc != nil {
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type: string(generated.WsFrameTypeError), SessionId: &sid,
-					Message: "Stop could not finish; required storage or notice publication failed. Retry after storage is repaired.",
-				})
+				h.publishStopNotice(wc, sid, "settled", "Stop could not finish",
+					"Stop could not finish; required storage or notice publication failed. Retry after storage is repaired.", notifications.SeverityError)
 			}
 		},
 		OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
@@ -359,16 +348,8 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 				)
 				return
 			}
-			var sidPtr *string
-			if scope.SessionID != "" {
-				sidCopy := scope.SessionID
-				sidPtr = &sidCopy
-			}
-			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:      string(generated.WsFrameTypeError),
-				SessionId: sidPtr,
-				Message:   "Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.",
-			})
+			h.publishStopNotice(wc, scope.SessionID, "latch", "Stop did not take effect",
+				"Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.", notifications.SeverityWarning)
 		},
 	}
 }
@@ -431,10 +412,8 @@ func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll 
 	if err != nil {
 		slog.Warn("ws: handleCancel: RequestCancel error",
 			"session_id", sessionID, "error", err)
-		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:    string(generated.WsFrameTypeError),
-			Message: "cancel failed: the Stop request could not be completed. Details are in the server log.",
-		})
+		h.publishStopNotice(wc, sessionID, "failed", "Stop could not be completed",
+			"cancel failed: the Stop request could not be completed. Details are in the server log.", notifications.SeverityError)
 		return
 	}
 	if !outcome.Fired {

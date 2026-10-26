@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SmartSelect } from '@/components/ui/smart-select'
+import { ErrorState } from '@/components/ui/error-state'
 import {
   fetchChannelConfig,
   configureChannel,
@@ -30,6 +31,7 @@ import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
 import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
+import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
 import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 // CONFIGURED_SENTINEL is the backend's redaction placeholder for stored secrets
@@ -68,13 +70,10 @@ interface ChannelConfigPanelProps {
    * the QR renders by default ("the UI must only offer what the binary can do").
    */
   nativeAvailable?: boolean
-  /**
-   * Whether the channel is currently enabled. Used to gate the WhatsApp QR
-   * pairing UI: whatsmeow only starts the QR handshake after the channel is
-   * enabled, so we show an informational prompt when enabled is false/undefined
-   * rather than starting the 15-second QR timeout with no chance of a QR arriving.
-   */
+  /** Current ChannelEntry.enabled from the parent's live channels query. */
   enabled?: boolean
+  /** A failed channels readback is unknown, not a confirmed disabled state. */
+  enabledStateUnknown?: boolean
 }
 
 // #326: Map raw snake_case API field keys to human-readable labels using the
@@ -409,6 +408,7 @@ export function ChannelConfigPanel({
   onOpenChange,
   nativeAvailable,
   enabled,
+  enabledStateUnknown = false,
 }: ChannelConfigPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -425,11 +425,18 @@ export function ChannelConfigPanel({
   // enter a new value to replace)" placeholder/help note and satisfies
   // required-field validation without requiring a retype.
   const [hasStoredSecret, setHasStoredSecret] = useState<Record<string, boolean>>({})
-  // Tracks whether Save & Enable was just clicked in this panel session. Needed because
-  // the `enabled` prop comes from the parent's stale state after Save & Enable keeps the
-  // dialog open — without this, the panel would keep showing the enable-prompt even after
-  // the channel was just enabled in this session.
-  const [wasJustEnabled, setWasJustEnabled] = useState(false)
+  // Subscribe after Configure succeeds, before Enable settles. This is only
+  // observation interest, never evidence that the channel enabled or started.
+  const [configuredForEnable, setConfiguredForEnable] = useState<string | null>(null)
+  const panelSessionRef = useRef(0)
+  useEffect(() => {
+    panelSessionRef.current += 1
+    setConfiguredForEnable(null)
+    return () => {
+      // Closing, switching channel or unmounting makes old local callbacks inert.
+      panelSessionRef.current += 1
+    }
+  }, [channelId, open])
 
   // #324 — Google Chat auth method picker. Switching method clears the other
   // group's useState value so a stale secret cannot be resurrected on switch-back (F-G08).
@@ -544,7 +551,6 @@ export function ChannelConfigPanel({
   // of re-showing the real stored config.
   useEffect(() => {
     if (!open) {
-      setWasJustEnabled(false)
       setSelectedWorkspaceId('')
       setSelectedAgentId('__none__')
       setFieldErrors({})
@@ -654,46 +660,47 @@ export function ChannelConfigPanel({
   })
 
   const { mutate: doSaveAndEnable, isPending: savingAndEnabling } = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({ channelId: targetId, panelSession }: { channelId: string; panelSession: number }) => {
       const errors = validateRequired(fields, getValue, isGoogleChat, gChatAuthMethod, hasStoredSecret)
       if (Object.keys(errors).length > 0) {
         setFieldErrors(errors)
         focusFirstInvalidField(errors)
         throw new Error('Please fill in the required fields')
       }
-      await configureChannel(channelId, buildSubmitPayload())
-      await enableChannel(channelId)
+      await configureChannel(targetId, buildSubmitPayload())
+      if (panelSessionRef.current === panelSession) setConfiguredForEnable(targetId)
+      await enableChannel(targetId)
     },
-    onSuccess: () => {
+    onSuccess: (_, { channelId: targetId, panelSession }) => {
+      if (panelSessionRef.current !== panelSession) return
       isDirtyRef.current = false
       setFieldErrors({})
-      queryClient.invalidateQueries({ queryKey: ['channels'] })
-      queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
-      // #358: channels with a live pairing flow (WhatsApp native) must keep the panel
-      // open after enable so the QR — pushed over the whatsapp_pairing WS frame once the
-      // backend starts the channel — can render in WhatsAppNativeNotice. Closing here
-      // unmounts the notice and drops its subscription before any QR frame arrives, which
-      // is why "Enable & Save" never showed a code. Other channels have no pairing step.
-      // Base-type match: namespaced instances ("whatsapp.sales") have the same
-      // pairing flow as the bare instance — an exact-id match here closed the
-      // panel on enable and the QR could never render.
-      const hasPairingFlow = baseType === WHATSAPP_CHANNEL_ID
+      // Keep WhatsApp's viewer open; enabled is not proof of a QR or linked phone.
+      const hasPairingFlow = targetId.split('.')[0] === WHATSAPP_CHANNEL_ID
       addToast({
         message: hasPairingFlow
-          ? 'Channel enabled — scan the QR code below to link your device'
+          ? 'Channel enabled — waiting for pairing status'
           : 'Channel configured and enabled',
         variant: 'success',
       })
-      if (hasPairingFlow) {
-        setWasJustEnabled(true)
-      } else {
-        onOpenChange(false)
-      }
+      if (!hasPairingFlow) onOpenChange(false)
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, { channelId: targetId, panelSession }) => {
+      if (panelSessionRef.current !== panelSession) return
       if (err instanceof Error && err.message === 'Please fill in the required fields') return
-      const rawMsg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to enable channel'
-      addToast({ message: mapErrorsToHumanLabels(fields, rawMsg), variant: 'error' })
+      // Do not remap the server's WhatsApp pairing instructions as form fields.
+      const rawMsg = targetId.split('.')[0] === WHATSAPP_CHANNEL_ID
+        ? getWhatsAppEnableErrorMessage(err, 'Failed to enable channel')
+        : mapErrorsToHumanLabels(fields, isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to enable channel')
+      addToast({ message: rawMsg, variant: 'error' })
+    },
+    onSettled: async (_, __, { channelId: targetId }) => {
+      // Even a 500 can follow a durable enable. Keep observing until readback
+      // finishes, then use current ChannelEntry state, never the error's wording.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['channels'] }),
+        queryClient.invalidateQueries({ queryKey: ['channel-config', targetId] }),
+      ])
     },
   })
 
@@ -955,9 +962,9 @@ export function ChannelConfigPanel({
                 QR pairing UI (#283) — but only when the server build can run
                 native WhatsApp. On a lite/stub build (native_available:false) show
                 a hint instead of a QR that can never pair (#299).
-                When the channel is not yet enabled, show an informational prompt
-                instead of starting the 15-second QR timeout: whatsmeow only
-                generates a QR after the channel is enabled. */}
+                Observe as soon as Configure succeeds while enable is pending;
+                after readback, only a currently enabled entry keeps the viewer.
+                A failed readback is unknown, not a disabled or enabled claim. */}
             {isWhatsApp &&
               (whatsAppNativeUnavailable ? (
                 <p
@@ -967,8 +974,13 @@ export function ChannelConfigPanel({
                   WhatsApp requires the native build (whatsmeow); this server build
                   doesn&apos;t include it, so linked-device pairing is unavailable.
                 </p>
-              ) : (enabled || wasJustEnabled) ? (
+              ) : open && (enabled === true || (savingAndEnabling && configuredForEnable === channelId)) ? (
                 <WhatsAppNativeNotice channelId={channelId} />
+              ) : enabledStateUnknown ? (
+                <ErrorState
+                  message="Could not confirm whether WhatsApp is enabled."
+                  onRetry={() => queryClient.invalidateQueries({ queryKey: ['channels'] })}
+                />
               ) : (
                 <p
                   data-testid="whatsapp-enable-prompt"
@@ -1117,7 +1129,7 @@ export function ChannelConfigPanel({
             <div className="flex flex-col gap-[var(--space-2)] pt-[var(--space-2)] border-t border-[var(--color-border)]">
               <Button
                 className="w-full gap-[var(--space-1)]"
-                onClick={() => doSaveAndEnable()}
+                onClick={() => doSaveAndEnable({ channelId, panelSession: panelSessionRef.current })}
                 disabled={isBusy}
               >
                 <Lightning size={13} weight="fill" />

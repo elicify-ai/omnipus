@@ -50,16 +50,18 @@ function rawPanel(search: SearchRecord): WorkspacePanelId | undefined {
 }
 
 function hasForeignKey(search: SearchRecord): boolean {
-  return Object.keys(search).some((key) => key !== 'panel' && key !== 'agent')
+  return Object.keys(search).some((key) => key !== 'panel' && key !== 'agent' && key !== 'open')
 }
 
-/** Keep `agent` (declared, SP-23) and an optional `panel=library`. Every
- * other key is set undefined so the encoder drops it. */
+/** Keep `agent` (declared, SP-23), `open` (declared, #1437 — the linked
+ * chat's session id) and an optional `panel=library`. Every other key is set
+ * undefined so the encoder drops it. */
 function cleanedSearch(prev: SearchRecord, panel: WorkspacePanelId | undefined): SearchRecord {
   const next: SearchRecord = {}
   for (const key of Object.keys(prev)) next[key] = undefined
   if (panel) next.panel = panel
   if (typeof prev.agent === 'string') next.agent = prev.agent
+  if (typeof prev.open === 'string') next.open = prev.open
   return next
 }
 

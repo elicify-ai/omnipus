@@ -130,18 +130,10 @@ func TestNewCustomAgentToolsCfg_GoalClaimAndBrowserHandoverAreExplicit(t *testin
 	require.True(t, ok, "customs' default allowlist must have an explicit policy for goal_claim")
 	assert.Equal(t, config.ToolPolicyAllow, p, "customs' default allowlist goal_claim must be allow")
 
-	// browser_handover: deny. This value equals the denyAllThenOverride
-	// floor by design (a fresh custom agent holds no browser action set to
-	// stand down from — see the conservative initial allow-list below,
-	// which grants no browser_* tool), so the runtime map cannot itself
-	// distinguish "explicit deny via override" from "floor deny via
-	// absence". The explicitness this test can prove is that the key is
-	// present with the intended value; the override literal itself
-	// (pkg/coreagent/core.go, this function's overrides map) is the
-	// source-level proof R-12 asked for.
+	// SPEC.md Table (2026-10-22): all browser_* tools, including handover, default Allow for Main.
 	p, ok = cfg.Builtin.Policies["browser_handover"]
 	require.True(t, ok, "customs' default allowlist must have an explicit policy for browser_handover")
-	assert.Equal(t, config.ToolPolicyDeny, p, "customs' default allowlist browser_handover must be deny")
+	assert.Equal(t, config.ToolPolicyAllow, p, "customs' default browser_handover must be allow")
 }
 
 // TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances verifies that each core
@@ -191,7 +183,9 @@ func TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances(t *testing.T) {
 func TestJimSeed_DenyDefaultWithExplicitAllows(t *testing.T) {
 	policies := coreAgentSeed(IDJim)
 
-	for _, toolName := range []string{"bash", "serve_web"} {
+	// SPEC.md Table (2026-10-22): serve_web is Main core Allow; Jim's bash Deny is unchanged.
+	assert.Equal(t, config.ToolPolicyAllow, ADR090RolePolicyInventory(IDJim)["serve_web"])
+	for _, toolName := range []string{"bash"} {
 		p, ok := policies[toolName]
 		require.True(t, ok, "Jim must have explicit policy for %q", toolName)
 		assert.Equal(t, config.ToolPolicyDeny, p,
@@ -221,8 +215,9 @@ func TestJimSeed_DenyDefaultWithExplicitAllows(t *testing.T) {
 func TestJimSeed_ConsentGatedDeleteTools(t *testing.T) {
 	policies := coreAgentSeed(IDJim)
 
+	// SPEC.md Table (2026-10-22): delete_task is Ask; management deletions remain out of role.
+	assert.Equal(t, config.ToolPolicyAsk, ADR090RolePolicyInventory(IDJim)["delete_task"])
 	for _, toolName := range []string{
-		"delete_task",
 		"delete_workspace", "remove_mcp_server",
 	} {
 		p, ok := policies[toolName]

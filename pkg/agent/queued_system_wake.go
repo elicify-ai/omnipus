@@ -63,8 +63,9 @@ func (al *AgentLoop) commitQueuedSystemWakeLocked(lifecycle *session.LifecycleSt
 		return fmt.Errorf("steer: queued wake requires a message ID")
 	}
 	item := steeringQueueItem{
-		message: providers.Message{Role: "user", Content: content},
-		wake:    &steeringWake{messageID: messageID, transcriptSessionID: claim.SessionID, agentID: agentID},
+		message:         providers.Message{Role: "user", Content: content},
+		wake:            &steeringWake{messageID: messageID, transcriptSessionID: claim.SessionID, agentID: agentID},
+		secretRequestID: secretResumeIDFromMessage(messageID),
 	}
 	duplicate := queuedSteeringWake(entry.wakeInputs, messageID)
 	if duplicate != nil && (!reflect.DeepEqual(duplicate.message, item.message) || *duplicate.wake != *item.wake) {
@@ -74,7 +75,9 @@ func (al *AgentLoop) commitQueuedSystemWakeLocked(lifecycle *session.LifecycleSt
 	if saved {
 		pendingMessage, savedID = "", messageID
 	}
-	if duplicate != nil {
+	if duplicate != nil || item.secretRequestID != "" {
+		// Secret input is retained on this admission, but must not enter
+		// reconstruction's pending text before its actual claim on promotion.
 		pendingMessage = ""
 	}
 	if _, err := commitSteeredExecutionStateWithSaved(lifecycle, claim, session.LifecycleQueued, pendingMessage, savedID); err != nil {

@@ -40,17 +40,21 @@ const CurrentVersion = 1
 
 // Config is the current config structure with version support
 type Config struct {
-	Version   int                              `json:"version"             yaml:"-"` // schema version for migration
-	Agents    AgentsConfig                     `json:"agents"              yaml:"-"`
-	Bindings  []AgentBinding                   `json:"bindings,omitempty"  yaml:"-"`
-	Session   SessionConfig                    `json:"session,omitempty"   yaml:"-"`
-	Channels  map[string]ChannelInstanceConfig `json:"channels"            yaml:"channels"`
-	Providers []*ModelConfig                   `json:"providers"           yaml:"providers"` // Configured providers with credentials
-	Gateway   GatewayConfig                    `json:"gateway"             yaml:"-"`
-	Hooks     HooksConfig                      `json:"hooks,omitempty"     yaml:"-"`
-	Tools     ToolsConfig                      `json:"tools"               yaml:",inline"`
-	Schedules SchedulesConfig                  `json:"schedules,omitempty" yaml:"-"`
-	Voice     VoiceConfig                      `json:"voice"               yaml:"-"`
+	Version  int                              `json:"version"             yaml:"-"` // schema version for migration
+	Agents   AgentsConfig                     `json:"agents"              yaml:"-"`
+	Bindings []AgentBinding                   `json:"bindings,omitempty"  yaml:"-"`
+	Session  SessionConfig                    `json:"session,omitempty"   yaml:"-"`
+	Channels map[string]ChannelInstanceConfig `json:"channels"            yaml:"channels"`
+	// channelOrder belongs to this exact runtime snapshot, never to config.json.
+	// Populate only before publication; Clone preserves it without rebinding.
+	channelOrder        map[string]uint64
+	channelOrderChanged map[string]bool // this unpublished write's protected entries
+	Providers           []*ModelConfig  `json:"providers"           yaml:"providers"` // Configured providers with credentials
+	Gateway             GatewayConfig   `json:"gateway"             yaml:"-"`
+	Hooks               HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
+	Tools               ToolsConfig     `json:"tools"               yaml:",inline"`
+	Schedules           SchedulesConfig `json:"schedules,omitempty" yaml:"-"`
+	Voice               VoiceConfig     `json:"voice"               yaml:"-"`
 	// Mailboxes holds email mailbox accounts (M11), keyed agent ID → workspace
 	// ID → mailbox: every (agent, workspace) pair may hold its own mailbox — an
 	// agent plays different roles in different workspaces and can have a
@@ -193,7 +197,8 @@ type Config struct {
 	// RegisterSensitiveValues (e.g., resolved credential store values). These
 	// supplement the reflection-walked SecureString fields so that *Ref-based
 	// credentials are also scrubbed from LLM output and audit logs.
-	registeredSensitive []string
+	registeredSensitive   []string
+	storedSensitiveSource func() ([]string, error)
 }
 
 // OmnipusStorageConfig holds storage-related settings per Appendix E §E.5.4.
@@ -294,10 +299,12 @@ func (c *Config) Clone() (*Config, error) {
 	// so the next SensitiveDataReplacer rebuilds from this carried set.
 	c.sensitiveMu.RLock()
 	registered := append([]string(nil), c.registeredSensitive...)
+	clone.storedSensitiveSource = c.storedSensitiveSource
 	c.sensitiveMu.RUnlock()
 	if len(registered) > 0 {
 		clone.RegisterSensitiveValues(registered)
 	}
+	clone.CopyChannelOrderFrom(c)
 	return clone, nil
 }
 
@@ -2407,7 +2414,7 @@ type CredentialStore interface {
 // documented credential boot contract, ADR-004: NewStore → Unlock →
 // LoadConfigWithStore → InjectFromConfig → ...).
 func LoadConfigWithStore(path string, store CredentialStore) (*Config, error) {
-	return loadConfigInternal(path, store, nil)
+	return loadConfigWithSensitiveSource(path, store, nil)
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -2449,7 +2456,7 @@ func LoadConfigWithStoreAndSelfHealHook(
 	store CredentialStore,
 	onSelfHeal SelfHealWriteHook,
 ) (*Config, error) {
-	return loadConfigInternal(path, store, onSelfHeal)
+	return loadConfigWithSensitiveSource(path, store, onSelfHeal)
 }
 
 // seedPublicURLFromEnv fills cfg.Gateway.PublicURL from $DEVPOD_PREVIEW_URL when

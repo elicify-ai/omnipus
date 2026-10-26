@@ -4,10 +4,11 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
@@ -27,10 +28,9 @@ func TestWU3ProductionWiringPassesGodModeToSystemTools(t *testing.T) {
 		name      string
 		godMode   bool
 		effective string
-		clamped   int
 	}{
-		{"god mode on", true, "allow", 0},
-		{"god mode off", false, "ask", 1},
+		{"god mode on", true, "allow"},
+		{"god mode off", false, "ask"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rc := wu3BootRunContext(t, func(cfg *config.Config) {
@@ -50,13 +50,12 @@ func TestWU3ProductionWiringPassesGodModeToSystemTools(t *testing.T) {
 			require.True(t, ok)
 			res := tool.Execute(tools.WithAgentID(context.Background(), "omnipus"), map[string]any{"id": "god-mode-subject"})
 			require.False(t, res.IsError, res.ForLLM)
-			var body struct {
-				Effective map[string]string `json:"effective_policies"`
-				Clamped   []map[string]any  `json:"clamped"`
-			}
-			require.NoError(t, json.Unmarshal([]byte(res.ForLLM), &body), res.ForLLM)
-			assert.Equal(t, tc.effective, body.Effective["read_file"])
-			assert.Len(t, body.Clamped, tc.clamped)
+			// SPEC.md compact output: production-wired read-back is plain text, not effective_policies/clamped JSON.
+			state, err := agentstore.New(rc.homePath).ReadState("god-mode-subject")
+			require.NoError(t, err)
+			header := fmt.Sprintf("agent: god-mode-subject | name: Subject | kind: main | revision: %s", state.Revision)
+			body := defaultToolsParseCompact(t, res.ForLLM, header, rc.centralBuiltinReg.All())
+			assert.Equal(t, tc.effective, body["read_file"], "production-wired God Mode must govern the compact effective policy")
 		})
 	}
 }

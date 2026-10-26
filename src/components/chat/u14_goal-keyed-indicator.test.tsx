@@ -1,44 +1,6 @@
-// RED pack — WC-RESUME RED·U13/U14, unit U14 (FR-039; DEL-F39–40).
-//
-// Spec source: docs/internal/specs/session-core-spec.md
-//   FR-039 — "Thinking/error indicators MUST join their own producing
-//            run/turn/message goal_id to exact keyed merged criteria; unknown
-//            neutral. Delete only latest-goal-wins indicator selection."
-//   DEL-F39–40 — old branch: the InlineThinkingIndicator / FallbackToolUI /
-//            VirtualAssistantMessageRow indicator use of the shared scalar
-//            `goalStatus` (latest frame across all goals). Replacement:
-//            "producer run/turn/message goal_id → goalPills/mergeGoalPillFrame
-//            with exact merged criteria, neutral if unknown."
-//   C-GOAL UI — "Matching empty active goal may show setup; different/
-//            nonempty/unknown uses ordinary/neutral state."; "FR-039 forbids
-//            scalar/latest/_default indicator choice."
-//   BDD-12.5   — "a matching G1 setup only; b G2/ordinary never relabelled G1;
-//            c neutral."
-//
-// Oracle provenance: the spec's replacement column.
-//   * UNKNOWN (message carries no goal association) MUST be neutral — the
-//     generic rotating pool — even while some OTHER goal is live and
-//     record-empty. The latest-goal-wins scalar reading treats the live frame
-//     as if it described this message, which is exactly the deleted branch.
-//   * KEYED (message belongs to G1, whose record is empty) MUST show G1's own
-//     setup label, never G2's state — even when G2 is the latest frame.
-//
-// FIELD-NAME ASSUMPTION (stated, not hidden): the producing message's goal
-// association is read here as `message.goalId` (the camelCase twin of the
-// wire `goal_id`, matching the existing `turnId`/`agentId` convention on
-// ChatMessage). The spec names the association by meaning ("run/turn/message
-// goal_id"), not by TS field name — if the frontend-lead's GREEN lands a
-// different field name, update ONLY this harness, not the assertions.
-//
-// NOTE for GREEN: this pack's UNKNOWN-neutral case contradicts the existing
-// `ChatScreen.goal-aware-thinking-indicator.test.tsx` first case (which seeds
-// an active-empty goal as the latest scalar and expects "Framing your goal"
-// for a message with no goal association). DEL-F39–40 removes that scalar
-// reading, so that case is part of the change and must be updated, not kept.
-//
-// Harness mirrors ChatScreen.goal-aware-thinking-indicator.test.tsx exactly
-// ('@assistant-ui/react' left UNMOCKED, ChatScreen mounted inside a real
-// AssistantRuntimeProvider via the real useOmnipusRuntime hook).
+// Founder 2026-10-21: active-form-or-fixed-fallback copy replaces goal setup labels.
+// Keep the real live runtime and producing-goal fixtures: unknown, own and
+// unrelated goals must not replace the fallback or borrow another goal's copy.
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, within } from '@testing-library/react'
@@ -245,10 +207,9 @@ describe('U14/DEL-F39–40 — thinking indicator joins the producing message go
     expect(within(bubble).getByText(GENERIC_THINKING_RE)).toBeInTheDocument()
   })
 
-  it('shows the producing message\'s OWN goal G1 setup label, never the latest goal G2 state', async () => {
-    // BDD-12.5 "a matching G1 setup only; b G2/ordinary never relabelled G1".
-    // The message belongs to G1 (record still empty); G2 is the latest scalar
-    // frame and its record is populated. The indicator must follow G1.
+  it('uses fallback for its own goal G1 without borrowing goal G2 copy', async () => {
+    // The message belongs to empty G1 while populated G2 is the latest scalar.
+    // Neither state supplies status text without a current active form.
     const sid = 'u14_indicator_keyed'
     seedStreamingAssistant({
       sid,
@@ -262,7 +223,8 @@ describe('U14/DEL-F39–40 — thinking indicator joins the producing message go
 
     const container = await renderChatScreen()
     const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-    expect(within(bubble).getByText('Framing your goal')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent(GENERIC_THINKING_RE)
+    expect(within(bubble).queryByText('Framing your goal')).not.toBeInTheDocument()
   })
 
   it('falls back to the generic pool when the producing message\'s OWN goal record is populated (positive control)', async () => {

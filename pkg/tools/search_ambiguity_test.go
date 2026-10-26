@@ -175,8 +175,8 @@ func TestAmbiguity_ZeroOrNegativeScoreNeverPromoted(t *testing.T) {
 func TestAdministrativeToolNames_Drift(t *testing.T) {
 	want := []string{
 		"delete_agent", "delete_task", "delete_workspace",
-		"remove_mcp_server", "remove_skill", "disable_channel", "enable_channel",
-		"add_mcp_server", "configure_channel", "configure_provider", "set_config",
+		"remove_mcp_server", "remove_secret", "remove_skill", "disable_channel", "enable_channel",
+		"add_mcp_server", "configure_channel", "configure_provider", "connect_channel", "set_config",
 		"stop_plan", "environment_setup",
 	}
 	got := AdministrativeToolNames()

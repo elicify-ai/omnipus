@@ -18,6 +18,7 @@ import type {
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 import type { UserDeliveryState } from '@/lib/userDeliveryState'
+import type { SessionModelChoice } from './model-choice'
 
 /**
  * #823 catch-up redesign (BE-DESIGN.md §6.1) — the SPA's per-session
@@ -175,6 +176,8 @@ export interface PendingFirstSend {
   sessionId: string | null
   assistantPlaceholderId: string
   status: FirstSendStatus
+  /** Browser-local explicit draft choice; only this message's receipt may save it. */
+  modelChoice?: SessionModelChoice
 }
 
 export type ChatMessage = Message & {
@@ -367,26 +370,8 @@ export type ChatMessage = Message & {
    * the de-dup key, there is no separate domain id to carry.
    */
   browserHandoverNoticeId?: string
-  /**
-   * provider-messages spec US-6/FB-1…FB-4 — set ONLY on the synthetic
-   * `role: 'system'` ChatMessage the provider-frames handler inserts for a
-   * `provider_fallback` frame (live) or a `replay_provider_fallback` note
-   * (persisted transcript carrier). Purely a render-time discriminator
-   * (mirrors `goalAckGoalId`/`browserHandoverNoticeId`'s identical role) so
-   * ChatScreen's two system-row renderers can draw the grey event line with
-   * the exact §6 copy. The message id is the transcript entry's own id on
-   * the replay path (stable dedup across replays); on the live path it is
-   * SPA-generated — a reconnect wipes history (session_snapshot) and the
-   * replay carrier re-inserts the persisted note, so no duplicate survives.
-   * Never serialized to the wire — this field is SPA bookkeeping; the note
-   * itself comes off the wire in both directions.
-   */
-  providerFallbackNote?: {
-    /** The exact §6 one-liner — SPA-assembled from the live frame's models, server-assembled on the replay carrier. */
-    message: string
-    /** D12 — true when `unavailable_code` is `model_retired`; adds the pick-a-new-model hint line. */
-    pickNewModelHint?: boolean
-  }
+  // providerFallbackNote is declared once on the API-normalized Message
+  // (src/lib/api/sessions.ts::ProviderFallbackNoteMarker); ChatMessage inherits it.
 }
 
 export interface QueuedOutboundMessage {
@@ -988,9 +973,12 @@ export interface ChatStore extends HistorySlice {
    * outgoing message. The composer model selector writes the picker's
    * value here; the AssistantUI runtime reads it in `onNew` and threads
    * it into `sendMessage` as `model_name` (forwarded to the server as
-   * `metadata.model_name` in the WS frame). Cleared after each send
-   * so the next session reopen re-derives the default from transcript
-   * history or the agent's `model` config (per spec §18 Q3).
+   * `metadata.model_name` in the WS frame). Never cleared after a send —
+   * a pick stays sticky for the conversation's page life; on navigating
+   * away and back (or a reload), the picker restores the session's latest
+   * explicit choice (#1436, src/store/chat/model-choice.ts) or, when the
+   * session has none, re-derives the seed from transcript history or the
+   * agent's `model` config (per spec §18 Q3).
    */
   nextModel: string | null
   /**
@@ -999,19 +987,23 @@ export interface ChatStore extends HistorySlice {
    * picker shows the check on ONLY the picked provider's row when two
    * providers serve the same model slug. null = the value was seeded from
    * transcript/agent-default, not picked; the picker then derives the
-   * display provider via the first-provider lookup. Today this is consumed
+   * display provider via `resolveUniqueModelProvider` — a row only when
+   * exactly ONE usable provider serves the slug, no row when several do
+   * (H6 R2: the old first-provider lookup presented list order as if it
+   * were a recorded choice). Today this is consumed
    * by the DISPLAY only — `MessageFrame.metadata` has no provider sibling
    * for `model_name` on the wire; if the contract gains one
    * (`metadata.provider`), this is the value to send with it.
    */
   nextModelProvider: string | null
+  /** The current user pick, not a restored/derived seed. Snapshotted into an ordinary first send. */
+  explicitNextModelChoice: SessionModelChoice | null
   /**
-   * Set the next-turn model override (called by the composer). `provider`
-   * records which provider row the pick was made under (H6 pair identity);
-   * omitted → null — the seed path (transcript/agent default) carries no
-   * provider.
+   * Set the next-turn pair. source='user' records an explicit selector action;
+   * restored choices and transcript/agent seeds omit it. Only the explicit
+   * choice is eligible to travel with a new chat's pending first message.
    */
-  setNextModel: (model: string | null, provider?: string | null) => void
+  setNextModel: (model: string | null, provider?: string | null, source?: 'user') => void
 
   // ── Actions that operate on the foreground session ───────────────────────────
   setReplaying: (value: boolean) => void

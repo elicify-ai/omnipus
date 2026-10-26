@@ -397,7 +397,7 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 	if ts := turnStateFromContext(ctx); ts != nil {
 		origin = ts.currentApprovalOrigin()
 	}
-	return approver.RequestApproval(ctx, PolicyApprovalReq{
+	approved, denialReason, recordGrant = approver.RequestApproval(ctx, PolicyApprovalReq{
 		ToolCallID:  toolCallID,
 		ToolName:    toolName,
 		Args:        cloneStringAnyMap(args),
@@ -407,6 +407,17 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		RoomRef:     origin.roomRefCopy(),
 		OriginLabel: origin.Label,
 	})
+	// A session Stop is control, not an ordinary refusal for the model to
+	// interpret. The owning chat may have withdrawn this helper's approval
+	// without targeting any of its already-running siblings. End only the
+	// exact execution that was waiting; user Deny/Cancel still just refuse
+	// the call. This also covers shell pre-flight approvals through this gate.
+	if !approved && denialReason == "session canceled" {
+		if ts := turnStateFromContext(ctx); ts != nil && ts.transcriptSessionID == sessionID && ts.turnID == turnID {
+			ts.requestHardAbort()
+		}
+	}
+	return approved, denialReason, recordGrant
 }
 
 // checkStandingGrant reports whether a standing "Always Allow" grant already

@@ -216,7 +216,7 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 	// The admission wake is "on its way": another turn admitted before it is
 	// processed must not publish a second copy of the same text.
 	al.claimWakeSlot(requestID)
-	if err := al.publishRequestWake(pubCtx, a.Receiver, requestID, receiverSessionID, entry.Content); err != nil {
+	if err := al.publishRequestWake(pubCtx, a.Receiver, a.Sender, requestID, receiverSessionID, entry.Content); err != nil {
 		al.heldRepublished.Delete(requestID)
 		// The request is durable in the receiver's main and answerable; only
 		// the turn start failed. It is HELD exactly like a request for a stopped
@@ -256,8 +256,12 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 //
 // extra adds metadata to the wake (a group-chat room request adds its no-join
 // marker and room id, room_request.go) - the same one publication site.
-func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing.Pair, requestID, receiverSessionID, content string, extra ...map[string]string) error {
+func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing.Pair, sender addressing.Sender, requestID, receiverSessionID, content string, extra ...map[string]string) error {
 	meta := map[string]string{"agent_id": receiver.AgentID, "workspace_id": receiver.WorkspaceID, ownerWakeMetadataKey: "1"}
+	if sender.Agent.AgentID != "" {
+		// §6.18: the receiving turn's origin is this peer ("asked by <Agent>").
+		meta[requestSenderAgentMetadataKey] = sender.Agent.AgentID
+	}
 	for _, m := range extra {
 		for k, v := range m {
 			meta[k] = v

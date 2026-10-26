@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/utils"
@@ -820,8 +821,8 @@ func (al *AgentLoop) resolveSystemMessageWorkspaceID(msg bus.InboundMessage, tra
 }
 
 // processSteeredSystemWake reconstructs a durable steering-session turn from
-// its lifecycle record. The consumed marker is the idempotency boundary: a
-// replayed wake is acknowledged without starting another turn.
+// its lifecycle record. Ordinary inbox wakes use their consumed marker;
+// secret-only direct-bus wakes use the mandatory request-id claim instead.
 func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (resp string, runErr error) {
 	sessionID := msg.AsyncTranscriptSessionID
 	messageID := inboundMetadata(msg, "steer_message_id")
@@ -845,15 +846,25 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if store == nil {
 		return "", fmt.Errorf("steer: wake: transcript store for %q is not available", sessionID)
 	}
-	marker := "consumed " + messageID
+	rec, generation, secretHandled, secretErr := al.prepareSecretSteeredWake(ctx, &msg, rec, generation)
+	if secretErr != nil || secretHandled {
+		return "", secretErr
+	}
+	secretID := inboundMetadata(msg, secretResumeMetadataKey)
+	marker := ""
+	if secretID == "" {
+		marker = "consumed " + messageID
+	}
 	entries, readErr := store.ReadTranscript(sessionID)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return "", fmt.Errorf("steer: wake: read transcript: %w", readErr)
 	}
 	for _, entry := range entries {
-		if entry.Content == marker {
-			if inbox := al.GetMessageInboxStore(); inbox != nil {
-				_ = inbox.Ack(sessionID, []string{messageID})
+		if (secretID == "" && entry.Content == marker) || (secretID != "" && entry.ID == secretrequest.ResumeEntryID(secretID)) {
+			if secretID == "" {
+				if inbox := al.GetMessageInboxStore(); inbox != nil {
+					_ = inbox.Ack(sessionID, []string{messageID})
+				}
 			}
 			return "", nil
 		}
@@ -1028,7 +1039,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		rec = running
 	}
 
-	if consumeErr := al.consumeSteeredWake(ctx, ts, store, sessionID, messageID, marker, rec.AgentID, saved); consumeErr != nil {
+	if proceed, consumeErr := al.consumeAdmittedWake(ctx, ts, store, sessionID, messageID, secretID, marker, rec.AgentID, saved); consumeErr != nil || !proceed {
 		abort()
 		return "", consumeErr
 	}
@@ -1050,6 +1061,29 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	rootExecution.recordTurnOutcome(err)
 	return result.finalContent, err
+}
+
+// consumeAdmittedWake is processSteeredSystemWake's consumption step, run
+// only once admission is certain. A secret-only wake has no inbox row: its
+// successful request-id claim is the sole consumption boundary, and redundant
+// writes after it could strand an already-claimed request before the body.
+// Ordinary wakes (and saved wake inputs) still owe their one marker and
+// acknowledgement. proceed=false with a nil error means a secret wake whose
+// claim was already taken: stop without running the turn.
+func (al *AgentLoop) consumeAdmittedWake(ctx context.Context, ts *turnState, store *session.UnifiedStore,
+	sessionID, messageID, secretID, marker, agentID string, saved bool,
+) (proceed bool, err error) {
+	claimed, err := al.claimAdmittedSecretWake(secretID, sessionID, ts)
+	if err != nil || !claimed {
+		return false, err
+	}
+	if secretID != "" {
+		return true, nil
+	}
+	if err := al.consumeSteeredWake(ctx, ts, store, sessionID, messageID, marker, agentID, saved); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // consumeSteeredWake writes the wake's one durable consumption marker and its

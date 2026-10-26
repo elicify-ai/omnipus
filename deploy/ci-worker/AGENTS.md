@@ -3,13 +3,15 @@
 Scoped guidance for the `deploy/ci-worker/` directory. Loaded automatically by Claude Code
 whenever a file in this directory (or a descendant) is read.
 
-Last reviewed: 2026-10-23 — delivery policy
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 
 **Before using any recipe below:** apply root `CLAUDE.md` ("CI scope and remote
 pre-flight" and "CI quarantine"). These are runner capabilities, not permission to
 run full CI on a lane. Use the shared skill's "Build and test" procedure for
-approval/pre-flight receipts. The trigger restriction and quarantine automation are
-separate backend work; this text does not claim either is implemented.
+approval/pre-flight receipts. GitHub trigger selection and the required CI
+aggregate quarantine are implemented at the revision linked from root
+"CI implementation pointer"; raw Fly gate verdicts do not apply that aggregate.
+PR eligibility is by destination base, not source-branch prefix or draft state.
 
 ## ⚠️ "ALL GATES GREEN" from this worker does NOT mean races were checked
 

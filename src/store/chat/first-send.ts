@@ -107,6 +107,7 @@ export function startOrdinaryFirstSend(
   const payload = structuredClone(outbound)
   const attemptGeneration = context.get().firstSendGeneration + 1
   const assistantPlaceholderId = generateId()
+  const choice = context.get().explicitNextModelChoice
   const pending: PendingFirstSend = {
     clientMessageId: payload.client_message_id,
     payload,
@@ -115,6 +116,9 @@ export function startOrdinaryFirstSend(
     sessionId: null,
     assistantPlaceholderId,
     status: 'sending',
+    // Capture the pair with this immutable request, never read the foreground
+    // model when its receipt arrives: another chat may be selected by then.
+    ...(choice && choice.model === payload.metadata?.model_name ? { modelChoice: { ...choice } } : {}),
   }
   const user: ChatMessage = {
     id: pending.clientMessageId,

@@ -16,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // agentLoopRunTurnResponseCallLLMWithRetries carries the shared state of callLLMWithRetries across its stages.
@@ -890,8 +891,11 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 	}
 
 	rr.normalizedToolCalls = make([]providers.ToolCall, 0, len(rr.rq.ri.rf.response.ToolCalls))
+	rr.argumentRefusals = make([]*tools.ToolResult, 0, len(rr.rq.ri.rf.response.ToolCalls))
 	for _, tc := range rr.rq.ri.rf.response.ToolCalls {
-		rr.normalizedToolCalls = append(rr.normalizedToolCalls, providers.NormalizeToolCall(tc))
+		call, refusal := valueFreeRefusedToolCall(rr.rq.ri.rf.rt.ts.agent.Tools, providers.NormalizeToolCall(tc))
+		rr.normalizedToolCalls = append(rr.normalizedToolCalls, call)
+		rr.argumentRefusals = append(rr.argumentRefusals, refusal)
 	}
 
 	toolNames := make([]string, 0, len(rr.normalizedToolCalls))

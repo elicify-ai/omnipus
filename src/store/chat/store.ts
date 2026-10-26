@@ -292,16 +292,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // init. See ChatStore.pendingAutoApproveChoice's doc comment.
     pendingAutoApproveChoice: null,
     setPendingAutoApproveChoice: (choice) => set({ pendingAutoApproveChoice: choice }),
-    // Phase 1 / FR-008/009/010: per-thread model override for the next
-    // outgoing message. null means "no override" — the server uses the
-    // agent's `model` config. The composer writes here on picker
-    // change; the runtime reads here in onNew and clears it.
+    // The runtime reads this pair for sends. Only a selector action records
+    // an explicit choice to snapshot with a pending first message; restoring
+    // another session's pair releases that foreground choice, not its snapshot.
     nextModel: null,
-    // H6 (provider hotfix 2026-10-13): provider row the nextModel pick was
-    // made under — the picker's (provider, model) selection identity. null
-    // = seeded, not picked; see the twin comment on the ChatStore type.
     nextModelProvider: null,
-    setNextModel: (model, provider) => set({ nextModel: model, nextModelProvider: provider ?? null }),
+    explicitNextModelChoice: null,
+    setNextModel: (model, provider, source) => set({
+      nextModel: model, nextModelProvider: provider ?? null,
+      explicitNextModelChoice: source === 'user' && model ? { model, provider: provider ?? null } : null,
+    }),
 
     setReplaying: (value) => {
       const sid = getActiveSid()
