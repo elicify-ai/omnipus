@@ -1845,7 +1845,13 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 //     3. It has NO manifest-note presence (the full tier has none).
 //     4. Boundary preserved (ADR-090 §5.4: "initial visibility does not
 //     grant permission"): for Jim, whose seeded ADR-090 policy denies
-//     get_workspace, the upfront name never reaches the defs.
+//     bash, the upfront name never reaches the defs. Spec change (founder
+//     Q85, 2026-10-25): the 2026-10-22 default-tools table wins — Jim
+//     (Main) now holds get_workspace allow, so the boundary probe moved
+//     from get_workspace to bash, the one per-agent carve-out the table
+//     kept (jim bash deny survives, pkg/coreagent/seed.go) and itself an
+//     ADR-090 §5.4 upfront name (pkg/tools/manifest.go
+//     fullManifestToolNames).
 //
 // Traces to: ADR-090 §5.4; pkg/tools/manifest.go fullManifestToolNames;
 // superseding the ADR-071 D3 §4.1 pin this function previously held.
@@ -1913,23 +1919,29 @@ func TestGetWorkspace_UpfrontFullTier_ADR090(t *testing.T) {
 		"get_workspace (ManifestFull) must have no manifest-note presence")
 
 	// BOUNDARY (ADR-090 §5.4: upfront visibility never grants permission):
-	// Jim's ADR-090 seeded policy denies get_workspace, so the same upfront
-	// name must never reach his defs.
+	// a seeded policy deny must keep an upfront name out of the defs even
+	// though the name is in the global upfront set. Spec change (founder
+	// Q85, 2026-10-25): the 2026-10-22 default-tools table wins, so Jim
+	// (Main) now holds get_workspace allow and the probe moved to bash —
+	// the one per-agent carve-out the table kept (Jim's bash deny survives
+	// the seed, pkg/coreagent/seed.go), itself an ADR-090 §5.4 upfront name
+	// (pkg/tools/manifest.go fullManifestToolNames) and registered for
+	// every agent (pkg/agent/loop_wire.go wireExecToolDepsOn).
 	jimAgent, ok := al.registry.GetAgent("jim")
 	require.True(t, ok, "jim must be in registry")
-	jimAgent.Tools.Register(&fakeGetWorkspaceTool{})
 	jimFiltered, _ := tools.FilterToolsByPolicy(jimAgent.Tools.GetAll(), jimAgent.AgentType, jimAgent.LoadToolPolicy())
-	var jimHasGetWorkspace bool
+	var jimHasBash bool
 	for _, t2 := range jimFiltered {
-		if t2.Name() == "get_workspace" {
-			jimHasGetWorkspace = true
+		if t2.Name() == "bash" {
+			jimHasBash = true
 		}
 	}
-	require.False(t, jimHasGetWorkspace,
-		"fixture: Jim's ADR-090 seeded policy must deny get_workspace for the boundary half to be non-vacuous")
-	jimDefs := mustBuildCompressedToolDefs(t, al, fakeTurnState(jimAgent, "sess-jim-get-workspace-adr090"), jimFiltered)
+	require.False(t, jimHasBash,
+		"fixture: Jim's ADR-090 seeded policy must deny bash (founder Q85, 2026-10-25: the 2026-10-22 "+
+			"default-tools table keeps bash per-agent and deny for Jim) for the boundary half to be non-vacuous")
+	jimDefs := mustBuildCompressedToolDefs(t, al, fakeTurnState(jimAgent, "sess-jim-boundary-adr090"), jimFiltered)
 	for _, d := range jimDefs {
-		assert.NotEqual(t, "get_workspace", d.Function.Name,
+		assert.NotEqual(t, "bash", d.Function.Name,
 			"ADR-090 §5.4 boundary: the upfront name must NOT reach the defs of an agent whose policy denies it")
 	}
 }

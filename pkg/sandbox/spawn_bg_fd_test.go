@@ -53,7 +53,10 @@ func TestSpawn_NoLeakedParentFD_AfterStart(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
-	case <-done:
+	case waitErr := <-done:
+		if waitErr != nil {
+			t.Fatalf("background child exited with error: %v", waitErr)
+		}
 	case <-time.After(5 * time.Second):
 		if killErr := cmd.Process.Kill(); killErr != nil {
 			_ = killErr

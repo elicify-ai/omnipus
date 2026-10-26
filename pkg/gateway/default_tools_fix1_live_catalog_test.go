@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -81,7 +82,8 @@ func fix1InventoryPolicyRows(t *testing.T, raw, header string, expected []tools.
 	require.Equal(t, header, lines[0])
 	require.Len(t, lines, len(expected)+1, "every expected catalog tool appears once, with no extra sections")
 	policies := map[string]string{}
-	var names, wanted []string
+	names := slices.Grow([]string(nil), len(lines)-1)
+	wanted := slices.Grow([]string(nil), len(expected))
 	for _, line := range lines[1:] {
 		parts := strings.SplitN(line, " | ", 3)
 		require.GreaterOrEqual(t, len(parts), 2)

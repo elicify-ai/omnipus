@@ -13,6 +13,14 @@ import (
 )
 
 // not-wire-format: independent founder Q10=A fixture, never a gateway type.
+// SPEC CHANGE (founder Q74, 2026-10-24, scoped by the early train review):
+// the required-active_form rule applies to set_todos ONLY. The shared fixture
+// keeps its original normalization+length oracle — Board/API writes may omit
+// active_form, so the other consumers (pkg/task, the REST handler, the
+// frontend display tests) keep the fixture's own expectations. THIS tool test
+// overlays the required rule on inputs that normalize to empty (the
+// Expected == "" branches below); trim normalization for non-empty values
+// and the 38-case count are unchanged.
 type q10FormCase struct {
 	Name     string `json:"name"`
 	Input    string `json:"input"`
@@ -49,6 +57,18 @@ func TestTodosActiveFormQ10Normalization(t *testing.T) {
 							require.Nil(t, got, "rejected parse must not return a partial todo list")
 							return
 						}
+						if tc.Expected == "" {
+							// set_todos-only required rule (founder Q74): input
+							// that normalizes to empty is rejected by the tool,
+							// while the shared fixture's other consumers accept
+							// it as omitted.
+							if err == nil {
+								t.Fatalf("empty-after-trim active_form must be rejected by set_todos, parse accepted %q", tc.Input)
+							}
+							assertActiveFormRequiredErrorText(t, err.Error(), 0)
+							require.Nil(t, got, "rejected parse must not return a partial todo list")
+							return
+						}
 						require.NoError(t, err, "normalization precedes the length check")
 						require.Equal(t, want, got, "parsed active_form must be normalized exactly, preserving legitimate joiners/RTL")
 						return
@@ -61,6 +81,13 @@ func TestTodosActiveFormQ10Normalization(t *testing.T) {
 					if tc.Reject {
 						require.True(t, result.IsError, "501 normalized code points must not be saved")
 						require.Equal(t, lengthError, result.ForLLM)
+						require.Empty(t, cards, "rejected tool input must not create a task")
+						return
+					}
+					if tc.Expected == "" {
+						// set_todos-only required rule (founder Q74): see the
+						// parse branch above.
+						assertActiveFormRequiredRejection(t, result, 0)
 						require.Empty(t, cards, "rejected tool input must not create a task")
 						return
 					}

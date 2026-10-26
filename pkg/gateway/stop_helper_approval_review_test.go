@@ -93,7 +93,8 @@ func reviewPauseStop(t *testing.T, f *stopHelperApprovalFixture, parent string, 
 
 func reviewReleaseStop(t *testing.T, f *stopHelperApprovalFixture, done <-chan struct{}) {
 	t.Helper()
-	gate := gatewaySteerCanceller(f.al).(*reviewApprovalStopGate)
+	gate, ok := gatewaySteerCanceller(f.al).(*reviewApprovalStopGate)
+	require.True(t, ok, "Stop canceller must be the installed *reviewApprovalStopGate")
 	gate.unblock.Do(func() { close(gate.release) })
 	select {
 	case <-done:
@@ -262,7 +263,9 @@ func reviewParentOwnApproval(t *testing.T) {
 	f.h.handleCancel(f.wc, parent)
 	for _, entry := range []*approvalEntry{own, helper, nested} {
 		require.Equal(t, ApprovalStateDeniedCancel, f.state(entry.ApprovalID), "Stop must cover the parent's own Ask as well as helpers")
-		_, err := os.Stat(filepath.Join(f.workDir, entry.Args["path"].(string)))
+		path, ok := entry.Args["path"].(string)
+		require.True(t, ok, "approval %s path must be a string, got %T", entry.ApprovalID, entry.Args["path"])
+		_, err := os.Stat(filepath.Join(f.workDir, path))
 		require.ErrorIs(t, err, os.ErrNotExist)
 	}
 	f.awaitState(t, child, session.LifecycleStopped)

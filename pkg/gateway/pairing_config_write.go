@@ -33,13 +33,13 @@ func (a *restAPI) prepareConfigJSONLocked(mutate func(map[string]any) error) ([]
 	}
 	var doc map[string]any
 	var before config.Config
-	if err := json.Unmarshal(raw, &doc); err != nil {
+	if err = json.Unmarshal(raw, &doc); err != nil {
 		return nil, nil, nil, fmt.Errorf("parse config: %w", err)
 	}
-	if err := json.Unmarshal(raw, &before); err != nil {
+	if err = json.Unmarshal(raw, &before); err != nil {
 		return nil, nil, nil, fmt.Errorf("parse config: %w", err)
 	}
-	if err := mutate(doc); err != nil {
+	if err = mutate(doc); err != nil {
 		return nil, nil, nil, err
 	}
 	if v, ok := doc["version"].(float64); !ok || int(v) < config.CurrentVersion {
@@ -109,7 +109,7 @@ func (a *restAPI) orderedConfigJSONLocked(store *channels.PairingAttempts, fixed
 		return err
 	}
 	commit.ProtectDeletes(exclusiveDeletes...)
-	if err := fileutil.WriteFileAtomic(a.configPath(), out, 0o600); err != nil {
+	if err = fileutil.WriteFileAtomic(a.configPath(), out, 0o600); err != nil {
 		return err // no ready/revoke transition before persistence
 	}
 	err = a.applyWrittenConfigLocked(out, candidate)
@@ -127,7 +127,8 @@ func (a *restAPI) publishPairingAfterConfigUnlock(progress []channels.PairingPro
 	}
 	go func() {
 		a.configMu.Lock()
+		publisher := a.agentLoop
 		a.configMu.Unlock()
-		a.agentLoop.PublishPairingProgress(progress)
+		publisher.PublishPairingProgress(progress)
 	}()
 }

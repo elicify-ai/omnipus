@@ -92,7 +92,7 @@ interface ModelSelectorProps {
    * form fields and elements with an explicit tabindex attribute). Every
    * call site historically relied on this being optional and omitted it,
    * which soft-locked keyboard users on Safari at any required Model field
-   * (e.g. agent-creation wizard Step 1). Callers may still override.
+   * (e.g. onboarding's first-agent step). Callers may still override.
    */
   tabIndex?: number
   /** Prefix for each item's data-testid. The full id is `${itemTestIdPrefix}${model}`. */
@@ -195,6 +195,20 @@ interface ModelSelectorProps {
   catalogGroups?: ModelCatalogGroup[]
   /** ADR-068 FR-019 — see `ModelSelectorProviderFilter`. */
   filterProviders?: ModelSelectorProviderFilter
+  /**
+   * #1436: the agent's default model slug. When set, the matching row carries
+   * a visible "Default" chip so the user can see which model is the default
+   * and switch back to it deliberately — independent of which row is
+   * currently chosen. Cosmetic only: it never changes selection or emits.
+   */
+  defaultModel?: string | null
+  /**
+   * #1436: the provider the agent's default model is served under. With it,
+   * the Default chip marks the exact (provider, model) row — a second
+   * provider serving the same slug stays unmarked. Without it, the chip
+   * falls back to marking the slug wherever it appears.
+   */
+  defaultProvider?: string | null
 }
 
 /** One rendered line of catalog mode: a vendor heading or a pickable model. */
@@ -211,7 +225,7 @@ type CatalogRow =
 /** Height used to lay out the virtualised list, in px. Rows are a fixed size. */
 const CATALOG_ROW_HEIGHT = 32
 
-export function ModelSelector({ models, value, valueProvider, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange, label, catalogGroups, filterProviders }: ModelSelectorProps) {
+export function ModelSelector({ models, value, valueProvider, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange, label, catalogGroups, filterProviders, defaultModel, defaultProvider }: ModelSelectorProps) {
   const [internalOpen, setInternalOpen] = React.useState(false)
   const isControlled = controlledOpen !== undefined
   const open = isControlled ? controlledOpen : internalOpen
@@ -679,6 +693,32 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
   const matchesValueProvider = (rowProviderId: string | undefined): boolean =>
     valueProvider === undefined || rowProviderId === undefined || valueProvider === rowProviderId
 
+  // #1436: the agent-default mark is pair-scoped like the chosen mark — with
+  // a known default provider, only that provider's row for the slug carries
+  // the chip; without one (legacy flat lists, unresolved agent provider) the
+  // slug is marked wherever it appears.
+  const isAgentDefaultRow = (model: string, rowProviderId: string | undefined): boolean =>
+    !!defaultModel
+    && defaultModel === model
+    && (defaultProvider === undefined || defaultProvider === null || defaultProvider === ''
+      || rowProviderId === undefined
+      || defaultProvider === rowProviderId)
+
+  // The chip itself: same token treatment as the Recommended chip (color-mix
+  // over the accent token — never a raw rgba), uppercase label, no icon.
+  const renderDefaultChip = () => (
+    <span
+      className="ml-[var(--space-2)] shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
+      style={{
+        backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
+        color: 'var(--color-accent)',
+        borderColor: 'color-mix(in srgb, var(--color-accent) 40%, transparent)',
+      }}
+    >
+      Default
+    </span>
+  )
+
   // H6 (provider hotfix 2026-10-13): the ROW's providerId is the picked one —
   // never re-derived from the slug (see the removed scan above).
   const handleSelect = (model: string, rowProviderId?: string) => {
@@ -757,6 +797,7 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
             {RECOMMENDED_CHIP_LABEL}
           </span>
         )}
+        {isAgentDefaultRow(row.model.id, row.providerId) && renderDefaultChip()}
       </CommandItem>
     )
   }
@@ -951,6 +992,7 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
                             style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
                           />
                           <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
+                          {isAgentDefaultRow(model, group.providerId) && renderDefaultChip()}
                         </CommandItem>
                       )
                     })}
@@ -989,6 +1031,7 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
                           style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
                         />
                         <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
+                        {isAgentDefaultRow(model, undefined) && renderDefaultChip()}
                       </CommandItem>
                     )
                   })}

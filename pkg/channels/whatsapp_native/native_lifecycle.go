@@ -144,6 +144,17 @@ func (c *WhatsAppNativeChannel) disposeNative(resource *nativeLifecycle, store *
 			c.client, c.container = nil, nil
 		}
 		c.SetRunning(false)
+		// gate r4 R4-T2: an attempt-scoped teardown that completed cleanly
+		// leaves the connector idle but alive — its successor attempt must be
+		// able to activate, and a later disable/reload stop must still capture
+		// and tear down the CURRENT attempt, so the consumed lifecycle is
+		// cleared and the stopping latch released. A teardown that failed, or
+		// a channel-level stop (interrupt), keeps the latch and the captured
+		// resource; the next Start owns recovery.
+		if !interrupt && resource.err == nil {
+			c.stopping.Store(false)
+			c.lifecycle = nil
+		}
 	}
 	c.mu.Unlock()
 	var completed channels.PairingAttempt

@@ -180,10 +180,10 @@ func defaultToolsExecutable(t *testing.T) string {
 func defaultToolsPolicies(cfg *config.Config, agent *config.AgentConfig) (*tools.ToolPolicyCfg, string) {
 	// Use the production config-to-policy adapter, with the actual persisted
 	// agent rather than a stand-in seed map. The shipped ceiling is NOT lifted.
-	snapshot := *cfg
-	snapshot.Agents = cfg.Agents
+	// Copy only the adapter's inputs, never Config's runtime mutex.
+	snapshot := &config.Config{Agents: cfg.Agents, Sandbox: cfg.Sandbox}
 	snapshot.Agents.List = []config.AgentConfig{*agent}
-	return tools.BuildFallbackPolicyCfg(&snapshot, agent.ID)
+	return tools.BuildFallbackPolicyCfg(snapshot, agent.ID)
 }
 
 // Catalog reachability is separate from the spec's policy-resolution contract.

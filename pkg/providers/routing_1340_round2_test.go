@@ -62,8 +62,14 @@ func TestRouting1340_Round2AvailabilityAssertions(t *testing.T) {
 			if tc.wantBadModel {
 				want = FailoverBadModel
 			}
-			if got == nil || got.Reason != want || got.Status != 400 || got.IsRetriable() {
-				t.Errorf("routing=%+v, want non-retriable%s/status400", got, want)
+			if got == nil || got.Reason != want || got.Status != 400 {
+				t.Errorf("routing=%+v, want %s/status400", got, want)
+			}
+			// Spec change (founder Q70, 2026-10-24): bad_model is now
+			// retriable (falls back to the backup); format stays terminal.
+			// The classification subject oracle above is unchanged.
+			if wantRetriable := tc.wantBadModel; got != nil && got.IsRetriable() != wantRetriable {
+				t.Errorf("retriability=%t, want %t for %q", got.IsRetriable(), wantRetriable, tc.message)
 			}
 		})
 	}
@@ -74,7 +80,9 @@ func TestRouting1340_Round2AvailabilityAssertions(t *testing.T) {
 	t.Run("structured_input_first_remains_authoritative", func(t *testing.T) {
 		body := `{"error":{"code":"model_not_found","message":"Image input for this model is not available."}}`
 		got := ClassifyError(&common.ProviderError{Status: 400, Body: body}, "openrouter", "m")
-		if !IsBadModelError(400, body, "m") || got == nil || got.Reason != FailoverBadModel || got.Status != 400 || got.IsRetriable() {
+		// Spec change (founder Q70, 2026-10-24): the verdict is still
+		// bad_model, and it is now retriable; OLD: non-retriable.
+		if !IsBadModelError(400, body, "m") || got == nil || got.Reason != FailoverBadModel || got.Status != 400 || !got.IsRetriable() {
 			t.Errorf("structured model absence lost to input-first prose: %+v", got)
 		}
 	})

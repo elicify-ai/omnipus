@@ -135,8 +135,15 @@ func TestStopNoticeProducerInputs_AreNonTerminalAndPersisted(t *testing.T) {
 			// random id tie-breaks; frame delivery order is never changed.
 			if object, ok := list.(map[string]any); ok {
 				if rows, ok := object["notifications"].([]any); ok {
+					notificationID := func(index int) string {
+						row, ok := rows[index].(map[string]any)
+						require.True(t, ok, "notification row %d must be an object, got %T", index, rows[index])
+						id, ok := row["id"].(string)
+						require.True(t, ok, "notification row %d id must be a string, got %T", index, row["id"])
+						return id
+					}
 					sort.Slice(rows, func(i, j int) bool {
-						return rows[i].(map[string]any)["id"].(string) < rows[j].(map[string]any)["id"].(string)
+						return notificationID(i) < notificationID(j)
 					})
 				}
 			}

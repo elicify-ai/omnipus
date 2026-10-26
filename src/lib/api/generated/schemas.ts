@@ -18580,7 +18580,7 @@ export const ProviderFallbackFrame = z
     turn_id: z.string().min(1).max(128),
     answered_model: z.string().min(1).max(256),
     unavailable_model: z.string().min(1).max(256),
-    unavailable_code: z.enum(["rate_limited", "model_retired"]),
+    unavailable_code: z.enum(["rate_limited", "model_retired", "model_not_found"]),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -18594,7 +18594,7 @@ export const ProviderFallbackNote = z
     timestamp: z.string(),
     answered_model: z.string().min(1).max(256).optional(),
     unavailable_model: z.string().min(1).max(256).optional(),
-    unavailable_code: z.enum(["rate_limited", "model_retired"]).optional(),
+    unavailable_code: z.enum(["rate_limited", "model_retired", "model_not_found"]).optional(),
     message: z.string().min(1).max(4096),
   })
   .strict();

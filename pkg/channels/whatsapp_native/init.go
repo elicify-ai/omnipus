@@ -1,6 +1,7 @@
 package whatsapp
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -27,7 +28,11 @@ func init() {
 			}
 			ch, err := NewWhatsAppNativeChannel(waCfg, b, storePath)
 			if err == nil {
-				ch.(*WhatsAppNativeChannel).originConfig = cfg
+				native, ok := ch.(*WhatsAppNativeChannel)
+				if !ok {
+					return nil, fmt.Errorf("whatsapp native factory: expected *WhatsAppNativeChannel, got %T", ch)
+				}
+				native.originConfig = cfg
 			}
 			return ch, err
 		},

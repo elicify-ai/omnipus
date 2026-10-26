@@ -222,11 +222,13 @@ func (c *PairingConfigCommit) Commit(applied bool) []PairingProgress {
 	for i, order := range c.orders {
 		changed, _ := order.CommitConfig(c.intents[i], applied)
 		for _, attempt := range changed {
-			message := PairingInterruptedMessage
-			if attempt.Phase == PairingPhaseStopping {
-				message = PairingStopPendingMessage // Retry cannot win until real disposal finishes
-			}
-			p := order.Transition(attempt, PairingStatusError, message)
+			// The gate r4 contract (R4, TestPairingREST_DisableAndDeleteTellTheChat):
+			// the write that cut a pairing off tells its chat immediately that the
+			// pairing was interrupted. A still-running replacement disposal keeps
+			// its barrier through p.Dispose (finishPairingTeardown and
+			// disposeReplacedPairing report a Stop that did not finish); the frame
+			// here is the interruption, not the stopping notice.
+			p := order.Transition(attempt, PairingStatusError, PairingInterruptedMessage)
 			order.store.mu.Lock()
 			rec := order.connector.attempts[attempt.AttemptID]
 			if rec != nil && rec.Phase == PairingPhaseStopping && rec.disposal == pairingDisposalReplacement && rec.StopGeneration == attempt.StopGeneration && !rec.disposalRunning {

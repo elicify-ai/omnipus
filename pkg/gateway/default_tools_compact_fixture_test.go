@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -68,7 +69,7 @@ func defaultToolsParseCompact(t *testing.T, raw, header string, catalog []tools.
 	require.Equal(t, header, lines[0], "SPEC.md compact identity header")
 	require.Len(t, lines, len(catalog)+1, "exactly one header and one row per catalog tool; no extra sections")
 	policies := make(map[string]string, len(catalog))
-	var names []string
+	names := slices.Grow([]string(nil), len(lines)-1)
 	for _, line := range lines[1:] {
 		parts := strings.SplitN(line, " | ", 3)
 		require.GreaterOrEqual(t, len(parts), 2, "SPEC.md Q21=D tool row must contain name and policy: %q", line)
@@ -88,7 +89,7 @@ func defaultToolsParseCompact(t *testing.T, raw, header string, catalog []tools.
 		policies[parts[0]] = parts[1]
 		names = append(names, parts[0])
 	}
-	var expectedNames []string
+	expectedNames := slices.Grow([]string(nil), len(catalog))
 	maxRunes := utf8.RuneCountInString(header) + 1
 	for _, tool := range catalog {
 		expectedNames = append(expectedNames, tool.Name())

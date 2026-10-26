@@ -20,12 +20,16 @@ Source of truth: `.github/workflows/cross-platform.yml:24-34`. Each job runs `go
 
 ## Test-only candidate binaries
 
-A successful **build** GitHub Actions run publishes one candidate artifact named
-`candidate-binaries-<built-commit-sha>-<run-id>-<run-attempt>`, retained for seven
-days. The workflow runs on pull requests, pushes to `main`, and manual runs on a
-selected branch. These are **test-only binaries**, not signed release packages,
-installers, or evidence that a platform has passed runtime acceptance tests.
-This does not change the release matrix above.
+A candidate binary is published by a successful **build** GitHub Actions run as
+an artifact named `candidate-binaries-<built-commit-sha>-<run-id>-<run-attempt>`,
+retained for seven days. That build runs in exactly two situations: a pull
+request targets `release/v0.1.1` or `main` — in practice, a train or
+standalone-candidate PR — or a push lands on `release/v0.1.1` or `main`. A push
+to an ordinary work branch publishes nothing; candidates exist only where a
+change is being integrated for release or has landed. These are **test-only
+binaries**, not signed release packages, installers, or evidence that a platform
+has passed runtime acceptance tests. This does not change the release matrix
+above.
 
 | Candidate filename | Platform | Release status |
 |---|---|---|

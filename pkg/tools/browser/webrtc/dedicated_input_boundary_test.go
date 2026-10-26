@@ -95,23 +95,23 @@ func TestDedicatedInputHoverKeepsOnlyNewestEligiblePosition(t *testing.T) {
 // for control/barrier and forbidden for peer/reliable/hover identities.
 func TestDedicatedInputCounterBoundaries(t *testing.T) {
 	const wireMax = 9007199254740991
-	for _, min := range []int{0, 1} {
+	for _, minimum := range []int{0, 1} {
 		for _, tc := range []struct {
 			name  string
 			value *int
 			want  bool
 		}{
 			{"missing", nil, false},
-			{"below minimum", boundaryInt(min - 1), false},
-			{"minimum", boundaryInt(min), true},
-			{"minimum plus one", boundaryInt(min + 1), true},
+			{"below minimum", boundaryInt(minimum - 1), false},
+			{"minimum", boundaryInt(minimum), true},
+			{"minimum plus one", boundaryInt(minimum + 1), true},
 			{"maximum minus one", boundaryInt(wireMax - 1), true},
 			{"maximum", boundaryInt(wireMax), true},
 			{"overflow", boundaryInt(wireMax + 1), false},
 		} {
-			t.Run(fmt.Sprintf("min%d/%s", min, tc.name), func(t *testing.T) {
-				if got := validInputCounter(tc.value, min); got != tc.want {
-					t.Fatalf("counter valid=%v, want %v for minimum %d, value %v", got, tc.want, min, tc.value)
+			t.Run(fmt.Sprintf("min%d/%s", minimum, tc.name), func(t *testing.T) {
+				if got := validInputCounter(tc.value, minimum); got != tc.want {
+					t.Fatalf("counter valid=%v, want %v for minimum %d, value %v", got, tc.want, minimum, tc.value)
 				}
 			})
 		}

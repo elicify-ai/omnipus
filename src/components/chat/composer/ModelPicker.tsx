@@ -7,6 +7,7 @@ import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchProviders } from '@/lib/api'
 import { isProviderUsable } from '@/lib/providerStatus'
 import { resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
+import { readSessionModelChoice, writeSessionModelChoice, warnModelChoiceStorageFailure } from '@/store/chat/model-choice'
 import { cn } from '@/lib/utils'
 
 /**
@@ -128,20 +129,25 @@ export function ModelPicker({
   // "navigation".
   const lastSeedKey = useRef<string>('')
   const modelSelectionSource = useRef<'auto' | 'user'>('auto')
+  const pendingMessageId = useRef<string | null>(null)
   useEffect(() => {
     const seedKey = `${activeSessionId ?? ''}::${activeAgentId ?? ''}`
     if (seedKey === lastSeedKey.current) return
     const prevSession = lastSeedKey.current.split('::')[0]
     lastSeedKey.current = seedKey
-    // Materialization guard: a fresh chat's first send creates a transient
-    // '__pending' bucket that then becomes the real session id
-    // ('' → '__pending' → realId). That is the SAME conversation continuing,
-    // NOT a navigation to a different session, so it must not clobber the model
-    // the user just picked for this message (which would otherwise reset to the
-    // default and fail to carry to the next message). Genuine navigation —
-    // opening/switching to a real session, or New Chat ('' target) — still
-    // re-seeds from that target's last-used model.
-    if (activeSessionId === '__pending' || prevSession === '__pending') return
+    if (activeSessionId === '__pending') {
+      pendingMessageId.current = useChatStore.getState().pendingFirstSend?.clientMessageId ?? null
+      return
+    }
+    const wasOrdinaryFirstSend = pendingMessageId.current !== null
+    pendingMessageId.current = null
+    // Non-ordinary kickoff materialization retains its existing in-page pair.
+    // Ordinary first sends instead save through their correlated receipt, so
+    // every destination is restored below, including a chat opened while the
+    // draft's receipt is still outstanding. A pending→real transition alone
+    // never authorizes a preference write.
+    if (prevSession === '__pending' && activeSessionId && !wasOrdinaryFirstSend
+      && useSessionStore.getState().attachedSessionType === null) return
     if (activeSessionId !== prevSession) {
       // Genuine navigation to a different conversation — any explicit pick
       // was scoped to the conversation it was made in, so it is released and
@@ -152,6 +158,19 @@ export function ModelPicker({
       // model pick survives an agent change, exactly like an explicit AGENT
       // pick survives a session-derived hint under session.ts's AGENT
       // PRECEDENCE RULE.
+      return
+    }
+    // #1436: the session's own latest explicit choice outranks the transcript
+    // and the agent default. A pick is recorded per session (per browser) the
+    // moment it is made — no assistant response or send required — so
+    // navigation and a full reload both restore exactly what the user chose
+    // here, including a deliberate re-selection of the agent's default. The
+    // transcript/default seed below applies only to a session with NO stored
+    // choice.
+    const { choice: storedChoice, failure } = readSessionModelChoice(activeSessionId)
+    warnModelChoiceStorageFailure(failure)
+    if (storedChoice) {
+      setNextModel(storedChoice.model, storedChoice.provider)
       return
     }
     // H6 R2 (review round 1 — F3): the seed's provider depends on its SOURCE.
@@ -169,12 +188,17 @@ export function ModelPicker({
   function onPickerChange(model: string) {
     // provider clears here (omitted second arg → null); a grouped pick's
     // onPairChange (below) immediately re-sets it in the same handler tick.
-    setNextModel(model || null)
+    setNextModel(model || null, null, 'user')
     // Either a non-empty pick (pin this model) or an explicit revert to ''
     // (hand back to auto-follow) is the user's OWN action, not a derived
     // seed — record which, so the re-seed effect above knows whether a later
     // agent-only change is allowed to overwrite it.
     modelSelectionSource.current = model ? 'user' : 'auto'
+    // #1436: persist the session's latest explicit choice at pick time — no
+    // send or assistant response required. An empty pick hands the session
+    // back to auto-follow, so its stored choice (if any) is cleared and the
+    // transcript/agent-default seed applies again.
+    warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, model ? { model, provider: null } : null))
     if (model === '') {
       addToast({ message: 'Reverted to agent default for next message', variant: 'default' })
     }
@@ -189,7 +213,11 @@ export function ModelPicker({
   // contract gains `metadata.provider`.
   function onPickerPairChange(pair: { model: string; provider: string }) {
     if (!pair.model) return
-    setNextModel(pair.model, pair.provider)
+    setNextModel(pair.model, pair.provider, 'user')
+    // #1436: the grouped pick's (provider, model) pair is the recorded
+    // identity — restoring it lands the check on exactly the row it was
+    // chosen under, even when the slug is served by more than one provider.
+    warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, { model: pair.model, provider: pair.provider }))
   }
 
   return (
@@ -213,6 +241,11 @@ export function ModelPicker({
         valueProvider={nextModelProvider ?? resolveUniqueModelProvider(usableProviders, nextModel ?? '')}
         onChange={onPickerChange}
         onPairChange={onPickerPairChange}
+        // #1436: mark the agent's default row so the user can see which model
+        // is the default and switch back to it deliberately. The mark follows
+        // the (provider, model) pair, not the bare slug.
+        defaultModel={activeAgentModel}
+        defaultProvider={activeAgentProvider}
         placeholder={activeAgentModel ?? 'Select a model…'}
         providerGroups={providerGroups}
         triggerTestId="composer-model-selector"

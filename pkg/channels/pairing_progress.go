@@ -52,7 +52,7 @@ func (o *PairingOrder) Progress(attemptID string, status PairingStatus, qr, mess
 		if rec.Phase == PairingPhaseActive {
 			rec.Phase, rec.Outcome, rec.cancel = PairingPhaseTerminal, pairingStatusOutcome(status), nil
 		}
-		if rec.Phase != PairingPhaseTerminal && !(rec.Phase == PairingPhaseStopping && rec.disposal == pairingDisposalReplacement && status == PairingStatusError) {
+		if rec.Phase != PairingPhaseTerminal && (rec.Phase != PairingPhaseStopping || rec.disposal != pairingDisposalReplacement || status != PairingStatusError) {
 			return PairingProgress{}, false
 		}
 	}
@@ -81,7 +81,31 @@ func (o *PairingOrder) progressLocked(attempt PairingAttempt, status PairingStat
 		}
 		p.Sequence = c.sequence
 		c.progressAttempt, c.progressStatus = attempt.AttemptID, status
+		if attempt.AttemptID != c.interruptNoticeAttemptID {
+			c.interruptNoticeAttemptID = "" // newer progress expires the notice
+		}
 	}
+	return p
+}
+
+// progressLockedAdmissionInterrupt stamps the stale-ready interruption an
+// accepted admission just applied (chief ruling C+D, security review F3). The
+// closed attempt is no longer the connector's latest — the successor reserved
+// in the same boundary is — so this is the one predecessor notice that stamps
+// against the successor's generation and records itself for delivery;
+// AcceptsProgress relaxes its latest-attempt rule for exactly this recorded
+// envelope, and any newer progress expires it (the sequence equality fails
+// and progressLocked clears the record). Caller holds the store mutex.
+func (o *PairingOrder) progressLockedAdmissionInterrupt(closed PairingAttempt) PairingProgress {
+	c := o.connector
+	p := PairingProgress{Attempt: closed, Generation: c.generation, Status: PairingStatusError, Message: PairingInterruptedMessage}
+	c.sequence++
+	if c.sequence == 0 {
+		panic("pairing progress sequence exhausted")
+	}
+	p.Sequence = c.sequence
+	c.progressAttempt, c.progressStatus = closed.AttemptID, PairingStatusError
+	c.interruptNoticeAttemptID = closed.AttemptID
 	return p
 }
 
@@ -107,7 +131,17 @@ func (o *PairingOrder) AcceptsProgress(generation, sequence uint64, attemptID st
 		return c.latest == nil
 	}
 	if c.latest == nil || c.latest.AttemptID != attemptID || effectivePairingGeneration(c.latest) != generation {
-		return false
+		// An admission's own stale-ready interruption is current work, not a
+		// superseded predecessor (chief ruling C+D, security review F3): the
+		// successor reserved in the same boundary is already latest, and the
+		// notice is stamped against the successor's generation. Only this
+		// one recorded error envelope passes — the record self-expires at
+		// the next stamped progress, and no predecessor's QR or waiting
+		// frame can ever shape-match it.
+		if status != PairingStatusError || attemptID == "" || attemptID != c.interruptNoticeAttemptID {
+			return false
+		}
+		return true
 	}
 	if status == PairingStatusCode || status == PairingStatusWaiting {
 		return c.latest.Phase == PairingPhaseActive && !c.latest.startFenced

@@ -44,7 +44,8 @@ properties:
     enum:
       - rate_limited
       - model_retired
-    description: The classified provider condition that made the unavailable candidate miss the turn. Gates the D12 pick-a-new-model hint in the persisted note (§6).
+      - model_not_found
+    description: The classified provider condition that made the unavailable candidate miss the turn. Gates the D12 pick-a-new-model hint in the persisted note (§6) — the hint still fires only for model_retired. model_not_found (founder decision 2026-10-24, Q70) means the provider reported the model as not found or not offered; the hop falls back to the next candidate instead of stopping the turn.
   seq:
     type: integer
     format: int64

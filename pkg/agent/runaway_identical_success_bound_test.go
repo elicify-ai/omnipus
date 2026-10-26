@@ -65,9 +65,12 @@ func (c *countingPassthroughTool) Execute(ctx context.Context, args map[string]a
 // transcript's original `goal` key replaced by `outcome` (the set_todos
 // rename): the shape is otherwise unchanged, and this test cares about the
 // iteration-cap behavior, not the field name.
+// SPEC CHANGE (founder Q74, 2026-10-24): the items now carry active_form so
+// the fixture stays a VALID call once set_todos requires it; every round still
+// sends the identical object, which is what the repeat detection pins.
 const uatRun4SetTodosArgs = `{"outcome":"Improve the renewable energy report goal record and re-issue the registration",` +
-	`"todos":[{"status":"in_progress","text":"Register the improved goal record via set_goal (mode: register)"},` +
-	`{"status":"pending","text":"Continue goal work: improved criteria"}]}`
+	`"todos":[{"status":"in_progress","text":"Register the improved goal record via set_goal (mode: register)","active_form":"Registering the improved goal record via set_goal"},` +
+	`{"status":"pending","text":"Continue goal work: improved criteria","active_form":"Continuing the improved goal work"}]}`
 
 func TestRunTurn_IdenticalSuccessfulSetTodosForever_EndsAtIterationCapWithNotice(t *testing.T) {
 	tmpHome := t.TempDir()
