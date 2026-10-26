@@ -23,8 +23,9 @@ import (
 // that is the separate planning.task_max_attempts config value, overridden per
 // task by max_attempts (founder decision 2026-09-14, issue #710).
 //
-// PUT accepts a partial update of {max_parallel_agents, tools_on_demand,
-// goal_max_rounds} and updates config.json atomically. The dispatch
+// PUT accepts partial concurrency, tool-loading, goal-budget and goal-timer
+// settings and updates config.json atomically. Goal timers are resolved live
+// by each keeper sweep, including goals already active. The dispatch
 // semaphore is resized in-memory immediately so a changed max_parallel_agents
 // takes effect without a restart; goal_max_rounds takes effect for every goal
 // that STARTS after the config reload below completes — a chat goal set after
@@ -106,12 +107,18 @@ func performanceSettingsResponse(cfg *config.Config) gen.PerformanceSettings {
 	// is always the resolved value of the one config field, never echoed
 	// back as an unresolved 0. Always present in responses per the schema.
 	goalMaxRounds := cfg.Planning.EffectiveGoalMaxRounds()
+	goalQuietSeconds := cfg.Planning.EffectiveGoalReminderQuietSeconds()
+	goalCheckinEnabled := cfg.Planning.EffectiveGoalStalledCheckinEnabled()
+	goalCheckinMinutes := cfg.Planning.EffectiveGoalStalledCheckinMinutes()
 	ps := gen.PerformanceSettings{
 		MaxParallelAgents:           &configured,
 		EffectiveMaxParallelAgents:  &effective,
 		MaxParallelAgentsConfigured: &capped,
 		ToolsOnDemand:               &toolsOnDemand,
 		GoalMaxRounds:               &goalMaxRounds,
+		GoalReminderQuietSeconds:    &goalQuietSeconds,
+		GoalStalledCheckinEnabled:   &goalCheckinEnabled,
+		GoalStalledCheckinMinutes:   &goalCheckinMinutes,
 	}
 	// #904: the global tool-iteration limit in force, plus the D13 saved
 	// state (and raw value when out of range) for the Settings warning.
@@ -150,9 +157,10 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	// At least one field must be present — a PUT with no recognized fields is
 	// a no-op that almost certainly indicates a client bug.
 	if req.MaxParallelAgents == nil && req.ToolsOnDemand == nil && req.GoalMaxRounds == nil &&
-		req.MaxToolIterations == nil {
+		req.MaxToolIterations == nil && req.GoalReminderQuietSeconds == nil &&
+		req.GoalStalledCheckinEnabled == nil && req.GoalStalledCheckinMinutes == nil {
 		jsonErr(w, http.StatusBadRequest,
-			"at least one of max_parallel_agents, tools_on_demand, goal_max_rounds or max_tool_iterations is required")
+			"at least one performance setting is required")
 		return
 	}
 
@@ -168,6 +176,17 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	// field the way 0 is for max_parallel_agents.
 	if req.GoalMaxRounds != nil && *req.GoalMaxRounds < 1 {
 		jsonErr(w, http.StatusBadRequest, "goal_max_rounds must be >= 1")
+		return
+	}
+
+	if value := req.GoalReminderQuietSeconds; value != nil && (*value < config.MinGoalReminderQuietSeconds || *value > config.MaxGoalReminderQuietSeconds) {
+		jsonErr(w, http.StatusBadRequest, "goal_reminder_quiet_seconds must be an integer from 30 to 3600")
+		return
+	}
+	// Validate minutes independently of the enabled switch. Off retains a
+	// real, valid choice rather than accepting zero as an off sentinel.
+	if value := req.GoalStalledCheckinMinutes; value != nil && (*value < config.MinGoalStalledCheckinMinutes || *value > config.MaxGoalStalledCheckinMinutes) {
+		jsonErr(w, http.StatusBadRequest, "goal_stalled_checkin_minutes must be an integer from 5 to 1440")
 		return
 	}
 
@@ -202,6 +221,18 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		if req.GoalMaxRounds != nil {
 			planning := ensureMap(m, "planning")
 			planning["goal_max_rounds"] = *req.GoalMaxRounds
+		}
+		if req.GoalReminderQuietSeconds != nil {
+			planning := ensureMap(m, "planning")
+			planning["goal_reminder_quiet_seconds"] = *req.GoalReminderQuietSeconds
+		}
+		if req.GoalStalledCheckinEnabled != nil {
+			planning := ensureMap(m, "planning")
+			planning["goal_stalled_checkin_enabled"] = *req.GoalStalledCheckinEnabled
+		}
+		if req.GoalStalledCheckinMinutes != nil {
+			planning := ensureMap(m, "planning")
+			planning["goal_stalled_checkin_minutes"] = *req.GoalStalledCheckinMinutes
 		}
 		if limitUpd != nil {
 			defaults := ensureMap(m, "agents", "defaults")
@@ -305,7 +336,7 @@ func writePerformanceReloadFailed(w http.ResponseWriter, outcome performanceWrit
 // performanceChangedFields lists, in contract enum order, the Performance
 // fields present in the PUT body — the settings this request changed.
 func performanceChangedFields(req *gen.PerformanceSettingsUpdate) []gen.PerformanceReloadFailedDetailsChangedFields {
-	out := make([]gen.PerformanceReloadFailedDetailsChangedFields, 0, 4)
+	out := make([]gen.PerformanceReloadFailedDetailsChangedFields, 0, 7)
 	if req.MaxParallelAgents != nil {
 		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents)
 	}
@@ -315,6 +346,15 @@ func performanceChangedFields(req *gen.PerformanceSettingsUpdate) []gen.Performa
 	if req.GoalMaxRounds != nil {
 		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds)
 	}
+	if req.GoalReminderQuietSeconds != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsGoalReminderQuietSeconds)
+	}
+	if req.GoalStalledCheckinEnabled != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinEnabled)
+	}
+	if req.GoalStalledCheckinMinutes != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinMinutes)
+	}
 	if req.MaxToolIterations != nil {
 		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations)
 	}
@@ -323,10 +363,13 @@ func performanceChangedFields(req *gen.PerformanceSettingsUpdate) []gen.Performa
 
 // performanceSettingLabels names each Performance field in user-facing text.
 var performanceSettingLabels = map[gen.PerformanceReloadFailedDetailsChangedFields]string{
-	gen.PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents: "the parallel-agent limit",
-	gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand:     "tools on demand",
-	gen.PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds:     "the goal round budget",
-	gen.PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations: "the tool-iteration limit",
+	gen.PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents:         "the parallel-agent limit",
+	gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand:             "tools on demand",
+	gen.PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds:             "the goal round budget",
+	gen.PerformanceReloadFailedDetailsChangedFieldsGoalReminderQuietSeconds:  "the goal reminder quiet window",
+	gen.PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinEnabled: "stalled-work check-ins",
+	gen.PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinMinutes: "the stalled-work check-in interval",
+	gen.PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations:         "the tool-iteration limit",
 }
 
 // performanceReloadFailedMessage builds the human-readable error from the
