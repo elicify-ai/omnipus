@@ -81,7 +81,8 @@
         "tests/e2e/calendar.spec.ts",
         "tests/e2e/contract-counters.spec.ts",
         "tests/e2e/sidebar-agent-row-menu.spec.ts",
-        "tests/e2e/side-panel-signin-return.spec.ts"
+        "tests/e2e/side-panel-signin-return.spec.ts",
+        "tests/e2e/chat-composer-focus-replay.spec.ts"
       ]
     },
     {
