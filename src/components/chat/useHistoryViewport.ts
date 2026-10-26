@@ -434,7 +434,8 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   // page). Our listener runs after the router's restorer in the same emit.
   const router = useRouter({ warn: false })
   useLayoutEffect(() => {
-    if (!router) return
+    // No router (routerless render) or a partial router stand-in: nothing restores scroll.
+    if (typeof router?.subscribe !== 'function') return
     return router.subscribe('onRendered', () => {
       const scroller = scrollRef.current
       if (!scroller || !current.current.sid) return
