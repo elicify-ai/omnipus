@@ -2150,7 +2150,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           // lookup and one rule set (span-frames.ts::applySpanFrame), also used
           // by the paged history paths.
           if (!targetSid) break
-          rememberLiveSpanFact(targetSid, frame)
+          rememberLiveSpanFact(targetSid, frame, get().sessionsById[targetSid])
           withBucket(targetSid, (b) => applySpanFrame(b, frame, targetSid))
           break
         }

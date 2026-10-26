@@ -118,7 +118,7 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
       // Refreshed saved rows re-settle their spans exactly as a page commit
       // does, or a reconstructed helper row would lose its span (I3).
       rememberHistoryReadFacts(sid, rows, contexts)
-      const spans = settleHistorySpans(sid, [...rows, ...pending])
+      const spans = settleHistorySpans(sid, [...rows, ...pending], live)
       const patch = historyRowsPatch(b, [...spans.rows, ...live], ordered)
       return { ...patch, messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: liveOrder,
         spanBySpanId: { ...patch.spanBySpanId, ...spans.index },
