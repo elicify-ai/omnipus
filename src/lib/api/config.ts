@@ -464,10 +464,17 @@ export interface PerformanceReloadFailure { // not-wire-format: constructor opti
   loweredUnknown: boolean
 }
 
+// C1 goal timers: the three new changed-field keys keep their human-readable
+// names here so a saved-but-unapplied save names them (both the typed body
+// path and reloadFailedError's salvage path, which filters sent fields by
+// these keys) instead of falling back to an unnamed list.
 const CHANGED_FIELD_LABELS: Record<PerformanceChangedField, string> = {
   max_parallel_agents: 'agents running at once',
   tools_on_demand: 'on-demand tool loading',
   goal_max_rounds: 'goal tries',
+  goal_reminder_quiet_seconds: 'idle reminder quiet window',
+  goal_stalled_checkin_enabled: 'stalled-work check-ins',
+  goal_stalled_checkin_minutes: 'stalled-work check-in interval',
   max_tool_iterations: 'tool-call limit',
 }
 
