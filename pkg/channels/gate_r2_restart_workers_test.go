@@ -353,6 +353,13 @@ func TestManager_RevokedAdmissionNeverRestarts(t *testing.T) {
 	store := m.PairingAttempts()
 	owner := &PairingOwner{SessionID: "chat-a", RequestID: "req-a"}
 
+	// Instrument (CHECK finding 1, restored): with an empty attempt history a
+	// Retry has nothing to revive — the store must refuse it before any other
+	// admission mints history. retryEligible(nil, ·) must stay false; a
+	// mutation returning true here fails this require.
+	_, err = store.Admit("gate-r4-revoked", PairingAdmissionRetry, owner)
+	require.ErrorIs(t, err, ErrPairingConflict, "instrument: nothing to retry yet")
+
 	// Fixture (security r3 F5): the accepted-snapshot identity the publication
 	// guard requires is carried by cfg BEFORE the manager starts, so the start
 	// itself records exactly this generation and no reload restarts the channel
@@ -364,8 +371,8 @@ func TestManager_RevokedAdmissionNeverRestarts(t *testing.T) {
 	// r3 F5. The stamp must equal the generation the admission under test will
 	// mint, so a probe admission is minted and immediately released to fix that
 	// value: the probe is terminal when StartAll runs, so the start takes no
-	// token and consumes nothing. The former "instrument: nothing to retry yet"
-	// precondition is gone with it — a released probe legitimately admits.
+	// token and consumes nothing. A Retry after the probe's release would
+	// legitimately admit — the empty-history refusal above is what stays.
 	probe, err := store.Admit("gate-r4-revoked", PairingAdmissionConnect, owner)
 	require.NoError(t, err)
 	require.True(t, store.Release("gate-r4-revoked", probe.AttemptID, PairingOutcomeInterrupted))
