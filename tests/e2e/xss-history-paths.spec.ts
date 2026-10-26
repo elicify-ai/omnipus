@@ -8,12 +8,28 @@ import { chatInput } from './fixtures/selectors';
 import { createXssSession, expectEscapedPayload, HISTORY_XSS_PAYLOAD, monitorXssExecution, openXssSession, test } from './fixtures/xss-history';
 
 // Security-lead F1: native live, actual REST older page and real document reload.
+// Security-lead F2 (team-lead Option A ruling, 2026-10-26): rendered Markdown
+// link/image vectors — exact rendered label/marker, full hostile source proven
+// in real native replay traffic, rendered anchor/img absent or scheme-safe,
+// and no navigation/dialog/execution/console error on click or focus.
+// Security-lead F3: canonically persisted hostile tool result in the real
+// generic Tool output region and a genuine hostile user message end to end.
 // Only external model HTTP is scripted; all product/render/persistence paths real.
 test.use({ viewport: { width: 1280, height: 900 } });
 test.describe.configure({ retries: 0 });
 test.setTimeout(120_000); // Includes private gateway and canonical fsynced fixture setup.
 
 const assistantRow = (page: Parameters<typeof chatInput>[0], id: string) => page.locator(`[data-message-id="${id}"]`);
+
+// F2 ruling oracle: no javascript:, data: or vbscript: target may survive on
+// a rendered markdown anchor/img. Whitespace and control characters are
+// compacted away first — exactly like the shared helper's javascript: check —
+// so `java\nscript:` cannot slip past the prefix match.
+const unsafeTarget = (value: string | null) => {
+  if (value === null) return false;
+  const compact = [...value].filter(character => character.charCodeAt(0) > 32).join('');
+  return /^(javascript|data|vbscript):/i.test(compact);
+};
 
 test('XSS F1 live: exact hostile assistant text is safe during a genuinely held native turn', async ({ page, canonicalGateway, xssProvider }, info) => {
   const monitor = await monitorXssExecution(page);
@@ -196,4 +212,106 @@ test('XSS F3 user message: one genuine native input and durable echo render the 
     expect(traffic.sends.filter(frame => frame.session_id === session.id), 're-addressing the session never resends the hostile input').toHaveLength(1);
     expect(traffic.failures).toEqual([]);
   } finally { ready.cancel(); observer.dispose(); }
+});
+
+test('XSS F2 link: a javascript: markdown link arrives whole in native replay, renders only its label, and click/focus neither navigate nor execute', async ({ page, canonicalGateway, xssProvider, consoleErrors }, info) => {
+  const monitor = await monitorXssExecution(page);
+  const session = await createXssSession(canonicalGateway);
+  const linkId = 'xss-f2-link';
+  const linkSource = '[click](javascript:alert(1))';
+  await seedCanonicalLegacyTranscript(session.id, [{ id: linkId, type: 'message', role: 'assistant',
+    content: linkSource, agent_id: session.agent_id, timestamp: new Date().toISOString() } satisfies Message]);
+  const traffic = await openXssSession(page, canonicalGateway, session.id);
+  const replayed = traffic.frames.filter(frame => frame.type === 'replay_message' && frame.session_id === session.id && frame.id === linkId);
+  expect(replayed, 'POSITIVE TRAFFIC CONTROL: the authored row arrives in the real native opening replay').toHaveLength(1);
+  expect(replayed[0]?.type === 'replay_message' ? replayed[0].content : undefined,
+    'the full hostile link source arrives unchanged — a safely omitted render cannot be replaced by an emptied setup').toBe(linkSource);
+  const row = assistantRow(page, linkId);
+  await expect(row, 'the addressed rendered assistant row is present exactly once').toHaveCount(1);
+  const label = row.getByText('click', { exact: true });
+  await expect(label, 'POSITIVE CONTROL: the exact rendered link label is visible').toBeVisible();
+  expect(await row.innerText(), 'Option A: the markdown syntax is consumed by rendering, never shown as literal source')
+    .not.toContain(linkSource);
+  await expectEscapedPayload(page, row, monitor, info, 'xss-f2-link', 'click', label);
+  const anchors = row.locator('a');
+  expect(await anchors.count(), 'one markdown link renders at most one anchor').toBeLessThan(2);
+  for (const anchor of await anchors.all()) {
+    const attribute = await anchor.getAttribute('href');
+    expect(unsafeTarget(attribute), `the rendered href ${JSON.stringify(attribute)} carries no unsafe scheme`).toBe(false);
+    const resolved = await anchor.evaluate(element => (element as HTMLAnchorElement).href);
+    expect(unsafeTarget(resolved), `the resolved URL property ${JSON.stringify(resolved)} is not an unsafe scheme`).toBe(false);
+  }
+  const rowHandlers = await row.evaluate(element => [element, ...element.querySelectorAll('*')].flatMap(node =>
+    [...node.attributes].filter(attribute => /^on[a-z]/i.test(attribute.name)).map(attribute => attribute.name)));
+  expect(rowHandlers, 'no event-handler attribute survives anywhere in the rendered row').toEqual([]);
+  const urlBefore = page.url();
+  await label.evaluate(element => (element as HTMLElement).focus({ preventScroll: true }));
+  expect(new URL(page.url()).origin + new URL(page.url()).pathname, 'focusing the label never navigates the document')
+    .toBe(new URL(urlBefore).origin + new URL(urlBefore).pathname);
+  expect(monitor.dialogs, 'focusing the label opens no dialog').toEqual([]);
+  expect(monitor.popups, 'focusing the label opens no popup').toEqual([]);
+  await label.click();
+  expect(new URL(page.url()).origin + new URL(page.url()).pathname, 'clicking the label never navigates the document')
+    .toBe(new URL(urlBefore).origin + new URL(urlBefore).pathname);
+  expect(monitor.dialogs, 'clicking the label opens no dialog').toEqual([]);
+  expect(monitor.popups, 'clicking the label opens no popup').toEqual([]);
+  expect(await page.evaluate(() => (window as unknown as { __xss_fired: boolean }).__xss_fired),
+    'neither focus nor click executes the hostile payload').toBe(false);
+  expect(consoleErrors, 'render, focus and click emit no console error').toEqual([]);
+  expect(xssProvider.calls(), 'rendering persisted markdown never dispatches a model call').toBe(0);
+  expect(traffic.sends, 'opening persisted markdown never sends an input').toEqual([]);
+  expect(traffic.failures).toEqual([]);
+});
+
+test('XSS F2 image: a javascript: markdown image arrives whole in native replay beside its plain marker, and interaction neither navigates nor executes', async ({ page, canonicalGateway, xssProvider, consoleErrors }, info) => {
+  const monitor = await monitorXssExecution(page);
+  const session = await createXssSession(canonicalGateway);
+  const imageId = 'xss-f2-image';
+  const imageMarker = 'XSS F2 image marker';
+  const imageSource = `${imageMarker}\n\n![x](javascript:alert(1))`;
+  await seedCanonicalLegacyTranscript(session.id, [{ id: imageId, type: 'message', role: 'assistant',
+    content: imageSource, agent_id: session.agent_id, timestamp: new Date().toISOString() } satisfies Message]);
+  const traffic = await openXssSession(page, canonicalGateway, session.id);
+  const replayed = traffic.frames.filter(frame => frame.type === 'replay_message' && frame.session_id === session.id && frame.id === imageId);
+  expect(replayed, 'POSITIVE TRAFFIC CONTROL: the authored row arrives in the real native opening replay').toHaveLength(1);
+  expect(replayed[0]?.type === 'replay_message' ? replayed[0].content : undefined,
+    'the full hostile image source arrives unchanged — a safely omitted render cannot be replaced by an emptied setup').toBe(imageSource);
+  const row = assistantRow(page, imageId);
+  await expect(row, 'the addressed rendered assistant row is present exactly once').toHaveCount(1);
+  const marker = row.getByText(imageMarker, { exact: true });
+  await expect(marker, 'POSITIVE CONTROL: the exact plain-text marker is visible').toBeVisible();
+  expect(await row.innerText(), 'Option A: the markdown image syntax is consumed by rendering, never shown as literal source')
+    .not.toContain('![x](javascript:alert(1))');
+  await expectEscapedPayload(page, row, monitor, info, 'xss-f2-image', imageMarker, marker);
+  const images = row.locator('img');
+  const imageCount = await images.count();
+  expect(imageCount, 'one markdown image renders at most one img element').toBeLessThan(2);
+  for (const image of await images.all()) {
+    const attribute = await image.getAttribute('src');
+    expect(unsafeTarget(attribute), `the rendered src ${JSON.stringify(attribute)} carries no unsafe scheme`).toBe(false);
+    const resolved = await image.evaluate(element => (element as HTMLImageElement).src);
+    expect(unsafeTarget(resolved), `the resolved src property ${JSON.stringify(resolved)} is not an unsafe scheme`).toBe(false);
+  }
+  const rowHandlers = await row.evaluate(element => [element, ...element.querySelectorAll('*')].flatMap(node =>
+    [...node.attributes].filter(attribute => /^on[a-z]/i.test(attribute.name)).map(attribute => attribute.name)));
+  expect(rowHandlers, 'no event-handler attribute survives anywhere in the rendered row').toEqual([]);
+  const interaction = imageCount === 1 ? images.first() : marker;
+  if (imageCount === 0) await expect(images, 'image absence is proven before the marker stands in for interaction').toHaveCount(0);
+  const urlBefore = page.url();
+  await interaction.evaluate(element => (element as HTMLElement).focus({ preventScroll: true }));
+  expect(new URL(page.url()).origin + new URL(page.url()).pathname, 'focusing the interaction target never navigates the document')
+    .toBe(new URL(urlBefore).origin + new URL(urlBefore).pathname);
+  expect(monitor.dialogs, 'focusing the interaction target opens no dialog').toEqual([]);
+  expect(monitor.popups, 'focusing the interaction target opens no popup').toEqual([]);
+  await interaction.click();
+  expect(new URL(page.url()).origin + new URL(page.url()).pathname, 'clicking the interaction target never navigates the document')
+    .toBe(new URL(urlBefore).origin + new URL(urlBefore).pathname);
+  expect(monitor.dialogs, 'clicking the interaction target opens no dialog').toEqual([]);
+  expect(monitor.popups, 'clicking the interaction target opens no popup').toEqual([]);
+  expect(await page.evaluate(() => (window as unknown as { __xss_fired: boolean }).__xss_fired),
+    'neither focus nor click executes the hostile payload').toBe(false);
+  expect(consoleErrors, 'render, focus and click emit no console error').toEqual([]);
+  expect(xssProvider.calls(), 'rendering persisted markdown never dispatches a model call').toBe(0);
+  expect(traffic.sends, 'opening persisted markdown never sends an input').toEqual([]);
+  expect(traffic.failures).toEqual([]);
 });
