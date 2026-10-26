@@ -107,10 +107,16 @@ function retainedSpanIds(rows: Iterable<ChatMessage>): Set<string> {
   return ids
 }
 
-function releaseDetachedSpanFacts(sessionId: string, rows: Iterable<ChatMessage>): void {
+/**
+ * Release every span no retained row carries. A span whose live update beat
+ * its start (the bucket's parked pendingSpanUpdatesBySpanId, itself capped at
+ * PENDING_SPAN_UPDATE_CAP) keeps its record until that start arrives.
+ */
+function releaseDetachedSpanFacts(sessionId: string, rows: Iterable<ChatMessage>, parked: SessionChatState['pendingSpanUpdatesBySpanId']): void {
   const bySpan = spanFacts.get(sessionId)
   if (!bySpan) return
   const keep = retainedSpanIds(rows)
+  for (const spanId of Object.keys(parked ?? {})) keep.add(spanId)
   for (const spanId of [...bySpan.keys()]) if (!keep.has(spanId)) bySpan.delete(spanId)
 }
 
@@ -140,7 +146,7 @@ export function rememberHistoryReadFacts(sessionId: string, entries: ChatMessage
  * spans no row of `bucket` still carries (I4/F4).
  */
 export function rememberLiveSpanFact(sessionId: string, frame: HistorySpanFrame, bucket: SessionChatState | undefined): void {
-  if (bucket && !spanFacts.get(sessionId)?.has(frame.span_id)) releaseDetachedSpanFacts(sessionId, Object.values(bucket.messagesById))
+  if (bucket && !spanFacts.get(sessionId)?.has(frame.span_id)) releaseDetachedSpanFacts(sessionId, Object.values(bucket.messagesById), bucket.pendingSpanUpdatesBySpanId)
   rememberSpanFact(sessionId, { frame, tick: ++factTick, rank: 0 })
 }
 
@@ -192,9 +198,10 @@ function carriesPayload(frame: HistorySpanFrame): boolean {
  * saved rows runs it, after remembering its read (rememberHistoryReadFacts):
  * page loads and the loaded-window refresh (history.ts::refresh, I3). It then
  * releases the facts of every span neither `rows` nor `retained` (the live
- * tail kept beside the reader) still carries (I4/F4, D9).
+ * tail kept beside the reader) still carries, except spans `parked` before
+ * their start (I4/F4, D9).
  */
-export function settleHistorySpans(sessionId: string, rows: ChatMessage[], retained: ChatMessage[] = []): { rows: ChatMessage[]; index: SessionChatState['spanBySpanId'] } {
+export function settleHistorySpans(sessionId: string, rows: ChatMessage[], retained: ChatMessage[] = [], parked?: SessionChatState['pendingSpanUpdatesBySpanId']): { rows: ChatMessage[]; index: SessionChatState['spanBySpanId'] } {
   const bySpan = spanFacts.get(sessionId)
   const index: NonNullable<SessionChatState['spanBySpanId']> = {}
   if (!bySpan) return { rows, index }
@@ -216,7 +223,7 @@ export function settleHistorySpans(sessionId: string, rows: ChatMessage[], retai
     const result = mini.messagesById[row.id]
     return record?.ran ? { ...result, spans: result.spans?.map(span => span.spanId === start.span_id ? { ...span, hasRun: true } : span) } : result
   })
-  releaseDetachedSpanFacts(sessionId, [...settled, ...retained])
+  releaseDetachedSpanFacts(sessionId, [...settled, ...retained], parked)
   return { rows: settled, index }
 }
 
@@ -299,7 +306,7 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   }
   const hidden = hiddenIds.flatMap(id => bucket.messagesById[id] ? [bucket.messagesById[id]] : [])
   rememberHistoryReadFacts(page.session_id, incoming, [page.page_info.context])
-  const spans = settleHistorySpans(page.session_id, finalRows, hidden)
+  const spans = settleHistorySpans(page.session_id, finalRows, hidden, bucket.pendingSpanUpdatesBySpanId)
   const patch = { ...historyRowsPatch(bucket, [...spans.rows, ...hidden], positions), messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: hiddenIds }
   patch.spanBySpanId = { ...patch.spanBySpanId, ...spans.index }
   patch.historySourceAliases = Object.fromEntries(positions.flatMap(position => {
