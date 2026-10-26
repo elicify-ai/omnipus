@@ -198,12 +198,23 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   const newOverlap = pagePositions.filter(position => existingPositions.has(position))
   if (oldOverlap.join() !== newOverlap.join()) throw new HistoryPageProtocolError('Contradictory history overlap.')
   if ((action === 'older' || action === 'newer') && page.entries.length && page.entries.every(entry => existingPositions.has(entry.historyPosition))) throw new HistoryPageProtocolError('History boundary did not advance.')
-  const incoming = page.entries.map(entry => {
-    // A saved source whose id a displayed reply already coalesced (the token
-    // resolver's mergedReplayIds) merges onto that display row: it keeps its
-    // identity and live text and takes the saved position, never a second
-    // reply beside it (D4/D7, r21).
-    const owner = bucket.messagesById[entry.id] ? undefined : coalescedOwner(bucket, entry)
+  // A saved source whose id a displayed reply already coalesced (the token
+  // resolver's mergedReplayIds) merges onto that display row: it keeps its
+  // identity and live text and takes the saved position, never a second reply
+  // beside it (D4/D7, r21). Only when it is the ONE saved source that display
+  // row represents (final-gate F1): a row the page also selects by its own id,
+  // a row two page sources would claim, or a row already holding another saved
+  // position stays itself, and each distinct saved entry keeps its own row, so
+  // no saved segment collapses into another under one display identity.
+  const candidates = page.entries.map(entry => bucket.messagesById[entry.id] ? undefined : coalescedOwner(bucket, entry))
+  const claims = new Map<string, number>()
+  page.entries.forEach((entry, i) => {
+    const claimed = candidates[i]?.id ?? (bucket.messagesById[entry.id] ? entry.id : undefined)
+    if (claimed) claims.set(claimed, (claims.get(claimed) ?? 0) + 1)
+  })
+  const incoming = page.entries.map((entry, i) => {
+    const candidate = candidates[i]
+    const owner = candidate && claims.get(candidate.id) === 1 && (!candidate.historyPosition || candidate.historyPosition === entry.historyPosition) ? candidate : undefined
     return owner ? mergeHistoryEntry({ ...entry, id: owner.id }, owner, baseline[owner.id]) : mergeHistoryEntry(entry, bucket.messagesById[entry.id], baseline[entry.id])
   })
   const union = action === 'older' ? [...incoming, ...old] : action === 'newer' ? [...old, ...incoming] : incoming
