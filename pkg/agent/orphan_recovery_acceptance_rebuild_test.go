@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,21 +29,23 @@ func orphanACFirstRecovery(t *testing.T) {
 	}
 	h.append(t, raw...)
 	before := orphanACSnapshot(t, h)
-	want := orphanACPick(raw, 0, 2)
+	issuer := r2Issuer(t, before, 1)
 	cleaned := RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil)
-	assert.Equal(t, want, cleaned, "R1: real recovery must not strip unrelated controls following the canceled declaration")
 	after := orphanACSnapshot(t, h)
-	require.Len(t, viewArchived(after), 4, "one durable cancellation record, no invented tool result")
+	require.Len(t, viewArchived(after), 4, "one durable missing-occurrence observation, no invented original result")
 	require.Equal(t, viewArchived(before), viewArchived(after)[:3], "all original records remain byte-for-field intact")
-	require.Equal(t, "system", viewArchived(after)[3].Role, "marker is a system record")
-	var marker map[string]any
-	require.NoError(t, json.Unmarshal([]byte(viewArchived(after)[3].Content), &marker))
-	require.Equal(t, map[string]any{"type": "turn_canceled_restart", "reason": "ungraceful_shutdown_recovery", "tool_call_id": "first-orphan"}, marker, "existing cancellation shape is sufficient")
+	require.Equal(t, "tool", viewArchived(after)[3].Role, "DESIGN 5: the appended record is an engine observation, not a system cancellation")
+	observation := viewArchived(after)[3]
+	r2CheckedObservation(t, observation, "first-orphan", issuer)
+	want := append(orphanACPick(raw, 0, 1), observation, raw[2])
+	assert.Equal(t, want, cleaned, "R1: DESIGN 2/5 retains the declaration, preserves the unrelated control and appends one truthful observation")
+	require.NoError(t, validateWindowGroups(cleaned), "the retained declaration pairs with its own observation")
 	require.Equal(t, before.State.Skip, after.State.Skip, "recovery is not cursor eviction")
 	require.Equal(t, before.State.AnchorLine, after.State.AnchorLine, "recovery is not an anchor replacement")
-	require.Equal(t, 4, after.State.Count, "count reflects the durable marker only")
+	require.Equal(t, 4, after.State.Count, "count reflects the durable observation only")
 	out := orphanACAssemble(t, h, h.turn(""), cleaned)
 	assert.Equal(t, want, out[1:], "R1: snapshot assembly must not overwrite successful recovery with raw history")
+	assert.Equal(t, want, RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil), "repeat recovery adds nothing")
 	orphanACReopen(t, h)
 	orphanACAssertView(t, h, h.turn(""), want)
 }

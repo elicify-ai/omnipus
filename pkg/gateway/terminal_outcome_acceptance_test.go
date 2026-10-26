@@ -139,7 +139,10 @@ func TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces(t *testing.T) {
 					"same-turn contradiction: done.stats.turn_failed=%t but turn.end.status=%s", failed, payload.Status)
 			}
 			assert.Zero(t, handler.agentLoop.EventDrops(agent.EventKindTurnEnd), "lifecycle observation must not be lossy")
-			terminalAcceptanceAssertLog(t, logPath, end, payload.Status, tc.wantText)
+			// DESIGN 1 forbids generic error for a ceiling; it does not specify
+			// a seventh internal diagnostic enum. Derive the log oracle from
+			// the case/spec, never from the implementation's observed payload.
+			terminalAcceptanceAssertLog(t, logPath, end, tc.wantStatus, tc.wantText)
 
 			entries, err := store.ReadTranscript(meta.ID)
 			require.NoError(t, err)
@@ -287,7 +290,13 @@ func terminalAcceptanceAssertLog(t *testing.T, path string, end agent.Event, wan
 		}
 	}
 	require.Len(t, ends, 1, "real log reader must observe this turn's end, not accept an empty log")
-	assert.Equal(t, string(wantStatus), ends[0]["status"], "logged outcome must agree with the failed/successful done flag")
+	if wantStatus == "" {
+		// DESIGN 1 / nonfatal ceiling: independently require non-error here
+		// as well as on turn.end. Exact internal enum meaning is unspecified.
+		assert.NotEqual(t, string(agent.TurnEndStatusError), ends[0]["status"], "a ceiling diagnostic must not claim generic failure")
+	} else {
+		assert.Equal(t, string(wantStatus), ends[0]["status"], "ordinary success has the independently specified completed diagnostic")
+	}
 	assert.Equal(t, end.Meta.AgentID, ends[0]["agent_id"])
 	assert.Equal(t, end.Meta.SessionKey, ends[0]["session_key"])
 	require.Len(t, responses, 1, "diagnostics must name the genuine terminal reason for the same session")

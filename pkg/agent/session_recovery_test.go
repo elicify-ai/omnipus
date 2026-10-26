@@ -5,22 +5,16 @@
 
 // Tests for SIGKILL recovery — RecoverOrphanedToolCalls (FR-069, FR-088).
 //
-// BDD Scenario: "SIGKILL recovery — orphaned tool_call gets synthetic deny on next boot"
-//
-// Given a session JSONL transcript whose tail contains a tool_call with no matching
-//   tool_result (gateway was SIGKILL'd while paused awaiting approval),
-// And no in-process pending approval matches the orphaned tool_call_id,
-// When the gateway restarts and the session is loaded,
-// Then a synthetic entry {role: "system", type: "turn_canceled_restart",
-//   tool_call_id: <orphan>, reason: "ungraceful_shutdown_recovery"} is appended,
-// And an audit event tool.policy.ask.denied with reason: "restart" is emitted at session-load time,
-// And the orphaned turn is not resumed; the next user message starts a fresh turn.
-//
-// Traces to: tool-registry-redesign-spec.md BDD "SIGKILL recovery" / FR-069 / FR-088
+// PRT T1 reconciliation: crash-recovery DESIGN Decisions 2/5 supersede
+// synthetic Deny and whole-group omission. Preserve the original declaration,
+// completed results and archive addresses; append only engine-owned missing-
+// occurrence observations. Unknown has audit decision=error, never policy Deny.
+// Legacy test names remain so existing exact regression selectors still run.
 
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -265,21 +259,29 @@ func TestRecovery_StripOrphanedTurn_RemovesOrphanedAssistant(t *testing.T) {
 	}
 	require.NoError(t, store.Save(sessionKey), "seed the real persisted session")
 
+	before, err := store.WindowView(context.Background(), sessionKey)
+	require.NoError(t, err)
+	issuer := r2Issuer(t, before, 1)
 	cleaned := RecoverOrphanedToolCalls(store, sessionKey, nil)
 
-	// Only the original user message should remain in the recovered view.
-	require.Len(t, cleaned, 1, "cleaned history must have only the user message")
+	// DESIGN 2/5: user + original declaration + truthful missing observation.
+	require.Len(t, cleaned, 3, "preserve the original declaration instead of omitting its group")
 	assert.Equal(t, "user", cleaned[0].Role)
-	assert.Equal(t, []providers.Message{history[0]}, cleaned, "recovery preserves the complete original user message")
+	assert.Equal(t, history, cleaned[:len(history)], "recovery preserves every complete original message and field")
+	assert.Equal(t, r2ExpectedObservation("tc-001"), r2CheckedObservation(t, cleaned[2], "tc-001", issuer))
+	require.NoError(t, validateWindowGroups(cleaned), "retained declaration is paired with its own recovery observation")
 
-	// Reopen from disk: a cleaned context is not permission to erase the archive
-	// or to treat an in-memory-only cancellation as durable recovery.
-	persisted := recoveryStore(t, storage).GetHistory(sessionKey)
-	require.Len(t, persisted, len(history)+1, "recovery appends exactly one cancellation to the original persisted transcript")
+	// Reopen: the observation must be durable; original addresses stay intact.
+	reloaded := recoveryStore(t, storage)
+	persisted := reloaded.GetHistory(sessionKey)
+	require.Len(t, persisted, len(history)+1, "one durable observation, not an invented original result")
 	assert.Equal(t, history, persisted[:len(history)], "the orphaned assistant remains archived, unchanged")
-	assert.Equal(t, "system", persisted[len(history)].Role, "cancellation is a system record")
-	require.JSONEq(t, `{"type":"turn_canceled_restart","tool_call_id":"tc-001","reason":"ungraceful_shutdown_recovery"}`,
-		persisted[len(history)].Content, "architect Option A retains the exact one-l restart-record schema")
+	assert.Equal(t, "tool", persisted[len(history)].Role, "engine observation is a provider-valid result")
+	assert.Equal(t, r2ExpectedObservation("tc-001"), r2CheckedObservation(t, persisted[len(history)], "tc-001", issuer))
+	after, err := reloaded.WindowView(context.Background(), sessionKey)
+	require.NoError(t, err)
+	assert.Equal(t, before.Live, after.Live[:len(before.Live)], "all original archive addresses and source metadata survive")
+	assert.Equal(t, cleaned, RecoverOrphanedToolCalls(reloaded, sessionKey, nil), "repeat recovery is idempotent")
 }
 
 // TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls verifies that public
@@ -371,21 +373,26 @@ func TestRecovery_RecoverOrphaned_ExistingMarkerNoNewOrphan_CleanViewNoNewRecord
 	require.Len(t, before, 5, "fixture precondition: pre-marked five-message transcript")
 	require.JSONEq(t, seed[2].Content, before[2].Content, "fixture precondition: the persisted marker from the earlier recovery")
 
+	view, err := store.WindowView(context.Background(), sessionKey)
+	require.NoError(t, err)
+	issuer := r2Issuer(t, view, 1)
 	cleaned := RecoverOrphanedToolCalls(store, sessionKey, nil)
 
-	// The last assistant declares no tool calls, so this recovery finds no new
-	// orphan — yet the earlier cancellation stays bound to its position: the
-	// dangling assistant and its marker record stay out of the LLM view while
-	// every unrelated message survives whole and in order.
-	require.Equal(t, []providers.Message{seed[0], seed[3], seed[4]}, cleaned,
-		"pre-marked history with no new orphan: view excludes the bound canceled group and its record, retains the rest in order")
-
-	// Idempotency: no new cancellation record in memory or on disk.
-	require.Equal(t, before, store.GetHistory(sessionKey),
-		"recovery appends no in-memory record when the marker already exists and no orphan exists")
+	// DESIGN 2/5: a retained legacy marker is not a recovered historical
+	// return. Add one truthful observation without erasing the declaration or
+	// either later clean message. The old marker remains archived once.
+	require.Len(t, cleaned, 5)
+	checked := append([]providers.Message(nil), cleaned...)
+	checked[2] = r2CheckedObservation(t, cleaned[2], "call_old", issuer)
+	require.Equal(t, []providers.Message{seed[0], seed[1], r2ExpectedObservation("call_old"), seed[3], seed[4]}, checked,
+		"original declaration plus occurrence-bound Unknown; unrelated messages retain order and fields")
+	require.NoError(t, validateWindowGroups(cleaned))
 	persisted := recoveryStore(t, storage).GetHistory(sessionKey)
-	require.Equal(t, before, persisted,
-		"recovery leaves the persisted transcript unchanged (same messages, no duplicate cancellation)")
+	require.Len(t, persisted, len(before)+1, "only the missing occurrence gains one durable observation")
+	require.Equal(t, before, persisted[:len(before)], "all five old archive records, including the legacy marker, remain unchanged")
+	require.Equal(t, r2ExpectedObservation("call_old"), r2CheckedObservation(t, persisted[len(before)], "call_old", issuer))
+	require.Equal(t, cleaned, RecoverOrphanedToolCalls(store, sessionKey, nil), "repeat repair adds nothing")
+	require.Equal(t, persisted, store.GetHistory(sessionKey), "no duplicate observation or cancellation")
 	markers := 0
 	for _, msg := range persisted {
 		if msg.Role == "system" && strings.Contains(msg.Content, "turn_canceled_restart") {
@@ -399,13 +406,17 @@ func TestRecovery_RecoverOrphaned_ExistingMarkerNoNewOrphan_CleanViewNoNewRecord
 
 // --- RecoverOrphanedToolCalls integration tests ---
 
-// TestRecovery_RecoverOrphaned_AppendsSyntheticEntry verifies the full recovery:
-//  1. A synthetic system message is appended to the transcript.
-//  2. An audit event tool.policy.ask.denied reason=restart is emitted.
-//  3. The returned history excludes the orphaned assistant turn (FR-088).
+// TestRecovery_RecoverOrphaned_AppendsSyntheticEntry verifies the full recovery,
+// reconciled to crash-recovery DESIGN Decisions 2/5 (the synthetic-deny and
+// whole-group-omission oracles are superseded):
+//  1. The original declaration is retained; one durable engine observation
+//     covers the missing occurrence — no invented original return.
+//  2. The audit entry is the typed Unknown recovery-interrupted event with
+//     decision=error — never tool.policy.ask.denied.
+//  3. The returned view is provider-valid: declaration plus observation.
 //
-// BDD: "SIGKILL recovery — orphaned tool_call gets synthetic deny on next boot"
-// Traces to: tool-registry-redesign-spec.md FR-069 / FR-088
+// Legacy test name retained so existing exact regression selectors still run.
+// Traces to: tool-registry-redesign-spec.md FR-069 / FR-088; DESIGN Decisions 2/5
 func TestRecovery_RecoverOrphaned_AppendsSyntheticEntry(t *testing.T) {
 	store := newTestSessionStoreRecovery(t)
 	auditLogger, auditPath := newTestAuditLoggerRecovery(t)
@@ -421,51 +432,44 @@ func TestRecovery_RecoverOrphaned_AppendsSyntheticEntry(t *testing.T) {
 	require.NoError(t, store.Save(sessionKey), "Save must succeed")
 
 	// Run recovery.
+	view, err := store.WindowView(context.Background(), sessionKey)
+	require.NoError(t, err)
+	issuer := r2Issuer(t, view, 1)
 	cleanedHistory := RecoverOrphanedToolCalls(store, sessionKey, auditLogger)
 
-	// 1. Cleaned history must not contain the orphaned assistant turn (FR-088).
-	for _, msg := range cleanedHistory {
-		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			t.Errorf("cleaned history must NOT contain assistant message with tool calls")
-		}
-	}
+	// 1. DESIGN 2/5: the declaration stays; one observation covers the orphan.
+	require.Len(t, cleanedHistory, 3, "declaration retained, one engine observation for the missing occurrence")
+	assert.Equal(t, buildOrphanedHistory(toolCallID, toolName), cleanedHistory[:2], "original user and declaration survive field-for-field")
+	assert.Equal(t, r2ExpectedObservation(toolCallID), r2CheckedObservation(t, cleanedHistory[2], toolCallID, issuer))
+	require.NoError(t, validateWindowGroups(cleanedHistory), "declaration and observation form a provider-valid group")
 
-	// 2. The session transcript must have a synthetic system entry appended.
+	// 2. Durable transcript: originals unchanged, observation appended.
 	fullHistory := store.GetHistory(sessionKey)
-	foundSynthetic := false
-	for _, msg := range fullHistory {
-		if msg.Role == "system" && strings.Contains(msg.Content, "turn_canceled_restart") {
-			foundSynthetic = true
-			assert.Contains(t, msg.Content, toolCallID,
-				"synthetic entry must contain the orphaned tool_call_id")
-			assert.Contains(t, msg.Content, "ungraceful_shutdown_recovery",
-				"synthetic entry must contain the recovery reason")
-		}
-	}
-	assert.True(t, foundSynthetic,
-		"session transcript must contain a synthetic turn_canceled_restart entry")
+	require.Len(t, fullHistory, 3, "one durable record, no invented original result")
+	assert.Equal(t, r2ExpectedObservation(toolCallID), r2CheckedObservation(t, fullHistory[2], toolCallID, issuer))
 
-	// 3. Audit event must have been emitted.
+	// 3. DESIGN 5 audit: typed Unknown with decision=error, never ask.denied.
 	// Close the logger to flush pending writes before reading the file.
 	require.NoError(t, auditLogger.Close())
 	auditData, err := readAuditFileRecovery(auditPath)
 	require.NoError(t, err, "audit file must be readable")
 
-	foundAuditEvent := false
+	foundUnknown := false
 	for _, entry := range auditData {
-		if entry["event"] == "tool.policy.ask.denied" {
+		assert.NotEqual(t, "tool.policy.ask.denied", entry["event"],
+			"DESIGN 5: a missing result is never a policy denial")
+		if entry["event"] == string(audit.EventToolRecoveryInterrupted) && entry["decision"] == string(audit.DecisionError) {
 			if details, ok := entry["details"].(map[string]any); ok {
-				if reason, _ := details["reason"].(string); reason == "restart" {
-					foundAuditEvent = true
-					tc, _ := details["tool_call_id"].(string)
-					assert.Equal(t, toolCallID, tc,
-						"audit event must contain the orphaned tool_call_id")
+				if tc, _ := details["tool_call_id"].(string); tc == toolCallID {
+					if disposition, _ := details["disposition"].(string); disposition == "unknown" {
+						foundUnknown = true
+					}
 				}
 			}
 		}
 	}
-	assert.True(t, foundAuditEvent,
-		"audit event tool.policy.ask.denied with reason=restart must be emitted")
+	assert.True(t, foundUnknown,
+		"audit must carry the typed recovery-interrupted Unknown for the exact occurrence (DESIGN 5); entries: %v", auditData)
 }
 
 // TestRecovery_RecoverOrphaned_NoOpOnCleanSession verifies that the function
@@ -509,9 +513,10 @@ func TestRecovery_RecoverOrphaned_NilAuditLogger(t *testing.T) {
 
 // TestRecovery_RecoverOrphaned_DifferentInputsDifferentOutputs is the differentiation
 // test: two different sessions with different orphaned tool_call_ids must produce
-// different synthetic entries.
+// different durable observation records, each bound to its own issuing declaration
+// (DESIGN 2/5 reconciliation of the superseded synthetic-entry oracle).
 //
-// Traces to: tool-registry-redesign-spec.md FR-069
+// Traces to: tool-registry-redesign-spec.md FR-069; crash-recovery DESIGN Decisions 2/5
 func TestRecovery_RecoverOrphaned_DifferentInputsDifferentOutputs(t *testing.T) {
 	store := newTestSessionStoreRecovery(t)
 
@@ -529,24 +534,18 @@ func TestRecovery_RecoverOrphaned_DifferentInputsDifferentOutputs(t *testing.T) 
 
 	hist1 := store.GetHistory("session-a")
 	hist2 := store.GetHistory("session-b")
+	require.Len(t, hist1, 3, "declaration retained, one observation appended")
+	require.Len(t, hist2, 3, "declaration retained, one observation appended")
+	viewA, err := store.WindowView(context.Background(), "session-a")
+	require.NoError(t, err)
+	viewB, err := store.WindowView(context.Background(), "session-b")
+	require.NoError(t, err)
 
-	var syn1, syn2 string
-	for _, m := range hist1 {
-		if m.Role == "system" && strings.Contains(m.Content, "turn_canceled_restart") {
-			syn1 = m.Content
-		}
-	}
-	for _, m := range hist2 {
-		if m.Role == "system" && strings.Contains(m.Content, "turn_canceled_restart") {
-			syn2 = m.Content
-		}
-	}
-
-	require.NotEmpty(t, syn1, "session-a must have a synthetic entry")
-	require.NotEmpty(t, syn2, "session-b must have a synthetic entry")
-	assert.Contains(t, syn1, "tc-AAA", "session-a synthetic must reference tc-AAA")
-	assert.Contains(t, syn2, "tc-BBB", "session-b synthetic must reference tc-BBB")
-	assert.NotEqual(t, syn1, syn2, "two different sessions must produce different synthetic entries")
+	// DESIGN 2/5: occurrences bind to their own issuing declaration and
+	// session, never to a global call-ID cancellation set.
+	obsA := r2CheckedObservation(t, hist1[2], "tc-AAA", r2Issuer(t, viewA, 1))
+	obsB := r2CheckedObservation(t, hist2[2], "tc-BBB", r2Issuer(t, viewB, 1))
+	assert.NotEqual(t, obsA, obsB, "two different sessions must produce different observation records")
 }
 
 // readAuditFileRecovery reads a JSONL audit file and returns parsed records.

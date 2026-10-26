@@ -30,7 +30,13 @@ import (
 // the winning explicit Retry. Both requests start at the same held barrier.
 func TestCrashRecovery_ConcurrentRetryCreatesExactlyOneFreshAttempt(t *testing.T) {
 	api, old, closed := crashTaskAfterBoot(t)
-	p := newCrashTaskProvider()
+	beforeSessions, err := api.agentLoop.GetSessionStore().ListSessions()
+	require.NoError(t, err)
+	beforeIDs := map[string]bool{}
+	for _, s := range beforeSessions {
+		beforeIDs[s.ID] = true
+	}
+	p := &r2RetryProvider{crashTaskProvider: newCrashTaskProvider()}
 	p.retry = true
 	work, err := workspace.EnsureWorkDir(api.homePath, old.WorkspaceID)
 	require.NoError(t, err)
@@ -41,6 +47,13 @@ func TestCrashRecovery_ConcurrentRetryCreatesExactlyOneFreshAttempt(t *testing.T
 	inst.Tools.RegisterReplacing(tools.NewAppendFileTool(work, true))
 	inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"append_file": config.ToolPolicyAllow, "goal_claim": config.ToolPolicyAllow}})
 	t.Cleanup(func() { p.open(); api.taskExecutor.Drain(10 * time.Second) })
+	p.resultCommitted = make(chan struct{}, 8)
+	trace := &r2ExecutionTrace{requests: map[string]int{}, effects: map[string]int{}}
+	require.NoError(t, api.agentLoop.MountHook(agent.NamedHook("r2-per-execution-retry-observer", trace)))
+	observed := &r2ObservedLauncher{SessionLauncher: agent.NewSteerLauncher(api.agentLoop), entered: make(chan steer.LaunchResult, 1), release: make(chan struct{})}
+	openLaunch := sync.OnceFunc(func() { close(observed.release) })
+	t.Cleanup(openLaunch)
+	api.taskExecutor.SetSessionLauncher(observed)
 	start := make(chan struct{})
 	responses := make(chan *httptest.ResponseRecorder, 2)
 	var wg sync.WaitGroup
@@ -57,6 +70,11 @@ func TestCrashRecovery_ConcurrentRetryCreatesExactlyOneFreshAttempt(t *testing.T
 		}()
 	}
 	close(start)
+	launched := gatewayCrashAwait(t, observed.entered)
+	require.NotEmpty(t, launched.SessionID, "instrument: winner crossed the REAL durable launcher under its reservation")
+	otherResponse := gatewayCrashAwait(t, responses)
+	assert.Equal(t, http.StatusOK, otherResponse.Code, "the other real PATCH returned while winner was held: %s", otherResponse.Body.String())
+	openLaunch()
 	wg.Wait()
 	close(responses)
 	for w := range responses {
@@ -74,6 +92,46 @@ func TestCrashRecovery_ConcurrentRetryCreatesExactlyOneFreshAttempt(t *testing.T
 		}
 	}
 	gatewayCrashAwait(t, p.resultCommitted)
+	// CHECK F1 / DESIGN 4: OpenRun can coalesce different sessions. Enumerate
+	// the actual durable sessions and lifecycle execution claims independently.
+	afterSessions, err := api.agentLoop.GetSessionStore().ListSessions()
+	require.NoError(t, err)
+	var freshIDs []string
+	for _, s := range afterSessions {
+		if !beforeIDs[s.ID] {
+			freshIDs = append(freshIDs, s.ID)
+		}
+	}
+	assert.Equal(t, []string{fresh.SessionID}, freshIDs, "exactly ONE fresh session, including workers refused after creation")
+	records, err := api.agentLoop.GetSessionLifecycleStore().List(session.LifecycleFilter{})
+	require.NoError(t, err)
+	var taskClaims []session.LifecycleRecord
+	for _, rec := range records {
+		if !beforeIDs[rec.SessionID] && rec.Origin != nil && rec.Origin.TaskID == old.ID {
+			taskClaims = append(taskClaims, rec)
+		}
+	}
+	assert.Len(t, taskClaims, 1, "one fresh task-session lifecycle, not a second distinct failed or queued worker")
+	for _, rec := range taskClaims {
+		assert.Equal(t, fresh.SessionID, rec.SessionID)
+		require.NotNil(t, rec.ExecutionID, "fresh task owns a real admission execution claim")
+		assert.NotEmpty(t, rec.ExecutionID.RunID)
+		for _, run := range runs {
+			if run.RunID != closed.RunID {
+				assert.Equal(t, rec.SessionID, run.SessionID, "new run and execution name the SAME unique session")
+			}
+		}
+		t.Logf("RETRY_EXECUTION session=%s generation=%d execution=%+v", rec.SessionID, rec.Generation, rec.ExecutionID)
+	}
+	requests, effects := trace.snapshot("")
+	assert.Len(t, requests, 1, "provider requests are observed per real session/turn, never a global scripted step")
+	assert.Len(t, effects, 1, "successful effects are observed per real session/turn")
+	for key, count := range requests {
+		assert.Contains(t, key, fresh.SessionID)
+		assert.Equal(t, 2, count, "one tool request and its settled-result follow-up in the same execution")
+		assert.Equal(t, 1, effects[key], "one actual effect for the unique admitted execution")
+	}
+	t.Logf("RETRY_IDENTITIES fresh=%v requests=%v effects=%v", freshIDs, requests, effects)
 	bytes, err := os.ReadFile(p.path)
 	require.NoError(t, err)
 	assert.Equal(t, "RETRY\n", string(bytes), "concurrent admission applies exactly one new effect")
