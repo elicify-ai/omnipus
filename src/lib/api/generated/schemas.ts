@@ -1808,6 +1808,7 @@ type ContextSettings = {
   tool_result_share_fraction: number;
   ingest_bound_bytes: number;
   default_context_window?: (number | null) | undefined;
+  default_max_tokens: number;
   model_overrides: Array<ContextModelOverride>;
 };
 type ContextModelOverride = {
@@ -1822,6 +1823,7 @@ type ContextSettingsUpdate = Partial<{
   tool_result_share_fraction: number;
   ingest_bound_bytes: number;
   default_context_window: number | null;
+  default_max_tokens: number;
   model_overrides: Array<ContextModelOverride>;
 }>;
 type IntegrationProvidersResponse = {
@@ -4612,6 +4614,7 @@ export const ContextSettings: z.ZodType<ContextSettings> = z.object({
   tool_result_share_fraction: z.number().gt(0).lte(1),
   ingest_bound_bytes: z.number().int().gte(1).lte(8388607),
   default_context_window: z.number().int().gte(1).nullish(),
+  default_max_tokens: z.number().int().gte(256).lte(1048576),
   model_overrides: z.array(ContextModelOverride),
 });
 export const ContextSettingsUpdate: z.ZodType<ContextSettingsUpdate> = z
@@ -4622,6 +4625,7 @@ export const ContextSettingsUpdate: z.ZodType<ContextSettingsUpdate> = z
     tool_result_share_fraction: z.number().gt(0).lte(1),
     ingest_bound_bytes: z.number().int().gte(1).lte(8388607),
     default_context_window: z.number().int().gte(1).nullable(),
+    default_max_tokens: z.number().int().gte(256).lte(1048576),
     model_overrides: z.array(ContextModelOverride),
   })
   .partial();
@@ -14176,7 +14180,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/settings/context",
     alias: "getContextSettings",
-    description: `Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 &lt; f ≤ 1, default 0.5), the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+    description: `Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 &lt; f ≤ 1, default 0.5), the ingest bound, the global default context window, the global default max output tokens and the per-(provider, model) window overrides. User-facing location: Settings → Models; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
 `,
     requestFormat: "json",
     response: ContextSettings,
@@ -14192,7 +14196,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/settings/context",
     alias: "updateContextSettings",
-    description: `Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap &gt; 150,000 or &lt; 1; tool_result_share_fraction must be a finite JSON number with 0 &lt; f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values &gt; 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or &lt; 1; model_overrides[].context_window &lt; 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+    description: `Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap &gt; 150,000 or &lt; 1; tool_result_share_fraction must be a finite JSON number with 0 &lt; f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values &gt; 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or &lt; 1; model_overrides[].context_window &lt; 1; default_max_tokens &lt; 256 or &gt; 1,048,576. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
 `,
     requestFormat: "json",
     parameters: [

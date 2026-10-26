@@ -59,6 +59,7 @@ type OverrideRow = { provider: string; model: string; context_window: string }
 
 type FormState = Record<NumericKey, string> & {
   default_context_window: string
+  default_max_tokens: string
   model_overrides: OverrideRow[]
 }
 
@@ -90,6 +91,10 @@ function toForm(s: ContextSettings): FormState {
       s.default_context_window === undefined || s.default_context_window === null
         ? ''
         : String(s.default_context_window),
+    default_max_tokens:
+      s.default_max_tokens === undefined || s.default_max_tokens === null
+        ? ''
+        : String(s.default_max_tokens),
     model_overrides: s.model_overrides.map((o) => ({
       provider: o.provider,
       model: o.model,
@@ -197,6 +202,19 @@ function validate(form: FormState): { errors: FieldErrors; parsed: Partial<Conte
     parsed.default_context_window = dw
   }
 
+  // No "unset" state: a default max-tokens value always exists (fresh install
+  // 64,000), so an empty field is an error, not a clear.
+  const dm = parseInt_(form.default_max_tokens)
+  if (dm === null || Number.isNaN(dm)) {
+    errors.default_max_tokens = 'Default max tokens must be a whole number.'
+  } else if (dm < 256) {
+    errors.default_max_tokens = 'Default max tokens must be at least 256.'
+  } else if (dm > 1_048_576) {
+    errors.default_max_tokens = 'Default max tokens must be at most 1,048,576.'
+  } else {
+    parsed.default_max_tokens = dm
+  }
+
   const overrides: ContextModelOverride[] = []
   form.model_overrides.forEach((row, i) => {
     const provider = row.provider.trim()
@@ -233,6 +251,9 @@ function buildPartial(parsed: Partial<ContextSettings>, base: ContextSettings): 
   if (parsed.default_context_window !== undefined && parsed.default_context_window !== baseDw) {
     body.default_context_window = parsed.default_context_window
   }
+  if (parsed.default_max_tokens !== undefined && parsed.default_max_tokens !== base.default_max_tokens) {
+    body.default_max_tokens = parsed.default_max_tokens
+  }
   const ov = parsed.model_overrides ?? []
   const same =
     ov.length === base.model_overrides.length &&
@@ -262,7 +283,7 @@ function fieldFromError(err: unknown): { field?: string; message: string } {
     }
   }
   if (!field) {
-    const known = [...NUMERIC_FIELDS.map((f) => f.key), 'default_context_window', 'model_overrides']
+    const known = [...NUMERIC_FIELDS.map((f) => f.key), 'default_context_window', 'default_max_tokens', 'model_overrides']
     field = known.find((k) => err.userMessage.includes(k))
   }
   return { field, message: err.userMessage }
@@ -361,7 +382,7 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
     )
   }
 
-  const setNumeric = (key: NumericKey | 'default_context_window', value: string) => {
+  const setNumeric = (key: NumericKey | 'default_context_window' | 'default_max_tokens', value: string) => {
     setForm((f) => (f ? { ...f, [key]: value } : f))
     setErrors((e) => {
       if (!(key in e)) return e
@@ -503,6 +524,34 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
           </span>
         </div>
         <FieldError id="context-error-default_context_window" message={errors.default_context_window} />
+      </section>
+
+      {/* Global default max output (per-agent profile "Max tokens" overrides it) */}
+      <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2)]">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Default max tokens</h3>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
+          Output-token budget per turn for agents that set no per-agent max tokens. Fresh installs start at 64,000.
+          The per-agent &ldquo;Max tokens&rdquo; in an agent&rsquo;s profile overrides this default. Values that would
+          overflow a model&rsquo;s context window are clamped on use.
+        </p>
+        <div className="flex items-center gap-[var(--space-2)]">
+          <Input
+            id="context-default-max-tokens"
+            data-testid="context-default-max-tokens"
+            type="number"
+            inputMode="numeric"
+            min={256}
+            max={1048576}
+            step={1}
+            value={form.default_max_tokens}
+            aria-invalid={errors.default_max_tokens ? 'true' : undefined}
+            aria-describedby={errors.default_max_tokens ? 'context-error-default_max_tokens' : undefined}
+            onChange={(e) => setNumeric('default_max_tokens', e.target.value)}
+            className={`${inputCls} ${borderFor('default_max_tokens')}`}
+          />
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">tokens</span>
+        </div>
+        <FieldError id="context-error-default_max_tokens" message={errors.default_max_tokens} />
       </section>
 
       {/* Model overrides */}

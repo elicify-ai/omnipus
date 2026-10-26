@@ -146,7 +146,7 @@ Old config (no version field, or `version: 0`):
   "providers": {
     "openai": { "api_key": "sk-...", "api_base": "https://api.openai.com/v1" }
   },
-  "agents": { "defaults": { "max_tokens": 32768 } }
+  "agents": { "defaults": { "max_tokens": 64000 } }
 }
 ```
 
@@ -163,7 +163,7 @@ New config (v1):
       "api_key": "sk-..."
     }
   ],
-  "agents": { "defaults": { "max_tokens": 32768 } }
+  "agents": { "defaults": { "max_tokens": 64000 } }
 }
 ```
 

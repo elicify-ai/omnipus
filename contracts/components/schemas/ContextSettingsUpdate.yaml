@@ -6,7 +6,8 @@ description: >
   tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1
   (null, strings, booleans, zero, negatives and values > 1 are invalid);
   ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window
-  < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400.
+  < 1; default_max_tokens < 256 or > 1,048,576. Malformed/nonfinite JSON and
+  unknown fields are rejected with 400.
   Set default_context_window to null to clear it. model_overrides, when
   present, replaces the whole list.
 type: object
@@ -48,6 +49,15 @@ properties:
     minimum: 1
     nullable: true
     example: 128000
+  default_max_tokens:
+    type: integer
+    minimum: 256
+    maximum: 1048576
+    description: >
+      Global default max output tokens per turn. Omitted means unchanged.
+      Writes agents.defaults.max_tokens; agents without their own per-agent
+      max_tokens pick the new value up from the reload this PUT triggers.
+    example: 64000
   model_overrides:
     type: array
     items:

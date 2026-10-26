@@ -1134,7 +1134,7 @@ func defaultAgentsConfig(workspacePath string) AgentsConfig {
 			// DefaultModel deliberately left at its zero value (FR-040):
 			// onboarding's explicit pick is the only writer on a fresh
 			// install.
-			MaxTokens:         32768,
+			MaxTokens:         64000,
 			Temperature:       nil, // nil means use provider default
 			MaxToolIterations: DefaultMaxToolIterations,
 			ToolFeedback: ToolFeedbackConfig{
