@@ -1810,8 +1810,34 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	// every subsequent turn. attachToolResultMedia owns that
 	// guard; the artifact tag at loop.go:8246 is the path-based
 	// fallback hook for the rare "rasterize failed" case.
+	//
+	// Issue #1435 R1: the fresh image is fitted to the TURN'S SELECTED
+	// provider/model budget — the provider that will actually receive the
+	// next request — not the package default (whose 7680-px edge exceeds
+	// real ceilings like ZAI's 6000).
+	//
+	// Issue #1435 R2: when a universal image cannot be made to fit, the
+	// helper writes its honest explanation into mediaMsg.Content. That text
+	// is merged into the admitted content HERE — the scratch message's
+	// Content has no other consumer, and without this merge the marker
+	// would never reach the model's input, the live tool event or the
+	// persisted tool result (round-1 review findings SF-1/F3).
 	if len(ex.toolResult.Media) > 0 && ex.rx.rr.rq.ri.turnMediaStore != nil {
-		attachToolResultMedia(&mediaMsg, ex.toolResult.Media, ex.rx.rr.rq.ri.turnMediaStore, ex.rx.rr.rq.ri.maxMediaSize)
+		// The turn's resolved selection wins when present (the light tier may
+		// have switched away from the configured primary); the configured
+		// primary pair is the fallback.
+		rt := ex.rx.rr.rq.ri.rf.rt
+		provider, model := "", ""
+		if len(rt.activeCandidates) > 0 {
+			provider, model = rt.activeCandidates[0].Provider, rt.activeCandidates[0].Model
+		} else if rt.ts != nil && rt.ts.agent != nil {
+			provider, model = rt.ts.agent.primaryModelPair()
+		}
+		selectedBudget := resizeBudgetForModel(ex.rx.rr.rq.ri.turnCatalog, provider, model, ex.rx.rr.rq.ri.maxMediaSize)
+		attachToolResultMedia(&mediaMsg, ex.toolResult.Media, ex.rx.rr.rq.ri.turnMediaStore, ex.rx.rr.rq.ri.maxMediaSize, selectedBudget)
+		if mediaMsg.Content != "" {
+			ex.contentForLLM = injectDocumentContent(ex.contentForLLM, []string{mediaMsg.Content})
+		}
 	}
 	// ADR-066 D5.4 (FR-041/FR-042): budget-first recall decision,
 	// BEFORE the choke point so the archive, transcript and events

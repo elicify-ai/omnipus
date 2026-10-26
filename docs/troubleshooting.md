@@ -351,7 +351,8 @@ Things to watch:
 
 - A resized image may be visibly smaller than the capture; the model sees the resized version.
 - Very tall full-page captures are the usual cause of size limits: a 2560-pixel-wide capture of a very long page can need more patches than a model allows even though its file size is modest.
-- Attachments stay resolvable for the life of their conversation, including across a gateway restart. Deleting the session releases them.
+- Attachments stay resolvable for the life of their conversation, including across a gateway restart. Deleting the session releases them. An upload whose conversation does not exist is not a conversation attachment: it expires with the ordinary cleanup instead of being kept.
+- When an accepted attachment's stored copy can no longer be found, the conversation records the "no longer available" notice — it stays visible after reopening the chat, alongside the original messages.
 
 ## Limits and things to watch
 

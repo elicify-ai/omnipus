@@ -47,6 +47,14 @@ import (
 // media://workspace/<ws>/<id> refs; empty is the legacy posture (global
 // registry only). Without it, workspace-library attachments fail closed
 // with ErrWorkspaceContextRequired and surface as [attachment unavailable].
+//
+// missingRefNotifier (issue #1435 R3) is optional: invoked once per resolved
+// ref that failed with media.ErrNotFound — the typed "attachment no longer
+// available, re-attach" cause — so the caller can emit the live
+// media_unavailable notice and persist it for replay. It is deliberately NOT
+// called for other resolution failures (stat errors, integrity failures,
+// workspace-context refusals): those are different causes with different
+// remedies, never a re-attach instruction.
 func resolveMediaRefsWithOffload(
 	messages []providers.Message,
 	store media.MediaStore,
@@ -56,6 +64,7 @@ func resolveMediaRefsWithOffload(
 	cat *catalog.Catalog,
 	rc workspaceRefcounter,
 	callerWorkspace string,
+	missingRefNotifier ...func(ref string),
 ) []providers.Message {
 	if store == nil {
 		return messages
@@ -113,6 +122,19 @@ func resolveMediaRefsWithOffload(
 					"ref":   ref,
 					"error": err.Error(),
 				})
+				// Issue #1435 R3: a ref that was ACCEPTED and is now gone is
+				// the typed media_unavailable cause. The content marker below
+				// keeps the model informed; the notifier (when wired) drives
+				// the live notice and the persisted replay entry — the model
+				// alone must never be the only channel a lost attachment is
+				// reported through.
+				if errors.Is(err, media.ErrNotFound) {
+					for _, notify := range missingRefNotifier {
+						if notify != nil {
+							notify(ref)
+						}
+					}
+				}
 				contentInjections = append(contentInjections, "[attachment unavailable: "+name+"]")
 				continue
 			}
@@ -173,60 +195,12 @@ func resolveMediaRefsWithOffload(
 			}
 
 			if strings.HasPrefix(mime, "image/") {
-				// Step 1 — capability gate (FR-010). If the catalog says
-				// the model lacks the image modality, skip native send
-				// (step 2 normalize/resize + step 3 native block + step 4
-				// outcome retry) and route directly to the step 5/6/7
-				// fallback — the same path encodeImageToDataURL's failure
-				// takes. A nil catalog is optimistic (FR-026): the gate
-				// always passes and a wrong guess self-corrects via the
-				// outcome-based step-4 retry.
-				var dataURL string
-				if modelSupportsImage(cat, provider, model) {
-					dataURL = encodeImageToDataURLCached(
-						localPath,
-						mime,
-						info,
-						maxSize,
-						model,
-						resizeBudgetForModel(cat, provider, model, maxSize),
-					)
-				}
+				dataURL, injection := resolveInlineImageRef(localPath, mime, info, meta, ref, maxSize, provider, model, sink, cat)
 				if dataURL != "" {
 					resolved = append(resolved, dataURL)
-				} else if mime == "image/svg+xml" {
-					// Option B (ADR-051 RD1 extension): rasterization failed,
-					// but an SVG is XML text — inject the markup into Content
-					// (step 6) so ANY model (including text-only ones) can
-					// reason about the image from its code. Never drop it
-					// silently. FR-022: when a step-5 offload sink is
-					// available, the guidance line + file path (step 5) prefix
-					// the markup — steps 5 and 6 compose, never either/or.
-					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
-						contentInjections = append(contentInjections, offInj+textInj)
-					} else {
-						contentInjections = append(contentInjections, textInj)
-					}
-				} else {
-					// Step-5 offload (FR-020/020a/021, H1-M2): the image could
-					// not be normalized — unsupported format (AVIF/HEIC/ICO),
-					// a decode bomb, oversize, or resize-ladder floor. Copy the
-					// file into the workspace work/ dir under a safe-derived
-					// name and inject the format-aware guidance + filesystem
-					// path. Non-image files are not text-extractable, so step 6
-					// does not fire (FR-022 negative case). With no sink
-					// (legacy/empty-workspace turn) this degrades to the step-7
-					// honest marker — previously these attachments all landed
-					// here with the misleading "too large or unreadable" reason
-					// regardless of cause (H1-M2).
-					if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
-						contentInjections = append(contentInjections, offInj)
-					} else {
-						name := sanitizeInjectedName(fallbackName(meta.Filename, localPath))
-						contentInjections = append(contentInjections,
-							"[attachment unavailable: "+name+" (too large or unreadable)]")
-					}
+				}
+				if injection != "" {
+					contentInjections = append(contentInjections, injection)
 				}
 				continue
 			}
@@ -276,6 +250,76 @@ func resolveMediaRefsWithOffload(
 	}
 
 	return result
+}
+
+// resolveInlineImageRef is resolveMediaRefsWithOffload's image branch
+// (steps 1–7, FR-010/020/022; extracted verbatim so the conductor stays
+// within its function budget). It returns the inline data URL to attach
+// ("" when the image could not be presented) and the content injection
+// that carries the failure explanation or offload guidance ("" when the
+// image itself was attached).
+func resolveInlineImageRef(
+	localPath, mime string,
+	info os.FileInfo,
+	meta media.MediaMeta,
+	ref string,
+	maxSize int,
+	provider, model string,
+	sink *offloadSink,
+	cat *catalog.Catalog,
+) (string, string) {
+	// Step 1 — capability gate (FR-010). If the catalog says
+	// the model lacks the image modality, skip native send
+	// (step 2 normalize/resize + step 3 native block + step 4
+	// outcome retry) and route directly to the step 5/6/7
+	// fallback — the same path encodeImageToDataURL's failure
+	// takes. A nil catalog is optimistic (FR-026): the gate
+	// always passes and a wrong guess self-corrects via the
+	// outcome-based step-4 retry.
+	var dataURL string
+	if modelSupportsImage(cat, provider, model) {
+		dataURL = encodeImageToDataURLCached(
+			localPath,
+			mime,
+			info,
+			maxSize,
+			model,
+			resizeBudgetForModel(cat, provider, model, maxSize),
+		)
+	}
+	if dataURL != "" {
+		return dataURL, ""
+	}
+	if mime == "image/svg+xml" {
+		// Option B (ADR-051 RD1 extension): rasterization failed,
+		// but an SVG is XML text — inject the markup into Content
+		// (step 6) so ANY model (including text-only ones) can
+		// reason about the image from its code. Never drop it
+		// silently. FR-022: when a step-5 offload sink is
+		// available, the guidance line + file path (step 5) prefix
+		// the markup — steps 5 and 6 compose, never either/or.
+		textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
+		if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
+			return "", offInj + textInj
+		}
+		return "", textInj
+	}
+	// Step-5 offload (FR-020/020a/021, H1-M2): the image could
+	// not be normalized — unsupported format (AVIF/HEIC/ICO),
+	// a decode bomb, oversize, or resize-ladder floor. Copy the
+	// file into the workspace work/ dir under a safe-derived
+	// name and inject the format-aware guidance + filesystem
+	// path. Non-image files are not text-extractable, so step 6
+	// does not fire (FR-022 negative case). With no sink
+	// (legacy/empty-workspace turn) this degrades to the step-7
+	// honest marker — previously these attachments all landed
+	// here with the misleading "too large or unreadable" reason
+	// regardless of cause (H1-M2).
+	if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
+		return "", offInj
+	}
+	name := sanitizeInjectedName(fallbackName(meta.Filename, localPath))
+	return "", "[attachment unavailable: " + name + " (too large or unreadable)]"
 }
 
 // buildUploadAnnouncement returns the D1b "[user uploaded: ...]" content
@@ -584,11 +628,22 @@ func detectMIME(localPath string, meta media.MediaMeta) string {
 // encodeSVGToDataURL and encodeImageToDataURL enforce it and return
 // "" on oversize, which the helper treats as "skip inline attach".
 //
+// selectedBudget (issue #1435 R1) optionally carries the TURN'S SELECTED
+// provider/model budget resolved by the caller
+// (resizeBudgetForModel(turnCatalog, provider, model, maxSize)). Fresh tool
+// images must fit the provider that will actually receive them, not the
+// package default: a 6144-px capture admitted under the 7680 default still
+// exceeds a 6000-px provider ceiling. Empty variadic (legacy direct callers)
+// keeps the package-default budget.
+//
 // Errors during resolve / read / rasterize are logged-not-fatal at
 // WARN level and silently skipped (matching the pre-fix behavior at
 // loop.go:8332-8335). The artifact tag remains the user/agent's
-// fallback hook to the file on disk.
-func attachToolResultMedia(msg *providers.Message, refs []string, store media.MediaStore, maxSize int) {
+// fallback hook to the file on disk. A universal image that cannot be
+// made to fit appends its honest explanation to msg.Content (#1435 R2);
+// the production caller merges that into the admitted tool text so the
+// marker reaches the model, the live event and the persisted transcript.
+func attachToolResultMedia(msg *providers.Message, refs []string, store media.MediaStore, maxSize int, selectedBudget ...catalog.ResizeLimits) {
 	if msg == nil || len(refs) == 0 || store == nil {
 		return
 	}
@@ -665,10 +720,13 @@ func attachToolResultMedia(msg *providers.Message, refs []string, store media.Me
 		// behavior is preserved exactly); an oversized one is downscaled
 		// through the resize ladder BEFORE it enters history — a full-page
 		// screenshot must shrink, never silently disappear or poison every
-		// later turn with a rejection. The tool-result path is model-
-		// agnostic (the image is replayed to whichever provider serves the
-		// next turn), so the budget is the catalog default, which carries
-		// the reconciled patch ceiling.
+		// later turn with a rejection. Issue #1435 R1: the budget is the
+		// TURN'S SELECTED provider/model budget when the caller resolved
+		// one — a fresh image must fit the provider that will actually
+		// receive it, not the package default (a 6144-px capture admitted
+		// under the 7680 default still exceeds a 6000-px ceiling). The
+		// package default (with its reconciled patch ceiling) remains the
+		// fallback for direct callers that pass no budget.
 		info, statErr := os.Stat(localPath)
 		if statErr != nil {
 			logger.WarnCF("agent", "attachToolResultMedia: stat failed", map[string]any{
@@ -679,6 +737,9 @@ func attachToolResultMedia(msg *providers.Message, refs []string, store media.Me
 			continue
 		}
 		budget := catalog.DefaultResizeLimits
+		if len(selectedBudget) > 0 && selectedBudget[0].LongEdgePx > 0 {
+			budget = selectedBudget[0]
+		}
 		maxBytes := int64(maxSize)
 		if budget.MaxBytes <= 0 || budget.MaxBytes > maxBytes {
 			budget.MaxBytes = maxBytes
@@ -804,6 +865,67 @@ func normalizeImageDataURLToBudget(dataURL string, maxSize int, budget catalog.R
 		return ""
 	}
 	return "data:" + result.Mime + ";base64," + base64.StdEncoding.EncodeToString(result.Data)
+}
+
+// fitOrdinaryImageMediaToBudget re-fits ordinary inline image media of a
+// REQUEST COPY to one candidate's budget (issue #1435 R1). Admission-time
+// fitting happens under the tool round's selected provider; a later send may
+// target a different candidate with stricter limits (fallback chains, model
+// switches), and history replays the canonical image every time — so the fit
+// is re-applied per provider attempt on a copied slice. The caller's messages
+// are never mutated: within-budget images keep their exact bytes, over-budget
+// ones are replaced by the request-local resized copy, and an image that
+// cannot be made to fit is replaced by the same honest marker the admission
+// path uses — never silently dropped.
+//
+// Cost note: every data:image URL pays one base64 decode plus a header-only
+// DecodeConfig on the fast path; only over-budget images pay the full
+// decode + resize ladder.
+func fitOrdinaryImageMediaToBudget(messages []providers.Message, budget catalog.ResizeLimits) []providers.Message {
+	if len(messages) == 0 || budget.LongEdgePx <= 0 {
+		return messages
+	}
+	result := make([]providers.Message, len(messages))
+	copy(result, messages)
+	anyChanged := false
+	for i := range result {
+		if len(result[i].Media) == 0 {
+			continue
+		}
+		fitted := make([]string, 0, len(result[i].Media))
+		var markers []string
+		msgChanged := false
+		for _, ref := range result[i].Media {
+			if !strings.HasPrefix(ref, "data:image/") {
+				fitted = append(fitted, ref)
+				continue
+			}
+			normalized := normalizeImageDataURLToBudget(ref, int(budget.MaxBytes), budget)
+			if normalized == "" {
+				// Undecodable or above the bounded downscale band: keep the
+				// failure visible, never send an unfittable image in silence.
+				msgChanged = true
+				markers = append(markers,
+					"\n\n[attachment unavailable: image (too large to fit the model's size limits, even after resizing)]")
+				continue
+			}
+			if normalized != ref {
+				msgChanged = true
+			}
+			fitted = append(fitted, normalized)
+		}
+		if msgChanged {
+			result[i].Media = fitted
+			if len(markers) > 0 {
+				result[i].Content = injectDocumentContent(result[i].Content, markers)
+			}
+			anyChanged = true
+		}
+	}
+	if !anyChanged {
+		return messages
+	}
+	return result
 }
 
 const maxImagePixels = 16 * 1024 * 1024

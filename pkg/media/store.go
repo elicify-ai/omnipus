@@ -443,14 +443,29 @@ func (s *FileMediaStore) CleanExpired() int {
 		// must stay resolvable for the life of their conversation,
 		// including across a restart. Both are freed explicitly by
 		// ReleaseAll on session delete, so the exemption cannot leak refs
-		// for deleted sessions. Other forget_only entries (send_file and
-		// other non-session scopes) are NOT pinned — they still age out of
-		// the in-memory index here as before (their files are preserved;
-		// only the ref is dropped), which avoids an unbounded ref leak for
-		// those non-session scopes.
+		// for deleted sessions.
+		//
+		// Issue #1435 R5: the pin holds only while the conversation's bytes
+		// exist. A removal path that deletes the files without holding this
+		// store's lock — the retention sweep deletes the session tree, and
+		// only REST session deletion reaches ReleaseAll — would otherwise
+		// leave a dead mapping pinned in the running store until process
+		// end. A pinned ref whose stored file is gone is stale: release the
+		// mapping here (forget_only entries lose only the ref, never a
+		// file), so every session-removal path is covered, not just REST.
+		//
+		// The lifetime pin is FORGET_ONLY-only by policy: the upload
+		// handler registers an upload whose owning session does not exist
+		// under the expiring policy instead, and that registration must
+		// reach the ordinary TTL expiry below — a pinned check keyed on
+		// scope alone would re-pin the very refs the policy choice exempted.
 		if scope, ok := s.refToScope[ref]; ok {
-			if strings.HasPrefix(scope, SessionInlineScopePrefix) || strings.HasPrefix(scope, SessionUploadScopePrefix) {
-				continue
+			if pinnedScope := strings.HasPrefix(scope, SessionInlineScopePrefix) || strings.HasPrefix(scope, SessionUploadScopePrefix); pinnedScope && entry.meta.CleanupPolicy == CleanupPolicyForgetOnly {
+				if _, statErr := os.Stat(entry.path); statErr == nil {
+					continue
+				}
+				logger.WarnCF("media", "cleanup: releasing session-pinned ref whose stored file is gone",
+					map[string]any{"ref": ref, "path": entry.path, "scope": scope})
 			}
 		}
 

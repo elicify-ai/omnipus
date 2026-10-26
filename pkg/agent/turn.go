@@ -602,6 +602,15 @@ type turnState struct {
 	// the single per-turn strip was spent.
 	imageRetryDone atomic.Bool
 
+	// mediaUnavailableNotified holds the media:// refs this turn already
+	// gave a typed media_unavailable notice for (issue #1435 R3). Media
+	// resolution runs at several sites — initial assembly, post-trim
+	// re-assembly, per-iteration preparation — and the same missing ref is
+	// resolved again at each; the dedupe keeps the notice at exactly one
+	// live event and one persisted entry per ref per turn, while the
+	// model-visible marker stays at every resolution. Guarded by mu.
+	mediaUnavailableNotified map[string]struct{}
+
 	// outcomeRelabel is the FR-017a relabel-on-success contract. When the
 	// outcome-based strip-retry fallback fires AND the subsequent LLM
 	// call succeeds, this field is stamped with CodeMediaUnsupported so

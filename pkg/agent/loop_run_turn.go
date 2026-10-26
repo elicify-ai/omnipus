@@ -624,10 +624,14 @@ func (rp *agentLoopRunTurnPrepare) assembleInitialContext() (agentLoopRunTurnCon
 	// with no decoder) be copied into work/ and surfaced as a filesystem path +
 	// guidance instead of dying the turn (ADR-051 Rev 4 FR-020/020a/021).
 	turnProvider, turnModel := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.primaryModelPair()
+	// Issue #1435 R3: a ref that was accepted and no longer resolves emits
+	// the typed media_unavailable notice (live + persisted), deduped per ref
+	// per turn — never only the LLM-visible marker.
 	rp.rc.rx.rr.rq.ri.messages = resolveMediaRefsWithOffload(
 		rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, turnProvider, turnModel,
 		&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
 		rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID,
+		rp.rc.rx.rr.rq.ri.rf.rt.ts.notifyMediaUnavailable,
 	)
 
 	// ADR-067 FR-016/FR-038 pre-turn gate (FIRST of the three). An agent whose
@@ -785,6 +789,7 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 				rp.rc.rx.rr.rq.ri.messages, rp.rc.rx.rr.rq.ri.turnMediaStore, rp.rc.rx.rr.rq.ri.maxMediaSize, trimProvider, trimModel,
 				&offloadSink{workDir: rp.rc.rx.rr.rq.ri.wsDir}, rp.rc.rx.rr.rq.ri.turnCatalog, rp.rc.rx.rr.rq.ri.turnRefcounter,
 				rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID,
+				rp.rc.rx.rr.rq.ri.rf.rt.ts.notifyMediaUnavailable,
 			)
 		}
 	}
@@ -1350,6 +1355,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 			candidateProvider(ri.rf.rt.activeCandidates), ri.activeModel,
 			&offloadSink{workDir: ri.wsDir}, ri.turnCatalog, ri.turnRefcounter,
 			ri.rf.rt.ts.opts.WorkspaceID,
+			ri.rf.rt.ts.notifyMediaUnavailable,
 		)
 		totalContentLen := 0
 		for i, pm := range ri.pendingMessages {
@@ -1682,6 +1688,11 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					if err != nil {
 						return nil, err
 					}
+					// Issue #1435 R1: this candidate's own budget applies to
+					// ordinary inline image media too — a tighter fallback
+					// candidate must not receive the looser primary's image
+					// bytes. Request-local fit; history stays canonical.
+					m = fitOrdinaryImageMediaToBudget(m, budget)
 					if rt.providerCallAttachCache != nil {
 						rt.providerCallAttachCache[attachKey] = m
 					}

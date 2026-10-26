@@ -429,6 +429,24 @@ func (ru *restAPIHandleUpload) finishLegacyUpload(sanitized string, destPath str
 	// the media store must never auto-delete the file. Registration failure
 	// is non-fatal: the file is still downloadable via path, the agent just
 	// won't see it inline.
+	//
+	// Issue #1435 R5 (founder ruling Q90): the conversation-lifetime pin is
+	// for uploads a REAL conversation accepted. A syntactically valid but
+	// nonexistent session id cannot later be released by its own deletion
+	// (deleting a nonexistent session fails first), so pinning its upload
+	// would retain it forever. Such an upload is still accepted, but under
+	// the store's expiring policy: it ages out with the ordinary TTL
+	// instead of living outside every lifecycle. An unwired session store
+	// keeps the ForgetOnly default (the lifetime guarantee) — the check
+	// never invents an owner.
+	uploadPolicy := media.CleanupPolicyForgetOnly
+	if sessions := ru.a.agentLoop.GetSessionStore(); sessions != nil {
+		if _, metaErr := sessions.GetMeta(ru.sessionID); metaErr != nil {
+			uploadPolicy = media.CleanupPolicyDeleteOnCleanup
+			slog.Info("rest: upload: owning session does not exist; registering under the expiring cleanup policy",
+				"session_id", ru.sessionID, "file", sanitized)
+		}
+	}
 	// #254 stale media store fix: always fetch the current store via the
 	// agent loop so uploads survive a restartServices store swap. Fall back
 	// to a.mediaStore only when the agent loop is not yet wired (e.g. tests
@@ -444,7 +462,7 @@ func (ru *restAPIHandleUpload) finishLegacyUpload(sanitized string, destPath str
 			Filename:      sanitized,
 			ContentType:   contentType,
 			Source:        "upload:webchat",
-			CleanupPolicy: media.CleanupPolicyForgetOnly,
+			CleanupPolicy: uploadPolicy,
 		}, media.SessionUploadScopePrefix+ru.sessionID)
 		if storeErr != nil {
 			slog.Warn("rest: upload: media store registration failed",

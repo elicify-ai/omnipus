@@ -58,6 +58,54 @@ func outcomeRelabelApplies(current, relabel LLMErrorCode) bool {
 	return relabel != "" && (current == "" || current == CodeUnknown || current == CodeProviderRequestRejected)
 }
 
+// notifyMediaUnavailable is the issue #1435 R3 sink for a media:// ref that
+// was ACCEPTED into a conversation but no longer resolves (media.ErrNotFound
+// from the real resolution path). It emits exactly one live ErrorPayload with
+// the typed media_unavailable code and persists exactly one translated
+// transcript entry per ref per turn — the chat page and the reopened replay
+// both render the promised re-attach copy, instead of the cause living only
+// in an LLM-only content marker. Deduped per ref per turn: media resolution
+// re-runs at several sites (initial assembly, post-trim re-assembly,
+// per-iteration preparation) and the notice must not multiply. Other
+// resolution failures (stat, integrity, workspace-context) are different
+// causes and never reach this sink.
+func (ts *turnState) notifyMediaUnavailable(ref string) {
+	if ts == nil {
+		return
+	}
+	ts.mu.Lock()
+	if ts.mediaUnavailableNotified == nil {
+		ts.mediaUnavailableNotified = make(map[string]struct{})
+	}
+	if _, dup := ts.mediaUnavailableNotified[ref]; dup {
+		ts.mu.Unlock()
+		return
+	}
+	ts.mediaUnavailableNotified[ref] = struct{}{}
+	ts.mu.Unlock()
+	llm := LLMError{
+		Code:      CodeMediaUnavailable,
+		Message:   defaultUserMessage(CodeMediaUnavailable),
+		Retryable: isRetryable(CodeMediaUnavailable),
+	}
+	logger.InfoCF("agent", "accepted attachment no longer resolvable — media_unavailable notice emitted",
+		map[string]any{"session_id": ts.transcriptSessionID, "ref": ref})
+	if ts.al != nil {
+		ts.al.emitEvent(
+			EventKindError,
+			ts.eventMeta("runTurn", "turn.media.unavailable"),
+			ErrorPayload{
+				Stage:     "media",
+				ChatID:    ts.chatID,
+				SessionID: string(ts.routingSessionID),
+				Code:      string(llm.Code),
+				Message:   llm.Message,
+			},
+		)
+	}
+	ts.appendClassifiedError(EventKindError.String(), "media", llm)
+}
+
 // warnAbandonedTranscriptWrite emits the ADR-057 FR-003/BDD-04 WARN record
 // for the ts.abandoned write-suppression branch shared by all four
 // transcript writers below, naming the session id and the suppression
