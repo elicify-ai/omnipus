@@ -43,6 +43,16 @@ beforeEach(() => {
   resetStage1App()
   __resetFinishedTurnIdsForTests()
   network = new Stage1Network()
+  // Train-3 recovers the running turn's checklist through this bounded
+  // process-edge read. This synthetic turn has no saved checklist; per-case
+  // page handlers below can still replace this exact endpoint. D3/D15.
+  network.respond('GET', `/api/v1/sessions/${SID}/messages`, request => {
+    expect(Object.fromEntries(new URLSearchParams(request.query)),
+      'optional checklist recovery must use its declared bounded read').toStrictEqual({ limit: '100' })
+    const noChecklist = page([], { sessionId: SID, info: { limit: 100 } })
+    expectValidPage(noChecklist, [], 0)
+    return json(noChecklist)
+  })
 })
 afterEach(async () => {
   transport?.connection.disconnect(); transport = undefined
