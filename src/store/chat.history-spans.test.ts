@@ -14,6 +14,10 @@
 // Real transport, store, REST client and history actions; only the socket,
 // fetch and clock are substituted.
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import { createElement, type ReactNode } from 'react'
+import { renderHook } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useRunningActivity } from '@/hooks/useRunningActivity'
 import type { Message } from '@/lib/api/generated/openapi-types'
 import type { ServerFrame, SessionStateFrame, SubagentEndFrame, SubagentStartFrame, SubagentStateFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
@@ -95,9 +99,31 @@ function attach(entries: Message[], frames: ServerFrame[], drawnRows: number, ea
   expect(bucket().history.historyLoaded, 'the snapshot page committed (server row count matched)').toBe(true)
 }
 
+// The end is authoritative (team-lead r23): a recorded success settles the
+// child's last in-progress lifecycle ('running') to 'completed', so every
+// lifecycle reader (Activity status, running-children count, panel dot)
+// agrees the helper finished.
 const FINISHED = {
   spanId: SPAN, parentCallId: 'call-audit', taskLabel: 'Audit the pages', agentId: 'jim', childSessionId: 'child-session-1',
-  status: 'success', durationMs: 4200, finalResult: 'All pages audited', lifecycleState: 'running', hasRun: true,
+  status: 'success', durationMs: 4200, finalResult: 'All pages audited', lifecycleState: 'completed', hasRun: true,
+}
+
+/** What the user sees: the real Activity consumer over the loaded chat. */
+function activity() {
+  useSessionStore.setState({ activeAgentId: null }) // no task-run polling in this store-level check
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
+  client.setQueryData(['agents'], [])
+  const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children)
+  const { result, unmount } = renderHook(() => useRunningActivity(), { wrapper })
+  const view = result.current
+  unmount()
+  return view
+}
+function expectFinishedInActivity() {
+  const view = activity()
+  expect(view.running.filter((item) => item.key === SPAN), 'the finished helper is not open work').toStrictEqual([])
+  expect(view.runningChildren, 'the pill counts no running helper').toBe(0)
+  expect(view.recentlyFinished.find((item) => item.key === SPAN), 'the helper is listed as finished').toMatchObject({ kind: 'agent', status: 'success', lifecycleState: 'completed', durationMs: 4200 })
 }
 
 describe('helper spans across paged history', () => {
@@ -114,6 +140,7 @@ describe('helper spans across paged history', () => {
     expect(settled(spanRows()[0].spans[0])).toMatchObject(FINISHED)
     expect(visibleRows().map((row) => row.id), 'only the question and the span row are drawn').toStrictEqual(['question', 'span-start'])
     expect(spanWarnings()).toStrictEqual([])
+    expectFinishedInActivity()
   })
 
   it('(b) start on an older page: no row until it loads, then exactly one start row with the latest state and end', async () => {
@@ -136,6 +163,7 @@ describe('helper spans across paged history', () => {
     expect(spanRows()[0].spans, 'no duplicate span on the row').toHaveLength(1)
     expect(settled(spanRows()[0].spans[0])).toMatchObject(FINISHED)
     expect(spanWarnings()).toStrictEqual([])
+    expectFinishedInActivity()
   })
 
   it('(c) REST renders the persisted span entries exactly like the socket path', async () => {
@@ -160,6 +188,17 @@ describe('helper spans across paged history', () => {
     expect(bucket().history.readerPositions).toStrictEqual([pos(1), pos(2), pos(3), pos(4)])
     expect(spanRows().map(({ id, spans }) => ({ id, spans: spans.map(settled) })), 'same span rows as the socket').toStrictEqual(socketSpans)
     expect(visibleRows().map((row) => row.id), 'same drawn rows as the socket').toStrictEqual(socketVisible)
+    expect(spanWarnings()).toStrictEqual([])
+  })
+})
+
+describe('the end is authoritative on the live path too', () => {
+  it('live start → state running → end success: Activity shows the helper finished, not running', () => {
+    useChatStore.getState().appendMessage({ id: 'live-parent', role: 'assistant', content: 'Delegating', timestamp: STAMP, status: 'streaming', isStreaming: true })
+    for (const frame of [startFrame, stateFrame, endFrame] as ServerFrame[]) useChatStore.getState().handleFrame(frame)
+    const span = bucket().messagesById['live-parent'].spans?.[0]
+    expect(span && settled(span)).toMatchObject(FINISHED)
+    expectFinishedInActivity()
     expect(spanWarnings()).toStrictEqual([])
   })
 })

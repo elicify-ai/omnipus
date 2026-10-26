@@ -107,6 +107,25 @@ function pendingMessagePatch(
 const RAN_LIFECYCLE_STATES: ReadonlySet<string> = new Set(['running', 'needs_input', 'paused', 'completed'])
 
 /** Once true, stays true. A later failed / cancelled / timed_out must not clear it. */
+/** In-progress child states a recorded end makes stale. */
+const IN_PROGRESS_LIFECYCLE: ReadonlySet<string> = new Set(['queued', 'running', 'needs_input'])
+/** The child lifecycle a terminal end implies; parked keeps the child's own state (it waits for an answer). */
+const LIFECYCLE_FOR_END: Partial<Record<SubagentEndFrame['status'], NonNullable<SubagentSpan['lifecycleState']>>> = {
+  success: 'completed', error: 'failed', timeout: 'failed', cancelled: 'stopped', interrupted: 'stopped',
+}
+
+/**
+ * The end is authoritative (#1266 r23): a recorded end settles a stale
+ * in-progress lifecycle, so every lifecycle reader (Activity status, the
+ * running-children count, the panel dot) agrees the helper finished. A
+ * terminal lifecycle the child already reported, and a parked end, are kept.
+ */
+function settledLifecycle(span: SubagentSpan, endStatus: SubagentEndFrame['status']): Pick<SubagentSpan, 'lifecycleState' | 'hasRun'> {
+  const settled = span.lifecycleState && IN_PROGRESS_LIFECYCLE.has(span.lifecycleState) ? LIFECYCLE_FOR_END[endStatus] : undefined
+  if (!settled) return { lifecycleState: span.lifecycleState, hasRun: span.hasRun }
+  return { lifecycleState: settled, hasRun: stickyHasRun(span.hasRun, settled) }
+}
+
 function stickyHasRun(previous: boolean | undefined, state: string): true | undefined {
   if (previous === true || RAN_LIFECYCLE_STATES.has(state)) return true
   return undefined
@@ -232,7 +251,7 @@ function applySubagentEnd(b: SessionChatState, frame: SubagentEndFrame, targetSi
         // subagent_start already stamped.
         childSessionId: existingSpan.childSessionId,
         statusLine: existingSpan.statusLine,
-        lifecycleState: existingSpan.lifecycleState, hasRun: existingSpan.hasRun,
+        ...settledLifecycle(existingSpan, ef.status),
         lastUpdateAt: new Date().toISOString(),
         status: ef.status,
         durationMs: ef.duration_ms ?? 0,
