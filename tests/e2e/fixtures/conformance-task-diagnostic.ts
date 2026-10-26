@@ -1,3 +1,4 @@
+import { validateHistoryPage } from '../../../src/lib/api/history-validation'
 import type { Page, TestInfo } from '@playwright/test'
 import { SessionDetail, Task } from '../../../src/lib/api/generated/schemas'
 import type {
@@ -83,6 +84,28 @@ function classifyCall(call: ParsedToolCall): Classification {
   return 'successful_goal_claim'
 }
 
+// Structural parsing and the canonical semantic validator are complementary.
+// Missing/unavailable history is never successful empty history.
+function readableHistory(detail: SessionDetailWire): boolean {
+  if (detail.history_state.status !== 'available' ||
+      detail.history_state.reason !== undefined || detail.history_state.message !== undefined ||
+      detail.messages === undefined || detail.page_info === undefined ||
+      typeof detail.has_earlier !== 'boolean' || typeof detail.has_later !== 'boolean') return false
+  try {
+    validateHistoryPage({
+      session_id: detail.session.id, entries: detail.messages,
+      page_info: detail.page_info, has_earlier: detail.has_earlier, has_later: detail.has_later,
+      ...(detail.next_before !== undefined ? { next_before: detail.next_before } : {}),
+      ...(detail.next_after !== undefined ? { next_after: detail.next_after } : {}),
+    }, detail.session.id, 'standalone-task failure diagnostic')
+    return true
+  } catch {
+    // The existing safe unavailable projection carries this failure; no raw
+    // response, position, query or exception is copied into diagnostics.
+    return false
+  }
+}
+
 export function projectStandaloneTaskDiagnostic(taskRaw: unknown, sessionRaw: unknown): SafeDiagnostic {
   const task = Task.safeParse(taskRaw)
   const detail = SessionDetail.safeParse(sessionRaw)
@@ -91,11 +114,14 @@ export function projectStandaloneTaskDiagnostic(taskRaw: unknown, sessionRaw: un
   if (!validToken(task.data.id, UUID) || !validToken(session.id, SESSION_ID) ||
       task.data.session_id !== session.id || session.task_id !== task.data.id) return unavailable()
 
+  const messages = detail.data.messages
+  if (!readableHistory(detail.data) || messages === undefined) return unavailable()
+
   const calls: SafeCall[] = []
-  let incomplete = detail.data.has_earlier_messages === true
+  let incomplete = detail.data.has_earlier === true || detail.data.has_later === true
   let successfulClaim = false
   let latestClaim: Classification = 'no_successful_goal_claim'
-  for (const message of detail.data.messages) {
+  for (const message of messages) {
     if (message.truncated || message.type === 'compaction' || message.type === 'context_window_notice') incomplete = true
     if (message.type !== 'tool_call') {
       if (message.tool_calls?.length) incomplete = true

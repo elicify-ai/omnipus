@@ -1,3 +1,5 @@
+import { Message as MessageSchema } from '../../../src/lib/api/generated/schemas'
+import { page as historyPage } from '../../chat-history-paging/fixtures'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Page, TestInfo } from '@playwright/test'
 import {
@@ -18,7 +20,24 @@ function call(tool = 'goal_claim', status = 'success', result: unknown = { text:
   }
 }
 
-function fixture(calls: unknown[] = []) {
+const HISTORY_POSITION = 'hp1_' + 'A'.repeat(43)
+
+function fixture(calls: unknown[] = [], earlier = false, later = false) {
+  const messages = [{
+        id: '22222222-2222-4222-8222-222222222222', type: 'tool_call',
+        history_position: HISTORY_POSITION,
+        agent_id: 'worker', turn_id: 'worker-turn-1', timestamp: TIME,
+        content: SECRET, summary: SECRET, tool_calls: calls,
+      }]
+  const toolIds = calls.flatMap(value => typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string' ? [value.id] : [])
+  const partial = earlier || later
+  const history = historyPage(messages.map(message => MessageSchema.parse(message)), {
+    sessionId: SESSION, earlier, later, rows: 1 + new Set(toolIds).size,
+    info: partial ? { stop_reason: 'clear', stopped_at_clear: true } : {},
+  })
+  const { entries, session_id, ...metadata } = history
+  void entries; void session_id
+
   return {
     task: {
       id: TASK, title: SECRET, prompt: SECRET, result: SECRET,
@@ -33,12 +52,9 @@ function fixture(calls: unknown[] = []) {
         created_at: TIME, updated_at: TIME, channel: 'webchat', partitions: [],
         stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 0 },
       },
-      has_earlier_messages: false,
-      messages: [{
-        id: '22222222-2222-4222-8222-222222222222', type: 'tool_call',
-        agent_id: 'worker', turn_id: 'worker-turn-1', timestamp: TIME,
-        content: SECRET, summary: SECRET, tool_calls: calls,
-      }],
+      history_state: { status: 'available' },
+      ...metadata,
+      messages,
     },
   }
 }
@@ -112,7 +128,10 @@ describe('standalone task diagnostic positive allowlist', () => {
 
   it('does not infer no-claim from partial history or calls on a non-tool row', () => {
     const input = fixture()
-    input.detail.has_earlier_messages = true
+    input.detail.has_earlier = true
+    input.detail.next_before = HISTORY_POSITION
+    input.detail.page_info.stop_reason = 'clear'
+    input.detail.page_info.stopped_at_clear = true
     expect(projectStandaloneTaskDiagnostic(input.task, input.detail).classification).toBe('unknown')
     const wrongRow = fixture([call()])
     wrongRow.detail.messages[0].type = 'message'
@@ -209,4 +228,81 @@ describe('diagnostic collection failure remains redacted', () => {
     expect(annotations).toEqual([{ type: 'conformance-t1-diagnostic', description: 'unavailable' }])
     expect(JSON.stringify(annotations)).not.toContain(SECRET)
   })
+})
+
+
+describe('paged-history carrier contract for the existing safe diagnostic', () => {
+  it('complete available empty history can prove no saved successful claim', () => {
+    const input = fixture()
+    const empty = historyPage([], { sessionId: SESSION })
+    const detail = { ...input.detail, messages: [], page_info: empty.page_info }
+    expect(projectStandaloneTaskDiagnostic(input.task, detail).classification).toBe('no_successful_goal_claim')
+  })
+  it('canonical unavailable history omits carriers and stays fixed unavailable, never empty success', () => {
+    const input = fixture([call()])
+    const detail = {
+      session: input.detail.session,
+      history_state: { status: 'unavailable', reason: 'index_missing', message: 'Session history is unavailable. Retry after the operator restores its index.' },
+    }
+    const safe = projectStandaloneTaskDiagnostic(input.task, detail)
+    expect(safe.classification).toBe('unavailable')
+    expect(safe.calls).toEqual([])
+    expect(JSON.stringify(safe)).not.toContain(SECRET)
+  })
+  for (const field of ['history_state', 'messages', 'page_info', 'has_earlier', 'has_later']) {
+    it(`missing required available carrier ${field} is unavailable, not successful empty history`, () => {
+      const input = fixture([call()])
+      Reflect.deleteProperty(input.detail, field)
+      const safe = projectStandaloneTaskDiagnostic(input.task, input.detail)
+      expect(safe.classification).toBe('unavailable')
+      expect(safe.calls).toEqual([])
+      expect(JSON.stringify(safe)).not.toContain(SECRET)
+    })
+  }
+  for (const flags of [{ earlier: true, later: false }, { earlier: false, later: true }, { earlier: true, later: true }]) {
+    it(`partial earlier=${flags.earlier}/later=${flags.later} cannot prove complete claim success`, () => {
+      const input = fixture([call()], flags.earlier, flags.later)
+      const safe = projectStandaloneTaskDiagnostic(input.task, input.detail)
+      expect(safe.classification).toBe('unknown')
+      expect(JSON.stringify(safe)).not.toContain(SECRET)
+    })
+  }
+  for (const direction of ['before', 'after'] as const) {
+    it(`required ${direction} cursor cannot be missing on a partial page`, () => {
+      const input = fixture([call()], direction === 'before', direction === 'after')
+      Reflect.deleteProperty(input.detail, `next_${direction}`)
+      expect(projectStandaloneTaskDiagnostic(input.task, input.detail).classification).toBe('unavailable')
+    })
+    it(`unexpected ${direction} cursor cannot turn a malformed page into complete success`, () => {
+      const input = fixture([call()])
+      Reflect.set(input.detail, `next_${direction}`, HISTORY_POSITION)
+      expect(projectStandaloneTaskDiagnostic(input.task, input.detail).classification).toBe('unavailable')
+    })
+    it(`partial ${direction} cursor must match its actual selected occurrence boundary`, () => {
+      const input = fixture([call()], direction === 'before', direction === 'after')
+      Reflect.set(input.detail, `next_${direction}`, 'hp1_' + 'B'.repeat(42) + 'A')
+      expect(projectStandaloneTaskDiagnostic(input.task, input.detail).classification).toBe('unavailable')
+    })
+  }
+  it('a paged message without its position is unavailable', () => {
+    const input = fixture([call()])
+    Reflect.deleteProperty(input.detail.messages[0], 'history_position')
+    expect(projectStandaloneTaskDiagnostic(input.task, input.detail).classification).toBe('unavailable')
+  })
+  for (const field of ['source_group_count', 'row_count'] as const) {
+    it(`contradictory ${field} metadata is unavailable`, () => {
+      const input = fixture([call()])
+      input.detail.page_info[field] = 0
+      expect(projectStandaloneTaskDiagnostic(input.task, input.detail).classification).toBe('unavailable')
+    })
+  }
+  for (const field of ['reason', 'message']) {
+    it(`available history cannot carry unavailable-only ${field}`, () => {
+      const input = fixture([call()])
+      Reflect.set(input.detail.history_state, field, field === 'reason' ? 'index_missing' : SECRET)
+      const safe = projectStandaloneTaskDiagnostic(input.task, input.detail)
+      expect(safe.classification).toBe('unavailable')
+      expect(JSON.stringify(safe)).not.toContain(SECRET)
+    })
+  }
 })
