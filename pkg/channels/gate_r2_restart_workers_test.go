@@ -350,23 +350,63 @@ func TestManager_RevokedAdmissionNeverRestarts(t *testing.T) {
 	t.Cleanup(mb.Close)
 	m, err := NewManager(cfg, credentials.SecretBundle{}, mb, nil)
 	require.NoError(t, err)
-	require.NoError(t, m.StartAll(context.Background()))
-	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
 	store := m.PairingAttempts()
 	owner := &PairingOwner{SessionID: "chat-a", RequestID: "req-a"}
-	_, err = store.Admit("gate-r4-revoked", PairingAdmissionRetry, owner)
-	require.ErrorIs(t, err, ErrPairingConflict, "instrument: nothing to retry yet")
+
+	// Fixture (security r3 F5): the accepted-snapshot identity the publication
+	// guard requires is carried by cfg BEFORE the manager starts, so the start
+	// itself records exactly this generation and no reload restarts the channel
+	// for the stamp. An ABA restart here would move built() before the
+	// assertion and the revoked admission's own dropped restart would no longer
+	// be observable on its own; absorbing it with an intermediate reload, in
+	// turn, either consumes the ready admission (a rebuild takes its token) or
+	// replaces the queued intent (one queued intent per connector) — security
+	// r3 F5. The stamp must equal the generation the admission under test will
+	// mint, so a probe admission is minted and immediately released to fix that
+	// value: the probe is terminal when StartAll runs, so the start takes no
+	// token and consumes nothing. The former "instrument: nothing to retry yet"
+	// precondition is gone with it — a released probe legitimately admits.
+	probe, err := store.Admit("gate-r4-revoked", PairingAdmissionConnect, owner)
+	require.NoError(t, err)
+	require.True(t, store.Release("gate-r4-revoked", probe.AttemptID, PairingOutcomeInterrupted))
+	cfg.SetChannelOrderGeneration("gate-r4-revoked", probe.Generation+1)
+	require.NoError(t, m.StartAll(context.Background()))
+	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
+
 	admitted, err := store.Admit("gate-r4-revoked", PairingAdmissionConnect, owner)
 	require.NoError(t, err)
+	require.Equal(t, probe.Generation+1, admitted.Generation,
+		"precondition: the pre-stamped generation is exactly the one this admission mints")
 	require.True(t, store.MarkReady("gate-r4-revoked", admitted.AttemptID, ChannelRevision(cfg, "gate-r4-revoked")))
+	// Fixture: the direct ready admission carries its accepted config identity,
+	// as the real writer does (the ec98acab8 sibling pattern).
+	finalManagerAcceptedSnapshot(t, store, cfg, "gate-r4-revoked", admitted.AttemptID)
+
+	// The operation under test is queued while the admission is still ready —
+	// restartIntent refuses a revoked attempt — and the very next reload is the
+	// one that must drop it. Nothing runs in between: no absorption reload may
+	// replace or consume the queued operation (security r3 F5).
 	m.RequestRestart("gate-r4-revoked", admitted.AttemptID)
 	_, revoked := store.BeginStop(admitted)
 	require.True(t, revoked, "the chat's Stop revokes the ready admission")
 
 	before := len(built())
 	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
-	require.Len(t, built(), before, "the revoked admission's restart was dropped: no new instance")
-	require.Len(t, built()[0].startIntents(), 1, "and nothing was started again")
+	// Gate r4 R4-A01 in the stamped world (post-ac1c24fdf): the accepted
+	// snapshot's own restart runs exactly once — the generation ABA — so the
+	// count pins ONE rebuild and nothing more. The revoked admission's restart
+	// is dropped at the token: the rebuilt worker starts cancelled-idle, never
+	// with the revoked attempt's token — no new start, no fallback pairing.
+	// Chief-accepted oracle change 2026-10-26: the pre-ac1c24fdf "no new
+	// instance" count is unsatisfiable once the accepted snapshot itself
+	// restarts the channel; the authoritative clause stays at the live token
+	// seam (CHECK to re-audit).
+	all := built()
+	require.Len(t, all, before+1,
+		"exactly the accepted snapshot's restart runs — the revoked admission adds no second one")
+	require.Equal(t, []startIntent{{}}, all[len(all)-1].startIntents(),
+		"the revoked admission's restart is dropped: the rebuilt worker starts with no token — no fallback pairing")
+	require.Len(t, built()[0].startIntents(), 1, "and the original instance was started exactly once")
 	latest, ok := store.Latest("gate-r4-revoked")
 	require.True(t, ok)
 	require.Equal(t, admitted.AttemptID, latest.AttemptID)
@@ -376,9 +416,13 @@ func TestManager_RevokedAdmissionNeverRestarts(t *testing.T) {
 	next, err := store.Admit("gate-r4-revoked", PairingAdmissionRetry, owner)
 	require.NoError(t, err, "the stopped chat may deliberately Retry")
 	require.True(t, store.MarkReady("gate-r4-revoked", next.AttemptID, ChannelRevision(cfg, "gate-r4-revoked")))
+	// Fixture: the control's own accepted write carries its identity too —
+	// an unstamped ready admission is refused by publication and the reload
+	// silently no-ops, which would hide the pinned restart behind a red.
+	finalManagerAcceptedSnapshot(t, store, cfg, "gate-r4-revoked", next.AttemptID)
 	m.RequestRestart("gate-r4-revoked", next.AttemptID)
 	require.NoError(t, m.Reload(context.Background(), cfg, credentials.SecretBundle{}))
-	all := built()
-	require.Len(t, all, before+1, "a ready admission's restart builds a fresh instance")
+	all = built()
+	require.Len(t, all, before+2, "a ready admission's restart builds a fresh instance — exactly one more rebuild")
 	require.Equal(t, []startIntent{{token: next.AttemptID}}, all[len(all)-1].startIntents())
 }

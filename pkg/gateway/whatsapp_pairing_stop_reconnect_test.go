@@ -331,7 +331,11 @@ func TestPairingStop_ConnectChannelStampsTheChatCorrelation(t *testing.T) {
 			}}}},
 		{Content: "done", FinishReason: "stop"},
 	})
-	main, err := w.al.GetSessionStore().GetOrCreateMainSession(testHarnessWorkspaceMembershipID, "omnipus")
+	// The conversation lives in the workspace the frame claims: this fixture's
+	// turn resolves into "sales" through the message metadata (train-3
+	// workspace-immutability guard, 61c4d8153 — a session bound elsewhere is
+	// refused), so the main session is created there, not in the harness default.
+	main, err := w.al.GetSessionStore().GetOrCreateMainSession("sales", "omnipus")
 	require.NoError(t, err)
 	turnOwner := wu6Owner
 	require.NoError(t, w.al.GetSessionStore().SetMeta(main.ID, session.MetaPatch{Owner: &turnOwner}))

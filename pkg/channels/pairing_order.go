@@ -129,7 +129,25 @@ func (o *PairingOrder) Admit(kind PairingAdmission, owner *PairingOwner) (Pairin
 }
 
 func (o *PairingOrder) AdmitContext(ctx context.Context, kind PairingAdmission, owner *PairingOwner) (PairingAttempt, error) {
-	return o.store.admitOrdered(o, ctx, kind, owner)
+	rec, _, err := o.store.admitOrdered(o, ctx, kind, owner, nil)
+	return rec, err
+}
+
+// AdmitClosingStaleReady admits like AdmitContext and, under the SAME held
+// ordering boundary, closes the ready attempt when servedContains() reports
+// that the served configuration no longer contains the connector — the
+// attempt can provably never start (security review F1, chief ruling C+D).
+// When the connector is still served, an in-flight ready attempt refuses the
+// admission untouched: the served snapshot cannot prove it is newer than a
+// durable commit, so the conservative choice is to refuse. The close is
+// applied only when this very admission is granted: a refused admission (a
+// foreign Retry its ownership check refuses) interrupts nothing. The
+// non-nil second return is the stamped interruption envelope: the caller
+// publishes it AFTER releasing this order — the event bus's synchronous
+// gateway tap re-enters the order, so nothing may publish while it is held
+// (security review F3). The caller must hold this order (LockChannel).
+func (o *PairingOrder) AdmitClosingStaleReady(ctx context.Context, kind PairingAdmission, owner *PairingOwner, servedContains func() bool) (PairingAttempt, *PairingProgress, error) {
+	return o.store.admitOrdered(o, ctx, kind, owner, servedContains)
 }
 
 func (o *PairingOrder) MarkReady(attemptID, revision string) bool {

@@ -43,7 +43,11 @@ func wu7ConnectJourney(t *testing.T, f *wu7LiveFixture, agentID, accessValue str
 	const instance, workspace = "line.wu7-live", "sales"
 	w := f.wu6Fixture
 	seedWU5Membership(t, w.f1277.home) // Sales contains Mia, not Omnipus.
-	mainID := w.mainSession(testHarnessWorkspaceMembershipID, "omnipus")
+	// The journey's turns resolve into "sales" through the inbound metadata
+	// (train-3 workspace-immutability guard, 61c4d8153 — a session bound
+	// elsewhere is refused), so the main session is created there. The sales
+	// workspace file exists: seedWU5Membership wrote it above.
+	mainID := w.mainSession("sales", "omnipus")
 	events := w.al.SubscribeEvents(256)
 	defer w.al.UnsubscribeEvents(events.ID)
 	w.provider.setDefaultScript([]providers.LLMResponse{

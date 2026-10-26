@@ -3022,7 +3022,14 @@ jobs:
           : "${OMNIPUS_E2E_MODEL:?OMNIPUS_E2E_MODEL is not set — the 'Read central e2e model' step must run first}"
           # Unquoted heredoc (interpolating $OMNIPUS_E2E_MODEL) — the same idiom as
           # the sandbox-uat.yml and runci.sh config seeds; this JSON body carries no
-          # other shell-significant characters.
+          # other shell-significant characters. Comments must stay OUTSIDE the
+          # heredoc: the body is written to config.json verbatim.
+          # The channels.whatsapp seed exists because whatsapp-qr.spec.ts case D
+          # enables the connector with an ordinary (bodyless) PUT
+          # /channels/whatsapp/enable, which since the pairing ownership model
+          # (151aa3af8) requires the instance to already exist — an enable never
+          # creates a missing or deleted connector. It is seeded disabled so the
+          # test's own precondition ("initially disabled") holds.
           cat > /tmp/omnipus-e2e/config.json <<EOF
           {
             "version": 1,
@@ -3034,6 +3041,12 @@ jobs:
               "audit_log": true,
               "tool_policies": {
                 "delegate": "allow"
+              }
+            },
+            "channels": {
+              "whatsapp": {
+                "type": "whatsapp",
+                "enabled": false
               }
             },
             "agents": {
