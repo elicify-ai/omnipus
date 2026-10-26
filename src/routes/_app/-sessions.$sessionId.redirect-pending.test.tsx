@@ -77,7 +77,7 @@ function expectPendingLookup() {
 }
 function expectWorkspaceRedirect() {
   expect(edges.navigate).toHaveBeenCalledExactlyOnceWith({
-    to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' }, replace: true,
+    to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' }, search: { open: mockSessionId }, replace: true,
   })
   expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('ws-1')
   expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toStrictEqual({
@@ -223,7 +223,7 @@ describe('legacy session deep link while its redirect is undecided', () => {
     expect(edges.inline).not.toHaveBeenCalled()
     await act(async () => { lookup.resolve([owningWorkspace()]) })
     await waitFor(() => expect(edges.navigate).toHaveBeenCalledExactlyOnceWith({
-      to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' }, replace: true,
+      to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' }, search: { open: mockSessionId }, replace: true,
     }))
     expect(client.getQueryState(workspaceKey)?.status).toBe('success')
     expectWorkspaceRedirect()

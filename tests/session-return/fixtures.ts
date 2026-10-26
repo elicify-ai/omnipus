@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
 import type { Agent, Provider, Session, Workspace } from '@/lib/api/generated/openapi-types'
+import { availableDetail, page } from '../chat-history-paging/fixtures'
 
 // Discriminating inputs, not product defaults. Restored expectations come from
 // the user's actions in #1436, not from whatever the picker currently returns.
@@ -97,7 +98,9 @@ export function installSessionReturnNetwork(options: {
         return Response.json({ message: 'This chat no longer exists' }, { status: 404 })
       }
       const target = sessions.find((item) => url.pathname === `/api/v1/sessions/${item.id}`)
-      if (target) return Response.json({ session: target, messages: [], agent_removed: false })
+      // #1266 D10: available detail includes explicit readiness and the full
+      // generated bounded page metadata; keep the original routing identity.
+      if (target) return Response.json({ ...availableDetail(page([], { sessionId: target.id }), target), agent_removed: false })
       if (sessions.some((item) => url.pathname === `/api/v1/sessions/${item.id}/messages`)) return Response.json([])
     }
     unexpectedRequests.push(`${method} ${url.pathname}${url.search}`)
