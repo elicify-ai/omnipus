@@ -90,6 +90,12 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	al.SetSessionMessagingStores(
 		session.NewMessageInboxStore(filepath.Join(workspaceDir, "session_messages")),
 		session.NewLifecycleStore(filepath.Join(workspaceDir, "session_lifecycle")))
+	epochDir := filepath.Join(workspaceDir, "boot_epoch")
+	require.NoError(t, os.MkdirAll(epochDir, 0o700))
+	boot := session.NewBootEpochStore(epochDir)
+	_, err := boot.Mint()
+	require.NoError(t, err, "fixture: mint a genuine boot epoch for ordinary admission")
+	al.SetBootEpochStore(boot)
 
 	// Resolve the session key the direct turn will use: the explicit-agent
 	// route's key for channel "cli", chat "direct" ("mia" is the only agent
