@@ -27,12 +27,22 @@ export class ReloadHarness {
   }
   async ready(sessionId = this.sessionId, reload = false) {
     const start = this.traffic.frames.length;
-    if (reload) await this.page.reload();
-    else await this.page.goto(`${this.gateway.baseURL}/#/sessions/${sessionId}`);
+    const attachStart = this.traffic.attaches.length;
+    const alreadyActive = await this.page.locator(`[data-active-session-id="${sessionId}"]`).isVisible();
+    const completedBefore = this.traffic.frames.some(frame => frame.type === 'catch_up_complete' && frame.session_id === sessionId);
+    const navigation = reload ? await this.page.reload() : await this.page.goto(`${this.gateway.baseURL}/#/sessions/${sessionId}`);
     await expect(this.page.locator(`[data-active-session-id="${sessionId}"]`), this.phase).toBeVisible();
-    await expect.poll(() => this.traffic.frames.slice(start).filter(frame =>
-      frame.type === 'catch_up_complete' && frame.session_id === sessionId).length,
-    { message: `${this.phase}: actual attach finishes, not replay done alone` }).toBeGreaterThan(0);
+    await settled(this.page);
+    const newAttach = this.traffic.attaches.slice(attachStart).some(frame => frame.session_id === sessionId);
+    // Playwright returns null for a same-document hash navigation. Reuse only
+    // this already-active session's actual prior completion, never on reload.
+    if (!reload && navigation === null && alreadyActive && !newAttach) {
+      expect(completedBefore, `${this.phase}: same-session no-op must have a proven prior native completion`).toBe(true);
+    } else {
+      await expect.poll(() => this.traffic.frames.slice(start).filter(frame =>
+        frame.type === 'catch_up_complete' && frame.session_id === sessionId).length,
+      { message: `${this.phase}: actual attach finishes, not replay done alone` }).toBeGreaterThan(0);
+    }
     await expect(chatInput(this.page), this.phase).toBeEnabled();
     expect(this.traffic.failures, `${this.phase}: generated network shapes`).toEqual([]);
     await settled(this.page);
@@ -182,6 +192,11 @@ export class ReloadHarness {
   }
 }
 
+function killOwnedNativeProcess(pid: number) {
+  try { process.kill(pid, 'SIGKILL'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+}
+
 export const test = base.extend<{ reload: ReloadHarness }>({
   reload: async ({ page }, use, info) => {
     const provider = await startReloadProvider();
@@ -235,8 +250,7 @@ export const test = base.extend<{ reload: ReloadHarness }>({
           const receipt = fixture.nativeProcess()!;
           await info.attach('owned-native-process-cleanup', { contentType: 'application/json',
             body: JSON.stringify({ receipt, reason: 'teardown only; never accepted as the tested UI Stop' }) });
-          try { process.kill(receipt.pid, 'SIGKILL'); }
-          catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+          killOwnedNativeProcess(receipt.pid);
         }
         if (gateway) await gateway.stop();
       } finally { await provider.close(); }

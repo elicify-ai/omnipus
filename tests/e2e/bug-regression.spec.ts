@@ -21,6 +21,8 @@
 
 import { errors, expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
+import { test as canonicalTest } from './fixtures/canonical-history'
+import { seedCanonicalLegacyTranscript } from './fixtures/chat-history'
 import {
   chatInput,
   assistantMessages,
@@ -632,8 +634,8 @@ test.describe('Bug-5 inline approval helper controls', () => {
 import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
-const BUG_BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-const BUG_OMNIPUS_HOME =
+let BUG_BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
+let BUG_OMNIPUS_HOME =
   process.env.OMNIPUS_HOME ||
   (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '')
 
@@ -685,9 +687,13 @@ function requireBugHarnessHome(): void {
 // rock-solid Go regression test — TestWS_Message_FindsSession_InPerAgentStore
 // in pkg/gateway/websocket_session_test.go — verified to fail without
 // the fix and pass with it.
-test.describe('Bug-Hans: per-agent session resume must not produce "session not found"', () => {
+canonicalTest.describe('Bug-Hans: per-agent session resume must not produce "session not found"', () => {
+  canonicalTest.beforeEach(async ({ canonicalGateway }) => {
+    BUG_BASE_URL = canonicalGateway.baseURL
+    BUG_OMNIPUS_HOME = canonicalGateway.homeDir
+  })
 
-  test('(Bug-Hans-a) follow-up message on a per-agent session succeeds', async ({ page }) => {
+  canonicalTest('(Bug-Hans-a) follow-up message on a per-agent session succeeds', async ({ page }) => {
     test.slow() // real LLM call once the message lands; budget accordingly
     requireBugHarnessHome() // unresolvable home is a fail-fast preflight, not a skip (helper above)
     // Collect every WS frame the SPA receives for the life of the test. The
@@ -773,10 +779,7 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
       content: 'task done — open me to resume',
       timestamp: nowISO,
     }
-    fs.writeFileSync(
-      path.join(sessionDir, 'transcript.jsonl'),
-      JSON.stringify({ view_membership: 'chat', ...priorEntry }) + '\n',
-    )
+    await seedCanonicalLegacyTranscript(sessionID, [priorEntry])
 
     // 4. Navigate directly to the seeded session (TanStack Router hash form).
     await page.goto(`/#/sessions/${sessionID}`)

@@ -93,6 +93,9 @@ function retainSourceAndRememberTarget() {
     id: TARGET, type: 'chat', title: 'Target conversation', agentId: 'mia',
   })
   useWorkspacesStore.setState({ activeWorkspaceId: TARGET_WS })
+  // D9 legitimately releases prior detail caches during real navigation.
+  // Seed this target's validated authority only after the source transition.
+  seedCanonicalSession(TARGET, 'mia', TARGET_WS)
 }
 
 function messageFrames(send: ReturnType<typeof vi.fn>) {
@@ -111,7 +114,6 @@ async function settleInputPromises() {
 
 beforeEach(() => {
   queryClient.clear()
-  seedCanonicalSession(TARGET, 'mia', TARGET_WS)
   localStorage.clear()
   vi.clearAllMocks()
   vi.mocked(fetchAgents).mockResolvedValue([MIA, JIM])

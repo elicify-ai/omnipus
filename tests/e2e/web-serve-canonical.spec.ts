@@ -36,10 +36,11 @@
  */
 
 import { expect } from '@playwright/test'
-import { test } from './fixtures/console-errors'
+import { test } from './fixtures/canonical-history'
 import { seedAndOpenSession } from './fixtures/session-setup'
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
+let BASE_URL: string
+test.beforeEach(async ({ canonicalGateway }) => { BASE_URL = canonicalGateway.baseURL })
 // 'mia' — the seeded default of the 4-base roster. The historical 'main' id
 // no longer resolves to any agent; using it here would attribute these
 // synthetic transcript entries to a non-existent agent.

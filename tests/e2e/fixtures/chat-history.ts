@@ -4,12 +4,14 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { expect } from '@playwright/test';
 import type { Message } from '../../../src/lib/api/generated/openapi-types';
+import { Session, SessionDetail } from '../../../src/lib/api/generated/schemas';
 import { GatewayProcess } from './gateway-process';
+import { requireCanonicalHistoryContext } from './canonical-history-context';
 
 // Private test-driver plans/receipts; never sent across the gateway/SPA boundary.
 export type ChatHistoryFixtureDay = { day: string; entries: readonly Message[]; mtime?: string };
 export type ChatHistoryFixtureReceipt = {
-  schema_version: 1; action: 'seed_days' | 'sweep'; session_id?: string;
+  schema_version: 1; action: 'seed_days' | 'append_entries' | 'seed_aged' | 'sweep'; session_id?: string;
   written_records: number; rolled_partitions: number; removed_partitions: number;
 };
 const FORMAT = 'omnipus-chat-history-index/1\n'; // Architect decision F, v1 bytes.
@@ -112,6 +114,67 @@ export async function seedChatHistoryDayPartitions(gateway: GatewayProcess, sess
 export async function sweepChatHistoryFixture(gateway: GatewayProcess, retentionDays: number): Promise<ChatHistoryFixtureReceipt> {
   gateway.assertStoppedForFixture();
   return runDriver(gateway, { action: 'sweep', retention_days: retentionDays });
+}
+
+/** Author existing legacy payloads through the real writer in the actual
+ * stopped private gateway. No archive overwrite or automatic index adoption. */
+export async function seedCanonicalLegacyTranscript(sessionId: string, entries: readonly object[], append = false) {
+  const context = requireCanonicalHistoryContext();
+  if (!context.page) throw new Error('BLOCKED: canonical seed has no owned browser page');
+  await context.page.goto('about:blank');
+  await context.gateway.kill9();
+  context.gateway.assertStoppedForFixture();
+  healthyIndex(context.gateway, sessionId);
+  const receipt = runDriver(context.gateway, {
+    action: 'append_entries', session_id: sessionId, require_empty: !append,
+    days: [{ day: new Date().toISOString().slice(0, 10), entries }],
+  });
+  expect(receipt.written_records, 'every authored legacy record went through the canonical writer').toBe(entries.length);
+  healthyIndex(context.gateway, sessionId);
+  await resumeCanonicalHistory();
+  const result = await context.gateway.apiFetch('GET', `/api/v1/sessions/${sessionId}`);
+  expect(result.status, `CANONICAL SEED: first real detail error: ${result.raw}`).toBe(200);
+  const detail = SessionDetail.parse(result.body);
+  expect(detail.history_state.status, `POSSIBLE PRODUCT DEFECT: canonical seed still has unavailable history: ${result.raw}`).toBe('available');
+}
+
+/** Restart only the owned instance and refresh its genuine single-slot cookie. */
+export async function resumeCanonicalHistory() {
+  const context = requireCanonicalHistoryContext();
+  if (!context.page) throw new Error('BLOCKED: canonical restart has no owned browser page');
+  await context.gateway.restart();
+  const state = await context.gateway.browserStorageState();
+  await context.page.context().clearCookies();
+  await context.page.context().addCookies(state.cookies);
+  fs.writeFileSync(context.authFile, JSON.stringify(state), { mode: 0o600 });
+}
+
+/** Seed all original aged entries on real historical append days, then leave
+ * the owner stopped so callers can inspect the fixture before startup sweep. */
+export async function seedCanonicalAgedTranscript(entries: readonly object[], at: Date, title: string): Promise<string> {
+  const context = requireCanonicalHistoryContext();
+  if (!context.page) throw new Error('BLOCKED: aged seed has no owned browser page');
+  const result = await context.gateway.apiFetch('POST', '/api/v1/sessions', { agent_id: 'mia', type: 'chat' });
+  expect(result.status, `canonical aged identity creation failed: ${result.raw}`).toBe(201);
+  const session = Session.parse(result.body);
+  await context.page.goto('about:blank');
+  await context.gateway.kill9();
+  context.gateway.assertStoppedForFixture();
+  healthyIndex(context.gateway, session.id);
+  const prior = new Date(at.getTime());
+  prior.setUTCDate(prior.getUTCDate() - 1);
+  const split = Math.max(0, entries.length - 1);
+  const days = split > 0 ? [
+    { day: prior.toISOString().slice(0, 10), entries: entries.slice(0, split), mtime: at.toISOString() },
+    { day: at.toISOString().slice(0, 10), entries: entries.slice(split), mtime: at.toISOString() },
+  ] : [{ day: at.toISOString().slice(0, 10), entries, mtime: at.toISOString() }];
+  const receipt = runDriver(context.gateway, {
+    action: 'seed_aged', session_id: session.id, agent_id: 'mia', title, aged_at: at.toISOString(), days,
+  });
+  expect(receipt.written_records, 'aged fixture keeps the exact original record count').toBe(entries.length);
+  expect(receipt.rolled_partitions, 'aged source uses actual historical rollover').toBe(Math.max(0, days.length - 1));
+  healthyIndex(context.gateway, session.id);
+  return session.id;
 }
 
 /** Fixture-only aging AFTER real rollover. It changes mtime, never content or

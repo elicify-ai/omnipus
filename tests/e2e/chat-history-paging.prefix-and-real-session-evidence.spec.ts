@@ -72,7 +72,8 @@ test('T18 B21 B22:equal suffix after1000 and100000 prefixes has bounded physical
   await expect(page.getByTestId('virtualized-message-list')).toBeVisible();
 });
 
-test('T18 B21:isolated complete-page allocation receipts are present, exact-candidate and prefix-independent', async ({}, info) => {
+test('T18 B21:isolated complete-page allocation receipts are present, exact-candidate and prefix-independent', async () => {
+  const info = test.info();
   // Private CI evidence input, not a product setting. A receipt log starts with
   // HEAD:<full candidate SHA>, followed by the two isolated JSON measurements.
   const file = process.env.OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT;

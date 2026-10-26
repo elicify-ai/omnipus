@@ -22,6 +22,7 @@ import type { Session } from '@/lib/api'
 import type { AppState, Message, Session as WireSession, SessionPage, Workspace } from '@/lib/api/generated/openapi-types'
 import type { ClientFrame, MessageFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
 import { wireHistoryPage } from '../../../tests/chat-history-paging/legacy-wire'
+import { entry, expectValidFrame, expectValidPage, page, pos, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 import { WsConnection } from '@/lib/ws'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
@@ -175,6 +176,23 @@ function seedOmnipus() {
   useSessionStore.setState({ activeSessionId: OMNIPUS_MAIN, activeAgentId: 'omnipus', activeAgentType: 'core' })
   useWorkspacesStore.setState({ activeWorkspaceId: 'research' })
 }
+function completeConnectedOffer(rows: Message[]) {
+  const sources = rows.map((row, index) => entry(index + 1, row))
+  const selected = page(sources, { sessionId: OMNIPUS_MAIN })
+  expectValidPage(selected, sources.map((_, index) => pos(index + 1)), sources.length)
+  const incoming: ServerFrame[] = [
+    { ...snapshot(selected), seq: 1, boot_id: 'workspace-offer-boot' },
+    { type: 'session_state', session_id: OMNIPUS_MAIN, user_id: 'offer-reader', pending_approvals: [],
+      emitted_at: OFFER_ROW.timestamp, history_state: { status: 'available' } },
+    ...sources.map(row => replay(row, OMNIPUS_MAIN)),
+    { type: 'done', session_id: OMNIPUS_MAIN },
+    { type: 'catch_up_complete', session_id: OMNIPUS_MAIN, seq: 1, boot_id: 'workspace-offer-boot', mode: 'snapshot' },
+  ]
+  incoming.forEach(expectValidFrame)
+  act(() => incoming.forEach(frame => useChatStore.getState().handleFrame(frame)))
+  expect(useChatStore.getState().sessionsById[OMNIPUS_MAIN].history.historyLoaded,
+    'D6/D7: connected offer rows come from a fully committed snapshot').toBe(true)
+}
 async function expectSystemRows(failed: boolean) {
   const offer = await screen.findByText(OFFER, { exact: true })
   expect(offer).toBeVisible()
@@ -241,25 +259,23 @@ describe('FR-047 server-owned workspace setup offer', () => {
     seedOmnipus()
     const rows = failed ? [OFFER_ROW, FAILURE_ROW] : [OFFER_ROW]
     history = carrier === 'history' ? rows : []
+    // D6: REST is a genuinely disconnected fallback; connected replay is
+    // established by the authoritative bounded attach below, not a second GET.
+    useConnectionStore.setState({ isConnected: carrier !== 'history' })
     await mountApp('/omnipus')
     expect(await screen.findByTestId('omnipus-chat-screen')).toBeVisible()
     if (carrier === 'replay') {
       await waitFor(() => expect(queryClient.isFetching()).toBe(0))
-      act(() => {
-        for (const row of rows) {
-          const frame: ServerFrame = { type: 'replay_message', session_id: OMNIPUS_MAIN,
-            id: row.id, role: 'system', agent_id: 'omnipus', content: row.content!, timestamp: row.timestamp }
-          useChatStore.getState().handleFrame(frame)
-        }
-        useChatStore.getState().handleFrame({ type: 'done', session_id: OMNIPUS_MAIN, stats: { frames_emitted: rows.length } })
-      })
+      completeConnectedOffer(rows)
     }
     await expectSystemRows(failed)
-    expect(requests.some((r) => r.path === `/api/v1/sessions/${OMNIPUS_MAIN}/messages`)).toBe(true)
+    expect(requests.some((r) => r.method === 'GET' && r.path.split('?')[0] === `/api/v1/sessions/${OMNIPUS_MAIN}/messages`),
+      'D6: only the disconnected history carrier reads REST; connected replay must not race a second history read').toBe(carrier === 'history')
   })
   it('ordinary Omnipus history does not manufacture a setup offer or a failure note', async () => {
     seedOmnipus()
     history = [{ ...OFFER_ROW, id: 'ordinary-system', content: 'Ordinary system information.' }]
+    useConnectionStore.setState({ isConnected: false })
     await mountApp('/omnipus')
     expect(await screen.findByText('Ordinary system information.', { exact: true })).toBeVisible()
     expect(screen.queryByText(OFFER, { exact: true })).not.toBeInTheDocument()

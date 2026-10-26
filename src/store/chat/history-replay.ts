@@ -15,13 +15,13 @@ import { useSessionStore } from '@/store/session'
 import { cursorFromTerminalFrame, isPendingTailMessage } from './cursor'
 import { findFirstSendMessage } from './first-send'
 import { abortHistoryReads, registerHistoryRelease } from './history'
-import { applyHistoryPageToBucket, HistoryPageProtocolError } from './history-merge'
+import { applyHistoryPageToBucket, HistoryPageProtocolError, releaseHistorySpanFacts } from './history-merge'
 import { ApiSchemaError } from '@/lib/api/http'
 import { logDiagnostic } from '@/lib/telemetry'
 import { validateHistoryMetadata, historyPosition } from '@/lib/api/history-validation'
 import { SessionHistoryResponse as PageSchema } from '@/lib/api/generated/schemas'
 
-type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage>; cancellations: Set<string> } // not-wire-format: transient projection ownership
+type Stage = { frame: SessionSnapshotFrame; groups: Map<string, SessionChatState>; generation: number; baseline: Record<string, ChatMessage>; invalid: boolean; progressive: boolean; published: boolean; priorOrder: string[]; priorHistory: SessionChatState['history']; publishedRows: Record<string, ChatMessage>; cancellations: Set<string>; priorBootId: string | undefined } // not-wire-format: transient projection ownership
 
 /** Local classification only; never carries source data or exception details. */
 class SnapshotProtocolError extends Error {
@@ -119,7 +119,34 @@ function settleRecoveredSnapshotInput(bucket: SessionChatState, page: SessionHis
   }
 }
 
-function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryPage, baseline: Record<string, ChatMessage>, bootMismatch: boolean): { bucket: SessionChatState; page: SessionHistoryPage } {
+/** A reply this tab watched streaming whose turn the server's current state
+ * no longer runs, and that the committed page does not hold, did not survive
+ * on the server (a restart cut it before it was saved). Dropping it at the
+ * snapshot commit restores the pre-paging rebuild: the question it answered is
+ * the last row again and the witnessed-cut sweep reads the real transcript.
+ * A turn the server still reports active, any row the page holds (also via a
+ * merged replay id), and every user row stay untouched. */
+function dropDeadWitnessedStreams(bucket: SessionChatState, page: SessionHistoryPage): SessionChatState {
+  const witnessed = new Set(bucket.wipedOpenTurnIds ?? [])
+  if (!witnessed.size) return bucket
+  const onPage = new Set(page.entries.map(entry => entry.id))
+  const dead = new Set([...new Set([...bucket.messageOrder, ...(bucket.historyLiveOrder ?? [])])].filter(id => {
+    const row = bucket.messagesById[id]
+    return row?.role === 'assistant' && (row.isStreaming || row.status === 'streaming') && !row.historyPosition &&
+      !!row.turnId && witnessed.has(row.turnId) && row.turnId !== bucket.activeTurnId &&
+      !onPage.has(row.id) && !row.mergedReplayIds?.some(id => onPage.has(id))
+  }))
+  if (!dead.size) return bucket
+  const messagesById = { ...bucket.messagesById }
+  for (const id of dead) delete messagesById[id]
+  // With the dead reply gone, the chat streams only if a row still does or the
+  // server reports a turn; a stale flag would read as "still running".
+  const stillStreaming = !!bucket.activeTurnId || Object.values(messagesById).some(row => row.isStreaming || row.status === 'streaming')
+  return { ...bucket, messagesById, isStreaming: bucket.isStreaming && stillStreaming,
+    messageOrder: bucket.messageOrder.filter(id => !dead.has(id)), historyLiveOrder: bucket.historyLiveOrder?.filter(id => !dead.has(id)) }
+}
+
+function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryPage, baseline: Record<string, ChatMessage>, bootChanged: boolean): { bucket: SessionChatState; page: SessionHistoryPage } {
   if (bucket.history.serverState?.status !== 'available' || bucket.activeTurnId) return { bucket, page }
   const messagesById = { ...bucket.messagesById }
   const settledTurns = new Set<string>()
@@ -156,16 +183,29 @@ function settleCompletedSnapshot(bucket: SessionChatState, page: SessionHistoryP
       ...bucket, messagesById, isStreaming: stillOpen ? bucket.isStreaming : false,
       // A changed boot retains the personally witnessed-cut check. A normal
       // completed snapshot must not relabel its completed answer as unfinished.
-      wipedOpenTurnIds: bootMismatch ? bucket.wipedOpenTurnIds : bucket.wipedOpenTurnIds?.filter(id => !settledTurns.has(id)),
+      wipedOpenTurnIds: bootChanged ? bucket.wipedOpenTurnIds : bucket.wipedOpenTurnIds?.filter(id => !settledTurns.has(id)),
     },
     page: { ...page, entries },
   }
+}
+
+/** A persisted span fact is its own silent source row. Reducing it alone in
+ * its isolated group could never meet the span's start (another position,
+ * possibly another page); the page commit settles it onto the start row
+ * (history-merge.ts::settleHistorySpans), exactly as REST pages do. */
+function stageSpanFact(stage: Stage, frame: ServerFrame, entryId: string | undefined, position: string, previous: SessionChatState): boolean {
+  if (frame.type !== 'subagent_start' && frame.type !== 'subagent_state' && frame.type !== 'subagent_message' && frame.type !== 'subagent_end') return false
+  const id = entryId ?? `history-${position}`
+  const row: ChatMessage = { id, role: 'assistant', content: '', timestamp: '1970-01-01T00:00:00Z', status: 'done', historyPosition: position, historySpanFrame: frame }
+  stage.groups.set(position, { ...previous, messagesById: { [id]: row }, messageOrder: [id] })
+  return true
 }
 
 export function createHistoryFrameOwner(context: HistorySliceContext) {
   const stages = new Map<string, Stage>()
   const discardedSnapshots = new Set<string>()
   registerHistoryRelease(sid => {
+    releaseHistorySpanFacts(sid ?? undefined)
     if (!sid) { for (const [id, stage] of stages) restorePublishedProjection(context, id, stage); stages.clear(); discardedSnapshots.clear(); return }
     const stage = stages.get(sid)
     if (stage) { restorePublishedProjection(context, sid, stage); discardedSnapshots.add(sid) }
@@ -214,7 +254,11 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
         older: { status: 'idle', error: null, attempt: 0 }, newer: { status: 'idle', error: null, attempt: 0 }, refresh: { status: 'idle', error: null, attempt: 0 } } } }))
     const bucket = context.get().sessionsById[frame.session_id]
     stages.set(frame.session_id, { frame, groups: new Map(), generation: bucket.history.viewGeneration, baseline: { ...bucket.messagesById }, invalid: false,
-      progressive: isProgressiveAttachFrame(frame), published: false, cancellations: new Set(), priorOrder: bucket.messageOrder.slice(), priorHistory: bucket.history, publishedRows: {} })
+      progressive: isProgressiveAttachFrame(frame), published: false, cancellations: new Set(), priorOrder: bucket.messageOrder.slice(), priorHistory: bucket.history, publishedRows: {},
+      // The live cursor's boot before this snapshot (undefined: no cursor yet,
+      // so no boot to compare). A different snapshot boot means the gateway
+      // restarted, whatever the snapshot reason says.
+      priorBootId: bucket.cursor?.bootId })
   }
   function collect(frame: ServerFrame, sid: string, stage: Stage, reduce: (frame: ServerFrame) => void): void {
     const origin = 'history_origin' in frame ? frame.history_origin : undefined
@@ -223,6 +267,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     try { position = historyPosition(origin.position, 'WS history', ['history_origin', 'position']) } catch { stage.invalid = true; return }
     if (frame.type === 'replay_message' && frame.role === 'turn_canceled') stage.cancellations.add(position)
     const previous = stage.groups.get(position) ?? { ...emptySessionState(), isReplaying: true, awaitingCatchUp: true }
+    if (stageSpanFact(stage, frame, origin.entry_id, position, previous)) { publishProgressiveProjection(context, sid, stage); return }
     active = { sid, bucket: previous, staging: true }
     // A tool-only owning source is a real non-prose group, not the preceding
     // assistant bubble. The ordinary tool adapters then retain exact offsets.
@@ -275,7 +320,12 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
         // the immediate prior reader so that failure is still transactional.
         beforeCommit = original
         const recovered = settleRecoveredSnapshotInput(original, page)
-        const { bucket: b, page: completedPage } = settleCompletedSnapshot(recovered, page, baseline, frame.reason === 'boot_mismatch')
+        // A restarted gateway keeps the witnessed-cut check, also when the
+        // snapshot reason is unknown_position: the boot the live stream ran
+        // on is gone, so a witnessed open turn did not finish there. Same
+        // definition as the catch_up_complete reducer's bootChanged.
+        const bootChanged = frame.reason === 'boot_mismatch' || (stage.priorBootId !== undefined && frame.boot_id !== undefined && frame.boot_id !== stage.priorBootId)
+        const { bucket: b, page: completedPage } = settleCompletedSnapshot(recovered, page, baseline, bootChanged)
         const completion = b === original ? {} : { isStreaming: b.isStreaming, wipedOpenTurnIds: b.wipedOpenTurnIds, recoveredFirstSend: b.recoveredFirstSend }
         if (b.history.viewMode === 'historical') {
           const needed = new Set(retainedPending(b).map(row => row.id))
@@ -293,7 +343,8 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
           return { ...patch, ...completion, messageOrder: b.messageOrder, historyLiveOrder: liveOrder, historyNeedsSnapshot: false,
             history: { ...patch.history!, tailEntries: capacity ? tail.slice(-capacity) : [], pageMetadata: historyMetadata(completedPage), historyLoaded: true } }
         }
-        return { ...applyHistoryPageToBucket(b, completedPage, 'latest', baseline), ...completion }
+        const live = dropDeadWitnessedStreams(b, completedPage)
+        return { ...applyHistoryPageToBucket(live, completedPage, 'latest', baseline), ...completion, ...(live !== b ? { isStreaming: live.isStreaming } : {}) }
       })
       return true
     } catch (error) {

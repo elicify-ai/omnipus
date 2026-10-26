@@ -1,6 +1,6 @@
 import { expect, type Page } from '@playwright/test';
 import { SessionHistoryResponse } from '../../../../src/lib/api/generated/schemas';
-import { type HistoryHarness, geometry, scrollToDistance, settled } from './harness';
+import { type HistoryHarness, geometry, historyScroller, scrollToDistance, settled } from './harness';
 
 /** Browse through actual UI requests. IDs in this synthetic fixture have
  * authored ordinals; opaque production history positions are never sorted. */
@@ -8,8 +8,15 @@ export async function browseBack(history: HistoryHarness, targetOrdinal: number)
   const opening = expectedReaderOrdinals(history);
   expect(opening.length, 'opening source identities are visible to the traversal instrument').toBeGreaterThan(0);
   let earliest = Math.min(...opening);
+  let initialReaderIntent = true;
   while (earliest > targetOrdinal) {
     const before = history.traffic.pages.length;
+    if (initialReaderIntent) {
+      await historyScroller(history.page).focus();
+      await expect(historyScroller(history.page), 'real keyboard reader intent targets the conversation scroller').toBeFocused();
+      await history.page.keyboard.press('Home');
+      initialReaderIntent = false;
+    }
     await scrollToDistance(history.page, 0);
     await expect.poll(() => history.traffic.pages.length, { message: 'genuine UI traversal must produce a page' }).toBeGreaterThan(before);
     const replies = history.traffic.pages.slice(before);

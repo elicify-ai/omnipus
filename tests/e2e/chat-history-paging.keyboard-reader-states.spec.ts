@@ -100,7 +100,9 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
       // This tests reflow; it does not pretend deviceScaleFactor changes CSS zoom.
       await page.setViewportSize({ width: 640, height: 500 });
     }
-    await history.seed({ label: 'a11y', count: 40, clearAt: [19] });
+    // D1/D5: 300 post-clear groups exceed two maximum-100 pages, leaving
+    // real older content for automatic prefetch and the distinct Enter request.
+    await history.seed({ label: 'a11y', count: 320, clearAt: [19] });
     await history.authenticate();
     await history.open();
     await page.evaluate(() => {
@@ -126,11 +128,17 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
     let prefetchAnnouncements: string[];
     try {
       await scrollToDistance(page, 0);
-      await prefetch.requested;
+      const prefetchRoute = await prefetch.requested;
       expect(prefetch.requests, 'one real automatic prefetch before keyboard activation').toHaveLength(1);
       await expect(page.getByRole('status').filter({ hasText: 'Loading earlier messages…' })).toHaveCount(1);
       await expect(historyScroller(page)).toHaveAttribute('aria-busy', 'true');
       prefetch.release();
+      const prefetchResponse = await prefetchRoute.request().response();
+      expect(prefetchResponse, 'prefetch must actually finish delivery before Enter, not remain held or aborted').not.toBeNull();
+      if (!prefetchResponse) throw new Error('PREREQUISITE: automatic prefetch was aborted before a distinct keyboard attempt');
+      expect(prefetchResponse.status(), 'prefetch settlement is a real successful page, not a hidden transport failure').toBe(200);
+      expect(await prefetchResponse.finished(), 'the prefetch body finishes before keyboard activation').toBeNull();
+      expect(prefetch.abortedOrHandled, 'an interrupted app transition cannot masquerade as a settled prefetch').toBe(false);
       await expect(page.getByText('Loading earlier messages…', { exact: true })).toHaveCount(0);
       await expect(historyScroller(page)).not.toHaveAttribute('aria-busy', 'true');
       await settled(page);
@@ -143,6 +151,8 @@ for (const presentation of ['reduced-motion-reflow', 'plain-no-observer'] as con
       const earlier = page.getByRole('button', { name: 'Show earlier messages', exact: true });
       await earlier.focus();
       await settled(page);
+      await expect(earlier, 'the distinct keyboard attempt starts only after the prefetch guard clears').not.toHaveAttribute('aria-disabled', 'true');
+      await expect(historyScroller(page), 'no automatic request remains in flight before Enter').not.toHaveAttribute('aria-busy', 'true');
       expect(held.requests, 'keyboard attempt has not started before its Enter action').toHaveLength(0);
       await page.keyboard.press('Enter');
       await held.requested;

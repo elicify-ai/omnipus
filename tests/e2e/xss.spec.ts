@@ -1,7 +1,11 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
-import type { Message, Session } from '../../src/lib/api/generated/openapi-types';
-import { wireAvailableDetail, wireHistoryPage } from '../chat-history-paging/legacy-wire';
+import type { Message, SessionCreateRequest } from '../../src/lib/api/generated/openapi-types';
+import { Agent, Session } from '../../src/lib/api/generated/schemas';
+import { test as canonicalTest } from './fixtures/canonical-history';
+import { seedCanonicalLegacyTranscript } from './fixtures/chat-history';
+import { observeTraffic } from './fixtures/chat-history-paging/harness';
+import { openSessionByDeepLink } from './fixtures/session-setup';
 
 // XSS DOM-rendering coverage for the chat markdown render path.
 //
@@ -44,22 +48,13 @@ for (const { name, payload } of xssPayloads) {
       data: { name: agentName, description: payload, model: 'scripted-model' },
     });
 
-    // If the agent was rejected by the server (validation error) that is acceptable
-    // defense-in-depth. Skip DOM rendering for that payload.
-    if (!createResp.ok()) {
-      test.info().annotations.push({
-        type: 'skip-reason',
-        description: `Server rejected payload ${name} with ${createResp.status()} — server-side defense active`,
-      });
-      return;
-    }
-
-    const created = await createResp.json() as { id?: string };
+    // A rejected or malformed setup is not evidence of safe DOM rendering.
+    // Both prerequisites must fail loudly before any escaping claim is made.
+    expect(createResp.ok(),
+      `PREREQUISITE: create description-XSS agent ${name}; HTTP ${createResp.status()}: ${await createResp.text()}`).toBe(true);
+    const created = Agent.parse(await createResp.json());
     const agentId = created.id;
-    if (!agentId) {
-      // No id in response — treat as rejection.
-      return;
-    }
+    expect(agentId.trim().length, `PREREQUISITE: created description-XSS agent ${name} has a nonempty id`).toBeGreaterThan(0);
 
     try {
       // Navigate to the agent profile page where description is rendered.
@@ -72,6 +67,8 @@ for (const { name, payload } of xssPayloads) {
       // We must NOT count those. Instead, assert that no <script> appears inside
       // the main content area where the agent description is rendered.
       const descriptionArea = page.locator('main, [role="main"], .agent-profile, [data-testid="agent-description"]').first();
+      await expect(descriptionArea.getByText(payload, { exact: true }),
+        `POSITIVE CONTROL: description-XSS payload "${name}" itself renders visibly as exact escaped text before safety checks`).toBeVisible();
       const scriptInContent = await descriptionArea.locator('script').count();
       expect(
         scriptInContent,
@@ -124,68 +121,56 @@ for (const { name, payload } of xssPayloads) {
   });
 }
 
-test('chat message with XSS payload renders as escaped text, not live HTML', async ({ page }) => {
-  // This test verifies the chat rendering path (not just the agent description field).
-  // It uses page.route to intercept a WS message and inject an XSS payload as
-  // an assistant response, then asserts the payload appears as escaped text in the DOM.
-  //
-  // NOTE: This test intercepts only the API responses, not the real WS stream.
-  // It uses page.route to mock the sessions API so we get a predictable transcript
-  // without needing a live LLM connection.
-
+canonicalTest.describe('persisted chat payload', () => {
+canonicalTest.describe.configure({ retries: 0 });
+canonicalTest('chat message with XSS payload renders as escaped text, not live HTML', async ({ page, canonicalGateway }, info) => {
+  // A real REST identity and canonical archive back the real WS attach. No
+  // HTTP history projection or socket is mocked: absence cannot prove safety.
   const xssContent = '<script>window.__xss_fired = true;</script><img src=x onerror="window.__xss_fired=true">';
-
-  // Navigate to chat screen.
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
-
-  // Intercept the actual list, detail and messages paths. The retired
-  // /transcript route never supplied ChatScreen's real history query.
-  const sessionId = `xss-test-session-${Date.now()}`;
+  await page.addInitScript(() => {
+    // Mutable execution monitor only; nothing prevents injected code setting it.
+    (window as unknown as { __xss_fired: boolean }).__xss_fired = false;
+  });
+  const created = await canonicalGateway.apiFetch('POST', '/api/v1/sessions', {
+    agent_id: 'mia', type: 'chat',
+  } satisfies SessionCreateRequest);
+  expect(created.status, `PREREQUISITE: real XSS session creation: ${created.raw}`).toBe(201);
+  const session = Session.parse(created.body);
+  const sessionId = session.id;
   const timestamp = new Date().toISOString();
   const assistantId = 'xss-retained-assistant';
-  const session: Session = {
-    id: sessionId, agent_id: 'omnipus-system', title: 'XSS Test Session',
-    type: 'chat', status: 'active', created_at: timestamp, updated_at: timestamp,
-    channel: 'webchat', partitions: [],
-    stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 2 },
-  };
   const entries: Message[] = [
     { id: 'xss-retained-user', type: 'message', role: 'user', content: 'hi', agent_id: session.agent_id, timestamp },
     { id: assistantId, type: 'message', role: 'assistant', content: xssContent, agent_id: session.agent_id, timestamp },
   ];
-  const history = wireHistoryPage(sessionId, entries, 2);
-  await page.route('**/api/v1/sessions', async (route) => {
-    if (route.request().method() === 'GET') {
-      await route.fulfill({ status: 200, json: { sessions: [session] } });
-    } else {
-      await route.continue();
-    }
-  });
-  await page.route(`**/api/v1/sessions/${sessionId}`, async (route) => {
-    await route.fulfill({ status: 200, json: wireAvailableDetail(session, history) });
-  });
-  await page.route(`**/api/v1/sessions/${sessionId}/messages`, async (route) => {
-    await route.fulfill({ status: 200, json: history });
-  });
+  await seedCanonicalLegacyTranscript(sessionId, entries);
+  const traffic = observeTraffic(page); // Seed left this actual page at about:blank.
+  await openSessionByDeepLink(page, sessionId, canonicalGateway.baseURL);
+  await expect.poll(() => traffic.frames.some(frame => frame.type === 'catch_up_complete' && frame.session_id === sessionId),
+    { message: 'PREREQUISITE: the real addressed WS attach completes, not mocked HTTP hydration' }).toBe(true);
+  expect(traffic.attaches.map(frame => frame.session_id), 'PREREQUISITE: actual native WS attach names the real session').toContain(sessionId);
+  expect(traffic.failures, 'generated contract validation on actual native WS traffic').toEqual([]);
 
-  // Navigate to the injected session's URL so the chat store loads the transcript.
-  await page.goto(`/#/sessions/${sessionId}`);
-  await page.waitForLoadState('networkidle');
-
-  // Positive instrument control: neither an unrendered assistant nor a failed
-  // route/history load may prove that the hostile payload was rendered safely.
   const retainedAssistant = page.locator(`[data-message-id="${assistantId}"]`);
   await expect(retainedAssistant).toBeVisible();
-
-  // Assert: the XSS did NOT execute (window.__xss_fired should be undefined/false).
+  await expect(retainedAssistant.getByText(xssContent, { exact: true }),
+    'POSITIVE CONTROL: the hostile assistant payload itself renders visibly as escaped text').toBeVisible();
   const xssFired = await page.evaluate(() => (window as unknown as Record<string, unknown>)['__xss_fired']);
   expect(
     xssFired,
     'XSS payload executed in the chat transcript DOM — the SPA must escape assistant message content',
-  ).toBeFalsy();
+  ).toBe(false);
 
-  // Assert: no <script> element inside the messages area.
   const scriptInMsg = await retainedAssistant.locator('script').count();
   expect(scriptInMsg, 'Rendered assistant message must not contain live <script> elements').toBe(0);
+  await expect(retainedAssistant.locator('img'), 'raw hostile HTML is escaped text, not a live image').toHaveCount(0);
+  const eventHandlers = await retainedAssistant.evaluate(element => [...element.querySelectorAll('*')].flatMap(node =>
+    [...node.attributes].filter(attribute => /^on[a-z]/i.test(attribute.name)).map(attribute => attribute.name)));
+  expect(eventHandlers, 'escaped payload cannot install live on* handler attributes').toEqual([]);
+  await info.attach('xss-real-rendered-payload', { contentType: 'application/json', body: JSON.stringify({
+    sessionId, assistantId, renderedText: await retainedAssistant.innerText(), xssFired,
+    scriptInMsg, eventHandlers, attaches: traffic.attaches, failures: traffic.failures,
+  }, null, 2) });
+  await info.attach('xss-real-rendered-payload-screenshot', { contentType: 'image/png', body: await page.screenshot({ fullPage: true }) });
+});
 });

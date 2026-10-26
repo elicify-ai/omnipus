@@ -1,11 +1,14 @@
 import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
 import { ChatScreen } from '@/components/chat/ChatScreen'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import { fetchSessionDetail, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
+import { ErrorState } from '@/components/ui/error-state'
+import { fetchSessionDetail } from '@/lib/api'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 import { isApiError } from '@/lib/api-error'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
@@ -72,11 +75,10 @@ function SessionRoute() {
   }, [sessionId, detail?.session.id, detail?.session.total_tokens])
 
   // Fetch active workspaces to verify the session's workspace_id.
-  const { data: workspaces = [], isPending: workspacesPending, isPaused: workspacesPaused, refetch: refetchWorkspaces } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    // The query's own signal reaches the request, so cancelling the query
-    // really aborts a stalled lookup (Retry below).
-    queryFn: ({ signal }) => fetchWorkspaces({ status: 'active', signal }),
+  const { data: workspaces = [], isPending: workspacesPending, isPaused: workspacesPaused, isFetching: workspacesFetching, isError: workspacesFailed, refetch: refetchWorkspaces } = useQuery({
+    // Shared definition: its signal reaches the request whichever component
+    // started it, so cancelling the query really aborts a stalled lookup.
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
     enabled: !!detail?.session?.workspace_id,
   })
@@ -263,7 +265,7 @@ function SessionRoute() {
   // that has no data yet (query-core 5.101): cancel this exact query first,
   // which aborts its in-flight request, then start a fresh one.
   const retryWorkspaceLookup = async () => {
-    await queryClient.cancelQueries({ queryKey: workspacesQueryKeys.list({ status: 'active' }), exact: true })
+    await queryClient.cancelQueries({ queryKey: activeWorkspacesQueryOptions.queryKey, exact: true })
     await refetchWorkspaces()
   }
   const redirectWaitExpired = useBoundedWait(!!detail?.session?.workspace_id && workspacesPending, REDIRECT_DECISION_WAIT_MS)
@@ -293,20 +295,38 @@ function SessionRoute() {
   // The bounded wait ended (or the lookup is paused offline) while the
   // workspace is still unresolved: open inline, but say so, and offer a Retry
   // that replaces the stalled lookup. The later automatic move is announced.
-  if (wsId && workspacesPending) {
-    return (
-      <div className="absolute inset-0 flex flex-col">
-        <WorkspaceLookupNotice paused={workspacesPaused} onRetry={() => { void retryWorkspaceLookup() }} />
-        {/* ChatScreen's root is absolute inset-0: give it its own positioned
-            slot below the notice so the two never overlap. */}
-        <div className="relative min-h-0 flex-1" data-testid="workspace-lookup-chat-slot">
-          <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
-        </div>
+  // State comes from the LOOKUP, not from what the cached list contains: a
+  // stale list without this workspace that is being refreshed is still a
+  // lookup in progress, and a failed refresh is a failure even if a list is cached.
+  // The lookup failed (e.g. 403, or 503s outlasting their retries): the chat
+  // is open here, but say why it did not move and offer a real Retry.
+  let notice: ReactNode = null
+  if (wsId && (workspacesFetching || workspacesPaused)) {
+    notice = <WorkspaceLookupNotice paused={workspacesPaused} onRetry={() => { void retryWorkspaceLookup() }} />
+  } else if (wsId && workspacesFailed) {
+    notice = (
+      <div className="px-[var(--space-3)] py-[var(--space-1)]">
+        <ErrorState message="Couldn't find this chat's workspace, so the chat is open here instead. Retry to move it into its workspace." onRetry={() => { void retryWorkspaceLookup() }} />
       </div>
     )
   }
 
-  return <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
+  // ONE wrapper and ONE chat slot for idle, fetching, paused and failed: only
+  // the notice above the slot changes. A different root per lookup state made
+  // React replace the whole chat (DOM, focus, selection, composer mount
+  // effects) whenever a background refresh of the shared workspace list
+  // started or ended -- every Sidebar refresh cycle for an archived
+  // workspace's chat.
+  return (
+    <div className="absolute inset-0 flex flex-col">
+      {notice}
+      {/* ChatScreen's root is absolute inset-0: give it its own positioned
+          slot below the notice so the two never overlap. */}
+      <div className="relative min-h-0 flex-1" data-testid="workspace-lookup-chat-slot">
+        <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
+      </div>
+    </div>
+  )
 }
 
 /** How long a deep link waits for the workspace list before opening inline. */
