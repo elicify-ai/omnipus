@@ -162,9 +162,9 @@ func (d *approvalDeps) Admit(ctx context.Context, a Admission) (AdmitResult, err
 	}
 	d.entered <- a.DeliveryID
 	<-d.preApproval
-	d.fakeDeps.mu.Lock()
+	d.mu.Lock()
 	d.cards++
-	d.fakeDeps.mu.Unlock()
+	d.mu.Unlock()
 	if a.OnAwaitingApproval != nil {
 		a.OnAwaitingApproval()
 	}
