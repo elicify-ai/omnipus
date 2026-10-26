@@ -95,6 +95,14 @@ export function currentHistoryEntries(bucket: SessionChatState): SessionHistoryE
   })
 }
 
+/** The display row that coalesced this saved source's id, same turn and producer. */
+function coalescedOwner(bucket: SessionChatState, entry: SessionHistoryEntry): ChatMessage | undefined {
+  const owners = Object.values(bucket.messagesById).filter(row =>
+    row.role === entry.role && row.mergedReplayIds?.includes(entry.id) &&
+    (!entry.turnId || !row.turnId || entry.turnId === row.turnId) && (!entry.agentId || !row.agentId || entry.agentId === row.agentId))
+  return owners.length === 1 ? owners[0] : undefined
+}
+
 export function applyHistoryPageToBucket(bucket: SessionChatState, page: SessionHistoryPage, action: HistoryActionKind, baseline: Record<string, ChatMessage> = bucket.messagesById): Partial<SessionChatState> {
   const history = bucket.history
   const old = currentHistoryEntries(bucket)
@@ -104,7 +112,14 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   const newOverlap = pagePositions.filter(position => existingPositions.has(position))
   if (oldOverlap.join() !== newOverlap.join()) throw new HistoryPageProtocolError('Contradictory history overlap.')
   if ((action === 'older' || action === 'newer') && page.entries.length && page.entries.every(entry => existingPositions.has(entry.historyPosition))) throw new HistoryPageProtocolError('History boundary did not advance.')
-  const incoming = page.entries.map(entry => mergeHistoryEntry(entry, bucket.messagesById[entry.id], baseline[entry.id]))
+  const incoming = page.entries.map(entry => {
+    // A saved source whose id a displayed reply already coalesced (the token
+    // resolver's mergedReplayIds) merges onto that display row: it keeps its
+    // identity and live text and takes the saved position, never a second
+    // reply beside it (D4/D7, r21).
+    const owner = bucket.messagesById[entry.id] ? undefined : coalescedOwner(bucket, entry)
+    return owner ? mergeHistoryEntry({ ...entry, id: owner.id }, owner, baseline[owner.id]) : mergeHistoryEntry(entry, bucket.messagesById[entry.id], baseline[entry.id])
+  })
   const union = action === 'older' ? [...incoming, ...old] : action === 'newer' ? [...old, ...incoming] : incoming
   const byPosition = new Map<string, ChatMessage>()
   for (const row of union) {
