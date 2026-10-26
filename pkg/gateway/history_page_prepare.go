@@ -205,6 +205,12 @@ func (r *historyPageRequest) prepareGroup(ctx context.Context, p session.ChatHis
 		sr.lifecycle = r.lifecycle
 	}
 	sr.prepareReplay()
+	for _, parent := range e.NestedDelegateParents {
+		// The selected group cannot prove orphanhood from its own page.
+		// Retained parent provenance keeps the shared ADR-091 classifier's
+		// legacy nested-child suppression, even when the parent is off-page.
+		sr.spawnIDsWithChildren[string(parent)] = true
+	}
 	for _, d := range p.PageInfo.Context.DuplicateIDs {
 		if d.Kind == "tool" && d.CanonicalPosition != e.Position {
 			sr.latestByID[d.ID] = tcAddr{entryIdx: -1, tcIdx: -1}
