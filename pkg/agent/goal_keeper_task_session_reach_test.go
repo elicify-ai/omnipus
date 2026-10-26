@@ -83,7 +83,6 @@ import (
 // Traces to: GOAL-FR-015, goal-entity-spec.md S-06, JUDGE-FR-097, ADR-086.
 func TestKeeperReachesSessionMintedByARealTaskRun(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")

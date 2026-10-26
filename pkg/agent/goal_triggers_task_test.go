@@ -296,7 +296,6 @@ func (h *taskKeeperHarness) swapJudgeProvider(cp *fakeJudgeProvider) *fakeJudgeP
 func newTaskKeeperHarness(t *testing.T, condition string, criteria []task.AcceptanceCriterion) *taskKeeperHarness {
 	t.Helper()
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 	if !ok {
@@ -867,7 +866,6 @@ func TestNudgeLadderUnreachableForTaskGoal(t *testing.T) {
 
 	t.Run("a recordless chat goal DOES enter the nudge ladder", func(t *testing.T) {
 		resetGoalTriggerStateForTest()
-		withShortIdleWindow(t, 2*time.Second)
 		al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 		_, sid := newGoalTestSession(t, al, agentInst.ID)

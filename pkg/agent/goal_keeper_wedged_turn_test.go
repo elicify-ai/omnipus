@@ -108,9 +108,9 @@ func TestWedgedTurnDoesNotDisarmTheGoalIdleExpirySweep(t *testing.T) {
 	// Sanity: the arrange really is past the quiet window, so every sweep
 	// below genuinely reaches the live-turn branch rather than returning early
 	// at the window check. Without this the test could pass vacuously.
-	if now.Sub(h.armedAt) <= goalIdleQuietWindow {
+	if now.Sub(h.armedAt) <= DefaultGoalReminderQuietWindow {
 		t.Fatalf("arrange: goal armed %s ago, quiet window is %s — the keeper would never reach the live-turn branch",
-			now.Sub(h.armedAt), goalIdleQuietWindow)
+			now.Sub(h.armedAt), DefaultGoalReminderQuietWindow)
 	}
 
 	for i := 0; i < 8; i++ {

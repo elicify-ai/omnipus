@@ -526,7 +526,6 @@ func TestClaimScanWatermarkSurvivesATranscriptReadError(t *testing.T) {
 // turn, spending real tokens, every quiet window, forever.
 func TestKeeperDoesNotDispatchAnUncountedPush(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	_, sid := newGoalTestSession(t, al, agentInst.ID)

@@ -28,16 +28,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// withShortIdleWindow swaps goalIdleQuietWindow to a small value for the test
-// and restores it on cleanup. Must not be combined with t.Parallel (the var
-// is package-scoped); all tests here run non-parallel under -p 1.
-func withShortIdleWindow(t *testing.T, d time.Duration) {
-	t.Helper()
-	prev := goalIdleQuietWindow
-	goalIdleQuietWindow = d
-	t.Cleanup(func() { goalIdleQuietWindow = prev })
-}
-
 // countingProvider is a fake Judge LLM provider that returns a fixed canned
 // response and counts how many times it was invoked — so a test can assert the
 // Judge fired EXACTLY once (G-1/INV-1). Reuses judge_test.go's
@@ -375,7 +365,6 @@ func TestNoClaim_NoAdjudication_FR101(t *testing.T) {
 // new activity.
 func TestIdlePush_FiresOnceConsumesNoRoundRearms_G2(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -461,7 +450,6 @@ func TestBareClaim_FirstFreeSecondCosts_G4(t *testing.T) {
 // idle settlement is suppressed while the pause holds.
 func TestWaitingOnUser_PauseNoRoundNoVerdictIdleSuppressed_G5(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -557,7 +545,6 @@ func TestStrayClaimAfterClear_Inert_N12(t *testing.T) {
 // consult, F1's key-consistency contract, unaffected by D13).
 func TestVerifierInFlight_SuppressesIdlePush_NoSelfRace_F5(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -601,7 +588,6 @@ func TestVerifierInFlight_SuppressesIdlePush_NoSelfRace_F5(t *testing.T) {
 // settlements — each fires its own continue-push, keyed by goal-id.
 func TestPerGoalId_TwoSessionsIndependent_FR107(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sidA := newGoalTestSession(t, al, agentInst.ID)
@@ -937,7 +923,6 @@ func TestTriggerStateKeyedByGoalID(t *testing.T) {
 	armForKeying := func(t *testing.T) (al *AgentLoop, sid, gid string, dispatches *goalDispatchRecorder) {
 		t.Helper()
 		resetGoalTriggerStateForTest()
-		withShortIdleWindow(t, 2*time.Second)
 		al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 		if !ok {
@@ -1113,7 +1098,6 @@ func TestTriggerStateKeyedByGoalID(t *testing.T) {
 		// activation, so a definition-phase goal has none — and the keeper
 		// drivers must not be reachable for such a goal at all.
 		resetGoalTriggerStateForTest()
-		withShortIdleWindow(t, 2*time.Second)
 		al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		if _, ok := al.GetRegistry().GetAgent("native-agent"); !ok {
 			t.Fatal("native-agent not registered")

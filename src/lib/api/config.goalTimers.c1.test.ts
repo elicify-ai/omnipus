@@ -79,12 +79,12 @@ describe('C1 performance timer runtime contract', () => {
     ['goal_stalled_checkin_minutes', [-1, 0, 4, 1441, 5.5, '30', false]],
     ['goal_stalled_checkin_enabled', [0, 'false']],
   ] as const) {
-    it.each(values)(`generated request rejects malformed/outside ${key} case %#`, (value) => {
+    it.each<number | string | boolean>(values)(`generated request rejects malformed/outside ${key} case %#`, (value) => {
       const result = PerformanceSettingsUpdate.safeParse({ goal_max_rounds: 7, goal_stalled_checkin_enabled: false, [key]: value })
       expect(result.success).toBe(false)
       if (!result.success) expect(result.error.issues.some((issue) => issue.path[0] === key)).toBe(true)
     })
-    it.each(values)(`generated response rejects malformed/outside ${key} case %#`, (value) => {
+    it.each<number | string | boolean>(values)(`generated response rejects malformed/outside ${key} case %#`, (value) => {
       const result = PerformanceSettings.safeParse({ ...known, ...defaults, [key]: value })
       expect(result.success).toBe(false)
       if (!result.success) expect(result.error.issues.some((issue) => issue.path[0] === key)).toBe(true)

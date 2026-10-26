@@ -107,7 +107,6 @@ const parityClaimEvidence = "importer migrated, backfill verified"
 func observeGoalBehaviour(t *testing.T, ownerKind generated.GoalOwnerKind) goalBehaviourObservation {
 	t.Helper()
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 	if !ok {
@@ -437,7 +436,6 @@ func TestKeeperPromptsInstructTheAgentToClaim(t *testing.T) {
 
 	t.Run("the dispatched re-post carries the instruction", func(t *testing.T) {
 		resetGoalTriggerStateForTest()
-		withShortIdleWindow(t, 2*time.Second)
 		al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 		_, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -459,7 +457,6 @@ func TestKeeperPromptsInstructTheAgentToClaim(t *testing.T) {
 
 	t.Run("the dispatched nudge carries the instruction", func(t *testing.T) {
 		resetGoalTriggerStateForTest()
-		withShortIdleWindow(t, 2*time.Second)
 		al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 		_, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -508,7 +505,6 @@ func TestKeeperPromptsInstructTheAgentToClaim(t *testing.T) {
 // judge-active-reviewer-spec.md line 2517 (FR-097's retained push budget).
 func TestNudgeLadderHasNoTerminatorOfItsOwn(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)

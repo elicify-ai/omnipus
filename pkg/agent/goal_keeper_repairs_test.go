@@ -94,7 +94,6 @@ func rewindGoalActivityTimeOnly(t *testing.T, _ *session.UnifiedStore, sid strin
 // quiet window rather than firing again on the very next tick.
 func TestIdleSettlement_InFlightSuppression(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -140,7 +139,6 @@ func TestIdleSettlement_InFlightSuppression(t *testing.T) {
 // transcriptSessionID, which is its own distinct id post-ADR-057 D2/FR-011.
 func TestIdleSettlement_InFlightSuppression_DelegatedDescendant(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -190,7 +188,6 @@ func (f *fakeParkedCardRegistry) CancelByUser(string, string) error { return nil
 // push count consumed). Once the card clears, suppression lifts.
 func TestKeeper_ParkedCardSuppression(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -272,7 +269,6 @@ func TestAsyncNotifyEvent_SenderCanonicalID_NonGoalSourcesKeepDefault(t *testing
 // cycle can fire afterward.
 func TestKeeper_SenderGateUnwedged_TwoFullIdleCycles(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	grPrepareLegacyReminderRuntime(t, al)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
@@ -535,7 +531,6 @@ func TestKeeper_RecordlessChannelOriginGetsOneVisiblePause(t *testing.T) {
 // allow five reminders to execute, then pause visibly without judging or ending.
 func TestPushLadder_RecordedGoal_FiveUnproductiveThenVisiblePause(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	grPrepareLegacyReminderRuntime(t, al)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
