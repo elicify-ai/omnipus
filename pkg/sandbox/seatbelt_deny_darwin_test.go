@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -120,28 +121,61 @@ func TestSeatbelt_DenyEmittedForNonExistentPath(t *testing.T) {
 	}
 }
 
-// TestSeatbelt_OpenProfileKeepsIPCDefaultDeny is spec FR-10.1/FR-10.2.
+// TestSeatbelt_OpenProfileKeepsIPCDefaultDeny is spec FR-10.1/FR-10.2 (FR-10.1
+// amended 2026-10-26 by founder ruling Q125).
 //
 // A path deny does not stop a daemon-mediated read: securityd will service a
 // keychain query for a sandboxed client, and launchctl outside the sandbox
 // exfiltrates cleanly. Both are blocked ONLY by the preamble's (deny default)
 // over mach-lookup. This test exists so a future "make the toolchain work" edit
 // cannot widen mach-lookup and silently delete that protection.
+//
+// The amended FR-10.1 allows EXACTLY two mach-lookup entries, each on its own
+// line: the mDNSResponder entry (name resolution) and the per-user
+// certificate-trust service com.apple.trustd.agent. The comparison is
+// whole-LINE set equality over every mach-lookup allow in the rendered
+// profile, so a combined line — e.g. (allow mach-lookup (global-name
+// "com.apple.mDNSResponder") (global-name "com.apple.SecurityServer")) —
+// survives a Contains-style check but fails here, as does any extra
+// global-name or third service (the spec keeps com.apple.SecurityServer, secd
+// and the system com.apple.trustd denied).
 func TestSeatbelt_OpenProfileKeepsIPCDefaultDeny(t *testing.T) {
+	// Expected allow-set derived from the amended spec text (FR-10.1,
+	// docs/internal/specs/filesystem-model-inversion-spec.md), not from the
+	// implementation.
+	want := []string{
+		// The mDNSResponder entry named by FR-10.1; spelling per the shipped
+		// system preamble (finding 4), where it is the sole DNS mach-lookup.
+		`(allow mach-lookup (global-name "com.apple.mDNSResponder"))`,
+		// Quoted verbatim in FR-10.1: per-user certificate trust only.
+		`(allow mach-lookup (global-name "com.apple.trustd.agent"))`,
+	}
+	slices.Sort(want)
+
 	profile, err := renderSeatbeltProfile(openPolicy(t.TempDir()))
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
+
+	var got []string
 	for _, line := range strings.Split(profile, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "(allow mach-lookup") {
-			continue
+		// Whitespace-normalised exact lines: indentation or doubled spaces
+		// must not hide a widening, and must not falsely reject the
+		// sanctioned entries either.
+		trimmed := strings.Join(strings.Fields(line), " ")
+		if strings.Contains(trimmed, "(allow mach-lookup") {
+			got = append(got, trimmed)
 		}
-		if strings.Contains(trimmed, "com.apple.mDNSResponder") {
-			continue // the one sanctioned entry; without it name resolution dies
-		}
-		t.Errorf("open profile widens mach-lookup beyond mDNSResponder: %q — "+
-			"this re-opens the securityd and launchctl paths that no file deny can close", trimmed)
+	}
+	slices.Sort(got)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("open profile mach-lookup allow-set = %#v, want exactly %#v — "+
+			"FR-10.1 permits ONLY the mDNSResponder and com.apple.trustd.agent "+
+			"entries, each on its own line; a combined line, an extra global-name "+
+			"or any third service (com.apple.SecurityServer, secd, system "+
+			"com.apple.trustd) re-opens the securityd and launchctl paths that "+
+			"no file deny can close", got, want)
 	}
 }
 
