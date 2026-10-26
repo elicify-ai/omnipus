@@ -56,14 +56,14 @@ func TestPairingAdmission_EligibleStaleReadyCloseSurvivesTheSyncHubTap(t *testin
 	handler := newWSHandler(msgBus, al, "")
 	t.Cleanup(handler.Wait)
 
-	// The loop serves a real revision for the connector, so the eligible
-	// closer's captured revision is the served one.
-	require.NoError(t, al.MutateConfig(func(c *config.Config) error {
-		c.Channels = map[string]config.ChannelInstanceConfig{
-			"whatsapp": {Type: "whatsapp", Enabled: true},
-		}
-		return nil
-	}))
+	// Chief ruling C+D (2026-10-26): the admission-time close fires ONLY when
+	// the served config no longer contains the connector; present-but-different
+	// ⇒ refuse (that state is F1's, pinned by
+	// pkg/agent/sec_f1_pairing_stale_snapshot_test.go). The served config here
+	// therefore does NOT contain the connector — the gate r6 retirement shape
+	// gate_r6_pairing_stale_test.go uses — so this fixture's stale-ready
+	// attempt is closed by an eligible admission and the detector below guards
+	// exactly that close against the self-deadlock and the lost notice.
 
 	// An eligible stale-ready attempt: readied at a revision the served
 	// configuration has since replaced (the gate r6 shape — the next
