@@ -29,6 +29,8 @@ export function historyLayoutHeight(element: HTMLElement): number {
   const edges = [style.paddingTop, style.paddingBottom, style.borderTopWidth, style.borderBottomWidth]
   return height + edges.reduce((sum, value) => sum + (Number.parseFloat(value) || 0), 0)
 }
+type FillDirection = 'older' | 'newer'
+type FillOwner = { frame: number | null; finishLayout: (() => void) | null } // not-wire-format
 type Anchor = { position: string; offset: number; alternatives: { position: string; screenTop: number }[] } // not-wire-format
 
 function bindReaderIntent(scroller: HTMLElement, enter: () => void, dragging: { current: boolean }): () => void {
@@ -82,7 +84,12 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   // virtualizer adjustment). Such movement never ends follow-latest.
   const ownedTop = useRef<number | null>(null)
   const opening = useRef(true)
-  const fill = useRef<{ frame: number | null; finishLayout: (() => void) | null } | null>(null)
+  // D5: one fill owner per view AND per direction. A single shared owner let
+  // an in-flight older fill refuse the newer fill of a reader who jumped to the
+  // newer edge, and nothing asked again once the older fill settled (T16 B12).
+  const fills = useRef<Record<FillDirection, FillOwner | null>>({ older: null, newer: null })
+  // Re-evaluates one direction's pixel trigger; assigned below, after requestFill.
+  const evaluateFill = useRef<(direction: FillDirection) => void>(() => {})
   const [average, setAverage] = useState(80)
   const [prefix, setPrefix] = useState(0)
   const [widthGeneration, bumpWidthGeneration] = useState(0)
@@ -216,16 +223,17 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
   const requestFill = useCallback(async (direction: 'older' | 'newer', initial = false) => {
     const scroller = scrollRef.current
     const sessionId = current.current.sid
-    if (!scroller || !sessionId || fill.current || document.hidden || scroller.clientHeight <= 0) return
+    if (!scroller || !sessionId || fills.current[direction] || document.hidden || scroller.clientHeight <= 0) return
     const generation = current.current.history.viewGeneration
     const starting = new Set(current.current.history.readerPositions)
-    const owner = { frame: null as number | null, finishLayout: null as (() => void) | null }
-    fill.current = owner
+    const owner: FillOwner = { frame: null, finishLayout: null }
+    fills.current[direction] = owner
+    let committed = false
     try {
       for (;;) {
         const state = useChatStore.getState()
         const kept = state.sessionsById[sessionId]
-        if (fill.current !== owner || current.current.sid !== sessionId || document.hidden || scroller.clientHeight <= 0 || !kept || kept.isReplaying || kept.awaitingCatchUp || kept.history.viewGeneration !== generation || kept.history.requests.refresh.status !== 'idle' || kept.history.requests[direction].status === 'error') break
+        if (fills.current[direction] !== owner || current.current.sid !== sessionId || document.hidden || scroller.clientHeight <= 0 || !kept || kept.isReplaying || kept.awaitingCatchUp || kept.history.viewGeneration !== generation || kept.history.requests.refresh.status !== 'idle' || kept.history.requests[direction].status === 'error') break
         const selected = current.current.messages.filter(message => message.historyPosition && (!starting.has(message.historyPosition) || initial))
         const added = selected.reduce((sum, message) => sum + (heights.current.get(message.historyPosition!) ?? drawnHistoryRows(message, current.current.verbose) * samples.current.average), 0)
         const remaining = Math.max(0, (initial ? 4 : 2) * scroller.clientHeight - added)
@@ -236,32 +244,52 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
         size.limit = Math.min(100, Math.max(20, Math.ceil(remaining / samples.current.average)))
         size.min_rows = Math.min(size.limit, size.min_rows)
         await (direction === 'older' ? state.loadOlderHistory(sessionId, size) : state.loadNewerHistory(sessionId, size))
-        if (fill.current !== owner || document.hidden) break
+        if (fills.current[direction] !== owner || document.hidden) break
         // External-store commits must reach layout before newly drawn heights
         // can decide whether this same fill owner needs a contiguous top-up.
         await new Promise<void>(resolve => {
           owner.finishLayout = resolve
           owner.frame = requestAnimationFrame(() => { owner.frame = null; owner.finishLayout = null; resolve() })
         })
-        if (fill.current !== owner || current.current.sid !== sessionId || document.hidden) break
+        if (fills.current[direction] !== owner || current.current.sid !== sessionId || document.hidden) break
         const after = useChatStore.getState().sessionsById[sessionId]
         if (!after || after.history.viewGeneration !== generation || after.history.requests[direction].status !== 'idle' || before === (direction === 'older' ? after.history.olderBoundary : after.history.newerBoundary)) break
+        committed = true
         measure()
         const newRows = current.current.messages.filter(message => message.historyPosition && !previousPositions.has(message.historyPosition))
         if (!newRows.some(message => (heights.current.get(message.historyPosition!) ?? drawnHistoryRows(message, current.current.verbose) * samples.current.average) > 0) || previousPositions.size === 500) break
       }
     } finally {
-      if (fill.current === owner) { fill.current = null; if (initial) opening.current = false }
+      if (fills.current[direction] === owner) {
+        fills.current[direction] = null
+        if (initial) opening.current = false
+        // New content moved the geometry: ask the OTHER direction again, once,
+        // in case the reader reached its edge meanwhile. Only after a real
+        // commit, so two edges that both cannot load never ping-pong.
+        if (committed) requestAnimationFrame(() => { if (current.current.sid === sessionId) evaluateFill.current(direction === 'older' ? 'newer' : 'older') })
+      }
     }
   }, [measure, scrollRef])
 
   const cancelFill = useCallback(() => {
-    const owner = fill.current
-    fill.current = null
-    if (owner?.frame !== null && owner?.frame !== undefined) cancelAnimationFrame(owner.frame)
-    owner?.finishLayout?.()
-    if (owner) { owner.frame = null; owner.finishLayout = null }
+    for (const direction of ['older', 'newer'] as const) {
+      const owner = fills.current[direction]
+      fills.current[direction] = null
+      if (owner?.frame !== null && owner?.frame !== undefined) cancelAnimationFrame(owner.frame)
+      owner?.finishLayout?.()
+      if (owner) { owner.frame = null; owner.finishLayout = null }
+    }
   }, [])
+  useLayoutEffect(() => {
+    evaluateFill.current = (direction) => {
+      const scroller = scrollRef.current
+      const state = current.current
+      if (!scroller || !state.sid || state.history.requests.refresh.status !== 'idle') return
+      if (direction === 'older') {
+        if (historyPixelTrigger(scroller.scrollTop, scroller.clientHeight, !document.hidden)) void requestFill('older', opening.current)
+      } else if (state.history.hasLater && historyPixelTrigger(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight, scroller.clientHeight, !document.hidden)) void requestFill('newer')
+    }
+  }, [requestFill, scrollRef])
   const onScroll = useCallback(() => {
     const scroller = scrollRef.current
     const state = current.current
