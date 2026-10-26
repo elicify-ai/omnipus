@@ -202,7 +202,7 @@ func TestHistoryRepairCommand_PreflightManifestAndIdempotence(t *testing.T) {
 		require.NoError(t, err)
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(b, &m))
-		require.EqualValues(t, 1, m["schema_version"])
+		require.EqualValues(t, 2, m["schema_version"], "manifest format version 2 (link and special kinds)")
 		require.Equal(t, source, m["source_root"])
 		require.Equal(t, backup, m["backup_root"])
 		require.Regexp(t, `^[0-9a-f]{64}$`, m["canonical_fingerprint"])

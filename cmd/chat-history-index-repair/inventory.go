@@ -17,13 +17,19 @@ import (
 )
 
 // inventoryEntry is private operator evidence. It is never read by the SPA.
+//
+// Kinds: "file" (hashed), "directory", "symlink" (target string recorded, never
+// followed or opened) and "special" (socket, named pipe, device; never opened).
+// Links and special files are only accepted outside sessions/.
 type inventoryEntry struct { // not-wire-format
-	Path   string `json:"path"`
-	Kind   string `json:"kind"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256,omitempty"`
-	Mtime  string `json:"mtime_unix_ns"`
-	Mode   uint32 `json:"mode"`
+	Path        string `json:"path"`
+	Kind        string `json:"kind"`
+	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256,omitempty"`
+	LinkTarget  string `json:"link_target,omitempty"`
+	SpecialType string `json:"special_type,omitempty"`
+	Mtime       string `json:"mtime_unix_ns"`
+	Mode        uint32 `json:"mode"`
 }
 
 func validInventoryPath(path string) bool {
@@ -40,6 +46,67 @@ func validInventoryPath(path string) bool {
 func derivedInventoryPath(path string) bool {
 	parts := strings.Split(path, "/")
 	return len(parts) >= 3 && parts[0] == "sessions" && parts[1] != "" && parts[2] == session.ChatHistoryIndexDirectory
+}
+
+// strictInventoryPath reports whether path is the sessions/ subtree the tool
+// reads canonically and writes into. Case-folded so a case-insensitive file
+// system cannot route the product's sessions directory around the check.
+func strictInventoryPath(path string) bool {
+	first, _, _ := strings.Cut(path, "/")
+	return strings.EqualFold(first, "sessions")
+}
+
+// specialFileType names a non-regular, non-directory, non-link file type.
+func specialFileType(mode os.FileMode) string {
+	switch {
+	case mode&os.ModeNamedPipe != 0:
+		return "named_pipe"
+	case mode&os.ModeSocket != 0:
+		return "socket"
+	case mode&os.ModeDevice != 0 && mode&os.ModeCharDevice != 0:
+		return "char_device"
+	case mode&os.ModeDevice != 0:
+		return "block_device"
+	default:
+		return "irregular"
+	}
+}
+
+// linkOrSpecialEntry records a symbolic link or special file outside
+// sessions/ from its own lstat metadata. A link is never followed and a
+// special file is never opened (an open of a named pipe can block forever).
+func linkOrSpecialEntry(path, rel string, d os.DirEntry) (inventoryEntry, error) {
+	info, err := d.Info()
+	if err != nil {
+		return inventoryEntry{}, integrity("io_error", err)
+	}
+	e := inventoryEntry{Path: rel, Mode: uint32(info.Mode().Perm()), Mtime: strconv.FormatInt(info.ModTime().UnixNano(), 10)}
+	switch mode := info.Mode(); {
+	case mode&os.ModeSymlink != 0:
+		target, err := os.Readlink(path)
+		if err != nil {
+			return e, integrity("io_error", err)
+		}
+		// The manifest stores the target as a JSON string; a target that
+		// cannot round-trip losslessly is refused like a non-UTF-8 name.
+		if target == "" || !utf8.ValidString(target) || strings.ContainsRune(target, 0) {
+			return e, refusal("unsafe_path")
+		}
+		after, err := os.Lstat(path)
+		if err != nil {
+			return e, integrity("io_error", err)
+		}
+		if !os.SameFile(info, after) || after.Mode() != info.Mode() || !after.ModTime().Equal(info.ModTime()) {
+			return e, refusal("source_changed")
+		}
+		e.Kind, e.LinkTarget = "symlink", target
+	case mode.IsDir() || mode.IsRegular():
+		// Directory entry type and lstat disagree: the entry changed under us.
+		return e, refusal("source_changed")
+	default:
+		e.Kind, e.SpecialType = "special", specialFileType(mode)
+	}
+	return e, nil
 }
 func inventoryTree(ctx context.Context, root string, canonicalOnly bool) ([]inventoryEntry, error) {
 	entries := make([]inventoryEntry, 0)
@@ -63,8 +130,18 @@ func inventoryTree(ctx context.Context, root string, canonicalOnly bool) ([]inve
 			return refusal("unsafe_path")
 		}
 		seen[strings.ToLower(rel)] = true
-		if d.Type()&os.ModeSymlink != 0 {
-			return refusal("unsafe_kind")
+		if !d.IsDir() && !d.Type().IsRegular() {
+			// Links and special files are refused inside sessions/ (read
+			// canonically and written by apply) and recorded elsewhere.
+			if strictInventoryPath(rel) {
+				return refusal("unsafe_kind")
+			}
+			e, err := linkOrSpecialEntry(path, rel, d)
+			if err != nil {
+				return err
+			}
+			entries = append(entries, e)
+			return nil
 		}
 		if canonicalOnly && derivedInventoryPath(rel) {
 			if !d.IsDir() {
@@ -122,7 +199,16 @@ func canonicalFingerprint(entries []inventoryEntry) string {
 		if e.Kind == "directory" {
 			mtime = ""
 		}
-		writeTuple(h, e.Path, e.Kind, strconv.FormatInt(e.Size, 10), e.SHA256, mtime)
+		values := []string{e.Path, e.Kind, strconv.FormatInt(e.Size, 10), e.SHA256, mtime}
+		// Kind precedes these fields, so the length-prefixed stream stays
+		// unambiguous; file/directory tuples are unchanged from version 1.
+		switch e.Kind {
+		case "symlink":
+			values = append(values, e.LinkTarget)
+		case "special":
+			values = append(values, e.SpecialType)
+		}
+		writeTuple(h, values...)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -151,13 +237,18 @@ func inventoriesEqual(a, b []inventoryEntry, canonicalOnly bool) bool {
 	}
 	return true
 }
-func inventoryCounts(entries []inventoryEntry) (files, directories int) {
+func inventoryCounts(entries []inventoryEntry) (files, directories, symlinks, special int) {
 	for _, e := range entries {
-		if e.Kind == "file" {
+		switch e.Kind {
+		case "file":
 			files++
-		} else {
+		case "directory":
 			directories++
+		case "symlink":
+			symlinks++
+		default:
+			special++
 		}
 	}
-	return files, directories
+	return files, directories, symlinks, special
 }

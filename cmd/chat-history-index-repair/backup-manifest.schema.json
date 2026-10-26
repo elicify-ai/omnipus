@@ -5,7 +5,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "source_root", "backup_root", "created_at", "tool_commit", "entries", "canonical_fingerprint"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "source_root": {"type": "string", "minLength": 1},
     "backup_root": {"type": "string", "minLength": 1},
     "created_at": {"type": "string", "format": "date-time"},
@@ -19,13 +19,20 @@
         "required": ["path", "kind", "size", "mtime_unix_ns", "mode"],
         "properties": {
           "path": {"type": "string", "minLength": 1},
-          "kind": {"enum": ["file", "directory"]},
+          "kind": {"enum": ["file", "directory", "symlink", "special"]},
           "size": {"type": "integer", "minimum": 0},
           "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "link_target": {"type": "string", "minLength": 1},
+          "special_type": {"enum": ["named_pipe", "socket", "char_device", "block_device", "irregular"]},
           "mtime_unix_ns": {"type": "string", "pattern": "^(0|-?[1-9][0-9]*)$"},
           "mode": {"type": "integer", "minimum": 0, "maximum": 4095}
         },
-        "allOf": [{"if": {"properties": {"kind": {"const": "directory"}}}, "then": {"properties": {"size": {"const": 0}}, "not": {"required": ["sha256"]}}, "else": {"required": ["sha256"]}}]
+        "allOf": [
+          {"if": {"properties": {"kind": {"const": "file"}}}, "then": {"required": ["sha256"], "not": {"anyOf": [{"required": ["link_target"]}, {"required": ["special_type"]}]}}},
+          {"if": {"properties": {"kind": {"const": "directory"}}}, "then": {"properties": {"size": {"const": 0}}, "not": {"anyOf": [{"required": ["sha256"]}, {"required": ["link_target"]}, {"required": ["special_type"]}]}}},
+          {"if": {"properties": {"kind": {"const": "symlink"}}}, "then": {"required": ["link_target"], "properties": {"size": {"const": 0}}, "not": {"anyOf": [{"required": ["sha256"]}, {"required": ["special_type"]}]}}},
+          {"if": {"properties": {"kind": {"const": "special"}}}, "then": {"required": ["special_type"], "properties": {"size": {"const": 0}}, "not": {"anyOf": [{"required": ["sha256"]}, {"required": ["link_target"]}]}}}
+        ]
       }
     }
   }

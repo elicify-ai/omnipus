@@ -13,6 +13,10 @@ import (
 	"time"
 )
 
+// manifestSchemaVersion 2 added the "symlink" and "special" entry kinds with
+// their link_target / special_type fields. Only the current version is read.
+const manifestSchemaVersion = 2
+
 type backupManifest struct { // not-wire-format: private operator inventory
 	SchemaVersion        int              `json:"schema_version"`
 	SourceRoot           string           `json:"source_root"`
@@ -48,12 +52,12 @@ func produceManifest(ctx context.Context, a repairArgs, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	m := backupManifest{SchemaVersion: 1, SourceRoot: a.root, BackupRoot: a.backup, CreatedAt: time.Now().UTC().Format(time.RFC3339), ToolCommit: commit, Entries: copyEntries, CanonicalFingerprint: canonicalFingerprint(source)}
+	m := backupManifest{SchemaVersion: manifestSchemaVersion, SourceRoot: a.root, BackupRoot: a.backup, CreatedAt: time.Now().UTC().Format(time.RFC3339), ToolCommit: commit, Entries: copyEntries, CanonicalFingerprint: canonicalFingerprint(source)}
 	if err = writeRepairJSON(a.output, "backup-manifest.schema.json", m); err != nil {
 		return err
 	}
-	files, dirs := inventoryCounts(copyEntries)
-	fmt.Fprintf(out, "mode=manifest files=%d directories=%d entries=%d verified=1\n", files, dirs, len(copyEntries))
+	files, dirs, links, special := inventoryCounts(copyEntries)
+	fmt.Fprintf(out, "mode=manifest files=%d directories=%d symlinks=%d special=%d entries=%d verified=1\n", files, dirs, links, special, len(copyEntries))
 	return nil
 }
 func loadBackupManifest(a repairArgs) (backupManifest, error) {
@@ -68,7 +72,7 @@ func loadBackupManifest(a repairArgs) (backupManifest, error) {
 	var version struct {
 		Version int `json:"schema_version"`
 	}
-	if json.Unmarshal(b, &version) == nil && version.Version != 1 {
+	if json.Unmarshal(b, &version) == nil && version.Version != manifestSchemaVersion {
 		return m, refusal("unsupported_manifest_version")
 	}
 	if err = validateRepairJSON("backup-manifest.schema.json", b, &m); err != nil {

@@ -66,8 +66,28 @@ synthetic-only success or direct publisher call is not that evidence.
 Every filesystem operand must be an explicit canonical absolute native path.
 There is no default home. The full backup must be separate from, and neither
 inside nor an alias of, the source. Put binding, receipt, manifest, optional plan
-and optional scratch outside **both** trees. Resolve paths before use; symlink
-or special-file inventories are refused rather than silently skipped.
+and optional scratch outside **both** trees. Resolve paths before use.
+
+Symbolic links and special files (sockets, named pipes, devices) are handled by
+where they sit in the data root:
+
+| Location | Handling |
+| --- | --- |
+| Under `sessions/` | Refused with `unsafe_kind` (exit 2). The command reads this subtree canonically and writes indexes into it. |
+| Anywhere else (for example a workspace's link to the user's Desktop, browser-profile `Singleton*` links, toolchain `.bin` links) | Recorded, never followed and never opened. A link is inventoried as itself — its exact target text, permission mode and its own modification time — and nothing behind it is inventoried, even when it points outside the data root. A special file is inventoried by its type, mode and modification time. |
+
+The backup must therefore preserve links **as links** with the identical target
+text and modification time, and recreate special files as the same type,
+rather than following or skipping them. A missing link, a different target, or
+a regular file or folder in a link's place refuses the manifest
+(`backup_incomplete`) and later verification (`backup_tampered`). On macOS,
+`cp -a` was checked to preserve link targets, link modes and nanosecond link
+modification times, and to copy named pipes; it does **not** copy sockets (it
+prints `is a socket (not copied)` yet still exits 0), and the bundled
+`openrsync` drops sub-second times. If the stopped instance's data root still
+contains a socket, a `cp -a` copy lacks it and the manifest step refuses with
+`backup_incomplete` until the copy holds a socket at the same path with the
+same mode and modification time.
 
 The examples below use isolated workspace locations. Set the variables to the
 verified instance, its actual native executable and separate evidence locations;
@@ -99,7 +119,7 @@ they contain operator paths, process identities and full inventory digests.
 | 1. Dry-run first | `"$TOOL" dry-run --data-root "$ROOT"`. No prior backup or stopped receipt is required. Default dry-run writes nothing anywhere; it prints deterministic session plans and refusal classes. A plan from a running instance is advisory, not a frozen source snapshot. |
 | 2. Handle unconverted data first | An `unconverted` refusal (exit 2) means use the compatible product's **normal boot**, which owns the established saved-chat cutover, before indexing. The repair command never runs conversion. If normal cutover fails, stop and report it. Preserve any pre-cutover backup as rollback evidence, then repeat dry-run and take a **fresh post-cutover authoritative full backup**. Never index half-converted data or use the old backup as the new equality baseline. |
 | 3. Capture while running | `"$TOOL" stopped-receipt --capture-instance --data-root "$ROOT" --gateway-executable "$GATEWAY" --operator "$OPERATOR" --output "$BINDING"`. This requires the actual existing gateway PID file and a positively identified running native process. It is an instance binding, **not** a stopped receipt. |
-| 4. Full count-verified backup | Take an actual complete instance copy, preserving every file's bytes, permissions and modification time and the directory inventory. Include configuration, encrypted credentials, uploads, session metadata, archives, dispositions and preexisting indexes. The command does **not** make the copy. Run `"$TOOL" manifest --data-root "$ROOT" --backup-root "$BACKUP" --output "$MANIFEST"` against that real copy. Record independently matching file and directory counts as well as hashes/modes/times, not just a success flag. |
+| 4. Full count-verified backup | Take an actual complete instance copy, preserving every file's bytes, permissions and modification time and the directory inventory, with links copied as links (not followed) — see the table above. Include configuration, encrypted credentials, uploads, session metadata, archives, dispositions and preexisting indexes. The command does **not** make the copy. Run `"$TOOL" manifest --data-root "$ROOT" --backup-root "$BACKUP" --output "$MANIFEST"` against that real copy. It prints `files`, `directories`, `symlinks`, `special` and total `entries` counts. Record independently matching counts as well as hashes/modes/times/link targets, not just a success flag. |
 | 5. Quiet window and actual stop | Tell the chief not to touch the instance/data. On macOS, boot out the verified live launchd service so KeepAlive cannot restart it. Independently observe actual process exit. On every platform disable the applicable restart authority operationally; the command does not inspect or control service managers. |
 | 6. Recheck stopped source | Graceful PID removal and shutdown writes invalidate a backup made while running. If equality changed, refuse; repeat dry-run and take a fresh complete count-verified backup/manifest **while stopped**. There is deliberately no PID-file exclusion. Do not edit a manifest to hide drift. |
 | 7. Produce stopped receipt | `"$TOOL" stopped-receipt --data-root "$ROOT" --instance-binding "$BINDING" --operator "$OPERATOR" --output "$RECEIPT"`. The same root object and bound native process must be checkable. A missing PID file or bootout's return code alone is not proof. The producer leaves either an absent PID file or the exact captured stale bytes unchanged. |
@@ -136,13 +156,13 @@ The shared engine safely replaces its own unfinished derived publication state
 and retains a valid prior generation until a replacement is complete. Public
 occurrence tokens remain stable only when final canonical bytes are unchanged.
 
-## Private v1 formats and full backup verification
+## Private formats and full backup verification
 
 The authoritative private JSON schemas ship alongside the command source:
 
 | Schema | Contents |
 | --- | --- |
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2/cmd/chat-history-index-repair/backup-manifest.schema.json` | Version 1; exact source/backup roots, UTC creation time, actual built-tool commit, sorted non-null complete entries and canonical fingerprint. Each normalized relative UTF-8 path has kind, size, permission mode and nanosecond modification time as a lossless decimal string; files include their actual lowercase SHA-256, including the real empty digest for zero bytes. Directories have size 0 and no digest. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2/cmd/chat-history-index-repair/backup-manifest.schema.json` | Version 2; exact source/backup roots, UTC creation time, actual built-tool commit, sorted non-null complete entries and canonical fingerprint. Each normalized relative UTF-8 path has kind (`file`, `directory`, `symlink` or `special`), size, permission mode and nanosecond modification time as a lossless decimal string; files include their actual lowercase SHA-256, including the real empty digest for zero bytes. Directories have size 0 and no digest. A `symlink` has size 0, no digest and its exact `link_target` text (a target that is not valid UTF-8 is refused as `unsafe_path`). A `special` entry has size 0, no digest and a `special_type` (`named_pipe`, `socket`, `char_device`, `block_device` or `irregular`). Version 1 manifests (written before link support) are refused with `unsupported_manifest_version`; produce a new manifest. |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2/cmd/chat-history-index-repair/instance-binding.schema.json` | Version/type, canonical root and PID-file path, native directory-object identity, actual positive captured PID, hash of exact PID-file bytes, native process-birth identity, native executable, UTC capture time, operator, actual tool commit and derived instance ID. |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2/cmd/chat-history-index-repair/stopped-receipt.schema.json` | Version/type, matching root/instance/PID, hash of the actual binding bytes, absent/same-stale PID-file state, UTC native inspection time, operator and actual tool commit. |
 
@@ -162,7 +182,9 @@ files, including the gateway PID file, remain covered. Directory modification
 times do not enter canonical equality because permitted index creation changes
 its parent directory's time. Directory names/kinds and modes still compare.
 The fingerprint's sorted length-prefixed tuple includes path, kind, canonical
-size, digest and file mtime; directory mtime is encoded as empty. It is not a
+size, digest and file mtime; directory mtime is encoded as empty. A `symlink`
+tuple adds its link target and a `special` tuple adds its type, so a retargeted
+link is detected as drift. It is not a
 user assertion that a backup succeeded.
 
 ## Outcomes and exit codes
