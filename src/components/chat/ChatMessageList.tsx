@@ -1,5 +1,5 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { elementScroll, useVirtualizer } from '@tanstack/react-virtual'
 import { ThreadPrimitive } from '@assistant-ui/react'
 import type { ChatMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
@@ -16,8 +16,8 @@ import { RoomTrafficMessage } from './RoomTrafficEntry'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { SystemMessage, VirtualSystemMessageRow } from './SystemMessageRows'
 import { placementOf, useSkillChipData, VirtualUserMessageRow, VirtualAssistantMessageRow, StreamingDelegation, VirtualizerAutoFollow, UserMessage, AssistantMessage } from './ChatScreen'
-import { HistoryBoundary, HistoryReaderStatus } from './HistoryBoundary'
-import { drawnHistoryRows, useHistoryViewport } from './useHistoryViewport'
+import { FloatingReturnToLatest, HistoryBoundary, HistoryReaderStatus } from './HistoryBoundary'
+import { drawnHistoryRows, historyLayoutHeight, useHistoryViewport } from './useHistoryViewport'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 
 function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
@@ -116,6 +116,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
         </div>
         <HistoryBoundary action="newer" average={viewport.average} />
         {!viewport.historical && <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />}
+        <FloatingReturnToLatest />
       </div>
     </div>
   )
@@ -190,8 +191,19 @@ function VirtualizedMessageListInner({
     getItemKey,
     scrollMargin: viewport.prefix,
     overscan: 5,
-    // measureElement default (rounded ResizeObserver border box, else offsetHeight) is
-    // correct; useHistoryViewport samples the same transform-independent layout size.
+    // A virtualizer size adjustment is an application-owned placement: it must
+    // not read as the reader scrolling away from the live end.
+    scrollToFn: (offset, options, instance) => { elementScroll(offset, options, instance); viewport.claimScroll() },
+    // The default measureElement rounds every row to whole pixels, so D5
+    // prefixes drifted by the sum of that rounding. Measure the same unrounded,
+    // transform-independent layout size useHistoryViewport samples; like the
+    // default, a call without an observer entry keeps an existing measurement.
+    measureElement: (element, entry, instance) => {
+      const box = entry?.borderBoxSize?.[0]
+      if (box) return box.blockSize
+      const cached = instance.itemSizeCache.get(instance.options.getItemKey(instance.indexFromElement(element)))
+      return cached ?? historyLayoutHeight(element as HTMLElement)
+    },
   })
 
   virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => !viewport.historical
@@ -330,6 +342,7 @@ function VirtualizedMessageListInner({
         )}
         <HistoryBoundary action="newer" average={viewport.average} />
         {!viewport.historical && <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />}
+        <FloatingReturnToLatest />
       </div>
     </ThreadPrimitive.Viewport>
   )
