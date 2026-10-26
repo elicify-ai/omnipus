@@ -1,0 +1,62 @@
+{
+  "session_id": "1435-round3-session",
+  "turn_id": "1435-round3-turn",
+  "message_id": "1435-round3-reply",
+  "notice_index": 1,
+  "provider_was_held": true,
+  "frames": [
+    {
+      "agent_id": "mia",
+      "content": "Continue processing the text even if the attachment is unavailable.",
+      "id": "415b39f5-f190-4427-97ab-b9a8e829f909",
+      "seq": 2,
+      "session_id": "1435-round3-session",
+      "timestamp": "2026-10-26T00:00:00Z",
+      "type": "user_message"
+    },
+    {
+      "message": "That attachment is no longer available — Omnipus no longer has its stored copy. Please re-attach the file and send it again.",
+      "payload": {
+        "llm_error": {
+          "code": "media_unavailable",
+          "detail": "That attachment is no longer available — Omnipus no longer has its stored copy. Please re-attach the file and send it again.",
+          "message": "That attachment is no longer available — Omnipus no longer has its stored copy. Please re-attach the file and send it again.",
+          "retryable": false
+        }
+      },
+      "seq": 3,
+      "session_id": "1435-round3-session",
+      "type": "error"
+    },
+    {
+      "agent_id": "mia",
+      "content": "Working on the remaining request.",
+      "message_id": "1435-round3-reply",
+      "seq": 4,
+      "session_id": "1435-round3-session",
+      "turn_id": "1435-round3-turn",
+      "type": "token"
+    },
+    {
+      "agent_id": "mia",
+      "content": " Still progressing.",
+      "message_id": "1435-round3-reply",
+      "seq": 5,
+      "session_id": "1435-round3-session",
+      "turn_id": "1435-round3-turn",
+      "type": "token"
+    },
+    {
+      "message_id": "1435-round3-reply",
+      "seq": 6,
+      "session_id": "1435-round3-session",
+      "stats": {
+        "cost": 0,
+        "duration_ms": 1,
+        "tokens": 0
+      },
+      "turn_id": "1435-round3-turn",
+      "type": "done"
+    }
+  ]
+}
