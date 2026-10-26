@@ -331,6 +331,15 @@ type Library struct {
 	workspaceID string
 	manifest    map[string]manifestEntry
 	now         func() time.Time
+	// deletedNames remembers the original filename of recently deleted
+	// entries (issue #1435 R4 item 2): once an entry is gone, a failed
+	// resolution can still name the lost file in the typed
+	// media_unavailable notice and its model-facing marker instead of an
+	// opaque UUID. In-memory by design — after a gateway restart the
+	// marker falls back to the ref, while the persisted notice keeps the
+	// re-attach remedy. Bounded by maxDeletedNames with FIFO eviction.
+	deletedNames      map[string]string
+	deletedNamesOrder []string
 	// removeFile and renameFile are the quarantine-pattern's final-unlink
 	// and rename primitives (Delete, CascadeDelete, OrphanGC and their
 	// rollback paths). They default to os.Remove/os.Rename in New() and
@@ -453,6 +462,7 @@ func New(home, workspaceID string, options ...Option) (*Library, error) {
 		renameFile:      os.Rename,
 		writeManifest:   fileutil.WriteFileAtomic,
 		inFlightUploads: make(map[string]struct{}),
+		deletedNames:    make(map[string]string),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -817,6 +827,7 @@ func (l *Library) ResolvePathWithCaller(
 	l.mu.RLock()
 	entry, exists := l.manifest[mediaID]
 	_, stranded := l.stranded[mediaID]
+	deletedName := l.deletedNames[mediaID]
 	l.mu.RUnlock()
 	if stranded {
 		// See Read's identical guard — ResolvePathWithCaller is the
@@ -828,6 +839,13 @@ func (l *Library) ResolvePathWithCaller(
 		return "", media.MediaMeta{}, fmt.Errorf("%w: %s", ErrEntryStranded, mediaID)
 	}
 	if !exists {
+		// Issue #1435 R4 item 2: a tombstoned deletion carries the lost
+		// file's name so the downstream notice can name it; the
+		// DeletedEntryError still unwraps to ErrNotFound for every
+		// existing errors.Is consumer.
+		if deletedName != "" {
+			return "", media.MediaMeta{}, &DeletedEntryError{ID: mediaID, Filename: deletedName}
+		}
 		return "", media.MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, mediaID)
 	}
 	return l.rawPath(mediaID), media.MediaMeta{
@@ -1004,8 +1022,53 @@ func (l *Library) Delete(id string) (gen.MediaLibraryEntry, error) {
 			return previousEntry.projection(), fmt.Errorf("media library: delete final unlink %s: %w", id, removeErr)
 		}
 	}
+	// Issue #1435 R4 item 2: remember the deleted entry's filename so a
+	// later failed resolution can name the lost file in the typed
+	// media_unavailable notice and its model-facing marker instead of an
+	// opaque UUID. In-memory, bounded, best-effort: the delete itself is
+	// already committed at this point.
+	l.recordDeletedName(id, previousEntry.filename)
 	return previousEntry.projection(), nil
 }
+
+// maxDeletedNames bounds the deleted-name tombstone map (FIFO eviction).
+const maxDeletedNames = 1024
+
+// recordDeletedName stores one deleted entry's filename under its id,
+// evicting the oldest tombstone past the bound. Caller holds l.mu.
+func (l *Library) recordDeletedName(id, filename string) {
+	if filename == "" {
+		return
+	}
+	if _, exists := l.deletedNames[id]; !exists {
+		l.deletedNamesOrder = append(l.deletedNamesOrder, id)
+		for len(l.deletedNamesOrder) > maxDeletedNames {
+			evict := l.deletedNamesOrder[0]
+			l.deletedNamesOrder = l.deletedNamesOrder[1:]
+			delete(l.deletedNames, evict)
+		}
+	}
+	l.deletedNames[id] = filename
+}
+
+// DeletedEntryError marks a library entry that was DELETED: ErrNotFound
+// semantics for every errors.Is consumer (unchanged routing), plus the
+// recorded filename so a failure notice can still name the lost file
+// (issue #1435 R4 item 2). Filename is empty when no tombstone exists
+// (entry never existed, or the gateway restarted since the delete).
+type DeletedEntryError struct {
+	ID       string
+	Filename string
+}
+
+func (e *DeletedEntryError) Error() string {
+	if e.Filename != "" {
+		return fmt.Sprintf("media library: entry %s not found (deleted file was %q)", e.ID, e.Filename)
+	}
+	return fmt.Sprintf("media library: entry %s not found", e.ID)
+}
+
+func (e *DeletedEntryError) Unwrap() error { return ErrNotFound }
 
 // CascadeDelete removes every entry in the library and returns the summary
 // the caller needs to emit a media.cascade_delete audit event. Each entry

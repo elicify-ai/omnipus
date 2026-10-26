@@ -73,12 +73,21 @@ export function handleJudgeConclusionErrorFrame(frame: Frame, withBucket: WithBu
  * Routing it through the terminal error sweep stopped the turn, cleared the
  * active-turn identity, replaced the pending reply and drained queued
  * input mid-provider. Same non-terminal shape as the judge-conclusion
- * handler above. Live error frames only: the persisted entry renders
- * through the ordinary replay path on reload.
+ * handler above.
+ *
+ * Issue #1435 R4 item 1 (SFH HIGH): the PERSISTED notice replays as
+ * `replay_error` and gets the same non-terminal treatment — it becomes its
+ * own separate notice entry and must never merge into, overwrite or close
+ * an earlier truncated entry or a streaming reply (a replay window can
+ * open while a live turn is still running). The entry-id dedupe in
+ * appendErrorNotice keeps a replayed notice from doubling with its live
+ * twin. Handler runs before the generic replay path in handleFrame.
  */
 export function handleMediaUnavailableNoticeFrame(frame: Frame, withBucket: WithBucket): boolean {
-  if (frame.type !== 'error') return false
-  const llmError = readLLMErrorFromFrame(frame)
+  if (frame.type !== 'error' && frame.type !== 'replay_error') return false
+  const llmError = frame.type === 'error'
+    ? readLLMErrorFromFrame(frame)
+    : readLLMErrorFromReplayFrame(frame)
   if (llmError?.code !== 'media_unavailable') return false
   const { message, detail } = getLLMErrorDisplay(
     llmError,

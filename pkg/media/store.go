@@ -349,15 +349,58 @@ func (s *FileMediaStore) resolveWorkspaceRef(ref string, opts ResolveOpts) (stri
 // wrapped in ErrNotFound so callers (e.g. the gateway's serveMedia) can
 // distinguish this routine "never existed" case from a genuine resolution
 // failure elsewhere in the same function family — see ErrNotFound's doc.
+//
+// Issue #1435 R4: a mapping whose stored file is CONFIRMED missing is
+// released at the moment the lie is detected. The conversation-lifetime pin
+// holds while the bytes exist; a session-removal path that never reached
+// this store — the retention sweep cascade-deletes the uploads dir, and a
+// gateway with the media cleaner disabled never runs the release pass —
+// would otherwise leave the dead mapping live until process end (the
+// LoadRegistry boot-time drop only helps after a restart). Only a confirmed
+// absence releases (R3 item 3 discipline): a temporary stat fault keeps the
+// pin and fails this one resolution.
 func (s *FileMediaStore) resolveLegacyWithMeta(ref string) (string, MediaMeta, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	entry, ok := s.refs[ref]
+	s.mu.RUnlock()
 	if !ok {
 		return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
 	}
+	if _, statErr := os.Stat(entry.path); errors.Is(statErr, fs.ErrNotExist) {
+		s.releaseConfirmedDeadRef(ref, entry)
+		return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
+	}
 	return entry.path, entry.meta, nil
+}
+
+// releaseConfirmedDeadRef drops a mapping whose stored file is confirmed
+// missing (single-ref counterpart of CleanExpired's phase-1 release). The
+// re-check under the write lock makes concurrent resolvers idempotent:
+// whoever releases first wins, the rest observe an already-removed ref.
+func (s *FileMediaStore) releaseConfirmedDeadRef(ref string, entry mediaEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, alive := s.refs[ref]; !alive {
+		return
+	}
+	if scope, ok := s.refToScope[ref]; ok {
+		if scopeRefs, ok := s.scopeToRefs[scope]; ok {
+			delete(scopeRefs, ref)
+			if len(scopeRefs) == 0 {
+				delete(s.scopeToRefs, scope)
+			}
+		}
+	}
+	if _, shouldDelete := s.releaseRefLocked(ref, entry.path); shouldDelete {
+		// The stat above already confirmed the file is gone; nothing to
+		// remove — the mapping is the only thing being released.
+		logger.WarnCF("media", "resolve: released confirmed-dead mapping whose store-managed file is also gone",
+			map[string]any{"ref": ref, "path": entry.path})
+	} else {
+		logger.WarnCF("media", "resolve: released confirmed-dead pinned mapping (stored file no longer exists)",
+			map[string]any{"ref": ref, "path": entry.path})
+	}
+	s.scheduleSave()
 }
 
 // ReleaseAll removes all files under the given scope and cleans up mappings.

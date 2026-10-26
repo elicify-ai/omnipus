@@ -128,7 +128,21 @@ func resolveMediaRefsWithOffload(
 				// the live notice and the persisted replay entry — the model
 				// alone must never be the only channel a lost attachment is
 				// reported through.
-				if errors.Is(err, media.ErrNotFound) {
+				//
+				// Issue #1435 R4 item 2: a DELETED workspace-library entry is
+				// the same accepted-then-lost cause — the workspace resolver
+				// forwards library.ErrNotFound unwrapped (resolveWorkspaceRef
+				// deliberately leaves provider errors unwrapped so callers
+				// can tell them apart). ErrWorkspaceMismatch and every other
+				// library error are different causes with different remedies
+				// and never reach this notifier. The library tombstones the
+				// deleted entry's filename, so the marker names the lost FILE
+				// (accepted.png), not an opaque UUID.
+				var deletedEntry *library.DeletedEntryError
+				if errors.As(err, &deletedEntry) && deletedEntry.Filename != "" {
+					name = sanitizeInjectedName(deletedEntry.Filename)
+				}
+				if errors.Is(err, media.ErrNotFound) || errors.Is(err, library.ErrNotFound) {
 					for _, notify := range missingRefNotifier {
 						if notify != nil {
 							notify(ref)

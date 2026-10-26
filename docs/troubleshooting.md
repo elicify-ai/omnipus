@@ -345,7 +345,7 @@ If an image still cannot be made to fit, or an accepted attachment can no longer
 | Notice | Meaning and next step |
 |---|---|
 | "An image in this conversation is too large for this model's size limit…" | The provider rejected the image for its size, even after automatic resizing. Send a smaller image — for example capture a viewport screenshot instead of a full-page capture of a very long page — or switch to a model with a larger image limit. Technical detail is available live under **Verbose chat**. |
-| "That attachment is no longer available…" | Omnipus no longer has the stored copy of a file it accepted earlier. Attach the file again and send it again. |
+| "That attachment is no longer available…" | Omnipus no longer has the stored copy of a file it accepted earlier. Attach the file again and send it again. This notice is informational — it does not end the agent's turn — and it appears as its own separate entry when you reopen the chat. |
 
 Things to watch:
 
