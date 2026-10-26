@@ -189,3 +189,82 @@ describe('Q7/r21 saved-on-page guard preserves an old witnessed reply alongside 
     expect(bucket().isStreaming).toBe(true)
   })
 })
+
+it('r26 same-ID guard: saved membership preserves the witnessed body before a different active turn emits its first token', () => {
+  // D4: live text wins overlaps without losing still-unpersisted output.
+  // D7: authoritative active_turn need not have produced any projection yet.
+  // Unlike r21-a, NO new-turn token can close the old streaming candidate.
+  const savedId = 'r26-same-id-reply'
+  const oldTurn = 'r26-witnessed-turn'
+  transport = historyTransport()
+  transport.attach()
+  const initial = page([question], { rows: 1 })
+  expectValidPage(initial, [pos(1)], 1)
+  transport.deliver(
+    { ...snapshot(initial), seq: 4, boot_id: 'boot-1' }, state(), replay(question),
+    { type: 'done', session_id: SID },
+    { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-1', mode: 'snapshot' },
+  )
+  transport.deliver({ type: 'token', session_id: SID, turn_id: oldTurn, agent_id: 'mia',
+    message_id: savedId, content: WITNESSED_BODY, seq: 5 })
+  expect(bucket().messagesById[savedId], 'instrument: the old body was actually witnessed live').toMatchObject({
+    id: savedId, role: 'assistant', content: WITNESSED_BODY, turnId: oldTurn, agentId: 'mia',
+    status: 'streaming', isStreaming: true,
+  })
+  expect(bucket().messagesById[savedId].historyPosition).toBeUndefined()
+  expect(bucket().messagesById[savedId].mergedReplayIds, 'same-ID protection must not depend on an alias').toBeUndefined()
+
+  transport.connection.disconnect()
+  transport = historyTransport()
+  transport.attach()
+  const saved = entry(2, { id: savedId, role: 'assistant', content: SAVED_PREFIX, agent_id: 'mia', turn_id: oldTurn })
+  const latest = page([question, saved], { rows: 2 })
+  expectValidPage(latest, [pos(1), pos(2)], 2)
+  expect(latest.entries.map(row => row.id), 'instrument: this exact saved ID, not an alias, is on the page').toStrictEqual(['saved-question', savedId])
+
+  // Real transport releases the batch at COMPLETE. Observe the real store's
+  // session_state update within that batch, before the historical commit;
+  // never seed private witness/streaming/alias flags to reach the predicate.
+  const beforeCommit: ReturnType<typeof bucket>[] = []
+  const unsubscribe = useChatStore.subscribe(current => {
+    const b = current.sessionsById[SID]
+    if (!beforeCommit.length && b?.activeTurnId === CURRENT_TURN && b.awaitingCatchUp && b.cursor?.bootId === 'boot-1') {
+      beforeCommit.push(structuredClone(b))
+    }
+  })
+  try {
+    transport.deliver(
+      { ...snapshot(latest, 'boot_mismatch'), seq: 10, boot_id: 'boot-2' }, state(CURRENT_TURN),
+      replay(question), replay(saved), { type: 'done', session_id: SID },
+      { type: 'catch_up_complete', session_id: SID, seq: 10, boot_id: 'boot-2', mode: 'snapshot' },
+    )
+  } finally {
+    unsubscribe()
+  }
+  expect(beforeCommit, 'instrument: real authoritative current state applied before the page commit').toHaveLength(1)
+  const held = beforeCommit[0]
+  expect(held.activeTurnId).toBe(CURRENT_TURN)
+  expect(held.wipedOpenTurnIds, 'instrument: the snapshot witnessed the candidate old turn still open').toStrictEqual([oldTurn])
+  expect(held.messagesById[savedId], 'instrument: all non-membership drop conditions still hold before commit').toMatchObject({
+    id: savedId, role: 'assistant', content: WITNESSED_BODY, turnId: oldTurn, agentId: 'mia',
+    status: 'streaming', isStreaming: true,
+  })
+  expect(held.messagesById[savedId].historyPosition).toBeUndefined()
+  expect(held.messagesById[savedId].mergedReplayIds).toBeUndefined()
+  expect(held.messagesById[CURRENT_REPLY], 'the active new turn has not emitted a token').toBeUndefined()
+
+  expect(bucket().history.historyLoaded, 'the real page commit succeeded, not a rejected or incomplete reconstruction').toBe(true)
+  expect(bucket().history.readerPositions).toStrictEqual([pos(1), pos(2)])
+  expect(bucket().cursor).toStrictEqual({ bootId: 'boot-2', seq: 10 })
+  expect(bucket().messagesById[savedId],
+    'D4/D7: same-ID membership keeps the witnessed body, never deletes it and reconstructs only the older saved prefix').toMatchObject({
+    id: savedId, role: 'assistant', content: WITNESSED_BODY, turnId: oldTurn, agentId: 'mia', historyPosition: pos(2),
+  })
+  expect(bucket().messageOrder, 'one saved occurrence retains one existing display identity').toStrictEqual(['saved-question', savedId])
+  expect(bucket().historySourceAliases?.[pos(2)]).toBe(savedId)
+  expect(bucket().messagesById[savedId].mergedReplayIds).toBeUndefined()
+  expect(bucket().activeTurnId, 'the saved reply cannot stop the distinct active turn').toBe(CURRENT_TURN)
+  expect(bucket().activeTurnAgentId).toBe('mia')
+  expect(bucket().messagesById[CURRENT_REPLY], 'history commit cannot invent output for the active turn').toBeUndefined()
+  expect(bucket().isStreaming, 'authoritative work remains active before its first token').toBe(true)
+})
