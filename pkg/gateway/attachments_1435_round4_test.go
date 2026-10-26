@@ -136,6 +136,7 @@ replayDone:
 	open() // the turn finishes; capture the real live continuation (hybrid case 1b)
 
 	var liveAfterFrames []any
+	liveReplyMessageID := ""
 	for {
 		require.NoError(t, conn.SetReadDeadline(time.Now().Add(20*time.Second)))
 		_, raw, readErr := conn.ReadMessage()
@@ -147,6 +148,11 @@ replayDone:
 		}
 		switch frame["type"] {
 		case "token", "done":
+			if liveReplyMessageID == "" {
+				if id, ok := frame["message_id"].(string); ok {
+					liveReplyMessageID = id
+				}
+			}
 			liveAfterFrames = append(liveAfterFrames, frame)
 		}
 		if frame["type"] == "done" {
@@ -154,11 +160,19 @@ replayDone:
 		}
 	}
 liveDone:
+	require.NotEmpty(t, liveReplyMessageID, "instrument: the resumed turn must carry a gateway-minted reply message id")
 
 	// SPA input container. Canonicalization folds per-run generated values
 	// only; frame order, types, codes, content and entry-id relationships
 	// are preserved exactly.
+	//
+	// The gateway mints a FRESH reply message id per run, so it is folded by
+	// VALUE (like the round-3 producer does) — otherwise every bare run would
+	// compare a new UUID against the committed fixture. It is the only
+	// per-run opaque id folded this way; the notice's entry id keeps its own
+	// token, so the two stay distinguishable below.
 	sessionToken, turnToken := "1435-round4-session", "1435-round4-turn"
+	replyToken := "1435-round4-reply"
 	entryTokens := map[string]string{}
 	var canonicalize func(any)
 	canonicalize = func(value any) {
@@ -190,6 +204,9 @@ liveDone:
 			}
 			for key, child := range object {
 				lower := key
+				if text, ok := child.(string); ok && text == liveReplyMessageID {
+					object[key] = replyToken
+				}
 				if lower == "timestamp" || lower == "emitted_at" {
 					if _, ok := child.(string); ok {
 						object[key] = "2026-10-27T00:00:00Z"
@@ -207,6 +224,27 @@ liveDone:
 	}
 	canonicalize(replayFrames)
 	canonicalize(liveAfterFrames)
+
+	// The notice's identity and the reply's identity must stay DISTINCT:
+	// folding the per-run reply id must not collapse the notice onto the
+	// reply it is supposed to stay separate from.
+	noticeEntryID, replyFoldedID := "", ""
+	for _, value := range replayFrames {
+		frame := value.(map[string]any)
+		if frame["type"] == "replay_error" {
+			noticeEntryID, _ = frame["entry_id"].(string)
+		}
+	}
+	for _, value := range liveAfterFrames {
+		frame := value.(map[string]any)
+		if frame["type"] == "token" {
+			replyFoldedID, _ = frame["message_id"].(string)
+		}
+	}
+	require.NotEmpty(t, noticeEntryID, "instrument: the notice must carry an entry id")
+	require.Equal(t, replyToken, replyFoldedID, "the reply's per-run message id must be folded to the stable token")
+	require.NotEqual(t, noticeEntryID, replyFoldedID,
+		"the notice's entry id and the reply's message id must stay distinguishable after folding")
 
 	document := map[string]any{
 		"session_id":        sessionToken,

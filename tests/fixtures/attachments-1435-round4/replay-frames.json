@@ -3,14 +3,14 @@
     {
       "agent_id": "mia",
       "content": " Still progressing.",
-      "message_id": "418fead7-f5e6-4e4b-b60d-523b6bca2d85",
+      "message_id": "1435-round4-reply",
       "seq": 5,
       "session_id": "1435-round4-session",
       "turn_id": "1435-round4-turn",
       "type": "token"
     },
     {
-      "message_id": "418fead7-f5e6-4e4b-b60d-523b6bca2d85",
+      "message_id": "1435-round4-reply",
       "seq": 6,
       "session_id": "1435-round4-session",
       "stats": {

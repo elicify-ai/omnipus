@@ -57,8 +57,10 @@ beforeEach(() => {
   replyId = `1435-r4-reply-${caseNumber}`
   // The gateway-minted reply id from the real live continuation: the SPA
   // placeholder must adopt that exact identity so the continued tokens
-  // land on the same reply.
-  const rawReplyId = (inputs?.live_after_frames ?? recorded.live_after_frames)
+  // land on the same reply. Read it from the IMMUTABLE recorded fixture —
+  // never from the previous case's `inputs`, which already carries the
+  // renamed id and would leave the raw wire id unrenamed in this case.
+  const rawReplyId = recorded.live_after_frames
     .map((frame) => frame as { type?: string; message_id?: string })
     .filter((frame) => frame.type === 'token' && typeof frame.message_id === 'string')
     .map((frame) => frame.message_id as string)[0]
