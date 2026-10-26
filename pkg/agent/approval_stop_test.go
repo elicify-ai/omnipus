@@ -83,6 +83,9 @@ func TestStop_WhileApprovalPending_EndsTheTurnStopped(t *testing.T) {
 
 	busRef := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, busRef, &approvalStopProvider{})
+	// Match gateway boot: durable Stop state requires the installed lifecycle
+	// and inbox stores, plus the execution identity's genuine boot epoch.
+	installTestSessionLauncher(t, al)
 	t.Cleanup(al.Close)
 
 	// The turn runs as a genuine user-initiated webchat turn (the gateway
@@ -142,6 +145,14 @@ func TestStop_WhileApprovalPending_EndsTheTurnStopped(t *testing.T) {
 		t.Fatal("timeout waiting for the turn to park on the pending approval")
 	}
 
+	lifecycle := al.GetSessionLifecycleStore()
+	require.NotNil(t, lifecycle)
+	parkedRecord, parkedErr := lifecycle.Load(sessionID)
+	require.NoError(t, parkedErr)
+	require.NotNil(t, parkedRecord, "the approval must belong to an admitted execution")
+	disposition := al.executionDispositionFor(al.executionClaimFor(parkedRecord))
+	require.NotNil(t, disposition, "the parked turn must have its owning execution disposition")
+
 	cancelOutcome, cancelErr := al.StopSession(
 		context.Background(),
 		StopRequest{
@@ -179,6 +190,20 @@ func TestStop_WhileApprovalPending_EndsTheTurnStopped(t *testing.T) {
 	require.True(t, turnEnded, "the turn stayed working after Stop while an approval was pending — REPRODUCED")
 	assert.True(t, approver.ctxDoneLocked(), "the parked approval must observe the turn context cancelling")
 
+	// turn_end describes compute, not durable settlement. The outer worker
+	// still owns streamer/output tails and the Stop landing after runTurn
+	// returns. Join this exact execution's existing completion barrier before
+	// reading its final state; do not poll for the expected state itself.
+	select {
+	case <-disposition.done:
+	case <-time.After(time.Until(deadline)):
+		t.Fatal("the stopped turn's owning execution did not settle")
+	}
+	disposition.mu.Lock()
+	settlementErr := disposition.result
+	disposition.mu.Unlock()
+	require.NoError(t, settlementErr, "the owning execution must settle Stop successfully")
+
 	// Foreground truth: no active foreground turn may survive the Stop.
 	turnID, _, _, ok := al.ActiveForegroundTurnInfo(sessionID)
 	assert.False(t, ok, "no foreground turn may remain active after Stop (turn %q)", turnID)
@@ -186,13 +211,15 @@ func TestStop_WhileApprovalPending_EndsTheTurnStopped(t *testing.T) {
 	// Durable lifecycle truth: the session's lifecycle record must read
 	// stopped after the Stop landed and the turn ended — this is the state
 	// the SPA's session rows and fresh session_state frames show.
-	lifecycle := al.GetSessionLifecycleStore()
-	require.NotNil(t, lifecycle)
 	rec, loadErr := lifecycle.Load(sessionID)
 	require.NoError(t, loadErr)
 	require.NotNil(t, rec)
 	assert.Equal(t, session.LifecycleStopped, rec.State,
 		"the server lifecycle must record stopped after Stop ends a turn parked on a pending approval")
+	require.NotNil(t, rec.StopNote, "a settled Stop must retain its durable note")
+	assert.Equal(t, session.StopCauseStop, rec.StopNote.Cause, "the note must record this explicit Stop")
+	assert.Nil(t, rec.Stop, "the settled Stop must spend its in-flight fence")
+	t.Logf("owning execution settled after Stop with lifecycle %q", rec.State)
 }
 
 func (p *parkingApprover) ctxDoneLocked() bool {
