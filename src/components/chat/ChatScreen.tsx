@@ -1778,6 +1778,32 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     if (prevSearchOpenRef.current && !searchModalOpenForFocus) focusChatInput()
     prevSearchOpenRef.current = searchModalOpenForFocus
   }, [searchModalOpenForFocus, focusChatInput])
+  // D8 / T24 B26: a reconnect replay (or another temporary lock) disables the
+  // composer, through our inputEnabled prop OR assistant-ui's own thread
+  // isDisabled. A real browser drops focus to <body> the moment a focused
+  // control becomes disabled and never returns it. Remember a blur caused by
+  // that lock and, when the textarea's own disabled attribute clears, give
+  // focus back only if nothing else took it meanwhile; preventScroll keeps the
+  // reader in place. Watching the element covers every lock source.
+  const restoreFocusAfterLockRef = useRef(false)
+  const releaseLockWatchRef = useRef<(() => void) | null>(null)
+  const setChatInput = useCallback((node: HTMLTextAreaElement | null) => {
+    chatInputRef.current = node
+    releaseLockWatchRef.current?.()
+    releaseLockWatchRef.current = null
+    if (!node || typeof MutationObserver === 'undefined') return
+    // Native listener: the browser's blur on disable is what drops focus.
+    const blur = () => { restoreFocusAfterLockRef.current = node.disabled }
+    node.addEventListener('blur', blur)
+    const observer = new MutationObserver(() => {
+      if (node.disabled || !restoreFocusAfterLockRef.current) return
+      restoreFocusAfterLockRef.current = false
+      const active = document.activeElement
+      if (!active || active === document.body) node.focus({ preventScroll: true })
+    })
+    observer.observe(node, { attributes: true, attributeFilter: ['disabled'] })
+    releaseLockWatchRef.current = () => { observer.disconnect(); node.removeEventListener('blur', blur) }
+  }, [])
 
   const cancelState = useCancelState(isStreaming, cancelStream)
   // G1: Stop stays reachable in the idle gap between goal turns (see goalActivity.ts).
@@ -2317,7 +2343,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           {/* Ghost text wrapper — positioned overlay approach */}
           <div className="relative flex-1 min-w-0">
             <ComposerPrimitive.Input
-              ref={chatInputRef}
+              ref={setChatInput}
               data-testid="chat-input"
               data-no-focus-ring
               // Composer tab ring — see the full map in ChatControls.tsx.
