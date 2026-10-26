@@ -24,10 +24,10 @@ const protection = new Map<string, ReadonlySet<string>>()
 export function protectHistoryPositions(sessionId: string, positions: ReadonlySet<string>): void { protection.set(sessionId, positions) }
 export function releaseHistoryProtection(sessionId: string): void { protection.delete(sessionId) }
 
-// Persisted span facts per session and span, keyed by source position. Paged
-// history can hold a span's start and its later state/end on different pages
-// (or only in a page's bounded context), so the facts outlive one page and are
-// re-settled whenever the start row is on the reader. Never serialized.
+// Persisted span facts per session and span. Paged history can hold a span's
+// start and its later state/end on different pages (or only in a page's
+// bounded context), so the facts outlive one page and are re-settled whenever
+// the start row is on the reader. Never serialized.
 //
 // Chronology (final-gate I2): facts are remembered once per READ (a page, a
 // refresh) or live frame, never by re-reading rows already on the reader. A
@@ -36,13 +36,24 @@ export function releaseHistoryProtection(sessionId: string): void { protection.d
 // read's own entries; a later read or live frame ranks above an earlier one.
 // Settlement applies the latest state and message by that ranking, so an older
 // page loaded later cannot overwrite the state a newer read established.
-const SPAN_FACT_SPAN_CAP = 200
+//
+// Bound (final-gate I4/F4, spec D9): each span keeps only the facts settlement
+// reads, the latest of each kind (SpanRecord), and the memory holds only spans
+// a retained row still carries: a saved span source row within the 500-group
+// reader, or a span drawn on a reader or 100-row live-tail row. Every other
+// span's facts are released at each history commit and whenever a live frame
+// opens a new span record.
 type SpanFact = { frame: HistorySpanFrame; tick: number; rank: number } // not-wire-format: in-memory settlement bookkeeping
 type HistoryContext = SessionHistoryPage['page_info']['context'] | undefined // not-wire-format: alias of a generated type
-// `ran` holds the server's proof that the child left the queue (a page
-// context's has_run, F4-arch), which survives even when that running state
-// itself lies outside every page this reader loaded.
-type SpanRecord = { facts: Map<string, SpanFact>; ran: boolean } // not-wire-format: in-memory settlement bookkeeping
+type SubagentMessage = Extract<HistorySpanFrame, { type: 'subagent_message' }> // not-wire-format: alias of a generated type
+// One slot per fact kind settlement applies. `statusMessage` is the latest
+// message that sets the span's status line (span-frames.ts::reduceSubagentMessage),
+// `lastMessage` the latest message of any other kind, which only refreshes the
+// update time; the line therefore shows exactly what in-order application of
+// every message would show. `ran` holds the server's proof that the child left
+// the queue (a page context's has_run, F4-arch) or a recorded ran-state.
+type SpanRecord = { state?: SpanFact; statusMessage?: SpanFact; lastMessage?: SpanFact; notDelivered?: SpanFact; end?: SpanFact; ran: boolean } // not-wire-format: in-memory settlement bookkeeping
+type FactSlot = Exclude<keyof SpanRecord, 'ran'>
 const spanFacts = new Map<string, Map<string, SpanRecord>>()
 let factTick = 0
 export function releaseHistorySpanFacts(sessionId?: string): void {
@@ -51,40 +62,70 @@ export function releaseHistorySpanFacts(sessionId?: string): void {
 }
 
 const laterFact = (a: SpanFact, b: SpanFact) => a.tick - b.tick || a.rank - b.rank
-const factKey = (frame: HistorySpanFrame) => frame.history_origin?.position ?? `${frame.type}:${JSON.stringify(frame)}`
+/** Lifecycle states that prove the child left the queue (span-frames.ts' sticky hasRun). */
+const RAN_STATES: ReadonlySet<string> = new Set(['running', 'needs_input', 'paused', 'completed'])
+const setsStatusLine = (frame: SubagentMessage) => frame.kind === 'steer' || frame.kind === 'respond' || !!frame.text
+
+function factSlots(frame: HistorySpanFrame): FactSlot[] {
+  switch (frame.type) {
+    case 'subagent_state': return ['state']
+    case 'subagent_end': return ['end']
+    case 'subagent_message':
+      if (frame.kind === 'not_delivered') return ['notDelivered']
+      return setsStatusLine(frame) ? ['statusMessage', 'lastMessage'] : ['lastMessage']
+    default: return [] // the start lives on its own row
+  }
+}
+
+function rememberSpanFact(sessionId: string, fact: SpanFact): void {
+  const slots = factSlots(fact.frame)
+  if (!slots.length) return
+  const record = spanRecord(sessionId, fact.frame.span_id)
+  for (const slot of slots) {
+    const prior = record[slot]
+    if (!prior || laterFact(fact, prior) > 0) record[slot] = fact
+  }
+  if (fact.frame.type === 'subagent_state' && RAN_STATES.has(fact.frame.state)) record.ran = true
+}
 
 function spanRecord(sessionId: string, spanId: string): SpanRecord {
   const bySpan = spanFacts.get(sessionId) ?? new Map<string, SpanRecord>()
   spanFacts.set(sessionId, bySpan)
   let record = bySpan.get(spanId)
-  if (!record) {
-    record = { facts: new Map(), ran: false }
-    bySpan.set(spanId, record)
-    if (bySpan.size > SPAN_FACT_SPAN_CAP) bySpan.delete(bySpan.keys().next().value!)
-  }
+  if (!record) bySpan.set(spanId, record = { ran: false })
   return record
 }
 
-function rememberSpanFact(sessionId: string, fact: SpanFact, key: string): void {
-  const { facts } = spanRecord(sessionId, fact.frame.span_id)
-  const prior = facts.get(key)
-  if (!prior || laterFact(fact, prior) > 0) facts.set(key, fact)
+/** The spans a retained row still carries: a saved span source row (start, state, message or end), or a span drawn on a row. */
+function retainedSpanIds(rows: Iterable<ChatMessage>): Set<string> {
+  const ids = new Set<string>()
+  for (const row of rows) {
+    if (row.role === 'assistant' && row.historySpanFrame) ids.add(row.historySpanFrame.span_id)
+    for (const span of row.spans ?? []) ids.add(span.spanId)
+  }
+  return ids
+}
+
+function releaseDetachedSpanFacts(sessionId: string, rows: Iterable<ChatMessage>): void {
+  const bySpan = spanFacts.get(sessionId)
+  if (!bySpan) return
+  const keep = retainedSpanIds(rows)
+  for (const spanId of [...bySpan.keys()]) if (!keep.has(spanId)) bySpan.delete(spanId)
 }
 
 /**
- * Remember one read's span facts: its entries in page order (keyed by their
- * source position, so a REST row and its page-context copy are one fact), then
- * each page context in fetch order, above the entries.
+ * Remember one read's span facts: its entries in page order, then each page
+ * context in fetch order, above the entries.
  */
 export function rememberHistoryReadFacts(sessionId: string, entries: ChatMessage[], contexts: ReadonlyArray<HistoryContext>): void {
   const tick = ++factTick
   entries.forEach((row, rank) => {
-    if (row.role === 'assistant' && row.historySpanFrame) rememberSpanFact(sessionId, { frame: row.historySpanFrame, tick, rank }, row.historyPosition ?? factKey(row.historySpanFrame))
+    if (row.role === 'assistant' && row.historySpanFrame) rememberSpanFact(sessionId, { frame: row.historySpanFrame, tick, rank })
   })
   contexts.forEach((context, i) => {
     for (const span of context?.spans ?? []) {
       if (span.has_run === true) spanRecord(sessionId, span.span_id).ran = true
-      for (const frame of [span.start, span.state, span.message, span.end]) if (frame) rememberSpanFact(sessionId, { frame, tick, rank: entries.length + i }, factKey(frame))
+      for (const frame of [span.state, span.message, span.end]) if (frame) rememberSpanFact(sessionId, { frame, tick, rank: entries.length + i })
     }
   })
 }
@@ -94,10 +135,12 @@ export function rememberHistoryReadFacts(sessionId: string, entries: ChatMessage
  * live reducer updates the span on its row at once, and recording the same
  * frame here means a later history settlement (an unrelated older page, a
  * refresh) rebuilds that row WITH the live end or state instead of restoring
- * the older cached running state.
+ * the older cached running state. Opening a new span record first releases the
+ * spans no row of `bucket` still carries (I4/F4).
  */
-export function rememberLiveSpanFact(sessionId: string, frame: HistorySpanFrame): void {
-  rememberSpanFact(sessionId, { frame, tick: ++factTick, rank: 0 }, factKey(frame))
+export function rememberLiveSpanFact(sessionId: string, frame: HistorySpanFrame, bucket: SessionChatState | undefined): void {
+  if (bucket && !spanFacts.get(sessionId)?.has(frame.span_id)) releaseDetachedSpanFacts(sessionId, Object.values(bucket.messagesById))
+  rememberSpanFact(sessionId, { frame, tick: ++factTick, rank: 0 })
 }
 
 /** Counts of the span-fact memory for one session; see historySpanFactStats. */
@@ -110,6 +153,8 @@ export interface HistorySpanFactStats {
   payloadFactsBySpan: Record<string, number>
 }
 
+const recordFacts = (record: SpanRecord) => [...new Set([record.notDelivered, record.statusMessage, record.lastMessage, record.state])].filter((fact): fact is SpanFact => !!fact)
+
 /**
  * Read-only diagnostic of the private span-fact memory, for tests only (#1266
  * I4/F4 bound): COUNTS, never a fact body, never logged, no wire or UI surface.
@@ -118,10 +163,11 @@ export interface HistorySpanFactStats {
  */
 export function historySpanFactStats(sessionId: string): HistorySpanFactStats {
   const stats: HistorySpanFactStats = { spans: 0, factsBySpan: {}, payloadFactsBySpan: {} }
-  for (const [spanId, { facts }] of spanFacts.get(sessionId) ?? []) {
+  for (const [spanId, record] of spanFacts.get(sessionId) ?? []) {
+    const facts = [...recordFacts(record), ...(record.end ? [record.end] : [])]
     stats.spans += 1
-    stats.factsBySpan[spanId] = facts.size
-    stats.payloadFactsBySpan[spanId] = [...facts.values()].filter(fact => carriesPayload(fact.frame)).length
+    stats.factsBySpan[spanId] = facts.length
+    stats.payloadFactsBySpan[spanId] = facts.filter(fact => carriesPayload(fact.frame)).length
   }
   return stats
 }
@@ -132,27 +178,22 @@ function carriesPayload(frame: HistorySpanFrame): boolean {
   return false
 }
 
-/** Lifecycle states that prove the child left the queue (span-frames.ts' sticky hasRun). */
-const RAN_STATES: ReadonlySet<string> = new Set(['running', 'needs_input', 'paused', 'completed'])
-
-function latestFact(facts: SpanFact[], match: (frame: HistorySpanFrame) => boolean): SpanFact | undefined {
-  return facts.filter(fact => match(fact.frame)).sort(laterFact).at(-1)
-}
-
 /**
  * Settle persisted span facts onto their start rows (ADR-091 D7/I-4, #1266):
  * the span lives on its start entry's own row, as replay has always placed it.
  * It is rebuilt with the live path's own rules (applySpanFrame): the start,
- * then the latest not-delivered note, message and state by recorded
+ * then the latest not-delivered note, messages and state by recorded
  * chronology, then the end, which is authoritative. hasRun stays sticky across
  * every recorded state and the server's has_run proof. Rows carrying only
  * state/message/end stay silent; a span whose start is not on the reader
  * draws nothing until that page loads.
  * A span a live row already holds is left to the live row. Every commit of
  * saved rows runs it, after remembering its read (rememberHistoryReadFacts):
- * page loads and the loaded-window refresh (history.ts::refresh, I3).
+ * page loads and the loaded-window refresh (history.ts::refresh, I3). It then
+ * releases the facts of every span neither `rows` nor `retained` (the live
+ * tail kept beside the reader) still carries (I4/F4, D9).
  */
-export function settleHistorySpans(sessionId: string, rows: ChatMessage[]): { rows: ChatMessage[]; index: SessionChatState['spanBySpanId'] } {
+export function settleHistorySpans(sessionId: string, rows: ChatMessage[], retained: ChatMessage[] = []): { rows: ChatMessage[]; index: SessionChatState['spanBySpanId'] } {
   const bySpan = spanFacts.get(sessionId)
   const index: NonNullable<SessionChatState['spanBySpanId']> = {}
   if (!bySpan) return { rows, index }
@@ -161,18 +202,10 @@ export function settleHistorySpans(sessionId: string, rows: ChatMessage[]): { ro
     const start = row.role === 'assistant' ? row.historySpanFrame : undefined
     if (start?.type !== 'subagent_start' || live.has(start.span_id)) return row
     const record = bySpan.get(start.span_id)
-    const facts = [...(record?.facts.values() ?? [])]
-    const isMessage = (frame: HistorySpanFrame): frame is Extract<HistorySpanFrame, { type: 'subagent_message' }> => frame.type === 'subagent_message'
-    const updates = [
-      latestFact(facts, frame => isMessage(frame) && frame.kind === 'not_delivered'),
-      latestFact(facts, frame => isMessage(frame) && frame.kind !== 'not_delivered'),
-      latestFact(facts, frame => frame.type === 'subagent_state'),
-    ].filter((fact): fact is SpanFact => !!fact).sort(laterFact)
-    const end = latestFact(facts, frame => frame.type === 'subagent_end')
-    const ran = record?.ran === true || facts.some(fact => fact.frame.type === 'subagent_state' && RAN_STATES.has(fact.frame.state))
+    const updates = record ? recordFacts(record).sort(laterFact) : []
     let mini: SessionChatState = { ...emptySessionState(), messagesById: { [row.id]: { ...row, spans: undefined } }, messageOrder: [row.id] }
     mini = { ...mini, ...applySpanFrame(mini, start, sessionId) }
-    for (const fact of [...updates, ...(end ? [end] : [])]) {
+    for (const fact of [...updates, ...(record?.end ? [record.end] : [])]) {
       if (!mini.spanBySpanId?.[start.span_id]) break // ended: nothing applies after an end
       mini = { ...mini, ...applySpanFrame(mini, fact.frame, sessionId) }
     }
@@ -180,8 +213,9 @@ export function settleHistorySpans(sessionId: string, rows: ChatMessage[]): { ro
     if (entry) index[start.span_id] = entry
     // The span reducers only touch the row's spans; status stays the saved one.
     const result = mini.messagesById[row.id]
-    return ran ? { ...result, spans: result.spans?.map(span => span.spanId === start.span_id ? { ...span, hasRun: true } : span) } : result
+    return record?.ran ? { ...result, spans: result.spans?.map(span => span.spanId === start.span_id ? { ...span, hasRun: true } : span) } : result
   })
+  releaseDetachedSpanFacts(sessionId, [...settled, ...retained])
   return { rows: settled, index }
 }
 
@@ -264,7 +298,7 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   }
   const hidden = hiddenIds.flatMap(id => bucket.messagesById[id] ? [bucket.messagesById[id]] : [])
   rememberHistoryReadFacts(page.session_id, incoming, [page.page_info.context])
-  const spans = settleHistorySpans(page.session_id, finalRows)
+  const spans = settleHistorySpans(page.session_id, finalRows, hidden)
   const patch = { ...historyRowsPatch(bucket, [...spans.rows, ...hidden], positions), messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: hiddenIds }
   patch.spanBySpanId = { ...patch.spanBySpanId, ...spans.index }
   patch.historySourceAliases = Object.fromEntries(positions.flatMap(position => {
