@@ -4,6 +4,9 @@ import type { ChatMessage, SessionChatState } from './types'
 import { historyMetadata, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
 import { isClearContextMarker } from '@/lib/clearMarker'
 import { mergeRecordedSessionTokens } from './session-usage'
+import { applySpanFrame } from './slices/span-frames'
+import { emptySessionState } from './session'
+import type { HistorySpanFrame } from '@/lib/api/sessions'
 
 /** Expected contradiction in a page's relation to the current reader. */
 export class HistoryPageProtocolError extends Error {}
@@ -20,6 +23,67 @@ export class HistoryPageDeferredError extends Error {
 const protection = new Map<string, ReadonlySet<string>>()
 export function protectHistoryPositions(sessionId: string, positions: ReadonlySet<string>): void { protection.set(sessionId, positions) }
 export function releaseHistoryProtection(sessionId: string): void { protection.delete(sessionId) }
+
+// Persisted span facts per session and span, keyed by source position. Paged
+// history can hold a span's start and its later state/end on different pages
+// (or only in a page's bounded context), so the facts outlive one page and are
+// re-settled whenever the start row is on the reader. Never serialized.
+const SPAN_FACT_SPAN_CAP = 200
+const spanFacts = new Map<string, Map<string, Map<string, HistorySpanFrame>>>()
+export function releaseHistorySpanFacts(sessionId?: string): void {
+  if (sessionId === undefined) spanFacts.clear()
+  else spanFacts.delete(sessionId)
+}
+
+function rememberSpanFact(sessionId: string, frame: HistorySpanFrame): void {
+  const bySpan = spanFacts.get(sessionId) ?? new Map<string, Map<string, HistorySpanFrame>>()
+  spanFacts.set(sessionId, bySpan)
+  const facts = bySpan.get(frame.span_id) ?? new Map<string, HistorySpanFrame>()
+  if (!bySpan.has(frame.span_id)) {
+    bySpan.set(frame.span_id, facts)
+    if (bySpan.size > SPAN_FACT_SPAN_CAP) bySpan.delete(bySpan.keys().next().value!)
+  }
+  facts.set(frame.history_origin?.position ?? `${frame.type}:${JSON.stringify(frame)}`, frame)
+}
+
+const FACT_ORDER: Record<HistorySpanFrame['type'], number> = { subagent_start: 0, subagent_state: 1, subagent_message: 2, subagent_end: 3 }
+
+/**
+ * Settle persisted span facts onto their start rows (ADR-091 D7/I-4, #1266):
+ * the span lives on its start entry's own row, as replay has always placed it,
+ * and its state/message/end come from facts on the reader in page order, then
+ * the page context's latest facts. Rows carrying only state/message/end stay
+ * silent; a span whose start is not on the reader draws nothing until that
+ * page loads. One rule set with the live path (applySpanFrame), so no fact
+ * misses its span. A span a live row already holds is left to the live row.
+ */
+function settleHistorySpans(sessionId: string, rows: ChatMessage[], positions: string[], context: SessionHistoryPage['page_info']['context'] | undefined): { rows: ChatMessage[]; index: SessionChatState['spanBySpanId'] } {
+  for (const row of rows) if (row.role === 'assistant' && row.historySpanFrame) rememberSpanFact(sessionId, row.historySpanFrame)
+  for (const span of context?.spans ?? []) for (const fact of [span.start, span.state, span.message, span.end]) if (fact) rememberSpanFact(sessionId, fact)
+  const bySpan = spanFacts.get(sessionId)
+  const index: NonNullable<SessionChatState['spanBySpanId']> = {}
+  if (!bySpan) return { rows, index }
+  const order = new Map(positions.map((position, i) => [position, i]))
+  const live = new Set(rows.filter(row => !row.historyPosition).flatMap(row => row.spans?.map(span => span.spanId) ?? []))
+  const settled = rows.map(row => {
+    const start = row.role === 'assistant' ? row.historySpanFrame : undefined
+    if (start?.type !== 'subagent_start' || live.has(start.span_id)) return row
+    const facts = [...(bySpan.get(start.span_id)?.values() ?? [])].filter(fact => fact.type !== 'subagent_start')
+    const onReader = facts.filter(fact => order.has(fact.history_origin?.position ?? '')).sort((a, b) => order.get(a.history_origin!.position)! - order.get(b.history_origin!.position)!)
+    const contextOnly = facts.filter(fact => !order.has(fact.history_origin?.position ?? '')).sort((a, b) => FACT_ORDER[a.type] - FACT_ORDER[b.type])
+    let mini: SessionChatState = { ...emptySessionState(), messagesById: { [row.id]: { ...row, spans: undefined } }, messageOrder: [row.id] }
+    mini = { ...mini, ...applySpanFrame(mini, start, sessionId) }
+    for (const fact of [...onReader, ...contextOnly]) {
+      if (!mini.spanBySpanId?.[start.span_id]) break // ended: nothing applies after an end
+      mini = { ...mini, ...applySpanFrame(mini, fact, sessionId) }
+    }
+    const entry = mini.spanBySpanId?.[start.span_id]
+    if (entry) index[start.span_id] = entry
+    // The span reducers only touch the row's spans; status stays the saved one.
+    return mini.messagesById[row.id]
+  })
+  return { rows: settled, index }
+}
 
 export function currentHistoryEntries(bucket: SessionChatState): SessionHistoryEntry[] {
   const byPosition = new Map(Object.values(bucket.messagesById).filter(row => row.historyPosition).map(row => [row.historyPosition!, row as SessionHistoryEntry]))
@@ -73,7 +137,9 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
     }
   }
   const hidden = hiddenIds.flatMap(id => bucket.messagesById[id] ? [bucket.messagesById[id]] : [])
-  const patch = { ...historyRowsPatch(bucket, [...finalRows, ...hidden], positions), messageOrder: [...new Set(finalRows.map(row => row.id))], historyLiveOrder: hiddenIds }
+  const spans = settleHistorySpans(page.session_id, finalRows, positions, page.page_info.context)
+  const patch = { ...historyRowsPatch(bucket, [...spans.rows, ...hidden], positions), messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: hiddenIds }
+  patch.spanBySpanId = { ...patch.spanBySpanId, ...spans.index }
   patch.historySourceAliases = Object.fromEntries(positions.flatMap(position => {
     const row = byPosition.get(position)
     return row && patch.messagesById?.[row.id] ? [[position, row.id]] : []

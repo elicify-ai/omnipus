@@ -162,12 +162,12 @@ export function SearchModal() {
     ? 'sessions and workspaces'
     : sessionsError ? 'sessions' : 'workspaces'
   const coverage = readSessionFetchCoverage(sessions)
-  const requestActivityPanel = useUiStore((s) => s.requestActivityPanel)
+  // Founder ruling ("Straight to the chat"): Open lands in the chat with no
+  // panel opened automatically; Activity stays one click away.
   const selectSession = useSelectSession({
     agents,
     workspaces,
     onClose: close,
-    onSelected: (session) => requestActivityPanel(session.id),
   })
   const wsMap = useMemo(() => new Map(workspaces.map((workspace) => [workspace.id, workspace])), [workspaces])
   const sessionById = useMemo(() => new Map(sessions.map((session) => [session.id, session])), [sessions])

@@ -19,7 +19,8 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
-import { test } from './fixtures/console-errors'
+import { test, canonicalHistoryAuthFile } from './fixtures/canonical-history'
+import { seedCanonicalLegacyTranscript } from './fixtures/chat-history'
 import { expectA11yClean } from './fixtures/a11y'
 // No verbose-chat opt-in anywhere in this file: ADR-091 D7/AC-7 makes a
 // delegation visible in the DEFAULT, non-verbose thread (the delegate/spawn
@@ -31,16 +32,20 @@ import { assistantReplyChallenge } from './fixtures/assistant-reply-acceptance'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
+let BASE_URL: string
+let OMNIPUS_HOME: string
+test.beforeEach(async ({ canonicalGateway }) => {
+  BASE_URL = canonicalGateway.baseURL
+  OMNIPUS_HOME = canonicalGateway.homeDir
+  AUTH_FILE = canonicalHistoryAuthFile()
+})
 
 /**
  * OMNIPUS_HOME: the gateway's workspace directory.
  * Must match the directory the running gateway is using.
  * Override via env var when the gateway is started with a non-default home.
  */
-const OMNIPUS_HOME =
-  process.env.OMNIPUS_HOME ||
-  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test')
+// OMNIPUS_HOME is bound above to this test's real, privately owned gateway.
 
 // ── Transcript helpers ─────────────────────────────────────────────────────────
 
@@ -70,17 +75,8 @@ interface TranscriptEntry {
  * The gateway reads this file when the browser sends attach_session.
  * Precondition: the session directory must already exist (created via POST /api/v1/sessions).
  */
-function seedTranscript(sessionId: string, entries: TranscriptEntry[]): void {
-  const sessionDir = path.join(OMNIPUS_HOME, 'sessions', sessionId)
-  if (!fs.existsSync(sessionDir)) {
-    throw new Error(
-      `Session directory does not exist: ${sessionDir}. ` +
-        'Create the session via REST API before seeding the transcript.',
-    )
-  }
-  const transcriptPath = path.join(sessionDir, 'transcript.jsonl')
-  const lines = entries.map((e) => JSON.stringify({ view_membership: 'chat', ...e })).join('\n') + '\n'
-  fs.writeFileSync(transcriptPath, lines, { encoding: 'utf-8' })
+async function seedTranscript(sessionId: string, entries: TranscriptEntry[]): Promise<void> {
+  await seedCanonicalLegacyTranscript(sessionId, entries)
 }
 
 /**
@@ -91,12 +87,7 @@ function seedTranscript(sessionId: string, entries: TranscriptEntry[]): void {
 function getStoredAuthToken(): string | null {
   // Respect OMNIPUS_AUTH_FILE env var set by isolated test runs (e.g. port 6062)
   // to avoid using a token minted for a different gateway instance.
-  const authFile = process.env.OMNIPUS_AUTH_FILE
-    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-    : path.join(
-        path.dirname(new URL(import.meta.url).pathname),
-        'fixtures/.auth/admin.json',
-      )
+  const authFile = canonicalHistoryAuthFile()
   if (!fs.existsSync(authFile)) {
     return null
   }
@@ -278,7 +269,7 @@ test(
     // Seed the transcript: one user message + one assistant reply with two tool calls.
     // Dataset D1 (shell tool) + D4 (agent_id="ray") from spec.
     // Traces to: BDD Scenario 1 (tool-call fidelity), Scenario 3 (agent label).
-    seedTranscript(sessionId, [
+    await seedTranscript(sessionId, [
       {
         id: 'entry-user-1',
         role: 'user',
@@ -394,13 +385,13 @@ test(
  * and replay silently falls back to the reconstructed, child_session_id-less
  * frame instead.
  */
-function appendPersistedSubagentStart(
+async function appendPersistedSubagentStart(
   parentSessionId: string,
   childSessionId: string,
   callId: string,
   taskLabel: string,
   agentId: string,
-): void {
+): Promise<void> {
   const sessionDir = path.join(OMNIPUS_HOME, 'sessions', parentSessionId)
   if (!fs.existsSync(sessionDir)) {
     throw new Error(
@@ -444,11 +435,7 @@ function appendPersistedSubagentStart(
       },
     },
   ]
-  fs.appendFileSync(
-    path.join(sessionDir, 'transcript.jsonl'),
-    entries.map((e) => JSON.stringify({ view_membership: 'chat', ...e })).join('\n') + '\n',
-    { encoding: 'utf-8' },
-  )
+  await seedCanonicalLegacyTranscript(parentSessionId, entries, true)
 }
 
 /**
@@ -599,7 +586,7 @@ test(
     // frames are withheld by `stillActive` anyway, and recording a "success"
     // for a call the transcript also says is still open would be an
     // incoherent fixture.
-    seedTranscript(sessionId, [
+    await seedTranscript(sessionId, [
       {
         id: 'entry-asst-spawn',
         role: 'assistant',
@@ -634,7 +621,7 @@ test(
         ],
       },
     ])
-    appendPersistedSubagentStart(sessionId, childSessionId, callId, taskLabel, 'mia')
+    await appendPersistedSubagentStart(sessionId, childSessionId, callId, taskLabel, 'mia')
 
     await openSession(page, sessionId)
     await waitForReplayDone(page)
@@ -666,12 +653,7 @@ test(
 
 // Respect OMNIPUS_AUTH_FILE env var set by isolated test runs (e.g. port 6062)
 // to avoid using a token minted for a different gateway instance.
-const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
-  ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-  : path.join(
-      path.dirname(new URL(import.meta.url).pathname),
-      'fixtures/.auth/admin.json',
-    )
+let AUTH_FILE: string
 
 test(
   '(c) attach-during-active-turn: second browser context receives all events without loss',
@@ -818,7 +800,7 @@ test(
 
     // Seed a simple multi-entry transcript (no tool calls — validates text replay + continuation).
     // Traces to: BDD Scenario 8 (replay → live continuation), Scenario 4 (user message replay).
-    seedTranscript(sessionId, [
+    await seedTranscript(sessionId, [
       {
         id: 'entry-user-d1',
         role: 'user',
@@ -939,7 +921,7 @@ test(
     // This mirrors the JSONL that the gateway writes during a real tool turn
     // (ADR-036 renamed exec/workspace_shell/workspace_shell_bg to the unified
     // "bash" tool; a fresh session's transcript now records tool: "bash").
-    seedTranscript(sessionId, [
+    await seedTranscript(sessionId, [
       {
         id: 'entry-user-f1',
         role: 'user',
@@ -1071,7 +1053,13 @@ test(
         ],
       })
     }
-    seedTranscript(sessionId, entries)
+    await seedTranscript(sessionId, entries)
+    // Offline canonical seeding deliberately leaves about:blank. Install the
+    // observer only after restoring a real connected app document, otherwise
+    // the next full navigation discards it and cannot observe any transition.
+    await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+    await waitForWsConnected(page)
 
     // ── Navigate to the session and immediately check send button state ──
     // Traces to: Scenario 10 When "user types in the input → send button is disabled".
@@ -1146,7 +1134,8 @@ test(
     // addressed directly via the app's deep-link route (see openSession's
     // doc comment above for why this is the current real seam, not a
     // workaround).
-    await page.goto(`/#/sessions/${sessionId}`)
+    const navigation = await page.goto(`/#/sessions/${sessionId}`)
+    expect(navigation, 'PREREQUISITE: same-document navigation preserves the already installed replay observer').toBeNull()
 
     // Poll the observer trace from the test side. We accept anything that proves
     // the disabled state was true at least once between click and done. expect.poll

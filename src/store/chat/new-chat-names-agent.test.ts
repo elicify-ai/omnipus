@@ -13,6 +13,7 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
 import { queryClient } from '@/lib/queryClient'
+import { emptySessionState } from './session'
 
 function sentFrames(): unknown[] {
   const sent: unknown[] = []
@@ -83,6 +84,7 @@ describe('a __pending retry (a mint retry) names its agent too (K16)', () => {
     useChatStore.setState({
       sessionsById: {
         __pending: {
+          ...emptySessionState(),
           session_id: '__pending',
           messageOrder: ['u1'],
           messagesById: {

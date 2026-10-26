@@ -622,7 +622,7 @@ describe('SearchModal — search lookup failures and Retry', () => {
     expect(vi.mocked(fetchSessions)).toHaveBeenCalledTimes(failSessions ? 2 : 1)
     expect(vi.mocked(fetchSessions)).toHaveBeenLastCalledWith(undefined, undefined, { flat: true })
     expect(vi.mocked(fetchWorkspaces)).toHaveBeenCalledTimes(failWorkspaces ? 2 : 1)
-    expect(vi.mocked(fetchWorkspaces)).toHaveBeenLastCalledWith({ status: 'active' })
+    expect(vi.mocked(fetchWorkspaces)).toHaveBeenLastCalledWith({ status: 'active', signal: expect.any(AbortSignal) })
     expect(vi.mocked(fetchAgents)).toHaveBeenCalledTimes(1)
   })
 })

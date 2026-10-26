@@ -16,7 +16,7 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } fr
 import { fetchSessionMessages } from '@/lib/api/sessions'
 import { getApiSchemaErrorCount, resetApiSchemaErrorCount } from '@/lib/api/http'
 import type { ContextWindowNotice, Message as WireMessage } from '@/lib/api/generated/openapi-types'
-import type { ContextWindowNoticeFrame, ReplayMessageFrame } from '@/lib/api/generated/asyncapi-types'
+import type { ContextWindowNoticeFrame, ReplayMessageFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
 import { ContextWindowNoticeFrame as ContextWindowNoticeFrameSchema } from '@/lib/api/generated/schemas'
 import * as toolVisibility from '@/lib/toolVisibility'
 import { useOmnipusRuntime } from '@/lib/omnipus-runtime'
@@ -25,7 +25,7 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { ChatScreen } from './ChatScreen'
-import { expectValidPage, page, pos } from '../../../tests/chat-history-paging/fixtures'
+import { expectValidFrame, expectValidPage, page, pos, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 import { expectHistoryPage } from '../../../tests/chat-history-paging/legacy-fixtures'
 
 const SID = 'q33-history-reload-session'
@@ -211,24 +211,27 @@ describe('Q33: real REST reload and classified replay', () => {
     // this remains network data, not already-decoded display-message seeding.
     history = [...ordinaryHistory(), storedNotice(kind)]
     await act(async () => {
-      useChatStore.getState().setReplaying(true)
-      for (const entry of ordinaryHistory()) {
-        const frame: ReplayMessageFrame = {
-          type: 'replay_message', session_id: SID, id: entry.id,
-          role: entry.role ?? 'system', content: entry.content ?? '',
-          timestamp: entry.timestamp, agent_id: entry.agent_id,
-        }
-        useChatStore.getState().handleFrame(frame)
-      }
-      // Deliver the actual classified replay carrier twice, as on reconnect.
-      // No already-normalized notice is inserted through setMessages.
-      useChatStore.getState().handleFrame(noticeFrame(kind))
-      useChatStore.getState().handleFrame(noticeFrame(kind))
-      useChatStore.getState().setReplaying(false)
+      const bounded = page(history, { sessionId: SID })
+      expectValidPage(bounded, [pos(1), pos(2), pos(3)], 3)
+      const ordinary: ReplayMessageFrame[] = ordinaryHistory().map(source => replay(source, SID))
+      const classified: ContextWindowNoticeFrame = { ...noticeFrame(kind), history_origin: { position: pos(3), entry_id: ENTRY_ID } }
+      const frames: ServerFrame[] = [
+        { ...snapshot(bounded), seq: 5, boot_id: 'q33-history-boot' },
+        { type: 'session_state', session_id: SID, user_id: 'q33-history-reader', pending_approvals: [],
+          emitted_at: BEFORE_NOTICE, history_state: { status: 'available' } },
+        ...ordinary, classified, classified,
+        { type: 'done', session_id: SID },
+        { type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'q33-history-boot', mode: 'snapshot' },
+      ]
+      frames.forEach(expectValidFrame)
+      frames.forEach(frame => useChatStore.getState().handleFrame(frame))
+      expect(useChatStore.getState().sessionsById[SID]?.history.historyLoaded,
+        'C1: real snapshot committed all selected sources before rendering').toBe(true)
     })
     await waitFor(() => expect(useChatStore.getState().isReplaying).toBe(false))
-    expect.soft(useChatStore.getState().sessionsById[SID]?.lastReceivedEventTime,
-      'a hidden replay diagnostic still advances the original timestamp cursor').toBe(NOTICE_TIME)
+    expect.soft(useChatStore.getState().sessionsById[SID]?.cursor,
+      'completed live/control catch-up mints the seq cursor; hidden diagnostic replay does not advance it per frame')
+      .toStrictEqual({ bootId: 'q33-history-boot', seq: 5 })
     await renderHistoryThread()
     await expectRetainedVerboseToggle(kind)
     expect(getApiSchemaErrorCount()).toBe(0)

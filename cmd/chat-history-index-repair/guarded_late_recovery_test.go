@@ -51,14 +51,20 @@ func repairLateOperatorRestore(t *testing.T, tool string, batch repairLateBatch)
 	t.Helper()
 	// Preserve the entire failed source as evidence. Restoration below is an
 	// explicit TEST OPERATOR action; the repair executable must never do it.
-	oldRoot, err := os.Stat(batch.source)
-	require.NoError(t, err)
 	preserved := filepath.Join(t.TempDir(), "preserved-failed-source")
 	require.NoError(t, os.Rename(batch.source, preserved))
 	repairCopy(t, batch.backup, batch.source)
+	// Compare the preserved original (at its new path) against the restored
+	// directory: Go's Windows os.SameFile resolves file IDs lazily by path
+	// (os/types_windows.go sameFile -> loadFileId), so a FileInfo captured
+	// at the original path would identify whatever now sits there and
+	// compare the restored copy with itself (measured windows-latest, run
+	// 40065143594). Same evidence, path-stable on every OS.
+	preservedRoot, err := os.Stat(preserved)
+	require.NoError(t, err)
 	newRoot, err := os.Stat(batch.source)
 	require.NoError(t, err)
-	require.False(t, os.SameFile(oldRoot, newRoot), "actual full backup restoration replaces the bound native root object")
+	require.False(t, os.SameFile(preservedRoot, newRoot), "actual full backup restoration replaces the bound native root object")
 	require.Equal(t, repairFullCopyFacts(t, batch.backup), repairFullCopyFacts(t, batch.source),
 		"independent full count/byte/mode/mtime restoration rehearsal, not sessions-only restore")
 	before := repairTree(t, batch.source)

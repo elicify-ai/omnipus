@@ -5,10 +5,14 @@ import type { WsConnection } from '@/lib/ws'
 import { getMessages, useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { entry, expectValidPage, page, pos } from '../../tests/chat-history-paging/fixtures'
+import { reopenFixtureHistory } from '../../tests/chat-history-paging/reopen-fixture-history'
 
 // U5-R1: per-chat errors never become an app-wide connection problem.
 // Real stores, send/steer, navigation, routing and foreground synchronization.
-// Socket only is fake. No fixture-built messages or terminal-status shortcuts.
+// Socket plus declared raw HTTP for D9 reopen are process-edge fixtures.
+// Live refusal remains frame-driven; synthetic saved pages prove the client
+// read/restore path, not backend durable writes or terminal-status shortcuts.
 // The untagged refusal below matches today's gateway shape; the late TAGGED
 // cases test frontend isolation, not the separately needed backend correlation.
 const HELPER = 'uat-error-helper'
@@ -32,7 +36,7 @@ beforeEach(() => {
     useSessionStore.getState().setActiveSession(HELPER, 'worker')
   })
 })
-afterEach(reset)
+afterEach(() => { reset(); vi.unstubAllGlobals() })
 
 function streamAndSteerHelper() {
   act(() => {
@@ -44,27 +48,60 @@ function streamAndSteerHelper() {
   expect(sender.send.mock.calls.map(([frame]) => frame.type)).toStrictEqual(['message', 'message'])
 }
 
-function assertLocalRefusal() {
+function assertLocalRefusal(released = false) {
   const messages = getMessages(useChatStore.getState().sessionsById[HELPER])
   expect(messages.filter((message) => message.status === 'error').map(({ content, role }) => ({ content, role }))).toStrictEqual([{ content: REFUSAL, role: 'assistant' }])
-  expect(messages.filter((message) => message.content === 'Original progress').map((message) => message.closedBySteer)).toStrictEqual([true])
+  if (released) {
+    expect(messages.filter((message) => message.content === 'Original progress'),
+      'D9: the old closed body is released, not retained in every inactive bucket').toStrictEqual([])
+  } else {
+    expect(messages.filter((message) => message.content === 'Original progress').map((message) => message.closedBySteer)).toStrictEqual([true])
+  }
   expect(useConnectionStore.getState().isConnected).toBe(true)
   expect(useConnectionStore.getState().connectionError, 'U5: a chat refusal is not a lost connection').toBeNull()
 }
 
 describe('U5 — routed chat errors stay with their originating transcript', () => {
-  it('an actual untagged worker refusal after a real mid-turn send does not leak into parent or new chats', () => {
+  it('an actual untagged worker refusal after a real mid-turn send does not leak into parent or new chats', async () => {
     streamAndSteerHelper()
     act(() => useChatStore.getState().handleFrame({ type: 'error', message: REFUSAL }))
     assertLocalRefusal()
-    const saved = structuredClone(getMessages(useChatStore.getState().sessionsById[HELPER]))
+    const pending = structuredClone(getMessages(useChatStore.getState().sessionsById[HELPER]).filter(message => message.role === 'user'))
+    expect(pending.map(message => message.content), 'instrument: both unacknowledged original inputs still belong to the helper').toStrictEqual(['Report progress', 'Focus on the next step'])
     act(() => useSessionStore.getState().setActiveSession(PARENT, 'jim'))
     expect(useChatStore.getState().messages).toStrictEqual([])
     expect(useConnectionStore.getState().connectionError).toBeNull()
     act(() => useSessionStore.getState().startNewSession())
     expect(useChatStore.getState().messages).toStrictEqual([])
     expect(useChatStore.getState().isStreaming).toBe(false)
-    expect(getMessages(useChatStore.getState().sessionsById[HELPER])).toStrictEqual(saved)
+    expect(getMessages(useChatStore.getState().sessionsById[HELPER]),
+      'D9: release closed bodies but preserve the original pending inputs exactly').toStrictEqual(pending)
+    expect(useChatStore.getState().sessionsById[HELPER].history.readerPositions).toStrictEqual([])
+    expect(useChatStore.getState().sessionsById[HELPER].history.tailEntries).toStrictEqual([])
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+
+    // Independent declared archive data, not a clone of a supposedly durable
+    // in-memory transcript. Exercise actual HTTP validation/adapter/reopen.
+    const saved = page([
+      entry(1, { id: 'saved-helper-first', role: 'user', content: 'Report progress', client_message_id: 'uat-helper-first' }),
+      entry(2, { id: 'saved-helper-progress', role: 'assistant', content: 'Original progress', status: 'ok' }),
+      entry(3, { id: 'saved-helper-steer', role: 'user', content: 'Focus on the next step', client_message_id: 'uat-helper-steer' }),
+      entry(4, { id: 'saved-helper-refusal', role: 'assistant', content: REFUSAL, status: 'error' }),
+    ], { sessionId: HELPER })
+    expectValidPage(saved, [pos(1), pos(2), pos(3), pos(4)], 4)
+    const sentBeforeRead = structuredClone(sender.send.mock.calls)
+    act(() => useSessionStore.getState().setActiveSession(HELPER, 'worker'))
+    let reads!: string[]
+    await act(async () => { reads = await reopenFixtureHistory(useChatStore, HELPER, saved) })
+    expect(reads).toStrictEqual([`GET /api/v1/sessions/${HELPER}/messages?limit=40&min_rows=20`])
+    expect(getMessages(useChatStore.getState().sessionsById[HELPER]).map(({ content, role, status }) => ({ content, role, status }))).toStrictEqual([
+      { content: 'Report progress', role: 'user', status: 'done' },
+      { content: 'Original progress', role: 'assistant', status: 'done' },
+      { content: 'Focus on the next step', role: 'user', status: 'done' },
+      { content: REFUSAL, role: 'assistant', status: 'error' },
+    ])
+    expect(useChatStore.getState().sessionsById[HELPER].history.readerPositions).toStrictEqual([pos(1), pos(2), pos(3), pos(4)])
+    expect(sender.send.mock.calls, 'history reopen is not a resend').toStrictEqual(sentBeforeRead)
     expect(useConnectionStore.getState().connectionError).toBeNull()
   })
 
@@ -83,7 +120,7 @@ describe('U5 — routed chat errors stay with their originating transcript', () 
     const parent = structuredClone(useChatStore.getState().sessionsById[PARENT])
     const frame: ErrorFrame = { type: 'error', session_id: HELPER, client_message_id: 'uat-helper-steer', message: REFUSAL }
     act(() => useChatStore.getState().handleFrame(frame))
-    assertLocalRefusal()
+    assertLocalRefusal(true)
     expect(useChatStore.getState().messages).toStrictEqual(foreground)
     expect(useChatStore.getState().isStreaming).toBe(wasStreaming)
     expect(useChatStore.getState().sessionsById[PARENT]).toStrictEqual(parent)

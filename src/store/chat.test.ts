@@ -141,7 +141,7 @@ describe('chat store — message handling', () => {
     expect(messages).toHaveLength(1)
     expect(messages[0].content).toBe('New message')
     expect(Object.keys(toolCalls)).toHaveLength(0)
-    expect(sessionTokens).toBe(0)
+    expect(sessionTokens, 'D16: message hydration without an aggregate observation leaves usage unknown').toBeUndefined()
   })
 })
 
@@ -181,7 +181,7 @@ describe('chat store — streaming via handleFrame', () => {
         isStreaming: true,
       })
       useChatStore.setState({ isStreaming: true })
-      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 150, cost: 0.02, duration_ms: 0 }, session_id: TEST_SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 150, session_tokens_total: 150, cost: 0.02, duration_ms: 0 }, session_id: TEST_SESSION_ID })
     })
     const state = useChatStore.getState()
     expect(state.isStreaming).toBe(false)
@@ -1728,7 +1728,7 @@ describe('chat store — done frame for unknown targetSid (B1.3d)', () => {
       useChatStore.getState().handleFrame({
         type: 'done',
         session_id: TEST_SESSION_ID,
-        stats: { tokens: 42, cost: 0.001, duration_ms: 100 },
+        stats: { tokens: 42, session_tokens_total: 42, cost: 0.001, duration_ms: 100 },
       })
     })
 

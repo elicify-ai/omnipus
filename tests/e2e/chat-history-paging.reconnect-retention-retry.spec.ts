@@ -24,23 +24,43 @@ test('T24 B04:transport loss after real replay but before complete retains the p
   const completeHeld = new Promise<void>((resolve) => { held = resolve; });
   let interruptedRoute: WebSocketRoute | undefined;
   let upstreamCompletions = 0;
+  let withheldComplete: Extract<WsFrame, { type: 'catch_up_complete' }> | undefined;
+  const deliveredToPage: WsFrame[] = [];
+  const clientToServer: WsFrame[] = [];
+  const addressedClientAttaches = () => clientToServer.filter((frame): frame is Extract<WsFrame, { type: 'attach_session' }> =>
+    frame.type === 'attach_session' && frame.session_id === history.sessionId);
   // Real server forwarding is explicit. Only DELIVERY of its actual final
   // frame is held; no generated snapshot/replay/control frame is fabricated.
   await page.routeWebSocket((url) => url.origin.replace(/^ws/, 'http') === history.gateway.baseURL, (socket) => {
     const server = socket.connectToServer();
+    socket.onMessage(message => {
+      clientToServer.push(WsFrame.parse(JSON.parse(message.toString())));
+      server.send(message); // Preserve actual client delivery when adding the observer.
+    });
     server.onMessage((message) => {
       const frame = WsFrame.parse(JSON.parse(message.toString()));
       if (armed && frame.type === 'catch_up_complete' && frame.session_id === history.sessionId) {
         upstreamCompletions++;
+        withheldComplete = frame;
         interruptedRoute = socket;
         held();
-      } else socket.send(message);
+      } else {
+        socket.send(message);
+        deliveredToPage.push(frame); // Native server receipt is NOT page delivery.
+      }
     });
   });
   await history.open();
+  expect(deliveredToPage.filter(frame => frame.type === 'catch_up_complete' && frame.session_id === history.sessionId),
+    'positive delivery instrument sees the initial completion actually forwarded to the page').toHaveLength(1);
+  expect(addressedClientAttaches(), 'positive outbound instrument sees the real initial addressed attach').toHaveLength(1);
+  const initialComplete = deliveredToPage.find(frame => frame.type === 'catch_up_complete' && frame.session_id === history.sessionId);
+  if (initialComplete?.type !== 'catch_up_complete') throw new Error('PREREQUISITE: actual prior completion missing from delivery ledger');
+  const completedCursor = { since_seq: initialComplete.seq, boot_id: initialComplete.boot_id };
   await scrollToDistance(page, (await geometry(page)).H);
   const saved = await anchor(page);
-  const before = history.traffic.frames.length;
+  const before = deliveredToPage.length;
+  const clientBeforeInterruptedAttach = clientToServer.length;
   armed = true;
   await history.gateway.kill9();
   await history.gateway.restart({ relogin: false });
@@ -53,10 +73,38 @@ test('T24 B04:transport loss after real replay but before complete retains the p
     if (!interruptedRoute) throw new Error('real attach completion was not intercepted');
     await interruptedRoute.close({ code: 1001, reason: 'history-acceptance-transport-loss' });
     await settled(page);
-    expect(history.traffic.frames.slice(before).filter((f) => f.type === 'catch_up_complete' && f.session_id === history.sessionId),
+    expect(deliveredToPage.slice(before).filter((f) => f.type === 'catch_up_complete' && f.session_id === history.sessionId),
       'undelivered control catch-up cannot manufacture successful complete').toEqual([]);
     await expectAnchor(page, saved);
     await expect(historyRow(page, saved.id)).toBeVisible();
+    const afterInterruption = () => clientToServer.slice(clientBeforeInterruptedAttach)
+      .filter((frame): frame is Extract<WsFrame, { type: 'attach_session' }> =>
+        frame.type === 'attach_session' && frame.session_id === history.sessionId);
+    expect(afterInterruption().filter(frame => frame.ack_attention === true),
+      'B04: replay done and a withheld completion produce NO client acknowledgment').toEqual([]);
+    if (!withheldComplete) throw new Error('PREREQUISITE: actual withheld completion identity missing');
+    expect({ since_seq: withheldComplete.seq, boot_id: withheldComplete.boot_id },
+      'positive cursor instrument distinguishes the undelivered restarted-boot completion').not.toEqual(completedCursor);
+    // Exercise the real client's saved cursor through network recovery. Never
+    // manufacture an attach frame or inspect/write an internal store for this.
+    const probeStart = clientToServer.length;
+    await page.context().setOffline(false);
+    await waitForConnected(page);
+    await expect.poll(() => clientToServer.slice(probeStart).filter(frame => frame.type === 'attach_session' &&
+      frame.session_id === history.sessionId).length, { message: 'real recovery sends one observable addressed cursor probe' }).toBe(1);
+    await expect.poll(() => upstreamCompletions, { message: 'cursor probe reaches the real server; its completion is also withheld' }).toBe(2);
+    await settled(page); // Flush forwarded replay frames before judging any premature acknowledgment.
+    expect(deliveredToPage.slice(before).filter(frame => frame.type === 'catch_up_complete' && frame.session_id === history.sessionId),
+      'cursor probe never releases either withheld completion to the page').toEqual([]);
+    const continuation = addressedClientAttaches().at(-1);
+    expect(continuation, 'actual client recovery attach exists at the server boundary').toBeDefined();
+    expect({ since_seq: continuation?.since_seq, boot_id: continuation?.boot_id },
+      'B04: incomplete replay retains the exact prior cursor, not the withheld completion cursor').toEqual(completedCursor);
+    expect(afterInterruption().filter(frame => frame.ack_attention === true),
+      'B04: no completion acknowledgment escapes during interruption or its recovery probe').toEqual([]);
+    await history.info.attach('incomplete-client-cursor-proof', { contentType: 'application/json', body: JSON.stringify({
+      completedCursor, withheldComplete, continuation, clientAttaches: afterInterruption(),
+    }, null, 2) });
     await history.record('interrupted-before-complete');
   } finally { armed = false; await page.context().setOffline(false); }
 });
@@ -128,7 +176,9 @@ test('T24 B47 B10: failed range refresh keeps cached rows/out-of-date/anchor, pa
     const retry = await holdPage(page, (url) => url.searchParams.has('window_start'));
     try {
       const button = alert.getByRole('button', { name: 'Retry', exact: true });
-      await button.focus();
+      // Focus the real recovery control without native focus scrolling away
+      // from the saved reader. The keyboard action is still a genuine Enter.
+      await button.evaluate(element => (element as HTMLElement).focus({ preventScroll: true }));
       await page.keyboard.press('Enter');
       await retry.requested;
       await expect(button).toBeFocused();
@@ -216,11 +266,20 @@ for (const survival of ['anchor-kept', 'anchor-gone', 'none'] as const) {
     const before = history.traffic.frames.length;
     await history.gateway.kill9();
     history.gateway.assertStoppedForFixture();
-    // Actual rollover exists before aging. Only the real retention owner deletes
-    // the chosen rolled files and updates the real index; no fabricated frames.
-    ageRolledHistoryPartitions(history.gateway, history.sessionId, expired.map((n) => days[n].day), new Date(Date.now() - 60 * 24 * 60 * 60 * 1000));
-    const receipt = await sweepChatHistoryFixture(history.gateway, 30);
-    expect(receipt.removed_partitions).toBe(expired.length);
+    // Actual rollover exists before aging. D1a refuses 65+ unpublished deletion
+    // facts, so create separate real expiry cohorts BEFORE each real sweep,
+    // never chunk-recover an already-existing over-bound gap or rebuild an index.
+    const receipts: Awaited<ReturnType<typeof sweepChatHistoryFixture>>[] = [];
+    const cohortSize = 32; // Half D1a's 64 combined-item bound; no other writer runs.
+    for (let start = 0; start < expired.length; start += cohortSize) {
+      const cohort = expired.slice(start, start + cohortSize);
+      ageRolledHistoryPartitions(history.gateway, history.sessionId, cohort.map(n => days[n].day), new Date(Date.now() - 60 * 24 * 60 * 60 * 1000));
+      const receipt = await sweepChatHistoryFixture(history.gateway, 30);
+      expect(receipt.removed_partitions, 'each actual retention pass removes exactly its newly aged cohort').toBe(cohort.length);
+      receipts.push(receipt);
+    }
+    expect(receipts.reduce((sum, receipt) => sum + receipt.removed_partitions, 0),
+      'all originally selected partitions really expired through the retention owner').toBe(expired.length);
     await history.gateway.restart({ relogin: false });
     await waitForConnected(page);
     await expect.poll(() => history.traffic.frames.slice(before).filter((f) => f.type === 'catch_up_complete').length).toBe(1);
@@ -245,7 +304,7 @@ for (const survival of ['anchor-kept', 'anchor-gone', 'none'] as const) {
     }
     await expect(page.getByLabel('Conversation history', { exact: true })).toBeFocused();
     expect(history.traffic.sends).toEqual([]);
-    await history.record(`range-expiry-${survival}`, { receipt });
+    await history.record(`range-expiry-${survival}`, { receipts });
   });
 }
 

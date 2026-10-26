@@ -8,7 +8,7 @@ import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { onlineManager, QueryClientProvider } from '@tanstack/react-query'
+import { CancelledError, onlineManager, QueryClientProvider } from '@tanstack/react-query'
 import { queryClient as client } from '@/lib/queryClient'
 import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
@@ -77,13 +77,16 @@ describe('workspace lookup failure and shared producers', () => {
 
   it('aborts a lookup started by another producer of the shared query, then starts a second one', async () => {
     // Another component (the sidebar) starts the request through the shared definition.
-    void client.fetchQuery({ ...activeWorkspacesQueryOptions }).catch(() => undefined)
+    const producer = client.fetchQuery({ ...activeWorkspacesQueryOptions }).catch((error: unknown) => {
+      if (!(error instanceof CancelledError)) throw error
+      expect(error).toBeInstanceOf(CancelledError)
+    })
     await waitFor(() => expect(lookups, 'the other producer started the first real request').toHaveLength(1))
     expect(lookups[0].signal, 'the shared definition forwards the query signal').toBeDefined()
     render(<QueryClientProvider client={client}><SessionRoute /></QueryClientProvider>)
     const retry = await screen.findByRole('button', { name: 'Retry' }, { timeout: REDIRECT_DECISION_WAIT_MS + 3_000 })
     expect(lookups, 'the route joined the in-flight request instead of starting its own').toHaveLength(1)
-    await userEvent.click(retry)
+    await Promise.all([producer, userEvent.click(retry)])
     await waitFor(() => expect(lookups).toHaveLength(2))
     expect(lookups[0].signal!.aborted, 'Retry aborts the request the other producer started').toBe(true)
     expect(lookups[1].signal!.aborted).toBe(false)
@@ -136,5 +139,36 @@ describe('workspace lookup failure and shared producers', () => {
     await userEvent.click(within(alert).getByRole('button', { name: /^Retry$/u }))
     expect(await screen.findByText(/^Waiting for the connection to find this chat's workspace\./u)).toBeTruthy()
     expect(screen.queryByText(/Couldn't find this chat's workspace/u)).toBeNull()
+  })
+
+  it('a failed replacement stays a terminal error with Retry and inline chat, never a successful empty list', async () => {
+    const key = activeWorkspacesQueryOptions.queryKey
+    const failureMessage = "Couldn't find this chat's workspace, so the chat is open here instead. Retry to move it into its workspace."
+    render(<QueryClientProvider client={client}><SessionRoute /></QueryClientProvider>)
+    await waitFor(() => expect(lookups, 'the initial real request started').toHaveLength(1))
+    lookups[0].settle(forbidden())
+    const firstAlert = await screen.findByRole('alert')
+    expect(firstAlert).toHaveTextContent(failureMessage)
+    expect(client.getQueryState(key)).toMatchObject({ status: 'error', fetchStatus: 'idle', error: { status: 403 } })
+    const firstError = client.getQueryState(key)?.error
+
+    await userEvent.click(within(firstAlert).getByRole('button', { name: /^Retry$/u }))
+    await waitFor(() => expect(lookups, 'Retry starts the replacement real request').toHaveLength(2))
+    expect(client.getQueryState(key)?.fetchStatus).toBe('fetching')
+    expect(screen.queryByText(failureMessage), 'the previous failure is not the replacement outcome').toBeNull()
+    lookups[1].settle(forbidden())
+
+    await waitFor(() => expect({ status: client.getQueryState(key)?.status, fetchStatus: client.getQueryState(key)?.fetchStatus },
+      'r13 m03: the SECOND request failed; never normalize it into successful empty data')
+      .toStrictEqual({ status: 'error', fetchStatus: 'idle' }))
+    expect(client.getQueryState(key)?.error).toMatchObject({ status: 403 })
+    expect(client.getQueryState(key)?.error, 'the replacement has its own terminal error, not the old one').not.toBe(firstError)
+    expect(client.getQueryState(key)?.data, 'neither failure is an empty successful workspace list').toBeUndefined()
+    const replacementAlert = await screen.findByRole('alert')
+    expect(replacementAlert).toHaveTextContent(failureMessage)
+    expect(replacementAlert).toBeVisible()
+    expect(within(replacementAlert).getByRole('button', { name: /^Retry$/u })).toBeVisible()
+    expect(screen.getByTestId('inline-chat-screen'), 'failed replacement keeps the chat open inline').toBeVisible()
+    expect(lookups, 'both403 outcomes are non-retryable; no hidden third request').toHaveLength(2)
   })
 })

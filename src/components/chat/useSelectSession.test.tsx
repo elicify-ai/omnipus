@@ -386,20 +386,24 @@ describe('useSelectSession — attach -> seedSessionTokens -> setActiveAgentType
       result.current(session)
     })
 
-    expect(seedSessionTokensSpy).toHaveBeenCalledWith(4200)
+    expect(seedSessionTokensSpy).toHaveBeenCalledWith(4200, 'sess-tok')
   })
 
-  it('does NOT seed the token counter when total_tokens is 0 or undefined', () => {
+  it('seeds an addressed recorded zero but never invents a known total for omitted usage', () => {
     const result = renderSelectSession()
 
     act(() => {
       result.current(makeSession({ id: 'sess-zero-tok', workspace_id: 'ws-a', title: 'Zero', total_tokens: 0 }))
     })
+    expect(seedSessionTokensSpy.mock.calls, 'D16: recorded zero is real evidence for this selected session').toStrictEqual([[0, 'sess-zero-tok']])
     act(() => {
       result.current(makeSession({ id: 'sess-no-tok', workspace_id: 'ws-a', title: 'None' }))
     })
 
-    expect(seedSessionTokensSpy).not.toHaveBeenCalled()
+    // The documented seam accepts undefined as a no-op. The hook may pass it
+    // through or omit that call; it must never substitute a known number.
+    expect(seedSessionTokensSpy.mock.calls.filter(([total]) => total !== undefined),
+      'D16: omitted aggregate is unknown, never an invented zero or another session total').toStrictEqual([[0, 'sess-zero-tok']])
   })
 
   it('sets activeAgentType from the resolved agent for a chat-type session', () => {

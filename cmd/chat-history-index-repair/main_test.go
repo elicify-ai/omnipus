@@ -80,6 +80,18 @@ func repairTree(t *testing.T, root string) map[string]repairFileFact {
 			return err
 		}
 		fact := repairFileFact{Mode: info.Mode(), Size: info.Size(), Mtime: info.ModTime().UnixNano()}
+		if info.Mode().IsDir() && runtime.GOOS == "windows" {
+			// Windows revises a directory's on-disk last-write value between
+			// stats with sub-millisecond forward-only drift even when nothing
+			// inside it changed (measured on windows-latest, run 40065143594
+			// job 120786695761: twelve read-only guarantees all differed only
+			// in a Size-0 entry's Mtime, 0.36-0.87 ms, files never). Directory
+			// Mtime is therefore not a bit-exact mutation oracle there — the
+			// same exclusion repairFullCopyFacts already applies D13-wide.
+			// Regular files keep full strictness on every platform, and
+			// directories keep it on Linux/macOS.
+			fact.Mtime = 0
+		}
 		if info.Mode().IsRegular() {
 			b, err := os.ReadFile(path)
 			if err != nil {
