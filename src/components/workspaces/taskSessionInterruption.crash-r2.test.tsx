@@ -1,6 +1,6 @@
 import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Task } from '@/lib/api'
 import { fetchSessionDetail, fetchSessionPage } from '@/lib/api/sessions'
 import type { components } from '@/lib/api/generated/openapi-types'
@@ -32,6 +32,28 @@ function session(child: boolean): WireSession {
       ...(state === 'interrupted' ? { interruption_reason: cause } : { execution: 'running' as const }) } : { child_count: 1 }),
   }
 }
+// Same jsdom geometry shims the graph consumers' own tests use (React Flow
+// needs them before GraphView renders); environment only, not an oracle.
+beforeAll(() => {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  const g = globalThis as unknown as Record<string, unknown>
+  g.ResizeObserver = ResizeObserverStub
+  g.DOMMatrixReadOnly = class {
+    m22 = 1
+  }
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
+  if (!Element.prototype.getBoundingClientRect) return
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+    x: 0, y: 0, width: 248, height: 96, top: 0, left: 0, right: 248, bottom: 96, toJSON: () => ({}),
+  } as DOMRect)
+})
+afterAll(() => { vi.restoreAllMocks() })
+
 const task: Task = {
   id: 'r2-task', title: 'Observe interrupted child', status: 'in_progress', action: 'llm', priority: 3,
   workspace_id: 'r2-workspace', surface: 'user', agent_id: 'mia', session_id: CHILD,
@@ -89,8 +111,8 @@ describe.each(['Board', 'List', 'Graph'] as const)('T5: %s task presentation', (
     const view = mount()
     await settled()
     const notice = screen.queryByTestId('task-session-interrupted')
-    expect.soft(notice?.textContent).toBe('Interrupted')
-    expect.soft(notice?.getAttribute('title')).toMatch(reason === 'tool_limit' ? /limit/i : /file.*check/i)
+    expect.soft(notice?.textContent ?? '').toBe('Interrupted')
+    expect.soft(notice?.getAttribute('title') ?? '').toMatch(reason === 'tool_limit' ? /limit/i : /file.*check/i)
     expect.soft(view.container.querySelector('[aria-label="Running"]')).toBeNull()
     expect.soft(view.container.querySelector('.animate-spin')).toBeNull()
     expect.soft(view.container.querySelector('time[aria-label^="Execution time"]')).toBeNull()
@@ -105,7 +127,7 @@ describe.each(['Board', 'List', 'Graph'] as const)('T5: %s task presentation', (
     state = 'interrupted'
     await act(async () => { await queryClient.invalidateQueries() })
     await settled()
-    expect.soft(screen.queryByTestId('task-session-interrupted')?.textContent).toBe('Interrupted')
+    expect.soft(screen.queryByTestId('task-session-interrupted')?.textContent ?? '').toBe('Interrupted')
     state = 'working' // A subsequent server-observed, explicitly continued execution.
     await act(async () => { await queryClient.invalidateQueries() })
     await settled()
