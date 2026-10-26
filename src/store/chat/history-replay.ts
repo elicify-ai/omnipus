@@ -201,6 +201,15 @@ function stageSpanFact(stage: Stage, frame: ServerFrame, entryId: string | undef
   return true
 }
 
+/** D7: only a complete, applied snapshot may claim its cut. A rejected page
+ * keeps the prior cursor, so the next live frame re-attaches from the position
+ * this reader actually holds; a skipped page (a newer view owns the bucket)
+ * still takes the frame's cursor. Current controls complete either way. */
+function completeUncommittedSnapshot(context: HistorySliceContext, sid: string, frame: Extract<ServerFrame, { type: 'catch_up_complete' }>, outcome: 'rejected' | 'skipped'): void {
+  context.withBucket(sid, b => ({ ...(outcome === 'skipped' ? { cursor: cursorFromTerminalFrame(frame, b.cursor?.bootId) } : {}),
+    awaitingCatchUp: false, isReplaying: false, history: { ...b.history, liveControlsReady: true } }))
+}
+
 export function createHistoryFrameOwner(context: HistorySliceContext) {
   const stages = new Map<string, Stage>()
   const discardedSnapshots = new Set<string>()
@@ -301,9 +310,12 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     refreshRosterAfterAgentMutation(frame)
     return true
   }
-  function finish(sid: string, stage: Stage): boolean {
+  /** committed: the page is published. rejected: the staged page failed
+   * validation or commit (failSnapshot restored the prior reader). skipped:
+   * a newer view owns the bucket, or this page is already published. */
+  function finish(sid: string, stage: Stage): 'committed' | 'rejected' | 'skipped' {
     const bucket = context.get().sessionsById[sid]
-    if (!bucket || bucket.history.viewGeneration !== stage.generation || (stage.published && bucket.history.historyLoaded)) return false
+    if (!bucket || bucket.history.viewGeneration !== stage.generation || (stage.published && bucket.history.historyLoaded)) return 'skipped'
     let beforeCommit: SessionChatState | undefined
     try {
       const { positions, entries, rowCount } = sourceProjection(stage.groups, stage.cancellations)
@@ -346,7 +358,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
         const live = dropDeadWitnessedStreams(b, completedPage)
         return { ...applyHistoryPageToBucket(live, completedPage, 'latest', baseline), ...completion, ...(live !== b ? { isStreaming: live.isStreaming } : {}) }
       })
-      return true
+      return 'committed'
     } catch (error) {
       const kind = error instanceof SnapshotProtocolError ? error.kind
         : error instanceof ApiSchemaError || error instanceof HistoryPageProtocolError ? 'protocol_metadata'
@@ -355,7 +367,7 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
       // stack, source bodies/identities or opaque source positions.
       logDiagnostic('chatHistorySnapshotRejected', { phase: 'snapshot_commit', kind })
       failSnapshot(sid, stage, beforeCommit)
-      return false
+      return 'rejected'
     }
   }
   function handle(frame: ServerFrame, reduce: (frame: ServerFrame) => void): void {
@@ -418,10 +430,8 @@ export function createHistoryFrameOwner(context: HistorySliceContext) {
     }
     if (sid && stage && frame.type === 'catch_up_complete') {
       stages.delete(sid)
-      if (!finish(sid, stage)) {
-        context.withBucket(sid, b => ({ cursor: cursorFromTerminalFrame(frame, b.cursor?.bootId), awaitingCatchUp: false, isReplaying: false, history: { ...b.history, liveControlsReady: true } }))
-        return
-      }
+      const outcome = finish(sid, stage)
+      if (outcome !== 'committed') { completeUncommittedSnapshot(context, sid, frame, outcome); return }
     }
     const before = sid ? context.get().sessionsById[sid] : undefined
     if (sid && before?.history.viewMode === 'historical' && !['session_snapshot', 'session_state'].includes(frame.type)) {
