@@ -22,6 +22,8 @@ import { useToolApprovalStore } from '@/store/toolApproval'
 import type { AskUserQuestionCard, GoalStatusFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { fetchAgents } from '@/lib/api'
+import { emptySessionState } from '@/store/chat/session'
+import { entry, page, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 
 class ResizeObserverStub {
   observe() {}
@@ -99,7 +101,8 @@ function seedMessages(sid: string, messages: ChatMessage[], flags: { streaming: 
     ...s,
     sessionsById: {
       [sid]: {
-        ...((s.sessionsById ?? {})[sid] ?? {}),
+        // Seam K / C5: partial buckets must include the real history state.
+        ...((s.sessionsById ?? {})[sid] ?? emptySessionState()),
         ...bucket,
         isStreaming: flags.streaming,
         isReplaying: flags.replaying,
@@ -764,10 +767,13 @@ describe('plain, replay, and idle bubbles', () => {
         useChatStore.getState().resetSessionForReplay(sid)
         useChatStore.getState().setReplaying(true)
       })
-      feed({ type: 'session_snapshot', session_id: sid, seq: 40, boot_id: 'handoff-boot', reason: 'unknown_position' })
-      feed({ type: 'session_state', session_id: sid, user_id: 'operator', pending_approvals: [], emitted_at: '2026-10-22T07:00:00Z', active_turn: { turn_id: turnId, agent_id: 'agent-1', started_at: '2026-10-22T06:59:00Z' } })
-      feed({ type: 'replay_message', session_id: sid, role: 'user', id: 'recovered-request', content: 'Continue the answer' })
-      feed({ type: 'replay_message', session_id: sid, role: 'assistant', id: messageId, content: 'Recovered answer', turn_id: turnId, agent_id: 'agent-1' })
+      // D3/D4/D7: the selected sources and their replay origins agree.
+      const request = entry(1, { id: 'recovered-request', role: 'user', content: 'Continue the answer' })
+      const answer = entry(2, { id: messageId, role: 'assistant', content: 'Recovered answer', turn_id: turnId, agent_id: 'agent-1' })
+      feed({ ...snapshot(page([request, answer], { sessionId: sid })), seq: 40, boot_id: 'handoff-boot' })
+      feed({ type: 'session_state', session_id: sid, user_id: 'operator', pending_approvals: [], emitted_at: '2026-10-22T07:00:00Z', history_state: { status: 'available' }, active_turn: { turn_id: turnId, agent_id: 'agent-1', started_at: '2026-10-22T06:59:00Z' } })
+      feed(replay(request, sid))
+      feed(replay(answer, sid))
       feed({ type: 'done', session_id: sid, stats: { frames_emitted: 2 } })
       feed({ type: 'catch_up_complete', session_id: sid, mode: 'snapshot', seq: 40, boot_id: 'handoff-boot' })
       const recovered = useChatStore.getState().sessionsById[sid]
