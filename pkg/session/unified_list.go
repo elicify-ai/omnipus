@@ -202,6 +202,18 @@ func (us *UnifiedStore) listSessionsFiltered(pred func(*UnifiedMeta) bool) ([]*U
 			_, readErr := us.readMetaLocked(name)
 			h.Unlock()
 			if readErr != nil {
+				if errors.Is(readErr, os.ErrNotExist) {
+					// No meta.json at all: this directory was never a session
+					// (e.g. the window-key folders task turns write —
+					// taskTurnSessionKey — which by design carry no meta.json).
+					// Boot's loadMetaCacheLocked and UnreadableSessionIDs
+					// already treat exactly this case as "not a session"; this
+					// list path runs on EVERY call, so a Warn here re-logged
+					// every orphan directory forever (55k+ lines on one live
+					// install). Skip quietly; Debug keeps it greppable.
+					slog.Debug("unified_store: list sessions: dir has no meta.json — not a session, skipped", "dir", name)
+					continue
+				}
 				slog.Warn(
 					"unified_store: list sessions: skipping unreadable out-of-band session dir",
 					"dir", name, "error", readErr,

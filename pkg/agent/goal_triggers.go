@@ -28,7 +28,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -1383,6 +1385,29 @@ func (al *AgentLoop) goalQuietWindowSettle(now time.Time) {
 		}
 		meta, merr := recStore.GetMeta(sessionID)
 		if merr != nil || meta == nil {
+			// GOAL-FR-044/EC-10 (pkg/goal/retention.go::Sweep pass 1): an
+			// active goal whose session no longer resolves MUST NOT be left
+			// dangling — it is terminal-expired on its record
+			// (GoalStateExpired, reason persisted, record retained — D9),
+			// never deleted. The retention sweep applies that rule, but only
+			// when retention is enabled; this keeper tick runs regardless, so
+			// it terminates the dangling record here once, after which
+			// ListActive no longer returns it and the sweep goes quiet.
+			// os.ErrNotExist is the deleted-session case — the same "not a
+			// session" reading loadMetaCacheLocked/UnreadableSessionIDs
+			// already apply; any other read failure stays a per-tick Warn, so
+			// a real storage fault is not silenced by a one-shot.
+			if merr != nil && errors.Is(merr, os.ErrNotExist) {
+				if terr := terminateGoalRecordByID(rec.GoalID, generated.GoalStateExpired,
+					"active session no longer exists (goal idle settle, GOAL-FR-044/EC-10)"); terr != nil {
+					logger.WarnCF("agent", "goal idle settle: could not terminate a goal whose session is gone — record left active, will retry next tick",
+						map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": terr.Error()})
+					continue
+				}
+				logger.WarnCF("agent", "goal idle settle: terminated a goal whose session no longer exists",
+					map[string]any{"session_id": sessionID, "goal_id": rec.GoalID})
+				continue
+			}
 			logger.WarnCF("agent", "goal idle settle: could not read the goal's session meta — skipping",
 				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": errString(merr)})
 			continue
