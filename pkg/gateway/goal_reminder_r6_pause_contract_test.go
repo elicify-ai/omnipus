@@ -208,7 +208,7 @@ func TestR6PauseHistoryMessagesRetainsOlderPageDuplicate(t *testing.T) {
 			Timestamp: at.Add(time.Duration(i) * time.Millisecond),
 		}
 		if i == 0 || i == seedCount-1 {
-			entry.Role, entry.Status, entry.Content, entry.GoalID = "system", "notice", r6GatewayPause, f.goalID
+			entry.Type, entry.Role, entry.Content, entry.GoalID = session.EntryTypeSystem, "system", r6GatewayPause, f.goalID
 			pauseIDs = append(pauseIDs, entry.ID)
 		}
 		expectedIDs[entry.ID] = true
