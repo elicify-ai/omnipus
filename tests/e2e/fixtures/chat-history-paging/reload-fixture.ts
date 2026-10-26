@@ -33,15 +33,20 @@ export class ReloadHarness {
     const attachStart = this.traffic.attaches.length;
     const alreadyActive = await this.page.locator(`[data-active-session-id="${sessionId}"]`).isVisible();
     const completedBefore = this.traffic.frames.some(frame => frame.type === 'catch_up_complete' && frame.session_id === sessionId);
+    const priorSocketProof = this.attachReadiness.completedOnCurrentSocket(sessionId);
     const readiness = this.attachReadiness.arm(sessionId); // Before navigation can emit the real attach.
     try {
       const navigation = reload ? await this.page.reload() : await this.page.goto(`${this.gateway.baseURL}/#/sessions/${sessionId}`);
       await settled(this.page);
       const newAttach = this.traffic.attaches.slice(attachStart).some(frame => frame.session_id === sessionId);
-      // Playwright returns null for a same-document hash navigation. Reuse only
-      // this already-active session's actual prior completion, never on reload.
-      if (!reload && navigation === null && alreadyActive && !newAttach) {
+      // A Skills round trip may unmount chat while its same socket stays bound.
+      // Reuse only the observed CURRENT socket proof, never another generation
+      // or a new pending attach, and never on a real document reload.
+      const currentSocketProof = this.attachReadiness.completedOnCurrentSocket(sessionId);
+      if (!reload && navigation === null && !newAttach && priorSocketProof && currentSocketProof) {
         expect(completedBefore, `${this.phase}: same-session no-op must have a proven prior native completion`).toBe(true);
+        expect(currentSocketProof, `${this.phase}: same-document reuse is the exact current socket's prior completion`).toEqual(priorSocketProof);
+        await this.info.attach('same-socket-addressed-readiness', { contentType: 'application/json', body: JSON.stringify({ alreadyActive, priorSocketProof, currentSocketProof }) });
       } else {
         // Native completion is the readiness barrier, under the unchanged test
         // deadline. A short DOM poll must not measure unrelated cold app boot.

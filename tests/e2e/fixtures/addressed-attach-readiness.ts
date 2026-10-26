@@ -21,6 +21,9 @@ type Waiter = {
 export function observeAddressedAttachReadiness(page: Page) {
   let ordinal = 0;
   let failure: Error | undefined;
+  let currentSocket: WebSocket | undefined;
+  let boundSessionId: string | undefined;
+  const completed = new Map<string, AttachProof>();
   const waiters = new Set<Waiter>();
   const cleanup = new Set<() => void>();
   const fail = (error: Error) => {
@@ -32,6 +35,9 @@ export function observeAddressedAttachReadiness(page: Page) {
   };
   const onSocket = (socket: WebSocket) => {
     if (new URL(socket.url()).pathname !== '/api/v1/chat/ws') return;
+    currentSocket = socket;
+    boundSessionId = undefined;
+    completed.clear(); // A prior document/socket cannot prove the new connection ready.
     const requests = new Map<string, { ordinal: number; frame: AttachProof['request'] }[]>();
     const parse = (payload: string | Buffer) => {
       const parsed = WsFrame.safeParse(JSON.parse(payload.toString()));
@@ -42,6 +48,7 @@ export function observeAddressedAttachReadiness(page: Page) {
       try {
         const frame = parse(payload);
         if (frame.type !== 'attach_session') return;
+        if (socket === currentSocket) { boundSessionId = frame.session_id; completed.clear(); }
         const queue = requests.get(frame.session_id) ?? [];
         queue.push({ ordinal: ++ordinal, frame });
         requests.set(frame.session_id, queue);
@@ -53,6 +60,8 @@ export function observeAddressedAttachReadiness(page: Page) {
         if (frame.type !== 'catch_up_complete') return; // replay done is not readiness.
         const request = requests.get(frame.session_id)?.shift();
         if (!request) return; // No observed request means no proof for this observer.
+        if (socket !== currentSocket) return; // A superseded connection cannot prove current readiness.
+        if (boundSessionId === frame.session_id) completed.set(frame.session_id, { request: request.frame, completion: frame });
         for (const waiter of waiters) {
           if (waiter.proof || request.ordinal <= waiter.after || (waiter.sessionId && waiter.sessionId !== frame.session_id)) continue;
           waiter.proof = { request: request.frame, completion: frame };
@@ -60,9 +69,11 @@ export function observeAddressedAttachReadiness(page: Page) {
         }
       } catch (error) { fail(error instanceof Error ? error : new Error(String(error))); }
     };
+    const closed = () => { if (socket === currentSocket) { currentSocket = undefined; boundSessionId = undefined; completed.clear(); } };
     socket.on('framesent', sent);
     socket.on('framereceived', received);
-    cleanup.add(() => { socket.off('framesent', sent); socket.off('framereceived', received); });
+    socket.on('close', closed);
+    cleanup.add(() => { socket.off('framesent', sent); socket.off('framereceived', received); socket.off('close', closed); });
   };
   const dispose = () => {
     fail(new Error('Page closed before its addressed attach completed'));
@@ -70,11 +81,15 @@ export function observeAddressedAttachReadiness(page: Page) {
     page.off('close', dispose);
     for (const remove of cleanup) remove();
     cleanup.clear();
+    completed.clear();
+    currentSocket = undefined;
+    boundSessionId = undefined;
     waiters.clear();
   };
   page.on('websocket', onSocket);
   page.once('close', dispose);
   return {
+    completedOnCurrentSocket(sessionId: string) { return completed.get(sessionId); },
     arm(sessionId?: string) {
       const waiter: Waiter = { after: ordinal, sessionId, error: failure };
       waiters.add(waiter);
