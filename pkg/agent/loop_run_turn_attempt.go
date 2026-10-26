@@ -37,6 +37,14 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 	streamed *atomic.Int64,
 ) (response *providers.LLMResponse, err error) {
 	defer func() { rt.accountProviderAttempt(providerName, model, response, err) }()
+	// Q59 (founder, 2026-10-23): capture THIS attempt's visible text as it
+	// streams. Cleared on every attempt entry, so the capture describes
+	// exactly the attempt about to run — never a previous round's. The
+	// truncated-tool-call repair (evaluateTruncatedToolCallError) reads it to
+	// settle narration that streamed before a cut-off call into the
+	// transcript, and to tell "this attempt showed the user text" apart from
+	// a stale streamer left over from an earlier round.
+	rt.ts.beginAttemptStreamCapture()
 	var imageErr error
 	cat := rt.al.getCapabilityCatalog()
 	budget := resizeBudgetForModel(cat, providerName, model, int(catalog.DefaultResizeLimits.MaxBytes))
@@ -142,6 +150,13 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 					// Update so an attempted partial emit fails closed even if the
 					// client disconnects during the write.
 					streamed.Add(int64(len(delta)))
+					// Q59: mirror the delta into the attempt-scoped capture so
+					// the agent loop holds what the live bubble was shown even
+					// when this attempt ends in an error — a truncated tool
+					// call comes back as a nil response, leaving the streamer
+					// buffer as the only other copy, and bus.Streamer has no
+					// read-back.
+					rt.ts.recordAttemptStreamDelta(delta)
 					if err := streamer.Update(ctx, delta); err != nil {
 						logger.DebugCF("agent", "Streaming update error (client may have disconnected)", map[string]any{"error": err.Error()})
 					}

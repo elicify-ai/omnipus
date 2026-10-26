@@ -718,6 +718,17 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 		return agentLoopRunTurnResponseReturn
 	}
 
+	// Q59 (founder, 2026-10-23): a provider response that completed without a
+	// truncated-tool-call refusal breaks the refusal run — the
+	// consecutiveTruncatedToolCallRefusals bound (evaluateTruncatedToolCallError)
+	// counts consecutive truncated calls, never lifetime attempts. This stage
+	// runs after every callLLMWithRetries at the main and media-downgrade call
+	// sites, so any successful response resets the count here; the
+	// empty-response retry site's own success passes through this stage too,
+	// because the empty response that triggered it was itself a successful
+	// call that already reset the count.
+	rr.rq.ri.rf.rt.ts.resetConsecutiveToolCallTruncations()
+
 	if rr.rq.ri.rf.rt.al.hooks != nil {
 		llmResp, decision := rr.rq.ri.rf.rt.al.hooks.AfterLLM(rr.rq.ri.rf.rt.turnCtx, &LLMHookResponse{
 			Meta:     rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.response"),
