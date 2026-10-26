@@ -5,6 +5,11 @@ Detail behind SKILL.md §3. Design source: section 5.6 of
 a dev-team tool authored under that design; it is deliberately not `check-`-prefixed, so
 the CI guards runner does not adopt it as a gate).
 
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
+
+Current safety authority: root `CLAUDE.md` ("Running CLI agents" and "Build, test,
+and quality gates"). The monitor and the worker controller are separate instruments.
+
 ## Calling the monitor
 
 ```bash
@@ -14,7 +19,7 @@ scripts/dev-machine-capacity.sh
 It prints its measurements (memory, disk, CPU load, active dispatch count) and exactly
 one verdict line:
 
-- `CAPACITY: OK` — dispatch more work.
+- `CAPACITY: OK` — monitor checks passed; complete the controller/load pre-flight too.
 - `CAPACITY: HOLD <reason>` — hold new dispatches.
 
 **Where it is run:** before every new dispatch wave, before widening an existing one,
@@ -31,10 +36,14 @@ squad). Team-lead and any squad lead widening its own fan-out both run it.
 | CPU load | advisory — feeds the verdict, never holds alone | Sustained 1-minute load above ~80% of logical cores over two samples ~30 s apart | One spike is noise; sustained load means lanes already compete |
 | Active dispatches | advisory — feeds the verdict, never holds alone (Round 18) | More than ~12 in-flight rows | The work-in-flight measure; the ledger knows what is actually running, the process table does not |
 
-**Round 18 (founder ruling, 2026-09-25):** only memory and disk can hold new work by
-themselves. The squad (active-dispatch) count is advisory only, exactly like CPU load —
-it never triggers a HOLD alone; it is shown as information and folded into the reason
-text solely once memory or disk has already produced a HOLD.
+**2026-10-23 amendment:** the advisory-only one-minute CPU row above describes the
+existing monitor, not permission to launch. Sample the **1-minute** load (`uptime`),
+compare it with the refusal threshold in root `CLAUDE.md` ("Running CLI agents"),
+and queue new workers when over it even if the monitor says OK. The five-minute
+overload check is not a substitute. The controller load refusal is implemented;
+use its actual admission result, not this monitor's advisory CPU row. Current
+controller behavior and shared-root lock exemptions are in root `CLAUDE.md`
+("Worker safety") and `knowledge/dispatch-and-watch.md`. Keep memory/disk HOLDs too.
 
 Thresholds are named constants at the top of the script, founder-adjustable — the
 numbers above are the shipped starting points, tuned through governance.
@@ -47,12 +56,13 @@ a HOLD — the verdict cannot be trusted without both hard signals.
 ## What HOLD means
 
 - **A HOLD queues the dispatch — it never cancels work** already running.
-- Retry after the next check passes or a running lane finishes.
+- Retry after the next check passes or a running lane finishes; re-check live lane/worktree ownership before resuming.
 - The monitor is **binding on dispatch decisions and advisory to the founder**.
 
 ## The 20-minute escalation
 
 A HOLD lasting longer than **20 minutes** fires an event status update to the founder
 (events only — SKILL.md §5), stating the reason and what is queued; the founder can
-override the HOLD. A silent, open-ended HOLD is the failure this escalation exists to
+override the monitor HOLD. That is not silent permission to bypass the controller
+or start a second live owner; report a controller refusal to the founder explicitly. A silent, open-ended HOLD is the failure this escalation exists to
 prevent.

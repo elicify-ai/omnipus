@@ -262,6 +262,10 @@ type PlanEngine struct {
 	// struct-literal test engine and in any deployment that has not yet wired
 	// the store — Start's sweep step no-ops cleanly when it is absent.
 	lifecycleStore *session.LifecycleStore
+	// bootSweepOnce keeps crash recovery on the first Start only. Reload reuses
+	// this engine while task runs remain alive; sweeping again would finalize
+	// their sessions as interrupted before the executor records their outcome.
+	bootSweepOnce sync.Once
 	// bootSweepBudget bounds the wall-clock time the boot sweep may take
 	// (boot_sweep_budget_seconds, FR-118 "within N s"). Defaults to
 	// DefaultBootSweepBudgetSeconds when zero (SetBootSweepBudget / gateway
@@ -708,8 +712,10 @@ func (pe *PlanEngine) Start(ctx context.Context) error {
 	// (N-15) into the same single boot pass. Runs AFTER bootReconcile so the
 	// durable F2 gate is already rehydrated (an awaiting-correction plan's
 	// owner session is then correctly EXEMPTED by exemption b). No-ops
-	// cleanly when no lifecycle store is wired.
-	pe.runBootSweep(ctx)
+	// cleanly when no lifecycle store is wired. A same-instance restart is a
+	// configuration reload, not a crash: its existing task runs keep ownership
+	// of their terminal writes. A fresh engine still performs the boot sweep.
+	pe.bootSweepOnce.Do(func() { pe.runBootSweep(ctx) })
 
 	pe.stoppedWG.Add(1)
 	go pe.runTickLoop()

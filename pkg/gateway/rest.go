@@ -69,6 +69,9 @@ type restAPI struct {
 	// setupOfferPoster posts the workspace-setup offer into Omnipus's main
 	// (FR-047). nil means the real poster (workspace_setup_offer.go).
 	setupOfferPoster workspaceSetupOfferPoster
+	// beforeWorkspaceDetailPreparation is a scheduling observer for lifecycle
+	// interleaving tests. Nil in production; never replaces reads or writes.
+	beforeWorkspaceDetailPreparation func()
 	// stopSession, when set, replaces agentLoop.StopSession in the delete
 	// path (a test seam for outcomes a real Stop cannot be made to produce
 	// portably, such as a failed background-shell kill). Nil in production.
@@ -290,6 +293,9 @@ type restAPI struct {
 	// approvalReg is the in-process tool-approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway; nil in test setups that do not exercise approvals.
 	approvalReg *approvalRegistryV2
+	// rooms is the group-chat service (rest_rooms.go, rooms_runtime.go);
+	// nil until boot wires it (routes then answer 500).
+	rooms atomic.Pointer[roomsHub]
 
 	// builtinRegistry is the central registry for builtin tools (M16, FR-001).
 	// Populated at boot via BuiltinRegistry.RegisterBuiltin for all sysagent tools.
@@ -661,6 +667,10 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 
 // registerCoreRoutes registers state, system, task, workspace, library, provider, tool, channel, agent, mailbox, token, and activity routes.
 func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
+	rae.cm.RegisterHTTPHandler("/api/v1/secret-requests/", rae.a.withAuthAndBodyLimit(rae.a.HandleSecretRequests, secretSubmitBodyLimit))
+	// K6 listing and K49 options: authenticated web user only; value-free.
+	rae.cm.RegisterHTTPHandler("/api/v1/secrets", rae.a.withAuth(rae.a.HandleSecrets))
+	rae.cm.RegisterHTTPHandler("/api/v1/secrets/", rae.a.withAuth(rae.a.HandleSecrets))
 	rae.cm.RegisterHTTPHandler("/api/v1/state", rae.a.withOptionalAuth(rae.a.HandleState))
 	rae.cm.RegisterHTTPHandler("/api/v1/system/cli-detect", rae.a.withAuth(rae.a.HandleSystemCliDetect))
 	// withAuth, never withOptionalAuth: this lists the operator's own disk.
@@ -708,6 +718,9 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// other workspace-scoped route is unaffected (still the generic 1 MiB).
 	rae.cm.RegisterHTTPHandler("/api/v1/workspaces", rae.a.withWorkspacesBodyLimit(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
 	rae.cm.RegisterHTTPHandler("/api/v1/workspaces/", rae.a.withWorkspacesBodyLimit(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
+	// Group chats (omnipus-system-agent K23-K26): /rooms/{id}[/members|/messages].
+	// /workspaces/{id}/rooms is dispatched from HandleWorkspaces.
+	rae.cm.RegisterHTTPHandler("/api/v1/rooms/", rae.a.withAuth(rae.a.HandleRooms))
 	// Library file explorer (rest_library.go). withUploadAuth, not plain
 	// withAuth: /library/{id}/upload streams multipart straight through this
 	// dispatcher, and withAuth's body limit would truncate it. Every JSON

@@ -1585,13 +1585,6 @@
     },
     {
       "ruleId": "spacing/extension-boundary",
-      "path": "src/components/screens/AgentListScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
-      "reason": "Lead read (undefined): line 639, line 658, line 675: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
-      "owner": "safe-area env() with validated closed-scale fallback exception registry"
-    },
-    {
-      "ruleId": "spacing/extension-boundary",
       "path": "src/components/screens/ConnectorsScreen.tsx",
       "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
       "reason": "Lead read (undefined): line 1063: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
@@ -2505,20 +2498,6 @@
       "path": "src/components/agents/AgentProfile.tsx",
       "syntax": "AgentProfile#svg-attribute.color<-selectedColor",
       "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1; founder decision 2026-09-19; commit d45146f13 (ts-colors.mjs colour lock) classification P2. Same `selectedColor` state as AgentProfile#dom-style.backgroundColor<-selectedColor above, this time forwarded unchanged to an SVG `color` attribute in the same avatar preview markup. Governed at the colour picker, not this paint sink.",
-      "owner": "user-authored colours exception registry"
-    },
-    {
-      "ruleId": "ts-colors/extension-boundary",
-      "path": "src/components/agents/CreateAgentModal.tsx",
-      "syntax": "payloadToCreateRequest#dom-style.color<-payload.color",
-      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Mechanically verified: `payloadToCreateRequest` writes `dom-style.color` directly from `payload.color`, whose root `payload` is a parameter declared at src/components/agents/CreateAgentModal.tsx:110:3, with the final property `color` read unchanged (no status/config lookup, no transformation).",
-      "owner": "user-authored colours exception registry"
-    },
-    {
-      "ruleId": "ts-colors/extension-boundary",
-      "path": "src/components/agents/WorkerCard.tsx",
-      "syntax": "WorkerCard#dom-style.backgroundColor<-agent.color",
-      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Mechanically verified: `WorkerCard` writes `dom-style.backgroundColor` directly from `agent.color`, whose root `agent` is a parameter declared at src/components/agents/WorkerCard.tsx:45:30, with the final property `color` read unchanged (no status/config lookup, no transformation).",
       "owner": "user-authored colours exception registry"
     },
     {
@@ -5106,27 +5085,6 @@
     },
     {
       "ruleId": "ts-colors/extension-boundary",
-      "path": "src/components/agents/CreateAgentModal.tsx",
-      "syntax": "identityOnCreate#dom-style.color<-payload.color",
-      "reason": "Category: user-authored colours — create sends payload.color only after it has been checked against the generated AgentColor options. The field is the wire color, read unchanged.",
-      "owner": "user-authored colours exception registry"
-    },
-    {
-      "ruleId": "ts-colors/extension-boundary",
-      "path": "src/components/agents/CreateAgentWizard.tsx",
-      "syntax": "initialPayload#dom-style.color<-AgentColor.options[9]",
-      "reason": "Category: user-authored colours — a new agent's untouched colour is Grey, the last generated AgentColor option, which is also the server default.",
-      "owner": "user-authored colours exception registry"
-    },
-    {
-      "ruleId": "ts-colors/extension-boundary",
-      "path": "src/components/agents/wizard/Step1Identity.tsx",
-      "syntax": "Step1Identity#svg-attribute.color<-payload.color",
-      "reason": "Category: user-authored colours — the create step forwards the form's color field unchanged into the live preview. The field is a palette hex.",
-      "owner": "user-authored colours exception registry"
-    },
-    {
-      "ruleId": "ts-colors/extension-boundary",
       "path": "src/components/ui/agent-icon.test.tsx",
       "syntax": "iconSteelBlue#svg-attribute.color<-AgentColor.options[0]",
       "reason": "Category: user-authored colours — the AgentIcon test passes Steel blue, the first generated AgentColor option (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconSteelBlue. The index is a numeric literal. The attribute is the AgentIcon color prop.",
@@ -5201,9 +5159,38 @@
       "syntax": "MessageItem#svg-attribute.color<-agent?.color",
       "reason": "Identity ink on the standalone/embed reply mark (founder UI feedback 2026-10-11: MessageItem joins the shared AgentStatusIndicator). MessageItem reads the responding agent's own color field and passes it unmodified into AgentStatusIndicator, which validates it against its published palette before AgentIcon paints it as currentColor — the same boundary already registered for ChatScreen.tsx's ResolvedAgentMark#svg-attribute.color<-agent?.color and VirtualAssistantMessageRow#svg-attribute.color<-agent?.color. Governed identity data (ADR-20261007, design-system rule 6), not a design-system chrome colour; the component does not choose a colour.",
       "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.active-form.test.tsx",
+      "syntax": "Fixture#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Governed identity data, not chrome: the named Fixture passes the literal final generated AgentColor option unchanged to the real AgentStatusIndicator and AgentIcon. This exact palette source and sink exercise the published identity mark alongside status-copy and motion assertions; no raw colour or arbitrary fixture flow is allowed.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.stories.tsx",
+      "syntax": "StatusMotionFixture#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Governed identity data, not chrome: the named StatusMotionFixture passes the literal final generated AgentColor option unchanged to the real AgentStatusIndicator and AgentIcon. This exact app-story palette source and sink allow actual icon/text timing verification without introducing a second colour palette or a raw colour.",
+      "owner": "user-authored colours exception registry"
     }
   ],
   "reviewedBoundaries": [
+    {
+      "path": "src/components/chat/composer/ModelPicker.session-return.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1436: mounts the existing application-classified ToastContainer to assert real visible storage-failure warnings alongside the real picker and stores. This host depends on application state and has no public library export; no production import, scanner rule, or QA assertion is changed."
+    },
+    {
+      "path": "src/routes/_app/-sessions.$sessionId.reload-return.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1437: mounts the existing application-classified ToastContainer with the real router/runtime to exercise the user-visible Retry action. This is the application host, not a new primitive; no production import, public export, scanner rule, or QA assertion is changed."
+    },
+    {
+      "path": "src/components/skills/WhatsAppNativeNotice.serverStates.test.tsx",
+      "kind": "test",
+      "reason": "real chat/Connectors error alerts via catalogued ToastContainer; test-only, no public export"
+    },
     {
       "path": "src/components/chat/AgentStatusIndicator.monogram.wave1.test.tsx",
       "kind": "test",
@@ -5265,16 +5252,6 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/agents/CreateAgentModal.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/CreateAgentWizard.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/agents/ExecutorSelector.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -5305,11 +5282,6 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/agents/WorkerCard.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/agents/mcpPolicyOrphan.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -5326,31 +5298,6 @@
     },
     {
       "path": "src/components/agents/voice-provider-sub.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/wizard/Step1Identity.commandPreview.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/wizard/Step1Identity.envFocus.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/wizard/Step1Identity.prefillValidate.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/wizard/Step1Identity.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/wizard/Step2Personality.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -6416,21 +6363,6 @@
     },
     {
       "path": "src/components/providers/region-inference.test.ts",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/screens/AgentListScreen.auth.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/screens/AgentListScreen.systemSection.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/screens/AgentListScreen.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -8445,17 +8377,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/test/integration/agent-list.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/test/integration/chat-streaming.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/test/integration/create-agent.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },

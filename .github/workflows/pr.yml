@@ -1,8 +1,10 @@
 name: PR
 
 on:
+  # Full CI is selected by PR base, including standalone feature branches.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main, release/v0.1.1]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   # ADR-067 step 1: run the SAME checks on a direct push to a release branch
   # or main, not just on pull_request. Before this, pr.yml was
   # pull_request-only, so a commit merged straight to a release branch (no
@@ -12,22 +14,11 @@ on:
   # compare against on a push, so its filter steps are skipped entirely for
   # push, and every gated job's `code`/`go`/`spa` input defaults to 'true'.
   push:
-    branches:
-      - release/**
-      - main
-  # Allow manual runs on feature branches without opening a PR.
-  workflow_dispatch:
-    inputs:
-      llm_e2e:
-        description: Run paid llm-* E2E shards (false runs only non-LLM shards)
-        type: boolean
-        default: true
+    branches: [main, release/v0.1.1]
 
 # Paid llm-* shards are opt-in on PRs: add the run-e2e label BEFORE the next
 # push to the PR branch (or reopen the PR). Label changes alone do not trigger CI.
-# Alternatively: gh workflow run pr.yml --ref <PR-branch> (all shards by default).
-# Add -f llm_e2e=false to that dispatch command to run only non-LLM shards.
-# Pushes to release/** and main always retain the full shard plan. The nightly
+# Pushes to release/v0.1.1 and main retain the full shard plan. The nightly
 # scheduler is follow-up #1127, not delivered by this workflow change.
 # Cancel the superseded run on each new push instead of letting it spend money
 # on opted-in paid LLM work (model source: tests/e2e/e2e-model.json). For a
@@ -83,8 +74,8 @@ jobs:
     # or should be added.
     #
     # Any doubt defaults to running everything: non-pull_request events
-    # (push to release/**|main, or workflow_dispatch — neither has a PR diff
-    # to filter against) always get code=true AND go=true AND spa=true, and
+    # (push to release/v0.1.1|main, with no PR diff to filter against)
+    # always get code=true AND go=true AND spa=true, and
     # if a filter step below doesn't run or doesn't succeed, the fallback in
     # "Decide" still defaults every output to 'true' — fail open, never fail
     # closed into a silent skip. This is also what ADR-067 §4.3 requires for
@@ -106,7 +97,7 @@ jobs:
       - name: Filter changed paths — anything-but-docs (pull_request only)
         # dorny/paths-filter's GitHub-API mode needs no checkout for
         # pull_request events. Non-pull_request events (push to
-        # release/**|main, or workflow_dispatch) have no PR to diff against,
+        # release/v0.1.1|main) have no PR to diff against,
         # so this step is skipped for them and the fail-open default in
         # "Decide" below applies.
         id: filter
@@ -751,7 +742,7 @@ jobs:
           # *.test.ts only, so the sibling *.spec.ts Playwright files are not
           # picked up by this pattern. It ran in NO shard until 2026-08-23.
           - group: lib-store
-            patterns: "src/main.test.tsx src/lib/ src/store/ src/routes/ src/test/ src/design-system/ tests/e2e/fixtures/ tests/design-system/"
+            patterns: "src/main.test.tsx src/lib/ src/store/ src/routes/ src/test/ src/design-system/ tests/e2e/fixtures/ tests/design-system/ tests/wu15-rooms-contract/"
           # Group B: chat components — heaviest component group
           - group: components-chat
             patterns: "src/components/chat/"
@@ -770,7 +761,7 @@ jobs:
           # fails the build if that happens, so add new directories HERE (or to
           # a group above) rather than letting them go unexecuted.
           - group: components-misc
-            patterns: "src/components/screens/ src/components/browser/ src/components/calendar/ src/components/library/ src/components/connectors/ src/components/providers/ src/components/search/ src/components/sessions/ src/hooks/ src/assets/ src/styles/ tests/browser-acceptance/"
+            patterns: "src/components/screens/ src/components/browser/ src/components/calendar/ src/components/library/ src/components/connectors/ src/components/providers/ src/components/rooms/ src/components/search/ src/components/sessions/ src/hooks/ src/assets/ src/styles/ tests/browser-acceptance/"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -825,7 +816,7 @@ jobs:
             import { readFileSync } from "node:fs";
             const { stats } = JSON.parse(readFileSync("input-fixture-results.json", "utf8"));
             if (stats.expected !== 4 || stats.unexpected !== 0 || stats.skipped !== 0 || stats.flaky !== 0) {
-              throw new Error(`Expected four passing local fixture tests: ${JSON.stringify(stats)}`);
+              throw new Error("Expected four passing local fixture tests: " + JSON.stringify(stats));
             }
           '
 
@@ -1047,9 +1038,26 @@ jobs:
           name: design-system-storybook-build
           path: dist/storybook
       - name: Download all evidence artifacts
+        id: evidence_dl
+        # Retry a transport failure, never a test/audit verdict. outcome retains
+        # the raw failure even though conclusion is success for this attempt.
+        continue-on-error: true
         uses: actions/download-artifact@v7
         with:
           path: /tmp/ci-evidence
+      - name: Retry evidence download once
+        id: evidence_retry
+        if: steps.evidence_dl.outcome == 'failure'
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/ci-evidence
+      - name: Fail if both evidence downloads failed
+        # Explicit always() removes the implicit success() that would otherwise
+        # skip this diagnostic after the hard-failing second download.
+        if: always() && steps.evidence_dl.outcome != 'success' && steps.evidence_retry.outcome != 'success'
+        run: |
+          printf '%s\n' '::error::Evidence download did not succeed after at most two attempts.' >&2
+          exit 1
       - name: Merge evidence files and validate audit preconditions
         run: |
           set -e  # fail fast on any error
@@ -1369,7 +1377,7 @@ jobs:
       # carry no !cgo build tags (see the cgo-gate job, which builds the module
       # under both CGO_ENABLED=0 and =1).
       CGO_ENABLED: "0"
-      GOLANGCI_LINT_VERSION: v2.10.1
+      GOLANGCI_LINT_VERSION: v2.15.0
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1559,13 +1567,15 @@ jobs:
           go-package: ./...
           # The action runs its OWN setup-go with go-version-input:stable and
           # GOTOOLCHAIN=local, so it ignores both the job's Setup Go step and
-          # go.mod's toolchain. Two bumps clear the 2026-10-08 advisory batch and
-          # BOTH are required: go1.26.9 clears the Go-stdlib advisories — GO-2026-
-          # 6604 (os), 6605/6609/6613 (net/http), 6607 (crypto/tls), 6608
-          # (mime/multipart); go1.26.10 clears GO-2026-6809 (crypto/x509) — while
-          # the golang.org/x/net v0.60.0 bump in go.mod
-          # clears GO-2026-6603, 6610, 6611, 6612 and 6617, each of which carries
-          # an x/net range as well as a stdlib one.
+          # go.mod's toolchain. The 2026-10-08 advisory batch was cleared by three
+          # bumps then, all required together: go1.26.9 cleared the Go-stdlib
+          # advisories — GO-2026-6604 (os), 6605/6609/6613 (net/http), 6607
+          # (crypto/tls), 6608 (mime/multipart); go1.26.10 cleared GO-2026-6809
+          # (crypto/x509); and the golang.org/x/net v0.60.0 bump in go.mod cleared
+          # GO-2026-6603, 6610, 6611, 6612 and 6617, each of which carries an
+          # x/net range as well as a stdlib one. 2026-10-23: the pin moves to
+          # 1.27.3 (current stable line, go.dev); it includes every stdlib fix
+          # above.
           #
           # MAINTENANCE HAZARD: this is the ONLY literal Go version in this
           # workflow — every other Go job reads `go-version-file: go.mod`. A
@@ -1573,7 +1583,7 @@ jobs:
           # running against an older stdlib than the release ships (a false green
           # on a security gate). This literal is the one place to keep in sync
           # with the `go` directive in go.mod.
-          go-version-input: '1.26.10'
+          go-version-input: '1.27.3'
           # The job's own "Setup Go" step above already restored the Go module
           # cache into $GOMODCACHE. The action bundles its OWN setup-go, which
           # by default restores a SECOND module cache into that same, already
@@ -2020,6 +2030,20 @@ jobs:
                 echo "REAL FAILURE (assertion failure detected — never excused): $p"
               done
             fi
+            exit 1
+          fi
+          # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a
+          # package FAIL line and no --- FAIL line, which is the hang shape
+          # this filter exists to excuse. Never retry it.
+          # shellcheck source=scripts/ci-flake-classify.sh
+          source scripts/ci-flake-classify.sh || {
+            echo "REAL FAILURE: cannot load scripts/ci-flake-classify.sh"
+            exit 1
+          }
+          if ci_log_has_guard_failure "$out"; then
+            echo ""
+            echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+            echo "REAL FAILURE (guard failure detected — never excused)"
             exit 1
           fi
           [ $code -eq 0 ] && exit 0
@@ -2547,6 +2571,20 @@ jobs:
             fi
             exit 1
           fi
+          # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a
+          # package FAIL line and no --- FAIL line, which is the hang shape
+          # this filter exists to excuse. Never retry it.
+          # shellcheck source=scripts/ci-flake-classify.sh
+          source scripts/ci-flake-classify.sh || {
+            echo "REAL FAILURE: cannot load scripts/ci-flake-classify.sh"
+            exit 1
+          }
+          if ci_log_has_guard_failure "$out"; then
+            echo ""
+            echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+            echo "REAL FAILURE (guard failure detected — never excused)"
+            exit 1
+          fi
           [ $code -eq 0 ] && exit 0
           # Hang/contention flake filter — same shape as the shared step's,
           # same DATA RACE grep on the isolated re-run's log (so a race
@@ -2753,13 +2791,11 @@ jobs:
         uses: actions/checkout@v7
       - name: Compute shard matrix from tests/e2e/shards.json
         id: plan
-        # Evaluate the event's PR labels at job time, without a labeled trigger.
-        # Use inputs (typed boolean), not github.event.inputs (string booleans).
+        # Evaluate PR labels at job time, without a labeled trigger.
         env:
           RUN_LLM_E2E: >-
             ${{ github.event_name == 'push' ||
-                (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-e2e')) ||
-                (github.event_name == 'workflow_dispatch' && inputs.llm_e2e) }}
+                (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-e2e')) }}
         run: |
           set -euo pipefail
           scripts/e2e-shards.sh check
@@ -2986,7 +3022,14 @@ jobs:
           : "${OMNIPUS_E2E_MODEL:?OMNIPUS_E2E_MODEL is not set — the 'Read central e2e model' step must run first}"
           # Unquoted heredoc (interpolating $OMNIPUS_E2E_MODEL) — the same idiom as
           # the sandbox-uat.yml and runci.sh config seeds; this JSON body carries no
-          # other shell-significant characters.
+          # other shell-significant characters. Comments must stay OUTSIDE the
+          # heredoc: the body is written to config.json verbatim.
+          # The channels.whatsapp seed exists because whatsapp-qr.spec.ts case D
+          # enables the connector with an ordinary (bodyless) PUT
+          # /channels/whatsapp/enable, which since the pairing ownership model
+          # (151aa3af8) requires the instance to already exist — an enable never
+          # creates a missing or deleted connector. It is seeded disabled so the
+          # test's own precondition ("initially disabled") holds.
           cat > /tmp/omnipus-e2e/config.json <<EOF
           {
             "version": 1,
@@ -2998,6 +3041,12 @@ jobs:
               "audit_log": true,
               "tool_policies": {
                 "delegate": "allow"
+              }
+            },
+            "channels": {
+              "whatsapp": {
+                "type": "whatsapp",
+                "enabled": false
               }
             },
             "agents": {
@@ -3334,6 +3383,18 @@ jobs:
           fi
           exit $rc
 
+      # This is raw evidence only. The test/gate steps above remain blocking
+      # and red; only ci-required may classify an exact, issue-tracked exception.
+      - name: Upload raw Playwright report for quarantine accounting
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-quarantine-playwright-${{ matrix.group }}-${{ github.run_attempt }}
+          path: /tmp/pw-results.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
       - name: Upload Playwright artifacts
         if: failure()
         uses: actions/upload-artifact@v7
@@ -3383,33 +3444,13 @@ jobs:
             kill "$(cat /tmp/omnipus.pid)" 2>/dev/null || true
           fi
 
-  # ---------------------------------------------------------------------------
-  # The single required check.
-  #
-  # Branch protection currently names JOB IDS (typecheck, lint, test, security,
-  # perf-smoke, playwright, wire-types-lint, verify-contracts). GitHub reports
-  # check runs under a job's DISPLAY NAME, and every one of those jobs sets
-  # `name:` — so the required contexts match nothing that is ever emitted, and
-  # `playwright` is a matrix job that can only ever emit "E2E — <group>". The
-  # practical effect is that no result from this workflow gates any merge.
-  #
-  # Requiring eight name strings that must each stay in sync with a `name:`
-  # field is the kind of duplicated definition that drifts silently. This job
-  # exists so protection can require exactly ONE context that cannot drift:
-  # it depends on every gate and re-derives the verdict from their results.
-  #
-  # Semantics, deliberately:
-  #   failure/cancelled in ANY dependency -> fail. No exceptions, no allowlist.
-  #   skipped                             -> pass. Language scoping means a
-  #                                          Go-only PR legitimately skips the
-  #                                          SPA jobs and vice versa. The one
-  #                                          skip a pass may NOT hide — the
-  #                                          design-system audits skipping on
-  #                                          an SPA-changing PR — is converted
-  #                                          to an explicit failure by
-  #                                          design-system-audit-summary.
-  #   changes must have SUCCEEDED         -> otherwise "everything skipped"
-  #                                          reads as success while nothing ran.
+  # The single required check. Keep every gate in needs: an omitted gate is
+  # invisible to toJSON(needs), even when its raw job fails (hermetic-build).
+  # ci-quarantine.py requires changes to succeed, preserves legitimate path
+  # skips, and blocks every failure except exact, evidenced entries with OPEN
+  # issues in the one tracked quarantine list. Raw leaf jobs are never softened.
+  # The summary reports dependent audits not run after an install timeout as
+  # coverage gaps, not passes; no unlisted failure can ride their exception.
   ci-required:
     name: CI
     if: always()
@@ -3434,6 +3475,7 @@ jobs:
       - fast-tier
       - vuln_check
       - cgo-gate
+      - hermetic-build
       - test
       - test-race
       - security
@@ -3443,14 +3485,32 @@ jobs:
       - browser-tests-gated
       - browser-e2e
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      checks: read
     steps:
+      - name: Checkout quarantine classifier and tracked manifest
+        uses: actions/checkout@v7
+      - name: Setup Python for required CI self-tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned PyYAML for workflow regression tests
+        run: python3 -I -m pip install --disable-pip-version-check 'PyYAML==6.0.3'
+      - name: Prove the quarantine guard and aggregate reject unlisted failures
+        run: |
+          set -euo pipefail
+          python3 -I scripts/ci-quarantine.py --self-test
+          python3 -I scripts/ci-gate-wiring.test.py
+          python3 -I scripts/ci-workflow-triggers.test.py
       - name: Report E2E shard coverage separately from gate results
         env:
           E2E_PLAN_RESULT: ${{ needs.e2e-plan.result }}
           E2E_RESULT: ${{ needs.playwright.result }}
           E2E_MATRIX: ${{ needs.e2e-plan.outputs.matrix }}
           LLM_SKIPPED: ${{ needs.e2e-plan.outputs.llm_skipped }}
-          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           printf '## E2E shard coverage\n\n' >> "$GITHUB_STEP_SUMMARY"
@@ -3469,11 +3529,8 @@ jobs:
             printf '| Selected shards aggregate job result | %s |\n\n' "$E2E_RESULT"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$skipped_count" -gt 0 ]; then
-            if [ "$EVENT_NAME" = "pull_request" ]; then
-              message='LLM e2e not run on this PR (label run-e2e or workflow_dispatch to run; nightly full run covers them)'
-            else
-              message='LLM e2e not run on this manual run (llm_e2e=false; dispatch with llm_e2e=true to run)'
-            fi
+            message='LLM e2e not run on this PR (add run-e2e before the next push or reopen)'
+
             nightly_status='The nightly full run is planned in #1127; it is not enabled by this change. Full release/main push coverage remains enabled.'
             printf '%s\nNightly status: %s\n' "$message" "$nightly_status"
             skipped_rows=$(jq -r '.[] | "| `" + . + "` | Not run — excluded, not passed or failed |"' <<< "$LLM_SKIPPED")
@@ -3483,28 +3540,9 @@ jobs:
               printf '| Excluded LLM shard | Coverage |\n| --- | --- |\n%s\n' "$skipped_rows"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-      - name: Require every gate to have passed or legitimately skipped
+      - name: Require every gate to pass except evidenced open-issue quarantines
+        if: always()
         env:
           RESULTS: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          echo "$RESULTS"
-
-          # `changes` decides what runs. If it did not succeed, every downstream
-          # skip is meaningless and "all skipped" must not read as a pass.
-          changes_result=$(echo "$RESULTS" | python3 -c \
-            'import json,sys; print(json.load(sys.stdin)["changes"]["result"])')
-          if [ "$changes_result" != "success" ]; then
-            echo "FAIL: the 'changes' job did not succeed (result: $changes_result)." >&2
-            echo "Every other job's skip is therefore uninterpretable — refusing to pass." >&2
-            exit 1
-          fi
-
-          bad=$(echo "$RESULTS" | python3 -c \
-            'import json,sys; d=json.load(sys.stdin); print(" ".join(sorted(k for k,v in d.items() if v["result"] not in ("success","skipped"))))')
-          if [ -n "$bad" ]; then
-            echo "FAIL: these jobs did not pass:" >&2
-            for j in $bad; do echo "  - $j" >&2; done
-            exit 1
-          fi
-          echo "OK: every gate passed or was legitimately skipped."
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I scripts/ci-quarantine.py aggregate

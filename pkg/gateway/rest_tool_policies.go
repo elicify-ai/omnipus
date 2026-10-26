@@ -34,8 +34,8 @@ import (
 // write, putToolPolicies calls TriggerReload to enforce the new policy on
 // already-running agents by rebuilding every agent instance with the new
 // global policy — SwapConfig alone does not (see the O7 hot-path note in
-// putToolPolicies). A reload failure is logged loudly and never masks the
-// successful persist (the policy still applies after the next restart).
+// putToolPolicies). A reload failure is logged and returned as HTTP 503 with
+// saved-but-not-applied recovery guidance; the persisted change is not rolled back.
 //
 // Valid policy values: "allow", "ask", "deny".
 func (a *restAPI) HandleToolPolicies(w http.ResponseWriter, r *http.Request) {
@@ -218,11 +218,9 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 	// wired) as a no-op, so a non-nil error here is always a genuine reload
 	// failure.
 	//
-	// Reload-failure semantics mirror updateAgent's soul path: the config IS
-	// persisted, so we never 500 (that would wrongly signal the write failed).
-	// A genuine reload error is logged at Error — it means running agents may
-	// keep the previous global policy until the next restart, which an operator
-	// must see in the logs.
+	// The config is already persisted. A reload failure must be reported as
+	// saved but not applied, not as a successful activation or a rolled-back
+	// write: running agents may still use the previous global policy.
 	//
 	// triggerReloadAndWait (not the bare TriggerReload): this is the fail-open
 	// authorization-bypass path described above, so the response must not claim
@@ -238,6 +236,10 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 			"error",
 			err,
 		)
+		jsonErr(w, http.StatusServiceUnavailable,
+			"The settings were saved, but could not be applied to running agents. "+
+				"Retry applying the change, or restart Omnipus.")
+		return
 	}
 
 	slog.Info("rest: global tool policies updated",

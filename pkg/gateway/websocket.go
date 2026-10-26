@@ -29,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/pairing"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -191,6 +192,10 @@ type WSHandler struct {
 	// tempdir cleanup races).
 	activeConns sync.WaitGroup
 
+	// rooms is the group-chat hub (rooms_runtime.go): attach_room frames and
+	// live room frames. Nil until boot wires it.
+	rooms *roomsHub
+
 	mu          sync.Mutex
 	sessions    map[string]*wsConn // chatID → connection
 	sessionIDs  map[string]string  // chatID → sessionID (for transcript recording)
@@ -223,6 +228,10 @@ type WSHandler struct {
 	// approvalRegV2 is the Central Tool Registry approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
+
+	// notifStore is the same per-user store used by the header notification
+	// REST endpoint. Injected at boot; Stop notices persist before live push.
+	notifStore *notifications.Store
 
 	// askUserReg is the AskUserQuestion pending registry (askuserquestion-
 	// tool-spec v3; pkg/askuser). Injected at boot alongside approvalRegV2.
@@ -261,6 +270,10 @@ type WSHandler struct {
 	// have to wait up to ~60 s before seeing any code.  The cache delivers the
 	// last-seen code immediately on subscribe via subscribePairingInterest.
 	lastPairingState sync.Map
+	// Cache metadata is protected inside the manager-owned channel order.
+	// Never hold this mutex while entering that order.
+	pairingCacheMu    sync.Mutex
+	pairingCacheStamp map[string]pairingDeliveryStamp
 
 	// streamOwners tracks, per sessionID, which turn currently "owns" live
 	// TokenFrame delivery to that session's bound connections. Keys are
@@ -434,22 +447,7 @@ func (c *wsConn) setPairingInterest(channelID string, active bool) {
 // between rotations would otherwise wait up to ~60 s before seeing a code.
 // The cache lets us deliver the last-seen code immediately on subscribe.
 func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, active bool) {
-	wc.setPairingInterest(channelID, active)
-	if !active {
-		return
-	}
-	// Re-emit the last-seen QR frame for this channel, if one is cached and the
-	// QR is still "live" (terminal states are deleted from the map by the
-	// eventForwarder). Delivered through the connection's own ordered queue
-	// like every other frame (#823 ws_conn_queue.go).
-	if cached, ok := h.lastPairingState.Load(channelID); ok {
-		frameBytes, ok := cached.([]byte)
-		if ok && len(frameBytes) > 0 {
-			sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frameBytes)
-		} else if !ok {
-			slog.Error("ws: lastPairingState held non-[]byte value, skipping re-emit", "channel_id", channelID)
-		}
-	}
+	h.replayPairing(wc, channelID, active)
 }
 
 // wantsPairing reports whether this connection has subscribed to channelID's
@@ -557,6 +555,7 @@ func newWSHandler(
 		agentLoop.SetClearHeldHook(h.announceClearHeld)
 		agentLoop.SetClearReleasedHook(h.releaseClearHeld)
 		agentLoop.SetRequestDeliveredHook(h.announceHeldRequestDelivered)
+		h.wireSecretRequests()
 	}
 	// Per-session state kept outside the hub is released with the hub
 	// (final-review N7).
@@ -685,6 +684,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(h.sessionIDs, chatID)
 		h.unbindConnHubLocked(wc)
 		h.mu.Unlock()
+		h.rooms.unsubscribeAll(wc) // the closed connection leaves every group chat
 		// w5-integration (US-2.3/MC-4): revoke this connection's Mail panel
 		// observers BEFORE the socket closes. This deferred block is the one
 		// choke point every disconnected socket passes through — explicit
@@ -1378,6 +1378,8 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 		}
 	case string(generated.WsFrameTypeSessionModeUpdate):
 		return wh.handleSessionModeUpdateFrame(data)
+	case string(generated.WsFrameTypeAttachRoom):
+		wh.h.handleAttachRoom(wh.wc, data)
 	case string(generated.WsFrameTypePing):
 		// Application-layer pong: the SPA's 60s "any frame received" liveness
 		// check needs a server-originated frame during idle. Gorilla WS-protocol
@@ -1420,6 +1422,9 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			})
 			return wsHandlerReadLoopContinue
 		}
+		// Subscribing only observes pairing frames; it never restores chat
+		// ownership (Train 2 gate r2 T2-R2-S1 / R2-A02). A chat Retry claims
+		// ownership through PUT /channels/{id}/enable with pairing_retry.
 		wh.h.subscribePairingInterest(wh.wc, f.ChannelId, f.Active)
 	case string(generated.WsFrameTypeMailPanelObserver):
 		// w5-integration (US-2/MC-4): Mail panel presence open/close. No
@@ -1484,10 +1489,8 @@ func wsFrameSchemaName(frameType string) string {
 		return "WhatsAppPairingSubscribeFrame"
 	case string(generated.WsFrameTypeAskUserAnswer):
 		return "AskUserAnswerFrame"
-	// Spec omnipus-system-agent K45: the room attach frame's shape is
-	// validated here from the contract onward; its handler arrives with
-	// WU-15, so until then a schema-valid attach_room falls through to
-	// dispatchFrame's "unknown frame type ignored" default.
+	// Spec omnipus-system-agent K45: the room attach frame
+	// (handleAttachRoom, ws_rooms.go).
 	case string(generated.WsFrameTypeAttachRoom):
 		return "AttachRoomFrame"
 	case string(generated.WsFrameTypePing):
@@ -1712,6 +1715,9 @@ type wsStreamer struct {
 	// the lastStreamer that gets finalized). Guarded by statsMu, which Finalize
 	// already holds while reading stats.
 	transcriptPersisted bool
+	// systemNotice is an already-persisted harness outcome, never model text.
+	// Guarded by statsMu, like the other finalization inputs.
+	systemNotice *generated.ReplayMessageFrame
 
 	// shadowResolved/isShadowStream implement the concurrent-stream
 	// interleaving fix — see WSHandler.streamOwners' doc comment for the

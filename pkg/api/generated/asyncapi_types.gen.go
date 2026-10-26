@@ -932,7 +932,7 @@ type NotificationFrame struct {
 	Body        *string `json:"body,omitempty"`
 	CreatedAtMs int64   `json:"created_at_ms"`
 	Id          string  `json:"id"`
-	// The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a) means the drift check found a knowledge base's search index out of step with the folder on disk and the index is being rebuilt; it is never emitted for a healthy check.
+	// The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a) means the drift check found a knowledge base's search index out of step with the folder on disk and the index is being rebuilt; it is never emitted for a healthy check. "stop_notice" is an operational Stop outcome (already-approved request, partial cleanup, or Stop did not complete). It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 	NotificationType string  `json:"notification_type"`
 	Read             bool    `json:"read"`
 	ScheduleId       *string `json:"schedule_id,omitempty"`
@@ -1063,7 +1063,7 @@ type ReplayErrorPayload struct {
 	LlmError LLMErrorReplay `json:"llm_error"`
 }
 
-// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path. A CHAT PROJECTION of the session's single append-only archive, not a provider-message or raw-storage type (session-core C-ARCHIVE / U2; FR-004/FR-005): the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance and its disk/byte/view marks are disk-only and are never emitted on this frame, and entries that belong to the model view only are not replayed.
+// ReplayMessageFrame — Server → client persisted chat entry, delivered live or during session replay. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); live publication uses the session hub, and transcript/snapshot projections remain unsequenced. A CHAT PROJECTION of the session's single append-only archive, not a provider-message or raw-storage type (session-core C-ARCHIVE / U2; FR-004/FR-005): the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance and its disk/byte/view marks are disk-only and are never emitted on this frame, and entries that belong to the model view only are not replayed.
 type ReplayMessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	// #823 catch-up redesign §4.7. Present on a replayed user entry persisted with a client-supplied id. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
@@ -1087,8 +1087,10 @@ type ReplayMessageFrame struct {
 	ReplyToParticipant *ChatParticipant `json:"reply_to_participant,omitempty"`
 	Role               string           `json:"role"`
 	// Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry.
-	RoomRef   *RoomRef `json:"room_ref,omitempty"`
-	SessionId string   `json:"session_id"`
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
+	// Hub-assigned per-session sequence number. Present on live publication and its incremental catch-up copies; absent on unsequenced transcript/snapshot projections. Only frames carrying seq advance the session cursor.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
 	// Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence (for example the tool-iteration-limit notice) written after the turn's earlier narration was already persisted. Live, the gateway closes the narration bubble with done(<narration id>) before this entry arrives, so it is a separate message; the replay stream has no such boundary, so the SPA must start a new message for this frame instead of merging it into the preceding same-turn assistant entry. Absent on every other frame, including entries written before this field existed.
 	TerminalOutcome *bool   `json:"terminal_outcome,omitempty"`
 	Timestamp       *string `json:"timestamp,omitempty"`
@@ -1193,15 +1195,18 @@ type RoomRef struct {
 	RoomName string `json:"room_name"`
 }
 
-// RoomSnapshotFrame — Server → client (spec omnipus-system-agent K45, K26, K27). The answer to attach_room: the room entries after the cursor in order, the members, mutes, member states, pause state, generation and allocated cost. `complete` is false when the server could not serve every entry after the cursor. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
+// RoomSnapshotFrame — Server → client (spec omnipus-system-agent K45, K26, K27). The answer to attach_room: the room entries after the cursor in seq order (at most the newest 10,000; `has_older` is true when older entries after the cursor were left out), the members, mutes, member states, pause state, generation and allocated cost. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
 type RoomSnapshotFrame struct {
 	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
 	AllocatedCostUnpriced bool  `json:"allocated_cost_unpriced"`
-	Complete              bool  `json:"complete"`
+	// always true; reserved.
+	Complete bool `json:"complete"`
 	// Entries after the cursor, in seq order. Never null.
 	Entries    []RoomEntry `json:"entries"`
 	Generation int64       `json:"generation"`
-	// Current delivery states of outstanding requests. Never null.
+	// True when entries after the cursor older than the ones served were left out (a snapshot carries at most the newest 10,000 entries).
+	HasOlder *bool `json:"has_older,omitempty"`
+	// Every outstanding (non-terminal) delivery state plus the latest terminal state of each member. Never null. Live states are never dropped (ruling Q2), so this array has no fixed upper bound.
 	MemberStates   []RoomDeliveryState `json:"member_states"`
 	Members        []string            `json:"members"`
 	Muted          []string            `json:"muted"`
@@ -1213,7 +1218,7 @@ type RoomSnapshotFrame struct {
 	Type string `json:"type"`
 }
 
-// SecretRecipientDisplay — Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+// SecretRecipientDisplay — Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
 type SecretRecipientDisplay struct {
 	// Recipient kind.
 	Kind string `json:"kind"`
@@ -1356,8 +1361,8 @@ type SessionStatePendingApproval struct {
 	ActingAgentName *string `json:"acting_agent_name,omitempty"`
 	AgentId         string  `json:"agent_id"`
 	ApprovalId      string  `json:"approval_id"`
-	// Same value as ToolApprovalRequiredFrame.args — an object, never null. Optional until bundle B3 (WU-8). The snapshot reaches exactly the connections the live frame reaches (same audience rule).
-	Args        map[string]any `json:"args,omitempty"`
+	// Same value as ToolApprovalRequiredFrame.args — an object, never null. The snapshot reaches exactly the connections the live frame reaches (same audience rule).
+	Args        map[string]any `json:"args"`
 	ExpiresInMs int            `json:"expires_in_ms"`
 	// Spec K7, §6.18. Server-derived turn origin, e.g. "while answering <person> on <connection>", "for group <name>", "asked by <Agent>". Omitted for a plain web turn.
 	OriginLabel *string `json:"origin_label,omitempty"`
@@ -1368,21 +1373,23 @@ type SessionStatePendingApproval struct {
 	// Same value and rules as ToolApprovalRequiredFrame.segments.
 	Segments  []CommandSegmentInfo `json:"segments,omitempty"`
 	SessionId string               `json:"session_id"`
-	// L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete and approvable. Optional until bundle B3 (WU-8) makes it required.
-	ToolCallId *string `json:"tool_call_id,omitempty"`
-	ToolName   string  `json:"tool_name"`
-	// Same value as ToolApprovalRequiredFrame.turn_id. Optional until bundle B3 (WU-8).
-	TurnId *string `json:"turn_id,omitempty"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete and approvable.
+	ToolCallId string `json:"tool_call_id"`
+	ToolName   string `json:"tool_name"`
+	// Same value as ToolApprovalRequiredFrame.turn_id.
+	TurnId string `json:"turn_id"`
 	// Same value and semantics as ToolApprovalRequiredFrame.workspace_id.
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // SessionStateSecretRequest — One entry of the `secret_requests` list on SessionStateFrame and SessionSnapshotFrame (spec omnipus-system-agent K4; FR-074, FR-079): a pending request, or a recent terminal one (value-free; at most the last 32 terminal entries per session, §6.2), so a reloaded card restores its true state. Absence of an entry is never success. Same card fields as SecretRequestFrame plus `state`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.SessionStateSecretRequest) — keep both copies in sync by hand.
 type SessionStateSecretRequest struct {
-	ActingAgentId   string               `json:"acting_agent_id"`
-	ActingAgentName string               `json:"acting_agent_name"`
-	Fields          []SecretRequestField `json:"fields"`
-	OriginLabel     *string              `json:"origin_label,omitempty"`
+	ActingAgentId   string `json:"acting_agent_id"`
+	ActingAgentName string `json:"acting_agent_name"`
+	// True only when state is `submitted` and the value-free continuation (the reference-only resume message) is not confirmed delivered: the latest ensure-delivery attempt failed or was revoked downstream. Absent once delivery is confirmed, the person stops the continuation, or the request reaches any non-submitted terminal state. Never carries or implies a secret value, cause, stage or reference name. (Train 2 M13, T2-SF-02; K4, FR-079.)
+	ContinuationUnconfirmed *bool                `json:"continuation_unconfirmed,omitempty"`
+	Fields                  []SecretRequestField `json:"fields"`
+	OriginLabel             *string              `json:"origin_label,omitempty"`
 	// Present only for the agent_private kind.
 	Owner *struct {
 		AgentId     string `json:"agent_id"`
@@ -1702,13 +1709,13 @@ type WhatsAppPairingFrame struct {
 	Type      string  `json:"type"`
 }
 
-// WhatsAppPairingSubscribeFrame — Client → server. Registers or clears this connection's interest in a channel's whatsapp_pairing frames so the QR is delivered only to the operator viewing that channel's pairing UI (#283).
+// WhatsAppPairingSubscribeFrame — Client → server. Registers or clears this connection's interest in a channel's whatsapp_pairing frames so the QR is delivered only to the operator viewing that channel's pairing UI (#283). Subscribing (including the automatic re-subscribe on reconnect) only observes pairing frames: it never restores chat ownership of a pairing and never restarts pairing. A chat Retry claims ownership through PUT /api/v1/channels/{id}/enable with pairing_retry.
 type WhatsAppPairingSubscribeFrame struct {
 	Active    bool   `json:"active"`
 	ChannelId string `json:"channel_id"`
-	// Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with the chat request that started it (QR pairing in chat, WU-7).
+	// Spec omnipus-system-agent K10 (FR-081). Correlation hint naming the chat request that started the pairing (QR pairing in chat, WU-7). It is not authority: subscribing never restores ownership.
 	RequestId *string `json:"request_id,omitempty"`
-	// Spec K10. The chat session the pairing belongs to, when it was started from a chat.
+	// Spec K10. Correlation hint naming the chat session the pairing belongs to, when it was started from a chat. It is not authority: subscribing never restores ownership.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
 }

@@ -32,55 +32,148 @@ import (
 	"encoding/json"
 	"log/slog"
 	"time"
+	"unicode/utf16"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
-// approvalWorkspaceMaxHops bounds approvalWorkspaceID's walk up the
-// delegation chain. Real chains are a handful of levels deep; the bound only
-// guarantees termination over corrupt or cyclic on-disk meta.
-const approvalWorkspaceMaxHops = 16
+// approvalChainMaxHops bounds approvalSessionContext's walk up the
+// ParentSessionID chain (#1263 R1: 16 hops, cycle guard). Real chains are a
+// handful of levels deep; the bound only guarantees termination over corrupt
+// or cyclic on-disk meta.
+const approvalChainMaxHops = 16
 
-// approvalWorkspaceIDMaxLen mirrors the wire schema's maxLength for
-// workspace_id (ToolApprovalRequiredFrame / SessionStatePendingApproval). A
+// Wire maxLength limits of the approval carriers (contracts/asyncapi.yaml,
+// ToolApprovalRequiredFrame / SessionStatePendingApproval), in characters. A
 // longer value is omitted rather than emitted schema-invalid.
-const approvalWorkspaceIDMaxLen = 128
+const (
+	approvalWorkspaceIDMaxLen = 128
+	approvalRootSessionMaxLen = 255
+	approvalActingNameMaxLen  = 128
+	approvalOriginLabelMaxLen = 200
+	approvalRoomNameMaxLen    = 80
+)
 
-// approvalWorkspaceID resolves the workspace an approval belongs to from the
-// acting session's meta. A delegated child session may carry no workspace of
-// its own, so the walk follows ParentSessionID upward until a session with a
-// workspace is found. Returns "" when the session belongs to no workspace, or
-// when its meta cannot be read — the SPA treats an absent workspace_id as
-// "show everywhere", which is the safe direction for an approval the agent is
-// blocked on.
-func (h *WSHandler) approvalWorkspaceID(sessionID string) string {
+// approvalContext is what every approval carrier derives from the acting
+// session (#1263 §1.3): the workspace the approval belongs to and the root
+// chat of the session chain the card renders in.
+type approvalContext struct {
+	// WorkspaceID is the first workspace found walking up from the acting
+	// session ("" = none, or unreadable — the SPA shows it everywhere).
+	WorkspaceID string
+	// RootSessionID is the session at the top of the ParentSessionID chain.
+	// On a failed walk it is the acting session itself, so the card shows in
+	// the acting chat (plus the banner), never nowhere.
+	RootSessionID string
+}
+
+// approvalSessionContext walks the acting session's ParentSessionID chain once
+// (the one derivation every approval carrier uses, amendment §1.3). A helper's
+// approval therefore names its root chat — the chat where a person is — while
+// session_id stays the acting helper (the Open-run target).
+func (h *WSHandler) approvalSessionContext(sessionID string) approvalContext {
+	out := approvalContext{RootSessionID: sessionID}
 	if h == nil || h.agentLoop == nil || sessionID == "" {
-		return ""
+		return out
+	}
+	// fallback keeps the card in the acting chat (never nowhere) and says so
+	// loudly: it only happens on an unreadable or corrupt chain, never on a
+	// normal path, and a helper's card then shows outside its root chat.
+	fallback := func(hopID, reason string, err error) approvalContext {
+		attrs := []any{"acting_session_id", sessionID, "failing_session_id", hopID, "reason", reason}
+		if err != nil {
+			attrs = append(attrs, "error", err)
+		}
+		slog.Error("ws: approval root chat could not be derived; the card is shown in the acting session's chat instead", attrs...)
+		return approvalContext{WorkspaceID: out.WorkspaceID, RootSessionID: sessionID}
 	}
 	seen := make(map[string]struct{}, 4)
 	sid := sessionID
-	for hop := 0; hop < approvalWorkspaceMaxHops && sid != ""; hop++ {
+	workspaceKnown := false
+	for hop := 0; hop < approvalChainMaxHops && sid != ""; hop++ {
 		if _, dup := seen[sid]; dup {
-			return ""
+			return fallback(sid, "parent chain has a cycle", nil)
 		}
 		seen[sid] = struct{}{}
 		store := h.resolveSessionStore(sid)
 		if store == nil {
-			return ""
+			return fallback(sid, "session not found in any store", nil)
 		}
 		meta, err := store.GetMeta(sid)
 		if err != nil || meta == nil {
-			return ""
+			return fallback(sid, "session meta unreadable", err)
 		}
-		if meta.WorkspaceID != "" {
-			if len(meta.WorkspaceID) > approvalWorkspaceIDMaxLen {
-				return ""
+		if !workspaceKnown && meta.WorkspaceID != "" {
+			workspaceKnown = true
+			if len(meta.WorkspaceID) <= approvalWorkspaceIDMaxLen {
+				out.WorkspaceID = meta.WorkspaceID
 			}
-			return meta.WorkspaceID
+		}
+		if meta.ParentSessionID == "" {
+			out.RootSessionID = sid
+			return out
 		}
 		sid = meta.ParentSessionID
 	}
-	return ""
+	return fallback(sid, "parent chain longer than the hop bound", nil)
+}
+
+// fitsWireLength reports whether s fits a contract maxLength as BOTH ends of
+// the wire count it. Never UTF-8 bytes: a valid 80-character non-ASCII room
+// name makes a "for group" label of well over 200 bytes that the contract
+// accepts (gate round 1, architect F3 / SF-06). And not code points either:
+// the browser's generated validator (zod z.string().max) counts JavaScript
+// String.length, UTF-16 code units, so a character outside the Basic
+// Multilingual Plane counts twice there. A value that fits in code points but
+// not in UTF-16 units made the browser reject the whole approval frame and the
+// whole reload snapshot (gate round 2, security S4 / SF-07 / architect N1;
+// founder decision 2026-10-20). UTF-16 units are never fewer than code points,
+// so this one count satisfies both the contract and the browser.
+func fitsWireLength(s string, limit int) bool {
+	units := 0
+	for _, r := range s {
+		units += utf16.RuneLen(r)
+		if units > limit {
+			return false
+		}
+	}
+	return true
+}
+
+// rootSessionField returns the wire root_session_id: omitted (nil) when the
+// root is the acting session itself or too long for the schema (K7).
+func (c approvalContext) rootSessionField(actingSessionID string) *string {
+	if c.RootSessionID == "" || c.RootSessionID == actingSessionID || len(c.RootSessionID) > approvalRootSessionMaxLen {
+		return nil
+	}
+	root := c.RootSessionID
+	return &root
+}
+
+// workspaceField returns the wire workspace_id, omitted when unknown.
+func (c approvalContext) workspaceField() *string {
+	if c.WorkspaceID == "" {
+		return nil
+	}
+	ws := c.WorkspaceID
+	return &ws
+}
+
+// approvalActingAgentName returns the acting agent's display name for the card
+// header (K7 acting_agent_name), nil when it cannot be resolved.
+func (h *WSHandler) approvalActingAgentName(agentID string) *string {
+	if h == nil || h.agentLoop == nil || agentID == "" {
+		return nil
+	}
+	reg := h.agentLoop.GetRegistry()
+	if reg == nil {
+		return nil
+	}
+	name, ok := reg.GetAgentName(agentID)
+	if !ok || name == "" || !fitsWireLength(name, approvalActingNameMaxLen) {
+		return nil
+	}
+	return &name
 }
 
 // broadcastToolApprovalRequired sends a tool_approval_required WS frame to
@@ -108,19 +201,22 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 		args = map[string]any{}
 	}
 
+	ctx := h.approvalSessionContext(entry.SessionID)
 	frame := generated.ToolApprovalRequiredFrame{
-		Type:        string(generated.WsFrameTypeToolApprovalRequired),
-		ApprovalId:  entry.ApprovalID,
-		ToolCallId:  entry.ToolCallID,
-		ToolName:    entry.ToolName,
-		Args:        args,
-		AgentId:     entry.AgentID,
-		SessionId:   entry.SessionID,
-		TurnId:      entry.TurnID,
-		ExpiresInMs: int(entry.expiresInMs()), // OBS-004: relative, not absolute
-	}
-	if ws := h.approvalWorkspaceID(entry.SessionID); ws != "" {
-		frame.WorkspaceId = &ws
+		Type:            string(generated.WsFrameTypeToolApprovalRequired),
+		ApprovalId:      entry.ApprovalID,
+		ToolCallId:      entry.ToolCallID,
+		ToolName:        entry.ToolName,
+		Args:            args,
+		AgentId:         entry.AgentID,
+		SessionId:       entry.SessionID,
+		TurnId:          entry.TurnID,
+		ExpiresInMs:     int(entry.expiresInMs()), // OBS-004: relative, not absolute
+		WorkspaceId:     ctx.workspaceField(),
+		RootSessionId:   ctx.rootSessionField(entry.SessionID),
+		ActingAgentName: h.approvalActingAgentName(entry.AgentID),
+		RoomRef:         approvalRoomRef(entry),
+		OriginLabel:     approvalOriginLabel(entry),
 	}
 	frame.Segments = h.bashApprovalSegments(entry)
 	raw, err := json.Marshal(frame)
@@ -189,6 +285,8 @@ func (h *WSHandler) broadcastToolApprovalResolved(entry *approvalEntry, state Ap
 	if entry.SessionID != "" {
 		sid := entry.SessionID
 		frame.SessionId = &sid
+		// K7: the root chat's card clears without a lookup.
+		frame.RootSessionId = h.approvalSessionContext(entry.SessionID).rootSessionField(entry.SessionID)
 	}
 	raw, err := json.Marshal(frame)
 	if err != nil {
@@ -242,17 +340,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 		// live frame — a tab reconnecting under account B must not re-hydrate
 		// account A's pending approvals as blocking stubs.
 		for _, e := range allPending {
-			entry := generated.SessionStatePendingApproval{
-				ApprovalId:  e.ApprovalID,
-				SessionId:   e.SessionID,
-				ToolName:    e.ToolName,
-				AgentId:     e.AgentID,
-				ExpiresInMs: int(e.expiresInMs()),
-			}
-			if ws := h.approvalWorkspaceID(e.SessionID); ws != "" {
-				entry.WorkspaceId = &ws
-			}
-			pendingApprovals = append(pendingApprovals, entry)
+			pendingApprovals = append(pendingApprovals, h.pendingApprovalSnapshot(e))
 		}
 	}
 
@@ -326,6 +414,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 	// may later echo back to acknowledge. 0 when the main has no outcome yet;
 	// omitted for a non-main, the connection-open emit, and an unreadable mark.
 	frame.AttentionBound = h.attentionBoundFor(sessionID)
+	frame.SecretRequests = h.secretRequestSnapshot(wc, sessionID)
 
 	raw, err := json.Marshal(frame)
 	if err != nil {
@@ -334,4 +423,62 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 	}
 	slog.Debug("ws: session_state built", "user_id", wc.userID, "pending", len(pendingApprovals))
 	return raw
+}
+
+// pendingApprovalSnapshot is one reload-snapshot entry (bundle B3, amendment
+// §1.3): the complete request, equal field for field to the live
+// tool_approval_required frame, so a reloaded card is complete and
+// approvable — never a Deny-only stub. tool_call_id, turn_id and args are
+// required by the contract; the registry never admits an entry without a
+// turn id (approvals.go::requestApproval, D-03).
+func (h *WSHandler) pendingApprovalSnapshot(e *approvalEntry) generated.SessionStatePendingApproval {
+	args := e.Args
+	if args == nil {
+		args = map[string]any{}
+	}
+	ctx := h.approvalSessionContext(e.SessionID)
+	return generated.SessionStatePendingApproval{
+		ApprovalId:      e.ApprovalID,
+		SessionId:       e.SessionID,
+		ToolName:        e.ToolName,
+		AgentId:         e.AgentID,
+		ExpiresInMs:     int(e.expiresInMs()),
+		ToolCallId:      e.ToolCallID,
+		TurnId:          e.TurnID,
+		Args:            args,
+		Segments:        h.bashApprovalSegments(e),
+		WorkspaceId:     ctx.workspaceField(),
+		RootSessionId:   ctx.rootSessionField(e.SessionID),
+		ActingAgentName: h.approvalActingAgentName(e.AgentID),
+		RoomRef:         approvalRoomRef(e),
+		OriginLabel:     approvalOriginLabel(e),
+	}
+}
+
+// approvalRoomRef projects a group chat's pre-admission card room reference
+// (FR-251, K7); absent on every other approval.
+//
+// A room_ref whose room name does not fit the browser's 80-unit limit is
+// omitted, never sent: the browser would otherwise reject the whole frame or
+// reload snapshot (gate round 3, security O1). Room names are validated in
+// UTF-16 units at creation (pkg/rooms/admin.go::roomName); this is the
+// producer's safety net, the same rule as the S4 fields.
+func approvalRoomRef(e *approvalEntry) *generated.RoomRef {
+	if e == nil || e.RoomRef == nil || !fitsWireLength(e.RoomRef.RoomName, approvalRoomNameMaxLen) {
+		return nil
+	}
+	ref := *e.RoomRef
+	return &ref
+}
+
+// approvalOriginLabel projects the server-derived turn origin label (spec
+// §6.18, K7): "for group <name>" on a room's pre-admission card, "asked by
+// <Agent>" for a turn that consumed a peer request. Absent for a plain web
+// turn, or when longer than the schema allows.
+func approvalOriginLabel(e *approvalEntry) *string {
+	if e == nil || e.OriginLabel == "" || !fitsWireLength(e.OriginLabel, approvalOriginLabelMaxLen) {
+		return nil
+	}
+	l := e.OriginLabel
+	return &l
 }

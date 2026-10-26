@@ -92,7 +92,12 @@ type ProcessSession struct {
 	// status/exit JSON so a late poller sees the same story the async
 	// callback told. Empty for sessions with no terminal note (bash today).
 	resultNote string
-	ptyMaster  *os.File
+	// publication is the installation-area outcome environment_setup
+	// recorded with the terminal state (committed, commit_failed, aborted,
+	// abort_failed, none); "" for other sessions. It lets every later
+	// poll/read/kill give the same FR-030 verdict the completion gave.
+	publication string
+	ptyMaster   *os.File
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
@@ -180,6 +185,14 @@ func (s *ProcessSession) ResultNote() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.resultNote
+}
+
+// Publication returns the recorded installation-area outcome (see the field
+// comment); "" when none was recorded.
+func (s *ProcessSession) Publication() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.publication
 }
 
 func (s *ProcessSession) GetExitCode() int {

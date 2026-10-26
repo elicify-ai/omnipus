@@ -16,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // agentLoopRunTurnResponseCallLLMWithRetries carries the shared state of callLLMWithRetries across its stages.
@@ -565,9 +566,10 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		retryAudience := cr.rr.rq.ri.rf.rt.al.audienceFor(cr.rr.rq.ri.rf.rt.turnCtx, steer.BoundaryRetryNotice, cr.rr.rq.ri.rf.rt.ts.transcriptSessionID)
 		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) && retryAudience == steer.AudienceUser {
 			if notifyErr := cr.rr.rq.ri.rf.rt.al.bus.PublishOutbound(cr.rr.rq.ri.rf.rt.turnCtx, bus.OutboundMessage{
-				Channel: cr.rr.rq.ri.rf.rt.ts.channel,
-				ChatID:  cr.rr.rq.ri.rf.rt.ts.chatID,
-				Content: "Retrying — please wait...",
+				Channel:        cr.rr.rq.ri.rf.rt.ts.channel,
+				ChatID:         cr.rr.rq.ri.rf.rt.ts.chatID,
+				Content:        "Retrying — please wait...",
+				ProgressNotice: true,
 			}); notifyErr != nil {
 				logger.WarnCF("agent", "Failed to send retry indicator",
 					map[string]any{"channel": cr.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
@@ -889,8 +891,11 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 	}
 
 	rr.normalizedToolCalls = make([]providers.ToolCall, 0, len(rr.rq.ri.rf.response.ToolCalls))
+	rr.argumentRefusals = make([]*tools.ToolResult, 0, len(rr.rq.ri.rf.response.ToolCalls))
 	for _, tc := range rr.rq.ri.rf.response.ToolCalls {
-		rr.normalizedToolCalls = append(rr.normalizedToolCalls, providers.NormalizeToolCall(tc))
+		call, refusal := valueFreeRefusedToolCall(rr.rq.ri.rf.rt.ts.agent.Tools, providers.NormalizeToolCall(tc))
+		rr.normalizedToolCalls = append(rr.normalizedToolCalls, call)
+		rr.argumentRefusals = append(rr.argumentRefusals, refusal)
 	}
 
 	toolNames := make([]string, 0, len(rr.normalizedToolCalls))

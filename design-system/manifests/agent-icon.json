@@ -68,6 +68,18 @@
       "applicable": true
     },
     {
+      "id": "agent-icon-working-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-working-browser] browser",
+      "story": "Working",
+      "requiredTargets": [
+        { "selector": "[data-testid=\"agent-icon\"]", "attribute": "data-motion", "value": "working" },
+        { "selector": "[data-testid=\"agent-icon\"] > [aria-hidden=\"true\"]:has(> [data-agent-icon-sheen])", "attribute": "class", "value": "pointer-events-none absolute inset-0 overflow-hidden" }
+      ],
+      "applicable": true
+    },
+    {
       "id": "agent-icon-monogram-browser",
       "kind": "browser",
       "file": "tests/design-system/browser.spec.ts",
@@ -88,6 +100,14 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "AgentIcon [check:agent-icon-reduced-motion] reduced-motion",
       "story": "Thinking",
+      "applicable": true
+    },
+    {
+      "id": "agent-icon-working-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-working-reduced-motion] reduced-motion",
+      "story": "Working",
       "applicable": true
     },
     {

@@ -298,14 +298,17 @@ describe('Sidebar — ARIA labels on interactive elements', () => {
     expect(useSidebarStore.getState().isOpen).toBe(true)
   })
 
-  it('Agents library link has aria-label="Agents"', () => {
+  it('the surviving global-library links carry accessible names and the retired Agents entry is gone', () => {
     // IA reframe (Sprint 4): the top-level Chat link is removed; the sidebar's
-    // global-library links (Agents/Connectors/Skills & Tools) carry aria-labels.
+    // global-library links carry accessible names. WU-11 (FR-108): the Agents
+    // library link is retired with the Agents screen — the Assets list keeps
+    // Skills & Tools and Connectors only.
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const agentsLink = screen.getByRole('link', { name: 'Agents' })
-    expect(agentsLink).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Skills & Tools' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Connectors' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Agents' })).toBeNull()
   })
 })
 
@@ -319,13 +322,14 @@ describe('Sidebar — ARIA labels on interactive elements', () => {
 // Traces to: src/components/layout/Sidebar.tsx — aria-current={isActive ? 'page' : undefined}
 describe('Sidebar — aria-current on active library items', () => {
   it('library links are NOT active at pathname "/" (no library route matches)', () => {
-    // useLocation is mocked to return { pathname: '/' }
+    // useLocation is mocked to return { pathname: '/' }. WU-11 (FR-108): the
+    // Agents link is retired — the route-accuracy rule pins the survivors.
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const agentsLink = screen.getByRole('link', { name: 'Agents' })
+    const skillsLink = screen.getByRole('link', { name: 'Skills & Tools' })
     const connectorsLink = screen.getByRole('link', { name: 'Connectors' })
-    expect(agentsLink.getAttribute('aria-current')).toBeNull()
+    expect(skillsLink.getAttribute('aria-current')).toBeNull()
     expect(connectorsLink.getAttribute('aria-current')).toBeNull()
   })
 

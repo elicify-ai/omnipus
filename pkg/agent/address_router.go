@@ -216,7 +216,7 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 	// The admission wake is "on its way": another turn admitted before it is
 	// processed must not publish a second copy of the same text.
 	al.claimWakeSlot(requestID)
-	if err := al.publishRequestWake(pubCtx, a.Receiver, requestID, receiverSessionID, entry.Content); err != nil {
+	if err := al.publishRequestWake(pubCtx, a.Receiver, a.Sender, requestID, receiverSessionID, entry.Content); err != nil {
 		al.heldRepublished.Delete(requestID)
 		// The request is durable in the receiver's main and answerable; only
 		// the turn start failed. It is HELD exactly like a request for a stopped
@@ -253,7 +253,20 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 // (final-gate SG-01). Not UserInitiated / OperatorPrompt either (fail closed
 // for /goal, /loop and the browser wheel; scripts/check-operator-prompt-sites.sh
 // counts this as one non-operator PublishInbound site).
-func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing.Pair, requestID, receiverSessionID, content string) error {
+//
+// extra adds metadata to the wake (a group-chat room request adds its no-join
+// marker and room id, room_request.go) - the same one publication site.
+func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing.Pair, sender addressing.Sender, requestID, receiverSessionID, content string, extra ...map[string]string) error {
+	meta := map[string]string{"agent_id": receiver.AgentID, "workspace_id": receiver.WorkspaceID, ownerWakeMetadataKey: "1"}
+	if sender.Agent.AgentID != "" {
+		// §6.18: the receiving turn's origin is this peer ("asked by <Agent>").
+		meta[requestSenderAgentMetadataKey] = sender.Agent.AgentID
+	}
+	for _, m := range extra {
+		for k, v := range m {
+			meta[k] = v
+		}
+	}
 	return al.bus.PublishInbound(ctx, bus.InboundMessage{
 		Channel:           "webchat",
 		ChatID:            "request:" + requestID,
@@ -261,7 +274,7 @@ func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing
 		Content:           content,
 		SessionID:         receiverSessionID,
 		TranscriptEntryID: requestID,
-		Metadata:          map[string]string{"agent_id": receiver.AgentID, "workspace_id": receiver.WorkspaceID, ownerWakeMetadataKey: "1"},
+		Metadata:          meta,
 	})
 }
 
@@ -470,6 +483,8 @@ func (r AddressRouter) Reply(ctx context.Context, req tools.ReplyRequest) (tools
 		receipt, err = al.replyViaConnector(ctx, capture, responder, req)
 	case addressing.SourceConversation:
 		receipt, err = al.replyIntoConversation(capture, responder, req)
+	case addressing.SourceRoom:
+		receipt, err = al.replyIntoRoom(ctx, capture, responder, req)
 	default:
 		return tools.ReplyReceipt{}, fmt.Errorf("%w", addressing.ErrUnusableCorrelation)
 	}

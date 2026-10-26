@@ -1,10 +1,36 @@
 # Dispatch and watch — keep workers observable and resumable
 
-Last reviewed: 2026-10-06
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 
 Mechanics for the planning loop's "Dispatch and watch" step. Launcher selection stays
 in the personal rules, outside this repo; set `OMNIPUS_WORKER_CLI` from those rules
 explicitly rather than relying on the controller's default.
+
+## Pre-flight before a long run or resume
+
+Read root `CLAUDE.md` ("Feature ownership" under "Subagent Workflow", and "Running CLI
+agents") and `knowledge/capacity-check.md`. Record the named feature/area owner, lane,
+absolute worktree, provider quota/balance receipt and authorized routing choice.
+Keep related scope with its capable owner; contained jobs and UAT lanes use the
+personal-layer routing. Model names and launcher choices stay outside repo assets.
+
+Controller locks, load refusal, local-receipt quota pre-flight and worker-owned
+process-group stop are **implemented** in the controller invoked below. Read its
+`lock_paths`, `acquire_lock`, `quota_refusal` and `main` before changing the launch
+procedure. Every launch keeps its output-base lock; ordinary worktrees also get
+a working-directory lock with live-PID checks. Exactly the shared launch roots
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus` and
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination` skip that directory
+lock, not the output-base, load or quota gates. Workers launched there still create
+their own writer worktrees; never use the exemption to edit the shared checkout or
+resume over a live predecessor.
+
+The quota check reads recent local receipts/streams, not a live balance endpoint;
+no known failure is not proof of remaining capacity. Record Unknown when reliable
+quota/balance information is unavailable. Save controller output and its direct
+exit code: 3 means ownership refusal, 4 load refusal, 5 quota refusal. A refusal is
+not a completed worker result. If this installed controller cannot be read or run,
+report BLOCKED rather than substituting manual checks or deleting a live lock.
 
 ## Launch with retained control
 
@@ -36,12 +62,13 @@ Append a newline-terminated user message to that worker's `.control.jsonl` to st
 ```
 
 For Agent-tool workers, observe their progress and use `SendMessage` to the original
-worker for steering and resuming. A watcher observes; it does not replace squad-lead's
-foreground wait in its goal loop.
+worker for steering and resuming. New work goes directly to specialists; the retained
+#1266 squad lead still uses its own foreground goal-loop wait.
 
 ## Resume the same session
 
-If unfinished work stops or disconnects, confirm the old process has exited, then run
+If unfinished work stops or disconnects, confirm the old process and its children
+have exited and the lane/worktree are free, then run
 the controller with the same role and worktree, a follow-up brief and a fresh output
 base; the **fifth argument is the original session id**:
 
@@ -51,3 +78,15 @@ OMNIPUS_WORKER_CLI="$WORKER_LAUNCHER" python3 -I /Users/danielpiatkowski/AI-Agen
 
 Arm a watcher on the new stream immediately. Resume the worker in its own session with
 its context intact, rather than replacing it with a fresh worker.
+
+On a quota/balance failure, save the provider receipt and follow the personal-layer
+next-tier rule immediately. Carry the original session id when supported, plus the
+latest committed SHA, ledger state, evidence and next unfinished step. If the next
+provider cannot resume that session id, restore that saved state explicitly; do not
+restart the task from zero or discard work. A capability routing exception needs the
+founder, not a silently skipped healthy ladder tier.
+
+On an explicit stop, use the controller's worker-owned process-group stop and verify
+that the parent and children are gone before releasing ownership. Do not apply this
+local-worker rule to shared Fly machines; their stop safety is documented separately
+in `deploy/ci-worker/CLAUDE.md`.

@@ -31,8 +31,8 @@ const versionsDir = ".versions"
 // finding #3): EditSkill used to infer "this is a genuine prior user
 // override, safe to edit in place" from mere file EXISTENCE at the writer's
 // root path. That inference is unsound in this install: SeedDefaults
-// materializes every built-in skill (summarize, skill-authoring, plan,
-// daily-briefing) onto the SAME writer-root path a real override would also
+// materializes every built-in skill (for example plan, interview, write-skill)
+// onto the SAME writer-root path a real override would also
 // occupy — there is no separate, untouched "factory" location existence
 // alone can distinguish from a genuine override. The practical result was
 // editing a never-touched built-in silently mutated it in place and
@@ -368,8 +368,8 @@ func (w *SkillWriter) EditSkill(
 	// A file's mere presence at this writer-root path is NOT proof of a
 	// genuine prior user override — SeedDefaults materializes every
 	// built-in skill onto this SAME path at boot, so on a fresh install
-	// fileExists is already true for summarize/skill-authoring/plan/
-	// daily-briefing before any user has ever touched them.
+	// fileExists is already true for every embedded skill (plan, interview,
+	// write-skill, ...) before any user has ever touched them.
 	// builtinMarkerFile's presence distinguishes "seeded, never edited
 	// since" from "a real override"; only the latter counts as localExists
 	// for the created_override contract below.

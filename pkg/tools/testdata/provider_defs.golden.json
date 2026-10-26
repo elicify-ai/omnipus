@@ -1,23 +1,30 @@
 [
   {
     "name": "add_mcp_server",
-    "description": "Add an MCP server to the configuration (tools.mcp.servers). The server is saved to config.json, a connection is attempted immediately, and the result reports live connection status and tool count. Every key in env is stored in the encrypted credential store and referenced from config.json by a ref (mcp_\u003cname\u003e_\u003ckey\u003e) — never written in plaintext, mirroring configure_channel's credential handling. sse/http URLs must be https, or http only for loopback addresses (localhost, 127.x.x.x, ::1). Adding a server when MCP is globally disabled and no other server is enabled will turn tools.mcp.enabled ON — an install-wide change; if another server is already enabled the global flag is left alone and the new server will not connect until an operator enables it. A name that already exists is refused, not updated — remove it first with remove_mcp_server. Tools the server exposes register with no tool policy and cannot be called until an operator assigns one.\nParameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env.",
+    "description": "Create an MCP server or attach stored env_refs to an existing unchanged descriptor; plaintext secrets are refused. For a new stdio server needing a secret, first create its descriptor without secrets using expected_revision=\"absent\". Then call request_secret with purpose and exactly one recipient form: server + env_key. Wait for the person to submit the secure web card. Submit stores a version; approved attachment selects it. Read list_mcp_servers, confirm the current entry, then call add_mcp_server with name, its expected_revision and non-empty env_refs. Each reference must have been stored for that exact server descriptor and environment variable; a different recipient is refused, so request a new card for it. Attachment changes only the named references: omit descriptor fields or supply exact matches; all other references, enable flags, assignments and policies stay unchanged. A stale revision or attempted descriptor change is refused; re-read and obtain confirmation before retrying. This is not a general server update or an in-place secret-value edit. The initial save is provisional when credentials are needed. If a later setup or connection step fails after commit, report \"saved but not working\" with the reason, not working or nothing saved. Connection status and tool count do not prove its tools can be called; operator assignment and tool policy still apply. Creation enables MCP globally if it was off and no other server was enabled; attachment never does.",
     "scope": "core",
     "category": "mcp",
     "source": "builtin"
   },
   {
     "name": "configure_channel",
-    "description": "Store a channel's credentials and settings. Secrets (token, app_secret) go into the encrypted credential store and are referenced from config.json by a *_ref — they are never written to config.json in plaintext. Non-secret fields (bot_id, app_id, mode) are written to config.json directly. This does NOT enable the channel and does NOT check whether it is enabled: call enable_channel separately, and note the channel only connects on the next config reload. WhatsApp does not take credentials here — it pairs by QR code in the Channels screen.\nParameters: id (required, from list_channels), token, app_secret, bot_id, app_id, mode.",
+    "description": "Save a channel instance's non-secret settings and select stored credential references; plaintext secrets are refused. Establish its intended settings first, then call request_secret with purpose and exactly one recipient form: instance + field for that existing connection. Wait for the person to submit the secure web card, then pass its returned references through the matching reference parameters. Submit stores a version; this approved change selects it. Each reference must match that exact instance, recipient settings and field; a different recipient is refused, so request a new card for it. A settings change that would redirect retained credentials is refused: change the destination in Settings first, then request a new card. Slack's paired card supplies bot_token and app_token; pass both as bot_token_ref and app_token_ref, not token_ref. Omitted references stay unchanged. Read list_channels and pass expected_revision (\"absent\" for a new entry); stale writes are refused. This does not enable or live-test the channel: call enable_channel separately; new settings take effect on the next config reload. Saving changed settings can interrupt an existing pairing immediately; the result states whether this happened. Report committed settings as \"saved but not working\" with the reason, never working or nothing saved. WhatsApp pairs by QR code under Connectors \u003e WhatsApp, not with credentials here.",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
   },
   {
     "name": "configure_provider",
-    "description": "Store an LLM provider's API key in the encrypted credential store and wire it into config.json so the provider becomes usable. Does NOT contact the provider — the key is stored and referenced, never validated against the live API, so a wrong or revoked key is accepted here without complaint; call list_models afterwards to confirm the key actually works. name must be a catalog provider id (list_models or the Settings → Providers screen show the valid ids; note the ids are 'amazon-bedrock' and 'google', not 'bedrock' or 'gemini'). api_key is required for every cloud provider and optional only for local ones (ollama, lmstudio, vllm). api_base is optional and overrides the catalog's default endpoint; it must be a full http:// or https:// URL with a host.\nParameters: name (required), api_key, api_base.",
+    "description": "Configure a provider by selecting api_key_ref; plaintext secrets are refused. First call request_secret with purpose and exactly one recipient: provider or endpoint. Wait for the person to submit the secure web card. Submit stores a version; this approved change selects it. A reference stored for a different recipient is refused: request a new card for the intended recipient. Cloud providers require api_key_ref; local providers need no key. Use catalog ids such as amazon-bedrock or google, not bedrock or gemini. This tool connects API-key and keyless local providers only: account sign-in (for example openai-chatgpt), coding-plan variants and providers needing more than one credential (for example amazon-bedrock: access key, secret, region) cannot be connected here — they are Settings → Providers paths; see the provider-config skill. After saving, this tool will check the SAVED entry by requesting a model list from the configured endpoint using its saved credential and protocol — when the protocol has a model listing; a protocol without one is reported as \"not checked\", leaving the endpoint and the credential untested. This does not prove that a chosen model runs. A failed reload or saved-entry check after commit is \"saved but not working\" with the reason; never report it as working or unsaved. Pass expected_revision from list_providers (\"absent\" for a new entry); stale writes are refused. dry_run checks input shape only, without saving, recipient validation or network calls.",
     "scope": "core",
     "category": "providers",
+    "source": "builtin"
+  },
+  {
+    "name": "connect_channel",
+    "description": "Connect a channel in one approved call: save its configuration, bind the instance's main agent in a workspace, enable it and live-test it. Supply id (the instance key: a bare type such as telegram for the default instance, or a namespaced key such as telegram.eu for an additional one), workspace_id, and agent_id for the main agent, who must be a member of that workspace — a valid token with a non-member target fails and nothing is saved. Credentials travel as stored references only, never plaintext: first request_secret for the instance's fields, wait for the person's card, then pass the returned references through the matching reference parameters; each must match that exact instance and field. WhatsApp needs no credentials here — an already-linked device is reported working with the pairing note 'the WhatsApp device was already linked; no QR code was needed'. A failed pairing start is saved but not working: report the cause and use Retry in this chat. An unlinked device reports 'pairing not finished: scan the WhatsApp QR code'; the connection works only after the QR scan. The QR code appears in this chat while pairing runs (and on Connectors \u003e WhatsApp), and Stop in this chat ends the pairing; a pairing timeout is reported as saved but not working. The result lists the facts proven by real platform calls and everything not tested; a channel that does not start is reported as saved but not working, with the reason — follow the result's cause and repair: some start failures identify a local session-store problem or an unreachable platform; the fallback groups rejected credentials with other start failures, and some status paths still combine credential rejection and reachability — and failed: nothing saved when validation stopped the save; never working. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode.",
+    "scope": "core",
+    "category": "channels",
     "source": "builtin"
   },
   {
@@ -57,7 +64,7 @@
   },
   {
     "name": "disable_channel",
-    "description": "Disable a channel connection. The channel will stop on the next config reload. A channel that has never been configured cannot be disabled — it is already inactive.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
+    "description": "Disable a channel connection. Saving the change can interrupt an existing pairing immediately; other live connection changes take effect on the next config reload. The result states whether a pairing was interrupted. A channel that has never been configured cannot be disabled — it is already inactive. expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, the channel type e.g. 'telegram', 'discord'), expected_revision (required).",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
@@ -71,7 +78,7 @@
   },
   {
     "name": "enable_channel",
-    "description": "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
+    "description": "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first. expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, the channel type e.g. 'telegram', 'discord'), expected_revision (required).",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
@@ -85,7 +92,7 @@
   },
   {
     "name": "get_agent_tools",
-    "description": "Read tool inventory and effective policies. Supply either id for an existing agent or new_agent_type (Main or Subagent) to preview native creation defaults before proposing a new agent. Preview is read-only, has no persisted id/revision, and includes no connector assignments. In preview, stored_tool_overrides contains creation defaults before proposed changes, not user-applied overrides. Main and Subagent share these defaults. Sparse creation patches modify only named policies; omitted policies retain their defaults. This does not grant or execute target tools.",
+    "description": "List tools and effective policies. For an existing agent or new-agent preview, allow/ask lines show name, effective policy, and a description of at most 40 characters; deny lines show only name and deny. Previews use main or worker defaults. ToolSearch reports allow. Existing agents use the effective policy, not only the stored override.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
@@ -162,14 +169,21 @@
   },
   {
     "name": "remove_mcp_server",
-    "description": "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change.\nParameters: name (required), confirm (bool, must be true).",
+    "description": "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change. expected_revision is the server's revision from list_mcp_servers; the removal is refused if the server changed since.\nParameters: name (required), confirm (bool, must be true), expected_revision (required).",
     "scope": "core",
     "category": "mcp",
     "source": "builtin"
   },
   {
+    "name": "remove_secret",
+    "description": "Remove one stored secret reference after the person has seen who depends on it. Supply the full reference name as list_secrets reports it, version suffix included. The consumers are listed on the approval card before anything is deleted. Removal of an in-use reference proceeds behind the approval; the result names every consumer, reports the stale live value truthfully, and the next boot starts with the affected integrations degraded. Removing an older version that a replacement superseded leaves the integration unaffected and working. The result reports three separate facts and they must stay separate: whether the value is durably deleted, what the live effect on running connections is, and whether the configuration still starts on the next boot. Never summarise them into a single ok. Values are never an input or an output. Only Omnipus holds this tool — an agent that wants a reference removed asks Omnipus. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode.",
+    "scope": "core",
+    "category": "platform",
+    "source": "builtin"
+  },
+  {
     "name": "remove_skill",
-    "description": "Remove an installed skill. IRREVERSIBLE — the skill's whole directory, including any version history it holds, is permanently deleted; there is no undo. This only reaches a skill in the operator's installed-skills directory (populated by installing from the marketplace) — it does NOT reach a skill authored with create_skill or a user override created with edit_skill, which live in a separate directory: naming one here returns NOT_FOUND even though list_skills reports it as available. If the removed skill was shadowing a lower-priority skill of the same id (an override or a built-in), that one becomes visible again. Parameters: name (required, the skill id as reported by list_skills — no path separators), revision (required from the reviewed skill read), confirm (bool, must be true). A conflict requires a fresh read; do not retry the stale deletion.",
+    "description": "Remove a project or installation-wide skill. IRREVERSIBLE — the skill's whole directory, including any version history it holds, is permanently deleted; there is no undo. It searches the target workspace's project shelf first and removes a matching skill from its own project. Only if no project skill matches does it use the installation's skills directory, which also contains installation-wide authored skills and user overrides. A project-shelf read failure returns READ_FAILED without removal or fallback; project-path integrity errors also stop removal instead of falling back. A skill present only on the built-in shelf is not removed. If the removed skill was shadowing a lower-priority skill of the same id (an override or a built-in), that one becomes visible again. Parameters: name (required, the skill id as reported by list_skills — no path separators), revision (required from the reviewed skill read), confirm (bool, must be true). A conflict requires a fresh read; do not retry the stale deletion.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
@@ -177,6 +191,13 @@
   {
     "name": "run_doctor",
     "description": "Run a narrow set of security diagnostic checks (exec egress config, credentials.json/config.json file permissions, audit log directory presence) and return checks_failed_pct — the percentage of THESE FEW checks that failed — plus actionable recommendations. This is NOT a comprehensive security audit: it never looks at sandbox.mode, god-mode, dev_mode_bypass, or Landlock/seccomp availability, so an install with every real protection disabled can still score 0% (\"no risk\"). A low checks_failed_pct means only these specific checks passed, not that the install is secure. No parameters required.",
+    "scope": "core",
+    "category": "platform",
+    "source": "builtin"
+  },
+  {
+    "name": "select_secret_version",
+    "description": "Select a stored version of a secret reference as the version in use; the previously selected version becomes superseded, listed and removable. Call it when the person asks to roll an agent's private variable back to an earlier one — a private replacement is always selected on submit on the owner's card, so a private variable only ever moves backwards through this tool. Supply reference_name and version as list_secrets reports them; for a private variable also supply the target workspace and agent. A reference stored for a different recipient is refused with nothing selected — request a fresh card for the current recipient instead; the same applies to a private selection that does not match the owner pair. Values are never an input or an output: reference names and version numbers only. Only Omnipus holds this tool — an agent that wants its own variable rolled back asks Omnipus. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode.",
     "scope": "core",
     "category": "platform",
     "source": "builtin"

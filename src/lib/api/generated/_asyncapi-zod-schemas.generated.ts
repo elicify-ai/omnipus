@@ -26,7 +26,7 @@ export const WorkflowStart = z
 
 export const SecretRecipientDisplay = z
   .object({
-    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private"]),
+    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private", "unbound"]),
     lines: z.array(z.string().min(1).max(500)).min(1).max(8),
   })
   .strict();
@@ -76,6 +76,7 @@ export const SessionStateSecretRequest = z
     session_id: z.string().min(1).max(255),
     root_session_id: z.string().min(1).max(255).optional(),
     state: z.enum(["pending", "submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    continuation_unconfirmed: z.boolean().optional(),
     acting_agent_id: z.string().min(1).max(128),
     acting_agent_name: z.string().min(1).max(128),
     origin_label: z.string().min(1).max(200).optional(),
@@ -118,9 +119,9 @@ export const RoomEntry = z
     client_message_id: z.string().min(1).max(128).optional(),
     author: RoomEntryAuthor,
     text: z.string().max(5242880),
-    addressees: z.array(z.string().min(1).max(128)).max(256),
+    addressees: z.array(z.string().min(1).max(128)),
     after_pause: z.boolean(),
-    deliveries: z.array(RoomDeliveryState).max(256),
+    deliveries: z.array(RoomDeliveryState),
     timestamp: z.string(),
   })
   .strict();
@@ -157,15 +158,16 @@ export const RoomSnapshotFrame = z
     room_id: z.string().min(1).max(128),
     seq: z.number().int().min(0),
     entries: z.array(RoomEntry).max(10000),
-    members: z.array(z.string().min(1).max(128)).max(256),
-    muted: z.array(z.string().min(1).max(128)).max(256),
-    member_states: z.array(RoomDeliveryState).max(10000),
+    members: z.array(z.string().min(1).max(128)),
+    muted: z.array(z.string().min(1).max(128)),
+    member_states: z.array(RoomDeliveryState),
     paused: z.boolean(),
     generation: z.number().int().min(0),
     read_only_reason: z.string().min(1).max(200).optional(),
     allocated_cost_micro_usd: z.number().int().min(0),
     allocated_cost_unpriced: z.boolean(),
     complete: z.boolean(),
+    has_older: z.boolean().optional(),
   })
   .strict();
 
@@ -174,8 +176,8 @@ export const RoomMetaFrame = z
     type: z.literal("room_meta"),
     room_id: z.string().min(1).max(128),
     seq: z.number().int().min(1),
-    members: z.array(z.string().min(1).max(128)).max(256),
-    muted: z.array(z.string().min(1).max(128)).max(256),
+    members: z.array(z.string().min(1).max(128)),
+    muted: z.array(z.string().min(1).max(128)),
     paused: z.boolean(),
     generation: z.number().int().min(0),
     read_only_reason: z.string().min(1).max(200).optional(),
@@ -626,6 +628,7 @@ export const ReplayMessageFrame = z
       reason: z.literal("stopped_before_delivery"),
     })
     .strict().optional(),
+    seq: z.number().int().min(1).optional(),
     terminal_outcome: z.boolean().optional(),
   })
   .strict();
@@ -717,7 +720,7 @@ export const ProviderFallbackFrame = z
     turn_id: z.string().min(1).max(128),
     answered_model: z.string().min(1).max(256),
     unavailable_model: z.string().min(1).max(256),
-    unavailable_code: z.enum(["rate_limited", "model_retired"]),
+    unavailable_code: z.enum(["rate_limited", "model_retired", "model_not_found"]),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -730,7 +733,7 @@ export const ProviderFallbackNote = z
     timestamp: z.string(),
     answered_model: z.string().min(1).max(256).optional(),
     unavailable_model: z.string().min(1).max(256).optional(),
-    unavailable_code: z.enum(["rate_limited", "model_retired"]).optional(),
+    unavailable_code: z.enum(["rate_limited", "model_retired", "model_not_found"]).optional(),
     message: z.string().min(1).max(4096),
   })
   .strict();
@@ -870,9 +873,9 @@ export const AskUserAnswerFrame = z
 
 export const SessionStatePendingApproval = z
   .object({
-    tool_call_id: z.string().min(1).optional(),
-    turn_id: z.string().min(1).optional(),
-    args: z.record(z.unknown()).optional(),
+    tool_call_id: z.string().min(1),
+    turn_id: z.string().min(1),
+    args: z.record(z.unknown()),
     segments: z.array(CommandSegmentInfo).optional(),
     root_session_id: z.string().min(1).max(255).optional(),
     acting_agent_name: z.string().min(1).max(128).optional(),
@@ -986,7 +989,7 @@ export const WhatsAppPairingFrame = z
     session_id: z.string().min(1).max(255).optional(),
     type: z.literal("whatsapp_pairing"),
     channel_id: z.string().min(1),
-    status: z.enum(["waiting", "code", "linked", "timeout", "error"]),
+    status: z.enum(["waiting", "code", "linked", "timeout", "error", "stopped"]),
     qr: z.string().optional(),
     message: z.string().optional(),
   })
@@ -1006,7 +1009,7 @@ export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
     id: z.string().min(1),
-    notification_type: z.enum(["schedule_failed", "knowledge_drift", "goal_paused"]),
+    notification_type: z.enum(["schedule_failed", "knowledge_drift", "goal_paused", "stop_notice"]),
     title: z.string().min(1),
     body: z.string().optional(),
     severity: z.enum(["info", "warning", "error"]),

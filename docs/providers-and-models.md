@@ -39,14 +39,31 @@ For a custom endpoint, choose either the `openai-compatible` or `anthropic` prot
 
 ## Picking a model when two providers offer it
 
-The model pickers — next to the chat message box, on an agent's profile, in the new-agent wizard, and on the **Default model** card — list every model offered by your connected and signed-in providers, grouped under the provider that serves it.
+The model pickers — next to the chat message box, on an agent's profile, and on the **Default model** card — list every model offered by your connected and signed-in providers, grouped under the provider that serves it.
 
 The same model name can appear under more than one provider, for example when a local proxy serves models that a subscription provider also offers. When that happens, the check mark appears only under the provider whose row you actually picked — by mouse or by keyboard — and picking the same model under a different provider moves the check mark to that provider's row.
 
+### The model a chat keeps
+
+The chat's model picker remembers the model you picked **for that one conversation**. Leave the conversation and come back, switch to another chat and back, or reload the browser — the picker shows the model you last chose there, and that is the model the next message uses. The choice is kept per browser until you pick a different model in that conversation.
+
+The picker also marks the conversation agent's **default model**: the row that carries the **Default** chip is the model the agent uses when you have not picked one. The chip follows the provider too: when the agent's default was saved together with a provider, only that provider's row for the model carries the chip — the same model name under a second provider is not marked. If the agent's model was saved without a provider, the chip marks the model name under every provider that offers it. To go back to the default, pick the **Default**-marked row deliberately; the conversation then keeps that choice like any other.
+
+The remembered choice is a per-browser convenience, not a server-side setting, and it covers **every** chat — workspace chats and unfiled chats (a chat outside any workspace, opened by link) alike. If you choose a model before a new chat has been saved, the first message is sent using that model. You can choose a different model in the same chat while delivery is still awaiting confirmation: the first request stays unchanged, and the newer choice applies to the next message. When delivery is confirmed with a conversation ID, Omnipus saves the latest choice made in that pending chat, even if you have since opened another chat. Opening an existing chat while that first message is pending restores the existing chat's own model; it does not copy the draft's choice into that chat. You do not need to wait for an answer before reloading once delivery has been confirmed. A chat you open on another device starts from the conversation's last answered model or the agent's default instead.
+
+If browser storage fails, a warning explains whether Omnipus could not **save** or **read** your model choices; damaged saved data is reported as invalid rather than treated as no choice. Choices made in the current page are still kept when you switch chats and return, but may be lost on reload. Check your browser's storage space and permissions. After fixing storage, select the model again to save it. The warning stays until you dismiss it, and does not stop you from using the selected model.
+
 Two limits to know:
 
-- A value restored from a saved setting or conversation rather than picked in this session carries no provider record (for example a recap model saved earlier, or the model a conversation was last answered with). When exactly one provider offers that model, its row is marked; when several providers offer it, no row is marked, because the UI cannot know which one served it.
-- In the chat composer the provider choice is currently display-only: the message is sent with the model name only, and the server decides which provider serves it. The agent profile, the new-agent wizard, the **Default model** card, and fallback entries do save the chosen provider.
+- Some values the picker restores rather than you picking carry no provider record — for example the recap model saved under Settings → Memory (that setting stores the bare model name), or the model a conversation was last answered with. For such a value, when exactly one provider offers that model, its row is marked; when several providers offer it, no row is marked, because the UI cannot know which one served it. A restored default that was saved together with a provider does carry it, and that provider's row is marked.
+- In the chat composer the provider choice is currently display-only: the message is sent with the model name only, and the server decides which provider serves it. The agent profile, the **Default model** card, and fallback entries do save the chosen provider. There is no create form in the app: new agents are created by asking Omnipus or through the REST API (see [agents](agents.md)).
+
+## Model requirements
+
+- **Minimum:** a model with a context window of at least **16,384 tokens (16k)**. Omnipus's built-in instructions need this much room.
+- **Recommended:** **256,000 tokens or more** for long conversations, delegation and goals.
+
+Choose models that meet these requirements for both the main model and its fallbacks. A context-length override cannot enlarge a model's actual window.
 
 ## Models known to support tools
 
@@ -69,11 +86,21 @@ For any other model, check the provider's documentation for **tool use**, **tool
 
 Some providers cannot be enumerated from a published catalog. Ollama and other local providers depend on what is installed on your machine, so Omnipus requests their live list. A custom endpoint has no catalog to enumerate; you maintain its model names under **Models** in that provider's settings.
 
+## What the provider check proves
+
+When Omnipus configures a provider with `configure_provider`, it checks the saved entry straight away: the configured endpoint (your own address if you set one, otherwise the catalog's) is asked for its model list over that provider's protocol, with the saved key. A local provider such as Ollama is checked without a key. The result is `working` when the list comes back and `saved but not working` with the reason otherwise — a refused key, an unreachable address, or a protocol that has no model list. A passing check does not prove that a particular model runs, that you have quota, or that the model supports tools.
+
+`configure_provider` also has a dry run (`dry_run`): it checks the provider id, the key's shape and the address's shape, saves nothing and contacts nobody.
+
+`list_models` lists models through each configured provider's saved endpoint the same way. Asking it for a provider that is not configured is an error that says so, instead of an empty list. `list_providers` shows each provider's effective endpoint (`api_base`), protocol and the name of its saved key reference (`api_key_ref`, never the key), and `test_provider` accepts every provider `list_providers` shows.
+
 ## Limits and things to watch
 
-A fallback is not used for every error. Omnipus moves to the next model after temporary failures such as timeouts, connection drops, overload, or rate limits. It skips a model that is cooling down after recent failures. A successful request clears that model's cooldown.
+A fallback is not used for every error. Omnipus moves to the next model after temporary failures such as timeouts, connection drops, overload, or rate limits, and after a `bad_model` answer when a backup model is configured (see below). It skips a model that is cooling down after recent failures. A successful request clears that model's cooldown.
 
-Authentication and billing failures also move to the next model. Invalid request format, context overflow, image-size errors, and unrecognized errors stop the chain. An HTTP 400 response that specifically says the model was not found or is not offered is a `bad_model` failure: it stops without trying another provider. Fix the model/provider pair in the agent's settings. Canceling a request also stops it. If every eligible model fails or is cooling down, the whole request fails with the recorded attempts.
+If a provider connection drops before a response starts streaming, Omnipus may retry within the same chat turn. In web chat, that recovery does not create a separate completed assistant reply: the chat stays active and **Stop** remains available until the turn genuinely finishes. Provider rate-limit countdowns and fallback notices are separate from this transport recovery.
+
+Authentication and billing failures also move to the next model. So does a `bad_model` failure — an HTTP 400 response that specifically says the model was not found or is not offered: Omnipus tries the next model, and a fallback notice names both models and says plainly that the first was not found or not offered by its provider. Invalid request format, context overflow, image-size errors, and unrecognized errors stop the chain. Canceling a request also stops it. If every eligible model fails or is cooling down, the whole request fails with the recorded attempts; a `bad_model` that no backup could absorb — the agent has no other model, or every model in the chain was rejected this way — tells you to fix the model/provider pair in the agent's settings.
 
 A native conversation turn uses the selected provider's configured connection even if the agent has only one model candidate. It never substitutes the global-default connection for a missing named route. If the provider's saved credentials or endpoint settings cannot produce a usable connection, the turn stops before sending a request for that pair, with a `model_route_unavailable` notice naming the provider and model. Fix those settings, then send the request again. When several rows name the same pair, usable rows are tried in configured order; a missing credential reference or invalid endpoint does not override a working row. A light model keeps its own resolved connection, including when it shares a provider name with the main model but uses another endpoint. Cloud-model lookup also checks the full catalog, not just the saved model pick list.
 

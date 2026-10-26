@@ -5,16 +5,19 @@ description: Load on failure dispatches only — when a developer (backend-lead 
 
 # Failure triage — Omnipus
 
-Last reviewed: 2026-09-26 — initial authoring 2026-09-25 (design §7.2, agent-refresh rollout); 2026-09-26 CI-cluster root-user caveat (issue #894).
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 
 ## Standing rules for this dispatch
 
 - **Origin is irrelevant.** Every failure is fixed, whatever its origin — a red on your
   branch, on the integration branch, or pre-existing anywhere. "Pre-existing / not mine /
   broken on main too" are never acceptable closures (root `CLAUDE.md`, Hard Constraint #7).
-- **You are the one dispatch on this red check.** Exactly one failure dispatch exists per
-  red check at a time; a second fixer collides in the tree. If your evidence shows someone
-  else is already on it, stop and tell team-lead instead of continuing.
+- **Keep the existing feature/area owner.** Consolidate related red checks into that
+  owner's brief, not a fresh fixer per finding (root `CLAUDE.md`, "Feature ownership").
+  If another live worker owns the area or worktree, stop and tell team-lead.
+- Read the current tracked quarantine entries before classifying a known failure; only
+  CI's mechanical qualified result has the meaning set by root `CLAUDE.md` ("CI
+  quarantine"). An issue or an isolated pass alone never turns a red into green.
 - The outcome is a fix on your work branch, or a blocked report to team-lead with options
   and a recommendation. Deferring anything needs a tracked issue with a target date and
   explicit founder approval.
@@ -99,20 +102,26 @@ cross-platform matrix, the build matrix and shellcheck fire on pull requests and
 pushes only, and the scheduled workflows never run on branch pushes at all. Say in your
 report which checks never ran — do not treat the green as full coverage.
 
-The remote CI cluster's Go tiers run as root (issue #894): a permission-sensitive test
-that fails only there is an environment artefact, not a defect — GitHub Actions stays
-the authority for permission-sensitive tests until #894 is fixed, and no fixer is
-dispatched onto a root-only cluster red. Say so in your report instead.
+The remote runner's `ci_prepare` / gate re-exec in `deploy/ci-worker/runci.sh` runs
+Go/node gates as the non-root `ci` user after root-only setup; `e2e` and `all` retain
+root for browser/port setup. The old blanket root-user excuse is obsolete. For a
+permission-sensitive failure, inspect that run's actual gate, deployed runner and
+user evidence before classifying it; never dismiss a Go-tier red merely because
+the Fly SSH shell is root. See `deploy/ci-worker/CLAUDE.md` ("Non-root test user, disk
+pressure, machine ownership").
 
 ### 8. One narrow local test only
 
 - Go: at most ONE narrow local test process at a time, only as
   `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/` —
   never multiple Go suites in parallel, never the full local suite (it OOM-kills this
-  shared environment; CI is the authority). Push the branch and read the checks instead.
+  shared environment; CI is the authority). Push the work branch and hand targeted
+  evidence back for candidate CI; do not trigger a full workflow on the lane.
   One-at-a-time allows repeats: the red run in step 1 and the green run after the fix
   are two processes, run one after another, never in parallel.
-- SPA: `npx vitest run <one-file>`.
+- SPA: `npx vitest run <one-file>`. Use the shared skill's "Build and test" procedure
+  for slot-runner use and the local typecheck/compile pre-flight before an approved
+  Fly window; heavy work is never run bare.
 - Your step-1 reproduction is the red evidence the fix's green is measured against —
   show both in the report.
 

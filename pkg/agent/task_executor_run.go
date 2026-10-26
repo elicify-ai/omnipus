@@ -694,6 +694,8 @@ func (al *AgentLoop) runTaskExternalCLIOnce(
 		// instruction to the SAME native CLI conversation (never a fresh Run).
 		ExternalCLIResume: resume,
 	}
+	// #1263 R1/R5: a task run is unattended whatever started it.
+	al.applyTurnAttendance(&opts)
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, sessionKey))
 	if out != nil {
 		// A person's Stop claims the cancel on this turn; a steer delivery
@@ -707,7 +709,6 @@ func (al *AgentLoop) runTaskExternalCLIOnce(
 		}
 	}
 	ts.depth = delegationDepth
-	ts.al = al // FIX 5: back-ref for hard-abort cascade (mirrors the pre-ADR-091 subturn.go, since deleted)
 
 	// FIX 5: register for the run's duration — see this function's doc
 	// comment for the full reachability analysis.
@@ -848,7 +849,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		var nextResp string
 		var nextErr error
 		_, contErr := al.continuePendingSteeringWithAgent(ctx, taskChatID, liveAgent,
-			func(_ *AgentInstance, steeringMsgs []providers.Message, _ []string) (string, error) {
+			func(_ *AgentInstance, steeringMsgs []providers.Message, _ []string, _ []inputOrigin) (string, error) {
 				resumed = true
 				out = taskExternalOutcome{}
 				nextResp, nextErr = al.runTaskExternalCLIOnce(ctx, liveAgent,

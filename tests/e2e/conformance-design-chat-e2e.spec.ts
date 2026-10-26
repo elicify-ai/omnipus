@@ -21,10 +21,11 @@
 // another test wrote, in this file or in any sibling — which is precisely what
 // makes splitting the suite across shards sound.
 
-import { expect, type Locator, type Page } from '@playwright/test'
+import { errors, expect, type Locator, type Page } from '@playwright/test'
 import { test } from './fixtures/plan-cleanup'
 import { chatInput, assistantMessages, userMessages } from './fixtures/selectors'
 import { requireApiKey, startFreshChatWithAgent, startFreshChatWithJim } from './fixtures/conformance-helpers'
+import { resolveGoalCheckApproval, waitWithGoalApprovals } from './fixtures/goal-approval'
 
 // ── Conformance_t0_ChatGoalE2E ───────────────────────────────────────────────
 //
@@ -62,7 +63,7 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
 
   const steering = await prepareGoalSteering(page, input)
 
-  const sawDone = await steerToDone(steering)
+  const sawDone = await steerToDone(page, steering)
 
   await assertChatGoalWalkComplete(steering, activePill, sawDone)
 })
@@ -231,10 +232,16 @@ interface ChatGoalSteering {
   claimUserBubbles: Locator
   steerText: string
   askUserQuestionCard: Locator
-  toolApprovalDialog: Locator
+  toolApprovalCard: Locator
   waitForDone: (budgetMs: number) => Promise<boolean>
   dismissPendingAsk: (where: string) => Promise<void>
-  denyToolApproval: (where: string) => Promise<void>
+}
+
+function recordGoalApproval(decision: 'allow_once' | 'deny', command: string | null): void {
+  test.info().annotations.push({
+    type: 'goal-check-approval',
+    description: `${decision}: ${command ?? 'unrelated tool'} — explicit inline-card decision`,
+  })
 }
 
 async function openChatGoalWalk(page: Page): Promise<ChatGoalWalkOpening> {
@@ -329,7 +336,11 @@ async function openChatGoalWalk(page: Page): Promise<ChatGoalWalkOpening> {
   // Wait for the worker turn to complete — assistant message counter advances.
   // The active-pill → worker-turn transition is automatic (goal_loop.go emits
   // the goal_status frame, then a normal chat turn fires to do the work).
-  await expect(assistantMessages(page).first()).toBeVisible({ timeout: 300_000 })
+  await waitWithGoalApprovals(
+    page,
+    expect(assistantMessages(page).first()).toBeVisible({ timeout: 300_000 }),
+    recordGoalApproval,
+  )
 
   return { input, activePill }
 }
@@ -447,36 +458,13 @@ async function prepareGoalSteering(page: Page, input: Locator): Promise<ChatGoal
     })
   }
 
-  // TOOL-APPROVAL MODAL (measured, this file's run 4): turn 1's prompt is
-  // bare steering prose, and this run's model spent it on repo orientation —
-  // a network-capable `bash git …` call. Under ADR-092, a network-capable
-  // binary on a chat with Auto-approve (and no enforcing kernel sandbox on
-  // macOS) escalates to the operator as the ToolApprovalModal — a full-screen
-  // Radix dialog whose overlay intercepts every pointer event until it is
-  // answered, so the composer cannot be clicked at all (run 4: the steer's
-  // input.click() retried 851× against the overlay for the rest of the
-  // budget). The operator action this test takes is DENY (the
-  // default-focused safe default, ToolApprovalModal.tsx denyButtonRef): the
-  // goal's check needs only bash `true`, never the network. This is an
-  // operator choice the ADR-092 flow exists to offer — it does not touch the
-  // oracle; the done pill still decides pass/fail, and the done pill's
-  // in-page wait is overlay-proof (the pill mounts in the DOM under the
-  // overlay; presence, not visibility, is what waitForFunction checks).
-  const toolApprovalDialog = page.locator('[data-testid="dialog-overlay"]')
-  const denyToolApproval = async (where: string): Promise<void> => {
-    if (!(await toolApprovalDialog.isVisible({ timeout: 1_000 }).catch(() => false))) return
-    console.log(`t0: tool-approval modal is blocking the composer — denying it (no network calls needed) (${where})`)
-    test.info().annotations.push({
-      type: 'blocker-dismissed',
-      description: `tool-approval modal denied — ${where}`,
-    })
-    await page
-      .getByRole('button', { name: 'Deny', exact: true })
-      .click()
-      .catch(() => {
-        /* modal may resolve itself between the check and the click */
-      })
-  }
+  // WU-8/#1263 approvals are INLINE now; they do not disable the composer.
+  // Run 39613424905 waited 285889ms on `true; echo "exit=$?"` while the old
+  // helper kept looking for the retired modal. No met claim could run behind
+  // that unanswered check. Explicitly approve THIS check once, deny unrelated
+  // calls, and also service cards during the existing completion waits below.
+  // The done pill remains the oracle; neither approval nor a sent steer is done.
+  const toolApprovalCard = page.getByTestId('tool-approval-panel')
 
   // ASK FOR THE CLAIM, AND KEEP ASKING.
   //
@@ -528,7 +516,7 @@ async function prepareGoalSteering(page: Page, input: Locator): Promise<ChatGoal
   // (networkCapableBinaries) so a steer-driven bash call cannot land on an
   // unapproved ADR-092 D8 pre-flight escalation — in the release run three
   // `bash git` calls ate ~85s each of the steer budget that way. And the
-  // modal they raise is answered by denyToolApproval at loop top (run 4).
+  // inline card they raise is denied by resolveGoalCheckApproval.
   const steerText =
     'Verify the goal\'s check criterion yourself, then claim it. First call the bash tool ' +
     'with the command `true; echo $?` and read the exit code it reports. Do not run git, curl, ' +
@@ -545,37 +533,35 @@ async function prepareGoalSteering(page: Page, input: Locator): Promise<ChatGoal
     claimUserBubbles,
     steerText,
     askUserQuestionCard,
-    toolApprovalDialog,
+    toolApprovalCard,
     waitForDone,
     dismissPendingAsk,
-    denyToolApproval,
   }
 }
 
-async function steerToDone(steering: ChatGoalSteering): Promise<boolean> {
+async function steerToDone(page: Page, steering: ChatGoalSteering): Promise<boolean> {
   const {
     input,
     claimUserBubbles,
     steerText,
     askUserQuestionCard,
-    toolApprovalDialog,
+    toolApprovalCard,
     waitForDone,
     dismissPendingAsk,
-    denyToolApproval,
   } = steering
 
   // FAST PATH: the worker may have claimed during its own turn. A model that
   // already claimed must not be steered again, so check before asking.
-  let sawDone = await waitForDone(20_000)
+  let sawDone = await waitWithGoalApprovals(page, waitForDone(20_000), recordGoalApproval)
 
   const STEER_ATTEMPTS = 3
   for (let attempt = 1; attempt <= STEER_ATTEMPTS && !sawDone; attempt++) {
     // Clear a stray AskUserQuestion card first — see dismissPendingAsk's own
     // comment above for why one can be sitting here blocking the composer.
-    // The tool-approval modal (run 4's blocker) is likewise answered before
-    // the typing: denyToolApproval above.
+    // Resolve an inline approval before typing; later cards are serviced
+    // during the existing done wait after the steer has been delivered.
     await dismissPendingAsk(`steer ${attempt}/${STEER_ATTEMPTS}, before typing`)
-    await denyToolApproval(`steer ${attempt}/${STEER_ATTEMPTS}, before typing`)
+    await resolveGoalCheckApproval(page, recordGoalApproval)
 
     // Start the done-pill wait BEFORE the typing. GoalPillTray.tsx removes a
     // terminal pill 4s after it paints (TERMINAL_PILL_DISPLAY_MS) — see
@@ -618,7 +604,7 @@ async function steerToDone(steering: ChatGoalSteering): Promise<boolean> {
           description: `steer ${attempt}/${STEER_ATTEMPTS}: typing interrupted, retyping (try ${typing}/${STEER_TYPE_TRIES})`,
         })
         await dismissPendingAsk(`steer ${attempt}/${STEER_ATTEMPTS}, typing try ${typing}/${STEER_TYPE_TRIES}`)
-        await denyToolApproval(`steer ${attempt}/${STEER_ATTEMPTS}, typing try ${typing}/${STEER_TYPE_TRIES}`)
+        await resolveGoalCheckApproval(page, recordGoalApproval)
       }
       await input.click()
       await input.press('ControlOrMeta+a')
@@ -629,7 +615,7 @@ async function steerToDone(steering: ChatGoalSteering): Promise<boolean> {
       if ((await input.inputValue().catch(() => '')) === steerText) break
       const blocked =
         (await askUserQuestionCard.isVisible({ timeout: 1_000 }).catch(() => false)) ||
-        (await toolApprovalDialog.isVisible({ timeout: 1_000 }).catch(() => false))
+        (await toolApprovalCard.isVisible({ timeout: 1_000 }).catch(() => false))
       if (!blocked) break
     }
     // LOUD GUARD: a blocker that took focus mid-typing swallows keystrokes
@@ -664,7 +650,7 @@ async function steerToDone(steering: ChatGoalSteering): Promise<boolean> {
     // the walk is claim → judging (ephemeral) → done. doneWait has been
     // running since BEFORE the typing — it covers the typing blind spot, and
     // its 90s clock started at the dismiss above.
-    sawDone = await doneWait
+    sawDone = await waitWithGoalApprovals(page, doneWait, recordGoalApproval)
     if (!sawDone && attempt < STEER_ATTEMPTS) {
       console.log(`t0: no done pill after steer ${attempt}/${STEER_ATTEMPTS} — asking again`)
     }
@@ -699,3 +685,155 @@ async function assertChatGoalWalkComplete(
     ).toBe(true)
   }
 }
+
+// Deterministic helper controls stay in this existing CI shard. These use real
+// browser locators on synthetic card DOM, not the gateway/Judge or fake locators.
+// They supplement t0 above; none is evidence that a real goal reached done.
+async function showGoalApprovalControl(
+  page: Page,
+  command: string,
+  options: {
+    tool?: string
+    malformed?: boolean
+    delayed?: boolean
+    completeAfterDecision?: boolean
+    keepPending?: boolean
+  } = {},
+): Promise<void> {
+  await page.setContent('<body data-approval-decisions="[]"></body>')
+  await page.evaluate(({ command, options }) => {
+    const create = () => {
+      const panel = document.createElement('section')
+      panel.dataset.testid = 'tool-approval-panel'
+      panel.setAttribute('aria-labelledby', 'approval-control-a-title')
+      const title = document.createElement('h3')
+      title.id = 'approval-control-a-title'
+      title.textContent = 'Tool Approval Required'
+      const tool = document.createElement('p')
+      tool.textContent = options.tool ?? 'Run command'
+      panel.append(title, tool)
+      // Real cards place command/segment previews before the Arguments JSON.
+      const preview = document.createElement('pre')
+      preview.textContent = command
+      const args = document.createElement('pre')
+      const inspected = options.malformed ? '{invalid' : JSON.stringify({ command })
+      args.textContent = inspected
+      panel.append(preview, args)
+      for (const [label, action] of [['Approve Once', 'allow_once'], ['Deny', 'deny']]) {
+        const button = document.createElement('button')
+        button.textContent = label
+        button.onclick = () => {
+          const decisions = JSON.parse(document.body.dataset.approvalDecisions ?? '[]') as string[]
+          decisions.push(action)
+          document.body.dataset.approvalDecisions = JSON.stringify(decisions)
+          if (!options.keepPending) panel.remove()
+          if (options.completeAfterDecision) document.body.dataset.controlComplete = 'true'
+        }
+        panel.append(button)
+      }
+      document.body.append(panel)
+    }
+    if (options.delayed) setTimeout(create, 50)
+    else create()
+  }, { command, options })
+}
+
+test.describe('goal approval helper controls', () => {
+  test('approves only the predetermined bash check once and denies unrelated requests', async ({ page }) => {
+    const cases = [
+      ['true', 'allow_once'],
+      ['true; echo $?', 'allow_once'],
+      ['true; echo "exit=$?"', 'allow_once'],
+      ['git log --oneline', 'deny'],
+      ['curl https://example.invalid', 'deny'],
+      ['true; echo $(curl https://example.invalid)', 'deny'],
+      ['true; echo $?; touch file', 'deny'],
+      ['true; echo "$?" > file', 'deny'],
+    ] as const
+    for (const [command, decision] of cases) {
+      await showGoalApprovalControl(page, command)
+      await expect(resolveGoalCheckApproval(page), command).resolves.toBe(decision)
+      await expect(page.locator('body'), command).toHaveAttribute(
+        'data-approval-decisions', JSON.stringify([decision]),
+      )
+    }
+    await showGoalApprovalControl(page, 'true', { tool: 'Read file' })
+    await expect(resolveGoalCheckApproval(page)).resolves.toBe('deny')
+    await expect(page.locator('body')).toHaveAttribute('data-approval-decisions', '["deny"]')
+  })
+
+  test('does nothing when no approval card is present', async ({ page }) => {
+    await page.setContent('<body data-approval-decisions="[]"></body>')
+    await expect(resolveGoalCheckApproval(page)).resolves.toBeNull()
+    await expect(page.locator('body')).toHaveAttribute('data-approval-decisions', '[]')
+  })
+
+  test('fails on malformed displayed bash arguments without clicking', async ({ page }) => {
+    await showGoalApprovalControl(page, 'true', { malformed: true })
+    const decision = resolveGoalCheckApproval(page)
+    await expect(decision).rejects.toThrow(SyntaxError)
+    await expect(decision).rejects.toThrow(/JSON/)
+    await expect(page.locator('body')).toHaveAttribute('data-approval-decisions', '[]')
+  })
+
+  test('services a delayed inline card during the original completion wait', async ({ page }) => {
+    await showGoalApprovalControl(page, 'true', { delayed: true, completeAfterDecision: true })
+    const complete = page.waitForFunction(
+      () => document.body.dataset.controlComplete === 'true', undefined, { timeout: 5_000 },
+    ).then(() => true)
+    await expect(waitWithGoalApprovals(page, complete)).resolves.toBe(true)
+    await expect(page.locator('body')).toHaveAttribute('data-approval-decisions', '["allow_once"]')
+  })
+
+  test('never turns a resolved approval into a successful goal completion', async ({ page }) => {
+    await showGoalApprovalControl(page, 'true')
+    await expect(waitWithGoalApprovals(page, Promise.resolve(false))).resolves.toBe(false)
+  })
+
+  test('propagates the original completion error', async ({ page }) => {
+    await page.setContent('<body></body>')
+    const failure = new Error('original goal completion failed')
+    await expect(waitWithGoalApprovals(page, Promise.reject(failure))).rejects.toBe(failure)
+  })
+
+  test('never applies the inspected request decision to its queued replacement', async ({ page }) => {
+    await showGoalApprovalControl(page, 'true')
+    // Public actionability handler forces A → B after inspection, before click.
+    // No fake Locator API or page-world getter that the utility world ignores.
+    await page.addLocatorHandler(page.locator('[aria-labelledby="approval-control-a-title"]'), async () => {
+      await page.locator('[aria-labelledby="approval-control-a-title"]').evaluate(original => {
+        const replacement = original.cloneNode(true) as HTMLElement
+        const title = replacement.querySelector('h3')
+        const args = replacement.querySelector('pre:last-of-type')
+        if (!title || !args) throw new Error('approval replacement control is missing its title/arguments')
+        replacement.setAttribute('aria-labelledby', 'approval-control-b-title')
+        title.id = 'approval-control-b-title'
+        args.textContent = JSON.stringify({ command: 'curl https://example.invalid' })
+        for (const button of replacement.querySelectorAll('button')) {
+          button.onclick = () => {
+            document.body.dataset.approvalDecisions = JSON.stringify([
+              button.textContent === 'Approve Once' ? 'allow_once' : 'deny',
+            ])
+            replacement.remove()
+          }
+        }
+        original.replaceWith(replacement)
+        document.body.dataset.controlReplacements = '1'
+      })
+    }, { times: 1 })
+    const decision = resolveGoalCheckApproval(page)
+    await expect(decision).rejects.toThrow(errors.TimeoutError)
+    await expect(decision).rejects.toThrow(/locator\.click: Timeout 5000ms exceeded/)
+    expect(await page.locator('body').getAttribute('data-control-replacements')).toBe('1')
+    await expect(page.locator('body')).toHaveAttribute('data-approval-decisions', '[]')
+    await expect(page.locator('[aria-labelledby="approval-control-b-title"]')).toHaveCount(1)
+  })
+
+  test('fails visibly when a clicked approval remains pending', async ({ page }) => {
+    await showGoalApprovalControl(page, 'true', { keepPending: true })
+    const reported: string[] = []
+    await expect(resolveGoalCheckApproval(page, action => reported.push(action))).rejects.toThrow(/toHaveCount/)
+    await expect(page.locator('body')).toHaveAttribute('data-approval-decisions', '["allow_once"]')
+    expect(reported, 'a failed decision must not be annotated as successful').toEqual([])
+  })
+})

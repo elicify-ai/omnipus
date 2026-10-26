@@ -8,6 +8,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -165,6 +166,13 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			}
 			globalDepthCap := resolveEffectiveDelegationDepth(nil, configuredDepthCap)
 
+			// Descriptions are display metadata, not delegation authority. Read
+			// the live config each turn, matching registry ID normalization.
+			descriptions := make(map[string]string, len(liveCfg.Agents.List))
+			for _, agentCfg := range liveCfg.Agents.List {
+				descriptions[routing.NormalizeAgentID(agentCfg.ID)] = agentCfg.Description
+			}
+
 			var targets []delegationTarget
 			for _, e := range edges {
 				if e.FromAgent != id {
@@ -197,10 +205,11 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 					}
 				}
 				targets = append(targets, delegationTarget{
-					ID:    e.ToAgent,
-					Label: label,
-					Modes: modes,
-					Depth: e.Depth,
+					ID:          e.ToAgent,
+					Label:       label,
+					Description: descriptions[routing.NormalizeAgentID(e.ToAgent)],
+					Modes:       modes,
+					Depth:       e.Depth,
 					// The gate's cap for this edge, from the RAW configured
 					// ceiling (see delegationTarget.DepthCap).
 					DepthCap: resolveEffectiveDelegationDepth(e.Depth, configuredDepthCap),

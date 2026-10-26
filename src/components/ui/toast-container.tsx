@@ -1,17 +1,20 @@
 import { X, CheckCircle, Warning, WarningCircle } from '@phosphor-icons/react'
 import { useUiStore } from '@/store/ui'
+import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 
 export function ToastContainer() {
   const { toasts, removeToast } = useUiStore()
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const visibleToasts = toasts.filter(toast => !toast.sessionId || toast.sessionId === activeSessionId)
 
-  if (toasts.length === 0) return null
+  if (visibleToasts.length === 0) return null
 
   return (
     <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-[var(--space-2)] max-w-sm w-full pointer-events-none">
-      {toasts.map((toast) => {
+      {visibleToasts.map((toast) => {
         return (
         <div
           key={toast.id}

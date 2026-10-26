@@ -33,12 +33,19 @@ class DeferredSocket {
   readyState = 0
   onopen: ((event: Event) => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
-  onclose: ((event: CloseEvent) => void) | null = null
+  private closeHandler: ((event: CloseEvent) => void) | null = null
+  private queuedCloseHandler: ((event: CloseEvent) => void) | null = null
+  get onclose() { return this.closeHandler }
+  set onclose(handler: ((event: CloseEvent) => void) | null) {
+    this.closeHandler = handler
+    // Capture installation BEFORE teardown detaches the browser property.
+    if (handler) this.queuedCloseHandler = handler
+  }
   onerror: ((event: Event) => void) | null = null
   private pendingClose: CloseEvent | null = null
   send = vi.fn<(data: string) => void>()
-  // Browser close events are asynchronous. Keep the handler installed by the
-  // REAL WsConnection, but deliver its event only when the test requests it.
+  // Browser close callbacks can already be queued when teardown detaches the
+  // property. Deliver the REAL captured callback only when the test requests it.
   close = vi.fn((code = 1000, reason = '') => {
     this.readyState = DeferredSocket.CLOSED
     this.pendingClose = new CloseEvent('close', { code, reason, wasClean: true })
@@ -53,8 +60,9 @@ class DeferredSocket {
 
   deliverClose() {
     expect(this.pendingClose, 'effect cleanup queued an intentional close').not.toBeNull()
-    expect(this.onclose, 'real WsConnection installed the close callback').toBeTypeOf('function')
-    this.onclose!(this.pendingClose!)
+    expect(this.queuedCloseHandler, 'real WsConnection installed the close callback').toBeTypeOf('function')
+    expect(this.onclose).toBeNull()
+    this.queuedCloseHandler!(this.pendingClose!)
     this.pendingClose = null
   }
 
@@ -142,8 +150,11 @@ describe('WsLifecycle connection ownership', () => {
     const connectionBefore = useConnectionStore.getState()
     const chatBefore = useChatStore.getState()
     const bucketBefore = chatBefore.sessionsById[SID]
+    const sentBefore = sockets.flatMap(sentFrames)
 
     act(() => retired.deliverClose())
+
+    expect(sockets.flatMap(sentFrames)).toStrictEqual(sentBefore)
 
     expect(useConnectionStore.getState()).toStrictEqual(connectionBefore)
     expect(useChatStore.getState().sessionsById[SID]).toStrictEqual(bucketBefore)
@@ -203,8 +214,11 @@ describe('WsLifecycle connection ownership', () => {
     expect(useConnectionStore.getState().connection).toBeNull()
     const connectionBefore = useConnectionStore.getState()
     const bucketBefore = useChatStore.getState().sessionsById[SID]
+    const sentBefore = sockets.flatMap(sentFrames)
 
     act(() => current.deliverClose())
+
+    expect(sockets.flatMap(sentFrames)).toStrictEqual(sentBefore)
 
     expect(useConnectionStore.getState()).toStrictEqual(connectionBefore)
     expect(useChatStore.getState().sessionsById[SID]).toStrictEqual(bucketBefore)

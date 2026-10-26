@@ -58,6 +58,9 @@ type steeringTerminalTransition struct {
 type steeringQueueItem struct {
 	message providers.Message
 	wake    *steeringWake
+	// resumeOnly carries one post-ceiling continuation of input already in
+	// model history. It never re-injects the text or repeats its receipt.
+	resumeOnly bool
 	// correlationID is issue #870's steering_receipt carrier: set on every
 	// item EnqueueSteeringMessage creates (caller-supplied, or server-
 	// assigned when blank — see enqueueSteeringMessage), empty for a bare
@@ -74,6 +77,12 @@ type steeringQueueItem struct {
 	// web/channel input; Stop's FR-024 discard uses it to label the original
 	// message "discarded". Empty for every other item.
 	transcriptEntryID string
+	// origin is who this input came from (§6.18). A channel person's message
+	// consumed mid-turn makes the running turn channel-triggered.
+	origin inputOrigin
+	// secretRequestID is server-minted correlation for a reference-only
+	// continuation; claimed only when this admitted item is consumed.
+	secretRequestID string
 }
 
 type steeringWake struct {
@@ -551,7 +560,16 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Content: msg.Content,
 		Media:   append([]string(nil), msg.Media...),
 	}
-	_, _, err = al.enqueueHumanSteeringMessage(route.SessionKey, ag.ID, pmsg, msg.TranscriptEntryID)
+	// Both trusted origin consumers travel with the input: channel-triggered
+	// secret policy and the ranked room-aware approval label.
+	origin := inboundInputOrigin(msg)
+	origin.approval = al.turnApprovalOrigin(msg, msg.SessionID)
+	correlationID := ""
+	if isRoomRequestWake(msg) {
+		// Preserve the room input's cost-settlement correlation (spec §6.14).
+		correlationID = roomSteerCorrelation(msg.TranscriptEntryID)
+	}
+	_, _, err = al.enqueueSteeringMessageEntry(route.SessionKey, ag.ID, pmsg, correlationID, msg.TranscriptEntryID, origin)
 	return err
 }
 
@@ -959,17 +977,35 @@ func (al *AgentLoop) enqueueDelegateSteer(scope, agentID string, msg providers.M
 // EnqueueSteeringMessage wrapper above strips the status to keep the
 // pkg/tools DelegateSteeringSink interface unchanged.
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
-	return al.enqueueSteeringMessageEntry(scope, agentID, msg, correlationID, "")
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, correlationID, "", inputOrigin{})
 }
 
 // enqueueHumanSteeringMessage queues a person's web/channel message and keeps
 // its archive entry id, so a Stop that discards it before delivery (FR-024) can
 // label that original message.
 func (al *AgentLoop) enqueueHumanSteeringMessage(scope, agentID string, msg providers.Message, transcriptEntryID string) (string, EnqueueStatus, error) {
-	return al.enqueueSteeringMessageEntry(scope, agentID, msg, "", transcriptEntryID)
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, "", transcriptEntryID, inputOrigin{})
 }
 
-func (al *AgentLoop) enqueueSteeringMessageEntry(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string) (string, EnqueueStatus, error) {
+// enqueueInboundSteeringMessage is enqueueHumanSteeringMessage for an inbound
+// message whose origin (§6.18: a channel person, another agent) is known, so
+// consuming it mid-turn records that origin on the running turn.
+func (al *AgentLoop) enqueueInboundSteeringMessage(scope, agentID string, msg providers.Message, transcriptEntryID string, origin inputOrigin) (string, EnqueueStatus, error) {
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, "", transcriptEntryID, origin)
+}
+
+// enqueueSteeringMessageEntryWithOrigin carries a server-derived room-aware
+// approval origin through the same per-input carrier and queue admission.
+func (al *AgentLoop) enqueueSteeringMessageEntryWithOrigin(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string, origin approvalOrigin) (string, EnqueueStatus, error) {
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, correlationID, transcriptEntryID, inputOrigin{approval: origin})
+}
+
+func (al *AgentLoop) enqueueSteeringMessageEntry(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string, origins ...inputOrigin) (string, EnqueueStatus, error) {
+	var origin inputOrigin
+	if len(origins) > 0 {
+		origin = origins[0]
+	}
+	origin.approval = origin.approvalFor(al)
 	correlationID, err := callerSteeringCorrelation(correlationID)
 	if err != nil {
 		return "", EnqueueStatusNormal, err
@@ -977,7 +1013,7 @@ func (al *AgentLoop) enqueueSteeringMessageEntry(scope, agentID string, msg prov
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
-	item := steeringQueueItem{message: msg, correlationID: correlationID, transcriptEntryID: transcriptEntryID}
+	item := steeringQueueItem{message: msg, correlationID: correlationID, transcriptEntryID: transcriptEntryID, origin: origin}
 	// onPostFinish fires only when the closing hand-off's transition buffer
 	// accepted this item during a terminal transition with non-refusal; its
 	// return value becomes enqueueSteeringItemWithStatus's own returned
@@ -1153,7 +1189,8 @@ func (al *AgentLoop) dequeueSteeringMessagesForScope(scope string) ([]providers.
 		return nil, nil
 	}
 	actualScope, items := al.steering.dequeueItemsScope(scope)
-	msgs, correlationIDs, _ := al.consumeDequeuedSteering(actualScope, items)
+	msgs, correlationIDs, consumed := al.consumeDequeuedSteering(actualScope, items)
+	al.noteConsumedOriginsForScope(scope, consumed)
 	return msgs, correlationIDs
 }
 
@@ -1162,8 +1199,34 @@ func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) (
 		return nil, nil
 	}
 	actualScope, items := al.steering.dequeueItemsScopeWithFallback(scope)
-	msgs, correlationIDs, _ := al.consumeDequeuedSteering(actualScope, items)
+	msgs, correlationIDs, consumed := al.consumeDequeuedSteering(actualScope, items)
+	al.noteConsumedOriginsForScope(scope, consumed)
 	return msgs, correlationIDs
+}
+
+// noteConsumedOriginsForScope raises the live turn's approval origin with the
+// origins of the inputs it just consumed (spec §6.18; the turn polling its
+// own scope is the one registered under it).
+func (al *AgentLoop) noteConsumedOriginsForScope(scope string, consumed []steeringQueueItem) {
+	merged := mergedItemOrigin(consumed)
+	if merged.Label == "" {
+		return
+	}
+	if v, ok := al.activeTurnStates.Load(scope); ok {
+		if ts, ok := v.(*turnState); ok {
+			ts.noteConsumedOrigin(merged)
+		}
+	}
+}
+
+// mergedItemOrigin folds the origins of consumed items under the §6.18
+// precedence rule (first of the highest class wins).
+func mergedItemOrigin(items []steeringQueueItem) approvalOrigin {
+	var merged approvalOrigin
+	for _, item := range items {
+		merged = mergeApprovalOrigin(merged, item.origin.approval)
+	}
+	return merged
 }
 
 // dequeueSteeringItemsForScopeWithFallback is dequeueSteeringMessagesForScopeWithFallback's
@@ -1197,7 +1260,8 @@ func (al *AgentLoop) dequeueSteeringItemsForScopeWithFallbackResult(scope string
 //
 // The third return value, consumedItems, is the ORIGINAL steeringQueueItem
 // for every index i that made it into msgs/correlationIDs — wake field and
-// all — so a caller that later needs to restore what it just consumed (e.g.
+// all — plus any resume-only continuation (which has no new model message).
+// A caller that later needs to restore what it just consumed (e.g.
 // Continue on a post-dequeue turn failure, or abandonQueuedSteering's own
 // panic recovery) can call steeringQueue.prependItemsScope with the SAME
 // item shape that was dequeued, rather than reconstructing an approximation
@@ -1214,7 +1278,23 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 	msgs := make([]providers.Message, 0, len(items))
 	correlationIDs := make([]string, 0, len(items))
 	consumedItems := make([]steeringQueueItem, 0, len(items))
+	al.recordConsumedInputOrigins(scope, items)
 	for i, item := range items {
+		if item.resumeOnly {
+			consumedItems = append(consumedItems, item)
+			continue
+		}
+		if item.secretRequestID != "" {
+			message, claimed, claimErr := al.claimSecretSteeringInput(scope, item.secretRequestID)
+			if claimErr != nil {
+				al.steering.prependItemsScope(scope, items[i:])
+				return msgs, correlationIDs, consumedItems, claimErr
+			}
+			if !claimed {
+				continue
+			}
+			item.message, item.wake = message, nil
+		}
 		if item.steerControlID != "" {
 			// D4: a delegate steer is delivered once its exact text is durable
 			// in the session transcript; only then is it handed to the turn
@@ -1469,11 +1549,46 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	steeringMsgs []providers.Message,
 	steeringCorrelationIDs []string,
 ) (string, error) {
-	transcriptSessionID, transcriptStore := al.continuationTranscript(sessionKey)
+	return al.continueWithConsumedSteering(ctx, agent, sessionKey, channel, chatID, workspaceID, "",
+		steeringMsgs, steeringCorrelationIDs, nil)
+}
+
+// continueWithConsumedSteering runs the ordinary continuation turn for
+// dequeued steering, recording the consumed items' origins on that new turn
+// (§6.18 / FR-240) — the turn that consumed them did not exist at dequeue.
+// transcriptSessionID is the conversation the continuation belongs to; like
+// processMessage it gives the turn its transcript context (tool recording,
+// secret cards, approval session ids). Empty keeps the context unset.
+func (al *AgentLoop) continueWithConsumedSteering(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey, channel, chatID, workspaceID, transcriptSessionID string,
+	steeringMsgs []providers.Message,
+	steeringCorrelationIDs []string,
+	consumedOrigins []inputOrigin,
+) (string, error) {
+	var transcriptStore *session.UnifiedStore
+	if transcriptSessionID != "" {
+		transcriptStore = al.ResolveSessionStore(transcriptSessionID)
+		if transcriptStore == nil {
+			logger.WarnCF("agent", "continuation session_id present but store not found — tool calls will not be recorded",
+				map[string]any{"session_id": transcriptSessionID})
+			transcriptSessionID = ""
+		}
+	} else {
+		// A session-scoped key names its conversation (release:
+		// continuationTranscript); a chat-scoped key stays unbound.
+		transcriptSessionID, transcriptStore = al.continuationTranscript(sessionKey)
+	}
+	var origin approvalOrigin
+	for _, consumed := range consumedOrigins {
+		origin = mergeApprovalOrigin(origin, consumed.approvalFor(al))
+	}
 	resp, err := al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:                    sessionKey,
+		approvalOrigin:                origin,
 		TranscriptSessionID:           transcriptSessionID,
 		TranscriptStore:               transcriptStore,
+		SessionKey:                    sessionKey,
 		Channel:                       channel,
 		ChatID:                        chatID,
 		DefaultResponse:               defaultResponse,
@@ -1481,6 +1596,7 @@ func (al *AgentLoop) continueWithSteeringMessages(
 		InitialSteeringMessages:       steeringMsgs,
 		InitialSteeringCorrelationIDs: steeringCorrelationIDs,
 		SkipInitialSteeringPoll:       true,
+		ConsumedInputOrigins:          consumedOrigins,
 		executionDisposition:          ordinaryDispositionFromContext(ctx),
 		// FIX 1 (re-review): see AgentLoop.resolveWorkspaceIDForContinuation
 		// (loop.go) for the resolution this value is sourced from — this
@@ -1494,6 +1610,26 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	return resp, err
 }
 
+// sessionIDFromScopeKey returns the session a scope key names, only for the
+// canonical session-key grammar "agent:<agent>:session:<nonempty id>" (parsed
+// with routing.ParseAgentSessionKey). Every other key kind names no session,
+// including a chat or peer key that merely contains ":session:<id>", a
+// prefixless key or a malformed one (gate round 4, architect ruling): reading
+// an id out of any ":session:" substring could attribute a turn to a session
+// the key does not name. The one parser for continuationTranscript,
+// attendanceSessionID and newRoomMeterForOptions.
+func sessionIDFromScopeKey(key string) string {
+	parsed := routing.ParseAgentSessionKey(key)
+	if parsed == nil {
+		return ""
+	}
+	id, ok := strings.CutPrefix(parsed.Rest, "session:")
+	if !ok {
+		return ""
+	}
+	return id
+}
+
 // continuationTranscript binds a steering continuation to the concrete session
 // its session-scoped key "agent:<agent>:session:<id>" names, so the
 // continuation's transcript rows (its reply, tool rows and a refused Ask call's
@@ -1503,8 +1639,8 @@ func (al *AgentLoop) continueWithSteeringMessages(
 // no session, and a session that does not exist has no transcript: both stay
 // unbound, exactly as before.
 func (al *AgentLoop) continuationTranscript(sessionKey string) (string, *session.UnifiedStore) {
-	_, sessionID, ok := strings.Cut(sessionKey, ":session:")
-	if !ok || sessionID == "" {
+	sessionID := sessionIDFromScopeKey(sessionKey)
+	if sessionID == "" {
 		return "", nil
 	}
 	store := al.ResolveSessionStore(sessionID)
@@ -1587,16 +1723,21 @@ func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 func (al *AgentLoop) continuePendingSteering(
 	ctx context.Context,
 	sessionKey string,
-	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
+	run continuationRunner,
 ) (string, error) {
 	return al.continuePendingSteeringWithAgent(ctx, sessionKey, al.agentForSession(sessionKey), run)
 }
+
+// continuationRunner runs the turn that consumes one dequeued batch. origins
+// are the trusted, server-derived origins of exactly the consumed items, in
+// the same order as steeringMsgs; the runner records them on its new turn.
+type continuationRunner func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string, origins []inputOrigin) (string, error)
 
 func (al *AgentLoop) continuePendingSteeringWithAgent(
 	ctx context.Context,
 	sessionKey string,
 	agent *AgentInstance,
-	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
+	run continuationRunner,
 ) (string, error) {
 	// Bug 1 fix (design note "Caller survey"): the active-turn guard must be
 	// scoped to THIS session's own key, not the whole activeTurnStates map —
@@ -1626,11 +1767,8 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 	}
 
 	actualScope, consumedItems, steeringMsgs, steeringCorrelationIDs, consumeErr := al.dequeueSteeringItemsForScopeWithFallbackResult(sessionKey)
-	if consumeErr != nil && len(steeringMsgs) == 0 {
+	if len(steeringMsgs) == 0 && !hasSteeringContinuation(consumedItems) {
 		return "", consumeErr
-	}
-	if len(steeringMsgs) == 0 {
-		return "", nil
 	}
 
 	if tool, ok := agent.Tools.Get("send_message"); ok {
@@ -1639,7 +1777,11 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 		}
 	}
 
-	resp, err := run(agent, steeringMsgs, steeringCorrelationIDs)
+	origins := make([]inputOrigin, 0, len(consumedItems))
+	for _, item := range consumedItems {
+		origins = append(origins, item.origin)
+	}
+	resp, err := run(agent, steeringMsgs, steeringCorrelationIDs, origins)
 	// SFH-02: this consumer owns every saved input it dequeued until it exits.
 	// A run refused before its turn took the receipts (workspace, provider or
 	// model preparation) gives the claims back here; a placed input already
@@ -1670,12 +1812,12 @@ func (al *AgentLoop) continuePendingSteeringWithAgent(
 // restorableSteeringItems excludes wakes whose consumed marker was already
 // written before their turn ran. Restoring those items would append the same
 // marker again and could later abandon a wake that recovery already treats as
-// consumed. Plain steering messages have no durable marker and remain safe to
-// restore after a failed turn.
+// consumed. Room inputs were settled by their failed continuation too and
+// cannot be restored as new work. Other plain steering remains restorable.
 func restorableSteeringItems(items []steeringQueueItem) []steeringQueueItem {
 	restored := make([]steeringQueueItem, 0, len(items))
 	for _, item := range items {
-		if item.wake == nil {
+		if item.wake == nil && !strings.HasPrefix(item.correlationID, roomSteerCorrelationPrefix) {
 			restored = append(restored, item)
 		}
 	}
@@ -1696,11 +1838,18 @@ func restorableSteeringItems(items []steeringQueueItem) []steeringQueueItem {
 // own to resolve it from (only the already-collapsed sessionKey/channel/
 // chatID), so it cannot recompute this value itself.
 func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, workspaceID string) (string, error) {
+	return al.continueSession(ctx, sessionKey, channel, chatID, workspaceID, "")
+}
+
+// continueSession is Continue for a known conversation: transcriptSessionID
+// (the continuation target's session id) gives the continuation turn the same
+// transcript context processMessage gives a direct turn.
+func (al *AgentLoop) continueSession(ctx context.Context, sessionKey, channel, chatID, workspaceID, transcriptSessionID string) (string, error) {
 	return al.continuePendingSteering(ctx, sessionKey,
-		func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
-			return al.continueWithSteeringMessages(
-				ctx, agent, sessionKey, channel, chatID, workspaceID,
-				steeringMsgs, steeringCorrelationIDs,
+		func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string, origins []inputOrigin) (string, error) {
+			return al.continueWithConsumedSteering(
+				ctx, agent, sessionKey, channel, chatID, workspaceID, transcriptSessionID,
+				steeringMsgs, steeringCorrelationIDs, origins,
 			)
 		})
 }

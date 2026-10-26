@@ -213,14 +213,6 @@ interface ToolApprovalCardProps {
   agentId: string
   expiresAt: number
   queueLength: number
-  /**
-   * Present on every entry sourced from a live tool_approval_required frame
-   * (the wire schema requires both non-empty, minLength 1). Empty here is the
-   * "reconnect stub" signal — see isReconnectStub below and the Deliverable 4
-   * note on ToolApprovalModal's call site.
-   */
-  toolCallId: string
-  turnId: string
   sessionId: string
   /**
    * ADR-092 D4 — per-segment breakdown of a chained shell command, present
@@ -229,6 +221,8 @@ interface ToolApprovalCardProps {
    * own doc comment (src/store/toolApproval.ts).
    */
   segments?: CommandSegmentInfo[]
+  /** K7 / FR-251: server-derived turn origin, retained across reconnects. */
+  originLabel?: string
 }
 
 function ToolApprovalCard({
@@ -238,10 +232,9 @@ function ToolApprovalCard({
   agentId,
   expiresAt,
   queueLength,
-  toolCallId,
-  turnId,
   sessionId,
   segments,
+  originLabel,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
   const markResolved = useToolApprovalStore((s) => s.markResolved)
@@ -422,28 +415,13 @@ function ToolApprovalCard({
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
 
-  // ── Reconnect-gap guard (Deliverable 4) ───────────────────────────────────
-  // SessionStatePendingApproval (the WS session_state reconnect snapshot)
-  // carries no `args`, `tool_call_id`, or `turn_id` — strictly less than a
-  // live tool_approval_required frame. When an approval the server still
-  // considers pending was never seen by this tab as a live frame (page
-  // reload while an approval was outstanding, or a second tab connecting
-  // afterwards), reconcileWithSessionState (src/store/toolApproval.ts) adds a
-  // stub queue entry for it with toolCallId/turnId set to '' — see that
-  // function's own comment for the full rationale. This is a safe,
-  // collision-free signal rather than a heuristic: toolCallId and turnId are
-  // both required + minLength 1 on the wire (ToolApprovalRequiredFrame
-  // schema), so a genuine live frame — the only thing enqueue() ever
-  // constructs a queue entry from — can never produce an empty string here.
-  const isReconnectStub = toolCallId === '' && turnId === ''
   const mountPath =
     typeof args.host_path === 'string' ? args.host_path.trim()
     : typeof args.path === 'string' ? args.path.trim()
     : ''
   // Always Allow remembers the exact arguments. A request_mount with no
-  // folder path has nothing safe to remember — hide the button, same as a
-  // reconnect stub.
-  const hideAlwaysAllow = isReconnectStub || (toolName === 'request_mount' && !mountPath)
+  // folder path has nothing safe to remember — hide the button.
+  const hideAlwaysAllow = toolName === 'request_mount' && !mountPath
 
   // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
   // Agent display name (D-87): a permission prompt is exactly where the human
@@ -501,7 +479,7 @@ function ToolApprovalCard({
       <DialogContent
         className="max-w-lg border-[var(--color-warning)]/40 p-0 overflow-hidden gap-0"
         aria-labelledby={titleId}
-        aria-describedby={descId}
+        aria-describedby={originLabel ? `${descId} ${descId}-origin` : descId}
         // Land focus on Deny (safe default) instead of Radix's first-focusable
         // heuristic (which would be the X close button).
         onOpenAutoFocus={(e) => {
@@ -526,12 +504,10 @@ function ToolApprovalCard({
               id={titleId}
               className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] font-headline"
             >
-              {isReconnectStub ? 'Approval Details Unavailable' : dialogTitleText}
+              {dialogTitleText}
             </DialogTitle>
             <DialogDescription id={descId} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate">
-              {isReconnectStub ? (
-                "This page can't show what's being asked — see below."
-              ) : replaceEntry ? (
+              {replaceEntry ? (
                 'Review the details below before deciding.'
               ) : (
                 <>
@@ -540,6 +516,15 @@ function ToolApprovalCard({
                 </>
               )}
             </DialogDescription>
+            {originLabel && (
+              <DialogDescription
+                id={`${descId}-origin`}
+                className="break-words text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+                data-testid="tool-approval-origin"
+              >
+                {originLabel}
+              </DialogDescription>
+            )}
           </div>
           {queueLength > 1 && (
             <span className="shrink-0 text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-0-5)] rounded-full">
@@ -550,7 +535,7 @@ function ToolApprovalCard({
 
         {/* FR-034: a helper or run asked, not the chat in front of the user.
             Names where it is acting and opens that run's own session. */}
-        {!isReconnectStub && sessionId && sessionId !== viewedSessionId && (
+        {sessionId && sessionId !== viewedSessionId && (
           <div className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] border-b border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             <span className="flex-1 min-w-0 truncate">Asked from a helper or run in another session.</span>
             <Button
@@ -574,23 +559,10 @@ function ToolApprovalCard({
           </div>
         )}
 
-        {/* Tool info — reconnect-stub notice, a 'replace'-mode readable summary
+        {/* Tool info — a 'replace'-mode readable summary
             (e.g. request_mount), or the generic Tool line + optional
             'additive' preview (e.g. bash) + raw Arguments JSON fallback. */}
-        {isReconnectStub ? (
-          <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2)]">
-            <div className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
-              <WarningCircle size={16} weight="bold" className="shrink-0 mt-[var(--space-0-5)]" aria-hidden="true" />
-              <p>
-                This page reconnected after {humanizeToolName(toolName)} was already waiting on a
-                decision, and the original request details did not come back with it.
-              </p>
-            </div>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-              Denying is the safe choice when you can&apos;t see what&apos;s being asked.
-            </p>
-          </div>
-        ) : replaceEntry ? (
+        {replaceEntry ? (
           <replaceEntry.Body {...previewCtx} />
         ) : (
           <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]">
@@ -711,7 +683,7 @@ function ToolApprovalCard({
             once the server has actually suggested one (prefixScopeAvailable)
             — never a client-guessed prefix. Applies to every currently
             unmatched segment shown above (one choice, not one per segment). */}
-        {!hasExpired && !isReconnectStub && !hideAlwaysAllow && isShellCommand && (
+        {!hasExpired && !hideAlwaysAllow && isShellCommand && (
           <div className="px-[var(--space-3)] pb-[var(--space-2-5)]">
             <RadioGroup
               aria-label="Grant scope for Always Allow"
@@ -748,25 +720,7 @@ function ToolApprovalCard({
             without any button clipping. */}
         {!hasExpired && (
           <div className="flex flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
-            {isReconnectStub ? (
-              // Only the safe action is offered. A reconnect stub has no
-              // arguments: Always Allow would record a grant for {}, which
-              // is not the call the user was asked about. No Approve either
-              // — approving a request this page cannot show would be a
-              // blind decision.
-              <Button
-                ref={denyButtonRef}
-                size="sm"
-                variant="outline"
-                onClick={() => handleAction('deny')}
-                disabled={submitting}
-                className="h-8 text-[length:var(--type-utility-xs-size)] w-full"
-              >
-                <XCircle size={14} weight="bold" aria-hidden="true" />
-                Deny
-              </Button>
-            ) : (
-              <>
+            <>
                 <Button
                   size="sm"
                   variant="default"
@@ -814,7 +768,6 @@ function ToolApprovalCard({
                   </Button>
                 )}
               </>
-            )}
           </div>
         )}
 
@@ -858,10 +811,9 @@ export function ToolApprovalModal() {
       agentId={first.agentId}
       expiresAt={first.expiresAt}
       queueLength={visible.length}
-      toolCallId={first.toolCallId}
-      turnId={first.turnId}
       sessionId={first.sessionId}
       segments={first.segments}
+      originLabel={first.originLabel}
     />
   )
 }

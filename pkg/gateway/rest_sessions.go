@@ -471,7 +471,7 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	// fields (Partitions in particular) marshal as [] not null — Zod on the SPA
 	// rejects null where the contract says type:array and drops the whole list.
 	genSessions := make([]gen.Session, 0, len(filtered))
-	approvals := a.pendingApprovalMains()
+	approvals := a.withPendingSecretCards(a.pendingApprovalMains())
 	for _, m := range filtered {
 		s := unifiedMetaToGenSession(a.withDisplayTitle(m))
 		// U11 (FR-047): needs_attention for a main (nil for every other row).
@@ -585,7 +585,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
 	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
 	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
-	writeSessionDetail(w, a.withDisplayTitle(meta), messages, view.HasEarlier, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.pendingApprovalMains()), a.agentLoop.CurrentBootEpoch())
+	writeSessionDetail(w, a.withDisplayTitle(meta), messages, view.HasEarlier, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.withPendingSecretCards(a.pendingApprovalMains())), a.agentLoop.CurrentBootEpoch())
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {

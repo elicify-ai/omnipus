@@ -9,11 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -30,19 +30,14 @@ import (
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-// slugRegexp matches characters that should be replaced in agent name → ID conversion.
-var slugRegexp = regexp.MustCompile(`[^a-z0-9]+`)
-
-// toSlug converts a display name to a URL-safe slug ID.
-func toSlug(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	s = slugRegexp.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	if s == "" {
-		s = fmt.Sprintf("agent-%d", rand.Intn(99999))
-	}
-	return s
-}
+// newAgentID returns the id of a newly created agent: a random UUID, exactly
+// as the REST create path does (pkg/gateway/rest_agents_create.go). No agent
+// id is ever derived from its name — the name is a free label kept verbatim,
+// and two agents may share one (founder decision 2026-10-14). Built-in agents
+// keep their fixed ids. Production ignores the name argument; it exists only
+// so tests whose fixtures are keyed by a known id (or that plant a fault at
+// the new agent's paths) can choose the id per created agent.
+var newAgentID = func(_ string) string { return uuid.New().String() }
 
 // canonicalAgentColor applies the REST colour rule (coreagent.CanonicalColor,
 // AgentColor.yaml): a palette value in any letter-case is returned uppercase and
@@ -168,6 +163,9 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"description": "Positive token override. JSON null clears the override.",
 			},
 			"model_params": modelParamsParameters(),
+			// FR-040/FR-041: the workspace the new agent joins and gets its
+			// main chat in; omitted = the conversation's workspace.
+			workspaceIDParam: workspaceIDProperty("the new agent joins (and gets its main chat in)"),
 		},
 		// soul is deliberately NOT in the schema required list: it is required
 		// for native agents ('Main'/'Subagent') only. External CLI workers
@@ -200,10 +198,19 @@ type agentCreateToolExecute struct {
 	// joinedWorkspaceID is the workspace the new agent joined ("" when none); its
 	// mains are provisioned in publishAndRespond, AFTER the live roster has the agent.
 	joinedWorkspaceID string
-	mutation          agentstore.MutationResult
+	// target is the destination workspace resolved before any write (FR-040).
+	target   targetWorkspace
+	mutation agentstore.MutationResult
+	// mainsErr is the failure of the new member's main-chat provisioning.
+	mainsErr error
+	// joinMissed is set when a target workspace was resolved but the
+	// membership did not land (joinErr carries the cause when there is one).
+	joinMissed bool
+	joinErr    error
 }
 
-func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	ac := &agentCreateToolExecute{t: t, ctx: ctx, args: args}
 
 	if r0, stop := ac.validate(); stop {
@@ -240,6 +247,12 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	ac.name, _ = ac.args["name"].(string)
 	if strings.TrimSpace(ac.name) == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", "Provide a name for the agent")), true
+	}
+	if coreagent.AgentNameTooLong(ac.name) {
+		// #1075: refused before anything is stored, so a long name never
+		// reaches the store as an opaque SAVE_FAILED.
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", coreagent.AgentNameTooLongRefusal,
+			"Choose a shorter name")), true
 	}
 	if coreagent.IsReservedAgentName(ac.name) {
 		return reservedNameResult(), true
@@ -340,10 +353,17 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if _, _, err := parseOptionalHeartbeat(ac.args); err != nil {
 		return fieldErrorResult(err), true
 	}
-	ac.id = toSlug(ac.name)
+	ac.id = newAgentID(ac.name)
 	if err := validateID(ac.id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
 	}
+	// FR-040/FR-043: the destination workspace is validated before any
+	// write; an unknown one fails with nothing saved.
+	target, refusal := resolveTargetWorkspace(ac.t.deps, ac.ctx, ac.args)
+	if refusal != nil {
+		return refusal, true
+	}
+	ac.target = target
 	return nil, false
 }
 
@@ -461,19 +481,12 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	// exclusively via the per-workspace Team tab now
 	// (PUT /api/v1/workspaces/{id}/delegation); this tool does not — and
 	// must not — pretend to grant it.
-	// Seed the privilege rail (FR-008/FR-022, plus bash:deny per CRIT-001 /
-	// bash-tool-spec.md FR-B12): system.agent.create has no tools_cfg
-	// parameter (see Parameters() above — there is no caller-supplied
-	// override for Tools), so newAgent.Tools is always nil here and the
-	// default seed IS the agent's entire tools config. Delegate to the
-	// single shared constructor — also used by the REST create path
-	// (pkg/gateway/rest.go's createAgent, via
-	// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
-	// paths cannot drift out of sync on this seed again.
+	// Share the REST path's complete Main/Worker creation defaults (founder
+	// ruling, 2026-10-22). Main-only tools are denied for Workers before any
+	// sparse caller patch is applied below. Workers may list secrets but ask
+	// their main agent to request one. bash and administration stay denied.
 	ac.newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
 	if ac.newAgent.Type == config.AgentTypeWorker {
-		// §6.5 (FR-007): the worker tier gets no secret card, secret list or
-		// conversation reading.
 		coreagent.RestrictForWorkerTier(ac.newAgent.Tools)
 	}
 	fields := mutationFieldNames(ac.args)
@@ -535,7 +548,7 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 				"Use update_agent to modify the existing agent or choose a different name",
 			)), true
 		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", fmt.Sprintf("persistence=%s stage=%s revision=%s", mutation.PersistenceStatus, mutation.ErrorStage, mutation.Revision), "Read the agent state before retrying")), true
+		return createSaveFailedResult(ac.id, mutation, err), true
 	}
 
 	// Create agent workspace and write personality files.
@@ -584,7 +597,7 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	// re-deriving it from whether a workspace context happened to be
 	// present, since a join attempt can also fail (logged, non-fatal).
 	ac.joinedWorkspace = false
-	if wsID := tools.ToolWorkspaceID(ac.ctx); wsID != "" {
+	if wsID := ac.target.ID; wsID != "" {
 		joined, joinErr := ac.t.joinWorkspaceTeam(wsID, ac.finalID)
 		ac.joinedWorkspace = joined
 		if joined {
@@ -604,10 +617,12 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 			return createJoinSeedPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), wsID, joinErr), true
 		default:
 			// The membership itself did not land, so the agent is genuinely
-			// metadata-only (a member of no team). Best-effort: keep creation
-			// succeeding, exactly as before.
+			// metadata-only (a member of no team). The agent record is durable,
+			// so the result is "partly saved" naming the missing membership
+			// (FR-030, BDD-9.4) — never a plain success.
 			slog.Warn("sysagent: create_agent: could not add new agent to workspace core_team",
 				"agent_id", ac.finalID, "workspace_id", wsID, "error", joinErr)
+			ac.joinMissed, ac.joinErr = true, joinErr
 		}
 	}
 	return nil, false
@@ -647,10 +662,16 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 	// that roster, and before the agent_created notify below so the client's
 	// refetch sees the main. A failure is logged, not fatal: the main is
 	// re-attempted when its chat is opened.
+	if ac.joinedWorkspaceID != "" && ac.t.deps.EnsureWorkspaceMains == nil {
+		// FR-041: a joined member's main chat is part of the change; without
+		// the provisioning hook it was not created, so the result must say so.
+		ac.mainsErr = errors.New("main chat provisioning is not available here")
+	}
 	if ac.joinedWorkspaceID != "" && ac.t.deps.EnsureWorkspaceMains != nil {
 		if mainsErr := ac.t.deps.EnsureWorkspaceMains(ac.joinedWorkspaceID); mainsErr != nil {
 			slog.Error("sysagent: create_agent: the new member's main chat was not created; it is re-attempted when the chat is opened",
 				"agent_id", ac.finalID, "workspace_id", ac.joinedWorkspaceID, "error", mainsErr)
+			ac.mainsErr = mainsErr
 		}
 	}
 
@@ -722,7 +743,89 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 	if publishWarning != "" {
 		result["publish_warning"] = publishWarning
 	}
-	return tools.NewToolResult(successJSON(result))
+	if ac.joinedWorkspaceID != "" {
+		result["workspace_id"] = ac.joinedWorkspaceID
+	}
+	return changeSuccess(result, ac.createVerdict(activation, publishWarning))
+}
+
+// createVerdict is create_agent's FR-030 verdict, built from the existing
+// read-backs: the durable entity revision, the joined workspace (membership
+// re-read from disk in joinWorkspaceTeam), the main-chat provisioning and the
+// live activation.
+func (ac *agentCreateToolExecute) createVerdict(activation agentstore.ActivationStatus, publishWarning string) changeOutcome {
+	const scope = "saved agent record; workspace membership re-read from disk; main chat provisioning; live activation"
+	notTested := []string{"a conversation turn with the new agent", "its model answering"}
+	var missing, reasons []string
+	if ac.joinMissed {
+		missing = append(missing, "workspace membership in "+ac.target.ID)
+		r := "the agent was saved but did not join workspace " + ac.target.ID
+		if ac.joinErr != nil {
+			r += ": " + ac.joinErr.Error()
+		}
+		reasons = append(reasons, r)
+	}
+	if ac.mainsErr != nil {
+		missing = append(missing, "main chat in "+ac.joinedWorkspaceID)
+		reasons = append(reasons, "the main chat was not created: "+ac.mainsErr.Error())
+	}
+	switch {
+	case publishWarning != "":
+		missing = append(missing, "live activation")
+		reasons = append(reasons, publishWarning)
+	case activation != agentstore.ActivationActive:
+		missing = append(missing, "live activation")
+		reasons = append(reasons, fmt.Sprintf("live activation was not confirmed (%s)", activation))
+	}
+	if len(missing) > 0 {
+		return partlySaved(strings.Join(reasons, "; "), scope, missing, notTested...)
+	}
+	if !ac.joinedWorkspace {
+		return savedNotWorking("the agent belongs to no workspace, so it cannot chat or be delegated to until "+
+			"it is added to a workspace's team", scope, notTested...)
+	}
+	return working(scope, notTested...)
+}
+
+// createSaveFailedResult reports a failed entity save. The store's own
+// persistence status decides the verdict: a partial write is "partly saved";
+// otherwise nothing was saved. The stage, revision and cause are always named
+// — never blank fields (#1064 A2).
+func createSaveFailedResult(id string, mutation agentstore.MutationResult, err error) *tools.ToolResult {
+	// The store marks a status as soon as any file is published; an empty
+	// status means it failed before publishing anything (same reading as
+	// update_agent's mutateErrorResult).
+	stage := mutation.ErrorStage
+	if stage == "" {
+		stage = "prepare"
+	}
+	persistence := string(mutation.PersistenceStatus)
+	if persistence == "" {
+		persistence = string(agentstore.PersistenceNone)
+	}
+	body := map[string]any{
+		"success": false,
+		"error": map[string]any{
+			"code":       "SAVE_FAILED",
+			"message":    strings.TrimSpace(fmt.Sprintf("the agent %q could not be saved at stage %s: %v. %s", id, stage, err, mutation.Message)),
+			"suggestion": "Read the agent state (get_agent) before retrying",
+		},
+		"id":                 id,
+		"persistence_status": persistence,
+		"error_stage":        stage,
+		"revision":           mutation.Revision,
+	}
+	if mutation.PersistenceStatus == agentstore.PersistencePartial {
+		// The store's own list of what it published is the durable part.
+		changed := mutation.ChangedFields
+		if changed == nil {
+			changed = []string{}
+		}
+		body["changed_fields"] = changed
+		return changeErrorWithOutcome(body, partlySaved("the agent record was partly written: "+err.Error(), "",
+			[]string{"complete agent record"}))
+	}
+	return tools.ErrorResult(successJSON(body))
 }
 
 func parseOptionalHeartbeat(args map[string]any) (string, bool, error) {
@@ -738,7 +841,7 @@ func parseOptionalHeartbeat(args map[string]any) (string, bool, error) {
 }
 
 func createHomePartialResult(id, revision string, fields []string, err error) *tools.ToolResult {
-	return tools.ErrorResult(successJSON(map[string]any{
+	return changeErrorWithOutcome(map[string]any{
 		"id":                 id,
 		"code":               "SAVE_FAILED",
 		"message":            "agent was saved but the agent home could not be initialized. Read current state before retrying.",
@@ -748,11 +851,12 @@ func createHomePartialResult(id, revision string, fields []string, err error) *t
 		"changed_fields":     fields,
 		"error_stage":        "init_home",
 		"detail":             err.Error(),
-	}))
+	}, partlySaved("the agent record was saved but its home folder could not be created: "+err.Error(), "",
+		[]string{"agent home folder", "workspace membership", "live activation"}))
 }
 
 func createHeartbeatPartialResult(id, revision string, fields []string, err error) *tools.ToolResult {
-	return tools.ErrorResult(successJSON(map[string]any{
+	return changeErrorWithOutcome(map[string]any{
 		"id":                 id,
 		"code":               "SAVE_FAILED",
 		"message":            "agent was saved but HEARTBEAT.md could not be written. Read current state before retrying.",
@@ -762,7 +866,8 @@ func createHeartbeatPartialResult(id, revision string, fields []string, err erro
 		"changed_fields":     fields,
 		"error_stage":        "heartbeat",
 		"detail":             err.Error(),
-	}))
+	}, partlySaved("the agent record was saved but HEARTBEAT.md could not be written: "+err.Error(), "",
+		[]string{"HEARTBEAT.md", "workspace membership", "live activation"}))
 }
 
 // createJoinSeedPartialResult is the U5A-FIX-R1 / N3 truthful partial-failure
@@ -781,7 +886,7 @@ func createHeartbeatPartialResult(id, revision string, fields []string, err erro
 // UNCHANGED team does NOT recover it — that tool only seeds for NEWLY added
 // members — so it is deliberately not offered as the fix.
 func createJoinSeedPartialResult(id, revision string, fields []string, wsID string, err error) *tools.ToolResult {
-	return tools.ErrorResult(successJSON(map[string]any{
+	return changeErrorWithOutcome(map[string]any{
 		"id":                 id,
 		"code":               "SAVE_FAILED",
 		"message":            fmt.Sprintf("agent %q was saved and added to workspace %q, but its self-delegation row could not be written. Read the workspace's Team tab before retrying.", id, wsID),
@@ -795,7 +900,9 @@ func createJoinSeedPartialResult(id, revision string, fields []string, wsID stri
 		"self_edge_seeded":   false,
 		"detail":             err.Error(),
 		"suggestion":         "Open the workspace's Team tab and add this agent's self-delegation row (or remove and re-add the agent on the team), then confirm the row is present.",
-	}))
+	}, partlySaved(fmt.Sprintf("the agent was saved and joined workspace %q but its self-delegation row was not written: %v",
+		wsID, err), "workspace membership re-read from disk",
+		[]string{"self-delegation row in " + wsID, "live activation"}))
 }
 
 // joinWorkspaceTeam appends agentID to workspace wsID's CoreTeam (deduped)
@@ -978,12 +1085,21 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 			// (applyContextWindow/jsonInt) still refuses non-integers.
 			"context_window_override": map[string]any{"type": []string{"integer", "null"}, "description": "Positive token override. JSON null clears the override."},
 			"model_params":            modelParamsParameters(),
+			// #1064: AGENT.md, the agent definition file read on every turn,
+			// beside soul. (Heartbeats are per workspace and live in the
+			// workspace's member settings, not in a file, so there is no
+			// heartbeat field here.)
+			"agent_md": map[string]any{
+				"type":        "string",
+				"description": "New AGENT.md content (overwrites the agent's AGENT.md).",
+			},
 		},
 		"required": []string{"id", "revision"},
 	}
 }
 
-func (t *AgentUpdateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *AgentUpdateTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	return t.executeADR090(args)
 }
 
@@ -1069,7 +1185,8 @@ type agentDeleteToolExecute struct {
 	deletionResult          agentstore.MutationResult
 }
 
-func (t *AgentDeleteTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *AgentDeleteTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	ad := &agentDeleteToolExecute{t: t, args: args}
 
 	if r0, stop := ad.validateAndLoad(); stop {
@@ -1409,6 +1526,11 @@ func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
 	ad.deletionResult = res.Deletion
 	if res.DeletionErr != nil {
 		if errors.Is(res.DeletionErr, agentstore.ErrRevisionConflict) {
+			if ad.cascadeChangedAnything() {
+				// The cleanup steps ran before the record's revision check
+				// refused: the agent is partly deleted, never "nothing saved".
+				return ad.partlyDeletedResult("record_delete_revision_conflict"), true
+			}
 			return tools.ErrorResult(errorJSON("REVISION_CONFLICT", res.DeletionErr.Error(), "Read the agent again and retry with its current revision")), true
 		}
 		return ad.partlyDeletedResult("record_delete"), true
@@ -1443,7 +1565,15 @@ func (ad *agentDeleteToolExecute) partlyDeletedResult(errorStage string) *tools.
 	if len(ad.cascadeWarnings) > 0 {
 		body["cascade_warnings"] = ad.cascadeWarnings
 	}
-	return tools.ErrorResult(successJSON(body))
+	return changeErrorWithOutcome(body, partlySaved(
+		fmt.Sprintf("agent %q is partly deleted: the %s step failed", ad.id, errorStage), "",
+		append([]string{"agent record deletion"}, ad.cascadeWarnings...)))
+}
+
+// cascadeChangedAnything reports whether the delete cascade changed any
+// durable data before stopping.
+func (ad *agentDeleteToolExecute) cascadeChangedAnything() bool {
+	return ad.sessionsDeleted+ad.tasksUnassigned+ad.workspacesUpdated+ad.edgesRemoved > 0
 }
 
 // reload reloads live configuration and records a warning if publication fails.
@@ -1552,7 +1682,20 @@ func (ad *agentDeleteToolExecute) respond() *tools.ToolResult {
 	if len(ad.cascadeWarnings) > 0 {
 		result["cascade_warnings"] = ad.cascadeWarnings
 	}
-	return tools.NewToolResult(successJSON(result))
+	const scope = "agent record deleted; cascade over its sessions, tasks and workspace references; live registry reload"
+	var missing, reasons []string
+	if ad.publishWarning != "" {
+		missing = append(missing, "live registry update")
+		reasons = append(reasons, ad.publishWarning)
+	}
+	if len(ad.cascadeWarnings) > 0 {
+		missing = append(missing, ad.cascadeWarnings...)
+		reasons = append(reasons, "some references to the agent could not be cleaned up")
+	}
+	if len(missing) > 0 {
+		return changeSuccess(result, partlySaved(strings.Join(reasons, "; "), scope, missing))
+	}
+	return changeSuccess(result, working(scope))
 }
 
 // cascadeDeleteAgentSessions removes every session in the shared session

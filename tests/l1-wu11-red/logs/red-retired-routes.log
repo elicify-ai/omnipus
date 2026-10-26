@@ -1,0 +1,205 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa
+
+Not implemented: Window's scrollTo() method
+Not implemented: Window's scrollTo() method
+stderr | src/routes/_app/-wu11-retired-routes.test.tsx > WU-11 RED — retired routes are removed without forwarding (FR-108, BDD-12.7, BDD-12.8) > /agents renders the root not-found page and keeps the URL (no redirect, no Agents screen)
+[ws] Web Worker construction failed — WS frame parsing will run inline on the main thread; this is a performance regression under burst input ReferenceError: Worker is not defined
+    at WsConnection._startWorker (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/lib/ws.ts:507:26)
+    at WsConnection.connect (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/lib/ws.ts:467:10)
+    at /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/components/chat/OmnipusRuntimeProvider.tsx:250:10
+    at Object.react_stack_bottom_frame (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/node_modules/react-dom/cjs/react-dom-client.development.js:25989:20)
+    at runWithFiberInDEV (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+    at commitHookEffectListMount (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/node_modules/react-dom/cjs/react-dom-client.development.js:13249:29)
+    at commitHookPassiveMountEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/node_modules/react-dom/cjs/react-dom-client.development.js:13336:11)
+    at reconnectPassiveEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/node_modules/react-dom/cjs/react-dom-client.development.js:15832:11)
+    at recursivelyTraverseReconnectPassiveEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/node_modules/react-dom/cjs/react-dom-client.development.js:15784:9)
+    at reconnectPassiveEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/node_modules/react-dom/cjs/react-dom-client.development.js:15885:11)
+
+stderr | src/routes/_app/-wu11-retired-routes.test.tsx > WU-11 RED — retired routes are removed without forwarding (FR-108, BDD-12.7, BDD-12.8) > /agents renders the root not-found page and keeps the URL (no redirect, no Agents screen)
+[ws] transport error reaching ws://localhost:3000/api/v1/chat/ws
+
+Not implemented: Window's scrollTo() method
+stderr | src/routes/_app/-wu11-retired-routes.test.tsx > WU-11 RED — retired routes are removed without forwarding (FR-108, BDD-12.7, BDD-12.8) > /agents/mia renders the root not-found page and keeps the URL (deep link must not open the editor or redirect)
+[ws] transport error reaching ws://localhost:3000/api/v1/chat/ws
+
+Not implemented: Window's scrollTo() method
+stderr | src/routes/_app/-wu11-retired-routes.test.tsx > WU-11 RED — retired routes are removed without forwarding (FR-108, BDD-12.7, BDD-12.8) > /admin/chat renders the root not-found page and keeps the URL even when Admin resolves (no forwarding)
+[ws] transport error reaching ws://localhost:3000/api/v1/chat/ws
+
+stderr | src/routes/_app/-wu11-retired-routes.test.tsx > WU-11 RED — retired routes are removed without forwarding (FR-108, BDD-12.7, BDD-12.8) > the sidebar carries no "Agents" asset link (BDD-12.8: no Agents management entry exists)
+[ws] transport error reaching ws://localhost:3000/api/v1/chat/ws
+
+ ❯ src/routes/_app/-wu11-retired-routes.test.tsx (4 tests | 4 failed) 4508ms
+     × /agents renders the root not-found page and keeps the URL (no redirect, no Agents screen) 1780ms
+     × /agents/mia renders the root not-found page and keeps the URL (deep link must not open the editor or redirect) 962ms
+     × /admin/chat renders the root not-found page and keeps the URL even when Admin resolves (no forwarding) 223ms
+     × the sidebar carries no "Agents" asset link (BDD-12.8: no Agents management entry exists) 1517ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/routes/_app/-wu11-retired-routes.test.tsx > WU-11 RED — retired routes are removed without forwarding (FR-108, BDD-12.7, BDD-12.8) > /agents renders the root not-found page and keeps the URL (no redirect, no Agents screen)
+AssertionError: expected <button tabindex="0" …(4)>…(1)</button> to be null
+
+- Expected:
+null
+
++ Received:
+<button
+  class="relative inline-flex items-center justify-center whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] font-semibold h-9 px-[var(--space-3)] py-[var(--space-2)] gap-[var(--space-2)]"
+  data-action-state="idle"
+  data-ds-action=""
+  tabindex="0"
+  type="button"
+>
+  <svg
+    fill="currentColor"
+    height="14"
+    viewBox="0 0 256 256"
+    width="14"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z"
+    />
+  </svg>
+   New agent
+</button>
+
+ ❯ src/routes/_app/-wu11-retired-routes.test.tsx:208:45
+    206|     // agent" header action (AgentListScreen.tsx) must not render. Thi…
+    207|     // loudest RED today: the action IS on the settled screen.
+    208|     expect(screen.queryByText('New agent')).toBeNull()
+       |                                             ^
+    209|     expect(screen.queryByText('Create agent')).toBeNull()
+    210|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  src/routes/_app/-wu11-retired-routes.test.tsx > WU-11 RED — retired routes are removed without forwarding (FR-108, BDD-12.7, BDD-12.8) > /agents/mia renders the root not-found page and keeps the URL (deep link must not open the editor or redirect)
+AssertionError: expected <button tabindex="0" …(4)>…(1)</button> to be null
+
+- Expected:
+null
+
++ Received:
+<button
+  class="relative inline-flex items-center justify-center whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] font-semibold h-9 px-[var(--space-3)] py-[var(--space-2)] gap-[var(--space-2)]"
+  data-action-state="idle"
+  data-ds-action=""
+  tabindex="0"
+  type="button"
+>
+  <svg
+    fill="currentColor"
+    height="14"
+    viewBox="0 0 256 256"
+    width="14"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M228,128a12,12,0,0,1-12,12H140v76a12,12,0,0,1-24,0V140H40a12,12,0,0,1,0-24h76V40a12,12,0,0,1,24,0v76h76A12,12,0,0,1,228,128Z"
+    />
+  </svg>
+   New agent
+</button>
+
+ ❯ src/routes/_app/-wu11-retired-routes.test.tsx:228:45
+    226|     // violations. Settling lands on the redirected list screen today,…
+    227|     // 404 assertion below is the RED.
+    228|     expect(screen.queryByText('New agent')).toBeNull()
+       |                                             ^
+    229|     expect(screen.queryByText(/drifted into the deep/)).toBeInTheDocum…
+    230|     expect(view.currentPath()).toBe('/agents/mia')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  src/routes/_app/-wu11-retired-routes.test.tsx > WU-11 RED — retired routes are removed without forwarding (FR-108, BDD-12.7, BDD-12.8) > /admin/chat renders the root not-found page and keeps the URL even when Admin resolves (no forwarding)
+AssertionError: expected <p …(1)></p> to be null
+
+- Expected:
+null
+
++ Received:
+<p
+  class="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+>
+  Restoring your conversation…
+</p>
+
+ ❯ src/routes/_app/-wu11-retired-routes.test.tsx:247:64
+    245|     ])
+    246|
+    247|     expect(screen.queryByText('Restoring your conversation…')).toBeNul…
+       |                                                                ^
+    248|     expect(screen.queryByLabelText('Main chat unavailable')).toBeNull()
+    249|     expect(screen.queryByText(/drifted into the deep/)).toBeInTheDocum…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  src/routes/_app/-wu11-retired-routes.test.tsx > WU-11 RED — retired routes are removed without forwarding (FR-108, BDD-12.7, BDD-12.8) > the sidebar carries no "Agents" asset link (BDD-12.8: no Agents management entry exists)
+AssertionError: expected <a tabindex="0" …(3)>…(2)</a> to be null
+
+- Expected:
+null
+
++ Received:
+<a
+  aria-label="Agents"
+  class="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2)] mx-[var(--space-2)] rounded-lg text-[length:var(--type-body-compact-size)] transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+  href="/agents"
+  tabindex="0"
+>
+  <svg
+    class=""
+    fill="currentColor"
+    height="18"
+    viewBox="0 0 256 256"
+    width="18"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M200,48H136V16a8,8,0,0,0-16,0V48H56A32,32,0,0,0,24,80V192a32,32,0,0,0,32,32H200a32,32,0,0,0,32-32V80A32,32,0,0,0,200,48Zm16,144a16,16,0,0,1-16,16H56a16,16,0,0,1-16-16V80A16,16,0,0,1,56,64H200a16,16,0,0,1,16,16Zm-52-56H92a28,28,0,0,0,0,56h72a28,28,0,0,0,0-56Zm-24,16v24H116V152ZM80,164a12,12,0,0,1,12-12h8v24H92A12,12,0,0,1,80,164Zm84,12h-8V152h8a12,12,0,0,1,0,24ZM72,108a12,12,0,1,1,12,12A12,12,0,0,1,72,108Zm88,0a12,12,0,1,1,12,12A12,12,0,0,1,160,108Z"
+    />
+  </svg>
+  <span
+    class="flex-1"
+  >
+    Agents
+  </span>
+</a>
+
+ ❯ src/routes/_app/-wu11-retired-routes.test.tsx:266:60
+    264|
+    265|     // Sidebar.tsx::ASSET_ITEMS ships { to: '/agents', label: 'Agents'…
+    266|     expect(screen.queryByRole('link', { name: 'Agents' })).toBeNull()
+       |                                                            ^
+    267|     expect(view.currentPath()).toBe('/workspaces/ws-default/chat')
+    268|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed (4)
+   Start at  13:43:22
+   Duration  69.47s (transform 35.40s, setup 711ms, import 59.65s, tests 4.51s, environment 3.58s)
+

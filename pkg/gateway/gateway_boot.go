@@ -681,6 +681,7 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	stg.wsHandler = newWSHandler(stg.msgBus, stg.agentLoop, stg.allowedOrigin)
 	stg.wsHandler.home = stg.homePath
+	stg.wsHandler.notifStore = stg.runningServices.notifStore
 	// w5-integration (US-2/MC-4): bind W1's ONE Mail panel presence registry
 	// to the WS lifecycle (frames dispatch, teardown revokes), and flip the
 	// pool's retention gate — the production activation the conservative
@@ -759,6 +760,11 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// Wire the policy approver into the agent loop (FR-011, C3).
 	// The adapter bridges agent.PolicyApprover → approvalRegistryV2 + WSHandler.
 	stg.agentLoop.SetToolApprover(newPolicyApproverAdapter(stg.approvalReg, stg.wsHandler))
+
+	// Group chats (omnipus-system-agent US-17): the room service, its live
+	// frames on the chat WS, and its runtime in the agent loop (room
+	// admission, dequeue fence, reply branch, cost).
+	stg.wsHandler.rooms = newRoomsHub(stg.wsHandler, stg.homePath)
 
 	// AskUserQuestion pending registry (askuserquestion-tool-spec v3, ADR-074
 	// D4b; W9b wiring): durable state lives in each owner session's
@@ -1265,6 +1271,7 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		taskLock:               task.TaskFileLock,                   // shared striped lock for board task RMW
 	}
 	stg.api.cronService.Store(stg.runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	stg.api.rooms.Store(stg.wsHandler.rooms)                   // group chats (rest_rooms.go)
 	// w5-integration (US-5.9/B-33): boot reconciliation — orphan Mail cache
 	// subtrees, watcher state files and identity records (state whose pair
 	// is absent from the live config) are never servable, their deletion is
@@ -2008,6 +2015,10 @@ func wireChannelManager(cm *channels.Manager, al *agent.AgentLoop) {
 			al.EmitWhatsAppPairing(channelID, status, qr, message)
 		},
 	)
+	// Gate r3 M8: channels that track pairing attempts report each event with
+	// its attempt id, so a late event of an older attempt never reaches a
+	// successor's frames.
+	cm.SetPairingAttemptObserver(al.EmitWhatsAppPairingAttempt)
 	// BDD-08.9 / N1: an answer the final egress check refused (instance rebound,
 	// unbound or deleted since the request arrived) must be visible to the
 	// responding side, not only counted and logged.

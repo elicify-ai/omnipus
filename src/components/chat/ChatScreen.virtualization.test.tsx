@@ -23,6 +23,8 @@ import { useConnectionStore } from '@/store/connection'
 // ── Mock AssistantUI ───────────────────────────────────────────────────────────
 // Captured here so tests can assert autoScroll delegation without re-implementing scroll math.
 let lastViewportAutoScroll: boolean | undefined
+let viewportAtBottom = true
+const viewportStore = { getState: () => ({ isAtBottom: viewportAtBottom }) }
 
 // Reference the module-level `React` import (not an in-factory `require('react')`)
 // — the latter was corrupting the shared React module binding across test files
@@ -32,6 +34,7 @@ let lastViewportAutoScroll: boolean | undefined
 // batch. vi.mock factories may reference top-level `import` bindings safely —
 // only same-file local `const`/`let` declarations have the hoisting restriction.
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  useThreadViewportStore: () => viewportStore,
   ThreadPrimitive: {
     Viewport: React.forwardRef(
               (
@@ -189,8 +192,12 @@ function seedStore(messages: ChatMessage[]): void {
 // assistant-ui's Viewport (useThreadViewportAutoScroll / use-stick-to-bottom)
 // and verified via live browser; the unit test asserts delegation + structure,
 // not scroll math.
+let contentResized: (() => void) | undefined
 class StubResizeObserver {
-  observe() {}
+  constructor(private callback: () => void) {}
+  observe(target: Element) {
+    if (target.parentElement?.getAttribute('data-testid') === 'virtualized-message-list') contentResized = this.callback
+  }
   unobserve() {}
   disconnect() {}
 }
@@ -201,25 +208,126 @@ import { ChatScreen } from './ChatScreen'
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('VirtualizedMessageList', () => {
-  beforeEach(() => {
-    // Reset stores to initial state.
-    useConnectionStore.setState({
-      isConnected: true,
-      liteMode: false,
-      reconnectPhase: null,
-      reconnectAttempt: 0,
-      connectionError: null,
-      connection: null,
+function resetVirtualizedFixture() {
+  // Reset stores to initial state.
+  viewportAtBottom = true
+  contentResized = undefined
+  useConnectionStore.setState({
+    isConnected: true,
+    liteMode: false,
+    reconnectPhase: null,
+    reconnectAttempt: 0,
+    connectionError: null,
+    connection: null,
+  })
+  // Stub ResizeObserver so the component takes the virtualized path rather than
+  // the PlainMessageList fallback (VirtualizedMessageList feature-detects it).
+  vi.stubGlobal('ResizeObserver', StubResizeObserver)
+}
+
+describe('Replay completion scrolling', () => {
+  beforeEach(resetVirtualizedFixture)
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  // R3 oracle: a completed attach lands on the physical bottom, but a person
+  // who scrolled up during loading keeps their position. jsdom has no layout;
+  // provide only the platform's scroll geometry, not our scroll implementation.
+  it.each([true, false])('R3 completion follows the bottom only with existing follow intent (%s)', async (following) => {
+    seedStore(makeMessages(12))
+    viewportAtBottom = following
+    act(() => useChatStore.setState({ isReplaying: true }))
+    const result = render(<ChatScreen />)
+    const el = result.getByTestId('virtualized-message-list')
+    let top = 100
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => 3000 },
+      clientHeight: { configurable: true, get: () => 600 },
+      scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.max(0, Math.min(2400, value)) } },
     })
-    // Stub ResizeObserver so the component takes the virtualized path rather than
-    // the PlainMessageList fallback (VirtualizedMessageList feature-detects it).
-    vi.stubGlobal('ResizeObserver', StubResizeObserver)
+    await act(async () => { useChatStore.setState({ isReplaying: false }); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(el.scrollHeight - el.clientHeight - el.scrollTop).toBe(following ? 0 : 2300)
+    result.unmount()
+    viewportAtBottom = true
   })
 
-  afterEach(() => {
-    vi.unstubAllGlobals()
+  it('R3 keeps following a content-only resize but yields to a real upward scroll', async () => {
+    seedStore(makeMessages(12))
+    const result = render(<ChatScreen />)
+    const el = result.getByTestId('virtualized-message-list')
+    let height = 3000
+    let top = 100
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => height },
+      clientHeight: { configurable: true, get: () => 600 },
+      scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.max(0, Math.min(height - 600, value)) } },
+    })
+    expect(typeof contentResized).toBe('function')
+    await act(async () => { contentResized?.(); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(top).toBe(2400)
+    // A measured content-only shift, with no user scroll, must not lose the
+    // follow preference merely because the viewport now has eight more pixels.
+    height = 3008
+    viewportAtBottom = false
+    await act(async () => { contentResized?.(); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(el.scrollHeight - el.clientHeight - el.scrollTop).toBe(0)
+    top -= 600 // Actual upward movement, unlike the content-only shift above.
+    height += 8
+    await act(async () => { contentResized?.(); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(el.scrollHeight - el.clientHeight - el.scrollTop).toBe(608)
+    result.unmount()
   })
+
+  it('R3 a user scroll between scheduling and painting cancels the queued bottom pin', async () => {
+    seedStore(makeMessages(12))
+    const result = render(<ChatScreen />)
+    const el = result.getByTestId('virtualized-message-list')
+    await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+    let top = 2400
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => 3000 },
+      clientHeight: { configurable: true, get: () => 600 },
+      scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.min(2400, value) } },
+    })
+    const queued: FrameRequestCallback[] = []
+    const raf = vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(callback => { queued.push(callback); return queued.length })
+    try {
+      act(() => contentResized?.())
+      expect(queued).toHaveLength(1)
+      top = 1800
+      viewportAtBottom = false
+      act(() => queued[0](0))
+      expect(el.scrollTop).toBe(1800)
+    } finally {
+      raf.mockRestore()
+      result.unmount()
+    }
+  })
+
+  it('R3 completion preserves real upward movement even before the engine follow flag catches up', async () => {
+    seedStore(makeMessages(12))
+    act(() => useChatStore.setState({ isReplaying: true }))
+    const result = render(<ChatScreen />)
+    const el = result.getByTestId('virtualized-message-list')
+    let top = 100
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => 3000 },
+      clientHeight: { configurable: true, get: () => 600 },
+      scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.min(2400, value) } },
+    })
+    await act(async () => { contentResized?.(); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(top).toBe(2400)
+    el.dispatchEvent(new WheelEvent('wheel', { deltaY: -600, bubbles: true }))
+    top = 1800 // A real upward scroll during loading; the engine flag is still true.
+    await act(async () => { useChatStore.setState({ isReplaying: false }); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(el.scrollTop).toBe(1800)
+    result.unmount()
+  })
+
+})
+
+describe('VirtualizedMessageList', () => {
+  beforeEach(resetVirtualizedFixture)
+  afterEach(() => { vi.unstubAllGlobals() })
 
   it('mounts ≤ 50 DOM nodes for a 1000-message session', async () => {
     const messages = makeMessages(1000)

@@ -6,8 +6,12 @@ package systools
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -20,6 +24,9 @@ type channelEntry struct {
 	Implementation string `json:"implementation"`
 	Enabled        bool   `json:"enabled"`
 	Status         string `json:"status"`
+	// Revision is the FR-088 token the channel write tools' expected_revision
+	// must carry ("absent" for a channel with no config entry).
+	Revision string `json:"revision,omitempty"`
 }
 
 // channelDisplayMeta carries presentational-only metadata (Name/Tier/
@@ -95,6 +102,19 @@ func buildKnownChannels() []channelEntry {
 	return out
 }
 
+// findChannelInstance resolves a channel INSTANCE id — a bare type
+// ("telegram", the default instance) or a namespaced instance key
+// ("telegram.eu", ADR-029) — to its type's catalog entry. The shared-resource
+// token and every write are scoped to the instance, never to the type
+// (FR-085/FR-088).
+func findChannelInstance(id string) (channelEntry, bool) {
+	if config.ValidateInstanceKey(id) != nil {
+		return channelEntry{}, false
+	}
+	chType, _ := config.ParseInstanceKey(id)
+	return findChannel(chType)
+}
+
 func findChannel(id string) (channelEntry, bool) {
 	for _, c := range knownChannels {
 		if c.ID == id {
@@ -104,6 +124,19 @@ func findChannel(id string) (channelEntry, bool) {
 	return channelEntry{}, false
 }
 
+// channelRevisionProperty is the expected_revision parameter of the channel
+// write tools (FR-085).
+func channelRevisionProperty() map[string]any {
+	return map[string]any{
+		"type":        "string",
+		"description": "The channel's revision from list_channels; \"absent\" for a channel that is not configured yet.",
+	}
+}
+
+// channelLiveNote describes a saved write with no pairing interruption. Each
+// write's captured progress supplies any immediate pairing effect separately.
+const channelLiveNote = "new settings take effect on the next config reload; no pending or active pairing was interrupted by this write; the live connection was not changed or tested by this write"
+
 // ---- system.channel.enable ----
 
 type ChannelEnableTool struct{ deps *Deps }
@@ -112,177 +145,267 @@ func NewChannelEnableTool(d *Deps) *ChannelEnableTool { return &ChannelEnableToo
 func (t *ChannelEnableTool) Name() string             { return "enable_channel" }
 func (t *ChannelEnableTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *ChannelEnableTool) Description() string {
-	return "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
+	return "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first. " +
+		"expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, the channel type e.g. 'telegram', 'discord'), expected_revision (required)."
 }
 
 func (t *ChannelEnableTool) Parameters() map[string]any {
 	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"id": map[string]any{"type": "string"}},
-		"required":   []string{"id"},
+		"type": "object",
+		"properties": map[string]any{
+			"id":                  map[string]any{"type": "string"},
+			expectedRevisionParam: channelRevisionProperty(),
+		},
+		"required": []string{"id", expectedRevisionParam},
 	}
 }
 
-func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *ChannelEnableTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	id, _ := args["id"].(string)
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	if _, ok := findChannel(id); !ok {
+	if _, ok := findChannelInstance(id); !ok {
 		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q", id), ""))
 	}
-	if err := t.deps.WithConfig(func(cfg *config.Config) error {
-		ch, ok := cfg.Channels[id]
-		if !ok {
-			ch = config.ChannelInstanceConfig{Type: id}
+	expected, missing := expectedRevisionArg(args, "list_channels")
+	if missing != nil {
+		return missing
+	}
+	var attemptID string
+	var refused *tools.ToolResult
+	committed := false
+	defer func() {
+		if attemptID != "" && !committed && t.deps.ReleasePairing != nil {
+			t.deps.ReleasePairing(id, attemptID)
 		}
-		ch.Enabled = true
-		cfg.Channels[id] = ch
-		return nil
+	}()
+	if err := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
+		attemptID, refused = t.admitPairing(ctx, write, id)
+		if refused != nil {
+			return channels.ErrPairingConflict
+		}
+		return write.withConfig(func(cfg *config.Config) error {
+			if cfg.Channels == nil {
+				cfg.Channels = map[string]config.ChannelInstanceConfig{}
+			}
+			ch, ok := cfg.Channels[id]
+			if !ok {
+				chType, _ := config.ParseInstanceKey(id)
+				ch = config.ChannelInstanceConfig{Type: chType}
+			}
+			ch.Enabled = true
+			cfg.Channels[id] = ch
+			return nil
+		})
 	}); err != nil {
+		if refused != nil {
+			return refused
+		}
+		if r, ok := revisionConflictResult(err, "list_channels"); ok {
+			return r
+		}
 		return tools.ErrorResult(errorJSON("ENABLE_FAILED", err.Error(), ""))
 	}
-	return tools.NewToolResult(successJSON(map[string]any{
-		"id":      id,
+	if attemptID != "" {
+		committed = t.deps.CommitPairing != nil && t.deps.CommitPairing(id, attemptID)
+		if !committed {
+			fields := map[string]any{"id": id, "revision": channelRevision(t.deps.GetCfg(), id), "changed_fields": []string{"enabled"}}
+			return changeSuccess(fields, savedNotWorking("the connection is turned on, but its pairing was cancelled before it started; "+
+				"turn it off and on again to start a new one", "saved configuration read back",
+				"authentication with the platform", "the live connection"))
+		}
+	}
+	return channelWriteResult(t.deps.GetCfg(), id, map[string]any{
 		"enabled": true,
 		"message": "Channel enabled. It will connect on the next config reload.",
-	}))
+	}, []string{"enabled"}, func(ch config.ChannelInstanceConfig) bool { return ch.Enabled })
+}
+
+// admitPairing reserves the unowned pairing attempt of a QR-paired connector
+// this enable turns on. An enable of a connector already on is idempotent and
+// reserves nothing (M1). A refusal saves nothing.
+func (t *ChannelEnableTool) admitPairing(ctx context.Context, write *channelWrite, id string) (string, *tools.ToolResult) {
+	chType, _ := config.ParseInstanceKey(id)
+	if !whatsappChannel(chType) || write.store == nil && t.deps.AdmitEnablePairing == nil {
+		return "", nil
+	}
+	if cfg := t.deps.GetCfg(); cfg != nil {
+		if ch, ok := cfg.Channels[id]; ok && ch.Enabled {
+			return "", nil
+		}
+	}
+	attemptID, err := write.admit(ctx, id, channels.PairingAdmissionEnable, nil)
+	switch {
+	case errors.Is(err, channels.ErrPairingDeleting):
+		return "", tools.ErrorResult(errorJSON("CHANNEL_BEING_DELETED",
+			"this WhatsApp connection is being deleted; nothing saved", "Add the connection again once the deletion has finished"))
+	case err != nil:
+		return "", tools.ErrorResult(errorJSON("PAIRING_IN_PROGRESS",
+			"another WhatsApp pairing of this connection is starting, running or stopping; nothing saved",
+			"Wait for it to finish, or stop it from the chat that started it, then enable it again"))
+	}
+	return attemptID, nil
+}
+
+// channelWriteResult separates the saved-entry readback, this exact write's
+// immediate pairing effect and the still-unproven connection/authentication.
+func channelWriteResult(cfg *config.Config, id string, fields map[string]any, changed []string,
+	readBack func(config.ChannelInstanceConfig) bool, progress ...channels.PairingProgress,
+) *tools.ToolResult {
+	const scope = "saved configuration read back"
+	fields["id"] = id
+	fields["revision"] = channelRevision(cfg, id)
+	fields["changed_fields"] = changed
+	notTested := []string{"authentication with the platform", "the live connection"}
+	var ch config.ChannelInstanceConfig
+	ok := false
+	if cfg != nil {
+		ch, ok = cfg.Channels[id]
+	}
+	note := channelWriteLiveNote(id, progress)
+	if !ok || !readBack(ch) {
+		return changeSuccess(fields, savedNotWorking("the saved channel entry did not read back as written; "+note, scope,
+			notTested...))
+	}
+	return changeSuccess(fields, savedNotWorking(note, scope, notTested...))
 }
 
 // ---- system.channel.configure ----
 
-type ChannelConfigureTool struct{ deps *Deps }
+type ChannelConfigureTool struct {
+	deps *Deps
+	secretSelectionAudit
+}
 
 func NewChannelConfigureTool(d *Deps) *ChannelConfigureTool { return &ChannelConfigureTool{deps: d} }
 func (t *ChannelConfigureTool) Name() string                { return "configure_channel" }
 func (t *ChannelConfigureTool) Scope() tools.ToolScope      { return tools.ScopeCore }
 func (t *ChannelConfigureTool) Description() string {
-	return "Store a channel's credentials and settings. Secrets (token, app_secret) go into the encrypted credential store and are referenced from config.json by a *_ref — they are never written to config.json in plaintext. Non-secret fields (bot_id, app_id, mode) are written to config.json directly. This does NOT enable the channel and does NOT check whether it is enabled: call enable_channel separately, and note the channel only connects on the next config reload. WhatsApp does not take credentials here — it pairs by QR code in the Channels screen.\nParameters: id (required, from list_channels), token, app_secret, bot_id, app_id, mode."
+	return "Save a channel instance's non-secret settings and select stored credential references; plaintext secrets are refused. " +
+		"Establish its intended settings first, then call request_secret with purpose and exactly one recipient form: instance + field " +
+		"for that existing connection. Wait for the person to submit the secure web card, then pass its returned references " +
+		"through the matching reference parameters. Submit stores a version; this approved change selects it. " +
+		"Each reference must match that exact instance, recipient settings and field; a different recipient is refused, " +
+		"so request a new card for it. A settings change that would redirect retained credentials is refused: " +
+		"change the destination in Settings first, then request a new card. Slack's paired card supplies bot_token and app_token; " +
+		"pass both as bot_token_ref and app_token_ref, not token_ref. Omitted references stay unchanged. " +
+		"Read list_channels and pass expected_revision (\"absent\" for a new entry); stale writes are refused. " +
+		"This does not enable or live-test the channel: call enable_channel separately; new settings take effect on the next config reload. " +
+		"Saving changed settings can interrupt an existing pairing immediately; the result states whether this happened. " +
+		"Report committed settings as \"saved but not working\" with the reason, never working or nothing saved. " +
+		"WhatsApp pairs by QR code under Connectors > WhatsApp, not with credentials here."
 }
 
 func (t *ChannelConfigureTool) Parameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"id":         map[string]any{"type": "string"},
-			"token":      map[string]any{"type": "string"},
-			"bot_id":     map[string]any{"type": "string"},
-			"app_id":     map[string]any{"type": "string"},
-			"app_secret": map[string]any{"type": "string"},
-			"mode":       map[string]any{"type": "string"},
+	properties := map[string]any{
+		"id": map[string]any{
+			"type":        "string",
+			"description": "Channel instance id from list_channels, also instance=id for request_secret. Establish its intended settings before requesting the card.",
 		},
-		"required": []string{"id"},
+		"bot_id": map[string]any{
+			"type": "string",
+			"description": "Non-secret bot identifier; save it before requesting a credential card. " +
+				"If retained credentials block a recipient change, change the destination in Settings, then request a new card.",
+		},
+		"app_id": map[string]any{
+			"type": "string",
+			"description": "Non-secret application identifier; save it before requesting a credential card. " +
+				"If retained credentials block a recipient change, change the destination in Settings, then request a new card.",
+		},
+		"mode": map[string]any{
+			"type": "string",
+			"description": "Non-secret channel mode; save it before requesting a credential card. " +
+				"If retained credentials block a recipient change, change the destination in Settings, then request a new card.",
+		},
+		expectedRevisionParam: channelRevisionProperty(),
+	}
+	for _, binding := range channelReferenceBindings {
+		properties[binding.parameter] = map[string]any{
+			"type": "string",
+			"description": "Stored reference for field=" + binding.field + "; first request_secret with purpose, instance=id and field=" + binding.field +
+				", then wait for the person's secure-card Submit. Must match that exact instance, recipient settings and field; " +
+				"otherwise request a new card for that recipient. Never pass a plaintext value.",
+		}
+	}
+	return map[string]any{
+		"type": "object", "properties": properties,
+		"required": []string{"id", expectedRevisionParam},
 	}
 }
 
-// channelSensitiveParams is the ordered list of sensitive parameter names that
-// configure_channel accepts. These are stored in the encrypted credential store
-// (never in config.json) and referenced via <field>_ref on ChannelInstanceConfig.
-// The mapping from field name to the *_ref struct field is handled by
-// applyChannelRef below. Must stay in sync with the Parameters() schema.
-var channelSensitiveParams = []string{"token", "app_secret"}
-
-// channelCredKey returns the canonical credential-store key for a channel secret.
-// Format mirrors the gateway's channelCredKey: "channel_<id>_<field>".
-func channelCredKey(channelID, field string) string {
-	return "channel_" + channelID + "_" + field
-}
-
-// applyChannelRef sets the appropriate *_ref field on ch for the given secret
-// field name and credential reference key. This mirrors the gateway's
-// configureChannel, which writes updates[field+"_ref"] = refName into the raw
-// config map. Here we set the matching typed struct field instead.
-func applyChannelRef(ch *config.ChannelInstanceConfig, field, refName string) {
-	switch field {
-	case "token":
-		ch.TokenRef = refName
-	case "app_secret":
-		ch.AppSecretRef = refName
+func (t *ChannelConfigureTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
+	if refusal := tools.ToolArgumentRefusal(t, args); refusal != nil {
+		return refusal
 	}
-}
-
-func (t *ChannelConfigureTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
 	id, _ := args["id"].(string)
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	if _, ok := findChannel(id); !ok {
-		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND",
-			fmt.Sprintf("Unknown channel %q", id), ""))
+	if _, ok := findChannelInstance(id); !ok {
+		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q", id), ""))
 	}
-
-	// Phase 1: store each provided secret in the credential store BEFORE the
-	// config write. The gateway follows the same order so that a partial failure
-	// (cred stored, config not written) leaves no dangling _ref — the config is
-	// only updated after all secrets are safely persisted.
-	sensitive := make(map[string]bool, len(channelSensitiveParams))
-	for _, f := range channelSensitiveParams {
-		sensitive[f] = true
+	in, err := readChannelReferenceInput(args)
+	if err != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Use request_secret for channel credentials"))
 	}
-	// credRefs tracks field → credKey for secrets that were successfully stored,
-	// so the WithConfig closure can write the _ref fields atomically.
-	credRefs := make(map[string]string)
-	for _, field := range channelSensitiveParams {
-		v, ok := args[field].(string)
-		if !ok || v == "" {
-			continue
-		}
-		if t.deps.CredStore == nil {
-			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
-				"credential store is not available",
-				"Ensure the credential store is unlocked before configuring channel secrets",
-			))
-		}
-		credKey := channelCredKey(id, field)
-		if err := t.deps.CredStore.Set(credKey, v); err != nil {
-			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
-				fmt.Sprintf("Failed to store %s credential: %s", field, err.Error()),
-				"Check that the credential store is unlocked",
-			))
-		}
-		credRefs[field] = credKey
+	expected, missing := expectedRevisionArg(args, "list_channels")
+	if missing != nil {
+		return missing
 	}
-
-	// Phase 2: write the _ref fields and plain config values into the channel
-	// config inside a single WithConfig transaction. This is the mutation the
-	// original code was missing entirely: without it the ChannelInstanceConfig
-	// never had TokenRef / AppSecretRef set, so prerequisites.go always reported
-	// "no credentials" and test_channel returned success=false.
-	if err := t.deps.WithConfig(func(cfg *config.Config) error {
-		if cfg.Channels == nil {
-			cfg.Channels = map[string]config.ChannelInstanceConfig{}
-		}
-		ch, ok := cfg.Channels[id]
-		if !ok {
-			ch = config.ChannelInstanceConfig{Type: id}
-		}
-		// Apply credential refs for every secret field we stored above.
-		for field, credKey := range credRefs {
-			applyChannelRef(&ch, field, credKey)
-		}
-		// Apply non-sensitive plain fields supported by this tool.
-		if v, ok := args["bot_id"].(string); ok && v != "" {
-			ch.BotID = v
-		}
-		if v, ok := args["app_id"].(string); ok && v != "" {
-			ch.AppID = v
-		}
-		if v, ok := args["mode"].(string); ok && v != "" {
-			ch.Mode = v
-		}
-		cfg.Channels[id] = ch
-		return nil
-	}); err != nil {
-		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED",
-			"Failed to persist channel config: "+err.Error(),
-			"",
-		))
+	var selected config.ChannelInstanceConfig
+	var progress []channels.PairingProgress
+	writeErr := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
+		err := write.withConfig(func(cfg *config.Config) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			before, exists := cfg.Channels[id]
+			if !exists {
+				chType, _ := config.ParseInstanceKey(id)
+				before = config.ChannelInstanceConfig{Type: chType}
+			}
+			selected = before
+			in.apply(&selected)
+			if err := t.validateChannelReferences(id, before, selected, in); err != nil {
+				return err
+			}
+			if cfg.Channels == nil {
+				cfg.Channels = make(map[string]config.ChannelInstanceConfig)
+			}
+			cfg.Channels[id] = selected
+			return nil
+		})
+		progress = append(progress, write.progress...)
+		return err
+	})
+	if r, ok := revisionConflictResult(writeErr, "list_channels"); ok {
+		return r
 	}
-
-	return tools.NewToolResult(successJSON(map[string]any{
-		"id":     id,
-		"status": "configured",
-	}))
+	if r, ok := referenceSelectionRefusal(writeErr); ok {
+		return r
+	}
+	if writeErr != nil {
+		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED", "Failed to persist channel config: "+writeErr.Error(), "Stored credential values were not changed"))
+	}
+	refs := make([]string, 0, len(in.references))
+	changed := make([]string, 0, len(in.references)+len(in.settings))
+	for _, binding := range channelReferenceBindings {
+		if ref, supplied := in.references[binding.parameter]; supplied {
+			refs = append(refs, ref)
+			changed = append(changed, binding.parameter)
+		}
+	}
+	for _, field := range []string{"bot_id", "app_id", "mode"} {
+		if _, supplied := in.settings[field]; supplied {
+			changed = append(changed, field)
+		}
+	}
+	t.selected(ctx, t.Name(), id, refs)
+	return channelWriteResult(t.deps.GetCfg(), id, map[string]any{"status": "configured"}, changed,
+		func(ch config.ChannelInstanceConfig) bool { return reflect.DeepEqual(ch, selected) }, progress...)
 }
 
 // ---- system.channel.disable ----
@@ -293,41 +416,59 @@ func NewChannelDisableTool(d *Deps) *ChannelDisableTool { return &ChannelDisable
 func (t *ChannelDisableTool) Name() string              { return "disable_channel" }
 func (t *ChannelDisableTool) Scope() tools.ToolScope    { return tools.ScopeCore }
 func (t *ChannelDisableTool) Description() string {
-	return "Disable a channel connection. The channel will stop on the next config reload. A channel that has never been configured cannot be disabled — it is already inactive.\nParameters: id (required, the channel type e.g. 'telegram', 'discord')."
+	return "Disable a channel connection. Saving the change can interrupt an existing pairing immediately; other live connection changes take effect on the next config reload. The result states whether a pairing was interrupted. A channel that has never been configured cannot be disabled — it is already inactive. " +
+		"expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, the channel type e.g. 'telegram', 'discord'), expected_revision (required)."
 }
 
 func (t *ChannelDisableTool) Parameters() map[string]any {
 	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"id": map[string]any{"type": "string"}},
-		"required":   []string{"id"},
+		"type": "object",
+		"properties": map[string]any{
+			"id":                  map[string]any{"type": "string"},
+			expectedRevisionParam: channelRevisionProperty(),
+		},
+		"required": []string{"id", expectedRevisionParam},
 	}
 }
 
-func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	id, _ := args["id"].(string)
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	if _, ok := findChannel(id); !ok {
+	if _, ok := findChannelInstance(id); !ok {
 		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q", id), ""))
 	}
-	if err := t.deps.WithConfig(func(cfg *config.Config) error {
-		ch, ok := cfg.Channels[id]
-		if !ok {
-			return fmt.Errorf("channel %q is not configured", id)
-		}
-		ch.Enabled = false
-		cfg.Channels[id] = ch
-		return nil
+	expected, missing := expectedRevisionArg(args, "list_channels")
+	if missing != nil {
+		return missing
+	}
+	var progress []channels.PairingProgress
+	if err := t.deps.withChannelWrite(id, expected, func(write *channelWrite) error {
+		// Empty token means a revoking intent, not a new pairing reservation.
+		write.reservations[id] = ""
+		err := write.withConfig(func(cfg *config.Config) error {
+			ch, ok := cfg.Channels[id]
+			if !ok {
+				return fmt.Errorf("channel %q is not configured", id)
+			}
+			ch.Enabled = false
+			cfg.Channels[id] = ch
+			return nil
+		})
+		progress = append(progress, write.progress...)
+		return err
 	}); err != nil {
+		if r, ok := revisionConflictResult(err, "list_channels"); ok {
+			return r
+		}
 		return tools.ErrorResult(errorJSON("DISABLE_FAILED", err.Error(), ""))
 	}
-	return tools.NewToolResult(successJSON(map[string]any{
-		"id":      id,
+	return channelWriteResult(t.deps.GetCfg(), id, map[string]any{
 		"enabled": false,
-		"message": "Channel disabled. It will disconnect on the next config reload.",
-	}))
+		"message": "Channel disabled in saved configuration.",
+	}, []string{"enabled"}, func(ch config.ChannelInstanceConfig) bool { return !ch.Enabled }, progress...)
 }
 
 // ---- system.channel.list ----
@@ -350,12 +491,12 @@ func (t *ChannelListTool) Execute(_ context.Context, _ map[string]any) *tools.To
 	out := make([]channelEntry, 0, len(knownChannels))
 	for _, c := range knownChannels {
 		e := c // copy the static display meta
+		e.Revision = channelRevision(cfg, c.ID)
 		if cfg != nil {
 			if ch, ok := cfg.Channels[c.ID]; ok {
 				e.Enabled = ch.Enabled
 				e.Status = "configured"
-				if ch.TokenRef == "" && ch.AppSecretRef == "" &&
-					(ch.Identity == nil || ch.Identity.ID == "") {
+				if !channelHasCredentials(ch) {
 					e.Status = "needs_credentials"
 				}
 			} else {
@@ -364,7 +505,48 @@ func (t *ChannelListTool) Execute(_ context.Context, _ map[string]any) *tools.To
 		}
 		out = append(out, e)
 	}
+	// Configured instances beyond each type's default one ("telegram.eu"):
+	// each is its own shared resource with its own revision (FR-088).
+	if cfg != nil {
+		var extra []string
+		for key := range cfg.Channels {
+			if _, isType := findChannel(key); !isType {
+				extra = append(extra, key)
+			}
+		}
+		sort.Strings(extra)
+		for _, key := range extra {
+			meta, ok := findChannelInstance(key)
+			if !ok {
+				continue
+			}
+			ch := cfg.Channels[key]
+			e := channelEntry{ID: key, Name: meta.Name, Tier: meta.Tier, Implementation: meta.Implementation,
+				Enabled: ch.Enabled, Status: "configured", Revision: channelRevision(cfg, key)}
+			if !channelHasCredentials(ch) {
+				e.Status = "needs_credentials"
+			}
+			out = append(out, e)
+		}
+	}
 	return tools.NewToolResult(successJSON(map[string]any{"channels": out}))
+}
+
+// channelHasCredentials reports whether a channel instance has credentials
+// present in its configuration: any reference field the configure_channel
+// write path can set (the shared channelReferenceBindings inventory, e.g.
+// Slack's bot_token_ref/app_token_ref pair) or a bound identity. Presence is
+// not proof the credentials authenticate with the platform.
+func channelHasCredentials(ch config.ChannelInstanceConfig) bool {
+	if ch.Identity != nil && ch.Identity.ID != "" {
+		return true
+	}
+	for _, binding := range channelReferenceBindings {
+		if *binding.target(&ch) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- system.channel.test ----
@@ -391,7 +573,7 @@ func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	if _, ok := findChannel(id); !ok {
+	if _, ok := findChannelInstance(id); !ok {
 		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q", id), ""))
 	}
 	cfg := t.deps.GetCfg()
@@ -406,9 +588,7 @@ func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools
 			"message": fmt.Sprintf("Channel %q is not configured. Use configure_channel to set it up.", id),
 		}))
 	}
-	hasCreds := ch.TokenRef != "" || ch.AppSecretRef != "" ||
-		(ch.Identity != nil && ch.Identity.ID != "")
-	if !hasCreds {
+	if !channelHasCredentials(ch) {
 		return tools.NewToolResult(successJSON(map[string]any{
 			"id":      id,
 			"success": false,

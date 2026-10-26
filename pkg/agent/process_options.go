@@ -24,6 +24,14 @@ type processOptions struct {
 	ChatID            string // Target chat ID for tool execution
 	SenderID          string // Current sender ID for dynamic context
 	SenderDisplayName string // Current sender display name for dynamic context
+	// InputOrigin is who the turn's triggering input came from (§6.18):
+	// a channel person on a connection, or another agent's request.
+	InputOrigin inputOrigin
+	// ConsumedInputOrigins are the origins of queued inputs a continuation
+	// turn was started to consume after the previous turn retired (the
+	// post-turn drain). They are recorded like InputOrigin, so consuming a
+	// channel person's queued message makes the new turn channel-triggered.
+	ConsumedInputOrigins []inputOrigin
 	// UserID is the authenticated gateway principal that initiated this turn,
 	// threaded from the WS connection (websocket.go wc.userID) via the dedicated
 	// bus.InboundMessage.GatewayUserID carrier (FR-017). It is stamped onto
@@ -80,6 +88,22 @@ type processOptions struct {
 	// approval prompt would stall the run forever. Only ProcessScheduled sets
 	// this; interactive paths leave it false so `ask` keeps prompting.
 	AutoDenyAsk bool
+
+	// askRefusalReason is the denial reason an unattended turn refuses an
+	// unsettled Ask-policy call with (#1263 R4). Set only by
+	// applyTurnAttendance when the turn is built; empty means the headless
+	// scheduled reason.
+	askRefusalReason string
+	// askRefusalCause explains an unresolved ancestry walk behind the refusal
+	// (gate round 1, SF-05); carried into the refusal's audit context.
+	askRefusalCause string
+
+	// approvalOrigin is the server-derived origin every approval this turn
+	// raises carries (spec §6.18, K7 origin_label / room_ref): "while
+	// answering <person> on <connection>" for a channel message, "asked by
+	// <Agent>" for a peer agent's request, "for group <name>" plus the room
+	// reference for a group-chat room request. Zero for a plain web turn.
+	approvalOrigin approvalOrigin
 
 	// Metadata carries the inbound message metadata (bus.InboundMessage.Metadata)
 	// through to the turn flow. The agent loop reads Metadata["model_name"] to
@@ -159,4 +183,9 @@ type processOptions struct {
 	goalReminderGoalID string
 	// goalReminderFrame is the durable chat row carried by this turn's start.
 	goalReminderFrame *generated.ReplayMessageFrame
+
+	// roomCost owns handed-over room inputs before execution, independently
+	// of later pricing polls. Ordinary, system-wake and continuation turns all
+	// collect inputs/cost and settle their owned requests on exit (§6.14).
+	roomCost *roomCostMeter
 }

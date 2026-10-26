@@ -3,8 +3,7 @@
 // 2026-10-11 Q1 B) and consumes this hook again, exactly as it did before the
 // cutover. Production caller: the mention menu (src/hooks/useSlashMenu.ts). The query and the scoping stay in one
 // definition: ONE `['agents']` react-query cache entry and IDENTICAL scoping
-// (ready-to-chat status, worker exclusion, active workspace's core_team,
-// plus the ADR-090 Admin standalone-operator exemption from TEAM scoping)
+// (ready-to-chat status, worker exclusion, active workspace's core_team)
 // instead of two hand-rolled copies of the same filter drifting apart.
 //
 // Query keys are deliberately unchanged from AgentPicker's original inline
@@ -43,29 +42,11 @@ const EMPTY_WORKSPACES: Workspace[] = []
 import { isChatEligibleAgent } from '@/lib/agentKind'
 export { isChatEligibleAgent }
 
-// ADR-090 FR-001 / §2.2: Admin is a chat-able CORE agent with "no team
-// membership". Team-add surfaces refuse an Admin membership; chat surfaces
-// must still offer a ready Admin, independent of the active workspace's
-// core_team. The type gate is load-bearing: a custom Main agent that
-// happens to be named "admin" is an ordinary agent and stays team-scoped.
-// Readiness / worker / hidden-role filters still apply — this predicate
-// only exempts Admin from TEAM scoping, never from those.
-// Exported for R2-S2-DV-07: the @ mention menu filters THIS exact predicate
-// back out outside the default workspace (the gateway refuses an Admin
-// request from any other — pkg/gateway/main_session.go::mainAgentEligible
-// returns ws.IsDefault) instead of hand-rolling a second `id === 'admin'`
-// check that could drift from this one.
-export function isStandaloneChatOperator(agent: Agent): boolean {
-  return agent.type === 'core' && agent.id === 'admin'
-}
-
 export interface UseChatAgentsResult {
   /** Unfiltered agent list straight from the `['agents']` query — needed by callers that must distinguish "no agents at all" (hard error) from "no chat-eligible agents" (all-draft), e.g. AgentPicker's error/draft branches. */
   agents: Agent[]
-  /** Ready-to-chat (active/idle), non-worker agents, scoped to the active workspace's core_team when one is set. A ready Admin is kept even when the team does not list it (ADR-090 standalone operator) — that is not a workspace membership grant. */
+  /** Ready-to-chat (active/idle), non-worker agents, scoped to the active workspace's core_team when one is set. */
   chatAgents: Agent[]
-  /** True when the ACTIVE workspace is the default workspace (R2-S2-DV-07): the only place the gateway admits an @ request to Admin (mainAgentEligible returns ws.IsDefault), so the @ mention menu offers Admin exactly here and nowhere else. Unknown (workspaces not loaded yet) reads as false — the safe side, and the list lands moments later. */
-  activeWorkspaceIsDefault: boolean
   /** True when the latest fetch of the active workspace's team list failed. The last successfully fetched team stays in `workspaces` (React Query retains previous data on a failed refetch), so `chatAgents` may be scoped by a team that failed to refresh — surfaces of the open picker show a "could not be refreshed" line instead of letting that list read as current. */
   teamRefreshFailed: boolean
   isError: boolean
@@ -95,10 +76,6 @@ export function useChatAgents(): UseChatAgentsResult {
   })
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId)
   const teamIds = activeWorkspace?.core_team
-  // R2-S2-DV-07: the @ mention menu offers Admin only here — the gateway
-  // refuses an Admin request from any other workspace
-  // (pkg/gateway/main_session.go::mainAgentEligible returns ws.IsDefault).
-  const activeWorkspaceIsDefault = activeWorkspace?.is_default === true
 
   // Focus recovery and agent_created both refresh ['agents'], but team
   // membership can change separately. Refresh the workspace query too, even
@@ -152,11 +129,10 @@ export function useChatAgents(): UseChatAgentsResult {
         .filter((a) =>
           !teamIds
           || teamIds.length === 0
-          || teamIds.includes(a.id)
-          || isStandaloneChatOperator(a),
+          || teamIds.includes(a.id),
         ),
     [agents, teamIds],
   )
 
-  return { agents, chatAgents, activeWorkspaceIsDefault, teamRefreshFailed, isError, refetch }
+  return { agents, chatAgents, teamRefreshFailed, isError, refetch }
 }

@@ -19,6 +19,11 @@ properties:
     maxLength: 500
     description: The checklist item text.
     example: "Draft the summary section"
+  active_form:
+    type: string
+    maxLength: 500
+    description: Optional phrasing for the item while it is in progress.
+    example: "Drafting the summary section"
   status:
     type: string
     enum:

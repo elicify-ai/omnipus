@@ -86,12 +86,13 @@ import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { SystemMessage, VirtualSystemMessageRow } from './SystemMessageRows'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import { MainChatAddParticipant } from './AddParticipant'
-import { AGENT_PRIVATE_SECRETS_ENABLED, INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED } from '@/lib/featureSwitches'
+import { INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
 import { RoomTrafficMessage } from './RoomTrafficEntry'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
   feedMarkLabel,
+  ReplyStatusFallbackProvider,
   showsFeedMark,
   useReplySlotPhase,
 } from './AgentStatusIndicator'
@@ -119,6 +120,13 @@ function placementOf(message: ChatMessage): DelegationPlacementMessage {
     spans: message.spans,
     toolCalls: message.tool_calls as DelegationPlacementMessage['toolCalls'],
   }
+}
+
+function delegationEventsOutsideRow(events: readonly DelegationEvent[], message: ChatMessage): DelegationEvent[] {
+  // The assistant row owns both inline and trailing events using its live-call
+  // projection. Splitting again from the unbaked message would draw them twice.
+  if (message.role === 'assistant' && message.type !== 'judge_verdict' && !(ROOMS_ENABLED && message.roomRef)) return []
+  return splitAnchoredDelegationEvents(events, message.id, placementOf(message)).trailing
 }
 
 // ── Skill-aware message content renderer (R2/F1/F7/F9) ───────────────────────
@@ -513,14 +521,11 @@ function AssistantTextPart() {
   )
 }
 
-// Inline status for the live streaming bubble. Actual correlated tool status
-// selects Working; label rules stay the same (a goal phrase wins over hidden
-// tool copy). Only a model-response phase uses the rotating thinking phrases.
-// The mark replaces the bouncing dots. Not mounted for a settled row —
-// that row draws Idle itself. The mark suspends until the agent record
-// arrives so the figure is in the same paint as the phrase.
+// Motion follows correlated execution; all work renderers share the status
+// episode owned above their split, including the identity-loading fallback.
 function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
   const message = useMessage()
+  const turnId = useChatStore((state) => state.messagesById[message.id]?.turnId ?? null)
   const isRunning = message.status?.type === 'running'
   const storeToolCalls = useChatStore((s) => s.toolCalls)
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
@@ -552,9 +557,9 @@ function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
   const label = feedMarkLabel(phase)
   return (
     <React.Suspense
-      fallback={<AgentStatusIndicator phase={phase.kind} label={label} />}
+      fallback={<AgentStatusIndicator phase={phase.kind} label={label} turnId={turnId} />}
     >
-      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} />
+      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} turnId={turnId} />
     </React.Suspense>
   )
 }
@@ -563,10 +568,12 @@ function ResolvedAgentMark({
   agentId,
   phase,
   label,
+  turnId,
 }: {
   agentId: string | null
   phase: 'thinking' | 'working' | 'waiting' | 'unavailable'
   label: string | null
+  turnId: string | null
 }) {
   const agents = useChatAgents()
   const agent = agents.find((item) => item.id === agentId)
@@ -574,6 +581,7 @@ function ResolvedAgentMark({
     <AgentStatusIndicator
       phase={phase}
       label={label}
+      turnId={turnId}
       figure={agent?.figure}
       role={agent?.role}
       color={agent?.color}
@@ -830,9 +838,10 @@ function wouldToolCallBeVisible(
     // (SetGoalCardBlock), which pre-empts GenericToolCall on both paths.
     // "Visible" here must mean "that UI actually renders something", so
     // this consults the SAME decision table the block renders from
-    // (classifySetGoalCall, review S4) — verbose chat shows the raw call,
-    // a failed call shows its quiet failure line, a record shows the card,
-    // a present-but-unparseable result shows a chip; only a still-running
+    // (classifySetGoalCall, review S4) — a record shows the card, with the
+    // raw call added below it in verbose chat. Non-verbose failures show
+    // their quiet failure line; a present-but-unparseable result shows a
+    // chip (or the raw call in verbose chat). Only a still-running
     // call (no result yet) or a completed call with no result at all is
     // hidden, so a bubble consisting solely of one still shows the
     // ThinkingIndicator rather than a blank shell.
@@ -1078,6 +1087,16 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     return false
   })
 
+  // Replay finalizes saved bubbles even when their producing turn is still
+  // running. Keep the existing indicator on the last confirmed active reply,
+  // without waiting for another token or marking older replies as running.
+  const recoveredRunning = useChatStore((state) => {
+    if (!isLastAssistant || !activeSessionId || !message.turnId) return false
+    const bucket = state.sessionsById[activeSessionId]
+    return bucket?.isStreaming === true && !bucket.isReplaying && bucket.activeTurnId === message.turnId
+  })
+  const replyStreaming = !!message.isStreaming || recoveredRunning
+
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
   const agentDisplayName = agent?.name ?? (messageAgentId || null)
@@ -1126,10 +1145,10 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     () => splitMessageParts(message.content ?? '', positionedToolCalls),
     [message.content, positionedToolCalls],
   )
-  const inlineByCall = splitAnchoredDelegationEvents(delegationEvents, message.id, {
+  const delegationSplit = splitAnchoredDelegationEvents(delegationEvents, message.id, {
     spans: message.spans,
     toolCalls: positionedToolCalls,
-  }).byCall
+  })
 
   // D-fix: this row is also used by PlainMessageList (the ResizeObserver-
   // unavailable fallback), which — unlike VirtualizedMessageListInner — does
@@ -1181,11 +1200,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     : null
   const positionedToolLabel = derivePositionedHiddenRunningLabel(positionedToolCalls, verboseChatEnabled)
   const replyPhase = useReplySlotPhase({
-    streaming: !!message.isStreaming,
+    streaming: replyStreaming,
     hasRunningTool: runningToolNames.length > 0,
     toolLabel: positionedToolLabel,
     goalLabel: emptyPlaceholderLabel,
-    idleEligible: isLastAssistant && !message.isStreaming,
+    idleEligible: isLastAssistant && !replyStreaming,
   })
   // 1b (founder UI feedback 2026-10-11): while THIS reply is streaming, the
   // inline indicator never disappears — streamed text, a visible tool card,
@@ -1196,9 +1215,9 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // no "Idle" word and no "Unavailable/reconnecting" word on a finished
   // reply — connection state has its own surfaces
   // (ChatConnectionStatusLine / UnavailableChatNotice).
-  const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || !!message.isStreaming)
+  const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || replyStreaming)
 
-  return (
+  const row = (
     <div
       data-testid="assistant-message"
       data-message-role="assistant"
@@ -1278,7 +1297,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             return renderHistoricalToolCall({
               tc,
               callId,
-              inlineEvents: inlineByCall.get(callId),
+              inlineEvents: delegationSplit.byCall.get(callId),
               activeSessionId,
               verboseChatEnabled,
               goalRecordEmpty,
@@ -1293,6 +1312,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             <AgentStatusIndicator
               phase={replyPhase.kind}
               label={feedMarkLabel(replyPhase)}
+              turnId={message.turnId}
               figure={agent?.figure}
               role={agent?.role}
               color={agent?.color}
@@ -1331,6 +1351,12 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
         <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />
       </div>
     </div>
+  )
+  return (
+    <>
+      {row}
+      <DelegationEventLineList events={delegationSplit.trailing} />
+    </>
   )
 })
 
@@ -1384,7 +1410,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
           } else {
             row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
           }
-          const trailing = splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing
+          const trailing = delegationEventsOutsideRow(delegationEvents, msg)
           return (
             <React.Fragment key={msg.id}>
               {row}
@@ -1449,29 +1475,64 @@ function VirtualizerAutoFollow({
   contentRef: React.RefObject<HTMLDivElement | null>
 }) {
   const viewportStore = useThreadViewportStore()
+  const isReplaying = useChatStore((s) => s.isReplaying)
+  const pin = useRef<number | null>(null)
+  const userScrolledUp = useRef(false)
   useEffect(() => {
     const el = scrollRef.current
     const content = contentRef.current
     if (!el || !content) return undefined
     let raf = 0
-    const ro = new ResizeObserver(() => {
-      // Only follow if the engine still considers us at the bottom — this reuses
-      // its scrollTop-direction "did the user scroll up" detection, so we never
-      // fight a user reading history. isAtBottom is unchanged by a content-growth
-      // resize (the engine updates it on scroll events, not on resize), so it
-      // still reflects the pre-growth position here.
-      if (!viewportStore.getState().isAtBottom) return
+    let pointerActive = false
+    const observeScroll = () => {
+      if (pointerActive && pin.current !== null && el.scrollTop < pin.current) userScrolledUp.current = true
+      if (el.scrollHeight - el.clientHeight - el.scrollTop <= 1) userScrolledUp.current = false
+    }
+    const onWheel = (event: WheelEvent) => { if (isReplaying && event.deltaY < 0) userScrolledUp.current = true }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isReplaying && (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey))) userScrolledUp.current = true
+    }
+    const onPointerDown = () => { pointerActive = isReplaying }
+    const onPointerUp = () => { pointerActive = false }
+    const canFollow = () => !userScrolledUp.current && (viewportStore.getState().isAtBottom || el.scrollTop === pin.current)
+    // Keep explicit upward intent across the replay-completion effect. Row
+    // measurement can move scrollTop too, so position changes alone are not
+    // evidence of a user scroll. Never prevent any native input here.
+    el.addEventListener('scroll', observeScroll, { passive: true })
+    el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener('keydown', onKeyDown)
+    el.addEventListener('pointerdown', onPointerDown, { passive: true })
+    window.addEventListener('pointerup', onPointerUp, { passive: true })
+    const follow = () => {
+      // A measurement can grow the spacer after a successful pin and dispatch
+      // a scroll event before ResizeObserver: the engine then reports "not at
+      // bottom" even though scrollTop never moved. Preserve that known pin,
+      // not an old offset after the user has actually scrolled away from it.
+      if (!canFollow()) return
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
+        // Recheck after scheduling: an upward scroll must win over this resize.
+        if (!canFollow()) return
         el.scrollTop = el.scrollHeight
+        pin.current = el.scrollTop
       })
-    })
+    }
+    const ro = new ResizeObserver(follow)
     ro.observe(content)
+    // A buffered attach replaces the whole transcript at once. Recheck its
+    // measured bottom on completion, even if the virtualizer reused a spacer
+    // of the same size. Keep the existing viewport's user-follow preference.
+    if (!isReplaying) follow()
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
+      el.removeEventListener('scroll', observeScroll)
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('keydown', onKeyDown)
+      el.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointerup', onPointerUp)
     }
-  }, [viewportStore, scrollRef, contentRef])
+  }, [viewportStore, scrollRef, contentRef, isReplaying])
   return null
 }
 
@@ -1589,7 +1650,7 @@ function VirtualizedMessageListInner({
                 >
                   {rowForMessage(msg)}
                   <DelegationEventLineList
-                    events={splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing}
+                    events={delegationEventsOutsideRow(delegationEvents, msg)}
                   />
                 </div>
               )
@@ -1759,16 +1820,7 @@ function AssistantMessage() {
           <AgentReplyLabel agent={agent} name={agentDisplayName} header={null} />
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-          {showEmptyPlaceholder ? (
-            // Nothing has streamed in yet — show only the status mark,
-            // not an empty text bubble + Copy affordance (D-fix).
-            <InlineThinkingIndicator agentId={messageAgentId ?? null} />
-          ) : isTerminalEmpty ? (
-            // Terminal-empty variant (D-fix): the turn is over and there is
-            // still nothing to show. Render nothing rather than an empty
-            // Copy-only bubble — see isTerminalEmpty's doc comment above.
-            null
-          ) : (
+          {!showEmptyPlaceholder && !isTerminalEmpty && (
             <>
               {/* Media (screenshots, files) renders BEFORE the parts so the image
                   shows directly under the tool-call pill that produced it, with
@@ -1789,14 +1841,12 @@ function AssistantMessage() {
                   },
                 }}
               />
-              {/* Trailing status mark — sits at the bottom of the bubble
-                  while the turn is running so the user always sees a "still
-                  working" cue at the position where the next text/tool will
-                  appear. Once a token streams in, the streamed text renders
-                  above the indicator and pushes it further down. */}
-              <InlineThinkingIndicator agentId={messageAgentId ?? null} />
             </>
           )}
+          {/* One mount point before and after the first visible token/tool.
+              Text can appear above it without reselecting the fixed phrase
+              or restarting the synchronized icon/text animation clocks. */}
+          {!isTerminalEmpty && <InlineThinkingIndicator agentId={messageAgentId ?? null} />}
         </div>
 
         {/* Action bar — Copy + Retry buttons, always visible at reduced opacity.
@@ -2875,6 +2925,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 // ── Welcome state ─────────────────────────────────────────────────────────────
 
 function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
+  const workspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
+  const entryBlocked = useSessionStore((state) => workspaceEntryBlocksSend(state, workspaceId))
+  if (entryBlocked) return null
   return (
     <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-[var(--space-5)] p-[var(--space-5)]">
       <div className="flex flex-col items-center gap-[var(--space-4)] text-center max-w-md">
@@ -3085,6 +3138,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
     // a test can type into the old surface and the message rides the stale
     // session binding — see openSessionByDeepLink in
     // tests/e2e/fixtures/session-setup.ts.
+    <ReplyStatusFallbackProvider>
     <div
       className="flex flex-col absolute inset-0 overflow-hidden"
       data-active-session-id={activeSessionId ?? ''}
@@ -3235,9 +3289,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           <AskUserQuestionThreadTail />
 
           {/* Secure secret card (omnipus-system-agent K1, FR-061/FR-074):
-              pending cards rooted in this chat, plus the latest result —
-              hidden until WU-4/5 (no secret-request server in stage 1). */}
-          {AGENT_PRIVATE_SECRETS_ENABLED && <SecretRequestThreadTail />}
+              pending cards rooted in this chat, plus the latest result.
+              WU-4 enables cards independently of WU-5's private-secrets list. */}
+          {SECRET_CARDS_ENABLED && <SecretRequestThreadTail />}
 
           {/* Inline tool approvals rooted in this chat (#1263, L1 amendment
               §1.2 R6) — hidden until WU-8 (stage 2): founder design = card in
@@ -3263,5 +3317,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         </ThreadPrimitive.Root>
       )}
     </div>
+    </ReplyStatusFallbackProvider>
   )
 }

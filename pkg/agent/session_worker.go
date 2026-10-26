@@ -256,6 +256,9 @@ func (w *sessionWorker) enqueueOrRetry(msg bus.InboundMessage) (handled, retry b
 	if w.exiting.Load() {
 		return false, true
 	}
+	if w.parent.deferSecretResume(msg, "worker_inbox_full") {
+		return true, false
+	}
 	if msg.Channel == "system" {
 		logger.WarnCF("agent.worker", "Session worker inbox full — system message not queued; falling back to unserialized dispatch",
 			map[string]any{
@@ -300,13 +303,21 @@ func (w *sessionWorker) enqueueOrRetry(msg bus.InboundMessage) (handled, retry b
 // (and drained) or sees inTurn=false (and goes to the inbox) — never in
 // between.
 func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
-	if msg.Channel == "system" {
+	// A group-chat room request is never steered into a running turn
+	// (omnipus-system-agent FR-214, the no-join intake): it waits in the
+	// inbox and runs as its own turn once the current one settles.
+	if msg.Channel == "system" || inboundMetadata(msg, secretResumeMetadataKey) != "" || isNoJoinRoomWake(msg) {
 		return false
 	}
 	w.steerMu.Lock()
 	defer w.steerMu.Unlock()
 	if !w.inTurn.Load() || w.systemTurn.Load() {
 		return false
+	}
+	// A held room request re-published for the turn that revived its member
+	// passes the room fence first; a cancelled one is discarded, not run.
+	if isRoomRequestWake(msg) && !w.parent.steerRoomRequest(msg) {
+		return true
 	}
 	if err := w.parent.enqueueSteeringFromMessage(msg); err != nil {
 		// A steering-rejected error here means the message was NOT accepted
@@ -386,6 +397,9 @@ func (al *AgentLoop) dispatchSessionWorker(scope string, msg bus.InboundMessage)
 	// the check and overshoot the cap.
 	admitted, release := al.admission.TryAdmit(scope)
 	if !admitted {
+		if al.deferSecretResume(msg, "session_capacity") {
+			return true
+		}
 		logger.WarnCF("agent", "At capacity — rejecting new session",
 			map[string]any{
 				"scope":    scope,
@@ -705,6 +719,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 
 	response, agent, err := al.processMessage(ctx, msg)
 	activeAgent = agent
+	err = errors.Join(err, al.roomTurnEnded(msg, err))
 	if err != nil {
 		// ADR-051 §RD5: never surface raw err text in the assistant-facing
 		// reply. Route through the classifier so provider-originated body /
@@ -811,6 +826,13 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
 			})
 
+		// Settle this turn's already-delivered stream before another turn can
+		// replace it. A notice-only stream must not suppress a later plain
+		// continuation answer through the channel's next-Send flag.
+		if finalResponse != "" && !published && al.bus.SettleStreamedResponse(target.Channel, target.ChatID) {
+			published = true
+		}
+
 		// Exit (a) (design note "Recommended design"): bounded retry, then
 		// fail loud. See continueDrainRetry's own doc comment for why a
 		// uniform bounded retry is simpler to review and just as safe here.
@@ -894,7 +916,7 @@ func (w *sessionWorker) publishContinuationTargetFailureNotice(msg bus.InboundMe
 func (w *sessionWorker) continueDrainRetry(ctx context.Context, target *continuationTarget) (continued string, attemptsMade int, continueErr error) {
 	al := w.parent
 	return retrySteeringContinuation(ctx, func() (string, error) {
-		return al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+		return al.continueSession(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID, target.SessionID)
 	}, func(err error) bool {
 		return errors.Is(err, errContinuePostDequeueFailure)
 	})

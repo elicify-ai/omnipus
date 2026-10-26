@@ -11,10 +11,11 @@
 
 import type { ZodType } from 'zod'
 import { z } from 'zod'
-import { Room as RoomSchema } from '@/lib/api/generated/schemas'
+import { Room as RoomSchema, RoomHistoryResponse as RoomHistoryResponseSchema } from '@/lib/api/generated/schemas'
 import type {
   Room,
   RoomCreateRequest,
+  RoomHistoryResponse,
   RoomMembersUpdateRequest,
   RoomMessageRequest,
 } from '@/lib/api/generated/openapi-types'
@@ -45,6 +46,7 @@ async function withRoomReason<T>(call: Promise<T>): Promise<T> {
 
 const roomSchema = RoomSchema as ZodType<Room>
 const roomListSchema = z.array(RoomSchema) as ZodType<Room[]>
+const roomHistorySchema = RoomHistoryResponseSchema as ZodType<RoomHistoryResponse>
 
 export const roomsQueryKeys = {
   all: ['rooms'] as const,
@@ -60,6 +62,26 @@ export function fetchWorkspaceRooms(workspaceId: string): Promise<Room[]> {
 /** K23: one room's record (members, mutes, pause, cost, read-only reason). */
 export function fetchRoom(roomId: string): Promise<Room> {
   return withRoomReason(request<Room>(`/rooms/${encodeURIComponent(roomId)}`, undefined, roomSchema))
+}
+
+/**
+ * #1332 (getRoomHistory): one page of older room entries, oldest→newest.
+ * `beforeSeq` is the exclusive cursor — the earliest DISPLAYED entry's seq,
+ * never the live high-water or seq - 1. `limit` is sent only when given;
+ * omitted means the server default (100). The continuation is the response's
+ * own `has_older` / `next_before_seq`, never inferred from the page length.
+ */
+export function fetchRoomHistory(roomId: string, opts: { beforeSeq?: number; limit?: number } = {}): Promise<RoomHistoryResponse> {
+  const query = new URLSearchParams()
+  if (opts.beforeSeq !== undefined) query.set('before_seq', String(opts.beforeSeq))
+  if (opts.limit !== undefined) query.set('limit', String(opts.limit))
+  const encoded = query.toString()
+  const suffix = encoded ? `?${encoded}` : ''
+  return withRoomReason(request<RoomHistoryResponse>(
+    `/rooms/${encodeURIComponent(roomId)}/messages${suffix}`,
+    undefined,
+    roomHistorySchema,
+  ))
 }
 
 /** K24: create a squad or an ad-hoc room; the team room is never created here. */

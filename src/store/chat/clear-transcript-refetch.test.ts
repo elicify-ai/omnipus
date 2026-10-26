@@ -40,6 +40,7 @@ import { retryClearTranscriptRead } from './clear-refetch'
 import { useUiStore } from '@/store/ui'
 import type { ServerFrame } from '@/lib/ws'
 import type { ChatMessage } from './types'
+import { seedCanonicalSession } from '../../../tests/unit/fixtures/canonical-session'
 
 // The ONLY stub: the HTTP edge (GET /sessions/{id}/messages answers here).
 // fetchSessionMessages and rawToMessage stay real, so the wire fixtures
@@ -158,6 +159,7 @@ beforeEach(() => {
   connectionOk = true
   requestMock.mockReset()
   queryClient.removeQueries()
+  seedCanonicalSession(SID, 'jim')
   delete replayingStartedAt[SID]
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'jim', activeAgentType: null })
   useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)

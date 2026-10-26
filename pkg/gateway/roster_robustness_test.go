@@ -69,7 +69,9 @@ func TestEmptyAgentRosterWouldResolveToPermissiveGlobalFloor(t *testing.T) {
 		"write_file": "allow",
 		"edit_file":  "allow",
 		"delegate":   "allow",
-		"send_email": "allow",
+		// Spec change (founder ruling, 2026-10-22, commit a70730fb3): the
+		// shipped ceiling for send_email moved allow -> ask.
+		"send_email": "ask",
 	}
 
 	for _, sensitive := range []string{"bash", "write_file", "edit_file", "delegate", "send_email"} {

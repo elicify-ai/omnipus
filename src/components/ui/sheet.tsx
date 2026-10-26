@@ -73,7 +73,7 @@ const sideVariants = {
  * slide-over was rendering at 47% of a 1440 px viewport via the legacy
  * sm:max-w-3xl literal (768 px). 90vw on mobile keeps the slide-over inside
  * the viewport on phone widths. Callers may still override via the
- * `widthClass` prop (e.g. CreateAgentModal keeps its wider sm:max-w-3xl).
+ * `widthClass` prop.
  */
 const sideDefaultWidth = {
   top: '',

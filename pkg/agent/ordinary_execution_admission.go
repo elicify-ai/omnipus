@@ -63,7 +63,10 @@ func ordinaryDispositionFromContext(ctx context.Context) *executionDisposition {
 
 // A zero preparation is valid only for a path without a concrete lifecycle
 // store/session. A missing record for a real ordinary session is minted first.
-type ordinaryExecutionPreparation struct{ execution *executionDisposition }
+type ordinaryExecutionPreparation struct {
+	execution *executionDisposition
+	roomCost  *roomCostMeter
+}
 
 // prepareOrdinaryExecution reuses identity preparation, not steered capacity or
 // FIFO admission. System goal/owner wakes can continue a finished root but never
@@ -101,7 +104,13 @@ var errOwnerWakeRetained = errors.New("ordinary admission: owner wake dropped: t
 func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessionID string, opts processOptions, revival *steer.Principal, admittingEntryID ...string) (ordinaryExecutionPreparation, error) {
 	preparation, err := al.admitOrdinarySessionExecution(ctx, sessionID, opts, revival)
 	if err == nil && preparation.execution != nil {
-		al.deliverHeldRequests(sessionID, admittingEntryID...)
+		if opts.roomCost == nil {
+			opts.roomCost = al.newRoomMeterForOptions(opts)
+		}
+		opts.roomCost.sessionID = sessionID
+		opts.roomCost.scope = opts.SessionKey
+		preparation.roomCost = opts.roomCost
+		al.deliverHeldRequestsWithMeter(sessionID, opts.roomCost, admittingEntryID...)
 	}
 	if opts.goalWake != nil {
 		err = markOrdinaryGoalPreTurn(err)
@@ -228,6 +237,9 @@ func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionI
 // newTurnStateForAdmission preserves the ordinary routing/history key. The
 // canonical lifecycle identity comes only from its admitted execution carrier.
 func (al *AgentLoop) newTurnStateForAdmission(agent *AgentInstance, opts processOptions) (*turnState, error) {
+	// #1263 R1/R5: the persisted root origin of the session chain decides
+	// whether anybody can answer an approval, for every ordinary entry.
+	al.applyTurnAttendance(&opts)
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, opts.SessionKey))
 	d := opts.executionDisposition
 	if d == nil {

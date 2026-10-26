@@ -172,142 +172,6 @@
       }
     },
     {
-      "id": "_app/admin.chat",
-      "kind": "route",
-      "source": "src/routes/_app/admin.chat.tsx",
-      "symbol": "Route",
-      "lane": 3,
-      "verification": [
-        {
-          "checkId": "surface:app-admin-chat:unit",
-          "file": "tests/design-system/surfaces/app-admin-chat.test.tsx",
-          "test": "_app/admin.chat surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:app-admin-chat:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/admin.chat surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:app-admin-chat:reflow",
-          "kind": "reflow",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/admin.chat surface reflow contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "route",
-        "path": "/admin/chat"
-      }
-    },
-    {
-      "id": "_app/agents",
-      "kind": "route",
-      "source": "src/routes/_app/agents.tsx",
-      "symbol": "Route",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:app-agents:unit",
-          "file": "tests/design-system/surfaces/app-agents.test.tsx",
-          "test": "_app/agents surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:app-agents:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:app-agents:reflow",
-          "kind": "reflow",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents surface reflow contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "route",
-        "path": "/agents"
-      }
-    },
-    {
-      "id": "_app/agents.$agentId",
-      "kind": "route",
-      "source": "src/routes/_app/agents.$agentId.tsx",
-      "symbol": "Route",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:app-agents-agentid:unit",
-          "file": "tests/design-system/surfaces/app-agents-agentid.test.tsx",
-          "test": "_app/agents.$agentId surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:app-agents-agentid:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents.$agentId surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:app-agents-agentid:reflow",
-          "kind": "reflow",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents.$agentId surface reflow contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "route",
-        "path": "/agents/:agentId"
-      }
-    },
-    {
-      "id": "_app/agents.index",
-      "kind": "redirect",
-      "source": "src/routes/_app/agents.index.tsx",
-      "symbol": "Route",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:app-agents-index:unit",
-          "file": "tests/design-system/surfaces/app-agents-index.test.tsx",
-          "test": "_app/agents.index surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:app-agents-index:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents.index surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:app-agents-index:reflow",
-          "kind": "reflow",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents.index surface reflow contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "route",
-        "path": "/agents"
-      }
-    },
-    {
       "id": "_app/automations",
       "kind": "route",
       "source": "src/routes/_app/automations.tsx",
@@ -1974,74 +1838,6 @@
       }
     },
     {
-      "id": "src/components/agents/CreateAgentModal.tsx#CreateAgentModal",
-      "kind": "modal",
-      "source": "src/components/agents/CreateAgentModal.tsx",
-      "symbol": "CreateAgentModal",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:src-components-agents-createagentmodal-tsx-createagentmodal:unit",
-          "file": "tests/design-system/surfaces/src-components-agents-createagentmodal-tsx-createagentmodal.test.tsx",
-          "test": "src/components/agents/CreateAgentModal.tsx#CreateAgentModal surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-agents-createagentmodal-tsx-createagentmodal:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/agents/CreateAgentModal.tsx#CreateAgentModal surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-agents-createagentmodal-tsx-createagentmodal:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/agents/CreateAgentModal.tsx#CreateAgentModal surface interaction contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/agents/CreateAgentModal.tsx#CreateAgentModal"
-      }
-    },
-    {
-      "id": "src/components/agents/CreateAgentWizard.tsx#overlay:1",
-      "kind": "modal",
-      "source": "src/components/agents/CreateAgentWizard.tsx",
-      "symbol": "overlay:1",
-      "lane": 5,
-      "entry": {
-        "type": "activation",
-        "path": "src/components/agents/CreateAgentWizard.tsx#overlay:1"
-      },
-      "verification": [
-        {
-          "checkId": "surface:src-components-agents-createagentwizard-tsx-overlay-1:unit",
-          "file": "tests/design-system/surfaces/src-components-agents-createagentwizard-tsx-overlay-1.test.tsx",
-          "test": "src/components/agents/CreateAgentWizard.tsx#overlay:1 surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-agents-createagentwizard-tsx-overlay-1:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/agents/CreateAgentWizard.tsx#overlay:1 surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-agents-createagentwizard-tsx-overlay-1:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/agents/CreateAgentWizard.tsx#overlay:1 surface interaction contract",
-          "status": "planned"
-        }
-      ]
-    },
-    {
       "id": "src/components/agents/ToolApprovalModal.tsx#ToolApprovalModal",
       "kind": "modal",
       "source": "src/components/agents/ToolApprovalModal.tsx",
@@ -3365,108 +3161,6 @@
       "entry": {
         "type": "activation",
         "path": "src/components/providers/SignInDialog.tsx#overlay:1"
-      }
-    },
-    {
-      "id": "src/components/screens/AgentListScreen.tsx#AgentListScreen",
-      "kind": "screen",
-      "source": "src/components/screens/AgentListScreen.tsx",
-      "symbol": "AgentListScreen",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-agentlistscreen:unit",
-          "file": "tests/design-system/surfaces/src-components-screens-agentlistscreen-tsx-agentlistscreen.test.tsx",
-          "test": "src/components/screens/AgentListScreen.tsx#AgentListScreen surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-agentlistscreen:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#AgentListScreen surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-agentlistscreen:reflow",
-          "kind": "reflow",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#AgentListScreen surface reflow contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/screens/AgentListScreen.tsx#AgentListScreen"
-      }
-    },
-    {
-      "id": "src/components/screens/AgentListScreen.tsx#tab:library",
-      "kind": "tab",
-      "source": "src/components/screens/AgentListScreen.tsx",
-      "symbol": "tab:library",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-library:unit",
-          "file": "tests/design-system/surfaces/src-components-screens-agentlistscreen-tsx-tab-library.test.tsx",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:library surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-library:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:library surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-library:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:library surface interaction contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/screens/AgentListScreen.tsx#tab:library"
-      }
-    },
-    {
-      "id": "src/components/screens/AgentListScreen.tsx#tab:teams",
-      "kind": "tab",
-      "source": "src/components/screens/AgentListScreen.tsx",
-      "symbol": "tab:teams",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-teams:unit",
-          "file": "tests/design-system/surfaces/src-components-screens-agentlistscreen-tsx-tab-teams.test.tsx",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:teams surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-teams:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:teams surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-teams:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:teams surface interaction contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/screens/AgentListScreen.tsx#tab:teams"
       }
     },
     {
@@ -6656,14 +6350,6 @@
       "lane": 5
     },
     {
-      "source": "src/components/agents/CreateAgentModal.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/CreateAgentWizard.tsx",
-      "lane": 5
-    },
-    {
       "source": "src/components/agents/ExecutorSelector.tsx",
       "lane": 5
     },
@@ -6681,10 +6367,6 @@
     },
     {
       "source": "src/components/agents/ToolsAndPermissions.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/WorkerCard.tsx",
       "lane": 5
     },
     {
@@ -6714,30 +6396,6 @@
     {
       "source": "src/components/agents/voice-provider-sub.tsx",
       "lane": 6
-    },
-    {
-      "source": "src/components/agents/wizard/Advanced.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/wizard/InheritToggle.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/wizard/Step1Identity.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/wizard/Step2Personality.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/wizard/Step3Tools.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/wizard/types.ts",
-      "lane": 5
     },
     {
       "source": "src/components/browser/BrowserLiveAnnotatePopover.tsx",
@@ -6845,6 +6503,10 @@
     },
     {
       "source": "src/components/chat/useChatAgents.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useCurrentTodo.ts",
       "lane": 3
     },
     {
@@ -7040,6 +6702,14 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/tools/ConnectChannelTool.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/ConnectChannelToolUI.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/tools/DraftLink.tsx",
       "lane": 3
     },
@@ -7122,10 +6792,6 @@
     {
       "source": "src/components/layout/AppShell.tsx",
       "lane": 7
-    },
-    {
-      "source": "src/components/layout/CrossWorkspaceApprovalBanner.tsx",
-      "lane": 8
     },
     {
       "source": "src/components/layout/GodModeIndicators.tsx",
@@ -7652,10 +7318,6 @@
       "lane": 6
     },
     {
-      "source": "src/components/screens/AgentListScreen.tsx",
-      "lane": 5
-    },
-    {
       "source": "src/components/screens/CalendarScreen.tsx",
       "lane": 2
     },
@@ -7905,6 +7567,10 @@
     },
     {
       "source": "src/components/skills/WhatsAppPairingBody.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/useWhatsAppPairingInterest.ts",
       "lane": 5
     },
     {
@@ -8246,22 +7912,6 @@
     {
       "source": "src/routes/_fullscreen.tsx",
       "lane": 8
-    },
-    {
-      "source": "src/routes/_app/admin.chat.tsx",
-      "lane": 3
-    },
-    {
-      "source": "src/routes/_app/agents.$agentId.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/routes/_app/agents.index.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/routes/_app/agents.tsx",
-      "lane": 5
     },
     {
       "source": "src/routes/_app/automations.tsx",

@@ -3,6 +3,16 @@
 Scoped guidance for the `deploy/ci-worker/` directory. Loaded automatically by Claude Code
 whenever a file in this directory (or a descendant) is read.
 
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
+
+**Before using any recipe below:** apply root `CLAUDE.md` ("CI scope and remote
+pre-flight" and "CI quarantine"). These are runner capabilities, not permission to
+run full CI on a lane. Use the shared skill's "Build and test" procedure for
+approval/pre-flight receipts. GitHub trigger selection and the required CI
+aggregate quarantine are implemented at the revision linked from root
+"CI implementation pointer"; raw Fly gate verdicts do not apply that aggregate.
+PR eligibility is by destination base, not source-branch prefix or draft state.
+
 ## ⚠️ "ALL GATES GREEN" from this worker does NOT mean races were checked
 
 The worker runs a FASTER SUBSET of GitHub CI. Two limits that have already caused a
@@ -76,7 +86,7 @@ concurrency. For race coverage, push and read GitHub CI.
 
 The Go test/build suite is run on a dedicated Fly worker cluster, **never in the dev pod** (linking the full `pkg/gateway` test binary with the pure-Go OLM crypto via the `goolm` tag OOMs the pod — see the root CLAUDE.md's "Build, test, and quality gates" section). The cluster is sized, on-demand boxes with persistent caches, driven via `flyctl ssh console`.
 
-- **App**: `ci-omnipus-1` (`sin` region) — **ONE app, several machines**. Each machine has its own 8-vCPU / 16 GB VM and its own persistent `/cache` volume (go-build/mod cache, npm cache, the cloned repo), and its own `/tmp/runci.lock`. **Placement (founder ruling, 2026-10-12): the machines are sized per test type on purpose; this is not a resize question.** The ONE `performance` 8x/16 GB machine, `080d74db170408`, runs the sustained heavy work: the `go` tier (`go-test`, `go-race`) and the full `e2e` gate, **one after the other, never in parallel** (together they starve each other). The lighter `node` and `xplat` tiers run on `shared` 8x/16 GB machines (defaults: `node` -> `d8d0d90a1e9648`, `xplat` -> `78113d4f329908`; the other two shared machines, `d8d3977c946558` and `48ee71eb1e9768`, are spare capacity). A targeted few-spec e2e rerun (`E2E_SPECS=...`) may use a shared machine; the FULL e2e gate must not. The measured reason: on 2026-10-11 the full e2e gate placed on shared machines ran 2 h at load ~21 and starved (even the baseline failed nearly everything), and `embed-build` took ~46 min on a shared machine against minutes on the performance one. That was a PLACEMENT error, not undersizing. `fly machine status <id> --app ci-omnipus-1` is the source of truth for sizes. The former standalone worker apps were **destroyed** by founder decision (2026-09-16) — do not reference or recreate them. Machines are addressed **by id**, and machine ids are provisioned by the harness, so they are DATA in `ci-cluster.sh` / its env vars, never hardcoded.
+- **App**: `ci-omnipus-1` (`sin` region) — **ONE app, five machines**. Each machine has its own 8-vCPU / 16 GB VM and its own persistent `/cache` volume (go-build/mod cache, npm cache, the cloned repo), and its own `/tmp/runci.lock`. **Placement (founder ruling, 2026-10-12): the machines are sized per test type on purpose; no resizing.** Founder decision 2026-10-21 ("ok a") moves `spa` to the performance machine after the Go gates. The ONE `performance` 8x/16 GB machine, `080d74db170408`, runs the `go` tier in order: `gofmt go-build go-vet lint go-test go-race spa`. The full `e2e` gate runs there **after that entire tier, never in parallel**. The `node` tier keeps only `contracts` on shared `d8d0d90a1e9648`; `xplat` keeps `embed-build records-no-sqlite cli-verb-guard` on shared `78113d4f329908`. Both `contracts` and `spa` reinstall `node_modules` with their own `npm ci`, so keeping contracts separate preserves every per-tier override without losing reuse of an installed dependency tree. The other two shared machines, `d8d3977c946558` and `48ee71eb1e9768`, remain spare capacity. A targeted few-spec e2e rerun (`E2E_SPECS=...`) may use a shared machine; the FULL e2e gate must not. On 2026-10-11 the full e2e gate placed on shared machines ran 2 h at load ~21 and starved (even the baseline failed nearly everything), and `embed-build` took ~46 min on a shared machine against minutes on the performance one. That was a PLACEMENT error, not undersizing. The 2026-10-21 SPA decision likewise follows timing-test failures on shared machines and a pass on performance; it does not weaken the tests. Indicative gate times and the unmeasured new totals are in root CLAUDE.md's "Remote CI cluster" table. `fly machine status <id> --app ci-omnipus-1` is the source of truth for sizes. The former standalone worker apps were **destroyed** by founder decision (2026-09-16) — do not reference or recreate them. Machines are addressed **by id**; their ids are DATA in `ci-cluster.sh` / its env vars, never dispatch logic.
 - **Source of truth**: `deploy/ci-worker/runci.sh` (in this repo) **and** the deployed copy at `/cache/runci.sh` on **every** machine. **Editing the repo file does NOT update any executing copy** — see "Redeploying runci.sh" below.
 - **Trigger — full cluster (preferred)**: `deploy/ci-worker/ci-cluster.sh <ref>` fans the gates out one tier per machine, concurrently, collects every machine's logs (verified, see trap 8), and stops every machine it started on the way out (see "CI cluster dispatcher" below and `docs/internal/architecture/ci-cluster-design.md`).
 - **Trigger — one gate on one machine**:
@@ -84,10 +94,10 @@ The Go test/build suite is run on a dedicated Fly worker cluster, **never in the
   fly ssh console --app ci-omnipus-1 --machine <id> -C "/cache/runci.sh <ref> <gate>"
   ```
 - **Gates** (verified against `runci.sh`'s `case` block 2026-09-16): `all | all-no-e2e | gofmt | go-build | go-vet | lint | go-test | go-race | records-no-sqlite | contracts | spa | quick | embed-build | e2e | cli-verb-guard`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `records-no-sqlite` (added for review finding F7) runs `pkg/gateway/rest_knowledge_find_propindexless_test.go`'s two tests under `-tags goolm,stdjson,records_no_sqlite` — the `records_no_sqlite` build tag otherwise appears nowhere in CI, so this is the only gate (here or in `.github/workflows/pr.yml`'s mirrored step) that ever exercises that honesty-contract carve-out. `e2e` runs the full Playwright matrix (90 spec files across 24 shards; count them with `ls tests/e2e/*.spec.ts | wc -l`) — see "E2E gate" below.
-- **When to use it**:
-  - Pre-push verification on a feature branch **before** opening a PR (when you want a signal without burning a PR slot).
-  - Pre-merge gate on a hotfix / release branch (faster turnaround than the public PR workflow).
-  - Any time the dev pod can't run the suite (OOM, RAM pressure, root disk > 90%).
+- **When to use it**: only for a founder-approved remote window within root
+  `CLAUDE.md`'s CI scope. Use a pushed candidate for authorized integration gates, or
+  only the lane's targeted tests/regression after its local pre-flight. Machine
+  pressure alone does not authorize a full feature/lane run or a new hotfix branch.
 
 **`all-no-e2e` gate (setup once, three parallel groups).** `all` minus `go-race` and `e2e`,
 restructured so the shared setup is paid once per run instead of once per gate. Measured

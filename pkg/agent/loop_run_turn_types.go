@@ -32,8 +32,11 @@ type agentLoopRunTurn struct {
 	iteration                int
 	llmOpts                  map[string]any
 	llmModel                 string
-	onToolCallProgress       protocoltypes.OnToolCallProgress
-	inspectionImages         map[string][]tools.InspectionImage
+	// A streaming-capable provider already tried this channel. Do not retry
+	// a declined factory merely to finalize the plain fallback response.
+	streamerLookupDeclined bool
+	onToolCallProgress     protocoltypes.OnToolCallProgress
+	inspectionImages       map[string][]tools.InspectionImage
 	// providerCallStreamedBytes is reset before each single-candidate retry
 	// attempt and counts callback-emitted bytes before streamer.Update. The
 	// successful-response tail flush is outside the error/retry path. This
@@ -79,7 +82,11 @@ type agentLoopRunTurnIteration struct {
 	// block (loop_run_turn.go's "Inject pending steering messages") can
 	// stamp applied_at and emit one steering_receipt per genuinely injected
 	// steer, never for one still queued.
-	pendingSteeringReceipts      []string
+	pendingSteeringReceipts []string
+	// Live steering can already be in history when another tool response
+	// exhausts this turn. Its one post-ceiling continuation carries no text.
+	inTurnSteering               bool
+	inTurnSteeringOrigin         inputOrigin
 	toolCallTruncationRepairUsed bool
 	gracefulTerminal             bool
 	ret0                         turnResult
@@ -106,6 +113,7 @@ type agentLoopRunTurnResponse struct {
 	orphanMarkup        providers.OrphanToolMarkup
 	hasOrphanMarkup     bool
 	normalizedToolCalls []providers.ToolCall
+	argumentRefusals    []*tools.ToolResult
 	ret0                turnResult
 	ret1                error
 }
@@ -118,8 +126,8 @@ type agentLoopRunTurnTools struct {
 	finalContent       string
 	// finalIsModelAnswer reports that finalContent is the model's own
 	// completed answer (set by finishTextResponse), not a synthetic stop
-	// notice or truncation outcome - only a real answer is kept when a
-	// late follow-up continues the turn (keepAnswerBeforeSteering).
+	// notice. A truncation outcome is kept separately with its mark when
+	// a late follow-up continues the turn (keepAnswerBeforeSteering).
 	finalIsModelAnswer bool
 	midTurnGuardErr    error
 	ret0               turnResult

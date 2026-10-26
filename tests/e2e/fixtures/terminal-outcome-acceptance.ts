@@ -4,7 +4,7 @@ import { WsFrame } from '../../../src/lib/api/generated/ws-schemas';
 import { Agent, Workspace, Session, SessionDetail } from '../../../src/lib/api/generated/schemas';
 import type { AgentCreateRequestMain, WorkspaceCreateRequest, SessionCreateRequest } from '../../../src/lib/api/generated/openapi-types';
 import { GatewayProcess } from './gateway-process';
-import { chatInput, waitForConnected, assistantMessages } from './selectors';
+import { chatInput, waitForConnected } from './selectors';
 import { E2E_MODEL } from './e2e-model';
 
 // Independent oracle: tool-iteration-limit spec, Machine-Verifiable Constraints,
@@ -113,26 +113,42 @@ export async function terminalTranscript(page: Page, baseURL: string, sessionId:
 
 export function terminalLiveEntries(frames: WsFrame[], sessionId: string, turnId: string) {
   const byId = new Map<string, string>();
+  const tokensById = new Map<string, string>();
+  let noticeFrames = 0;
   for (const frame of frames) {
-    if (frame.type !== 'token' || frame.session_id !== sessionId) continue;
-    expect.soft(frame.turn_id, 'live token is from the SAME observed turn').toBe(turnId);
-    expect.soft(frame.message_id, 'live token has a stable durable-entry identity').toEqual(expect.any(String));
-    if (!frame.message_id) continue; // The preceding soft assertion is a failure, not a skip.
-    byId.set(frame.message_id, frame.replace ? frame.content : (byId.get(frame.message_id) ?? '') + frame.content);
+    if (frame.type === 'token' && frame.session_id === sessionId) {
+      expect.soft(frame.turn_id, 'live token is from the SAME observed turn').toBe(turnId);
+      expect.soft(frame.message_id, 'live token has a stable durable-entry identity').toEqual(expect.any(String));
+      if (!frame.message_id) continue; // The preceding soft assertion is a failure, not a skip.
+      const content = frame.replace ? frame.content : (tokensById.get(frame.message_id) ?? '') + frame.content;
+      tokensById.set(frame.message_id, content);
+      byId.set(frame.message_id, content);
+    } else if (frame.type === 'replay_message' && frame.session_id === sessionId && frame.content === TERMINAL_CAP_NOTICE) {
+      noticeFrames++;
+      expect.soft(frame.role, 'live cap notice must be system-authored').toBe('system');
+      expect.soft(frame.turn_id, 'live notice is from the SAME observed turn').toBe(turnId);
+      expect.soft(frame.id, 'live notice has a stable durable-entry identity').toEqual(expect.any(String));
+      expect.soft(frame.model, 'live harness notice has no model attribution').toBeUndefined();
+      if (!frame.id) continue; // The preceding assertion and exact live/durable pair still fail.
+      byId.set(frame.id, frame.content);
+    }
   }
+  expect.soft(noticeFrames, 'exactly one live system cap-notice frame').toBe(1);
+  expect.soft(Array.from(tokensById.values()).join(''), 'the cap notice is not a model-token answer')
+    .not.toContain(TERMINAL_CAP_NOTICE);
   return Array.from(byId, ([id, content]) => ({ id, content }));
 }
 
 export async function assertTerminalRendering(
   page: Page, info: TestInfo, stage: string, terminalEntries: ReturnType<typeof SessionDetail.parse>['messages'],
 ) {
-  const terminal = assistantMessages(page).filter({ hasText: TERMINAL_CAP_NOTICE });
+  const terminal = page.locator('[data-message-role="system"][data-message-id]').filter({ hasText: TERMINAL_CAP_NOTICE });
   // Soft product assertions preserve RED while allowing reconnect/reload to be
   // measured too. A missing notice NEVER bypasses a later observation.
-  await expect.soft(terminal, `${stage}: exactly one completed terminal bubble`).toHaveCount(1);
+  await expect.soft(terminal, `${stage}: exactly one completed terminal system row`).toHaveCount(1);
   await expect.soft(page.getByText(TERMINAL_CAP_NOTICE, { exact: true }), `${stage}: exact terminal sentence`).toHaveCount(1);
   expect.soft(await terminal.evaluateAll((elements) => elements.map((el) => el.getClientRects().length > 0)),
-    `${stage}: the terminal bubble is actually visible`).toEqual([true]);
+    `${stage}: the terminal system row is actually visible`).toEqual([true]);
   expect.soft(await terminal.evaluateAll((elements) => elements.map((el) => el.getAttribute('data-message-id'))),
     `${stage}: rendered identity equals the real durable terminal entry`).toEqual(terminalEntries.map((entry) => entry.id));
   expect.soft(await page.evaluate(() => {

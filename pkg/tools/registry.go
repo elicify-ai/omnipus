@@ -519,6 +519,13 @@ func (r *ToolRegistry) ExecuteWithContext(
 	channel, chatID string,
 	asyncCallback AsyncCallback,
 ) *ToolResult {
+	tool, ok := r.Get(name)
+	if ok {
+		// Rejected secret-shaped inputs never enter the args log below.
+		if refusal := ToolArgumentRefusal(tool, args); refusal != nil {
+			return refusal
+		}
+	}
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
 			"tool": name,
@@ -534,7 +541,6 @@ func (r *ToolRegistry) ExecuteWithContext(
 	mediaStore := r.mediaStore
 	r.mu.RUnlock()
 
-	tool, ok := r.Get(name)
 	if !ok {
 		if canonical, retired := retiredToolCanonicalNames[name]; retired {
 			logger.WarnCF("tool", "Tool call used a retired name",
@@ -578,8 +584,14 @@ func (r *ToolRegistry) ExecuteWithContext(
 	if err := validateToolArgs(tool.Parameters(), args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
 			map[string]any{"tool": name, "error": err.Error()})
-		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
+		refusal := ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
 			WithError(fmt.Errorf("argument validation failed: %w", err))
+		if _, isChange := tool.(ChangeTool); isChange {
+			// The tool never ran, so nothing was saved: a change tool's refusal
+			// carries the FR-030 envelope here too (WU-3 CHECK F01).
+			refusal = FinalizeChangeResult(name, refusal)
+		}
+		return refusal
 	}
 
 	// Inject channel/chatID into ctx so tools read them via ToolChannel(ctx)/ToolChatID(ctx).

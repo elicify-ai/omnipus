@@ -1220,8 +1220,9 @@ func (rc *runContextWithOptions) prepareSkillServices() {
 	// First-boot seed of the embedded default skill set (Spec-6 U3, FR-9.3).
 	// SeedDefaults is idempotent: it only fills in skills that are missing from
 	// the global skills dir and never overwrites existing (possibly user-edited)
-	// skills. A fresh install therefore ships with summarize, skill-authoring,
-	// plan, and daily-briefing without any external files.
+	// skills. A fresh install therefore ships with every package under
+	// pkg/skills/embedded (plan, interview, the Omnipus workflow skills, ...)
+	// without any external files.
 	if seedRes, seedErr := skills.SeedDefaults(skillsGlobalDir); seedErr != nil {
 		slog.Warn("gateway: failed to seed default skills from embed", "error", seedErr)
 	} else if len(seedRes.Seeded) > 0 {
@@ -1345,11 +1346,29 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		SaveConfigLocked: func(c *config.Config) error {
 			return config.SaveConfig(rc.configPath, c)
 		},
-		CredStore:  rc.credStore,
-		ReloadFunc: rc.reloadTrigger,
+		// omnipus-system-agent FR-085: tool writes to providers, MCP servers
+		// and channel instances take the Settings config write lock first
+		// (config lock -> agent-loop lock, the Settings order).
+		LockConfigWrites: func() func() { return lockConfigWrites(rc.runningServices) },
+		CredStore:        rc.credStore,
+		ReloadFunc:       rc.reloadTrigger,
 		// EnsureWorkspaceMains (final-gate H2): create_agent's team join gives the
-		// new member its main chat through the workspace-save path.
-		EnsureWorkspaceMains: rc.runningServices.ensureWorkspaceMains,
+		// new member its main chat through the workspace-save path. Resolved at
+		// call time through the one restAPI (the same method boot stores in
+		// runningServices.ensureWorkspaceMains), so the hook never depends on
+		// which of the two was wired first (FR-041).
+		EnsureWorkspaceMains: func(workspaceID string) error {
+			if rc.runningServices == nil || rc.runningServices.restAPIRef == nil {
+				return errors.New("workspace main provisioning is not wired")
+			}
+			return rc.runningServices.restAPIRef.ensureWorkspaceMains(workspaceID)
+		},
+		UnbindWorkspaceChannels: func(workspaceID string) ([]string, error) {
+			if rc.runningServices == nil || rc.runningServices.restAPIRef == nil {
+				return nil, errors.New("workspace channel cleanup is not wired")
+			}
+			return unbindChannelInstancesForWorkspace(rc.runningServices.restAPIRef, workspaceID)
+		},
 		// DEL-10: the delete_agent cascade uses the loop's one live store and stops
 		// each session first.
 		DeleteSessionStore: func() systools.AgentSessionStore {
@@ -1426,6 +1445,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		SkillInstaller:    rc.sysSkillInstaller,
 		SkillWriter:       rc.sysSkillWriter,
 		ResolveToolPolicy: rc.agentLoop.ResolveRegisteredToolPolicy,
+		GodModeActive:     func() bool { return agent.GodModeActive(rc.agentLoop.GetConfig()) },
 		// ADR-057 U9 changed ListAllSessions' signature to
 		// (limit, offset int, parentSessionID string, flat bool), so it can no
 		// longer be assigned here as a bare method value — this field's type
@@ -1443,12 +1463,22 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		AgentConfigInventory: func() systools.AgentConfigInventory {
 			return sysagentAgentConfigInventory(rc)
 		},
+		ToolCatalog: func() []tools.Tool {
+			return sysagentToolCatalog(rc)
+		},
 		AgentIsLive: func(id string) bool {
 			return sysagentAgentIsLive(rc, id)
 		},
 		AgentActiveRevision: func(id string) string {
 			return sysagentAgentActiveRevision(rc.agentLoop, rc.homePath, id)
 		},
+	}
+	// FR-031: configure_provider's model-listing check calls an operator- or
+	// agent-supplied endpoint; it goes through the same SSRF guard as the
+	// gateway's own provider listings. Assigned only when non-nil so a
+	// disabled guard is never a typed-nil interface.
+	if chk := agent.GetSSRFChecker(rc.agentLoop); chk != nil {
+		sysAgentDeps.URLChecker = chk
 	}
 	rc.agentLoop.WireSysagentDeps(sysAgentDeps)
 

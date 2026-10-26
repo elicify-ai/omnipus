@@ -212,7 +212,7 @@ const goalReferentRule = "Work out what the goal refers to (\"it\", \"that\", \"
 // must be a tool call" plus a surface of exactly those two tools read, to
 // that model, as "call the tools you were given".
 const goalOneDoorRule = "Call exactly ONE of the two, never both in the same response. A question card pauses " +
-	"the whole turn until the user answers it, so only send one you genuinely need answered — never a " +
+	"the whole turn until it is answered, so only send one you genuinely need answered — never a " +
 	"placeholder, a test question, or a request for permission to proceed on a goal that is already clear."
 
 // goalRubricChannelAddendum extends buildGoalRubricNote's text on a

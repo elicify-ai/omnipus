@@ -48,6 +48,10 @@ Task tags are shown in the info panel and List, not on Board cards or Graph node
 
 To start a saved task later, press **Run** on its card (a play symbol), drag it into **In Progress**, or press **Start Task** in the panel. The engine then drives it: the agent works toward the goal, each run is judged against your criteria, and the card's status follows.
 
+### Task runs never ask for approval
+
+A task run never stops to ask you for approval, however you started it (changed 2026-10-13). Tool calls that Auto-approve, an operator `command_rules` rule or an "Always Allow" grant cover run as usual. Any other call that would need approval is refused at once: the task's conversation shows "Not run: needs approval, and task and plan runs never ask.", the agent reports what was blocked, and the task ends **Failed** with that explanation. Helpers the agent starts follow the same rule, and writing into the task's conversation does not change it. To let a task use such a tool, turn Auto-approve on, add a rule, or set the tool to Allow — see [security](security.md#task-plan-scheduled-and-other-unattended-runs). On a host without an enforcing kernel sandbox, Auto-approve runs only read-only shell commands and rule-covered ones, so more runs end blocked there.
+
 ### If the task conversation cannot be created
 
 A queued dispatch, or a new manual start that uses the assigned agent's conversation store, must create its task conversation before handing work to the agent. If that store is unavailable, or creating the conversation returns an error, the start is refused instead of running without a conversation. This applies to both native agents and external command-line agents on those start paths. The refused start consumes no execution attempt, creates no run-history entry, and starts no model request, tool call, or external command.
@@ -78,6 +82,18 @@ The fields on the New Task form, in order.
 | Todos | A checklist that shows its progress on the card | No |
 
 Picking a plan reveals two more fields — the files the task may touch, and whether it assembles parallel work. Those belong to [plans](plans.md).
+
+### Agent checklists
+
+With checklist guidance enabled, agents are instructed to use `set_todos` for every request, including a one-line answer, before their first reply or other tool call. They mark the current item `in_progress`, future items `pending`, and finished items `completed`, updating the full list as work advances and before their final reply. These are prompt instructions, not a guarantee of model compliance; see [shared operating rules](agents.md#shared-operating-rules-for-native-agents) for the registration and permission check, how reload applies changes, and the remaining per-request tool-list limit.
+
+Every item must include `active_form`, a present-participle phrase describing work in progress: for example, `text: "Draft the Q4 summary"` and `active_form: "Drafting the Q4 summary"`. This phrase is stored separately; it does not replace the normal checklist text on the Board. Use `create_task` with dependencies for a durable multi-wave plan while keeping your current working checklist here.
+
+The server applies the same phrase cleanup to `set_todos` and task checklist writes through the API. It removes bidirectional formatting controls (U+202A–U+202E, U+2066–U+2069, U+200E and U+200F), then trims surrounding Unicode whitespace. A result containing only whitespace or invisible Unicode format characters (category `Cf`), such as a zero-width space, counts as absent. Ordinary right-to-left text is unchanged, and joiners needed inside visible emoji, Indic or Arabic text are preserved. The limit is 500 Unicode code points **after** this cleanup.
+
+A supplied `active_form` must be a string: on `set_todos` and through the API (task creation, task updates and checklist replacement alike), JSON `null`, numbers, booleans, arrays and objects are rejected before anything is saved — through the API with an HTTP 400 naming the field (for example `todos[0].active_form`), on `set_todos` as a recoverable tool error the agent can retry. On API writes the phrase stays optional: to omit it, leave the field out or send an empty string; empty and whitespace-only values count as omitted there. On `set_todos` calls the phrase is also required on every item: a call whose item has no usable phrase left after the cleanup above — the field missing, empty, whitespace-only or invisible-only — fails before anything is written, with an error naming the item (for example `todos[0]`) and showing an example phrase; the agent can retry the same call with the phrase filled in. Checklist writes on tasks from the Board or the API keep the phrase optional. A rejected update leaves the previous task unchanged.
+
+The normalized phrase survives saved-task reloads and is included when the checklist is read back. Each call still replaces the entire checklist, so every item of every `set_todos` call must carry `active_form` again; previously supplied phrases are not carried over automatically.
 
 ## Task statuses
 
@@ -125,7 +141,11 @@ Click or tap a card or List row and the task detail panel slides in. The separat
 
 ## Limits and things to watch
 
-A confirmed wrong model (`bad_model`), or a named connection that cannot be set up (`model_route_unavailable`), ends a task **Failed** without consuming an attempt or restarting unchanged. The result names the failing provider/model and the settings to fix. Correct the model/provider pair or the provider's credentials and endpoint settings, then run the task again. These configuration failures are not temporary provider outages.
+A settings reload is not a gateway restart. A task that is already running keeps its run and conversation through the reload; crash recovery does not mark that live run interrupted. If the gateway process actually restarts during a task, the interrupted run ends Failed and does not resume automatically. Retry starts a fresh run.
+
+An agent's `set_todos` scratchpad is a separate checklist card, not another execution of the task it is working on. If the agent uses the task's title for its scratchpad, two cards can have the same title: the assigned task and its working checklist. Creating the checklist does not start another task run.
+
+A named connection that cannot be set up (`model_route_unavailable`), and a confirmed wrong model (`bad_model`) that no backup could absorb — the agent has no backup model, or every model in its chain was rejected this way — end a task **Failed** without consuming an attempt or restarting unchanged. With a backup model configured, a `bad_model` primary does not fail the task: the run continues on the backup, and a fallback notice names both models. The result names the failing provider/model and the settings to fix. Correct the model/provider pair or the provider's credentials and endpoint settings, then run the task again. These configuration failures are not temporary provider outages.
 
 - **A task with no agent cannot run.** The engine skips unassigned tasks; assign one before starting.
 - **The assigned agent must be on the workspace team** — its core members plus anyone reachable through delegation. See [workspaces](workspaces.md).

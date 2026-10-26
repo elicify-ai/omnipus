@@ -7,10 +7,10 @@
 // VirtualAssistantMessageRow, including a streaming row.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, within, waitFor } from '@testing-library/react'
+import { cleanup, render, within, waitFor } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { AssistantRuntimeProvider, useMessagePartText } from '@assistant-ui/react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
 import type { ChatMessage } from '@/store/chat'
@@ -19,7 +19,9 @@ import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { useOmnipusRuntime } from '@/lib/omnipus-runtime'
 import { useToolApprovalStore } from '@/store/toolApproval'
-import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import type { AskUserQuestionCard, GoalStatusFrame, ServerFrame } from '@/lib/api/generated/asyncapi-types'
+import { queryClient } from '@/lib/queryClient'
+import { fetchAgents } from '@/lib/api'
 
 class ResizeObserverStub {
   observe() {}
@@ -75,17 +77,19 @@ vi.mock('./markdown-text', () => ({
 import { ChatScreen } from './ChatScreen'
 
 function Providers({ children }: { children: React.ReactNode }) {
-  const queryClientRef = React.useRef<QueryClient | null>(null)
-  if (!queryClientRef.current) {
-    queryClientRef.current = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  }
   const runtime = useOmnipusRuntime()
   return (
-    <QueryClientProvider client={queryClientRef.current}>
+    <QueryClientProvider client={queryClient}>
       <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
     </QueryClientProvider>
   )
 }
+
+beforeEach(() => { queryClient.clear(); vi.spyOn(Math, 'random').mockReturnValue(0) })
+afterEach(() => {
+  cleanup()
+  queryClient.clear()
+})
 
 function seedMessages(sid: string, messages: ChatMessage[], flags: { streaming: boolean; replaying: boolean }) {
   const bucket = makeBucketMessages(messages)
@@ -248,6 +252,44 @@ describe('live inline indicator', () => {
     expectMarkMotion(bubble, 'thinking')
   })
 
+  it('keeps its chosen phrase when the real suspended identity lookup resolves', async () => {
+    const agents = await fetchAgents()
+    let resolveAgents!: (value: typeof agents) => void
+    const pending = new Promise<typeof agents>((resolve) => { resolveAgents = resolve })
+    vi.mocked(fetchAgents).mockImplementationOnce(() => pending)
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.2)
+    seedMessages('late-status-identity', streamingPair('late-status-identity', 'agent-1'), { streaming: true, replaying: false })
+    const bubble = assistantBubble(await mount())
+    const before = within(bubble).getByTestId('reply-status-indicator')
+    expect(within(before).getByTestId('reply-status-fallback')).toHaveTextContent('Processing your request…')
+    expect(within(before).queryByTestId('agent-icon')).not.toBeInTheDocument()
+    random.mockReturnValue(0.6)
+    await act(async () => resolveAgents(agents))
+    await waitFor(() => expectMarkMotion(bubble, 'thinking'))
+    const after = within(bubble).getByTestId('reply-status-indicator')
+    expect(within(after).getByTestId('reply-status-fallback')).toHaveTextContent('Processing your request…')
+  })
+
+  it('keeps its fallback and animation nodes when the first visible answer token arrives', async () => {
+    const sid = 'status-first-token'
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0.2)
+    seedMessages(sid, streamingPair(sid, 'agent-1'), { streaming: true, replaying: false })
+    const bubble = assistantBubble(await mount())
+    await within(bubble).findByText('Mia')
+    const before = within(bubble).getByTestId('reply-status-indicator')
+    expect(within(before).getByTestId('reply-status-fallback')).toHaveTextContent('Processing your request…')
+    const text = within(before).getByTestId('agent-status-text')
+    const icon = within(before).getByTestId('agent-icon')
+    random.mockReturnValue(0.6)
+    act(() => useChatStore.getState().handleFrame({ type: 'token', session_id: sid, message_id: `${sid}_assistant`, turn_id: `${sid}_turn`, agent_id: 'agent-1', content: 'Here is the first sentence' }))
+    await waitFor(() => expect(useChatStore.getState().sessionsById[sid].messagesById[`${sid}_assistant`].content).toBe('Here is the first sentence'))
+    expect(await within(bubble).findByText('Here is the first sentence')).toBeInTheDocument()
+    const after = within(bubble).getByTestId('reply-status-indicator')
+    expect(within(after).getByTestId('reply-status-fallback')).toHaveTextContent('Processing your request…')
+    expect(within(after).getByTestId('agent-status-text')).toBe(text)
+    expect(within(after).getByTestId('agent-icon')).toBe(icon)
+  })
+
   it('names a guest reply as that guest and does not switch the chat owner', async () => {
     seedMessages('guest-1', streamingPair('guest-1', 'agent-jim'), { streaming: true, replaying: false })
     const bubble = assistantBubble(await mount())
@@ -271,7 +313,7 @@ describe('live inline indicator', () => {
     expectMonogramReply(bubble)
   })
 
-  it('keeps the existing hidden-command label while the phase is Working', async () => {
+  it('keeps the fixed fallback while a hidden command selects Working', async () => {
     const sid = 'work-1'
     const messages = streamingPair(sid, 'agent-1')
     seedMessages(sid, messages, { streaming: true, replaying: false })
@@ -292,9 +334,9 @@ describe('live inline indicator', () => {
       toolCallOrder: [toolCallId],
     }))
     const bubble = assistantBubble(await mount())
-    // Existing label oracle: deriveBashThinkingLabel returns the description
-    // when it is already within 48 characters. The raw command must not appear.
-    expect(within(bubble).getByText(description)).toBeInTheDocument()
+    // Current founder rule: no active form means the one chosen fallback,
+    // not the hidden command's description. The raw command remains hidden.
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
     expect(bubble.textContent).not.toContain('go test')
     expect(bubble.querySelector('.animate-bounce')).toBeNull()
     expectMarkMotion(bubble, 'working')
@@ -310,7 +352,7 @@ describe('live inline indicator', () => {
     }))
     expect(useChatStore.getState().sessionsById[sid]?.toolCalls['tc-correlated'].status).toBe('running')
     const bubble = assistantBubble(await mount())
-    expect(await within(bubble).findByText(description)).toBeInTheDocument()
+    expect(await within(bubble).findByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
     expectMarkMotion(bubble, 'working')
     expectNameOnly(bubble, 'Jim')
     act(() => useToolApprovalStore.setState({ queue: [{
@@ -344,10 +386,8 @@ describe('live inline indicator', () => {
     act(() => useChatStore.getState().startToolCall('tc-phase', tool, params))
     expect(useChatStore.getState().sessionsById[sid]?.toolCalls['tc-phase'].status).toBe('running')
     const bubble = assistantBubble(await mount())
-    // W1-7 / Indicator input mapping: a running tool, not a hidden label,
-    // is the Working discriminator. Use the existing working phrase, stable.
-    expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
-    expect(within(bubble).queryByText('Thinking…')).not.toBeInTheDocument()
+    // A running tool still selects Working motion; copy remains fixed.
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
     expectMarkMotion(bubble, 'working')
     expectNameOnly(bubble, 'Jim')
     act(() => useChatStore.getState().resolveToolCall('tc-phase', 'complete', 'success'))
@@ -365,15 +405,14 @@ describe('live inline indicator', () => {
       action: 'run', run_in_background: true, description, command: 'git status',
     }))
     const bubble = assistantBubble(await mount())
-    expect(within(bubble).getByText(description)).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
     expectMarkMotion(bubble, 'working')
     act(() => useChatPreferencesStore.getState().setVerboseChatEnabled(true))
-    expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
     expect(within(bubble).queryByText(description)).not.toBeInTheDocument()
-    expect(within(bubble).queryByText('Thinking…')).not.toBeInTheDocument()
     expectMarkMotion(bubble, 'working')
     act(() => useChatPreferencesStore.getState().setVerboseChatEnabled(false))
-    expect(within(bubble).getByText(description)).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
     expectMarkMotion(bubble, 'working')
   })
 
@@ -382,7 +421,7 @@ describe('live inline indicator', () => {
   // latest-goal-scalar indicator branch is deleted. The goal frame must live
   // in goalPills (foreground + session bucket) and the streaming message
   // must carry the matching goalId (convertMessage → metadata.custom.goalId).
-  it('preserves the goal phrase without letting it override a real Working phase', async () => {
+  it('uses the fixed fallback for a goal while preserving real Working motion', async () => {
     const sid = 'goal-tool-phase'
     const [userMsg, assistantMsg] = streamingPair(sid, 'agent-jim')
     seedMessages(sid, [userMsg, { ...assistantMsg, goalId: 'goal-tool-phase' }], { streaming: true, replaying: false })
@@ -397,13 +436,13 @@ describe('live inline indicator', () => {
       sessionsById: { ...s.sessionsById, [sid]: { ...s.sessionsById[sid], goalPills: pills } },
     })))
     const bubble = assistantBubble(await mount())
-    expect(within(bubble).getByText('Framing your goal')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
     expectMarkMotion(bubble, 'thinking')
     act(() => useChatStore.getState().startToolCall('tc-goal-tool', 'set_goal', { mode: 'register' }))
-    expect(within(bubble).getByText('Setting acceptance criteria')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
     expectMarkMotion(bubble, 'working')
     act(() => useChatStore.getState().resolveToolCall('tc-goal-tool', 'registered', 'success'))
-    expect(within(bubble).getByText('Framing your goal')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
     expectMarkMotion(bubble, 'thinking')
   })
 
@@ -460,9 +499,7 @@ describe('live inline indicator', () => {
 
   it('draws no animation loop when reduced motion is on, and keeps the Thinking phrase', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
-    // Force a different phrase if a forbidden rotation interval runs.
-    let randomBeat = 0
-    vi.spyOn(Math, 'random').mockImplementation(() => (++randomBeat % 2 ? 0.1 : 0.3))
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: query.includes('prefers-reduced-motion'),
       media: query,
@@ -479,6 +516,8 @@ describe('live inline indicator', () => {
     expect(bubble.querySelector('.animate-bounce')).toBeNull()
     expect(bubble.querySelector('[data-testid="reply-status-indicator"] [data-art]')?.getAttribute('data-art')).toBe('octopus')
     expectMarkMotion(bubble, 'none')
+    let alternate = false
+    random.mockImplementation(() => { alternate = !alternate; return alternate ? 0.1 : 0.3 })
     for (let beat = 0; beat < 4; beat++) {
       await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
       expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
@@ -488,17 +527,83 @@ describe('live inline indicator', () => {
     }
   })
 
-  it('actually advances the normal-motion phrase clock while the reduced-motion clock stays still', async () => {
+  it('keeps the normal-motion fallback fixed across former phrase-clock ticks', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
-    let randomBeat = 0
-    vi.spyOn(Math, 'random').mockImplementation(() => (++randomBeat % 2 ? 0.1 : 0.3))
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
     vi.stubGlobal('matchMedia', (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} }))
     seedMessages('clock-control', streamingPair('clock-control', 'agent-1'), { streaming: true, replaying: false })
     const bubble = assistantBubble(await mount())
-    expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
-    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
-    expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
-    expect(within(bubble).queryByText('Thinking…')).not.toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
+    random.mockClear()
+    let alternate = false
+    random.mockImplementation(() => { alternate = !alternate; return alternate ? 0.1 : 0.3 })
+    await act(async () => { await vi.advanceTimersByTimeAsync(8000) })
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
+    expect(random).not.toHaveBeenCalled()
+    expectMarkMotion(bubble, 'thinking')
+  })
+})
+
+describe('current todo yields to notices in the real live runtime — round 2', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
+    useChatPreferencesStore.getState().setVerboseChatEnabled(false)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+  })
+
+  it.each([
+    ['approval', 'Waiting for your approval — bash', 'waiting'],
+    ['question', 'Waiting for your input', 'waiting'],
+    ['connection', 'Unavailable/reconnecting', 'none'],
+  ] as const)('preserves %s priority over a confirmed item and restores it afterwards', async (notice, copy, motion) => {
+    const sid = `todo-notice-${notice}`
+    seedMessages(sid, streamingPair(sid, 'agent-1'), { streaming: true, replaying: false })
+    const bubble = assistantBubble(await mount())
+    expect(bubble).toHaveAttribute('data-status', 'running') // Real AssistantUI path, not the plain/replay row.
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'tool_call_start', session_id: sid, tool: 'set_todos', call_id: 'notice-todo', params: { outcome: 'Review the report', todos: [{ text: 'Review the sources', status: 'in_progress', active_form: 'Reviewing the sources' }] } })
+      useChatStore.getState().handleFrame({ type: 'tool_call_result', session_id: sid, tool: 'set_todos', call_id: 'notice-todo', status: 'success', result: 'Checklist saved' })
+    })
+    const indicator = within(bubble).getByTestId('reply-status-indicator')
+    await waitFor(() => expect(within(indicator).getByTestId('reply-current-todo').textContent).toBe('Reviewing the sources'))
+    expect(within(indicator).getByText('Working on a checklist item')).toHaveClass('sr-only')
+
+    act(() => {
+      if (notice === 'approval') {
+        useToolApprovalStore.setState({ queue: [{ approvalId: 'notice-approval', toolCallId: 'notice-exec', toolName: 'bash', args: {}, agentId: 'agent-1', sessionId: sid, turnId: `${sid}_turn`, expiresAt: Date.now() + 60_000 }], resolvedIds: [] })
+      } else if (notice === 'question') {
+        const pendingAsk: AskUserQuestionCard = {
+          card_id: 'notice-question', session_id: sid, agent_id: 'agent-1', status: 'pending', created_at: '2026-10-21T12:00:00Z',
+          questions: [{ header: 'Scope', question: 'Continue with this scope?', options: [{ label: 'Continue' }, { label: 'Change scope' }] }],
+        }
+        useChatStore.setState((state) => ({ pendingAsk, sessionsById: { ...state.sessionsById, [sid]: { ...state.sessionsById[sid], pendingAsk } } }))
+      } else {
+        // Keep the running bucket and accepted call: clearing them here would
+        // make the phase-guard mutation invisible, reproducing the old gap.
+        useConnectionStore.setState({ isConnected: false, reconnectPhase: 'reconnecting', reconnectAttempt: 1 })
+      }
+    })
+    expect(useChatStore.getState().sessionsById[sid].isStreaming).toBe(true)
+    expect(useChatStore.getState().sessionsById[sid].toolCalls['notice-todo'].status).toBe('success')
+    expect(within(indicator).getByText(copy, { exact: true })).toBeInTheDocument()
+    expect(within(indicator).queryByTestId('reply-current-todo')).not.toBeInTheDocument()
+    expect(within(indicator).queryByText('Working on a checklist item')).not.toBeInTheDocument()
+    expectMarkMotion(bubble, motion)
+
+    act(() => {
+      useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
+      useChatStore.setState((state) => ({ pendingAsk: null, sessionsById: { ...state.sessionsById, [sid]: { ...state.sessionsById[sid], pendingAsk: null } } }))
+      useConnectionStore.setState({ isConnected: true, reconnectPhase: null, reconnectAttempt: 0, connectionError: null })
+    })
+    await waitFor(() => expect(within(indicator).getByTestId('reply-current-todo').textContent).toBe('Reviewing the sources'))
+    expect(within(indicator).getByText('Working on a checklist item')).toHaveClass('sr-only')
+    expect(within(indicator).queryByText(copy, { exact: true })).not.toBeInTheDocument()
+    expectMarkMotion(bubble, 'thinking')
   })
 })
 
@@ -528,7 +633,7 @@ describe('plain, replay, and idle bubbles', () => {
       seedMessages(sid, messages, { streaming: true, replaying: false })
       const bubble = assistantBubble(await mount())
       expect(await within(bubble).findByText('Jim')).toBeInTheDocument()
-      expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
+      expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent('Thinking…')
       expectMarkMotion(bubble, 'working')
       expectNameOnly(bubble, 'Jim')
       act(() => seedMessages(sid, [messages[0], {
@@ -635,6 +740,79 @@ describe('plain, replay, and idle bubbles', () => {
     } finally {
       if (height) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height)
       if (width) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width)
+    }
+  })
+
+  // Oracle: fix-round-1 dispatch item 3 / SFH F2. The fallback belongs to
+  // the continuous status episode, not to either renderer's component mount.
+  it('keeps the recovered historical fallback identical when the next token hands the same reply to live AssistantMessage', async () => {
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 800 })
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 800 })
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const sid = 'recovered-fallback-handoff'
+    const turnId = 'recovered-running-turn'
+    const messageId = 'recovered-text-answer'
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+    seedMessages(sid, [], { streaming: false, replaying: true })
+    const feed = (frame: ServerFrame) => act(() => useChatStore.getState().handleFrame(frame))
+    try {
+      act(() => {
+        useChatStore.getState().resetSessionForReplay(sid)
+        useChatStore.getState().setReplaying(true)
+      })
+      feed({ type: 'session_snapshot', session_id: sid, seq: 40, boot_id: 'handoff-boot', reason: 'unknown_position' })
+      feed({ type: 'session_state', session_id: sid, user_id: 'operator', pending_approvals: [], emitted_at: '2026-10-22T07:00:00Z', active_turn: { turn_id: turnId, agent_id: 'agent-1', started_at: '2026-10-22T06:59:00Z' } })
+      feed({ type: 'replay_message', session_id: sid, role: 'user', id: 'recovered-request', content: 'Continue the answer' })
+      feed({ type: 'replay_message', session_id: sid, role: 'assistant', id: messageId, content: 'Recovered answer', turn_id: turnId, agent_id: 'agent-1' })
+      feed({ type: 'done', session_id: sid, stats: { frames_emitted: 2 } })
+      feed({ type: 'catch_up_complete', session_id: sid, mode: 'snapshot', seq: 40, boot_id: 'handoff-boot' })
+      const recovered = useChatStore.getState().sessionsById[sid]
+      expect(recovered.activeTurnId).toBe(turnId)
+      expect(recovered.isStreaming).toBe(true)
+      expect(recovered.isReplaying).toBe(false)
+      // ChatMessage.isStreaming is optional; omitted and false are both
+      // historical. Only true selects the separate live renderer.
+      expect(recovered.messagesById[messageId].isStreaming ?? false).toBe(false)
+      expect(recovered.messagesById[messageId].status).toBe('done')
+      expect(recovered.messagesById[messageId].content).toBe('Recovered answer')
+
+      const container = await mount()
+      await waitFor(() => expect(container.querySelector(`[data-message-id="${messageId}"] [data-testid="reply-status-fallback"]`)).not.toBeNull())
+      const historical = container.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement
+      expect(historical.closest('[data-index]'), 'positive control: real historical virtualized row').not.toBeNull()
+      expect(historical.closest('[data-testid="streaming-message-anchor"]')).toBeNull()
+      const fallback = within(historical).getByTestId('reply-status-fallback').textContent
+      expect(fallback, 'initial RNG selects the published first fallback').toBe('Thinking…')
+      expectMarkMotion(historical, 'thinking')
+      expect(within(historical).getByText('Thinking', { exact: true })).toHaveClass('sr-only')
+      expect(within(historical).queryByTestId('reply-current-todo')).toBeNull()
+
+      // A second component-local selection must be observably different. The
+      // invariant is exact equality to the captured phrase, not a phrase regex.
+      random.mockReturnValue(0.6)
+      feed({ type: 'token', session_id: sid, message_id: messageId, turn_id: turnId, content: ' continued live' })
+      await waitFor(() => expect(container.querySelector(`[data-testid="streaming-message-anchor"] [data-message-id="${messageId}"]`)).not.toBeNull())
+      const live = container.querySelector(`[data-testid="streaming-message-anchor"] [data-message-id="${messageId}"]`) as HTMLElement
+      expect(live.closest('[data-index]'), 'positive control: historical row really yielded to live AssistantMessage').toBeNull()
+      expect(container.querySelectorAll(`[data-message-id="${messageId}"]`)).toHaveLength(1)
+      expect(historical.isConnected, 'the test must cross a renderer remount, not just update historical props').toBe(false)
+      const resumed = useChatStore.getState().sessionsById[sid]
+      expect(resumed.activeTurnId).toBe(turnId)
+      expect(resumed.messagesById[messageId].isStreaming).toBe(true)
+      expect(resumed.messagesById[messageId].content).toBe('Recovered answer continued live')
+      expectMarkMotion(live, 'thinking')
+      expect(within(live).getByText('Thinking', { exact: true })).toHaveClass('sr-only')
+      expect(within(live).getByTestId('reply-status-fallback').textContent, 'same continuous status must reuse its recovered fallback across historical → live handoff').toBe(fallback)
+    } finally {
+      cleanup()
+      random.mockRestore()
+      if (height) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'offsetHeight')
+      if (width) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width)
+      else Reflect.deleteProperty(HTMLElement.prototype, 'offsetWidth')
+      vi.stubGlobal('ResizeObserver', ResizeObserverStub)
     }
   })
 })

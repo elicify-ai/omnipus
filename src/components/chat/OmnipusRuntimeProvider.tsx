@@ -7,6 +7,7 @@ import { useOmnipusRuntime } from "@/lib/omnipus-runtime";
 import { useChatStore } from "@/store/chat";
 import { getPendingFirstSend } from "@/store/chat/first-send";
 import { useConnectionStore } from "@/store/connection";
+import { useUiStore } from "@/store/ui";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
 import { useSessionStore, attachSessionCursorFields, attachAlreadyInFlight, noteAttachSent } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
@@ -30,6 +31,7 @@ import { WebServeUI } from "./tools/WebServeUI";
 import { ServeWorkspaceUI } from "./tools/ServeWorkspaceUI";
 import { RunInWorkspaceUI } from "./tools/RunInWorkspaceUI";
 import { SetGoalToolUI } from "./tools/SetGoalToolUI";
+import { ConnectChannelToolUI } from "./tools/ConnectChannelToolUI";
 import {
   BrowserClickUI, BrowserClickUnderscoreUI,
   BrowserTypeUI, BrowserTypeUnderscoreUI,
@@ -210,6 +212,9 @@ function WsLifecycle() {
       onConnected: async () => {
         setConnected(true);
         setConnectionError(null);
+        // Lifecycle recovery must not wait for replay publication: REST may
+        // finish before a held catch_up_complete, and neither depends on the other.
+        void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         // Re-bind any in-flight session to the freshly-opened WS so the
         // gateway's per-connection sessionID is restored. Without this, a
         // browser-suspended WS that auto-reconnects on focus would cause the
@@ -243,6 +248,12 @@ function WsLifecycle() {
         useChatStore.getState().clearStreamingState();
       },
       onError: setConnectionError,
+      onReplayNotice: (sessionId, message) => {
+        const ui = useUiStore.getState();
+        // Reopening the same large chat must not stack persistent notices.
+        if (ui.toasts.some(toast => toast.sessionId === sessionId && toast.message === message)) return;
+        ui.addToast({ sessionId, message, variant: 'default', duration: 0 });
+      },
       // Fix 2: wire reconnect phase changes into the connection store so the
       // chat header banner can show live progress (attempt N / gave_up CTA).
       onReconnectStateChange: (phase, attempt) => setReconnectState(phase, attempt),
@@ -312,6 +323,7 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        *   browser_evaluate  → BrowserEvaluateUnderscoreUI (underscore alias)
        *   browser.evaluate  → BrowserEvaluateUI         (registered dotted name)
        *   set_goal          → SetGoalToolUI             (ADR-082 D9: goal record card, anchored at the call)
+       *   connect_channel   → ConnectChannelToolUI      (BDD-8.4: WhatsApp pairing QR in the requesting chat)
        */}
       <BashOutputUI />
       <ExecLegacyUI />
@@ -350,6 +362,7 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <BrowserEvaluateUI />
       <BrowserEvaluateUnderscoreUI />
       <SetGoalToolUI />
+      <ConnectChannelToolUI />
       <Suspense fallback={null}>
         <LazyDraftLinkToolUIs />
       </Suspense>

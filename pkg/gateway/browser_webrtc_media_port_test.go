@@ -82,23 +82,35 @@ func TestSharedMediaConn_TakenPort_RecordsOperatorVisibleDegradation(t *testing.
 // direction, and it is what keeps this fix from becoming noise: an ordinary
 // install that binds exactly the port it asked for must say nothing at all.
 func TestSharedMediaConn_ConfiguredPortFree_NoDegradationNotice(t *testing.T) {
-	probe, err := net.ListenPacket("udp", ":0")
-	require.NoError(t, err)
-	free := mediaConnPort(t, probe)
-	require.NoError(t, probe.Close())
+	// Draw/close/rebind race: the window between the probe's close and the
+	// production bind can hand the port to another test. Redraw — bounded —
+	// until the bind lands exactly on a freshly drawn port; the oracle (the
+	// configured port binds with no degradation notice) is unchanged.
+	for attempt := 1; attempt <= 5; attempt++ {
+		free := drawFreeUDPPort(t, 5)
 
-	cfg := &config.Config{}
-	cfg.Tools.Browser.WebRTCMediaUDPPort = free
+		cfg := &config.Config{}
+		cfg.Tools.Browser.WebRTCMediaUDPPort = free
 
-	h := &BrowserWSHandler{}
-	conn := h.sharedMediaConn(cfg)
-	require.NotNil(t, conn)
-	t.Cleanup(func() { _ = conn.Close() })
-	require.Equal(t, free, mediaConnPort(t, conn))
+		h := &BrowserWSHandler{}
+		conn := h.sharedMediaConn(cfg)
+		if conn == nil {
+			t.Logf("attempt %d: the production bind failed on the freshly drawn port %d — redrawing", attempt, free)
+			continue
+		}
+		if mediaConnPort(t, conn) != free {
+			t.Logf("attempt %d: port %d was taken before the bind — redrawing", attempt, free)
+			_ = conn.Close()
+			continue
+		}
+		t.Cleanup(func() { _ = conn.Close() })
 
-	assert.Empty(t, h.mediaTransportNotice(),
-		"nothing degraded, so nothing may be reported — a warning on a healthy install trains operators to "+
-			"ignore the one that matters")
+		assert.Empty(t, h.mediaTransportNotice(),
+			"nothing degraded, so nothing may be reported — a warning on a healthy install trains operators to "+
+				"ignore the one that matters")
+		return
+	}
+	t.Fatal("TestSharedMediaConn_ConfiguredPortFree_NoDegradationNotice: no freshly drawn port stayed free through the production bind in 5 attempts")
 }
 
 // TestSharedMediaConn_Unconfigured_NoDegradationNotice pins the laptop
@@ -349,26 +361,36 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 }
 
 func TestSharedMediaTCP_ConfiguredPortBinds(t *testing.T) {
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	probeAddr, probeAddrOk := probe.Addr().(*net.TCPAddr)
-	require.True(t, probeAddrOk, "listener address must be a *net.TCPAddr")
-	free := probeAddr.Port
-	require.NoError(t, probe.Close())
+	// The port comes from the listen/close/reuse idiom; the window between the
+	// draw's close and the production bind is a real race (another test binary
+	// can take the number). Redraw and rebind — bounded — until the production
+	// bind lands EXACTLY on a freshly drawn port; the oracle (the configured
+	// port binds, and binds once) is unchanged.
+	for attempt := 1; attempt <= 5; attempt++ {
+		free := drawFreeTCPPort(t, 5)
 
-	cfg := &config.Config{}
-	cfg.Tools.Browser.WebRTCMediaTCPPort = free
-	cfg.Tools.Browser.WebRTCMediaUDPBindAddress = "127.0.0.1"
+		cfg := &config.Config{}
+		cfg.Tools.Browser.WebRTCMediaTCPPort = free
+		cfg.Tools.Browser.WebRTCMediaUDPBindAddress = "127.0.0.1"
 
-	h := &BrowserWSHandler{}
-	ln := h.sharedMediaTCP(cfg)
-	require.NotNil(t, ln)
-	t.Cleanup(func() { _ = ln.Close() })
-	lnAddr, lnAddrOk := ln.Addr().(*net.TCPAddr)
-	require.True(t, lnAddrOk, "listener address must be a *net.TCPAddr")
-	got := lnAddr.Port
-	require.Equal(t, free, got)
-	require.Same(t, ln, h.sharedMediaTCP(cfg), "ICE-TCP listener must be bound once and reused")
+		h := &BrowserWSHandler{}
+		ln := h.sharedMediaTCP(cfg)
+		if ln == nil {
+			t.Logf("attempt %d: the production bind failed on the freshly drawn port %d — redrawing", attempt, free)
+			continue
+		}
+		lnAddr, lnAddrOk := ln.Addr().(*net.TCPAddr)
+		require.True(t, lnAddrOk, "listener address must be a *net.TCPAddr")
+		if lnAddr.Port != free {
+			t.Logf("attempt %d: port %d was taken before the bind (got %d) — redrawing", attempt, free, lnAddr.Port)
+			_ = ln.Close()
+			continue
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		require.Same(t, ln, h.sharedMediaTCP(cfg), "ICE-TCP listener must be bound once and reused")
+		return
+	}
+	t.Fatal("TestSharedMediaTCP_ConfiguredPortBinds: no freshly drawn port stayed free through the production bind in 5 attempts")
 }
 
 func TestSharedMediaTCP_Unconfigured_ReturnsNil(t *testing.T) {

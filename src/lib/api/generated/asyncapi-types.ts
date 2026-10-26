@@ -109,7 +109,7 @@ export interface WorkflowStart {
 }
 
 export interface SecretRecipientDisplay {
-  kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+  kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
   lines: Array<string>;
 }
 
@@ -149,6 +149,7 @@ export interface SessionStateSecretRequest {
   session_id: string;
   root_session_id?: string;
   state: "pending" | "submitted" | "cancelled" | "stopped" | "interrupted" | "refused";
+  continuation_unconfirmed?: boolean;
   acting_agent_id: string;
   acting_agent_name: string;
   origin_label?: string;
@@ -223,6 +224,7 @@ export interface RoomSnapshotFrame {
   allocated_cost_micro_usd: number;
   allocated_cost_unpriced: boolean;
   complete: boolean;
+  has_older?: boolean;
 }
 
 export interface RoomMetaFrame {
@@ -597,6 +599,7 @@ export interface ReplayMessageFrame {
     state: "discarded";
     reason: "stopped_before_delivery";
   };
+  seq?: number;
   terminal_outcome?: boolean;
 }
 
@@ -672,7 +675,7 @@ export interface ProviderFallbackFrame {
   turn_id: string;
   answered_model: string;
   unavailable_model: string;
-  unavailable_code: "rate_limited" | "model_retired";
+  unavailable_code: "rate_limited" | "model_retired" | "model_not_found";
   seq?: number;
 }
 
@@ -683,7 +686,7 @@ export interface ProviderFallbackNote {
   timestamp: string;
   answered_model?: string;
   unavailable_model?: string;
-  unavailable_code?: "rate_limited" | "model_retired";
+  unavailable_code?: "rate_limited" | "model_retired" | "model_not_found";
   message: string;
 }
 
@@ -797,9 +800,9 @@ export interface AskUserAnswerFrame {
 }
 
 export interface SessionStatePendingApproval {
-  tool_call_id?: string;
-  turn_id?: string;
-  args?: {
+  tool_call_id: string;
+  turn_id: string;
+  args: {
     [key: string]: unknown;
   };
   segments?: Array<CommandSegmentInfo>;
@@ -894,7 +897,7 @@ export interface WhatsAppPairingFrame {
   session_id?: string;
   type: "whatsapp_pairing";
   channel_id: string;
-  status: "waiting" | "code" | "linked" | "timeout" | "error";
+  status: "waiting" | "code" | "linked" | "timeout" | "error" | "stopped";
   qr?: string;
   message?: string;
 }
@@ -910,7 +913,7 @@ export interface WhatsAppPairingSubscribeFrame {
 export interface NotificationFrame {
   type: "notification";
   id: string;
-  notification_type: "schedule_failed" | "knowledge_drift" | "goal_paused";
+  notification_type: "schedule_failed" | "knowledge_drift" | "goal_paused" | "stop_notice";
   title: string;
   body?: string;
   severity: "info" | "warning" | "error";

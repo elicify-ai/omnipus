@@ -24,6 +24,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -167,7 +168,17 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	if directOwner {
 		ctx, entry = ordinaryExecutionContext(ctx)
 	}
+	// A group-chat room request re-checks its room under the room lock before
+	// it is dequeued into a turn (FR-217): a request cancelled by /pause, a
+	// member removal or a room deletion never runs.
+	room, proceed := al.gateRoomRequest(msg)
+	if !proceed {
+		return "", agent, nil
+	}
+	opts.roomCost = al.newTurnRoomMeter(msg)
+	defer func() { runErr = errors.Join(runErr, al.finishRoomTurn(opts.roomCost, runErr)) }()
 	preparation, prepErr := al.prepareOrdinaryExecution(ctx, msg, opts)
+	prepErr = errors.Join(prepErr, room.prepared(prepErr))
 	if errors.Is(prepErr, errOwnerWakeRetained) {
 		// F8: the chat was stopped; the answer stays in its transcript and the
 		// owner is not run. Nothing is reported - a Stop is not a failure.
@@ -191,6 +202,13 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	opts.executionDisposition = d
 	if directOwner {
 		defer func() { runErr = errors.Join(runErr, al.finishExecutionDisposition(d)) }()
+	}
+	if id := inboundMetadata(msg, secretResumeMetadataKey); id != "" {
+		secretRecord, claimed, claimErr := al.SecretRequests().ClaimResume(id, msg.SessionID)
+		if claimErr != nil || !claimed {
+			return "", agent, claimErr
+		}
+		opts.UserMessage = secretrequest.ResumeMessage(secretRecord)
 	}
 	resp, runErr = al.runAgentLoop(ctx, agent, opts)
 	d.recordTurnOutcome(runErr)

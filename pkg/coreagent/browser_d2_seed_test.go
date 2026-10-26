@@ -51,13 +51,15 @@ var d2BrowserVerbs = []string{
 }
 
 // browsingAgents are the seeded agents that hold the browser surface.
-var browsingAgents = []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim}
+// SPEC.md Table (2026-10-22): every ordinary built-in has its column's browser core.
+var browsingAgents = []coreagent.CoreAgentID{
+	coreagent.IDMia, coreagent.IDJim,
+	coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
+}
 
-// zeroBrowserAgents have explicit ADR-090 browser exclusions, which must
-// remain effective even when the global ceiling permits a browser tool.
+// SPEC.md Definitions (2026-10-22): hidden system agents are outside Main/Worker; keep their exclusions.
 var zeroBrowserAgents = []coreagent.CoreAgentID{
-	coreagent.IDOmnipus, coreagent.IDPlanner,
-	coreagent.IDResearcher, coreagent.IDWorker,
+	coreagent.IDOmnipus, coreagent.IDJudge, coreagent.IDPlanSupervisor,
 }
 
 // d2Resolve resolves one (agent, tool) pair through the REAL compositor,
@@ -119,25 +121,22 @@ func TestCoreAgentSeed_UploadIsAskForEveryBrowsingAgent(t *testing.T) {
 	}
 }
 
-// TestCoreAgentSeed_ResearcherHasNoBrowserSurface verifies Researcher uses
-// search_web and fetch_url and has no browser surface by default. Every
-// browser verb checked here must resolve Deny.
+// Historical test name retained; SPEC.md Table (2026-10-22) now grants Researcher the Worker browser core.
 func TestCoreAgentSeed_ResearcherHasNoBrowserSurface(t *testing.T) {
 	for _, agent := range []coreagent.CoreAgentID{coreagent.IDResearcher} {
 		for _, tool := range d2BrowserVerbs {
-			if got := d2Resolve(t, agent, tool); got != "deny" {
-				t.Errorf("(%s, %s) resolves %q, want deny — ADR-090 Researcher uses search/fetch, not browser",
-					agent, tool, got)
+			// SPEC.md Table: all browser_* tools default Allow for Worker.
+			if got := d2Resolve(t, agent, tool); got != "allow" {
+				t.Errorf("(%s, %s) resolves %q, want allow under the Worker column", agent, tool, got)
 			}
 		}
-		if got := d2Resolve(t, agent, "browser_upload_file"); got != "deny" {
-			t.Errorf("(%s, browser_upload_file) resolves %q, want deny", agent, got)
+		// SPEC.md Table: browser_upload_file is the explicit Ask exception.
+		if got := d2Resolve(t, agent, "browser_upload_file"); got != "ask" {
+			t.Errorf("(%s, browser_upload_file) resolves %q, want ask", agent, got)
 		}
-		if got := d2Resolve(t, agent, "browser_evaluate"); got != "deny" {
-			t.Errorf("(%s, browser_evaluate) resolves %q, want \"deny\". The research tier's "+
-				"ten-allow/one-deny shape is a least-privilege judgement about arbitrary code, and "+
-				"D2's verbs were granted precisely BECAUSE none of them is arbitrary-code-adjacent. "+
-				"Widening it here would take the judgement with them", agent, got)
+		// SPEC.md Table: 'all browser_*' includes browser_evaluate.
+		if got := d2Resolve(t, agent, "browser_evaluate"); got != "allow" {
+			t.Errorf("(%s, browser_evaluate) resolves %q, want allow", agent, got)
 		}
 	}
 }

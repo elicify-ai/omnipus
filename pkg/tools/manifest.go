@@ -166,16 +166,22 @@ var administrativeToolNames = map[string]struct{}{
 	// state. Classifying it here narrows only ToolSearch's speculative
 	// cross-category promotion; it is NOT a policy mechanism (the tool's
 	// policy is the ordinary two-level ask) and does not make it Admin-only.
-	"environment_setup":  {},
-	"delete_agent":       {},
-	"delete_task":        {},
-	"delete_workspace":   {},
-	"remove_mcp_server":  {},
-	"remove_skill":       {},
-	"disable_channel":    {},
-	"enable_channel":     {},
-	"add_mcp_server":     {},
-	"configure_channel":  {},
+	"environment_setup": {},
+	"delete_agent":      {},
+	"delete_task":       {},
+	"delete_workspace":  {},
+	"remove_mcp_server": {},
+	// remove_secret (omnipus-system-agent FR-077, WU-6): deletes a stored
+	// credential version install-wide; Omnipus only, ships ask.
+	"remove_secret":     {},
+	"remove_skill":      {},
+	"disable_channel":   {},
+	"enable_channel":    {},
+	"add_mcp_server":    {},
+	"configure_channel": {},
+	// connect_channel (omnipus-system-agent FR-080, WU-7): saves, binds,
+	// enables and live-starts a channel install-wide; Omnipus only, ships ask.
+	"connect_channel":    {},
 	"configure_provider": {},
 	"set_config":         {},
 	"stop_plan":          {},
@@ -188,15 +194,7 @@ var administrativeToolNames = map[string]struct{}{
 // NOT in administrativeToolNames — so a future tool matching the pattern
 // fails the build until a human records why it's exempt, rather than
 // silently passing it through.
-var administrativeExemptNames = map[string]string{
-	// Forward-reserved by WU-2 in the static catalogue; the tool itself is
-	// implemented later (omnipus-system-agent FR-077). Until then it has no
-	// executable tool and no manifest entry, so ToolSearch cannot surface it,
-	// and its guard is policy: it ships ask and is on the Auto ask-list
-	// (FR-021). Re-adjudicate it into administrativeToolNames when the tool
-	// lands.
-	"remove_secret": "forward-reserved, not yet implemented (FR-077); guarded by ask + Auto ask-list (FR-021)",
-}
+var administrativeExemptNames = map[string]string{}
 
 // isAdministrativeToolName reports whether name is in the drift-tested
 // destructive-and-install-wide set (ADR-071 §3.2.1).

@@ -1116,6 +1116,8 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 		return steer.DispatchResult{State: steer.DispatchRunning, Generation: gen}, nil
 	}
 
+	secretInputs := al.queuedSecretWakeItems(claim)
+	hasOrdinaryInput := len(rec.PendingUserMessages) > 0
 	ts, buildErr := al.reconstructSteeredTurn(rec, nil)
 	if buildErr != nil {
 		al.drainSteerQueue(claim)
@@ -1161,6 +1163,10 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 	}
 	if al.steering != nil {
 		al.steering.reopenScopeForGeneration(sessionID, gen)
+	}
+	if consumeErr := al.consumePromotedSecretWakes(ts, claim, secretInputs, hasOrdinaryInput); consumeErr != nil {
+		al.activeTurnStates.CompareAndDelete(sessionID, ts)
+		return steer.DispatchResult{}, errors.Join(consumeErr, al.finishExecutionDisposition(ts.opts.executionDisposition))
 	}
 	if rec.SteeredBy != nil {
 		al.deliverSubagentState(rec.SteeringSessionID(), rec, string(session.LifecycleRunning), nil)

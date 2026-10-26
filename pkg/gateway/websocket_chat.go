@@ -16,7 +16,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/validation"
@@ -517,7 +516,9 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 		// saved, naming the agents (CHECK F02). An unknown session id
 		// resolves no owner here; the session checks below reject it.
 		if owner := hcm.existingSessionOwner(); owner != "" {
-			if hcm.targetAgentID != "" && !strings.EqualFold(hcm.targetAgentID, owner) {
+			// #1330: only the requested system ID folds above; ordinary IDs
+			// must match the stored canonical owner exactly before any write.
+			if hcm.targetAgentID != "" && hcm.targetAgentID != owner {
 				logsafeWarn("ws: rejecting message frame whose agent_id conflicts with the session owner",
 					"agent_id", hcm.targetAgentID, "owner", owner, "session_id", hcm.frameSessionID)
 				hcm.sendResolveRefusal(sessionOwnerConflictRefusal(owner, hcm.targetAgentID))
@@ -546,6 +547,14 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 			Message: agentMustBeNamed,
 		})
 		return true
+	}
+	// New-chat admission must finish before minting or publishing anything.
+	if hcm.frameSessionID == "" {
+		if _, registered := hcm.h.agentLoop.GetRegistry().GetAgent(hcm.targetAgentID); !registered {
+			logsafeWarn("ws: rejecting new-chat frame for an unknown agent", "agent_id", hcm.targetAgentID)
+			hcm.sendResolveRefusal(fmt.Sprintf("the requested agent is not available: %q", hcm.targetAgentID))
+			return true
+		}
 	}
 	if isWorkerAgentID(hcm.h.agentLoop.GetConfig(), hcm.targetAgentID) && !hcm.addressesExistingHelperOf(hcm.targetAgentID) {
 		// An explicit agent_id that resolves to a worker is illegitimate: a worker
@@ -853,8 +862,8 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 	return false
 }
 
-// adoptExistingSession validates a client-supplied session_id, re-stamps the
-// active workspace, and binds the connection to the session for live
+// adoptExistingSession validates a client-supplied session_id, refuses a
+// different workspace, and binds the connection to the session for live
 // delivery. Returns true when the message was rejected.
 func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
 	// Final-gate M4: a stale tab must not keep chatting in a main the pair is no
@@ -876,40 +885,13 @@ func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
 		})
 		return true
 	}
-	// M4: track the ACTIVE workspace on every message, not just the first
-	// one. The SPA resends the CURRENTLY active workspace_id on every
-	// outbound frame (src/store/chat.ts sendMessage, read live from
-	// useWorkspacesStore) specifically so a task/delegation this turn
-	// creates lands on whatever workspace the operator is looking at
-	// right now — including an ongoing chat session that started in one
-	// workspace and is continuing in another. A stale "first binding
-	// wins" rule broke that: a delegation edge wired on a workspace's
-	// Team tab AFTER the session's first bind would never be consulted
-	// by resolveEffectiveWorkspaceID (pkg/agent/loop.go), which reads
-	// this same session meta fresh every turn — so the UI's "Saved just
-	// now" was genuine (see TestWorkspaceDelegation_EdgeWiredViaTeamTabPersistsForLiveSession)
-	// but the running session kept enforcing/advertising delegation against its
-	// ORIGINAL workspace until the operator started a brand new session.
-	// Only skip the rewrite when this message carries no workspace_id at
-	// all (workspaceID == "") — an absent value must never blank out an
-	// existing binding (e.g. a non-workspace-aware channel message
-	// resuming a workspace-bound session), it just leaves it as-is.
-	if hcm.workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID != hcm.workspaceID {
-		// FR-003: an Omnipus chat lives in the default workspace only; a frame
-		// naming another workspace must not re-bind it there.
-		if sessionIsOmnipusChat(existingMeta) {
-			home := hcm.h.home
-			if home == "" {
-				home = config.OmnipusHomeDir()
-			}
-			if hcm.refuseOmnipusChat(home, string(coreagent.IDOmnipus), hcm.workspaceID, hcm.sessionID) {
-				return true
-			}
-		}
-		wsCopy := hcm.workspaceID
-		if err := hcm.store.SetMeta(hcm.sessionID, session.MetaPatch{WorkspaceID: &wsCopy}); err != nil {
-			logsafeWarn("ws: could not bind workspace to session", "session_id", hcm.sessionID, "error", err)
-		}
+	if err := session.ValidateWorkspaceReuse(existingMeta, hcm.workspaceID); err != nil {
+		sid := hcm.sessionID
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type: string(generated.WsFrameTypeError), SessionId: &sid,
+			Message: session.ErrWorkspaceImmutable.Error(),
+		})
+		return true
 	}
 	// Track for streamer, and (#823) bind this connection to the
 	// session's hub for live delivery if it is not bound to any
@@ -1176,11 +1158,6 @@ func (hcm *wsHandlerHandleChatMessage) addressesExistingHelperOf(workerID string
 		return false
 	}
 	return rec.SteeredBy != nil && rec.AgentID == workerID
-}
-
-// sessionIsOmnipusChat reports whether meta is a chat owned by Omnipus.
-func sessionIsOmnipusChat(meta *session.UnifiedMeta) bool {
-	return meta != nil && len(meta.AgentIDs) > 0 && meta.AgentIDs[0] == string(coreagent.IDOmnipus)
 }
 
 // refuseOmnipusChat applies omnipusChatRefusal at a WebSocket door: it sends

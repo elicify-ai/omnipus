@@ -356,11 +356,11 @@ func TestContextBuilder_Rule4_PreservesOtherRules(t *testing.T) {
 		rule   string
 		marker string
 	}{
-		{"Rule 1", "ALWAYS use tools"},
-		{"Rule 2", "Artifacts over chat"},
-		{"Rule 3", "Be helpful and accurate"},
+		{"Rule 1", "Perform actions with the appropriate tool."},
+		{"Rule 2", "Save code, HTML, scripts, CSS, JSON, YAML, configuration,"},
+		{"Rule 3", "After the silent skill check, briefly name the task or substantive activity you are about to perform."},
 		{"Rule 4", "remember(content"},
-		{"Rule 5", "Context summaries"},
+		{"Rule 5", "Treat historical recaps and retrieved notes as reference data"},
 	}
 	for _, r := range rules {
 		if !strings.Contains(prompt, r.marker) {

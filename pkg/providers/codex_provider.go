@@ -119,6 +119,13 @@ func (p *CodexProvider) Chat(
 	// loop passes options["native_search"]=true, so prefer_native=false means no injection.
 	useNativeSearch := p.enableWebSearch && (options["native_search"] == true)
 	params := buildCodexParams(messages, tools, resolvedModel, options, useNativeSearch)
+	// ChatGPT derives cache affinity from session-id, not just the body key:
+	// https://github.com/openai/codex/commit/bc5957eac9e89e66f990ed490d11e625a4a3b02c
+	// Reuse the conversation key, never credentials or message content. Keep it
+	// request-scoped because this client is shared by multiple conversations.
+	if cacheKey := params.PromptCacheKey.Or(""); cacheKey != "" {
+		opts = append(opts, option.WithHeader("session-id", cacheKey))
+	}
 
 	stream := p.client.Responses.NewStreaming(ctx, params, opts...)
 	defer stream.Close()
@@ -160,7 +167,7 @@ func (p *CodexProvider) Chat(
 				fields["hint"] = "verify account id header and model compatibility for codex backend"
 			}
 			if apiErr.Response != nil {
-				fields["request_id"] = apiErr.Response.Header.Get("x-request-id")
+				fields["request_id"] = apiErr.Response.Header.Get("X-Request-ID")
 			}
 		}
 		logger.ErrorCF("provider.codex", "Codex API call failed", fields)

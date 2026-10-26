@@ -47,11 +47,26 @@ func (al *AgentLoop) rebuildChannelSessionIndex() {
 	if al.sharedSessionStore == nil {
 		return
 	}
-	sessions, _ := al.sharedSessionStore.ListSessions()
-	for _, s := range sessions {
-		if s.Channel != "" && s.Channel != "webchat" && s.PeerID != "" {
-			al.channelSessionIdx.Store(s.Channel+"/"+s.PeerID, s.ID)
+	sessions, err := al.sharedSessionStore.ListSessions()
+	if err != nil {
+		logger.WarnCF("agent", "channel conversation index could not be restored", map[string]any{"error": err.Error()})
+		return
+	}
+	sort.SliceStable(sessions, func(i, j int) bool {
+		if sessions[i].CreatedAt.Equal(sessions[j].CreatedAt) {
+			return sessions[i].ID > sessions[j].ID
 		}
+		return sessions[i].CreatedAt.After(sessions[j].CreatedAt)
+	})
+	for _, s := range sessions {
+		if s.Channel == "" || s.Channel == "webchat" || s.PeerID == "" {
+			continue
+		}
+		instanceID := s.InstanceID
+		if instanceID == "" {
+			instanceID = s.Channel
+		}
+		al.channelSessionIdx.LoadOrStore(instanceID+"/"+s.PeerID, s.ID)
 	}
 }
 
@@ -59,8 +74,8 @@ func (al *AgentLoop) rebuildChannelSessionIndex() {
 // creating a new session in the shared store if none exists yet.
 // workspaceID is stamped onto newly-created sessions when non-empty (ADR-029
 // FR-022: a session created by a bound channel instance inherits the instance's
-// workspace_id). Already-existing sessions are NOT patched — the index hit
-// returns the existing ID unchanged (workspace_id was set at creation time).
+// workspace_id). An index hit is reused only for the same workspace and agent;
+// a binding change creates a different conversation, preserving the old archive.
 // Returns "" if the shared store is unavailable or inputs are empty.
 func (al *AgentLoop) resolveOrCreateChannelSession(
 	channel, instanceID, chatID, agentID, displayName, workspaceID string,
@@ -80,10 +95,17 @@ func (al *AgentLoop) resolveOrCreateChannelSession(
 	key := indexID + "/" + chatID
 	if v, ok := al.channelSessionIdx.Load(key); ok {
 		if s, ok := v.(string); ok {
-			return s
+			meta, err := al.sharedSessionStore.GetMeta(s)
+			if err != nil {
+				logger.WarnCF("agent", "channel conversation could not be read", map[string]any{"session_id": s, "error": err.Error()})
+				return ""
+			}
+			if meta.WorkspaceID == workspaceID && meta.AgentID == agentID {
+				return s
+			}
+		} else {
+			logger.ErrorCF("agent", "channelSessionIdx: invalid cached identity", map[string]any{"key": key})
 		}
-		logger.ErrorCF("agent", "channelSessionIdx: invariant violated — unexpected value type, treating as cache miss",
-			map[string]any{"key": key, "got_type": fmt.Sprintf("%T", v)})
 	}
 	title := displayName
 	if title == "" {
@@ -108,6 +130,7 @@ func (al *AgentLoop) resolveOrCreateChannelSession(
 		); patchErr != nil {
 			logger.WarnCF("agent", "Failed to stamp workspace_id on channel session",
 				map[string]any{"session_id": meta.ID, "workspace_id": workspaceID, "error": patchErr.Error()})
+			return ""
 		}
 	}
 	al.channelSessionIdx.Store(key, meta.ID)

@@ -770,7 +770,7 @@ export interface paths {
         get: operations["getGlobalToolPolicies"];
         /**
          * Update global tool policies
-         * @description Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15).
+         * @description Persists new global tool policies to config.json under the sandbox key and waits until the running-agent reload has finished. Changes are audit-logged (SEC-15). HTTP 200 means the policies were saved and the reload completed and was confirmed, so running agents are enforcing the saved policies. A reload that fails, or that does not confirm, does not roll the save back and is not HTTP 200: the response is 503 with ErrorResponse. This operation is not the dev_mode_bypass guard.
          */
         put: operations["updateGlobalToolPolicies"];
         post?: never;
@@ -1155,7 +1155,7 @@ export interface paths {
         get?: never;
         /**
          * Enable a channel
-         * @description Sets the channel's enabled flag to true in config.
+         * @description Sets the channel's enabled flag to true in config. An absent body or {} is an ordinary enable that grants no chat ownership. A pairing_retry body is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the caller must own the session and the request/session pair must be the channel's recorded pairing owner; the next pairing attempt is claimed for that chat before the channel is enabled. A refused Retry enables nothing and changes no ownership; a disable that already succeeded is not rolled back, so the channel stays disabled.
          */
         put: operations["enableChannel"];
         post?: never;
@@ -2657,7 +2657,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a workspace by ID */
+        /**
+         * Get a workspace by ID
+         * @description Reads the workspace and makes one idempotent main-chat preparation attempt for each currently eligible member. A preparation failure does not undo saved membership or fail the workspace read: that member has main_session_error instead of main_session_id. Repeating this read retries preparation after storage is repaired; unreadable or mismatched saved identities are never replaced.
+         */
         get: operations["getWorkspace"];
         /** Update a workspace (partial update — absent fields unchanged) */
         put: operations["updateWorkspace"];
@@ -3939,7 +3942,7 @@ export interface paths {
         put?: never;
         /**
          * Submit (or cancel) a secret card
-         * @description Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of `values` or `cancel: true`. All checks run before any write; any failure writes nothing. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
+         * @description Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of `values` or `cancel: true`. All trust and payload checks run before the atomic store publication; a refusal or failed save writes no values. After publication, a metadata or continuation-dispatch failure returns 503 with state submitted and the committed references. The submission IS saved; boot or chat attach retries an undelivered continuation. If the request service or its saved state is unavailable before this attempt reaches publication, 503 instead carries an ErrorResponse: this attempt stored no values and returns no authoritative state. It does not prove that no request or earlier submission exists; read the state, or retry the same request id once available, and never resend values automatically. A repeated submit is idempotent and returns 409 with the same committed state, without storing another version. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
          */
         post: operations["submitSecretRequest"];
         delete?: never;
@@ -4017,7 +4020,7 @@ export interface paths {
         };
         /**
          * List a workspace's rooms
-         * @description Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+         * @description Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md). A storage or read failure is an explicit 500 with the error body, never 200 with an empty list (#1314).
          */
         get: operations["listWorkspaceRooms"];
         put?: never;
@@ -4083,7 +4086,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Read a backward page of room history
+         * @description #1332. Read the complete retained transcript, including entries older than the newest 10,000 returned by attach. With before_seq omitted, select the newest page including the newest entry. Otherwise select only entries with seq strictly less than before_seq. Return the newest limit eligible entries in strictly ascending seq order. A cursor need not equal an entry sequence; gaps do not prove that older entries exist.
+         *     The newest entry sequence is the greatest actual entry seq in the room at the locked read, or 0 for an empty room, not the room stream's high-water sequence. A cursor greater than that entry sequence is a 400, never clamped. Select entries, continuation and delivery projections from the same room-locked view. Paging does not change entries, membership, the live stream cursor or the forward attach subscription.
+         *     Uses exactly the existing authenticated room-read access and room-open path. Authenticate first, validate limit, validate before_seq syntax, open the room, then check the cursor's room-dependent upper bound. Query rules apply with inbound validation enabled or disabled. Missing, invalid or deleted rooms and missing workspaces return the existing 404 ErrorResponse with error "no such group chat". Paused, read-only and hidden-but-not-deleted rooms remain readable while the room and workspace exist. Storage/recovery failures remain errors, normally 500, never successful empty pages. No new reader-membership model or 403.
+         *     Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 400 {"error":"limit must be an integer from 1 to 1000"}. Invalid, empty, duplicated, overflowing or non-positive before_seq returns exactly 400 {"error":"before_seq must be a positive int64 integer"}. A valid positive cursor beyond the newest entry sequence returns exactly 400 {"error":"before_seq must not be greater than the newest entry seq"}. These use the existing ErrorResponse with no additional error fields.
+         */
+        get: operations["getRoomHistory"];
         put?: never;
         /**
          * Post a message into a room
@@ -8873,7 +8883,7 @@ export interface components {
              */
             type: "Main";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -8960,7 +8970,7 @@ export interface components {
              */
             type: "Subagent";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -9039,7 +9049,7 @@ export interface components {
              */
             type: "subagent_3p";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -9104,7 +9114,7 @@ export interface components {
             mcp_servers?: components["schemas"]["AgentMCPBinding"][];
             tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
-             * @description New display name. Rejected on locked agents.
+             * @description New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Renamed Agent
              */
             name?: string;
@@ -12575,6 +12585,25 @@ export interface components {
             cli_version?: string;
         };
         /**
+         * ChannelEnableRequest
+         * @description Optional body of PUT /api/v1/channels/{id}/enable. An absent body or {} is an ordinary enable and grants no chat ownership of a pairing. pairing_retry is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the gateway proves the caller owns session_id and that the request/session pair is the channel's recorded pairing owner, then claims the next pairing attempt for that chat before enabling. A WebSocket subscription never grants this ownership.
+         */
+        ChannelEnableRequest: {
+            /** @description The original connect call and chat of the pairing being retried (not newly minted identifiers). Compared verbatim. A mismatch, a stale owner or a competing attempt is refused with 409 pairing_retry_conflict and nothing is enabled. */
+            pairing_retry?: {
+                /**
+                 * @description The connect_channel tool-call ID that started the pairing.
+                 * @example original-connect-call-id
+                 */
+                request_id: string;
+                /**
+                 * @description The chat session that started the pairing.
+                 * @example requesting-chat-id
+                 */
+                session_id: string;
+            };
+        };
+        /**
          * ChannelEnabledResponse
          * @description Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
          */
@@ -14139,6 +14168,11 @@ export interface components {
              */
             text: string;
             /**
+             * @description Optional phrasing for the item while it is in progress.
+             * @example Drafting the summary section
+             */
+            active_form?: string;
+            /**
              * @description Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
              * @example pending
              * @enum {string}
@@ -14965,7 +14999,7 @@ export interface components {
         };
         /**
          * Notification
-         * @description A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+         * @description A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures, knowledge-base drift repair (ADR-067 FR-038a), and operational Stop outcomes; the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
          */
         Notification: {
             id: string;
@@ -14973,9 +15007,10 @@ export interface components {
              * @description The event class. Extensible; consumers must tolerate unknown values.
              *
              *     "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+             *     "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
              * @enum {string}
              */
-            type: "schedule_failed" | "knowledge_drift" | "goal_paused";
+            type: "schedule_failed" | "knowledge_drift" | "goal_paused" | "stop_notice";
             title: string;
             /** @description Optional detail (e.g. the failure reason). */
             body?: string;
@@ -15122,6 +15157,8 @@ export interface components {
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             readonly main_session_id?: string;
+            /** @description Safe, server-classified reason why this eligible member's main chat could not be prepared or resolved. Omitted when main_session_id is present or the member is ineligible. Contains no raw error text, filesystem paths, file names, session IDs or stored identity values. */
+            readonly main_session_error?: string;
             heartbeat?: components["schemas"]["WorkspaceMemberHeartbeat"];
             /** @description Display-only: when true the sidebar omits this member's row in this workspace, but the member stays a full team member — messageable, delegable, @-addressable; main and work untouched. Merge rules inside an incoming member config: absent => the stored flag is preserved (a heartbeat save never un-hides). Present with heartbeat absent (a pure hide/show) => the stored heartbeat is preserved unchanged. An entry with neither field ({}) keeps the ordinary replace behaviour: the stored heartbeat is cleared and the flag is still preserved by the absent rule. A heartbeat that IS present is always replaced wholesale, never merged field-by-field. Off-team entries are garbage-collected, so removing a member clears the flag and re-adding the agent starts visible. */
             hidden_from_sidebar?: boolean;
@@ -17936,7 +17973,7 @@ export interface components {
         } & (unknown | unknown);
         /**
          * SecretRequestState
-         * @description Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Absence is never read as success.
+         * @description Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
          */
         SecretRequestState: {
             request_id: string;
@@ -17954,8 +17991,11 @@ export interface components {
         SecretNameEntry: {
             /** @description Reference name of this version. */
             reference: string;
-            /** @enum {string} */
-            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+            /**
+             * @description Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
+             * @enum {string}
+             */
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
             /** Format: int64 */
             version: number;
             recipient: components["schemas"]["SecretRecipientDisplay"];
@@ -18043,6 +18083,22 @@ export interface components {
             text: string;
             /** @description Agent ids picked in the @-picker, or the reserved value `all`. */
             mentions: string[];
+        };
+        /**
+         * RoomHistoryResponse
+         * @description One backward page of the complete retained room transcript (#1332). Select the newest entries eligible for the exclusive before_seq cursor and applied limit, then return them in strictly ascending entry seq order. An omitted cursor includes the newest entry. This page does not change the live room stream position or the forward attach subscription.
+         *     has_older is true exactly when another actual eligible entry precedes this page, not merely when the page is full or sequence numbers have gaps. next_before_seq is present if and only if has_older is true and equals the first returned entry's seq. Otherwise omit it, never send null or zero. An empty page is entries: [] with has_older: false and no next_before_seq. These conditional continuation rules are producer/consumer invariants; structural schema validation alone does not prove them.
+         */
+        RoomHistoryResponse: {
+            /** @description The newest eligible entries, returned oldest to newest in strictly ascending seq order, with at most the applied limit. Always present and non-null, including an empty array at the beginning of history. Every entry belongs to the requested room and includes its existing delivery projection. */
+            entries: components["schemas"]["RoomEntry"][];
+            /** @description True exactly when another actual eligible entry precedes the first returned entry. False for an empty page or when the beginning of history has been reached, even if the page is full. */
+            has_older: boolean;
+            /**
+             * Format: int64
+             * @description Present if and only if has_older is true; exactly the first returned entry's seq, to use as the next exclusive before_seq cursor. Omitted when has_older is false; never null or zero.
+             */
+            next_before_seq?: number;
         };
         /**
          * AgentDependency
@@ -18406,16 +18462,64 @@ export interface components {
         };
         /**
          * SecretRecipientDisplay
-         * @description Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+         * @description Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
          */
         SecretRecipientDisplay: {
             /**
              * @description Recipient kind.
              * @enum {string}
              */
-            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
             /** @description Display lines, in order. Never null, never empty. */
             lines: string[];
+        };
+        /**
+         * RoomEntryAuthor
+         * @description Author of a room entry (spec omnipus-system-agent K26): the person (kind `user`) or a member agent (kind `agent`, with agent_id). Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntryAuthor) — keep both copies in sync by hand.
+         */
+        RoomEntryAuthor: {
+            /** @enum {string} */
+            kind: "user" | "agent";
+            /** @description Present iff kind is `agent`. */
+            agent_id?: string;
+        };
+        /**
+         * RoomDeliveryState
+         * @description State of one (room message, member) delivery (spec omnipus-system-agent K27, §6.11; FR-169, FR-201, FR-213). request_id is the stable delivery id, which is also the receiver's request id. The values are exactly the §6.11 states; the UI labels are in the §6.11 table. Anything the server cannot prove after a restart is `unknown`, never `working`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomDeliveryState) — keep both copies in sync by hand.
+         */
+        RoomDeliveryState: {
+            /** @description The member agent. */
+            agent_id: string;
+            request_id: string;
+            /** @enum {string} */
+            state: "recorded" | "awaiting_approval" | "admitted" | "held" | "working" | "waiting_on_user" | "answered" | "refused" | "failed" | "interrupted" | "unavailable" | "cancelled" | "unknown";
+            /** @description Optional reason, e.g. `rate_limit` or `removed`. */
+            reason?: string;
+        };
+        /**
+         * RoomEntry
+         * @description One entry of a room transcript (spec omnipus-system-agent K26; FR-166). Group entries carry the authoring agent and the resolved addressees. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntry) — keep both copies in sync by hand.
+         */
+        RoomEntry: {
+            id: string;
+            room_id: string;
+            /**
+             * Format: int64
+             * @description Position in the room transcript; strictly increasing.
+             */
+            seq: number;
+            /** @description Echo of RoomMessageRequest.client_message_id for a person's entry. */
+            client_message_id?: string;
+            author: components["schemas"]["RoomEntryAuthor"];
+            text: string;
+            /** @description Resolved addressee agent ids. Never null. */
+            addressees: string[];
+            /** @description True for an answer to work consumed before a /pause; such an answer never forwards its mentions (§6.11). */
+            after_pause: boolean;
+            /** @description Per-member delivery states for this entry. Never null. */
+            deliveries: components["schemas"]["RoomDeliveryState"][];
+            /** Format: date-time */
+            timestamp: string;
         };
     };
     responses: {
@@ -19991,7 +20095,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated global tool policies. */
+            /** @description The policies were saved and the in-memory reload completed and was confirmed. Running agents are enforcing the returned policies. This status is not used when the save succeeded but the reload failed or did not confirm. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -20010,7 +20114,20 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            503: components["responses"]["503BypassActive"];
+            /** @description The policies were saved and were not rolled back, but they could not be applied to running agents because the reload failed or did not confirm. Retrying the same update, or restarting Omnipus, is the recovery. This 503 is not 503BypassActive and does not mean dev_mode_bypass refused the write. The error field is exactly "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus." No other field is required. The response must not say the write was undone. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus."
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     getExecProxyStatus: {
@@ -20965,9 +21082,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ChannelEnableRequest"];
+            };
+        };
         responses: {
-            /** @description Channel enable state updated. */
+            /** @description Channel enable state updated. For a Retry this confirms ownership admission and enable acceptance only, not QR readiness, linking or message delivery. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -20976,7 +21097,9 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -20986,6 +21109,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description code pairing_retry_conflict: this chat can no longer retry this pairing (missing, stale or mismatched ownership, or a competing attempt). Nothing was enabled and no ownership changed. code pairing_in_progress: an ordinary enable of a WhatsApp connector while another of its pairings is starting, running or stopping. Nothing was changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The enable could not be completed. The error text says which state is saved: the configuration could not be saved or reloaded; the connection is enabled but its restart could not be confirmed yet (a Retry's pairing keeps its chat and can still start); or the connection is enabled but its reserved pairing was cancelled before it started (nothing else starts). Never a refusal before effects, which is 404 or 409. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     disableChannel: {
@@ -27068,6 +27210,15 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description Saved request state is unavailable (the service is not ready, or saved state could not be read or reconciled). This is not absence and not success; retrying this read is safe. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     submitSecretRequest: {
@@ -27116,6 +27267,24 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description The save failed before publication. No submitted values were stored; the request remains pending. The error is value-free. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description One of two bodies. A SecretRequestState body means the submission IS committed, but post-commit metadata or continuation dispatch is not confirmed: it has state submitted and the committed reference_names. Boot or chat attach retries an undelivered continuation; re-submitting returns 409 with the same state and never stores another version. An ErrorResponse body means the service or saved request state was unavailable before this attempt reached publication: this attempt committed no values and no authoritative state is returned. A pending or earlier submitted request may still exist; retry the same request id once available and never resend values automatically. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"] | components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     listSecrets: {
@@ -27137,6 +27306,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     updateSecretOptions: {
@@ -27168,6 +27338,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     getAgentDependencies: {
@@ -27223,6 +27394,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     createRoom: {
@@ -27254,6 +27426,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     getRoom: {
@@ -27280,6 +27453,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     deleteRoom: {
@@ -27305,6 +27479,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     updateRoomMembers: {
@@ -27336,6 +27511,39 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getRoomHistory: {
+        parameters: {
+            query?: {
+                /** @description Exclusive entry-sequence boundary, with no default. Omit for the newest page. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, signed int64 overflow and repeated occurrences (even identical ones) are rejected with the exact before_seq syntax 400 documented above. Must not exceed the newest actual entry seq, not the live stream high-water sequence; a cursor beyond that bound returns the distinct cursor-ahead 400 above. Positive values within the bound need not identify an existing entry, including values before the first entry. */
+                before_seq?: number;
+                /** @description Maximum number of entries to return. Omitted means 100; present empty does not mean default. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, overflow, values outside 1 to 1000 and repeated occurrences (even identical ones) return exactly 400 {"error":"limit must be an integer from 1 to 1000"}. Never clamp an invalid value. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The newest eligible page in ascending entry seq order. entries is always an array, never null. has_older is required; next_before_seq is present if and only if has_older is true and equals the first returned entry's seq. An empty or terminal page has has_older false and omits next_before_seq, even when the terminal page is full. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoomHistoryResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     postRoomMessage: {
@@ -27365,6 +27573,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
 }
@@ -27635,6 +27844,7 @@ export type SessionScopeUpdateResponse = components["schemas"]["SessionScopeUpda
 export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResponse"];
 export type AgentToolsResponse = components["schemas"]["AgentToolsResponse"];
 export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
+export type ChannelEnableRequest = components["schemas"]["ChannelEnableRequest"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
@@ -27801,5 +28011,6 @@ export type Room = components["schemas"]["Room"];
 export type RoomCreateRequest = components["schemas"]["RoomCreateRequest"];
 export type RoomMembersUpdateRequest = components["schemas"]["RoomMembersUpdateRequest"];
 export type RoomMessageRequest = components["schemas"]["RoomMessageRequest"];
+export type RoomHistoryResponse = components["schemas"]["RoomHistoryResponse"];
 export type AgentDependency = components["schemas"]["AgentDependency"];
 export type AgentDependencyList = components["schemas"]["AgentDependencyList"];

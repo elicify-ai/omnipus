@@ -75,6 +75,11 @@ func FixtureSessionStateFrame_Populated() SessionStateFrame {
 				ToolName:    "bash",
 				AgentId:     "jim",
 				ExpiresInMs: 30000,
+				// Bundle B3 (L1-AMENDMENTS-20261013 §1.3): the reload
+				// snapshot carries the full request.
+				ToolCallId: "tc-1",
+				TurnId:     "turn-1",
+				Args:       map[string]any{"command": "ls -la"},
 			},
 		},
 	}
@@ -105,9 +110,12 @@ func FixtureSessionStateFrame_Edge() SessionStateFrame {
 		UserId:    "user-unicode-🔑",
 		EmittedAt: "2026-05-17T00:00:01Z",
 		PendingApprovals: []SessionStatePendingApproval{
-			{ApprovalId: "ap-1", SessionId: "sess-1", ToolName: "tool.a", AgentId: "jim", ExpiresInMs: 1},
-			{ApprovalId: "ap-2", SessionId: "sess-2", ToolName: "tool.b", AgentId: "ava", ExpiresInMs: 2},
-			{ApprovalId: "ap-3", SessionId: "sess-3", ToolName: "tool.c", AgentId: "rex", ExpiresInMs: 3},
+			{ApprovalId: "ap-1", SessionId: "sess-1", ToolName: "tool.a", AgentId: "jim", ExpiresInMs: 1,
+				ToolCallId: "tc-1", TurnId: "turn-1", Args: map[string]any{}},
+			{ApprovalId: "ap-2", SessionId: "sess-2", ToolName: "tool.b", AgentId: "ava", ExpiresInMs: 2,
+				ToolCallId: "tc-2", TurnId: "turn-2", Args: map[string]any{"path": "notes.md"}},
+			{ApprovalId: "ap-3", SessionId: "sess-3", ToolName: "tool.c", AgentId: "rex", ExpiresInMs: 3,
+				ToolCallId: "tc-3", TurnId: "turn-3", Args: map[string]any{"nested": map[string]any{"n": 1}}},
 		},
 	}
 }
@@ -960,10 +968,12 @@ func FixtureTask_Populated() Task {
 		StartedAt:     &startedAt,
 		CompletedAt:   &completedAt,
 	}
+	activeForm := "Drafting the summary section"
 	t.Todos = &[]struct {
-		Status TaskTodosStatus `json:"status"`
-		Text   string          `json:"text"`
-	}{{Text: "Draft the summary section", Status: TaskTodosStatusPending}}
+		ActiveForm *string         `json:"active_form,omitempty"`
+		Status     TaskTodosStatus `json:"status"`
+		Text       string          `json:"text"`
+	}{{Text: "Draft the summary section", Status: TaskTodosStatusPending, ActiveForm: &activeForm}}
 	t.Trigger = &struct {
 		Config Task_Trigger_Config `json:"config"`
 		Type   TaskTriggerType     `json:"type"`

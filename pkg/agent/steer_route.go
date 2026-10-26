@@ -81,8 +81,10 @@ func (al *AgentLoop) deliverHumanHelperInput(msg bus.InboundMessage) bool {
 		if taskRec == nil {
 			return false
 		}
-		_, err = al.DeliverExternalCLIInstruction(context.Background(), msg.SessionID, strings.TrimSpace(taskRec.AgentID),
-			providers.Message{Role: "user", Content: msg.Content, Media: append([]string(nil), msg.Media...)}, "")
+		if err = al.validateInboundWorkspace(msg); err == nil {
+			_, err = al.DeliverExternalCLIInstruction(context.Background(), msg.SessionID, strings.TrimSpace(taskRec.AgentID),
+				providers.Message{Role: "user", Content: msg.Content, Media: append([]string(nil), msg.Media...)}, "")
+		}
 		if err != nil {
 			err = fmt.Errorf("deliver message to external-CLI task run %q: %w", msg.SessionID, err)
 		}
@@ -116,6 +118,9 @@ func (al *AgentLoop) deliverHumanHelperInput(msg bus.InboundMessage) bool {
 // is a task run), so a person's course-correction is never silently dropped.
 // The native helper keeps the ordinary queue path unchanged.
 func (al *AgentLoop) enqueueHelperSteeringFromMessage(msg bus.InboundMessage, agentID string, is3P bool) error {
+	if err := al.validateInboundWorkspace(msg); err != nil {
+		return err
+	}
 	route, _, err := al.resolveMessageRoute(msg)
 	if err != nil {
 		return fmt.Errorf("route the message to helper %q: %w", msg.SessionID, err)
@@ -134,9 +139,9 @@ func (al *AgentLoop) enqueueHelperSteeringFromMessage(msg bus.InboundMessage, ag
 		}
 		return nil
 	}
-	_, _, err = al.enqueueHumanSteeringMessage(msg.SessionID, agentID, providers.Message{
+	_, _, err = al.enqueueInboundSteeringMessage(msg.SessionID, agentID, providers.Message{
 		Role: "user", Content: msg.Content, Media: append([]string(nil), msg.Media...),
-	}, msg.TranscriptEntryID)
+	}, msg.TranscriptEntryID, inboundInputOrigin(msg))
 	return err
 }
 

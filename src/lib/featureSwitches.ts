@@ -4,16 +4,22 @@
 // Flip a switch only together with its server landing; the code behind it
 // stays in place.
 
-/** Group chats: sidebar section, squad dialog, Add participant, room route. Hidden until WU-15 (stage 3), #1314. */
-export const ROOMS_ENABLED = false
+/** Group chats: sidebar section, squad dialog, Add participant, room route. On since WU-15's server landed (stage 3, #1314). */
+export const ROOMS_ENABLED = true
 
-/** An agent's private secrets panel (GET /secrets). Hidden until WU-4/5. */
-export const AGENT_PRIVATE_SECRETS_ENABLED = false
+/** Destination-bound secret cards. Enabled with the WU-4 request/submit server. */
+export const SECRET_CARDS_ENABLED = true
+
+/** An agent's private secrets panel (GET /secrets). WU-5 landed in Train 2, so
+ * it is on again (founder 2026-10-14: a switch hides its UI only until the work
+ * unit it belongs to lands). Worker and system agents stay excluded at the
+ * mount site. */
+export const AGENT_PRIVATE_SECRETS_ENABLED = true
 
 /**
  * Inline tool approvals (#1263 unit 3: the card in the chat plus the "waiting in
- * another chat" banner). Hidden until WU-8 (stage 2): founder design = card in
- * parent chat, no banner, menu-bar attention animation. While off, the release
- * app-wide ToolApprovalModal shows every pending approval.
+ * another chat" banner). On since WU-8 / bundle B3: the card shows in its chat
+ * and a reload restores it complete from the session_state snapshot. While
+ * off, the release app-wide ToolApprovalModal shows every pending approval.
  */
-export const INLINE_TOOL_APPROVALS_ENABLED = false
+export const INLINE_TOOL_APPROVALS_ENABLED = true

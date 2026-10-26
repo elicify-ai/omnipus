@@ -230,10 +230,10 @@ func defaultToolPoliciesGeneral() map[string]string {
 		// existing tool-approval mechanism IS the approval; no new
 		// workflow. Founder ruling (2026-09-18): setup permission is set
 		// at BOTH levels — the global ceiling asks, and every agent
-		// permitted to set up environments (Mia, General Purpose, Omnipus,
-		// new custom native agents) ALSO carries an explicit per-agent
-		// "ask", so a later ceiling raise does not silently loosen any
-		// of them. As with every ceiling entry, this grants the tool to
+		// permitted to set up environments ALSO carries an explicit per-agent
+		// "ask", except Omnipus, whose tools ride the ceiling without local
+		// Ask. The 2026-10-22 Main/Worker defaults extend setup Ask to every
+		// ordinary role. As with every ceiling entry, this grants the tool to
 		// nobody by itself; the per-agent seeds (ADR090RolePolicyInventory
 		// / adr090SparseRolePolicies, the custom constructor in
 		// pkg/coreagent/seed.go) decide who holds it and at what level.
@@ -314,28 +314,24 @@ func defaultToolPoliciesGeneral() map[string]string {
 		"read_inbox":          "allow",
 		"search_email":        "allow",
 		"read_message":        "allow",
-		"send_email":          "allow",
-		"reply":               "allow",
+		// Sending mail asks at the ceiling as well as in the Main/Worker
+		// seeds (founder ruling, 2026-10-22); reading and drafting do not.
+		"send_email": "ask",
+		"reply":      "ask",
 		// create_email_draft (email-mail-view-spec §2.7 point 1): the
 		// Drafts-only write path — it can never send — so the ceiling ships
 		// allow. The D19 configure-time fill (§2.7 point 2) writes the
 		// per-tool ask/allow values only where the agent has no explicit
 		// entry.
 		"create_email_draft": "allow",
-		// Attachment tools (ADR-20261001 F3, w4 spec US-3): listing and
-		// reading RECEIVED attachments are read-only structure/text access
-		// — ceiling allow, alongside read_inbox/read_message. Saving is a
-		// normal download tool with the shipped global default ASK (founder
-		// F3 decision): the ordinary permission system governs it, with the
-		// existing workspace-path conditional Auto class and no
-		// attachment-specific approval, blocklist or fallback. Hard
-		// Constraint #6: these are the shipped ceiling entries every agent's
-		// policy resolution reads; ReconcileToolPolicyCeiling self-heals
-		// them into old installs additively, never overwriting an
-		// operator-set value, and no per-agent deny backfill exists.
+		// Received attachments can be listed, read and downloaded without
+		// a policy approval (founder ruling, 2026-10-22). Downloads retain
+		// their normal workspace-path checks; there is no special approval
+		// path or fallback. ReconcileToolPolicyCeiling adds missing entries
+		// only and never overwrites an operator's saved value.
 		"list_email_attachments":    "allow",
 		"read_email_attachment":     "allow",
-		"download_email_attachment": "ask",
+		"download_email_attachment": "allow",
 		"ToolSearch":                "allow",
 		// Skill (ADR-072 D1): the on-demand skill load/search tool —
 		// the same structural-floor reasoning as ToolSearch above
@@ -365,9 +361,9 @@ func defaultToolPoliciesBrowser() map[string]string {
 		"browser_close_tab":  "allow",
 		"browser_open_tab":   "allow",
 		// ADR-075 D2 — the interaction verbs and the accessibility
-		// snapshot. This is the global ceiling. ADR-090 ordinary-role seeds
-		// allow browser tools for Mia and Jim; other ordinary roles deny
-		// them. See ADR090RolePolicyInventory.
+		// snapshot. This is the global ceiling. Main/Worker creation defaults
+		// and all ordinary built-in roles allow these tools (2026-10-22).
+		// See ADR090RolePolicyInventory; hidden system roles stay narrower.
 		//
 		// These entries and the per-agent maps are ONE COMMIT with
 		// allStaticToolNames — see that literal's comment for why
@@ -387,7 +383,7 @@ func defaultToolPoliciesBrowser() map[string]string {
 		// Attaching a host file to a page on the operator's signed-in
 		// session is the one browser action that moves their data
 		// outward, so it is consent-gated at the ceiling as well as per agent.
-		// Mia and Jim use Ask; other ordinary roles deny this tool.
+		// Main/Worker defaults and ordinary built-in roles use Ask.
 		"browser_upload_file": "ask",
 		// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow.
 		// This is a decision, not an inheritance — the browser
@@ -395,8 +391,8 @@ func defaultToolPoliciesBrowser() map[string]string {
 		// "ask") — because handing the browser to the human is the
 		// conservative direction: the tool takes nothing and reaches
 		// no page, and an "ask" on it would put an approval card
-		// between the agent and its own stand-down. Mia and Jim use
-		// Allow for browser_handover; other ordinary roles deny it.
+		// between the agent and its own stand-down. Main/Worker defaults and
+		// every ordinary built-in role allow browser_handover (2026-10-22).
 		"browser_handover": "allow",
 	}
 }
@@ -415,8 +411,8 @@ func defaultToolPoliciesSysagent() map[string]string {
 		// omnipus-system-agent FR-020: provider, connector, channel, skill and
 		// agent removals/changes on this list ship "ask" — Omnipus confirms the
 		// whole plan once with Go, and each of these still raises its own
-		// approval after Go (FR-027). Every other built-in and new custom
-		// agent carries an explicit local deny for them.
+		// approval after Go (FR-027). Main/Worker seeds deny administration
+		// except skill authoring, which now ships Ask (2026-10-22).
 		"configure_provider": "ask",
 		"list_providers":     "allow",
 		"test_provider":      "allow",
@@ -434,7 +430,9 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"remove_mcp_server": "ask",
 		// list_mcp_servers is read-only and reports name/transport/enabled/
 		// command/url only — never args or env — so it leaks no credential.
-		"list_mcp_servers":  "allow",
+		"list_mcp_servers": "allow",
+		// Q22=B (2026-10-22): ordinary Main/Worker seeds keep a local Ask,
+		// while Omnipus rides this Allow ceiling without a local entry.
 		"create_skill":      "allow",
 		"edit_skill":        "allow",
 		"remove_skill":      "ask", // FR-020
@@ -508,28 +506,13 @@ func defaultToolPoliciesPlanning() map[string]string {
 		// "allow" — for these three tools OR any other, see that
 		// file's bug-class test — fails the build rather than
 		// shipping.
-		// inspect_session is verifier-role-only (fix-wave finding #2,
-		// architect F2 half 1). The runtime global x agent merge is
-		// strictest-wins (deny > ask > allow,
-		// pkg/tools/compositor.go:resolveEffectivePolicyWith), so a
-		// ceiling "deny" here would have OVERRULED the Judge's own
-		// seeded "allow" and resolved the Judge to deny — exactly
-		// the landed defect this seed inverts. The ceiling therefore
-		// seeds "allow" (raising the CEILING an agent's own policy
-		// can be granted UP TO, same as every other non-destructive
-		// tool — it does not, by itself, grant the tool to anyone);
-		// EVERY seeded non-Judge agent carries an explicit per-agent
-		// "deny" for inspect_session through adr090SparseRolePolicies or
-		// systemAgentSeed, so strictest-wins resolves Deny for everyone except
-		// the Judge, whose Allow merges against the Allow ceiling.
-		// Custom/unlisted agents are NOT deny-backfilled for this
-		// tool — the coverage repair only fills gaps, and this
-		// ceiling entry means inspect_session is never a gap — so a
-		// custom agent with no override resolves "allow" at the
-		// policy layer. Their real protection is the engine-set,
-		// fail-closed verifier-session scope lock
-		// (tools.VerifierSessionScopeAllows): a turn without the
-		// scope is refused every session id regardless of policy.
+		// inspect_session needs an Allow ceiling so a permitted agent is
+		// not silently tightened under strictest-wins. The Main/Worker
+		// core now includes its Allow policy (2026-10-22), as does the
+		// Judge's separate seed. Policy permission does not bypass the
+		// engine-set verifier-session scope lock
+		// (tools.VerifierSessionScopeAllows); a turn without that scope
+		// is refused regardless of its stored policy.
 		"create_plan":     "allow",
 		"execute_plan":    "allow",
 		"run_task":        "allow",
@@ -552,13 +535,10 @@ func defaultToolPoliciesSupervision() map[string]string {
 		//    the correction loop would be dead on every install —
 		//    exactly the landed defect the inspect_session note above
 		//    describes, on the very next tool. Raising the ceiling
-		//    grants the tool to nobody by itself: every seeded agent
-		//    except PlanSupervisor carries an explicit per-agent
-		//    "deny" through ordinary-role or hidden-role policy seeds, and the
-		//    REAL control against an agent with no per-agent entry
-		//    (e.g. one persisted before this tool name existed, which
-		//    would inherit this "allow") is the engine's exact-identity
-		//    gate on the correction path, not the policy layer.
+		//    grants the tool to nobody by itself. Main-agent defaults now
+		//    include Allow (2026-10-22); Worker defaults deny it, and hidden
+		//    roles retain their separate policies. These grants do not
+		//    bypass the engine's exact-identity gate on the correction path.
 		//
 		// 2. stop_plan: an "ask" ceiling would silently defeat the
 		//    FR-006b seeding rule. pkg/coreagent seeds stop_plan

@@ -393,14 +393,31 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		return true, "", false
 	}
 	approver := al.loadToolApprover()
-	return approver.RequestApproval(ctx, PolicyApprovalReq{
-		ToolCallID: toolCallID,
-		ToolName:   toolName,
-		Args:       cloneStringAnyMap(args),
-		AgentID:    agentID,
-		SessionID:  sessionID,
-		TurnID:     turnID,
+	var origin approvalOrigin
+	if ts := turnStateFromContext(ctx); ts != nil {
+		origin = ts.currentApprovalOrigin()
+	}
+	approved, denialReason, recordGrant = approver.RequestApproval(ctx, PolicyApprovalReq{
+		ToolCallID:  toolCallID,
+		ToolName:    toolName,
+		Args:        cloneStringAnyMap(args),
+		AgentID:     agentID,
+		SessionID:   sessionID,
+		TurnID:      turnID,
+		RoomRef:     origin.roomRefCopy(),
+		OriginLabel: origin.Label,
 	})
+	// A session Stop is control, not an ordinary refusal for the model to
+	// interpret. The owning chat may have withdrawn this helper's approval
+	// without targeting any of its already-running siblings. End only the
+	// exact execution that was waiting; user Deny/Cancel still just refuse
+	// the call. This also covers shell pre-flight approvals through this gate.
+	if !approved && denialReason == "session canceled" {
+		if ts := turnStateFromContext(ctx); ts != nil && ts.transcriptSessionID == sessionID && ts.turnID == turnID {
+			ts.requestHardAbort()
+		}
+	}
+	return approved, denialReason, recordGrant
 }
 
 // checkStandingGrant reports whether a standing "Always Allow" grant already
@@ -541,6 +558,36 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 			},
 		)
 	}
+}
+
+// emitTaskRunAutoDenyAudit writes the tool.policy.ask.denied entry for an
+// Ask-policy call refused in a task or plan chain (#1263 R4). Like the
+// scheduled variant it names no approval and no approver — none was ever
+// requested — but its reason is AskDenyReasonTaskRun, and it never warns about
+// a missing schedule identity: a task run has none.
+//
+// The row names the ACTING session — the concrete transcript the call was
+// refused in — not the turn's history scope: a task run's scope is
+// agent:<agent>:task:<task>, shared by every run of that task (gate round 1,
+// security S1; adr-057 session-unification spec, regression row 6).
+func (al *AgentLoop) emitTaskRunAutoDenyAudit(ctx context.Context, ts *turnState, toolName string) {
+	sessionID := ts.transcriptSessionID
+	if sessionID == "" {
+		sessionID = ts.sessionKey
+	}
+	audit.EmitToolPolicyAskDenied(
+		ctx,
+		al.auditLogger,
+		"", // approvalID — no approval request was made
+		"", // approverUserID — no human actor
+		toolName,
+		ts.agentID,
+		sessionID,
+		ts.turnID,
+		audit.AskDenyReasonTaskRun,
+		"",  // argsHash — not available at this call site
+		nil, // cancelledToolCallIDs — not applicable
+	)
 }
 
 // ShellPermissionGate implements tools.ShellModeResolver and

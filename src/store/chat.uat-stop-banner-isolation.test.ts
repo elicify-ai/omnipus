@@ -7,6 +7,8 @@ import { getMessages, useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
+import { queryClient } from '@/lib/queryClient'
+import { seedCanonicalSession } from '../../tests/unit/fixtures/canonical-session'
 
 // Oracle: release-UAT dispatch D3, and validator/report-v.md V4b / D4:
 // The turn_canceled message belongs only to the stopped chat and must never
@@ -29,6 +31,7 @@ const STOP_COPY = codeToDisplay.turn_canceled
 const sender = { send: vi.fn<WsConnection['send']>() }
 
 function resetStores() {
+  queryClient.clear()
   act(() => {
     useSessionStore.setState(useSessionStore.getInitialState(), true)
     useChatStore.setState(useChatStore.getInitialState(), true)
@@ -53,6 +56,7 @@ beforeEach(() => {
 afterEach(resetStores)
 
 function sendAndStopParent() {
+  seedCanonicalSession(PARENT, 'jim', WORKSPACE)
   act(() => {
     useChatStore.getState().sendMessage(INITIAL_TEXT, { clientMessageId: INITIAL_ID })
     useChatStore.getState().handleFrame({

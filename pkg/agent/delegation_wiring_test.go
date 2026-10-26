@@ -105,8 +105,8 @@ func TestDelegationWiring_RuntimeGraphRefresh(t *testing.T) {
 
 	// The SAME ContextBuilder — no rebuild — now reads the updated graph.
 	got2 := cb.buildDynamicContext(0, "", "", "", "", "")
-	if strings.Contains(got2, "ray") {
-		t.Fatalf("Phase B: 'ray' must be gone after graph edit.\ngot: %s", got2)
+	if strings.Contains(got2, "worker") {
+		t.Fatalf("Phase B: 'worker' must be gone after graph edit.\ngot: %s", got2)
 	}
 	if !strings.Contains(got2, "cannot delegate") {
 		t.Fatalf("Phase B: empty graph must render 'cannot delegate'.\ngot: %s", got2)
@@ -132,7 +132,7 @@ func TestDelegationWiring_RuntimeGraphRefresh_AddEdge(t *testing.T) {
 	got1 := cb.buildDynamicContext(0, "", "", "", "", "")
 	// Without edges, the injector renders cannot-delegate.
 	if !strings.Contains(got1, "cannot delegate") {
-		t.Logf("Phase A: got: %s", got1)
+		t.Fatalf("Phase A: empty graph must render 'cannot delegate'.\ngot: %s", got1)
 	}
 
 	// Phase B: add jim→worker edge without rebuilding the loop.
@@ -463,11 +463,11 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	}
 	// The launcher-backed delegate call is asynchronous and has no inline-wait
 	// form.
-	if !strings.Contains(got, `delegate(agent_id="jim", task="…")`) {
+	if !compactHasMode(t, got, "jim", "direct") {
 		t.Errorf("parity: delegate for jim must appear; got:\n%s", got)
 	}
 	// task must NOT appear for jim.
-	if strings.Contains(got, `create_task(agent_id="jim"`) {
+	if compactHasMode(t, got, "jim", "task") {
 		t.Errorf("parity: create_task for jim must NOT appear (task mode not in edge); got:\n%s", got)
 	}
 

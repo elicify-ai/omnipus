@@ -32,8 +32,10 @@ import (
 // matters. Only event kinds that produce a session-scoped CONVERSATION
 // frame are handled here; every other kind (whatsapp_pairing, notification,
 // task_status_changed, plan_status_changed, task_run_status — the "not
-// sequenced" list, BE-DESIGN.md §1.2) is untouched and stays on the
-// per-connection eventForwarder path.
+// sequenced" list, BE-DESIGN.md §1.2) stays on the per-connection
+// eventForwarder path for DELIVERY. One exception is state, not delivery:
+// whatsapp_pairing also updates the reconnect cache here, so an outcome
+// emitted while no connection is open is not lost (gate r1 SFH T2-SF-06).
 func (h *WSHandler) hubSyncTap(evt agent.Event) {
 	switch evt.Kind {
 	case agent.EventKindTurnStart:
@@ -76,6 +78,8 @@ func (h *WSHandler) hubSyncTap(evt agent.Event) {
 		h.hubProviderRetry(evt)
 	case agent.EventKindProviderFallback:
 		h.hubProviderFallback(evt)
+	case agent.EventKindWhatsAppPairing:
+		h.hubWhatsAppPairing(evt)
 	}
 }
 

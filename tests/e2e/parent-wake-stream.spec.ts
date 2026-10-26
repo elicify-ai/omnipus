@@ -19,9 +19,10 @@ import { expect, type BrowserContext, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { GatewayProcess } from './fixtures/gateway-process';
 import { E2E_MODEL } from './fixtures/e2e-model';
-import { chatInput, waitForConnected } from './fixtures/selectors';
-import { openTerminalSession } from './fixtures/terminal-outcome-acceptance';
+import { assistantMessages, chatInput, userMessages, waitForConnected } from './fixtures/selectors';
+import { openTerminalSession, terminalTranscript } from './fixtures/terminal-outcome-acceptance';
 import {
+  PARENT_WAKE_HELPER,
   PARENT_WAKE_PARTIAL,
   PARENT_WAKE_TASK,
   startParentWakeProvider,
@@ -32,7 +33,7 @@ import type { AgentCreateRequestMain, WorkspaceCreateRequest, SessionCreateReque
 test.use({ storageState: { cookies: [], origins: [] } });
 test.setTimeout(240_000);
 
-test('a woken parent reply streams to both browsers without a reload', async ({ page, browser }) => {
+test('a woken parent reply streams to both browsers without a reload', async ({ page, browser }, testInfo) => {
   const provider = await startParentWakeProvider();
   let gw: GatewayProcess | undefined;
   let second: BrowserContext | undefined;
@@ -41,10 +42,12 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
       apiBase: provider.url,
       model: E2E_MODEL,
       adminUsername: 'parent-wake-stream',
+      env: { OMNIPUS_LOG_LEVEL: 'info', OMNIPUS_LOG_FILE: testInfo.outputPath('gateway.log') },
     });
     const agentResult = await gw.apiFetch('POST', '/api/v1/agents', {
       type: 'Main',
       name: 'Parent wake',
+      tool_policy_changes: { set: { delegate: 'allow', message_parent: 'allow' } },
       soul: 'When asked, delegate the task to yourself with the delegate tool and do not poll for the result.',
       provider: 'openrouter',
       model: E2E_MODEL,
@@ -85,8 +88,23 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
     const pageB = await second.newPage();
     await openTerminalSession(pageB, gw.baseURL, parent.id);
 
+    const wakeText = `A delegated session handed back (final): ${PARENT_WAKE_HELPER}`;
+    // Positive control: a real person may type exactly the internal wake text.
+    // It must survive history load; filtering by prose would hide this input.
+    await chatInput(page).fill(wakeText);
+    await chatInput(page).press('Enter');
+    await expect(assistantMessages(page).filter({ hasText: 'Recorded your matching sentence.' })).toHaveCount(1);
+    await expect.poll(async () => (await terminalTranscript(page, gw!.baseURL, parent.id)).session.lifecycle_state).toBe('done');
+
     await chatInput(page).fill(`Delegate this and do not poll: ${PARENT_WAKE_TASK}`);
     await chatInput(page).press('Enter');
+    await expect(assistantMessages(page).filter({ hasText: 'Launched' })).toHaveCount(1);
+    await expect.poll(async () => (await terminalTranscript(page, gw!.baseURL, parent.id)).session.lifecycle_state).toBe('done');
+    await expect.poll(async () => (await terminalTranscript(page, gw!.baseURL, parent.id)).messages
+      .flatMap((message) => message.tool_calls ?? [])
+      .filter((call) => call.tool === 'delegate')
+      .map((call) => call.status), 'the actual delegate call succeeded, not just the scripted launch sentence').toEqual(['success']);
+    provider.releaseHelper();
 
     await expect(page.getByText(PARENT_WAKE_PARTIAL, { exact: false })).toBeVisible({ timeout: 90_000 });
     await expect(pageB.getByText(PARENT_WAKE_PARTIAL, { exact: false })).toBeVisible({ timeout: 30_000 });
@@ -98,10 +116,26 @@ test('a woken parent reply streams to both browsers without a reload', async ({ 
     expect(JSON.stringify(await otherMessages.json())).not.toContain(PARENT_WAKE_PARTIAL);
 
     provider.releaseWake();
-    await page.reload();
-    await expect(page.locator(`[data-active-session-id="${parent.id}"]`)).toBeVisible();
-    await waitForConnected(page);
-    await expect(page.getByText(`${PARENT_WAKE_PARTIAL} and the rest`, { exact: false })).toBeVisible();
+    await expect.poll(async () => (await terminalTranscript(page, gw!.baseURL, parent.id)).session.lifecycle_state).toBe('done');
+    for (const viewer of [page, pageB]) {
+      // First prove the live row structure. Then reload the same real browser:
+      // the former history bug adds a third user row despite a correct reply.
+      await expect(userMessages(viewer)).toHaveCount(2);
+      await viewer.reload();
+      await expect(viewer.locator(`[data-active-session-id="${parent.id}"]`)).toBeVisible();
+      await waitForConnected(viewer);
+      await expect(viewer.getByText(`${PARENT_WAKE_PARTIAL} and the rest`, { exact: false })).toBeVisible();
+      await expect(userMessages(viewer), 'reload keeps only the two genuine user messages, not the injected wake input').toHaveCount(2);
+      await expect(userMessages(viewer).filter({ hasText: wakeText }), 'the genuine matching sentence stays exactly once').toHaveCount(1);
+      const outcome = viewer.locator('[data-testid="helper-event-line"][data-helper-event-kind="finished"]');
+      await expect(outcome, 'one proper hand-back outcome row survives reload').toHaveCount(1);
+      await expect(outcome).toContainText(wakeText);
+      await expect(assistantMessages(viewer).filter({ hasText: `${PARENT_WAKE_PARTIAL} and the rest` }), 'one completed wake reply survives reload').toHaveCount(1);
+      await testInfo.attach(viewer === page ? 'browser-a-after-reload' : 'browser-b-after-reload', {
+        body: await viewer.screenshot(), contentType: 'image/png',
+      });
+    }
+    expect(provider.failures(), 'scripted provider sequence stays valid after both reloads').toEqual([]);
   } finally {
     await second?.close();
     await provider.close();

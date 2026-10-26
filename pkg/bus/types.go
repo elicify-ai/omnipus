@@ -187,6 +187,11 @@ type OutboundMessage struct {
 	Content          string `json:"content"`
 	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
 
+	// ProgressNotice marks a nonterminal status sentence, not a completed reply.
+	// Text channels may deliver Content; webchat must not turn it into token/done.
+	// In-process only: this is not a gateway/SPA wire field.
+	ProgressNotice bool `json:"-"`
+
 	// OwnershipChecked records that the send tool already applied ADR-065's
 	// ownership rule to this message. In-process only — never on the wire.
 	//

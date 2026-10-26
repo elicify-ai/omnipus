@@ -1233,7 +1233,7 @@ components:
     ReplayMessageFrame:
       name: ReplayMessageFrame
       title: replay_message
-      summary: Replayed transcript entry (server → client).
+      summary: Persisted chat entry, delivered live or replayed (server → client).
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ReplayMessageFrame'
@@ -1780,7 +1780,9 @@ components:
         display lines for the kind: endpoint (provider_key); transport + command
         or URL (mcp_env); channel instance + field (channel_credential); hosts +
         username + mailbox id (mailbox_password); workspace + agent + variable
-        (agent_private). Mirrored inline in contracts/asyncapi.yaml
+        (agent_private); for unbound (a stored value with no recipient
+        recorded) exactly the single fixed line "Stored in Settings; no
+        recipient recorded". Mirrored inline in contracts/asyncapi.yaml
         (components.schemas.SecretRecipientDisplay) — keep both copies in sync by
         hand.
       type: object
@@ -1797,6 +1799,7 @@ components:
             - channel_credential
             - mailbox_password
             - agent_private
+            - unbound
           description: Recipient kind.
         lines:
           type: array
@@ -2022,6 +2025,16 @@ components:
             - stopped
             - interrupted
             - refused
+        continuation_unconfirmed:
+          type: boolean
+          description: >
+            True only when state is `submitted` and the value-free continuation
+            (the reference-only resume message) is not confirmed delivered: the
+            latest ensure-delivery attempt failed or was revoked downstream.
+            Absent once delivery is confirmed, the person stops the continuation,
+            or the request reaches any non-submitted terminal state. Never carries
+            or implies a secret value, cause, stage or reference name. (Train 2
+            M13, T2-SF-02; K4, FR-079.)
         acting_agent_id:
           type: string
           minLength: 1
@@ -2194,7 +2207,6 @@ components:
           maxLength: 5242880
         addressees:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
@@ -2207,7 +2219,6 @@ components:
             never forwards its mentions (§6.11).
         deliveries:
           type: array
-          maxItems: 256
           items:
             $ref: '#/components/schemas/RoomDeliveryState'
           description: Per-member delivery states for this entry. Never null.
@@ -2306,10 +2317,10 @@ components:
       title: RoomSnapshotFrame
       description: >
         Server → client (spec omnipus-system-agent K45, K26, K27). The answer to
-        attach_room: the room entries after the cursor in order, the members,
-        mutes, member states, pause state, generation and allocated cost.
-        `complete` is false when the server could not serve every entry after the
-        cursor. THIS FILE EXISTS for the Constraint #8 5-step process and the
+        attach_room: the room entries after the cursor in seq order (at most the
+        newest 10,000; `has_older` is true when older entries after the cursor
+        were left out), the members, mutes, member states, pause state,
+        generation and allocated cost. THIS FILE EXISTS for the Constraint #8 5-step process and the
         pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
         schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
         Landing 1, WU-15 produces it.
@@ -2349,24 +2360,24 @@ components:
           description: Entries after the cursor, in seq order. Never null.
         members:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         muted:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         member_states:
           type: array
-          maxItems: 10000
           items:
             $ref: '#/components/schemas/RoomDeliveryState'
-          description: Current delivery states of outstanding requests. Never null.
+          description: >-
+            Every outstanding (non-terminal) delivery state plus the latest terminal
+            state of each member. Never null. Live states are never dropped (ruling
+            Q2), so this array has no fixed upper bound.
         paused:
           type: boolean
         generation:
@@ -2385,6 +2396,12 @@ components:
           type: boolean
         complete:
           type: boolean
+          description: always true; reserved.
+        has_older:
+          type: boolean
+          description: >
+            True when entries after the cursor older than the ones served were
+            left out (a snapshot carries at most the newest 10,000 entries).
     RoomMetaFrame:
       title: RoomMetaFrame
       description: >
@@ -2420,14 +2437,12 @@ components:
           minimum: 1
         members:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
             maxLength: 128
         muted:
           type: array
-          maxItems: 256
           items:
             type: string
             minLength: 1
@@ -4679,9 +4694,10 @@ components:
     ReplayMessageFrame:
       title: ReplayMessageFrame
       description: >
-        Server → client replayed transcript entry. Session-scoped
-        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
-        ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
+        Server → client persisted chat entry, delivered live or during session
+        replay. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); live
+        publication uses the session hub, and transcript/snapshot projections
+        remain unsequenced.
         A CHAT PROJECTION of the session's single append-only archive, not a
         provider-message or raw-storage type (session-core C-ARCHIVE / U2;
         FR-004/FR-005): the archive's private model payload (model_message),
@@ -4816,6 +4832,14 @@ components:
               type: string
               enum:
                 - stopped_before_delivery
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Hub-assigned per-session sequence number. Present on live publication and
+            its incremental catch-up copies; absent on unsequenced transcript/snapshot
+            projections. Only frames carrying seq advance the session cursor.
         terminal_outcome:
           type: boolean
           description: >
@@ -5206,6 +5230,7 @@ components:
           enum:
           - rate_limited
           - model_retired
+          - model_not_found
         seq:
           type: integer
           format: int64
@@ -5261,6 +5286,7 @@ components:
           enum:
           - rate_limited
           - model_retired
+          - model_not_found
         message:
           type: string
           minLength: 1
@@ -5832,6 +5858,9 @@ components:
       - tool_name
       - agent_id
       - expires_in_ms
+      - tool_call_id
+      - turn_id
+      - args
       additionalProperties: false
       properties:
         tool_call_id:
@@ -5840,19 +5869,18 @@ components:
           description: >
             L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as
             ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete
-            and approvable. Optional until bundle B3 (WU-8) makes it required.
+            and approvable.
         turn_id:
           type: string
           minLength: 1
           description: >
-            Same value as ToolApprovalRequiredFrame.turn_id. Optional until
-            bundle B3 (WU-8).
+            Same value as ToolApprovalRequiredFrame.turn_id.
         args:
           type: object
           additionalProperties: true
           description: >
             Same value as ToolApprovalRequiredFrame.args — an object, never null.
-            Optional until bundle B3 (WU-8). The snapshot reaches exactly the
+            The snapshot reaches exactly the
             connections the live frame reaches (same audience rule).
         segments:
           type: array
@@ -6309,6 +6337,7 @@ components:
           - linked
           - timeout
           - error
+          - stopped
         qr:
           type: string
         message:
@@ -6316,7 +6345,7 @@ components:
     WhatsAppPairingSubscribeFrame:
       title: WhatsAppPairingSubscribeFrame
       description: 'Client → server. Registers or clears this connection''s interest in a channel''s whatsapp_pairing frames
-        so the QR is delivered only to the operator viewing that channel''s pairing UI (#283).
+        so the QR is delivered only to the operator viewing that channel''s pairing UI (#283). Subscribing (including the automatic re-subscribe on reconnect) only observes pairing frames: it never restores chat ownership of a pairing and never restarts pairing. A chat Retry claims ownership through PUT /api/v1/channels/{id}/enable with pairing_retry.
 
         '
       type: object
@@ -6331,15 +6360,17 @@ components:
           minLength: 1
           maxLength: 128
           description: >
-            Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with
-            the chat request that started it (QR pairing in chat, WU-7).
+            Spec omnipus-system-agent K10 (FR-081). Correlation hint naming the
+            chat request that started the pairing (QR pairing in chat, WU-7).
+            It is not authority: subscribing never restores ownership.
         session_id:
           type: string
           minLength: 1
           maxLength: 255
           description: >
-            Spec K10. The chat session the pairing belongs to, when it was
-            started from a chat.
+            Spec K10. Correlation hint naming the chat session the pairing
+            belongs to, when it was started from a chat. It is not authority:
+            subscribing never restores ownership.
         type:
           type: string
           const: whatsapp_pairing_subscribe
@@ -6373,15 +6404,19 @@ components:
           minLength: 1
         notification_type:
           type: string
-          description: 'The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a)
-            means the drift check found a knowledge base''s search index out of step with the folder on disk and the index
-            is being rebuilt; it is never emitted for a healthy check.
-
-            '
+          description: >
+            The event class. Mirrors Notification.type in openapi.yaml.
+            "knowledge_drift" (ADR-067 FR-038a) means the drift check found a
+            knowledge base's search index out of step with the folder on disk
+            and the index is being rebuilt; it is never emitted for a healthy check.
+            "stop_notice" is an operational Stop outcome (already-approved request,
+            partial cleanup, or Stop did not complete). It is a non-terminal
+            header notification and must not be sent as a chat ErrorFrame.
           enum:
           - schedule_failed
           - knowledge_drift
           - goal_paused
+          - stop_notice
         title:
           type: string
           minLength: 1

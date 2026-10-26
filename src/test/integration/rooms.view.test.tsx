@@ -232,3 +232,221 @@ describe('RoomScreen transcript, pause and reachability — FR-166/170/217; K45'
     expect(net.writes()).toEqual([])
   })
 })
+
+// Ruling Q2 wins where it differs from K45's old "complete flag gates Send":
+// Send is blocked only while no snapshot has arrived. `complete: false` does
+// not block. `has_older` is a quiet note, not a send gate.
+const MESSAGE_PATH = `/api/v1/rooms/${ROOM_ID}/messages`
+const EARLIER = "Earlier messages aren't shown"
+const DRAFT = 'keep this note'
+
+function messagePosts() {
+  return net.writes().filter((request) => request.method === 'POST' && request.path === MESSAGE_PATH)
+}
+
+function sendButton() {
+  return screen.getByRole('button', { name: /^send(?: message)?$/i })
+}
+
+function composer() {
+  return screen.getByRole('textbox', { name: 'Message the group' })
+}
+
+async function mountUnresolved() {
+  const RoomScreen = await loadRoomScreen()
+  const store = await loadRoomStore()
+  act(() => store.setState(store.getInitialState(), true))
+  const linked = connectSocket()
+  connection = linked.connection
+  await mountAt(<RoomScreen workspaceId={WS} roomId={ROOM_ID} />)
+  await waitFor(() => {
+    if (!linked.socket.sent.some((frame) => frame.type === 'attach_room' && frame.room_id === ROOM_ID)) {
+      throw new Error('K45: RoomScreen must attach its room before the snapshot')
+    }
+  })
+  await screen.findByRole('textbox', { name: 'Message the group' })
+  return linked
+}
+
+async function typeDraft() {
+  const user = userEvent.setup()
+  await user.type(composer(), DRAFT)
+  return user
+}
+
+describe('Send waits for a snapshot, never for the complete flag (ruling Q2; §6.3)', () => {
+  it('[§6.3; ruling Q2] non-empty text cannot send before any snapshot, and the same text can send once a snapshot arrives', async () => {
+    const linked = await mountUnresolved()
+    const user = await typeDraft()
+    expect(sendButton()).toBeDisabled()
+    await user.keyboard('{Enter}')
+    expect(messagePosts()).toEqual([])
+    expect(composer()).toHaveValue(DRAFT)
+
+    await linked.emit(snapshot())
+    await waitFor(() => expect(sendButton()).toBeEnabled())
+    expect(composer()).toHaveValue(DRAFT)
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(messagePosts()).toHaveLength(1))
+    const body = messagePosts()[0]?.body as { client_message_id?: string; text?: string; mentions?: string[] }
+    expect(body.text).toBe(DRAFT)
+    expect(body.mentions).toEqual([])
+    expect(body.client_message_id).toEqual(expect.any(String))
+    expect(body.client_message_id?.length).toBeGreaterThan(0)
+  })
+
+  it('[ruling Q2] a snapshot with complete false does not disable Send for non-empty text', async () => {
+    const linked = await mountUnresolved()
+    const user = await typeDraft()
+    await linked.emit(snapshot({ complete: false, entries: [entry()] }))
+    await waitFor(() => expect(sendButton()).toBeEnabled())
+    expect(screen.queryByText(EARLIER, { exact: true })).toBeNull()
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(messagePosts()).toHaveLength(1))
+    expect(messagePosts()[0]?.body).toMatchObject({ text: DRAFT, mentions: [] })
+  })
+
+  it('[§6.3] disconnected non-empty text stays unsent and the transcript says reconnecting', async () => {
+    await open(snapshot({ entries: [entry()] }))
+    const user = await typeDraft()
+    act(() => useConnectionStore.getState().setConnected(false))
+    expect(screen.getByText('status?', { exact: true })).toBeVisible()
+    expect(screen.getByText(/reconnecting/i)).toBeVisible()
+    expect(sendButton()).toBeDisabled()
+    await user.keyboard('{Enter}')
+    expect(messagePosts()).toEqual([])
+    expect(composer()).toHaveValue(DRAFT)
+  })
+
+  it('[FR-204; K23] read-only non-empty text stays unsent and the server reason stays visible', async () => {
+    const reason = 'a room needs at least two agents'
+    net.currentRoom = room({ members: ['mia'], read_only_reason: reason })
+    await open(snapshot({ members: ['mia'], read_only_reason: reason }))
+    const user = await typeDraft()
+    expect(screen.getByText(reason, { exact: true })).toBeVisible()
+    expect(sendButton()).toBeDisabled()
+    await user.keyboard('{Enter}')
+    expect(messagePosts()).toEqual([])
+    expect(composer()).toHaveValue(DRAFT)
+  })
+
+  it('[ruling Q2] after a snapshot, a re-attach blocks non-empty Send until the next snapshot arrives', async () => {
+    const linked = await mountUnresolved()
+    await linked.emit(snapshot({ entries: [entry({ text: 'first window' })] }))
+    expect(await screen.findByText('first window', { exact: true })).toBeVisible()
+    const attachCount = () => linked.socket.sent.filter((frame) => frame.type === 'attach_room' && frame.room_id === ROOM_ID).length
+    const before = attachCount()
+
+    act(() => useConnectionStore.getState().setConnected(false))
+    expect(screen.getByText(/reconnecting/i)).toBeVisible()
+    act(() => useConnectionStore.getState().setConnected(true))
+    await waitFor(() => {
+      if (attachCount() <= before) throw new Error('re-attach did not send attach_room')
+      if (screen.queryByText(/reconnecting/i)) throw new Error('still disconnected')
+    })
+
+    const user = await typeDraft()
+    expect(sendButton()).toBeDisabled()
+    await user.keyboard('{Enter}')
+    expect(messagePosts()).toEqual([])
+    expect(composer()).toHaveValue(DRAFT)
+
+    await linked.emit(snapshot({ seq: 2, has_older: false }))
+    await waitFor(() => expect(sendButton()).toBeEnabled())
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(messagePosts()).toHaveLength(1))
+    expect(messagePosts()[0]?.body).toMatchObject({ text: DRAFT, mentions: [] })
+  })
+})
+
+describe('truncated snapshot note (ruling Q2)', () => {
+  it('[ruling Q2] has_older true keeps Send enabled and shows the quiet earlier-messages row', async () => {
+    const linked = await mountUnresolved()
+    const user = await typeDraft()
+    await linked.emit(snapshot({
+      has_older: true,
+      entries: [
+        entry({ id: 'kept-old', seq: 1, text: 'older kept line' }),
+        entry({ id: 'kept-new', seq: 2, text: 'newer kept line' }),
+      ],
+    }))
+    const note = await screen.findByText(EARLIER, { exact: true })
+    expect(note).toBeVisible()
+    expect(note.closest('[role="alert"]')).toBeNull()
+    const log = screen.getByRole('log')
+    const shown = within(log).getAllByRole('article').map((article) => article.textContent)
+    expect(shown).toEqual([
+      expect.stringContaining('older kept line'),
+      expect.stringContaining('newer kept line'),
+    ])
+    expect(note.compareDocumentPosition(within(log).getAllByRole('article')[0]!) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    await waitFor(() => expect(sendButton()).toBeEnabled())
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(messagePosts()).toHaveLength(1))
+    expect(messagePosts()[0]?.body).toMatchObject({ text: DRAFT, mentions: [] })
+  })
+
+  it.each([
+    ['false', { has_older: false as const }],
+    ['absent', {}],
+  ])('[ruling Q2] has_older %s shows no earlier-messages row and still allows Send', async (_label, extra) => {
+    const linked = await mountUnresolved()
+    const user = await typeDraft()
+    await linked.emit(snapshot({ entries: [entry({ text: 'visible line' })], ...extra }))
+    expect(await screen.findByText('visible line', { exact: true })).toBeVisible()
+    expect(screen.queryByText(EARLIER, { exact: true })).toBeNull()
+    await waitFor(() => expect(sendButton()).toBeEnabled())
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(messagePosts()).toHaveLength(1))
+  })
+
+  it('[ruling Q2, chief 2026-10-15] a cursor re-attach with has_older false keeps earlier entries and adds new ones once', async () => {
+    const linked = await mountUnresolved()
+    const already = entry({ id: 'e1', seq: 1, text: 'already on screen' })
+    const second = entry({ id: 'e2', seq: 2, text: 'second line' })
+    await linked.emit(snapshot({ seq: 2, has_older: false, entries: [already, second] }))
+    expect(await screen.findByText('second line', { exact: true })).toBeVisible()
+
+    // The room's cursor is 2. Reconnecting asks only for entries after it.
+    act(() => useConnectionStore.getState().setConnected(false))
+    expect(screen.getByText(/reconnecting/i)).toBeVisible()
+    act(() => useConnectionStore.getState().setConnected(true))
+    await waitFor(() => {
+      const attaches = linked.socket.sent.filter((frame) => frame.type === 'attach_room' && frame.room_id === ROOM_ID)
+      const latest = attaches[attaches.length - 1]
+      if (latest?.type !== 'attach_room' || latest.after_seq !== 2) {
+        throw new Error(`cursor re-attach must resume after seq 2, got ${latest?.type === 'attach_room' ? latest.after_seq : 'no attach'}`)
+      }
+    })
+
+    await linked.emit(snapshot({
+      seq: 4, has_older: false,
+      entries: [second, entry({ id: 'e3', seq: 4, text: 'new line' })],
+    }))
+    const shown = within(screen.getByRole('log')).getAllByRole('article').map((article) => article.textContent)
+    expect(shown).toEqual([
+      expect.stringContaining('already on screen'),
+      expect.stringContaining('second line'),
+      expect.stringContaining('new line'),
+    ])
+    expect(screen.getAllByText('second line', { exact: true })).toHaveLength(1)
+    expect(screen.queryByText(EARLIER, { exact: true })).toBeNull()
+  })
+
+  it('[ruling Q2, chief 2026-10-15] a snapshot with has_older true drops local entries it does not contain and shows the row', async () => {
+    const linked = await mountUnresolved()
+    await linked.emit({
+      type: 'room_entry', room_id: ROOM_ID, seq: 1,
+      entry: entry({ id: 'ancient', seq: 1, text: 'ancient note' }),
+    })
+    expect(await screen.findByText('ancient note', { exact: true })).toBeVisible()
+    await linked.emit(snapshot({
+      seq: 8, has_older: true, complete: true,
+      entries: [entry({ id: 'newest', seq: 8, text: 'newest note' })],
+    }))
+    expect(screen.queryByText('ancient note', { exact: true })).toBeNull()
+    expect(screen.getByText('newest note', { exact: true })).toBeVisible()
+    expect(screen.getByText(EARLIER, { exact: true })).toBeVisible()
+  })
+})

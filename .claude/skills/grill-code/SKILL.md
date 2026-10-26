@@ -7,8 +7,9 @@ description: >
   accessibility) when the diff touches src/, and the standard correctness/error-handling/
   security/testing/observability/overcomplexity lenses -- against actual code, never against
   a developer agent's claim. Runs as a complement to the 5-reviewer gate, not a replacement
-  for it: dispatch it after GREEN/CHECK and before (or alongside) the gate, so an unready
-  branch is caught before it spends the gate's five reviewers' time.
+  for it: in the feature flow, dispatch it after landing against the landed commit, as
+  root CLAUDE.md specifies. An explicit on-demand diff review remains available, but
+  does not replace the required gate or authorize a local test re-run.
   Read-only -- produces a findings report, never edits code. Works on a full feature with a
   spec, or a bare git diff with no spec at all. Triggers on "grill code", "grill my code",
   "grill the code", "grill implementation", "review implementation", "audit code", "check
@@ -19,7 +20,7 @@ allowed-tools: Read, Glob, Grep, Bash
 
 # Grill Code
 
-Last reviewed: 2026-10-06
+Last reviewed: 2026-10-23 — text contradictions and implemented tooling
 
 You audit code written by an agentic LLM coding agent. You do not trust anything the
 developer agent reports. You verify every claim by reading the actual code, the actual
@@ -31,31 +32,28 @@ marked implemented is suspect until you verify the code yourself. Every test tha
 reach it is not done, however green its tests are (root `CLAUDE.md`, "Definition of Done
 (MANDATORY)"; `omnipus-shared-rules` rule 5).
 
-**Your constraint**: you are READ-ONLY. You do not modify code, and you do not run the
-whole-repo Go suite. You produce a structured findings report. You may run **at most one**
-narrowly-scoped tagged Go test to verify a specific claim (never more than one at a time,
-never untagged, never `./...`) -- everything else about Go correctness comes from reading
-the code and reading CI's result, never from a local full run.
+**Your constraint**: you are READ-ONLY. Review code, assertions, CI results and saved
+artifacts; produce findings, not fixes. Under the canonical reviewer discipline,
+ordinary local re-runs belong to team-lead, not the reviewer. If a specific claim
+needs a narrow re-run, ask your dispatcher to arrange it through team-lead under
+shared-rules "Build and test"; read the returned command, exit code and evidence.
+Never run it yourself. A claim still lacking evidence is UNVERIFIED, a warning
+the dispatcher adjudicates, not a silent pass or a block by itself.
 
 ## Where this sits in the flow
 
 This skill is one input to the size/feature process (`docs/internal/design/dev-team-setup-design-2026-09-25.md`
 and the size-based flow it defines), not the whole gate.
-The founder decision of 2026-09-29 supersedes that dated design's gate size (root `CLAUDE.md`, "Change sizes and the review gate"). For a feature-size change the flow
-is: spec (`plan-spec`) -> two `grill-spec` rounds -> team-lead plan -> RED -> GREEN -> CHECK
--> **the 5-reviewer gate** (the 3 mandatory `pr-review-toolkit` plugin reviewers --
-`code-reviewer`, `silent-failure-hunter`, `pr-test-analyzer` -- plus an architect pass and a
-security-lead pass; `code-simplifier`, `comment-analyzer` and `type-design-analyzer` are
-optional, not part of the gate, dispatched on explicit request only, founder 2026-09-29)
--> the founder's yes -> landing. Dispatch `grill-code`
-**after CHECK, before or alongside the 5-reviewer gate** -- it is a fast, spec-aware
-pre-check that catches an unready branch (missing requirement, unwired feature, hand-written
-wire type, a test that asserts nothing) before it spends all five reviewers' time. It never
-substitutes for any of the five, and it never blocks the gate from also running.
+Root `CLAUDE.md` ("Spec-Driven Workflow") defines the feature-flow timing: run this
+audit **after landing**, pinned to the landed commit, against the spec's scenarios.
+The pre-landing size gate is already required; this audit never replaces it or
+pretends to have approved a landing retrospectively. Report discovered defects to
+the owning lead for the normal fix/review/landing process.
 
-For a small or standard-size change (no spec, maybe no ADR), `grill-code` still works: point
-it at the diff and it runs the code-quality lenses (Phase 5) and the reachability lens
-(Phase 2) without a compliance matrix.
+An explicit on-demand review may still target an unlanded diff, with or without a
+spec; record the requested base and commit rather than calling it the post-landing
+audit. It does not create a gate per lane/finding. The same read-only discipline
+and dispatcher-controlled re-run rule apply in either mode.
 
 ## Input handling
 
@@ -106,12 +104,9 @@ an untagged or whole-repo Go build or test locally -- `go test ./...` OOM-kills 
 environment, and the build tags (`goolm,stdjson`) are mandatory or `pkg/channels/matrix`
 fails to even compile. Read the CI run for the branch (`gh run view --log-failed`, or the
 cluster log parsed for `RESULT:`/`GATE FAILURE(S)` lines per `deploy/ci-worker/CLAUDE.md`)
-as the authority. If you must verify one specific Go claim yourself, run **at most one**
-narrowly-scoped tagged test:
-```
-CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/
-```
-never two such processes at once, never as a substitute for reading CI. For TypeScript, the
+as the authority. If one specific claim needs a narrow local re-run, request it
+through team-lead; never execute it as this reviewer. Read that run's receipt rather
+than substituting a re-run for CI evidence. For TypeScript, the
 only gate that means anything is `npm run typecheck` (`tsc -b --noEmit` under the hood) --
 a bare `tsc --noEmit` is this repo's known silent no-op # agent-guard: allow
 (tsconfig project-references root with no `include`); never trust or recommend it. Capture
@@ -336,7 +331,8 @@ spec-absent mode, to `code-review.md` in the current working directory. Structur
 [claims you could not check from available evidence, and what would resolve them]
 
 ## Test Results
-[from CI, or your one narrow local run -- cite the run/command and its exit code]
+[from CI/saved artifacts, or the team-lead-provided narrow-run receipt -- cite its
+commit, command/run ID and exit code; never imply the reviewer executed a local test]
 
 ## Verdict Rationale
 [1-2 paragraphs: what must change, or why PASS is warranted.]
@@ -346,9 +342,11 @@ spec-absent mode, to `code-review.md` in the current working directory. Structur
 ```
 
 Present the executive summary, list every CRITICAL and MAJOR finding, state the verdict.
-On BLOCK/REVISE: "Address these findings, then re-run `/grill-code [path]` before the
-5-reviewer gate." On PASS: "Reachability and spec compliance verified. Ready for the
-5-reviewer gate."
+On BLOCK/REVISE: "Route these findings to the owning lead; verify the fixes through
+the normal change process and re-audit the affected scope." On PASS: "No in-scope
+spec/reachability findings on the cited commit." State whether this was the feature
+flow's post-landing audit or an explicitly requested diff review; neither verdict
+substitutes for the required pre-landing gate.
 
 ## Rules of Engagement
 

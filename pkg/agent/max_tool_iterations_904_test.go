@@ -77,8 +77,8 @@ func TestNewAgentInstance_EffectiveLimit_ResolverDataset(t *testing.T) {
 // TestLoop_StopsAtEffectiveLimit — test plan row 12, scenario "Operator
 // lowers one agent" (loop leg) inverted to the ceiling case: global 2, own
 // value 5 → the turn stops after exactly 2 tool rounds (own cannot raise).
-// History of a turn that stops at limit N: user + N×(assistant, tool) +
-// final assistant = 2N+2 entries (N=1 → 4, cf. TestAgentLoop_ToolLimitUsesDedicatedFallback).
+// Model history at limit N: user + N×(assistant, tool) = 2N+1 entries.
+// The harness notice is chat-only (N=1 → 3; TestAgentLoop_ToolLimitUsesDedicatedFallback).
 func TestLoop_StopsAtEffectiveLimit(t *testing.T) {
 	outer := t.TempDir()
 	tmpDir := filepath.Join(outer, "home")
@@ -110,8 +110,14 @@ func TestLoop_StopsAtEffectiveLimit(t *testing.T) {
 		t.Fatalf("instance MaxIterations = %d, want 2 (global 2 caps own 5)", def.MaxIterations)
 	}
 	history := def.Sessions.GetHistory(directTurnHistoryKeyForTest(def.ID, "test", "chat1"))
-	if len(history) != 6 {
-		t.Fatalf("history len = %d, want 6 (limit 2 → user + 2×(assistant,tool) + final)", len(history))
+	if len(history) != 5 {
+		t.Fatalf("history len = %d, want 5 (limit 2 → user + 2×(assistant,tool); notice is chat-only)", len(history))
+	}
+	assertRoles(t, history, "user", "assistant", "tool", "assistant", "tool")
+	for _, message := range history {
+		if message.Content == specToolLimitMessage {
+			t.Fatal("runtime notice must not occupy a model-history slot")
+		}
 	}
 }
 

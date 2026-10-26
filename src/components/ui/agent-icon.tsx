@@ -32,30 +32,30 @@ export type AgentIconProps = AgentIconBase & {
 
 const MARK_CLASS = {
   none: '',
-  working: 'origin-center animate-[agent-icon-pump_1.6s_ease-in-out_infinite] motion-reduce:animate-none',
-  thinking: 'origin-center animate-[agent-icon-breathe_2.6s_ease-in-out_infinite] motion-reduce:animate-none',
-  waiting: 'origin-center animate-[agent-icon-pop_3.4s_ease-in-out_infinite] motion-reduce:animate-none',
+  working: 'origin-center animate-[agent-icon-pump_var(--motion-agent-icon-working-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
+  thinking: 'origin-center animate-[agent-icon-breathe_var(--motion-agent-icon-thinking-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
+  waiting: 'origin-center animate-[agent-icon-pop_var(--motion-agent-icon-waiting-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
 } as const
 
 const MARK_CLASS_FORCED = {
   none: '',
-  working: 'origin-center animate-[agent-icon-pump_1.6s_ease-in-out_infinite]',
-  thinking: 'origin-center animate-[agent-icon-breathe_2.6s_ease-in-out_infinite]',
-  waiting: 'origin-center animate-[agent-icon-pop_3.4s_ease-in-out_infinite]',
+  working: 'origin-center animate-[agent-icon-pump_var(--motion-agent-icon-working-duration)_var(--motion-easing-in-out)_infinite]',
+  thinking: 'origin-center animate-[agent-icon-breathe_var(--motion-agent-icon-thinking-duration)_var(--motion-easing-in-out)_infinite]',
+  waiting: 'origin-center animate-[agent-icon-pop_var(--motion-agent-icon-waiting-duration)_var(--motion-easing-in-out)_infinite]',
 } as const
 
 const GLOW_CLASS = {
   none: '',
-  working: 'animate-[agent-icon-glow_1.6s_ease-in-out_infinite] motion-reduce:animate-none',
-  thinking: 'animate-[agent-icon-think-glow_2.6s_ease-in-out_infinite] motion-reduce:animate-none',
-  waiting: 'animate-[agent-icon-flash_3.4s_ease-in-out_infinite] motion-reduce:animate-none',
+  working: 'animate-[agent-icon-glow_var(--motion-agent-icon-working-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
+  thinking: 'animate-[agent-icon-think-glow_var(--motion-agent-icon-thinking-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
+  waiting: 'animate-[agent-icon-flash_var(--motion-agent-icon-waiting-duration)_var(--motion-easing-in-out)_infinite] motion-reduce:animate-none',
 } as const
 
 const GLOW_CLASS_FORCED = {
   none: '',
-  working: 'animate-[agent-icon-glow_1.6s_ease-in-out_infinite]',
-  thinking: 'animate-[agent-icon-think-glow_2.6s_ease-in-out_infinite]',
-  waiting: 'animate-[agent-icon-flash_3.4s_ease-in-out_infinite]',
+  working: 'animate-[agent-icon-glow_var(--motion-agent-icon-working-duration)_var(--motion-easing-in-out)_infinite]',
+  thinking: 'animate-[agent-icon-think-glow_var(--motion-agent-icon-thinking-duration)_var(--motion-easing-in-out)_infinite]',
+  waiting: 'animate-[agent-icon-flash_var(--motion-agent-icon-waiting-duration)_var(--motion-easing-in-out)_infinite]',
 } as const
 
 const SHEEN_CLASS = 'agent-icon-sheen pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[agent-icon-sheen_2.4s_ease-in-out_infinite] motion-reduce:animate-none'
@@ -139,13 +139,47 @@ export function AgentIcon(props: AgentIconProps) {
           aria-hidden="true"
           width={size}
           height={size}
+          id={maskId(baseId, 'ink')}
           viewBox="0 0 256 256"
           fill="currentColor"
           dangerouslySetInnerHTML={{ __html: inkMarkup }}
         />
       </span>
       {animate && motion === 'working' && (
-        <span aria-hidden="true" data-agent-icon-sheen="" className={sheenClass} />
+        <>
+          <svg
+            aria-hidden="true"
+            width={size}
+            height={size}
+            viewBox={`0 0 ${size} ${size}`}
+            fill="currentColor"
+            className="pointer-events-none absolute inset-0"
+          >
+            <defs>
+              <mask
+                id={maskId(baseId, 'sheen')}
+                x="0" y="0" width="1" height="1"
+                maskUnits="objectBoundingBox"
+                maskContentUnits="userSpaceOnUse"
+                mask-type="alpha"
+              >
+                {/* Reuse the actual ink viewport so letters keep their painted font geometry. */}
+                <g data-agent-icon-mask-ink="" className={markClass}>
+                  <use href={`#${maskId(baseId, 'ink')}`} />
+                </g>
+              </mask>
+            </defs>
+          </svg>
+          {/* Mask the fixed highlight surface; ink and glow stay outside its clip. */}
+          <span
+            aria-hidden="true"
+            data-agent-icon-sheen-mask=""
+            className="pointer-events-none absolute inset-0 overflow-hidden"
+            style={{ maskImage: `url(#${maskId(baseId, 'sheen')})` }}
+          >
+            <span data-agent-icon-sheen="" className={sheenClass} />
+          </span>
+        </>
       )}
     </span>
   )

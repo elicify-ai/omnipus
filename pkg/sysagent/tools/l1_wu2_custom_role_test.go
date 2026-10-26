@@ -31,7 +31,8 @@ func TestL1WU2CustomNativeCreation_SecretGrantsFollowMainVersusWorkerTier(t *tes
 			assert.Equal(t, "Role Subject", ac.Name)
 			for _, name := range []string{"request_secret", "list_secrets", "read_conversation"} {
 				want := config.ToolPolicyAllow
-				if kind == "Subagent" {
+				// SPEC.md Table (2026-10-22): Worker list_secrets is Allow; request_secret/read_conversation stay Off.
+				if kind == "Subagent" && name != "list_secrets" {
 					want = config.ToolPolicyDeny
 				}
 				got, present := ac.Tools.Builtin.Policies[name]

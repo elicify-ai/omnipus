@@ -77,7 +77,7 @@ docker build -t omnipus:heavy -f docker/Dockerfile.heavy .
 
 Run it from the repository root, not from `docker/` — the build context must include the whole tree.
 
-Three stages: `node:24-alpine` builds the SPA into `dist/spa/`; `golang:1.26.10-alpine` copies that output into `pkg/gateway/spa/` (satisfying the `//go:embed all:spa` directive) and builds the binary; `node:24-bookworm-slim` is the runtime, which adds Chrome-for-Testing, Python 3, `uv`/`uvx`, `git`, `jq` and the shared libraries Chrome links against.
+Three stages: `node:24-alpine` builds the SPA into `dist/spa/`; `golang:1.27.3-alpine` copies that output into `pkg/gateway/spa/` (satisfying the `//go:embed all:spa` directive) and builds the binary; `node:24-bookworm-slim` is the runtime, which adds Chrome-for-Testing, Python 3, `uv`/`uvx`, `git`, `jq` and the shared libraries Chrome links against.
 
 Both builder stages are pinned to the **build** platform and cross-compile, so a multi-architecture build does not run `npm ci` and `go build` under emulation:
 
@@ -238,7 +238,7 @@ Either way, the directory layout is the same:
 | `cli.token` | Plaintext CLI key (0600), used by one-shot `omnipus <agent> "…"` runs |
 | `sessions/` | Day-partitioned JSONL transcripts |
 | `tasks/` | Per-task JSON files |
-| `agents/` | Custom agent definitions (AGENT.md + SOUL.md) |
+| `agents/` | Agent home folders, including `SOUL.md` for custom native agents |
 | `logs/` | `gateway.log`, `gateway_panic.log` |
 
 Mount the entire data directory as a single named volume or bind-mount. Splitting sub-paths into separate mounts is not supported.

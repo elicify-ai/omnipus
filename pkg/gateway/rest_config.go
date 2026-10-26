@@ -319,12 +319,20 @@ func (a *restAPI) credentialRefResolves(refName string) (bool, error) {
 // refresh fails the error is returned to the caller so the HTTP handler can surface
 // a 500 rather than silently serving stale state.
 func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) error {
+	return a.safeUpdateConfigWithDeletedChannels(mutate)
+}
+
+// safeUpdateConfigWithDeletedChannels also pins explicit DELETE's exclusion
+// through its later credential/state cleanup. The ordinary updater keeps its
+// fixed callback type for the existing authenticated session-cookie writers.
+func (a *restAPI) safeUpdateConfigWithDeletedChannels(mutate func(m map[string]any) error, exclusiveDeletes ...string) error {
 	// configMu serializes concurrent REST config writes (read-modify-write cycles).
 	// Sysagent mutations go through MutateConfig (al.mu) with SaveConfigLocked,
 	// which does not acquire configMu — so there is no lock ordering conflict.
+	store := a.pairingOrderStore()
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
-	return a.updateConfigJSONLocked(mutate)
+	return a.orderedConfigJSONLocked(store, nil, nil, mutate, exclusiveDeletes...)
 }
 
 // updateConfigJSONLocked is safeUpdateConfigJSON's body with the configMu
@@ -339,11 +347,7 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 // non-reentrant sync.Mutex. See createAgent, updateAgent, updateAgentTools
 // (this file) and putToolPolicies (rest_tool_policies.go) for the pattern.
 func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) error {
-	out, err := a.writeConfigJSONLocked(mutate)
-	if err != nil {
-		return err
-	}
-	return a.applyWrittenConfigLocked(out)
+	return a.orderedConfigJSONLocked(a.pairingOrderStore(), nil, nil, mutate)
 }
 
 // writeConfigJSONLocked is updateConfigJSONLocked's write phase: read
@@ -391,7 +395,7 @@ func (a *restAPI) writeConfigJSONLocked(mutate func(m map[string]any) error) ([]
 // the file watcher, refresh the in-memory config (a failure is returned as
 // *configRefreshError — the write stands on disk) and invalidate the cached
 // system-prompt preambles. Called while a.configMu is held.
-func (a *restAPI) applyWrittenConfigLocked(out []byte) error {
+func (a *restAPI) applyWrittenConfigLocked(out []byte, snapshots ...*config.Config) error {
 	// Register the content hash of what we just wrote so the config file
 	// watcher knows this is an app-initiated write and does not trigger a
 	// full service reload (channels disconnect/reconnect, cron lanes canceled).
@@ -403,7 +407,7 @@ func (a *restAPI) applyWrittenConfigLocked(out []byte) error {
 	// Refresh the in-memory config AND rewire sensitive-data scrubbing.
 	// Propagate the error so callers fail the HTTP request rather than silently
 	// serving stale in-memory state (prevents A1 regression on REST-initiated writes).
-	if refreshErr := a.refreshConfigAndRewireServices(a.configPath()); refreshErr != nil {
+	if refreshErr := a.refreshConfigAndRewireServices(a.configPath(), snapshots...); refreshErr != nil {
 		return &configRefreshError{err: refreshErr}
 	}
 	// refreshConfigAndRewireServices loads the config, and config.LoadConfig may
@@ -532,7 +536,11 @@ func (a *restAPI) populateAgentsListFromStore(cfg *config.Config) error {
 	return populateAgentsListFromEntityStoreStrict(cfg, a.homePath)
 }
 
-func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
+func (a *restAPI) refreshConfigAndRewireServices(configPath string, snapshots ...*config.Config) error {
+	snapshot := a.agentLoop.GetConfig()
+	if len(snapshots) > 0 {
+		snapshot = snapshots[0]
+	}
 	if a.credStore == nil {
 		// No credential store wired — use the plain loader (no v0 migration, no
 		// credential resolution). Safe because without a store there are no
@@ -550,7 +558,9 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 				"agent roster population failed (no credential store variant)", "error", rosterErr)
 			return fmt.Errorf("agent roster population failed: %w", rosterErr)
 		}
-		a.agentLoop.SwapConfig(newCfg)
+		if err := a.publishWrittenConfig(newCfg, snapshot, len(snapshots) > 0); err != nil {
+			return err
+		}
 		// Hot-apply the log level: gateway.log_level is a hot-reload key (not
 		// restart-gated), so a Settings save must take effect immediately
 		// rather than waiting for a manual restart.
@@ -587,7 +597,7 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	enabledRefs := buildEnabledRefMap(newCfg)
 	bundle, bundleErrs := credentials.ResolveBundle(newCfg, a.credStore)
 	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
-	if healthErr := a.credStore.HealthCheck(); healthErr != nil {
+	if healthErr := storeHealthFailure("refresh", a.credStore.HealthCheck()); healthErr != nil {
 		refreshErr := fmt.Errorf("refresh rejected: %w",
 			fatalStoreWideAuthFailure(healthErr, bundleAuth))
 		slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
@@ -629,7 +639,9 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	newCfg.RegisterSensitiveValues(values)
 	// Atomically swap the config pointer so all subsequent requests see the
 	// new config with scrubbing fully re-armed.
-	a.agentLoop.SwapConfig(newCfg)
+	if err := a.publishWrittenConfig(newCfg, snapshot, len(snapshots) > 0); err != nil {
+		return err
+	}
 	// Hot-apply the log level: gateway.log_level is a hot-reload key (not
 	// restart-gated), so a Settings save must take effect immediately
 	// rather than waiting for a manual restart.

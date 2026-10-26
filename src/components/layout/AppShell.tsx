@@ -5,7 +5,6 @@ import { AgentProfile } from '@/components/agents/AgentProfile'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
 import { Button } from '@/components/ui/button'
-import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspaceApprovalBanner'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { INLINE_TOOL_APPROVALS_ENABLED } from '@/lib/featureSwitches'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
@@ -202,8 +201,8 @@ export function AppShell() {
 
       {/* The ONE store-driven agent editor (AgentProfile). It reads
           editAgentId, so it must be hosted exactly once at the shell level:
-          the sidebar's row-menu Edit, the Team tab, and the Agents screen all
-          open this same instance, and a second host anywhere would open a
+          the sidebar's row-menu Edit, the Team tab, and Settings → System
+          agents all open this same instance, and a second host anywhere would open a
           second simultaneous sheet (CR F6). */}
       <AgentProfile />
 
@@ -271,10 +270,9 @@ export function AppShell() {
                 </div>
               )}
 
-              {/* "Waiting in another chat" notice (L1 amendment §1.2 R6) —
-              hidden until WU-8 (stage 2): founder design = card in parent
-              chat, no banner, menu-bar attention animation. */}
-              {INLINE_TOOL_APPROVALS_ENABLED && <CrossWorkspaceApprovalBanner />}
+              {/* No "waiting in another chat" notice (founder ruling
+              2026-10-18): an approval shows as a card in its parent chat and
+              lights that main's sidebar attention cue; nothing else. */}
 
               {/* Screen content — relative so children can use absolute inset-0 for bounded scrolling */}
               <main id="main-content" tabIndex={-1} className="flex-1 relative min-h-0 overflow-hidden">

@@ -19,7 +19,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	whatsappnative "github.com/elicify-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/google/uuid"
 )
 
@@ -165,13 +164,13 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			a.setChannelEnabled(w, channelID, true)
+			a.enableChannel(w, r, channelID)
 		case "disable":
 			if r.Method != http.MethodPut {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			a.setChannelEnabled(w, channelID, false)
+			a.disableChannel(w, channelID)
 		case "configure":
 			if r.Method != http.MethodPut {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -687,25 +686,9 @@ func (scr *restAPISetChannelRouting) handleBound() bool {
 			}
 		}
 
-		// Re-stamp workspace_id onto every session that already existed for
-		// this channel BEFORE the bind — resolveOrCreateChannelSession
-		// (pkg/agent/loop.go) only stamps workspace_id at session CREATION
-		// time and explicitly does not patch already-existing sessions.
-		// Without this, an existing conversation keeps routing delegation
-		// trust, memory rooms, and task-board placement against the stale
-		// (or empty, silently-default-substituted) workspace forever, even
-		// though new messages on the SAME conversation resolve the new
-		// agent via routing. See restampChannelSessionsWorkspace's doc
-		// comment for the full rationale.
-		if store := scr.a.agentLoop.GetSessionStore(); store != nil {
-			if n, rsErr := restampChannelSessionsWorkspace(store, scr.channelID, scr.workspaceID); rsErr != nil {
-				slog.Warn("rest: setChannelRouting: restamp existing sessions",
-					"instance_id", scr.channelID, "workspace_id", scr.workspaceID, "error", rsErr)
-			} else if n > 0 {
-				slog.Info("rest: setChannelRouting: restamped existing sessions to bound workspace",
-					"instance_id", scr.channelID, "workspace_id", scr.workspaceID, "count", n)
-			}
-		}
+		// Existing conversations keep their original workspace and archive.
+		// Connector intake resolves the new pair's conversation; the legacy
+		// channel-session lookup creates a fresh scoped session on mismatch.
 
 		// FR-129: a valid binding clears the routing degradation, so the
 		// channel's status stops reporting the drop the binding just repaired.
@@ -718,90 +701,6 @@ func (scr *restAPISetChannelRouting) handleBound() bool {
 		})
 		return true
 	}
-}
-
-// restampChannelSessionsWorkspace re-stamps WorkspaceID on every existing
-// session belonging to the given channel base type (e.g. "whatsapp" for
-// both the bare "whatsapp" instance key and namespaced ones like
-// "whatsapp.eu"). SessionMeta.Channel persists only the bare channel TYPE,
-// never the instance slug (see pkg/agent/loop.go::resolveOrCreateChannelSession's
-// NewChannelSession(channel, chatID, ...) call, which is handed msg.Channel —
-// the bare type — not the instance ID) — so this is the finest granularity
-// the session data model supports today. On an install with two instances
-// of the same channel type (e.g. "whatsapp.eu" and "whatsapp.us"), binding
-// one instance's workspace will also restamp the other instance's sessions,
-// because they are indistinguishable at the session-meta level; that is a
-// pre-existing limitation of SessionMeta (no InstanceID field), not
-// something introduced here, and fixing it would require a session schema
-// change outside this handler's scope.
-//
-// Closes the gap where setChannelRouting updated cfg.Channels[id].WorkspaceID
-// but left every session created BEFORE the change pinned to its stale
-// workspace_id forever: resolveOrCreateChannelSession only stamps
-// workspace_id at session CREATION time and its own doc comment concedes
-// "Already-existing sessions are NOT patched." A stale or empty workspace_id
-// is not a safe no-op — resolveEffectiveWorkspaceID (pkg/agent/loop.go)
-// silently substitutes the operator's default workspace, so a stale stamp
-// routes delegation trust (ADR-037), memory rooms, and task-board placement
-// against the WRONG workspace's graph.
-//
-// newWorkspaceID may be "" to clear the stamp (the unbind case). Every
-// matching session's WorkspaceID is unconditionally overwritten with
-// newWorkspaceID (skipping sessions that already match, to avoid a
-// no-op SetMeta write) — this must be able to MOVE a session off a stale
-// workspace onto a new one on re-bind, so it deliberately does not use the
-// non-clobber-once-set policy pkg/gateway/schedules.go's
-// stampScheduledSessionWorkspace uses for a different (single-anchor)
-// purpose.
-//
-// Only sessions whose Channel field equals baseType are touched — webchat
-// and other-channel sessions are never affected. A per-session SetMeta
-// failure is logged and does not abort the rest of the batch; the returned
-// count is the number of sessions successfully updated, and the returned
-// error (if any) is the first SetMeta failure encountered, for the caller's
-// own WARN log.
-// restampChannelSessionsWorkspace moves the sessions of ONE channel instance
-// onto a new workspace.
-//
-// It matches on the INSTANCE key, never the bare channel type. An install can
-// hold many instances of one platform — a hundred WhatsApp numbers, each bound
-// to its own (workspace, agent) pair under ADR-029 — and every one of their
-// sessions records Channel=="whatsapp". Matching on type would relabel all
-// hundred when an operator re-binds one of them: the very bug this restamp
-// exists to fix, inflicted on the other ninety-nine.
-//
-// A session with NO instance key is left alone. Those predate the field, so
-// "unknown" is the honest reading; guessing from the type is exactly the
-// conflation above. Their workspace still resolves correctly at turn time via
-// processMessage's channel-instance fallback whenever it is empty.
-func restampChannelSessionsWorkspace(store *session.UnifiedStore, instanceID, newWorkspaceID string) (int, error) {
-	if store == nil || instanceID == "" {
-		return 0, nil
-	}
-	sessions, err := store.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
-		return m != nil && m.InstanceID != "" && m.InstanceID == instanceID
-	})
-	if err != nil {
-		return 0, fmt.Errorf("list sessions for channel instance %q: %w", instanceID, err)
-	}
-	updated := 0
-	var firstErr error
-	for _, m := range sessions {
-		if m.WorkspaceID == newWorkspaceID {
-			continue // already correct — skip the redundant write
-		}
-		wsCopy := newWorkspaceID
-		if setErr := store.SetMeta(m.ID, session.MetaPatch{WorkspaceID: &wsCopy}); setErr != nil {
-			slog.Warn("rest: restampChannelSessionsWorkspace: SetMeta failed",
-				"session_id", m.ID, "instance_id", instanceID, "workspace_id", newWorkspaceID, "error", setErr)
-			if firstErr == nil {
-				firstErr = fmt.Errorf("session %q: %w", m.ID, setErr)
-			}
-			continue
-		}
-		updated++
-	}
-	return updated, firstErr
 }
 
 // createChannelInstance handles POST /api/v1/channels (ADR-029 FR-024/FR-025,
@@ -918,7 +817,6 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		jsonErr(w, http.StatusNotFound, "unknown instance")
 		return
 	}
-
 	// Snapshot credential ref names to delete AFTER the config write.
 	chBaseType, _ := config.ParseInstanceKey(channelID)
 	var credRefs []string
@@ -939,7 +837,8 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 	}
 
 	// Step 2: remove config entry and stale wildcard binding atomically.
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	var refreshFailure error
+	if err := a.safeUpdateConfigWithDeletedChannels(func(m map[string]any) error {
 		channels, _ := m["channels"].(map[string]any)
 		if channels != nil {
 			delete(channels, channelID)
@@ -977,11 +876,21 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 			}
 		}
 		return nil
-	}); err != nil {
-		slog.Error("rest: delete channel instance: save config", "id", channelID, "error", err)
-		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
-		return
+	}, channelID); err != nil {
+		var refreshErr *configRefreshError
+		if !errors.As(err, &refreshErr) {
+			slog.Error("rest: delete channel instance: save config", "id", channelID, "error", err)
+			jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
+			return // pre-persistence failure: no accepted deletion to finalize
+		}
+		// The removal IS durable. Finish this captured deletion's cleanup and
+		// finalizer even when its loaded-state publication failed. Returning
+		// here would strand an absent entry behind an unreachable exclusion.
+		refreshFailure = err
 	}
+	// The durable local commit already closed admission. Keep that barrier
+	// through captured resource/state cleanup; a failed save changed no pairing.
+	defer a.agentLoop.EndPairingDelete(channelID, true)
 
 	// Step 2b (FINAL-REVIEW Medium-High — leaked running channel): reload the
 	// manager NOW, after the config entry is removed but BEFORE the credential and
@@ -1054,54 +963,84 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 	}
 
 	slog.Info("rest: deleted channel instance", "id", channelID, "type", chBaseType, "cleanup_failed", cleanupFailed)
+	if refreshFailure != nil {
+		jsonServerFailure(w, http.StatusInternalServerError,
+			fmt.Sprintf("channel %s removal saved, but the running configuration could not be refreshed", channelID), refreshFailure)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) {
+func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) bool {
+	if a.applyChannelEnabled(w, channelID, enabled, channelEnableOptions{requireExisting: !enabled}) == enableFailed {
+		return false
+	}
+	jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: enabled})
+	return true
+}
+
+// enableOutcome is applyChannelEnabled's result. enableFailed means the
+// refusal or failure response is already written.
+type enableOutcome int
+
+const (
+	enableFailed enableOutcome = iota
+	enableConfirmed
+	enableUnconfirmed // saved; the reload did not confirm within its wait
+)
+
+// enableSavedHook is a test seam (gate r4 T2-SF-15): it runs after an
+// enable/disable local transaction committed and released both locks. Nil in
+// production; deferred work must retain that transaction's exact identity.
+var enableSavedHook func(channelID string)
+
+// channelEnableOptions shapes applyChannelEnabled.
+type channelEnableOptions struct {
+	// requireExisting refuses a missing instance with 404 instead of creating
+	// it (a disable, a chat Retry — gate r3 M12).
+	requireExisting bool
+	retryRequest    *http.Request
+	requestID       string
+	sessionID       string
+	attemptID       *string
+	// reservedAttempt is an internal continuation's exact earlier admission.
+	reservedAttempt string
+	// afterCommit is a post-transaction notification, never readiness/revocation.
+	afterCommit func(http.ResponseWriter) bool
+}
+
+// applyChannelEnabled saves channelID's enabled flag and reloads so the
+// channel starts or stops; it writes only refusal and failure responses.
+func (a *restAPI) applyChannelEnabled(w http.ResponseWriter, channelID string, enabled bool, opts channelEnableOptions) enableOutcome {
 	baseType, _ := config.ParseInstanceKey(channelID)
 	if !validChannelIDs[baseType] {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
-		return
+		return enableFailed
 	}
-	if enabled {
-		// Stage 1 of the channel-Test redesign: enabling a channel with an
-		// incomplete config must be rejected, not silently persisted — an
-		// enabled-but-incomplete channel would fail to construct on the next
-		// reload/boot. Disabling never validates (turning a channel off is
-		// always safe). readChannelConfigRaw returns {} for a channel with no
-		// persisted section yet.
-		stored, err := a.readChannelConfigRaw(channelID)
-		if err != nil {
-			slog.Error("rest: read config for channel enable validation", "channel", channelID, "error", err)
-			jsonServerFailure(w, http.StatusInternalServerError, "could not read config", err)
-			return
+	if err := a.saveChannelEnabled(w, channelID, baseType, enabled, opts); err != nil {
+		if errors.Is(err, errChannelEnableRefused) {
+			return enableFailed
 		}
-		if msg := validateChannelConfigComplete(baseType, stored, nil, nil); msg != "" {
-			jsonErr(w, http.StatusBadRequest, msg)
-			return
+		if errors.Is(err, errChannelAbsent) {
+			if opts.retryRequest != nil {
+				jsonErr(w, http.StatusNotFound, "this WhatsApp connection no longer exists; nothing was enabled")
+				return enableFailed
+			}
+			jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
+			return enableFailed
 		}
-	}
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		channels, _ := m["channels"].(map[string]any)
-		if channels == nil {
-			channels = map[string]any{}
-			m["channels"] = channels
-		}
-		ch, _ := channels[channelID].(map[string]any)
-		if ch == nil {
-			ch = map[string]any{}
-			channels[channelID] = ch
-		}
-		// Persist the type discriminator. For bare type keys the base type equals
-		// the key; for namespaced instance keys ("whatsapp.eu") the type is the
-		// pre-dot segment (ADR-029 Gate 0 / FR-017).
-		ch["type"] = baseType
-		ch["enabled"] = enabled
-		return nil
-	}); err != nil {
 		slog.Error("rest: set channel enabled", "channel", channelID, "enabled", enabled, "error", err)
+		var refreshErr *configRefreshError
+		if errors.As(err, &refreshErr) {
+			// The setting IS saved on disk; only the running configuration
+			// was not refreshed. Never report it as not saved (gate r4
+			// R4-A06). Nothing starts from this request.
+			jsonServerFailure(w, http.StatusInternalServerError,
+				fmt.Sprintf("channel %s setting saved, but the running configuration could not be refreshed", channelID), err)
+			return enableFailed
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
-		return
+		return enableFailed
 	}
 	// #358: persisting channels.<id>.enabled via safeUpdateConfigJSON only swaps the
 	// in-memory config pointer (refreshConfigAndRewireServices → SwapConfig); it does
@@ -1112,6 +1051,17 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 	// unwired reload pipeline (the unit-test environment) as a no-op and only returns an
 	// error on a genuine reload failure, which we surface rather than reporting a false
 	// success (the flag persisted but the channel did not start).
+	if enableSavedHook != nil {
+		enableSavedHook(channelID) // test seam: the window after the save
+	}
+	if opts.attemptID != nil && *opts.attemptID != "" && !a.agentLoop.CommitPairing(channelID, *opts.attemptID) {
+		jsonErr(w, http.StatusInternalServerError, pairingCancelledText)
+		return enableFailed
+	}
+	if opts.afterCommit != nil && !opts.afterCommit(w) {
+		return enableFailed
+	}
+	outcome := enableConfirmed
 	if a.agentLoop != nil {
 		if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 			verb := "start"
@@ -1122,8 +1072,9 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 				"channel", channelID, "enabled", enabled, "error", err)
 			jsonErr(w, http.StatusInternalServerError,
 				fmt.Sprintf("channel %s saved but failed to %s. Details are in the server log.", channelID, verb))
-			return
+			return enableFailed
 		} else if !confirmed {
+			outcome = enableUnconfirmed
 			verb := "start"
 			if !enabled {
 				verb = "stop"
@@ -1133,7 +1084,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 				"channel", channelID, "enabled", enabled)
 		}
 	}
-	jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: enabled})
+	return outcome
 }
 
 // redactChannelConfig returns a copy of cfg with sensitive fields replaced by a

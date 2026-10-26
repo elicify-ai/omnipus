@@ -40,7 +40,8 @@ properties:
   name:
     type: string
     minLength: 1
-    description: Display name for the new agent.
+    maxLength: 100
+    description: Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
     example: "My Custom Agent"
   description:
     type: string

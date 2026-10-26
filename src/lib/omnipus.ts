@@ -15,6 +15,7 @@
  */
 import type { Agent, Workspace } from '@/lib/api'
 import { mainSessionIdOfMember } from '@/lib/nav/sessionCoreSeam'
+import { isChatEligibleAgent } from '@/lib/agentKind'
 
 export const OMNIPUS_AGENT_ID = 'omnipus'
 export const JUDGE_AGENT_ID = 'judge'
@@ -54,8 +55,12 @@ export function isConversationAgent(agent: Pick<Agent, 'id' | 'type'>): boolean 
 /**
  * Team-eligible for the add-existing picker (FR-104): conversation agents and
  * workers; never Omnipus, Judge, Plan Supervisor or any other system agent.
+ * A `core` agent is a shipped built-in, so it is eligible only while it is a
+ * current chat built-in (lib/agentKind.ts::isChatEligibleAgent): a retired
+ * built-in that a stale agents cache still carries is never offered (FR-008).
  */
 export function isTeamEligible(agent: Pick<Agent, 'id' | 'type'>): boolean {
+  if (agent.type === 'core' && !isChatEligibleAgent(agent)) return false
   return teamKindOf(agent) !== null
 }
 
