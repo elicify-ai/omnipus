@@ -37,6 +37,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // TestRecoverOrphan_Wired_In_SessionLoadPath drives the full session-load →
@@ -82,6 +83,13 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
+	// DESIGN 2: recovery needs the real lifecycle/execution identity. The
+	// legacy V2.D fixture predated the shared messaging stores; wire the same
+	// real stores every other fixture uses (no lifecycle store means the
+	// pre-model fence refuses any turn with orphans, by design).
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(workspaceDir, "session_messages")),
+		session.NewLifecycleStore(filepath.Join(workspaceDir, "session_lifecycle")))
 
 	// Resolve the session key the direct turn will use: the explicit-agent
 	// route's key for channel "cli", chat "direct" ("mia" is the only agent
