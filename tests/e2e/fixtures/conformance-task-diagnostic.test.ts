@@ -31,7 +31,19 @@ function fixture(calls: unknown[] = [], earlier = false, later = false) {
       }]
   const toolIds = calls.flatMap(value => typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string' ? [value.id] : [])
   const partial = earlier || later
-  const history = historyPage(messages.map(message => MessageSchema.parse(message)), {
+  const history = historyPage(messages.map(message => {
+    const parsed = MessageSchema.parse(message)
+    return {
+      ...parsed,
+      tool_calls: parsed.tool_calls?.map(toolCall => {
+        // The generated runtime applies ToolCall's optional/default-full contract.
+        // Fail loudly if that prerequisite is absent; never invent a fallback.
+        const content_state = toolCall.content_state
+        if (content_state === undefined) throw new Error('Generated tool-call content state default is missing.')
+        return { ...toolCall, content_state }
+      }),
+    }
+  }), {
     sessionId: SESSION, earlier, later, rows: 1 + new Set(toolIds).size,
     info: partial ? { stop_reason: 'clear', stopped_at_clear: true } : {},
   })
@@ -305,4 +317,20 @@ describe('paged-history carrier contract for the existing safe diagnostic', () =
       expect(JSON.stringify(safe)).not.toContain(SECRET)
     })
   }
+})
+
+
+describe('generated tool-call default at the diagnostic metadata boundary', () => {
+  it('applies the real full default without rewriting original raw call inputs', () => {
+    const rawCall = call()
+    Reflect.deleteProperty(rawCall, 'content_state')
+    const before = JSON.stringify(rawCall)
+    const input = fixture([rawCall])
+    const parsed = MessageSchema.parse(input.detail.messages[0])
+    expect(parsed.tool_calls?.[0]?.content_state).toBe('full')
+    expect(rawCall).not.toHaveProperty('content_state')
+    expect(JSON.stringify(input.detail.messages[0].tool_calls[0])).toBe(before)
+    expect(projectStandaloneTaskDiagnostic(input.task, input.detail).classification).toBe('successful_goal_claim')
+    expect(JSON.stringify(projectStandaloneTaskDiagnostic(input.task, input.detail))).not.toContain(SECRET)
+  })
 })

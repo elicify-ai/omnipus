@@ -86,7 +86,7 @@ function classifyCall(call: ParsedToolCall): Classification {
 
 // Structural parsing and the canonical semantic validator are complementary.
 // Missing/unavailable history is never successful empty history.
-function readableHistory(detail: SessionDetailWire): boolean {
+function readableHistory(detail: ReturnType<typeof SessionDetail.parse>): boolean {
   if (detail.history_state.status !== 'available' ||
       detail.history_state.reason !== undefined || detail.history_state.message !== undefined ||
       detail.messages === undefined || detail.page_info === undefined ||
