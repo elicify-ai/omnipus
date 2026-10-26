@@ -7,7 +7,7 @@ import { useConnectionStore } from '@/store/connection'
 import { mergeRecordedSessionTokens } from './session-usage'
 import { isPendingTailMessage } from './cursor'
 import { emptyHistoryState, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
-import { applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, settleHistorySpans } from './history-merge'
+import { applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, rememberHistoryReadFacts, settleHistorySpans } from './history-merge'
 export { emptyHistoryState } from './history-state'
 export type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing, SessionHistoryState, SessionHistoryRange, HistoryRequestState } from './types'
 
@@ -117,7 +117,8 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
       const live = liveOrder.flatMap(id => b.messagesById[id] ? [b.messagesById[id]] : [])
       // Refreshed saved rows re-settle their spans exactly as a page commit
       // does, or a reconstructed helper row would lose its span (I3).
-      const spans = settleHistorySpans(sid, [...rows, ...pending], ordered, contexts)
+      rememberHistoryReadFacts(sid, rows, contexts)
+      const spans = settleHistorySpans(sid, [...rows, ...pending])
       const patch = historyRowsPatch(b, [...spans.rows, ...live], ordered)
       return { ...patch, messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: liveOrder,
         spanBySpanId: { ...patch.spanBySpanId, ...spans.index },
