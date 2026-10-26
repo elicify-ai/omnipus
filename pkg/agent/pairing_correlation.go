@@ -43,25 +43,26 @@ func (al *AgentLoop) admitPairing(channelID string, kind channels.PairingAdmissi
 	if store == nil {
 		return "", ErrPairingUnavailable
 	}
-	// gate r5 R5-A05/r6; security review F1: the stale-ready decision and the
-	// admission run under ONE ordering boundary. The current revision is read
-	// inside that boundary — while the channel order is held, matching the
-	// guard → al.mu direction of CommitPairing — never from a snapshot taken
-	// earlier, so an older snapshot can never interrupt a newer ready
-	// attempt. The close is applied only when this very admission is granted:
-	// a foreign Retry whose own ownership check would refuse interrupts
-	// nothing. The interruption envelope is stamped inside the boundary and
-	// published AFTER the order is released (security review F3): the event
-	// bus's synchronous gateway tap re-enters this same order, so publishing
-	// under it would self-deadlock.
+	// gate r5 R5-A05/r6; security review F1 (chief ruling C+D): the
+	// stale-ready decision and the admission run under ONE ordering boundary.
+	// The close fires only when the served configuration no longer contains
+	// the connector — the attempt can provably never start. When the
+	// connector is still served, an in-flight ready attempt refuses the
+	// admission untouched: the served snapshot cannot prove it is newer than
+	// a durable commit (the CheckConfigSnapshot skew), so the conservative
+	// choice is to refuse. The interruption envelope is stamped inside the
+	// boundary and published AFTER the order is released (security review
+	// F3): the event bus's synchronous gateway tap re-enters this same
+	// order, so publishing under it would self-deadlock.
 	order := store.LockChannel(channelID)
 	rec, interrupted, err := order.AdmitClosingStaleReady(context.Background(), kind, owner,
-		func() (string, bool) {
+		func() bool {
 			cfg := al.GetConfig()
 			if cfg == nil {
-				return "", false
+				return false
 			}
-			return channels.ChannelRevision(cfg, channelID), true
+			_, present := cfg.Channels[channelID]
+			return present
 		})
 	order.Unlock()
 	if interrupted != nil {
