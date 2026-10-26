@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -19,6 +20,33 @@ func recoveryReadOnly(tool tools.Tool) bool {
 	default:
 		return false
 	}
+}
+
+// witnessFaultReason classifies a witness read failure into its safe fault
+// class (SF5, DESIGN 2/5): the saved hold reason names the failed evidence
+// operation and keeps the underlying storage/decoder distinction, without
+// leaking storage paths. Malformed JSON and genuinely missing storage need
+// different repair actions; the generic not-provable text erases both.
+func witnessFaultReason(err error) string {
+	class := "is unreadable and the fault could not be classified"
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, fs.ErrNotExist):
+		class = "is missing from recovery storage (no such file)"
+	case errors.Is(err, fs.ErrPermission):
+		class = "cannot be read with current storage permissions"
+	default:
+		var syntaxErr *json.SyntaxError
+		var typeErr *json.UnmarshalTypeError
+		switch {
+		case errors.As(err, &syntaxErr):
+			class = "is malformed and fails to decode (invalid JSON syntax or character)"
+		case errors.As(err, &typeErr):
+			class = "is malformed and fails to decode (invalid JSON value)"
+		}
+	}
+	return "file-effect witness " + class
 }
 
 func (al *AgentLoop) recoveryReadContext(ctx context.Context, rec *session.LifecycleRecord, inst *AgentInstance) (context.Context, error) {
@@ -57,6 +85,7 @@ func (al *AgentLoop) recoverSessionToolCalls(ctx context.Context, inst *AgentIns
 	orphans := findOrphanedToolCalls(history)
 	unresolvedTargets := map[string]int{}
 	witnesses := map[restartCallIdentity]tools.FileEffectWitness{}
+	witnessFaults := map[restartCallIdentity]error{}
 	for _, o := range orphans {
 		slot, found := view.Slot(lines[o.assistantIndex])
 		if !found {
@@ -66,6 +95,11 @@ func (al *AgentLoop) recoverSessionToolCalls(ctx context.Context, inst *AgentIns
 		if e == nil {
 			witnesses[restartCallIdentity{assistantIndex: o.assistantIndex, toolCallID: o.ToolCallID}] = w
 			unresolvedTargets[w.Target]++
+		} else {
+			// SF5 (DESIGN 2/5): the specific safe fault class survives into the
+			// saved hold reason, so the repair report names what actually failed
+			// instead of the generic not-provable text.
+			witnessFaults[restartCallIdentity{assistantIndex: o.assistantIndex, toolCallID: o.ToolCallID}] = e
 		}
 	}
 	resolve := func(o orphanedToolCall) (recoveryObservation, error) {
@@ -76,7 +110,11 @@ func (al *AgentLoop) recoverSessionToolCalls(ctx context.Context, inst *AgentIns
 		ob := recoveryObservation{Disposition: tools.FileEffectUnknown, Reason: "no current-state proof adapter", Assistant: slot.Addr, Execution: slot.Source.Execution}
 		tool, found := inst.Tools.GetIncludingHidden(o.ToolName)
 		if _, supported := tool.(tools.FileEffectReconciler); supported {
-			ob.Reason = "file-effect witness, issuing identity or current read context is not provable"
+			if fault := witnessFaults[restartCallIdentity{assistantIndex: o.assistantIndex, toolCallID: o.ToolCallID}]; fault != nil {
+				ob.Reason = witnessFaultReason(fault)
+			} else {
+				ob.Reason = "file-effect witness, issuing identity or current read context is not provable"
+			}
 		}
 		if found && recoveryReadOnly(tool) {
 			ob.Disposition = tools.FileEffectAbsent

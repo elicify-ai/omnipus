@@ -483,10 +483,13 @@ func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationCha
 	restoreAccounting := ts.holdFollowingCallAccounting()
 	defer restoreAccounting()
 	ts.appendIntermediateAssistantTranscript(pending)
-	if !ts.opts.NoHistory && ts.agent != nil && ts.agent.Sessions != nil {
-		if err := ts.agent.Sessions.AddMessage(ts.contextKey(), "assistant", pending); err != nil {
-			return err
-		}
+	// C3/A2 (DESIGN 3): a flushed continuation prefix is the model's own
+	// derived narration and must carry the same trusted causal scope as every
+	// other assistant entry, or room retirement can never match and retire
+	// it. The window append stamps Source.RoomScope/RoomRequest exactly like
+	// the ordinary assistant path; AddMessage bypassed that stamping.
+	if _, err := ts.appendWindowMessage(providers.Message{Role: "assistant", Content: pending}, windowProducerAssistant); err != nil {
+		return err
 	}
 	return nil
 }

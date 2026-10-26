@@ -148,6 +148,11 @@ type ErrorEvent struct {
 	Message string
 	// Fatal is true when the run cannot continue after this error.
 	Fatal bool
+	// LimitExceeded is true only when the DRIVER itself, in code, detected
+	// that the run crossed its own configured turn cap (A4 / DESIGN 1). It
+	// distinguishes that typed, positively identified ceiling from arbitrary
+	// vendor error prose, which must stay a generic failure.
+	LimitExceeded bool
 }
 
 // PermissionDecision is the verdict returned to the external agent for a

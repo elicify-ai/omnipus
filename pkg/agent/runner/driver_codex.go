@@ -430,8 +430,9 @@ func (d *CodexDriver) parseLine(
 				Kind:  EventKindError,
 				RunID: runID,
 				Err: &ErrorEvent{
-					Message: fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns),
-					Fatal:   true,
+					Message:       fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns),
+					Fatal:         true,
+					LimitExceeded: true,
 				},
 			}, true
 		}

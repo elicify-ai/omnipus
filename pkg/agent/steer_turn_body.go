@@ -208,6 +208,21 @@ func (al *AgentLoop) runExternalCLISteeredTurn(ctx context.Context, rec *session
 	if answer == "" {
 		answer = strings.TrimSpace(result.ForLLM)
 	}
+	// A4 (DESIGN 1): a driver-detected turn cap is a typed, code-owned
+	// ceiling. The child ends Interrupted/tool_limit — nonfatal, frozen
+	// round, no FailedReason — exactly like the native ceiling path;
+	// completionDisposition's typed arm routes it to OutcomeToolLimit.
+	// Arbitrary vendor error prose keeps the generic Failed outcome below.
+	var limitErr *externalTurnLimitError
+	if errors.As(runErr, &limitErr) {
+		ts.markInterrupted(session.InterruptionToolLimit)
+		return turnResult{
+			status:             TurnEndStatusCompleted,
+			finalContent:       answer,
+			turnFailed:         false,
+			interruptionReason: session.InterruptionToolLimit,
+		}, runErr
+	}
 	status := TurnEndStatusCompleted
 	if runErr != nil {
 		status = TurnEndStatusError

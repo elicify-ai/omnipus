@@ -1092,6 +1092,15 @@ type curatedTurnError struct{ text string }
 
 func (e *curatedTurnError) Error() string { return e.text }
 
+// externalTurnLimitError marks a fatal runner error the DRIVER itself raised
+// in code after detecting that the run crossed its own configured turn cap
+// (A4 / DESIGN 1). It is a positively identified ceiling: the steered
+// external body ends the child Interrupted/tool_limit nonfatally instead of
+// guessing a ceiling from vendor prose, which stays a generic failure.
+type externalTurnLimitError struct{ text string }
+
+func (e *externalTurnLimitError) Error() string { return e.text }
+
 // RefusalText is the Omnipus-authored sentence, readable as written by the
 // delegate tool's refusal to the calling agent (pkg/tools.refusalTexter).
 func (e *curatedTurnError) RefusalText() string { return e.text }
