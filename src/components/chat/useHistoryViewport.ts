@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
+import { useRouter } from '@tanstack/react-router'
 import type { ChatMessage } from '@/store/chat'
 import { emptyHistoryState, useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
@@ -425,6 +426,24 @@ export function useHistoryViewport(scrollRef: RefObject<HTMLDivElement | null>, 
     if (!scroller) return
     return observeHistoryLayout(scroller, rows, () => { correct(); measure() })
   }, [messages, correct, measure, rows, scrollRef])
+  // TanStack Router (main.tsx scrollRestoration) writes back the saved
+  // scrollTop of every element that scrolled on a location when it renders
+  // that location again. For the conversation that write is application-owned
+  // placement, never reader movement (D8 T21 clarification), and this hook is
+  // the one coordinator of the position (D8; D9: returning opens the newest
+  // page). Our listener runs after the router's restorer in the same emit.
+  const router = useRouter({ warn: false })
+  useLayoutEffect(() => {
+    if (!router) return
+    return router.subscribe('onRendered', () => {
+      const scroller = scrollRef.current
+      if (!scroller || !current.current.sid) return
+      if (current.current.history.viewMode === 'historical') { correct(); return }
+      scroller.scrollTop = scroller.scrollHeight
+      ownedTop.current = scroller.scrollTop
+      lastTop.current = scroller.scrollTop
+    })
+  }, [router, correct, scrollRef])
   const busy = Object.values(history.requests).some(request => request.status === 'loading')
   /** Record a placement the list itself made (e.g. a virtualizer size adjustment). */
   const claimScroll = useCallback(() => {
