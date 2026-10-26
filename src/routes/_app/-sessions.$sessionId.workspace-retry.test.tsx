@@ -186,7 +186,7 @@ describe('workspace lookup Retry after the bounded wait', () => {
         await vi.advanceTimersByTimeAsync(1)
       })
       expect(navigate).toHaveBeenCalledExactlyOnceWith({
-        to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' }, replace: true,
+        to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' }, search: { open: mockSessionId }, replace: true,
       })
       expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('ws-1')
       expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toStrictEqual({
@@ -208,7 +208,7 @@ describe('workspace lookup Retry after the bounded wait', () => {
       expect(vi.getTimerCount(), 'no timer remains after leaving the resolved route; none are cleared by the test').toBe(0)
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
       expect(navigate, 'no second late move').toHaveBeenCalledExactlyOnceWith({
-        to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' }, replace: true,
+        to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' }, search: { open: mockSessionId }, replace: true,
       })
       expect(pendingQueries()).toStrictEqual([])
       expect(vi.getTimerCount()).toBe(0)
