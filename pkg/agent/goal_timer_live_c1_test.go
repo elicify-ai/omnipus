@@ -348,7 +348,7 @@ func c1LiveProgress(t *testing.T) {
 	for _, entry := range entries {
 		for _, call := range entry.ToolCalls {
 			if call.Tool == "read_file" && call.Parameters["path"] == reader.path {
-				require.Equal(t, "completed", call.Status)
+				require.Equal(t, "success", call.Status)
 				reads++
 			}
 		}
