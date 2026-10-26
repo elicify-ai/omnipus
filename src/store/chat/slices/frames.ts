@@ -40,7 +40,7 @@ import { handleRoomFrame } from './room-frames'
 import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
-import { appendErrorNotice, handleJudgeConclusionErrorFrame } from './error-notice-frames'
+import { appendErrorNotice, handleJudgeConclusionErrorFrame, handleMediaUnavailableNoticeFrame } from './error-notice-frames'
 
 
 
@@ -1082,6 +1082,13 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
 
       refreshSessionListForFrame(frame.type, get().sessionsById[targetSid ?? '']?.isReplaying === true)
       if (handleJudgeConclusionErrorFrame(frame, withBucket)) {
+        syncForeground()
+        return
+      }
+      // Issue #1435 R3 item 1: the informational media_unavailable notice
+      // must never end the running turn — same non-terminal routing as the
+      // judge-conclusion handler above.
+      if (handleMediaUnavailableNoticeFrame(frame, withBucket)) {
         syncForeground()
         return
       }

@@ -3,6 +3,7 @@ package media
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -450,9 +451,18 @@ func (s *FileMediaStore) CleanExpired() int {
 		// store's lock — the retention sweep deletes the session tree, and
 		// only REST session deletion reaches ReleaseAll — would otherwise
 		// leave a dead mapping pinned in the running store until process
-		// end. A pinned ref whose stored file is gone is stale: release the
-		// mapping here (forget_only entries lose only the ref, never a
-		// file), so every session-removal path is covered, not just REST.
+		// end. A pinned ref whose stored file is CONFIRMED gone is stale:
+		// release the mapping here (forget_only entries lose only the ref,
+		// never a file), so every session-removal path is covered, not just
+		// REST.
+		//
+		// Issue #1435 R3 item 3: only a CONFIRMED absence releases the pin.
+		// A temporary stat/permission/storage fault (the uploads directory
+		// briefly offline, an EACCES, anything that is not
+		// fs.ErrNotExist) proves nothing about the file's existence — the
+		// pin holds and the entry stays resolvable so a recovered mount
+		// finds the same accepted ref exactly where the conversation left
+		// it.
 		//
 		// The lifetime pin is FORGET_ONLY-only by policy: the upload
 		// handler registers an upload whose owning session does not exist
@@ -461,7 +471,13 @@ func (s *FileMediaStore) CleanExpired() int {
 		// scope alone would re-pin the very refs the policy choice exempted.
 		if scope, ok := s.refToScope[ref]; ok {
 			if pinnedScope := strings.HasPrefix(scope, SessionInlineScopePrefix) || strings.HasPrefix(scope, SessionUploadScopePrefix); pinnedScope && entry.meta.CleanupPolicy == CleanupPolicyForgetOnly {
-				if _, statErr := os.Stat(entry.path); statErr == nil {
+				_, statErr := os.Stat(entry.path)
+				if statErr == nil {
+					continue
+				}
+				if !errors.Is(statErr, fs.ErrNotExist) {
+					logger.WarnCF("media", "cleanup: temporary stat failure — session-pinned ref kept",
+						map[string]any{"ref": ref, "path": entry.path, "scope": scope, "error": statErr.Error()})
 					continue
 				}
 				logger.WarnCF("media", "cleanup: releasing session-pinned ref whose stored file is gone",

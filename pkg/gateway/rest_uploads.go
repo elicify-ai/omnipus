@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -436,15 +437,28 @@ func (ru *restAPIHandleUpload) finishLegacyUpload(sanitized string, destPath str
 	// (deleting a nonexistent session fails first), so pinning its upload
 	// would retain it forever. Such an upload is still accepted, but under
 	// the store's expiring policy: it ages out with the ordinary TTL
-	// instead of living outside every lifecycle. An unwired session store
-	// keeps the ForgetOnly default (the lifetime guarantee) — the check
-	// never invents an owner.
+	// instead of living outside every lifecycle.
+	//
+	// Issue #1435 R3 item 2: only a CONFIRMED absent owner selects the
+	// expiring policy. A metadata read/parse/I/O error proves nothing
+	// about the owner's existence — scheduling deletion of an accepted
+	// upload on a transient stats.json fault would destroy a live
+	// conversation's attachment. On such a fault the upload keeps the
+	// pinned lifetime policy (its real lifecycle paths — session deletion
+	// and the confirmed-missing release in CleanExpired — still apply).
+	// An unwired session store keeps the ForgetOnly default too — the
+	// check never invents an owner.
 	uploadPolicy := media.CleanupPolicyForgetOnly
 	if sessions := ru.a.agentLoop.GetSessionStore(); sessions != nil {
 		if _, metaErr := sessions.GetMeta(ru.sessionID); metaErr != nil {
-			uploadPolicy = media.CleanupPolicyDeleteOnCleanup
-			slog.Info("rest: upload: owning session does not exist; registering under the expiring cleanup policy",
-				"session_id", ru.sessionID, "file", sanitized)
+			if errors.Is(metaErr, fs.ErrNotExist) {
+				uploadPolicy = media.CleanupPolicyDeleteOnCleanup
+				slog.Info("rest: upload: owning session confirmed absent; registering under the expiring cleanup policy",
+					"session_id", ru.sessionID, "file", sanitized)
+			} else {
+				slog.Warn("rest: upload: owning-session metadata could not be read; keeping the pinned lifetime policy",
+					"session_id", ru.sessionID, "file", sanitized, "error", metaErr.Error())
+			}
 		}
 	}
 	// #254 stale media store fix: always fetch the current store via the

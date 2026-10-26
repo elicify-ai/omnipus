@@ -65,3 +65,31 @@ export function handleJudgeConclusionErrorFrame(frame: Frame, withBucket: WithBu
   withBucket(frame.session_id, (bucket) => appendErrorNotice(bucket, message, llmError, entryId, detail))
   return true
 }
+
+/**
+ * Issue #1435 R3 item 1 (founder Q106): the media_unavailable notice is
+ * INFORMATIONAL — a lost attachment is reported to the person while their
+ * turn keeps running; only the gateway's real done frame ends the turn.
+ * Routing it through the terminal error sweep stopped the turn, cleared the
+ * active-turn identity, replaced the pending reply and drained queued
+ * input mid-provider. Same non-terminal shape as the judge-conclusion
+ * handler above. Live error frames only: the persisted entry renders
+ * through the ordinary replay path on reload.
+ */
+export function handleMediaUnavailableNoticeFrame(frame: Frame, withBucket: WithBucket): boolean {
+  if (frame.type !== 'error') return false
+  const llmError = readLLMErrorFromFrame(frame)
+  if (llmError?.code !== 'media_unavailable') return false
+  const { message, detail } = getLLMErrorDisplay(
+    llmError,
+    useChatPreferencesStore.getState().verboseChatEnabled,
+  )
+  // Never guess another session or invoke the global terminal-error sweep.
+  if (!frame.session_id) {
+    useConnectionStore.getState().setConnectionError(message)
+    return true
+  }
+  const entryId = readEntryIdFromFrame(frame)
+  withBucket(frame.session_id, (bucket) => appendErrorNotice(bucket, message, llmError, entryId, detail))
+  return true
+}

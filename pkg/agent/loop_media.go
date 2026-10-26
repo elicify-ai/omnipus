@@ -1031,6 +1031,12 @@ func encodeImageToDataURLCached(
 	longEdgePx := 7680
 	maxBytes := int64(maxSize)
 	maxPatches := 0
+	// budgetSupplied distinguishes a production caller with a resolved
+	// provider/model budget (variadic present and valid) from the legacy
+	// no-budget callers (regression fixtures). It — not the presence of a
+	// patch limit — selects the bounded downscale band (issue #1435 R3
+	// item 4): a patch-less budget still bounds by edge and bytes.
+	budgetSupplied := len(budget) > 0 && budget[0].LongEdgePx > 0
 	if len(budget) > 0 && budget[0].LongEdgePx > 0 {
 		longEdgePx = budget[0].LongEdgePx
 		if budget[0].MaxBytes > 0 && budget[0].MaxBytes < maxBytes {
@@ -1100,8 +1106,15 @@ func encodeImageToDataURLCached(
 	//     image is decoded (dimensions from DecodeConfig bound the decode)
 	//     and the resize ladder below shrinks it under the budget. Above
 	//     the band it is still a decode bomb and is dropped.
+	//
+	// Issue #1435 R3 item 4: the band keys on whether a budget was SUPPLIED,
+	// never on MaxPatches. A selected provider budget without a patch limit
+	// (the contract's omitted max_patches = "unknown accounting") still
+	// bounds its images by the known byte/edge ceilings — keying the band on
+	// MaxPatches>0 sent such providers' full-page captures into the legacy
+	// 16-Mpx drop and discarded valid, downscalable images.
 	pixelCeiling := uint64(maxImagePixels)
-	if maxPatches > 0 {
+	if budgetSupplied {
 		pixelCeiling = uint64(maxDownscaleInputPixels)
 	}
 	if pixels > pixelCeiling {
