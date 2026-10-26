@@ -28,22 +28,54 @@ export function releaseHistoryProtection(sessionId: string): void { protection.d
 // history can hold a span's start and its later state/end on different pages
 // (or only in a page's bounded context), so the facts outlive one page and are
 // re-settled whenever the start row is on the reader. Never serialized.
+//
+// Chronology (final-gate I2): facts are remembered once per READ (a page, a
+// refresh) or live frame, never by re-reading rows already on the reader. A
+// read stamps its facts with one tick and ranks them in page order; its page
+// context is the server's latest state at the read's cut, so it ranks above the
+// read's own entries; a later read or live frame ranks above an earlier one.
+// Settlement applies the latest state and message by that ranking, so an older
+// page loaded later cannot overwrite the state a newer read established.
 const SPAN_FACT_SPAN_CAP = 200
-const spanFacts = new Map<string, Map<string, Map<string, HistorySpanFrame>>>()
+type SpanFact = { frame: HistorySpanFrame; tick: number; rank: number } // not-wire-format: in-memory settlement bookkeeping
+type HistoryContext = SessionHistoryPage['page_info']['context'] | undefined // not-wire-format: alias of a generated type
+const spanFacts = new Map<string, Map<string, Map<string, SpanFact>>>()
+let factTick = 0
 export function releaseHistorySpanFacts(sessionId?: string): void {
   if (sessionId === undefined) spanFacts.clear()
   else spanFacts.delete(sessionId)
 }
 
-function rememberSpanFact(sessionId: string, frame: HistorySpanFrame): void {
-  const bySpan = spanFacts.get(sessionId) ?? new Map<string, Map<string, HistorySpanFrame>>()
+const laterFact = (a: SpanFact, b: SpanFact) => a.tick - b.tick || a.rank - b.rank
+const factKey = (frame: HistorySpanFrame) => frame.history_origin?.position ?? `${frame.type}:${JSON.stringify(frame)}`
+
+function rememberSpanFact(sessionId: string, fact: SpanFact, key: string): void {
+  const bySpan = spanFacts.get(sessionId) ?? new Map<string, Map<string, SpanFact>>()
   spanFacts.set(sessionId, bySpan)
-  const facts = bySpan.get(frame.span_id) ?? new Map<string, HistorySpanFrame>()
-  if (!bySpan.has(frame.span_id)) {
-    bySpan.set(frame.span_id, facts)
+  const facts = bySpan.get(fact.frame.span_id) ?? new Map<string, SpanFact>()
+  if (!bySpan.has(fact.frame.span_id)) {
+    bySpan.set(fact.frame.span_id, facts)
     if (bySpan.size > SPAN_FACT_SPAN_CAP) bySpan.delete(bySpan.keys().next().value!)
   }
-  facts.set(frame.history_origin?.position ?? `${frame.type}:${JSON.stringify(frame)}`, frame)
+  const prior = facts.get(key)
+  if (!prior || laterFact(fact, prior) > 0) facts.set(key, fact)
+}
+
+/**
+ * Remember one read's span facts: its entries in page order (keyed by their
+ * source position, so a REST row and its page-context copy are one fact), then
+ * each page context in fetch order, above the entries.
+ */
+export function rememberHistoryReadFacts(sessionId: string, entries: ChatMessage[], contexts: ReadonlyArray<HistoryContext>): void {
+  const tick = ++factTick
+  entries.forEach((row, rank) => {
+    if (row.role === 'assistant' && row.historySpanFrame) rememberSpanFact(sessionId, { frame: row.historySpanFrame, tick, rank }, row.historyPosition ?? factKey(row.historySpanFrame))
+  })
+  contexts.forEach((context, i) => {
+    for (const span of context?.spans ?? []) {
+      for (const frame of [span.start, span.state, span.message, span.end]) if (frame) rememberSpanFact(sessionId, { frame, tick, rank: entries.length + i }, factKey(frame))
+    }
+  })
 }
 
 /**
@@ -54,7 +86,7 @@ function rememberSpanFact(sessionId: string, frame: HistorySpanFrame): void {
  * the older cached running state.
  */
 export function rememberLiveSpanFact(sessionId: string, frame: HistorySpanFrame): void {
-  rememberSpanFact(sessionId, frame)
+  rememberSpanFact(sessionId, { frame, tick: ++factTick, rank: 0 }, factKey(frame))
 }
 
 /** Counts of the span-fact memory for one session; see historySpanFactStats. */
@@ -78,7 +110,7 @@ export function historySpanFactStats(sessionId: string): HistorySpanFactStats {
   for (const [spanId, facts] of spanFacts.get(sessionId) ?? []) {
     stats.spans += 1
     stats.factsBySpan[spanId] = facts.size
-    stats.payloadFactsBySpan[spanId] = [...facts.values()].filter(carriesPayload).length
+    stats.payloadFactsBySpan[spanId] = [...facts.values()].filter(fact => carriesPayload(fact.frame)).length
   }
   return stats
 }
@@ -89,43 +121,53 @@ function carriesPayload(frame: HistorySpanFrame): boolean {
   return false
 }
 
-const FACT_ORDER: Record<HistorySpanFrame['type'], number> = { subagent_start: 0, subagent_state: 1, subagent_message: 2, subagent_end: 3 }
+/** Lifecycle states that prove the child left the queue (span-frames.ts' sticky hasRun). */
+const RAN_STATES: ReadonlySet<string> = new Set(['running', 'needs_input', 'paused', 'completed'])
+
+function latestFact(facts: SpanFact[], match: (frame: HistorySpanFrame) => boolean): SpanFact | undefined {
+  return facts.filter(fact => match(fact.frame)).sort(laterFact).at(-1)
+}
 
 /**
  * Settle persisted span facts onto their start rows (ADR-091 D7/I-4, #1266):
- * the span lives on its start entry's own row, as replay has always placed it,
- * and its state/message/end come from facts on the reader in page order, then
- * the page context's latest facts. Rows carrying only state/message/end stay
- * silent; a span whose start is not on the reader draws nothing until that
- * page loads. One rule set with the live path (applySpanFrame), so no fact
- * misses its span. A span a live row already holds is left to the live row.
- * Every commit of saved rows runs it: page loads and the loaded-window
- * refresh (history.ts::refresh, final-gate I3), with each read page's context.
+ * the span lives on its start entry's own row, as replay has always placed it.
+ * It is rebuilt with the live path's own rules (applySpanFrame): the start,
+ * then the latest not-delivered note, message and state by recorded
+ * chronology, then the end, which is authoritative. hasRun stays sticky across
+ * every recorded state. Rows carrying only state/message/end stay silent; a
+ * span whose start is not on the reader draws nothing until that page loads.
+ * A span a live row already holds is left to the live row. Every commit of
+ * saved rows runs it, after remembering its read (rememberHistoryReadFacts):
+ * page loads and the loaded-window refresh (history.ts::refresh, I3).
  */
-export function settleHistorySpans(sessionId: string, rows: ChatMessage[], positions: string[], contexts: ReadonlyArray<SessionHistoryPage['page_info']['context'] | undefined>): { rows: ChatMessage[]; index: SessionChatState['spanBySpanId'] } {
-  for (const row of rows) if (row.role === 'assistant' && row.historySpanFrame) rememberSpanFact(sessionId, row.historySpanFrame)
-  for (const context of contexts) for (const span of context?.spans ?? []) for (const fact of [span.start, span.state, span.message, span.end]) if (fact) rememberSpanFact(sessionId, fact)
+export function settleHistorySpans(sessionId: string, rows: ChatMessage[]): { rows: ChatMessage[]; index: SessionChatState['spanBySpanId'] } {
   const bySpan = spanFacts.get(sessionId)
   const index: NonNullable<SessionChatState['spanBySpanId']> = {}
   if (!bySpan) return { rows, index }
-  const order = new Map(positions.map((position, i) => [position, i]))
   const live = new Set(rows.filter(row => !row.historyPosition).flatMap(row => row.spans?.map(span => span.spanId) ?? []))
   const settled = rows.map(row => {
     const start = row.role === 'assistant' ? row.historySpanFrame : undefined
     if (start?.type !== 'subagent_start' || live.has(start.span_id)) return row
-    const facts = [...(bySpan.get(start.span_id)?.values() ?? [])].filter(fact => fact.type !== 'subagent_start')
-    const onReader = facts.filter(fact => order.has(fact.history_origin?.position ?? '')).sort((a, b) => order.get(a.history_origin!.position)! - order.get(b.history_origin!.position)!)
-    const contextOnly = facts.filter(fact => !order.has(fact.history_origin?.position ?? '')).sort((a, b) => FACT_ORDER[a.type] - FACT_ORDER[b.type])
+    const facts = [...(bySpan.get(start.span_id)?.values() ?? [])]
+    const isMessage = (frame: HistorySpanFrame): frame is Extract<HistorySpanFrame, { type: 'subagent_message' }> => frame.type === 'subagent_message'
+    const updates = [
+      latestFact(facts, frame => isMessage(frame) && frame.kind === 'not_delivered'),
+      latestFact(facts, frame => isMessage(frame) && frame.kind !== 'not_delivered'),
+      latestFact(facts, frame => frame.type === 'subagent_state'),
+    ].filter((fact): fact is SpanFact => !!fact).sort(laterFact)
+    const end = latestFact(facts, frame => frame.type === 'subagent_end')
+    const ran = facts.some(fact => fact.frame.type === 'subagent_state' && RAN_STATES.has(fact.frame.state))
     let mini: SessionChatState = { ...emptySessionState(), messagesById: { [row.id]: { ...row, spans: undefined } }, messageOrder: [row.id] }
     mini = { ...mini, ...applySpanFrame(mini, start, sessionId) }
-    for (const fact of [...onReader, ...contextOnly]) {
+    for (const fact of [...updates, ...(end ? [end] : [])]) {
       if (!mini.spanBySpanId?.[start.span_id]) break // ended: nothing applies after an end
-      mini = { ...mini, ...applySpanFrame(mini, fact, sessionId) }
+      mini = { ...mini, ...applySpanFrame(mini, fact.frame, sessionId) }
     }
     const entry = mini.spanBySpanId?.[start.span_id]
     if (entry) index[start.span_id] = entry
     // The span reducers only touch the row's spans; status stays the saved one.
-    return mini.messagesById[row.id]
+    const result = mini.messagesById[row.id]
+    return ran ? { ...result, spans: result.spans?.map(span => span.spanId === start.span_id ? { ...span, hasRun: true } : span) } : result
   })
   return { rows: settled, index }
 }
@@ -156,12 +198,23 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
   const newOverlap = pagePositions.filter(position => existingPositions.has(position))
   if (oldOverlap.join() !== newOverlap.join()) throw new HistoryPageProtocolError('Contradictory history overlap.')
   if ((action === 'older' || action === 'newer') && page.entries.length && page.entries.every(entry => existingPositions.has(entry.historyPosition))) throw new HistoryPageProtocolError('History boundary did not advance.')
-  const incoming = page.entries.map(entry => {
-    // A saved source whose id a displayed reply already coalesced (the token
-    // resolver's mergedReplayIds) merges onto that display row: it keeps its
-    // identity and live text and takes the saved position, never a second
-    // reply beside it (D4/D7, r21).
-    const owner = bucket.messagesById[entry.id] ? undefined : coalescedOwner(bucket, entry)
+  // A saved source whose id a displayed reply already coalesced (the token
+  // resolver's mergedReplayIds) merges onto that display row: it keeps its
+  // identity and live text and takes the saved position, never a second reply
+  // beside it (D4/D7, r21). Only when it is the ONE saved source that display
+  // row represents (final-gate F1): a row the page also selects by its own id,
+  // a row two page sources would claim, or a row already holding another saved
+  // position stays itself, and each distinct saved entry keeps its own row, so
+  // no saved segment collapses into another under one display identity.
+  const candidates = page.entries.map(entry => bucket.messagesById[entry.id] ? undefined : coalescedOwner(bucket, entry))
+  const claims = new Map<string, number>()
+  page.entries.forEach((entry, i) => {
+    const claimed = candidates[i]?.id ?? (bucket.messagesById[entry.id] ? entry.id : undefined)
+    if (claimed) claims.set(claimed, (claims.get(claimed) ?? 0) + 1)
+  })
+  const incoming = page.entries.map((entry, i) => {
+    const candidate = candidates[i]
+    const owner = candidate && claims.get(candidate.id) === 1 && (!candidate.historyPosition || candidate.historyPosition === entry.historyPosition) ? candidate : undefined
     return owner ? mergeHistoryEntry({ ...entry, id: owner.id }, owner, baseline[owner.id]) : mergeHistoryEntry(entry, bucket.messagesById[entry.id], baseline[entry.id])
   })
   const union = action === 'older' ? [...incoming, ...old] : action === 'newer' ? [...old, ...incoming] : incoming
@@ -197,7 +250,8 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
     }
   }
   const hidden = hiddenIds.flatMap(id => bucket.messagesById[id] ? [bucket.messagesById[id]] : [])
-  const spans = settleHistorySpans(page.session_id, finalRows, positions, [page.page_info.context])
+  rememberHistoryReadFacts(page.session_id, incoming, [page.page_info.context])
+  const spans = settleHistorySpans(page.session_id, finalRows)
   const patch = { ...historyRowsPatch(bucket, [...spans.rows, ...hidden], positions), messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: hiddenIds }
   patch.spanBySpanId = { ...patch.spanBySpanId, ...spans.index }
   patch.historySourceAliases = Object.fromEntries(positions.flatMap(position => {
