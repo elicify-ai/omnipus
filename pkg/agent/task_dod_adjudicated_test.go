@@ -304,6 +304,7 @@ func TestTaskDefinitionOfDoneIsAdjudicated_GOALFR047(t *testing.T) {
 			}
 
 			al.taskExecutor.adjudicateRunClaim(context.Background(), stored, taskSessionID,
+				"Implemented the CSV export and exercised the endpoint by hand.",
 				"Implemented the CSV export and exercised the endpoint by hand.", nil, &taskRunState{})
 
 			// --- what the Judge was actually ASKED --------------------------
@@ -396,6 +397,7 @@ func TestUnmetDoDIsTheReasonTheClaimFailed(t *testing.T) {
 	}
 
 	step, steer, _ := al.taskExecutor.adjudicateRunClaim(context.Background(), stored, taskSessionID,
+		"Implemented the CSV export and exercised the endpoint by hand.",
 		"Implemented the CSV export and exercised the endpoint by hand.", nil, &taskRunState{})
 	if step != runStepContinue {
 		t.Fatalf("step = %v, want the run to continue with the Judge's feedback", step)

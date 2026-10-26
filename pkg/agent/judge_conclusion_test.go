@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 func TestNotVerifiedConclusion_CarriesVerdictCauseAndResult(t *testing.T) {
@@ -150,7 +151,8 @@ func TestJudgeUnavailable_InteractiveGoalChatConcludesInTranscript(t *testing.T)
 }
 
 // Task run with a goal: the Judge never answers within its bound. The task
-// ends with a Result that carries the verdict AND the worker's evidence.
+// ends with a Result that carries the verdict AND the worker's actual answer,
+// independently of the distinct evidence summary supplied to goal_claim.
 func TestJudgeUnavailable_TaskResultCarriesVerdictAndWorkResult(t *testing.T) {
 	origTimeout, origSleep := goalJudgeRoundTimeout, judgeSleepFn
 	t.Cleanup(func() { goalJudgeRoundTimeout, judgeSleepFn = origTimeout, origSleep })
@@ -164,7 +166,10 @@ func TestJudgeUnavailable_TaskResultCarriesVerdictAndWorkResult(t *testing.T) {
 		}
 	}
 
-	worker := newClaimingWorker(turnClaimMet("RESULT-1306-TASK wrote report.md"))
+	const evidence = "EVIDENCE-1431-UNAVAILABLE checked the report criteria"
+	worker := newClaimingWorker(workerTurn{
+		claim: tools.GoalClaimStatusMet, evidence: evidence, content: "RESULT-1306-TASK wrote report.md",
+	})
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
 	var mu sync.Mutex
 	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
@@ -184,13 +189,14 @@ func TestJudgeUnavailable_TaskResultCarriesVerdictAndWorkResult(t *testing.T) {
 			t.Errorf("task result %q is missing %q", final.Result, want)
 		}
 	}
+	assertRound2ConclusionSeparatesAnswerAndEvidence(t, al, final, evidence, "RESULT-1306-TASK wrote report.md")
 }
 
 // assertTaskConclusionKeepsResult checks a task that ended on a Judge failure:
 // Failed, no attempt used, the plain Judge reason first, and the
-// "Not verified" conclusion carrying the worker's own evidence (issue #1306,
+// "Not verified" conclusion carrying the worker's actual answer (issue #1306,
 // CR F2 / SFH F3: every terminal Judge failure keeps the work result).
-func assertTaskConclusionKeepsResult(t *testing.T, final *task.Task, evidence string) {
+func assertTaskConclusionKeepsResult(t *testing.T, final *task.Task, answer string) {
 	t.Helper()
 	if final.Status != task.StatusFailed || final.AttemptCount != 0 {
 		t.Fatalf("status=%q attempts=%d, want failed with no attempt used (result: %s)", final.Status, final.AttemptCount, final.Result)
@@ -198,7 +204,7 @@ func assertTaskConclusionKeepsResult(t *testing.T, final *task.Task, evidence st
 	if !strings.HasPrefix(final.Result, "The Judge could not run: ") {
 		t.Errorf("result %q must lead with the plain Judge reason", final.Result)
 	}
-	for _, want := range []string{"Not verified", evidence} {
+	for _, want := range []string{"Not verified", answer} {
 		if !strings.Contains(final.Result, want) {
 			t.Errorf("task result %q is missing %q — the worker's result was discarded", final.Result, want)
 		}
@@ -207,31 +213,46 @@ func assertTaskConclusionKeepsResult(t *testing.T, final *task.Task, evidence st
 
 func TestJudgeMisconfigured_TaskResultKeepsTheWorkResult(t *testing.T) {
 	e7RecordJudgeBackoffWaits(t)
-	worker := newClaimingWorker(turnClaimMet("RESULT-1306-MISCONF wrote report.md"))
+	const evidence = "EVIDENCE-1431-MISCONFIGURED checked the report criteria"
+	worker := newClaimingWorker(workerTurn{
+		claim: tools.GoalClaimStatusMet, evidence: evidence, content: "RESULT-1306-MISCONF wrote report.md",
+	})
 	al, _ := newGoalLoopTestLoop(t, worker, e7BreakJudgeModel)
 	tk := newRunLoopTask(t, al, nil)
-	assertTaskConclusionKeepsResult(t, runTaskUntilTerminal(t, al, tk.ID, 1), "RESULT-1306-MISCONF wrote report.md")
+	final := runTaskUntilTerminal(t, al, tk.ID, 1)
+	assertTaskConclusionKeepsResult(t, final, "RESULT-1306-MISCONF wrote report.md")
+	assertRound2ConclusionSeparatesAnswerAndEvidence(t, al, final, evidence, "RESULT-1306-MISCONF wrote report.md")
 }
 
 func TestJudgeTruncatedVerdict_TaskResultKeepsTheWorkResult(t *testing.T) {
 	e7RecordJudgeBackoffWaits(t)
-	worker := newClaimingWorker(turnClaimMet("RESULT-1306-TRUNC wrote report.md"))
+	const evidence = "EVIDENCE-1431-TRUNCATED checked the report criteria"
+	worker := newClaimingWorker(workerTurn{
+		claim: tools.GoalClaimStatusMet, evidence: evidence, content: "RESULT-1306-TRUNC wrote report.md",
+	})
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
 	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		return &providers.LLMResponse{Content: e7CutOffVerdict, FinishReason: "length"}, nil
 	}}
 	tk := newRunLoopTask(t, al, nil)
-	assertTaskConclusionKeepsResult(t, runTaskUntilTerminal(t, al, tk.ID, 1), "RESULT-1306-TRUNC wrote report.md")
+	final := runTaskUntilTerminal(t, al, tk.ID, 1)
+	assertTaskConclusionKeepsResult(t, final, "RESULT-1306-TRUNC wrote report.md")
+	assertRound2ConclusionSeparatesAnswerAndEvidence(t, al, final, evidence, "RESULT-1306-TRUNC wrote report.md")
 }
 
 func TestJudgeNotRegistered_TaskResultKeepsTheWorkResult(t *testing.T) {
-	worker := newClaimingWorker(turnClaimMet("RESULT-1306-NOJUDGE wrote report.md"))
+	const evidence = "EVIDENCE-1431-NO-JUDGE checked the report criteria"
+	worker := newClaimingWorker(workerTurn{
+		claim: tools.GoalClaimStatusMet, evidence: evidence, content: "RESULT-1306-NOJUDGE wrote report.md",
+	})
 	al, _ := newGoalLoopTestLoop(t, worker, nil)
 	if !al.GetRegistry().RemoveAgent(string(coreagent.IDJudge)) {
 		t.Fatal("SETUP: the Judge agent was not registered to begin with")
 	}
 	tk := newRunLoopTask(t, al, nil)
-	assertTaskConclusionKeepsResult(t, runTaskUntilTerminal(t, al, tk.ID, 1), "RESULT-1306-NOJUDGE wrote report.md")
+	final := runTaskUntilTerminal(t, al, tk.ID, 1)
+	assertTaskConclusionKeepsResult(t, final, "RESULT-1306-NOJUDGE wrote report.md")
+	assertRound2ConclusionSeparatesAnswerAndEvidence(t, al, final, evidence, "RESULT-1306-NOJUDGE wrote report.md")
 }
 
 // noJudgeWait makes every Judge retry/backoff wait return at once.

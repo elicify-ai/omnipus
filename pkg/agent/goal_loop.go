@@ -584,10 +584,11 @@ func GoalClaimUnparseableResults() uint64 {
 // turn can ever produce a successful call) for goal_claim tool-call entries
 // timestamped strictly after since, and returns the LAST successful one
 // (E-27's last-occurrence-wins multiplicity rule, mirroring
-// parseGoalStatusMarker's own rule). A refused (FR-088/FR-090) or
+// parseGoalStatusMarker's own rule). A refused (FR-090) or
 // policy-denied (E-29) call has Status != "success" and is skipped — it is
 // not a successful call and must not suppress marker parsing (FR-092's own
-// text).
+// text; ADR-084 §13 removed FR-088's at-call refusal, so an empty-evidence
+// met call now SUCCEEDS and is the turn's claim).
 //
 // The tool's own Execute (pkg/tools/goal_claim.go) encodes its result as a
 // JSON object ({"status":..., "evidence":..., "goal_id":...}) via
@@ -809,12 +810,13 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) resolveClaim() {
 
 	if gl.toolFound {
 		// FR-092: the tool call is authoritative — result.finalContent is
-		// NOT parsed for markers at all this turn. HasEvidence is always
-		// true for a tool-recorded `met` claim (the tool itself refuses a
-		// met call with empty evidence at the call boundary, FR-088), which
-		// is exactly what makes the bare-claim bounce (FR-091) unreachable
-		// for the tool path, by construction — not a branch this file has
-		// to special-case.
+		// NOT parsed for markers at all this turn. HasEvidence is derived as
+		// toolStatus == met and routes every tool-recorded `met` claim — its
+		// evidence line empty or not — into the adjudication arm below, which
+		// is what makes the bare-claim bounce (FR-091) unreachable for the
+		// tool path by construction (ADR-084 §13, issue #1431: every met
+		// claim adjudicates; the at-call refusal FR-088 used to have is
+		// gone) — not a branch this file has to special-case.
 		gl.marker = goalStatusMarker{Present: true, Status: toolStatus, HasEvidence: toolStatus == tools.GoalClaimStatusMet}
 		if prose := parseGoalStatusMarker(gl.result.finalContent); prose.Present {
 			logger.InfoCF("agent", "goal claim: both channels fired in one turn — the tool call is authoritative (JUDGE-FR-092)",
@@ -933,7 +935,8 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 			})
 			return
 		}
-		// Clear any bounce streak (the worker satisfied the evidence gate).
+		// Clear any bounce streak — now on every adjudicated claim, evidence
+		// line empty or not (ADR-084 §13, issue #1431).
 		gl.al.clearGoalBareClaimStreak(gl.rec.GoalID)
 		// JUDGE-FR-094: the tool path's evidence argument becomes ClaimText,
 		// occupying the SAME position the marker path's whole
@@ -969,9 +972,10 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// economics — 1st free (teaching steer), 2nd costs a round. NEVER
 		// invokes the Judge (nothing to judge). Claiming stays cheaper than
 		// idling (D8/N-13). JUDGE-FR-091: unreachable for a tool-path claim
-		// by construction (the tool itself refuses an empty-evidence `met`
-		// call at the call boundary, so a tool-recorded `met` always carries
-		// HasEvidence=true and lands in the arm above instead).
+		// by construction (ADR-084 §13, issue #1431: every tool-recorded
+		// `met` claim — evidence line empty or not — carries
+		// HasEvidence=true and lands in the arm above, where it adjudicates;
+		// the at-call refusal this comment used to cite is removed).
 		gl.al.handleBareGoalClaim(gl.ctx, gl.agentInst, gl.opts, gl.store, gl.sessionID, gl.rec, gl.result)
 		return
 

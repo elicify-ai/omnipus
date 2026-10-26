@@ -3,13 +3,20 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // task_executor_adjudicate_claim_test.go covers TaskExecutor.adjudicateRunClaim's
-// two 7-reviewer-gate fixes (ADR-052 fix wave): item 3 (an empty completion
-// claim fails closed BEFORE any verifier dispatch — never a slow judge/
-// verifier turn for a claim with nothing to adjudicate) and item 4 (FR-014
-// member-path parity — a judge verdict computed while the task concurrently
-// left in_progress, e.g. via a Stop, must be dropped rather than silently
+// 7-reviewer-gate fixes (ADR-052 fix wave): item 4 (FR-014 member-path
+// parity — a judge verdict computed while the task concurrently left
+// in_progress, e.g. via a Stop, must be dropped rather than silently
 // overwriting the Stop outcome or consuming an attempt for a run that was
 // actually cancelled).
+//
+// Item 3's test (TestTaskExecutor_AdjudicateClaim_EmptyClaimFailsClosedWithoutVerifierDispatch)
+// was REMOVED on 2026-10-23: ADR-084 §13 (issue #1431) deletes the
+// empty-evidence pre-guard itself — every goal_claim(status: met) claim is
+// now recorded and adjudicated, and an unmet ruling spends a try as usual.
+// Its replacement (an empty claim reaches the Judge; the task ends failed
+// within max_attempts) is TestTaskRun_RepeatedEmptyEvidenceClaimsEndTaskFailedWithinMaxAttempts
+// in goal_claim_wiring_adr084_test.go, per §13 "Tests and specs that must
+// change".
 
 package agent
 
@@ -24,59 +31,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
-
-// TestTaskExecutor_AdjudicateClaim_EmptyClaimFailsClosedWithoutVerifierDispatch
-// proves item 3: a completion claim with no real content (whitespace-only)
-// is rejected fail-closed BEFORE al.JudgeCriteria/runVerifierAdjudication is
-// ever reached — the empty-output regression's root cause, per the fix
-// wave's finding, was exactly this path dispatching a full verifier turn
-// for a claim with nothing to check evidence against.
-func TestTaskExecutor_AdjudicateClaim_EmptyClaimFailsClosedWithoutVerifierDispatch(t *testing.T) {
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	fake := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		return &providers.LLMResponse{
-			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
-		}, nil
-	}}
-	judgeInst.Provider = fake
-
-	taskStore := GetTaskStore(al)
-	tk := &task.Task{
-		ID: "t-empty-claim", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "empty claim test",
-		Status:   task.StatusInProgress,
-		Criteria: []task.AcceptanceCriterion{proseCriterion("c1", "must do X")},
-	}
-	if err := taskStore.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-
-	state := &taskRunState{}
-	step, steer, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "   ", nil, state)
-
-	if fake.callCount() != 0 {
-		t.Fatalf("an empty completion claim must never dispatch the verifier; callCount=%d", fake.callCount())
-	}
-	if step != runStepContinue || redispatch != "" {
-		t.Fatalf("step=%v redispatch=%q, want the run to continue in the same session (a spent try, not a failed run)",
-			step, redispatch)
-	}
-	if !strings.Contains(steer, "one-line statement") {
-		t.Errorf("steer = %q, want it to ask for the evidence line", steer)
-	}
-	if state.innerTries != 1 {
-		t.Errorf("tries spent = %d, want 1", state.innerTries)
-	}
-	final, err := taskStore.Get(tk.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if final.Status != task.StatusInProgress {
-		t.Fatalf("status = %q, want in_progress — an empty claim neither completes nor fails the run", final.Status)
-	}
-	if final.AttemptCount != 0 {
-		t.Errorf("attempt_count = %d, want 0 — a spent goal try is not a task attempt", final.AttemptCount)
-	}
-}
 
 // TestTaskExecutor_AdjudicateClaim_FR014_DropsStaleVerdictAfterConcurrentStop
 // proves item 4: JudgeCriteria's verifier turn runs OUTSIDE any lock, so a
@@ -112,7 +66,7 @@ func TestTaskExecutor_AdjudicateClaim_FR014_DropsStaleVerdictAfterConcurrentStop
 
 	done := make(chan string, 1)
 	go func() {
-		_, _, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "I finished the thing", nil, &taskRunState{})
+		_, _, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "I finished the thing", "I finished the thing", nil, &taskRunState{})
 		done <- redispatch
 	}()
 
@@ -380,7 +334,7 @@ func TestTrustTheClaimPathRemoved_GOALFR022(t *testing.T) {
 			}
 
 			_, _, redispatch := al.taskExecutor.adjudicateRunClaim(
-				context.Background(), stored, "", "I finished it, trust me.", nil, &taskRunState{})
+				context.Background(), stored, "", "I finished it, trust me.", "I finished it, trust me.", nil, &taskRunState{})
 
 			if got := judge.callCount(); got != tc.wantJudgeCalls {
 				t.Errorf("Judge dispatched %d time(s), want %d", got, tc.wantJudgeCalls)
@@ -478,7 +432,7 @@ func TestLegacyCriterialessTaskStillRuns_GOALFR023(t *testing.T) {
 			})
 
 			al.taskExecutor.adjudicateRunClaim(
-				context.Background(), stored, "", "painted it green", nil, &taskRunState{})
+				context.Background(), stored, "", "painted it green", "painted it green", nil, &taskRunState{})
 
 			if judge.callCount() != 1 {
 				t.Fatalf("Judge dispatched %d time(s), want exactly 1 — a criteria-less legacy task "+
@@ -562,7 +516,7 @@ func TestTaskExecutor_AdjudicateClaim_ConcurrencyBackoffStandsDownWithoutRetry(t
 	}
 
 	state := &taskRunState{}
-	step, _, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "I finished the thing", nil, state)
+	step, _, redispatch := al.taskExecutor.adjudicateRunClaim(context.Background(), tk, "", "I finished the thing", "I finished the thing", nil, state)
 
 	// G-1: the Judge must never be re-invoked for a backed-off claim — the
 	// rejection happens before the provider call, and no retry may follow.

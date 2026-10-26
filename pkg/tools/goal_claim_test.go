@@ -68,9 +68,13 @@ func TestGoalClaimTool_SchemaAndEnum(t *testing.T) {
 		t.Fatalf("evidence.type = %v, want \"string\"", evidenceProp["type"])
 	}
 
+	// ADR-084 §13 (2026-10-23, issue #1431), decision line 1: `evidence` is
+	// required in the tool's input schema for EVERY status — required is
+	// exactly ["status", "evidence"]. FR-088 as amended / E-28; the spec's
+	// constants-table row ("required in the schema for every status").
 	required, ok := params["required"].([]string)
-	if !ok || len(required) != 1 || required[0] != "status" {
-		t.Fatalf("Parameters()[\"required\"] = %#v, want exactly [\"status\"]", params["required"])
+	if !ok || len(required) != 2 || required[0] != "status" || required[1] != "evidence" {
+		t.Fatalf("Parameters()[\"required\"] = %#v, want exactly [\"status\" \"evidence\"] (ADR-084 §13, issue #1431: evidence is schema-required for every status)", params["required"])
 	}
 
 	desc := tool.Description()
@@ -85,18 +89,28 @@ func TestGoalClaimTool_SchemaAndEnum(t *testing.T) {
 	}
 }
 
-// TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty — JUDGE-FR-088 (E-28): a
-// status:met claim with "", "   " or "\n\t " as evidence is refused at the
-// call as an empty-evidence violation, exactly like a wholly absent
-// evidence argument — no claim is recorded (access.writes stays 0, since
-// GoalClaimTool never writes anything on any path), and the refusal message
-// names the violation.
-func TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty(t *testing.T) {
+// TestGoalClaim_EmptyEvidenceMetClaimIsRecordedNotRefused — JUDGE-FR-088 as
+// amended 2026-10-23 (issue #1431; ADR-084 §13, decision line 2): a
+// present-empty or whitespace-only evidence argument on a status:met call is
+// RECORDED, never refused. The refusal this table used to assert let a goal
+// loop forever — nothing recorded, no attempt, no judge (§13 "The defect
+// this closes") — so it was deleted and this test replaces it, per §13
+// "Tests and specs that must change" (it inverts
+// TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty). Corrected 2026-10-23
+// (MAJ-002): the adjudication guarantee covers PRESENT-empty/whitespace
+// evidence only — an omitted property is schema-invalid at dispatch (E-28a)
+// and is asserted in
+// TestGoalClaimRegistry_OmittedEvidenceRejectedBeforeExecute, not here.
+// The call succeeds and the result payload is the record the engine reads
+// off the transcript (JUDGE-FR-092/094): {"status", "evidence", "goal_id"},
+// with the evidence text as supplied after trimming (E-28) — trimming
+// normalises, it never refuses, so every empty-equivalent argument records
+// an empty evidence line.
+func TestGoalClaim_EmptyEvidenceMetClaimIsRecordedNotRefused(t *testing.T) {
 	cases := []struct {
 		name     string
 		evidence any
 	}{
-		{"absent", nil},
 		{"empty string", ""},
 		{"spaces only", "   "},
 		{"mixed whitespace", "\n\t "},
@@ -105,6 +119,7 @@ func TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			const sessionID = "session_goal_claim_whitespace"
 			access := newFakeGoalRecordAccess()
+			access.goalID[sessionID] = "goal-empty-evidence"
 			access.condition[sessionID] = "an active goal"
 			tool := newGoalClaimTool(access)
 
@@ -114,14 +129,27 @@ func TestGoalClaim_WhitespaceOnlyEvidenceIsEmpty(t *testing.T) {
 			}
 			res := tool.Execute(setGoalCtx(sessionID, "mia"), args)
 
-			if !res.IsError {
-				t.Fatalf("want a refusal for evidence %q, got success: %q", tc.evidence, res.ForLLM)
+			if res.IsError {
+				t.Fatalf("ADR-084 §13 (issue #1431): an empty-evidence met claim must be RECORDED, not refused — got an error: %q", res.ForLLM)
 			}
-			if !strings.Contains(res.ForLLM, "evidence") {
-				t.Fatalf("error should name the empty-evidence violation: %q", res.ForLLM)
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(res.ForLLM), &payload); err != nil {
+				t.Fatalf("recorded result payload is not valid JSON: %v (%q)", err, res.ForLLM)
+			}
+			if payload["status"] != "met" {
+				t.Fatalf("payload[status] = %v, want \"met\"", payload["status"])
+			}
+			// The claim's evidence line is what the Judge receives as ClaimText
+			// (FR-094): empty here, by the amendment — "records the claim with
+			// whatever text was supplied, empty or not".
+			if payload["evidence"] != "" {
+				t.Fatalf("payload[evidence] = %v, want the (trimmed, empty) evidence text as supplied", payload["evidence"])
+			}
+			if payload["goal_id"] != "goal-empty-evidence" {
+				t.Fatalf("payload[goal_id] = %v, want %q — the recorded claim names its goal", payload["goal_id"], "goal-empty-evidence")
 			}
 			if access.writes != 0 {
-				t.Fatalf("must not write on an empty-evidence refusal, got %d writes", access.writes)
+				t.Fatalf("goal_claim must never write a goal record, got %d writes", access.writes)
 			}
 		})
 	}
@@ -324,5 +352,70 @@ func TestGoalClaim_BlockedAndWaitingOnUserNeedNoEvidence(t *testing.T) {
 				t.Fatalf("status:%s must carry the trimmed reason, got payload %v", status, withReason)
 			}
 		})
+	}
+}
+
+// TestGoalClaimRegistry_OmittedEvidenceRejectedBeforeExecute — ADR-084 §13
+// as corrected 2026-10-23 (MAJ-002, issue #1431; E-28a; the spec's FR-088
+// schema test row, "through the real registry not direct Execute"):
+// mandatory means PRESENCE. Through ToolRegistry.ExecuteWithContext:
+//
+//  1. present-empty ("") and whitespace-only evidence pass validation and
+//     REACH Execute (the call succeeds and records the claim);
+//  2. an OMITTED evidence property is rejected with the missing-property
+//     validation error BEFORE Execute runs — a mechanical dispatch error the
+//     model corrects in the same turn, not the removed semantic refusal;
+//  3. the schema's required list is exactly ["status", "evidence"].
+//
+// "Before Execute" is observable because the two rejections carry different
+// messages: checkRequired's "missing required property" (dispatch) vs the
+// in-tool refusal text (Execute's own body, which §13 deletes).
+func TestGoalClaimRegistry_OmittedEvidenceRejectedBeforeExecute(t *testing.T) {
+	const sessionID = "session_goal_claim_registry"
+
+	newRegistry := func(t *testing.T) (*ToolRegistry, *fakeGoalRecordAccess) {
+		t.Helper()
+		access := newFakeGoalRecordAccess()
+		access.goalID[sessionID] = "goal-registry-e28a"
+		access.condition[sessionID] = "an active goal"
+		r := NewToolRegistry()
+		r.Register(newGoalClaimTool(access))
+		return r, access
+	}
+
+	// The schema's required list (E-28a's mechanical basis).
+	tool := newGoalClaimTool(nil)
+	required, ok := tool.Parameters()["required"].([]string)
+	if !ok || len(required) != 2 || required[0] != "status" || required[1] != "evidence" {
+		t.Fatalf(`Parameters()["required"] = %#v, want exactly ["status" "evidence"] (ADR-084 §13, E-28a)`, tool.Parameters()["required"])
+	}
+
+	ctx := setGoalCtx(sessionID, "mia")
+
+	// (1) present-empty and whitespace-only evidence pass dispatch and reach
+	// Execute — the call succeeds.
+	for name, ev := range map[string]any{"empty string": "", "whitespace": "   "} {
+		r, _ := newRegistry(t)
+		res := r.ExecuteWithContext(ctx, GoalClaimToolName, map[string]any{"status": "met", "evidence": ev}, "webchat", "c1", nil)
+		if res == nil || res.IsError {
+			t.Fatalf("E-28 (§13 MAJ-002): evidence %s (%q) must pass dispatch and reach Execute, got error: %v", name, ev, res.ForLLM)
+		}
+		if !strings.Contains(res.ForLLM, `"status":"met"`) {
+			t.Fatalf("evidence %s: want the recorded met payload off Execute, got %q", name, res.ForLLM)
+		}
+	}
+
+	// (2) an OMITTED evidence property is rejected BEFORE Execute — the
+	// missing-property validation error, not the in-tool refusal.
+	r, _ := newRegistry(t)
+	res := r.ExecuteWithContext(ctx, GoalClaimToolName, map[string]any{"status": "met"}, "webchat", "c1", nil)
+	if res == nil || !res.IsError {
+		t.Fatalf("E-28a (§13 MAJ-002): an omitted evidence property must be rejected at dispatch, got success: %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, `missing required property "evidence"`) {
+		t.Fatalf("want the checkRequired missing-property error (dispatch rejection, before Execute), got: %q", res.ForLLM)
+	}
+	if strings.Contains(res.ForLLM, "evidence is required and must be non-empty") {
+		t.Fatalf("got the in-tool semantic refusal text — §13 deletes it; the omitted case must die at dispatch validation: %q", res.ForLLM)
 	}
 }

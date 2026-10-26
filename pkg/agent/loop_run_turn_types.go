@@ -59,7 +59,10 @@ type agentLoopRunTurnFallbacks struct {
 	callMessages     []providers.Message
 	callLLM          func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error)
 	response         *providers.LLMResponse
-	err              error
+	// responseFromModel is established only by a successful provider call;
+	// framework recovery after a failed call cannot create a model answer.
+	responseFromModel bool
+	err               error
 }
 
 // agentLoopRunTurnIteration carries the shared state of runTurn across its stages.
@@ -129,9 +132,12 @@ type agentLoopRunTurnTools struct {
 	// notice. A truncation outcome is kept separately with its mark when
 	// a late follow-up continues the turn (keepAnswerBeforeSteering).
 	finalIsModelAnswer bool
-	midTurnGuardErr    error
-	ret0               turnResult
-	ret1               error
+	// taskModelFinalAnswer is the model-only view of the logical final message
+	// already assembled by the conversation's continuation machinery.
+	taskModelFinalAnswer string
+	midTurnGuardErr      error
+	ret0                 turnResult
+	ret1                 error
 }
 
 // agentLoopRunTurnConductor carries the shared state of runTurn across its stages.

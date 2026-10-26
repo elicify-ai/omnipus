@@ -13,8 +13,13 @@
 // task_completion_signal.go's marker parser.
 //
 // This tool's own job stops at the call boundary: validating the scope
-// preconditions (FR-090), status/evidence shape (FR-087, FR-088), and direct
-// children before reporting the claim in its result. What the engine DOES
+// preconditions (FR-090), the status enum (FR-087), and direct children
+// before reporting the claim in its result. `evidence` is required in the
+// tool's INPUT SCHEMA for every status (ADR-084 §13, 2026-10-23, issue
+// #1431) — provider-side validation enforces its presence, and this tool
+// NEVER refuses a met claim over an empty or whitespace-only evidence line:
+// the claim is recorded with the text as given and adjudicated like any
+// other (FR-088 as amended). What the engine DOES
 // with a recorded claim — resolving tool-vs-marker precedence (FR-092), dispatching a
 // deferred adjudication after the reply is delivered (D13), refusing a
 // second claim while one is already in flight (FR-101), clearing the
@@ -122,20 +127,18 @@ func (t *GoalClaimTool) Category() ToolCategory { return CategoryTasks }
 
 // Description implements Tool.
 func (t *GoalClaimTool) Description() string {
-	return "Claim THIS session's active goal as done, blocked, or waiting on the operator (ADR-084). " +
-		"status:met means you believe the goal's acceptance criteria are satisfied. If any direct child " +
-		"sub-agent is queued or actively running, the met claim is rejected immediately; wait for them to finish " +
-		"or cancel them, then claim again. With no queued or actively running direct child, a valid met claim " +
-		"proceeds to adjudication after your reply is delivered; adjudication may disagree with your " +
-		"claim. A met claim requires a non-empty evidence argument (your own one-line statement of what you " +
-		"verified) or the call is refused before anything is recorded — if the work is not finished yet, do " +
-		"not claim met: keep working, or claim blocked or waiting_on_user with the reason as evidence. " +
-		"status:waiting_on_user and status:blocked both end the turn without any adjudication: " +
-		"waiting_on_user means you need an answer from the operator to continue; blocked means you " +
-		"cannot proceed and it is not something the operator can answer directly — for either, give the " +
-		"reason in one line as evidence so the operator can see why. This tool refuses on " +
-		"a delegated sub-turn (it reports the OWNER session's completion only) and on a session with no " +
-		"active goal."
+	return "Claim THIS session's active goal as met, blocked, or waiting_on_user (ADR-084). " +
+		"Both status and evidence are required on every call; omitting evidence is rejected at dispatch. " +
+		"Use met when you believe the acceptance criteria are satisfied. Prefer a one-line summary of " +
+		"what you did and how you checked it. A met claim is rejected while any direct child sub-agent " +
+		"is queued or actively running; wait for them to finish or cancel them, then claim again. " +
+		"Otherwise, the met claim is recorded and judged after your reply is delivered, even with empty " +
+		"or whitespace-only evidence. If no physical evidence is available, you can still claim met. " +
+		"The Judge decides met or unmet against the acceptance criteria using the conversation and your " +
+		"tool results, and may disagree with your claim. An unmet verdict uses one try. " +
+		"blocked means you cannot proceed and an operator answer cannot resolve it; waiting_on_user means " +
+		"you need an operator answer to continue. Both end the turn without adjudication; give the reason " +
+		"as evidence. Only the owner session can claim its active goal."
 }
 
 // Parameters implements Tool.
@@ -146,24 +149,28 @@ func (t *GoalClaimTool) Parameters() map[string]any {
 			"status": map[string]any{
 				"type": "string",
 				"enum": []string{GoalClaimStatusMet, GoalClaimStatusBlocked, GoalClaimStatusWaitingOnUser},
-				"description": "met: you believe the goal's acceptance criteria are satisfied; requires evidence. " +
-					"If any direct child sub-agent is queued or actively running, the met claim is rejected immediately; " +
-					"wait for them to finish or cancel them, then claim again. With no such direct child, a valid " +
-					"met claim proceeds to adjudication after your reply is delivered. blocked: you " +
-					"cannot proceed and it is not a question the operator can answer — parks the goal, no " +
-					"adjudication. waiting_on_user: you need an answer from the operator to continue — parks " +
-					"the goal, no adjudication. Required — never omit this expecting a default.",
+				"description": "Required. met: you believe the acceptance criteria are satisfied. If any direct child " +
+					"sub-agent is queued or actively running, wait for them to finish or cancel them before claiming met. " +
+					"Otherwise, the claim is recorded and judged after your reply is delivered, even with empty evidence. " +
+					"An unmet verdict uses one try. blocked: you cannot proceed and an operator answer cannot resolve it. " +
+					"waiting_on_user: you need an operator answer to continue. Both park the goal without adjudication. " +
+					"Include evidence for every status.",
 			},
 			"evidence": map[string]any{
 				"type": "string",
-				"description": "Your own one-line statement of what you verified. Required and non-empty " +
-					"when status is met (whitespace-only counts as empty and the call is refused). For " +
-					"blocked and waiting_on_user it is optional: one line saying why you cannot proceed or " +
-					"what you need — it becomes the reason the operator sees. Example when status is met: " +
-					"\"Wrote the report to report.md and read it back; all three required sections are present.\"",
+				"description": "Required string for every status; omitting it is rejected at dispatch. For met, " +
+					"prefer one line saying what you did and how you checked it. Empty or whitespace-only evidence " +
+					"is accepted: the Judge decides met or unmet against the acceptance criteria using the conversation " +
+					"and your tool results. An unmet verdict uses one try. For blocked or waiting_on_user, " +
+					"give the reason or the answer you need; this is shown to the operator.",
 			},
 		},
-		"required": []string{"status"},
+		// ADR-084 §13 (2026-10-23, issue #1431), decision line 1: `evidence` is
+		// required in the input schema for EVERY status — provider-side
+		// validation enforces its presence, and Execute never refuses on
+		// emptiness (an empty evidence line on a met claim is recorded and
+		// adjudicated like any other claim).
+		"required": []string{"status", "evidence"},
 	}
 }
 
@@ -236,28 +243,16 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		return ErrorResult(fmt.Sprintf("goal_claim rejected: %v", sErr))
 	}
 
-	// Emptiness is evaluated after Unicode whitespace trimming
+	// The argument is trimmed after Unicode whitespace trimming
 	// (strings.TrimSpace already trims every rune unicode.IsSpace reports —
-	// JUDGE-E-28), matching FR-026's rule for evidence_quote so the two
-	// cannot disagree about what "empty" means.
+	// JUDGE-E-28), the same rule FR-026 applies to evidence_quote so the two
+	// cannot disagree about what "empty" means. ADR-084 §13 (2026-10-23,
+	// issue #1431): trimming now only NORMALISES what the Judge receives and
+	// what blocked/waiting_on_user show the operator — it never refuses. The
+	// schema requires `evidence` for every status; an empty or
+	// whitespace-only evidence line on a met claim is recorded below with the
+	// text as given and adjudicated like any other claim.
 	evidence := strings.TrimSpace(argString(args, "evidence"))
-
-	// JUDGE-FR-088: a met claim with absent/empty/whitespace-only evidence
-	// is refused AT THE CALL — an error result, nothing recorded, no round
-	// consumed, no adjudication scheduled. This is what retires the G-4
-	// bounce economics for the tool path: the correction happens inside the
-	// turn, so the model can retry immediately instead of the engine having
-	// to price a bare claim it can only detect after the turn has ended.
-	if status == GoalClaimStatusMet && evidence == "" {
-		return ErrorResult("goal_claim(status:met) rejected: evidence is required and must be non-empty — " +
-			"nothing was recorded and the goal is unchanged, so retrying without evidence will be refused again. " +
-			"If the work is done and verified, call goal_claim again now with status \"met\" AND evidence — " +
-			"one line saying what you did and how you checked it, e.g. \"Wrote the report to report.md and read " +
-			"it back; all three required sections are present.\" If the work is NOT finished, do not claim met: " +
-			"keep working and claim later. If you cannot proceed or only the operator can unblock you, claim " +
-			"status \"blocked\" or \"waiting_on_user\" instead, with the reason as evidence. " +
-			"(ADR-084 JUDGE-FR-088)")
-	}
 
 	if status == GoalClaimStatusMet {
 		if direct, ok := access.(GoalClaimDirectChildrenAccess); ok {

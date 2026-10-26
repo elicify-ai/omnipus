@@ -305,6 +305,7 @@ turnLoop:
 			}
 			er.cn.rc.rx.finalContent = ""
 			er.cn.rc.rx.finalIsModelAnswer = false
+			er.cn.rc.rx.taskModelFinalAnswer = ""
 			goto turnLoop
 		}
 	}
@@ -334,6 +335,9 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 		}
 	}
 	er.cn.rc.rx.rr.rq.ri.rf.response = retryResp
+	// Apply the normal response cleanup before retry text enters answer assembly.
+	er.cn.rc.rx.rr.orphanMarkup, er.cn.rc.rx.rr.hasOrphanMarkup = stripOrphanToolCallMarkup(retryResp)
+	er.cn.rc.rx.rr.rq.ri.rf.rt.ts.markTaskModelResponse(er.cn.rc.rx.rr.rq.ri.rf.responseFromModel)
 	er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.Content
 	if er.cn.responseContent == "" && er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
 		er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent
@@ -349,6 +353,7 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 		case truncationActionEnd:
 			er.cn.rc.rx.finalContent = verdict.finalContent
 			er.cn.rc.rx.finalIsModelAnswer = false
+			er.cn.rc.rx.taskModelFinalAnswer = er.cn.rc.rx.rr.rq.ri.rf.rt.ts.continuationModelContent()
 			return agentLoopRunTurnConductorRunIterationsRetryResponseBreakL2
 		}
 	}
@@ -448,6 +453,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) prepareIteration() agentLoopRu
 	}
 
 	// Successful usage was captured once at the provider boundary.
+	cn.rc.rx.rr.rq.ri.rf.rt.ts.markTaskModelResponse(cn.rc.rx.rr.rq.ri.rf.responseFromModel)
 
 	return agentLoopRunTurnConductorRunIterationsNext
 }
@@ -606,6 +612,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 		case truncationActionEnd:
 			cn.rc.rx.finalContent = verdict.finalContent
 			cn.rc.rx.finalIsModelAnswer = false
+			cn.rc.rx.taskModelFinalAnswer = cn.rc.rx.rr.rq.ri.rf.rt.ts.continuationModelContent()
 			return agentLoopRunTurnConductorRunIterationsBreakL1
 		}
 	}
@@ -668,6 +675,11 @@ func (cn *agentLoopRunTurnConductorRunIterations) surfaceEmptyRetryOutcome() age
 func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoopRunTurnConductorRunIterationsFlow {
 	if len(cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || cn.rc.rx.rr.rq.ri.gracefulTerminal {
 		answered := strings.TrimSpace(cn.responseContent) != ""
+		fromModel := answered && cn.rc.rx.rr.rq.ri.rf.responseFromModel && cn.rc.rx.rr.rq.ri.rf.response.Content != ""
+		modelContent := ""
+		if fromModel {
+			modelContent = cn.rc.rx.rr.rq.ri.rf.response.Content
+		}
 		if !answered {
 			cn.responseContent = defaultResponse
 			cn.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
@@ -689,11 +701,13 @@ func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoop
 		// NOT already been settled into the record by
 		// flushContinuationAccumulator — see its doc comment.)
 		if cn.rc.rx.rr.rq.ri.rf.rt.ts.hadContinuation() {
-			cn.responseContent = cn.rc.rx.rr.rq.ri.rf.rt.ts.appendToAccumulator(cn.responseContent)
+			cn.responseContent = cn.rc.rx.rr.rq.ri.rf.rt.ts.appendToAccumulatorFrom(cn.responseContent, fromModel)
+			modelContent = cn.rc.rx.rr.rq.ri.rf.rt.ts.continuationModelContent()
 			cn.rc.rx.rr.rq.ri.rf.rt.ts.resolveContinuation()
 		}
 		cn.rc.rx.finalContent = cn.responseContent
 		cn.rc.rx.finalIsModelAnswer = answered
+		cn.rc.rx.taskModelFinalAnswer = modelContent
 		logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
 			map[string]any{
 				"agent_id":      cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -793,8 +807,16 @@ func (cn *agentLoopRunTurnConductorRunIterations) keepAnswerBeforeSteering(conte
 		// Keep this answer's own cut-off mark without auto-continuing it.
 		truncationReason = truncationReasonMaxOutputTokens
 	}
-	if fromDirectResponse && ts.continuationAccumulated() != "" {
-		content = ts.appendToAccumulator(content)
+	modelContent := cn.rc.rx.taskModelFinalAnswer
+	if fromDirectResponse {
+		modelContent = ""
+		if ri.rf.responseFromModel {
+			modelContent = content
+		}
+		if ts.continuationAccumulated() != "" {
+			content = ts.appendToAccumulatorFrom(content, ri.rf.responseFromModel)
+			modelContent = ts.continuationModelContent()
+		}
 	}
 	if chain := cn.rc.rx.rr.continuationChain; len(chain) > 0 {
 		ri.messages = stripContinuationChain(ri.messages, chain)
@@ -819,6 +841,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) keepAnswerBeforeSteering(conte
 		if content != "" || truncationReason != "" {
 			ts.markLastStreamerTranscriptPersisted()
 		}
+		ts.recordTaskModelAnswer(modelContent)
 		ts.retireContinuationAccumulator()
 		ts.setTruncationReason("")
 		return nil

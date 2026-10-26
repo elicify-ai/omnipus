@@ -146,7 +146,7 @@ func TestTaskClaimIsNeverTrustedWhenJudgeUnregistered(t *testing.T) {
 
 	const claim = "Implemented the CSV export and checked the output by hand."
 	step, _, redispatch := al.taskExecutor.adjudicateRunClaim(
-		context.Background(), claimed, taskSessionID, claim, run, &taskRunState{})
+		context.Background(), claimed, taskSessionID, claim, claim, run, &taskRunState{})
 
 	final, gerr := al.taskStore.Get(tk.ID)
 	if gerr != nil {

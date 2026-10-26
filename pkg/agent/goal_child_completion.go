@@ -116,7 +116,12 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 		// reported as ErrJudgeTimeLimit, never as a provider timeout.
 		ctx, cancel := context.WithTimeoutCause(withGoalAnswer(withGoalProducer(context.Background(), work.producer), work.answer),
 			goalJudgeRoundTimeout, ErrJudgeTimeLimit)
-		lastOutcome = al.runGoalAdjudicationOutcome(ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
+		// ADR-084 §13 (2026-10-23, issue #1431): every goalDeferredAdjudicationWork
+		// is a recorded claim by construction — the claim path (a successful
+		// goal_claim call, or the prose marker) built it — so the re-drive passes
+		// recordedClaim=true and the FR-095 tripwire never refuses a recorded
+		// claim whose evidence line is empty.
+		lastOutcome = al.runGoalAdjudicationOutcome(ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText, true,
 			al.idleSteerDeliverer(work.sessionID, rec.GoalID, goalClaimDeferredSourceKind))
 		cancel()
 		if lastOutcome.met || !lastOutcome.unavailable {

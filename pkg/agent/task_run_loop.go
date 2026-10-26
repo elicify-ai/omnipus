@@ -327,7 +327,10 @@ func (te *TaskExecutor) finishRunTurn(
 		return te.failedRunStep(ctx, t, taskSessionID, "execution error: "+plain, run)
 	}
 
-	if taskSessionID != "" && resp != "" && sessStore != nil {
+	// Native turns already persist their actual assistant messages in the turn
+	// engine. Their result can join several saved messages, so appending it here
+	// would invent a duplicate reply. Keep this write for external CLI results.
+	if te.dispatchesExternalCLI(t.AgentID) && taskSessionID != "" && resp != "" && sessStore != nil {
 		if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 			ID:        fmt.Sprintf("%s-response-%d", t.ID, state.turns),
 			Role:      "assistant",
@@ -410,7 +413,7 @@ func (te *TaskExecutor) finishRunTurn(
 		return runStepEnded, "", ""
 
 	case tools.GoalClaimStatusMet:
-		return te.adjudicateRunClaim(ctx, current, taskSessionID, claim.evidence, run, state)
+		return te.adjudicateRunClaim(ctx, current, taskSessionID, claim.evidence, resp, run, state)
 
 	case claimBareMarker:
 		return te.continueAfterInnerTry(ctx, current, taskSessionID, "a completion marker with no evidence line", claim.evidence, sessStore, run, state)
@@ -448,18 +451,20 @@ const reasoningOnlySteering = "Your last turn ended at the output-token limit wi
 // budget fails the run. A Judge only an operator can fix, or one still
 // unavailable after judgeUnavailableRetryBound tries, ends the task Failed
 // with a plain reason and no attempt consumed — restarting cannot help.
+// ADR-084 §13 (2026-10-23, issue #1431): there is no empty-evidence
+// pre-guard — every met claim, its evidence line empty or not, is recorded
+// and judged; an unmet ruling spends the run's goal try as usual, and the
+// try budget still ends the task failed. Evidence is the claim the Judge
+// checks; answer is the worker's actual result, kept separate even when either
+// is empty. Completion and unverified handbacks carry answer, never evidence.
 func (te *TaskExecutor) adjudicateRunClaim(
 	ctx context.Context,
 	t *task.Task,
-	taskSessionID, evidence string,
+	taskSessionID, evidence, answer string,
 	run *activeRun,
 	state *taskRunState,
 ) (runStep, string, string) {
 	sessStore := te.agentLoop.GetSessionStore()
-	if strings.TrimSpace(evidence) == "" {
-		steer := "A completion claim needs your own one-line statement of what you verified. Verify the work, then claim again with that line."
-		return te.continueAfterInnerTry(ctx, t, taskSessionID, "a completion claim with no evidence", steer, sessStore, run, state)
-	}
 
 	// The claim is judged against the criteria on the task's goal record — the
 	// same record a chat goal is judged from and the one the task card reads
@@ -506,10 +511,10 @@ func (te *TaskExecutor) adjudicateRunClaim(
 	if needsJudgeAgent(judged) {
 		if _, ok := te.agentLoop.GetRegistry().GetAgent(string(coreagent.IDJudge)); !ok {
 			// Issue #1306 (founder): the Judge must conclude WITH the work
-			// result — every terminal Judge failure keeps the worker's evidence.
+			// result — every terminal Judge failure keeps the worker's answer.
 			te.endTaskWithoutAttempt(t, taskSessionID,
 				"The Judge could not run: the Judge agent is not registered, so this claim cannot be checked."+
-					"\n\n"+notVerifiedConclusion("the Judge agent is not registered", "Register the Judge, then re-run the task.", evidence), run)
+					"\n\n"+notVerifiedConclusion("the Judge agent is not registered", "Register the Judge, then re-run the task.", answer), run)
 			return runStepEnded, "", ""
 		}
 	}
@@ -561,7 +566,7 @@ func (te *TaskExecutor) adjudicateRunClaim(
 			logger.ErrorCF("task_executor", "goal: the Judge cannot run until an operator fixes it — failing the task, no attempt used",
 				map[string]any{"task_id": t.ID, "reason": result.Reason})
 			te.endTaskWithoutAttempt(t, taskSessionID, "The Judge could not run: "+judgeOperatorFix(result.Reason)+
-				"\n\n"+notVerifiedConclusion("the Judge cannot run until its settings are fixed", "Fix the Judge settings named above, then re-run the task.", evidence), run)
+				"\n\n"+notVerifiedConclusion("the Judge cannot run until its settings are fixed", "Fix the Judge settings named above, then re-run the task.", answer), run)
 			return runStepEnded, "", ""
 		}
 		logger.WarnCF("task_executor", "goal: the Judge is unavailable — retrying the same claim, no try used",
@@ -569,10 +574,10 @@ func (te *TaskExecutor) adjudicateRunClaim(
 		if judgeTry >= judgeUnavailableRetryBound {
 			// Issue #1306 (founder): the Judge must conclude, and the worker's
 			// result must survive it — the task's Result carries the verdict
-			// AND the evidence the worker claimed completion with.
+			// AND the actual answer, independently of the claim's evidence.
 			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf(
 				"The Judge could not check this task's work after %d tries (%s). Re-run the task once the Judge is available.",
-				judgeTry, result.Reason)+"\n\n"+notVerifiedConclusion("the Judge was unavailable", "", evidence), run)
+				judgeTry, result.Reason)+"\n\n"+notVerifiedConclusion("the Judge was unavailable", "", answer), run)
 			return runStepEnded, "", ""
 		}
 		te.writeTaskReason(t, fmt.Sprintf(
@@ -608,7 +613,7 @@ func (te *TaskExecutor) adjudicateRunClaim(
 	state.innerTries++
 
 	if verdict.Met {
-		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, evidence, run)
+		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, answer, run)
 		return runStepEnded, "", ""
 	}
 

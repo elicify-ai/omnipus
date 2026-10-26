@@ -17218,7 +17218,7 @@ export interface components {
                  */
                 status: "met" | "blocked" | "waiting_on_user";
                 /**
-                 * @description The claim's own evidence text. Required and non-empty (whitespace-trimmed) at the call when `status == met` (JUDGE machine-verifiable constraint); ignored otherwise. This is a snapshot of what was submitted, not a grounding excerpt — distinct from `CriterionVerdict.evidence`.
+                 * @description The claim's own evidence text, carried as submitted — possibly empty or whitespace-only on a `met` claim, which ADR-084 §13 (corrected 2026-10-23, issue #1431) records and adjudicates like any other claim. Presence (not non-emptiness) is the schema- enforced constraint at the call; the durable invariant follows the tool's. This is a snapshot of what was submitted, not a grounding excerpt — distinct from `CriterionVerdict.evidence`.
                  * @example All 47 tests in pkg/plan pass; golangci-lint reports 0 issues.
                  */
                 evidence?: string;

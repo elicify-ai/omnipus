@@ -185,8 +185,16 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	}
 
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseCompleted)
+	finalContent := rz.rc.rx.finalContent
+	if rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.RunningTaskID != "" {
+		// The executor receives only this turn's real assistant output, including
+		// pre-tool text. Framework notices remain in the chat/history above but
+		// cannot become task results, regardless of their wording.
+		rz.rc.rx.rr.rq.ri.rf.rt.ts.recordTaskModelAnswer(rz.rc.rx.taskModelFinalAnswer)
+		finalContent = rz.rc.rx.rr.rq.ri.rf.rt.ts.taskModelAnswerContent()
+	}
 	return turnResult{
-		finalContent: rz.rc.rx.finalContent,
+		finalContent: finalContent,
 		status:       rz.rc.rx.rr.rq.ri.turnStatus,
 		followUps:    append([]bus.InboundMessage(nil), rz.rc.rx.rr.rq.ri.rf.rt.ts.followUps...),
 		turnFailed:   rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed,

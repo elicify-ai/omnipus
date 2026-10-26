@@ -12,21 +12,62 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// TestRecordClaimRequiresEvidenceWhenMet (JUDGE's machine-verifiable
-// constraint, Goal.yaml's latest_claim description) proves a met claim with
-// empty/whitespace-only evidence is rejected.
-func TestRecordClaimRequiresEvidenceWhenMet(t *testing.T) {
+// TestRecordClaim_AcceptsPresentEmptyEvidenceWhenMet — ADR-084 §13 as
+// corrected 2026-10-23 (MAJ-001, issue #1431): the durable invariant follows
+// the tool's — validateClaim keeps enforcing the status enum but MUST accept
+// a present-empty or whitespace-only evidence text on a met claim. The
+// previous form of this test (TestRecordClaimRequiresEvidenceWhenMet) pinned
+// the rejection that reproduced the §13 defect one layer below the tool
+// (task pauses via pauseRunForGoalError before the Judge; chat record goes
+// stale), so it was inverted per §13 "Tests and specs that must change".
+func TestRecordClaim_AcceptsPresentEmptyEvidenceWhenMet(t *testing.T) {
 	g := newTestGoal(t, "session", "s1")
 	now := time.Now().UTC()
 
-	if err := g.RecordClaim(generated.GoalLatestClaimStatusMet, "", now); err == nil {
-		t.Error("RecordClaim(met, \"\"): want error, got nil")
+	if err := g.RecordClaim(generated.GoalLatestClaimStatusMet, "", now); err != nil {
+		t.Fatalf("ADR-084 §13 (MAJ-001): RecordClaim(met, \"\") must be accepted, got error: %v", err)
 	}
-	if err := g.RecordClaim(generated.GoalLatestClaimStatusMet, "   ", now); err == nil {
-		t.Error("RecordClaim(met, whitespace-only): want error, got nil")
+	if g.LatestClaim == nil || g.LatestClaim.Status != generated.GoalLatestClaimStatusMet || g.LatestClaim.Evidence != "" {
+		t.Fatalf("LatestClaim = %+v, want status=met with the empty evidence text as given", g.LatestClaim)
 	}
-	if g.LatestClaim != nil {
-		t.Error("a rejected RecordClaim call must not have set LatestClaim")
+
+	if err := g.RecordClaim(generated.GoalLatestClaimStatusMet, "   ", now); err != nil {
+		t.Fatalf("ADR-084 §13 (MAJ-001): RecordClaim(met, whitespace-only) must be accepted, got error: %v", err)
+	}
+	if g.LatestClaim == nil || g.LatestClaim.Evidence != "   " {
+		t.Fatalf("LatestClaim.Evidence = %+v, want the whitespace text carried as given", g.LatestClaim)
+	}
+}
+
+// TestRecordClaim_EmptyEvidenceMetSurvivesStoreRoundTrip — ADR-084 §13 as
+// corrected 2026-10-23 (MAJ-001, issue #1431): through the REAL goal store,
+// an empty-evidence met claim records → saves → reads back intact for BOTH
+// owner kinds (chat/session-owned and task-owned) — the durable record, not
+// just the in-memory struct, carries the claim the Judge will adjudicate.
+func TestRecordClaim_EmptyEvidenceMetSurvivesStoreRoundTrip(t *testing.T) {
+	for _, kind := range []generated.GoalOwnerKind{generated.GoalOwnerKindSession, generated.GoalOwnerKindTask} {
+		t.Run(string(kind), func(t *testing.T) {
+			s := newTestStore(t)
+			g := mustCreateActive(t, s, kind, "owner-"+string(kind))
+			now := time.Now().UTC()
+
+			if _, uerr := s.Update(g.GoalID, func(cur *Goal) error {
+				return cur.RecordClaim(generated.GoalLatestClaimStatusMet, "", now)
+			}); uerr != nil {
+				t.Fatalf("ADR-084 §13 (MAJ-001): RecordClaim(met, \"\") through the real %s-owned store must be accepted, got error: %v", kind, uerr)
+			}
+
+			back, rerr := s.Get(g.GoalID)
+			if rerr != nil {
+				t.Fatalf("read back: %v", rerr)
+			}
+			if back.LatestClaim == nil {
+				t.Fatal("the empty-evidence met claim did not survive the store round trip — LatestClaim is nil")
+			}
+			if back.LatestClaim.Status != generated.GoalLatestClaimStatusMet || back.LatestClaim.Evidence != "" {
+				t.Fatalf("read-back LatestClaim = %+v, want status=met evidence=\"\"", back.LatestClaim)
+			}
+		})
 	}
 }
 

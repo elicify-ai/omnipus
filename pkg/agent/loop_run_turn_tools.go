@@ -2201,6 +2201,7 @@ func (rx *agentLoopRunTurnTools) finishToolIteration() agentLoopRunTurnToolsFlow
 				})
 			rx.finalContent = notice
 			rx.finalIsModelAnswer = false
+			rx.taskModelFinalAnswer = ""
 			rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
 			return agentLoopRunTurnToolsBreakL1
 		}
@@ -2220,6 +2221,7 @@ func (rx *agentLoopRunTurnTools) finishToolIteration() agentLoopRunTurnToolsFlow
 			})
 		rx.finalContent = notice
 		rx.finalIsModelAnswer = false
+		rx.taskModelFinalAnswer = ""
 		rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
 		return agentLoopRunTurnToolsBreakL1
 	}

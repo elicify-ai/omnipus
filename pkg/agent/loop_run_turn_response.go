@@ -46,12 +46,15 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 	cr := &agentLoopRunTurnResponseCallLLMWithRetries{rr: rr}
 
 	cr.rr.rq.ri.rf.callLLM = func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
+		cr.rr.rq.ri.rf.responseFromModel = false
 		cr.rr.rq.ri.rf.callMessages = messagesForCall
 		cr.rr.rq.ri.rf.providerToolDefs = toolDefsForCall
 		if err := cr.rr.rq.checkpointRequest(true); err != nil {
 			return nil, err
 		}
-		return cr.rr.rq.ri.rf.rt.callProviderOnce(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
+		response, err := cr.rr.rq.ri.rf.rt.callProviderOnce(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
+		cr.rr.rq.ri.rf.responseFromModel = err == nil && response != nil
+		return response, err
 	}
 
 	cr.rr.rq.ri.rf.response = nil
@@ -999,6 +1002,9 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 	rr.rq.ri.rf.rt.ts.appendIntermediateAssistantTranscript(rr.rq.ri.rf.response.Content)
 	if err := rr.rq.ri.rf.rt.ts.callAccountingError(); err != nil {
 		return err
+	}
+	if rr.rq.ri.rf.responseFromModel {
+		rr.rq.ri.rf.rt.ts.recordTaskModelAnswer(rr.rq.ri.rf.response.Content)
 	}
 	if rr.rq.ri.rf.response.Content != "" {
 		// The narration is now in the transcript. If this round's streamer

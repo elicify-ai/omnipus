@@ -14,6 +14,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -46,18 +47,28 @@ func TestFormatTierOneToolCall_RendersError(t *testing.T) {
 	}
 }
 
-// TestFormatTierOneToolCall_NeverRendersResult proves FR-106's "durable
-// fields only" — Result is the ONE field ADR-066 D5 overwrites mid-turn,
-// so it must never leak into the rendered summary, even when Parameters
-// and Error are both absent.
-func TestFormatTierOneToolCall_NeverRendersResult(t *testing.T) {
+// TestFormatTierOneToolCall_RendersResultPayloadWhenPresent — FR-106 as
+// amended 2026-10-23 (ADR-084 §13, MAJ-004, issue #1431): a tool call's
+// result payload that still exists on the record (ContentState empty) MUST
+// be rendered to the Judge through this same seam — without it, a decisive
+// value living only in a worker's tool result is unreachable, and the
+// amended empty-evidence claim path promises evidence it cannot see. This
+// test inverts TestFormatTierOneToolCall_NeverRendersResult (deleted per
+// §13 "Tests and specs that must change"): the D5-projection safety the old
+// test guarded is now carried by the ContentState marker (emptied/capped
+// render the explicit projection marker — retained below), not by never
+// reading Result.
+func TestFormatTierOneToolCall_RendersResultPayloadWhenPresent(t *testing.T) {
 	tc := session.ToolCall{
 		Tool: "read_file", Status: "success",
-		Result: map[string]any{"content": "SECRET-CANARY-MUST-NOT-APPEAR"},
+		Result: map[string]any{"content": "report.md lists three supplier quotes: Acme, Borel, Cide"},
 	}
 	got := formatTierOneToolCall(tc, nil)
-	if strings.Contains(got, "SECRET-CANARY-MUST-NOT-APPEAR") {
-		t.Fatalf("JUDGE-FR-106: Result must never be rendered (only Tool/Status/Parameters/Error are durable), got %q", got)
+	if !strings.Contains(got, "Acme, Borel, Cide") {
+		t.Fatalf("JUDGE-FR-106 as amended (§13 MAJ-004): a result payload that exists on the record must be rendered, got %q", got)
+	}
+	if strings.Contains(got, "projected away") {
+		t.Fatalf("a present result (ContentState empty) is not a D5 projection — the projection marker must not appear, got %q", got)
 	}
 }
 
@@ -105,6 +116,86 @@ func TestFormatTierOneToolCall_ParametersTruncatedAt512RunesWithMarker(t *testin
 	// The rendered params segment itself must not run away unbounded.
 	if idx := strings.Index(got, "params="); idx >= 0 && len(got)-idx > 700 {
 		t.Errorf("rendered params segment too long (%d bytes after 'params='), truncation not applied", len(got)-idx)
+	}
+}
+
+// TestFormatTierOneToolCall_ResultIsRedactedAndBounded — FR-106 as amended
+// 2026-10-23 (ADR-084 §13, MAJ-004): the result payload travels the SAME
+// redaction function and the SAME rune truncation already applied to
+// parameters and error — never raw, never unbounded.
+func TestFormatTierOneToolCall_ResultIsRedactedAndBounded(t *testing.T) {
+	// #1431 CHECK F2: pin FR-105/106's exact bound independently of the
+	// implementation constant. A 600-rune result-only mutant must fail.
+	const limit = 512
+	const rawPrefix = "token sk-live-secret accepted; "
+	const safePrefix = "token [REDACTED] accepted; "
+	redact := func(s string) string { return strings.ReplaceAll(s, "sk-live-secret", "[REDACTED]") }
+	for _, unit := range []string{"a", "界"} {
+		for _, size := range []int{511, 512, 513, 599, 600, 601, 2000} {
+			t.Run(fmt.Sprintf("%s/%d-runes", unit, size), func(t *testing.T) {
+				// These characters have no JSON escaping: this independently
+				// derived serialization includes the JSON wrapper in the bound.
+				overhead := len([]rune(`{"body":"` + safePrefix + `"}`))
+				padding := strings.Repeat(unit, size-overhead)
+				serialized := `{"body":"` + safePrefix + padding + `"}`
+				wantPayload := serialized
+				if size > limit {
+					wantPayload = string([]rune(serialized)[:limit]) + tierOneTruncationMarker
+				}
+				tc := session.ToolCall{Tool: "http_request", Status: "success",
+					Result: map[string]any{"body": rawPrefix + padding}}
+				got := formatTierOneToolCall(tc, redact)
+				want := "[tool_call] http_request -> success result=" + wantPayload
+				if got != want {
+					t.Errorf("FR-106 result at %d runes: got %q, want exact redacted 512-rune-bound rendering %q", size, got, want)
+				}
+				if strings.Contains(got, "sk-live-secret") || !strings.Contains(got, "[REDACTED]") {
+					t.Errorf("result must preserve the redaction, never the secret: %q", got)
+				}
+			})
+		}
+	}
+}
+
+// TestFormatTierOneToolCall_NoResultRendersAbsence — FR-106 as amended
+// 2026-10-23 (ADR-084 §13, MAJ-004): a call that produced no result says so
+// — never silence, which would read as an inconclusive projection, and never
+// a payload that does not exist.
+func TestFormatTierOneToolCall_NoResultRendersAbsence(t *testing.T) {
+	tc := session.ToolCall{Tool: "bash", Status: "success"}
+	got := formatTierOneToolCall(tc, nil)
+	lower := strings.ToLower(got)
+	if !strings.Contains(lower, "no result") {
+		t.Fatalf("§13 MAJ-004: a call with no result must render an explicit absence, got %q", got)
+	}
+	if strings.Contains(got, "projected away") {
+		t.Fatalf("absence of a result is not a D5 projection — the projection marker must not appear, got %q", got)
+	}
+}
+
+// TestTierOneFeed_RendersDecisiveToolResultOnly — FR-106 as amended
+// 2026-10-23 (ADR-084 §13, MAJ-004), the amended empty-evidence path's
+// sufficiency requirement: a value that exists ONLY in a worker tool result
+// — not in the narration, the claim text or the criteria — is visible in the
+// tier-one evidence feed the Judge receives (renderTranscriptEntriesForWindow).
+func TestTierOneFeed_RendersDecisiveToolResultOnly(t *testing.T) {
+	const decisive = "supplier Cide accepted clause 7.2 verbatim"
+	entries := []session.TranscriptEntry{
+		{ID: "narration-1", Content: "I have written the report and checked every clause.", Timestamp: baseTime.Add(time.Second)},
+		{ID: "call-1", Timestamp: baseTime.Add(2 * time.Second), ToolCalls: []session.ToolCall{{
+			Tool: "read_file", Status: "success",
+			Parameters: map[string]any{"path": "report.md"},
+			Result:     map[string]any{"content": decisive},
+		}}},
+	}
+	msgs := renderTranscriptEntriesForWindow(entries)
+	joined := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		joined = append(joined, m.Content)
+	}
+	feed := strings.Join(joined, "\n")
+	if !strings.Contains(feed, decisive) {
+		t.Fatalf("§13 MAJ-004: a decisive value living ONLY in a worker tool result must be visible in the rendered tier-one feed, got:\n%s", feed)
 	}
 }
 

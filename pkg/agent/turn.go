@@ -346,9 +346,13 @@ type turnState struct {
 	// THIS field, not on continuationRounds: without the distinction, an
 	// unrelated terminal exit many iterations after an already-resolved
 	// continuation chain would wrongly re-surface stale partial content.
-	continuationAccum   string
+	continuationAccum   answerText
 	continuationRounds  int
 	continuationPending bool
+	// The task answer is a concatenation of completed logical model messages,
+	// not provider fragments. Its provenance feeds the shared accumulator.
+	taskModelAnswer   answerText
+	taskModelResponse bool
 
 	// currentMessageID is the id #823's live/persisted unification hangs
 	// on: the SAME value goes onto this round's live streamed frames
@@ -1619,8 +1623,7 @@ func (ts *turnState) setProviderCancel(cancel context.CancelFunc) {
 func (ts *turnState) appendToAccumulator(content string) string {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.continuationAccum += content
-	return ts.continuationAccum
+	return ts.continuationAccum.append(content, ts.taskModelResponse)
 }
 
 // continuationAccumulated returns the concatenated answer accumulated so
@@ -1628,7 +1631,7 @@ func (ts *turnState) appendToAccumulator(content string) string {
 func (ts *turnState) continuationAccumulated() string {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
-	return ts.continuationAccum
+	return ts.continuationAccum.content
 }
 
 // markContinuationDispatched records that a D6 continuation round has been
@@ -1681,7 +1684,7 @@ func (ts *turnState) resolveContinuation() {
 func (ts *turnState) retireContinuationAccumulator() {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.continuationAccum = ""
+	ts.continuationAccum = answerText{}
 	ts.continuationPending = false
 	ts.continueSameMessageID = false
 }
