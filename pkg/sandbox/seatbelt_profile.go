@@ -76,13 +76,22 @@ import (
 //     session (the shipped LaunchAgent deployment) and the system daemon
 //     com.apple.trustd only for root or the launchd System/LoginWindow
 //     session, which no supported deployment uses, so that one is NOT
-//     granted. trustd evaluates certificate trust only: it is not the
-//     keychain (com.apple.SecurityServer / secd are not granted, so no secret
-//     or private key is reachable). Per Apple's open-source trustd, its
-//     trust-store modification operations require an Apple-private
-//     entitlement a sandboxed child cannot hold; the residual unentitled
-//     reach is reading trust settings and flushing trustd's OCSP, issuer and
-//     revocation caches, which refill on demand.
+//     granted.
+//
+//     What the lookup is for: TLS certificate verification by Go-built tools.
+//     What else it opens: a mach-lookup grants the WHOLE service, not one
+//     call. Per Apple's open-source trustd (trustd.c::trustd_ops,
+//     SecTrustSettingsServer.c), a child can also, without any entitlement,
+//     read trust settings and certificate/trust data (it is NOT shut out of
+//     certificate information), and reset trustd's OCSP and issuer caches
+//     and its revocation database — a performance impact only (re-fetch,
+//     possibly a daemon restart), not a trust change. What stays out of
+//     reach: keychain secrets — com.apple.SecurityServer and secd are not
+//     allowed, and no general keychain-item retrieval was found in trustd's
+//     dispatcher; and persistent trust-settings changes, whose write route
+//     requires an Authorization token carrying the trust-settings right,
+//     which this sandbox grants no way to obtain. These source readings are
+//     NOT verified against the macOS 26 binaries.
 //
 // Everything here is read-only or a well-known sink. The preamble grants no
 // write access outside /dev/null and no execute outside the system binary
