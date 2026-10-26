@@ -8518,6 +8518,11 @@
       "path": "src/components/agents/avatarSurfaceSweep.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/settings/PerformanceSection.goalTimers.c1.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary: C1 QA-authored goal-timer test renders the existing application-classified ToastContainer to assert real visible error alerts (role=alert) for out-of-range timer input, not just queued toast data. The application-only import is confined to this test; no production consumer or public component export is added. Mirrors the reviewed usePanelShell.standalone.test.tsx ToastContainer boundary. All QA assertions and production catalog locks unchanged."
     }
   ]
 }
