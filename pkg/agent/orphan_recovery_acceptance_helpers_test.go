@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -239,6 +240,96 @@ func orphanACAssertRejectedBeforeSend(t *testing.T, h *cwR1Harness, ts *turnStat
 type orphanACMarkTestingT interface {
 	require.TestingT
 	Helper()
+}
+
+// orphanACView5 is an expected DESIGN-5 model view with the archive address of
+// every entry.
+//
+// DESIGN 5 and its 2026-10-26 addendum "Trim shares the projection" fix the
+// projection shape:
+//   - the assistant declaration is RETAINED;
+//   - every durable sibling result is RETAINED, bound to the declaration that
+//     issued it;
+//   - a recognised cancellation record (the marker) is EXCLUDED — it is
+//     bookkeeping, replaced by the observation;
+//   - the occurrence a bound cancellation left without a result gains the
+//     engine-authored recovery observation, at ordinal -1;
+//   - every retained record keeps its ORIGINAL archive address.
+type orphanACView5 struct {
+	messages  []providers.Message
+	addresses []int
+}
+
+// orphanACObservation returns the engine observation the DESIGN-5 projection
+// inserts for callID. It is taken from the real recovered view — the
+// observation is a fixture, like the archive records it completes; only its
+// specified fields are checked (r2CheckedObservation), never its prose.
+func orphanACObservation(t *testing.T, h *cwR1Harness, ts *turnState, callID string) providers.Message {
+	t.Helper()
+	out := orphanACAssemble(t, h, ts, h.agent.Sessions.GetHistory(h.key))
+	return orphanACFindObservation(t, out[1:], callID)
+}
+
+// orphanACObservations returns every engine observation in a projected view,
+// in view order. Two occurrences can share one provider call id, so the
+// observations are addressed by position; each one is checked separately with
+// r2CheckedObservation against its own issuing occurrence.
+func orphanACObservations(t *testing.T, view []providers.Message) []providers.Message {
+	t.Helper()
+	out := make([]providers.Message, 0, 2)
+	for _, m := range view {
+		if m.Role == "tool" && strings.Contains(m.Content, "tool_recovery_observation") {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// orphanACDesign5ViewAt builds the expected DESIGN-5 model view for a fixture
+// that carries one or more engine observations.
+//
+// DESIGN 5 (and its 2026-10-26 "Trim shares the projection" addendum): the
+// retained raw archive lines keep their order and their ORIGINAL addresses;
+// every observation the projection inserts is ephemeral (ordinal -1) and sits
+// where the projection puts it — next to the declaration of the occurrence it
+// completes. obsAt maps a RETAINED-line index to the observations inserted
+// immediately before that line, in the order the projection inserts them.
+func orphanACDesign5ViewAt(t *testing.T, raw []providers.Message, lines []int,
+	obsAt map[int][]providers.Message,
+) ([]providers.Message, []int) {
+	t.Helper()
+	view := make([]providers.Message, 0, len(lines)+len(obsAt))
+	addresses := make([]int, 0, len(lines)+len(obsAt))
+	for i, line := range lines {
+		for _, obs := range obsAt[i] {
+			view = append(view, obs)
+			addresses = append(addresses, -1)
+		}
+		view = append(view, raw[line])
+		addresses = append(addresses, line)
+	}
+	for _, obs := range obsAt[len(lines)] {
+		view = append(view, obs)
+		addresses = append(addresses, -1)
+	}
+	return view, addresses
+}
+
+// orphanACAssertAcceptedBeforeSend is the positive counterpart of
+// orphanACAssertRejectedBeforeSend: a provider-valid projected view is not
+// refused, and the request reaches the real HTTP endpoint.
+func orphanACAssertAcceptedBeforeSend(t *testing.T, h *cwR1Harness, ts *turnState, messages []providers.Message) {
+	t.Helper()
+	r, provider := cwR1OpenAI(t, 0)
+	rr := cwR1Flow(h, ts, messages, provider)
+	rr.rq.prepareCallMessages()
+	require.NoError(t, ts.contextWindowError(), "a provider-valid projected group must not be refused")
+	conversation := requireConversationBeforeVolatileTail(t, rr.rq.ri.rf.callMessages)
+	require.Equal(t, messages, conversation, "the accepted candidate is the projected view, unchanged")
+	response, err := rr.rq.ri.rf.rt.callProviderOnce(rr.rq.ri.rf.callMessages, nil)
+	require.NoError(t, err, "the send boundary accepts the projected view")
+	require.NotNil(t, response)
+	require.Len(t, r.requests(t), 1, "the real HTTP endpoint receives the accepted request")
 }
 
 func orphanACAssertMark(t orphanACMarkTestingT, m providers.Message, id string, line, size, turn int) {

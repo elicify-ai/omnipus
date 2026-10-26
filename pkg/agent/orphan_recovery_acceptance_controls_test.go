@@ -39,7 +39,21 @@ func orphanACCompletedControls(t *testing.T) {
 			h.append(t, raw...)
 			before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
 			ts := h.turn("")
-			out := orphanACAssertView(t, h, ts, raw)
+			// DESIGN 5: the recognised cancellation record BINDS to the
+			// occurrence it names (the group's "done-a" call), so it is
+			// EXCLUDED from the projected view — it is engine bookkeeping,
+			// replaced by the observation it would authorise. That occurrence
+			// already has its durable result, so it authorises no observation
+			// at all. The declaration, both durable results and the unrelated
+			// control are RETAINED with their original addresses.
+			lines := []int{0, 1, 2, 3, 5}
+			if n == 2 {
+				lines = []int{0, 1, 2, 3, 6}
+			}
+			want, addresses := orphanACDesign5ViewAt(t, raw, lines, nil)
+			out := orphanACAssertView(t, h, ts, want)
+			require.Equal(t, append([]int{-1}, addresses...), mapWindowMessages(before, out, -1, 0),
+				"N4: the excluded cancellation record removes no other record and no address")
 			require.NoError(t, validateWindowGroups(out), "N4: already-completed groups are neither restart-canceled nor invalid")
 			r, provider := cwR1OpenAI(t, 0)
 			rr := cwR1Flow(h, ts, out, provider)
@@ -47,19 +61,15 @@ func orphanACCompletedControls(t *testing.T) {
 			require.NoError(t, ts.contextWindowError(), "positive instrument control takes the real validation path")
 			callMessages := rr.rq.ri.rf.callMessages
 			conversation := requireConversationBeforeVolatileTail(t, callMessages)
-			require.Len(t, conversation, len(raw)+1, "N4 ruling: complete raw view survives before FR-007's single tail")
+			require.Len(t, conversation, len(want)+1, "N4: the projected view reaches the send boundary with the pinned envelope and FR-007's single tail")
 			require.Equal(t, "system", conversation[0].Role)
-			require.Equal(t, raw, conversation[1:], "pre-send validation/repair cannot erase or reorder the raw complete group, unbound records or control")
+			require.Equal(t, want, conversation[1:], "pre-send validation/repair cannot erase or reorder the projected complete group, results or control")
 			pinnedInput := conversation[0].Content
 			// Architect N4 ruling: derive the exact wire instructions from the
 			// immutable pinned INPUT plus literal fixture records, not received
-			// output or a production normalizer. Preserve each input occurrence.
-			systemPieces := []string{pinnedInput}
-			for range n {
-				systemPieces = append(systemPieces, `{"type":"turn_canceled_restart","tool_call_id":"done-a","reason":"ungraceful_shutdown_recovery"}`)
-			}
-			systemPieces = append(systemPieces, "retain completed-turn control")
-			wantSystemContent := strings.Join(systemPieces, "\n\n")
+			// output or a production normalizer. Preserve each input occurrence
+			// that the DESIGN-5 projection retains.
+			wantSystemContent := strings.Join([]string{pinnedInput, "retain completed-turn control"}, "\n\n")
 			response, err := rr.rq.ri.rf.rt.callProviderOnce(callMessages, nil)
 			require.NoError(t, err, "valid complete request must cross the same send boundary negatives are forbidden to cross")
 			require.NotNil(t, response)
@@ -73,8 +83,8 @@ func orphanACCompletedControls(t *testing.T) {
 				"the single volatile tail survives the real HTTP adapter unchanged")
 			require.Len(t, wireConversation, 5, "N4 ruling: one composed system message and four unchanged conversation messages precede the tail")
 			require.Equal(t, "system", wireConversation[0].Role)
-			require.Equal(t, raw[:4], wireConversation[1:], "final serialized body retains the entire complete group and both results, with every field and order intact")
-			require.Equal(t, wantSystemContent, wireConversation[0].Content, "serialized instructions retain the pinned input, every unbound marker occurrence and unrelated control in exact order, without loss or duplicate collapse")
+			require.Equal(t, want[:4], wireConversation[1:], "final serialized body retains the entire complete group and both results, with every field and order intact")
+			require.Equal(t, wantSystemContent, wireConversation[0].Content, "serialized instructions retain the pinned input and the unrelated control in exact order; the excluded cancellation record is bookkeeping the model never sees")
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})
 	}
@@ -108,6 +118,18 @@ func orphanACUnboundControls(t *testing.T) {
 			h := cwR1New(t, 100000)
 			h.append(t, tc.raw...)
 			before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
+			// RED — a production gap, reported rather than guessed. DESIGN 5
+			// projects per OCCURRENCE: a cancellation record that binds to no
+			// occurrence authorises nothing, so the occurrence-scoped
+			// projection leaves it in place — that is what the assembled model
+			// view below still does, and what this leaf's expectation has
+			// always required (an unrecognised or unbound record must not
+			// remove anything). The recovery pass, however, now drops EVERY
+			// cancellation record from the history it returns, including one
+			// that binds to no occurrence, so the two surfaces disagree here.
+			// DESIGN 5 requires ONE projection shared across "initial
+			// recovery, snapshot assembly and trim/reload"; the recovery view
+			// is the one that must change.
 			require.Equal(t, tc.raw, RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil), "unbound records authorize no removal and no new record")
 			out := orphanACAssertView(t, h, h.turn(""), tc.raw)
 			require.NoError(t, validateWindowGroups(out))
@@ -148,9 +170,22 @@ func orphanACParsedRecords(t *testing.T) {
 			}
 			h.append(t, raw...)
 			before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
-			out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, 0, 3, 5, 6, 7))
-			require.Equal(t, []int{-1, 0, 3, 5, 6, 7}, mapWindowMessages(before, out, -1, 0), "JSON representation cannot change original source addresses")
-			require.NoError(t, validateWindowGroups(out))
+			ts := h.turn("")
+			// DESIGN 5: the record's decoded SHAPE decides its binding, never
+			// its spelling: a recognised cancellation record names the
+			// group's second call, so it BINDS to that occurrence and is
+			// EXCLUDED; the occurrence it cancelled gains the engine
+			// observation (ephemeral, ordinal -1) beside the declaration it
+			// completes. The declaration, its durable result, the control
+			// before the marker and the later complete turn are RETAINED with
+			// their original addresses.
+			obs := orphanACObservation(t, h, ts, tc.id)
+			r2CheckedObservation(t, obs, tc.id, r2Issuer(t, before, 1))
+			want, addresses := orphanACDesign5ViewAt(t, raw, []int{0, 1, 2, 3, 5, 6, 7},
+				map[int][]providers.Message{3: {obs}})
+			out := orphanACAssertView(t, h, ts, want)
+			require.Equal(t, append([]int{-1}, addresses...), mapWindowMessages(before, out, -1, 0), "JSON representation cannot change original source addresses")
+			require.NoError(t, validateWindowGroups(out), "the cancelled occurrence is completed by the engine observation, so the group is provider-valid")
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})
 	}
