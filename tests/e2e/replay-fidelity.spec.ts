@@ -29,6 +29,7 @@ import { expectA11yClean } from './fixtures/a11y'
 // asserts the default policy directly — see its own comment.
 import { assistantMessages, chatInput, sendButton, waitForConnected } from './fixtures/selectors'
 import { assistantReplyChallenge } from './fixtures/assistant-reply-acceptance'
+import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -699,72 +700,91 @@ test(
       `At the very end of your reply, on its own line: ${challenge.instruction}`
     expect(prompt, 'the expected assistant nonce must not appear in the user prompt').not.toContain(nonce)
 
-    const input = chatInput(page)
-    await expect(input).toBeEnabled({ timeout: 10_000 })
-    // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
-    // see waitForConnected's doc comment in fixtures/selectors.ts).
-    await waitForConnected(page, { timeout: 10_000 })
-    await input.fill(prompt)
-    const sendStart = Date.now()
-    await input.press('Enter')
-
-    // The user message should appear immediately (echoed by WS).
-    const userMsgs = page.locator('[data-message-id].flex-row-reverse')
-    await expect(userMsgs).toHaveCount(1, { timeout: 5_000 })
-
-    // ── Step 3: while the agent is still streaming, attach page2 ──
-    // Wait ~800ms after send so we are reliably mid-stream but well before
-    // the assistant message completes.
-    await page.waitForTimeout(800)
+    // Cold boot is not part of the active-turn attach experiment. Prepare
+    // the real second viewer first, and gate its existing ROOT banner check
+    // on that root's actual addressed completion. The unfiled target route
+    // intentionally has no banner; its own completion is required below.
     const context2 = await browser.newContext({ storageState: AUTH_FILE, baseURL: BASE_URL })
     const page2 = await context2.newPage()
-
+    const readiness2 = observeAddressedAttachReadiness(page2)
+    const rootReady = readiness2.arm()
     try {
-      await page2.goto('/')
-      await expect(page2.getByRole('banner')).toBeVisible({ timeout: 15_000 })
-      await waitForWsConnected(page2)
-      await openSession(page2, sessionId)
-      await waitForReplayDone(page2)
+      try {
+        await page2.goto('/')
+        const rootProof = await rootReady.wait()
+        await expect(page2.locator(`[data-active-session-id="${rootProof.completion.session_id}"]`),
+          'PREREQUISITE: second viewer renders the session whose root attach actually completed').toBeVisible()
+        await expect(page2.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+        await waitForWsConnected(page2)
+      } finally { rootReady.cancel() }
 
-      // page2 must replay the user message that page1 sent before page2 attached.
-      const userMsgs2 = page2.locator('[data-message-id].flex-row-reverse')
-      await expect(userMsgs2).toHaveCount(1, { timeout: 10_000 })
+      const input = chatInput(page)
+      await expect(input).toBeEnabled({ timeout: 10_000 })
+      // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
+      // see waitForConnected's doc comment in fixtures/selectors.ts).
+      await waitForConnected(page, { timeout: 10_000 })
+      await input.fill(prompt)
+      const sendStart = Date.now()
+      await input.press('Enter')
 
-      // ── Step 4: both contexts receive the final assistant message ──
-      // Only completed assistant rows may satisfy the delivery oracle; user
-      // input, a running placeholder or a system cancellation notice cannot.
-      // Page2 first — it attached mid-turn so it's the harder case (FR-I-009).
-      const reply1 = assistantMessages(page).filter({ hasText: nonce })
-      const reply2 = assistantMessages(page2).filter({ hasText: nonce })
-      await expect(reply2, 'second context receives one completed assistant answer').toHaveCount(1, { timeout: 60_000 })
-      await expect(reply1, 'first context receives the same completed assistant answer').toHaveCount(1, { timeout: 60_000 })
-      await expect(page2.locator('body')).toContainText(nonce, { timeout: 60_000 })
-      await expect(page.locator('body')).toContainText(nonce, { timeout: 60_000 })
+      // The user message should appear immediately (echoed by WS).
+      const userMsgs = page.locator('[data-message-id].flex-row-reverse')
+      await expect(userMsgs).toHaveCount(1, { timeout: 5_000 })
 
-      // page2 attached AFTER the turn started, so the only way it could see the
-      // assistant message is if live forwarding picked up where replay left off
-      // — that's what FR-I-009 demands and what we're verifying. We require at
-      // least 1.5s of wall-clock since send to confirm we observed a real
-      // mid-turn attach (the 800ms attach delay + page2 setup means anything
-      // above that floor proves page2 attached *after* the user message but
-      // *during* the turn). The previous 3s floor failed when GLM-5v-turbo
-      // streamed the 600-word reply in <3s, even though the mid-turn-attach
-      // contract was still satisfied (page2 attached at 800ms, well within
-      // the streaming window).
-      const wallClock = Date.now() - sendStart
-      expect(wallClock).toBeGreaterThanOrEqual(1_500)
+      // ── Step 3: while the agent is still streaming, attach page2 ──
+      // Wait ~800ms after send so we are reliably mid-stream but well before
+      // the assistant message completes.
+      await page.waitForTimeout(800)
+      const targetReady = readiness2.arm(sessionId)
+      try {
+        const [, targetProof] = await Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()])
+        expect(targetProof.request.session_id, 'the warm second viewer actually requests the target session').toBe(sessionId)
+        expect(targetProof.completion.session_id, 'the real target catch-up completes before replay assertions').toBe(sessionId)
+        await expect(page2.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({ timeout: 15_000 })
+        await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
+        await waitForReplayDone(page2)
 
-      // Final-state agreement: both browser contexts must show the same nonce.
-      // The body-text contains check above proved both saw it; belt-and-suspenders
-      // verifies the matched bubble text agrees character-for-character.
-      const text1 = await reply1.locator(`text=${nonce}`).first().innerText()
-      const text2 = await reply2.locator(`text=${nonce}`).first().innerText()
-      expect(text2.trim()).toBe(text1.trim())
-      const replyId = await reply1.getAttribute('data-message-id')
-      expect(replyId, 'the assistant answer has a stable entry identity').toEqual(expect.any(String))
-      expect(replyId).not.toBe('')
-      expect(await reply2.getAttribute('data-message-id'), 'both contexts render the SAME assistant entry').toBe(replyId)
+        // page2 must replay the user message that page1 sent before page2 attached.
+        const userMsgs2 = page2.locator('[data-message-id].flex-row-reverse')
+        await expect(userMsgs2).toHaveCount(1, { timeout: 10_000 })
+
+        // ── Step 4: both contexts receive the final assistant message ──
+        // Only completed assistant rows may satisfy the delivery oracle; user
+        // input, a running placeholder or a system cancellation notice cannot.
+        // Page2 first — it attached mid-turn so it's the harder case (FR-I-009).
+        const reply1 = assistantMessages(page).filter({ hasText: nonce })
+        const reply2 = assistantMessages(page2).filter({ hasText: nonce })
+        await expect(reply2, 'second context receives one completed assistant answer').toHaveCount(1, { timeout: 60_000 })
+        await expect(reply1, 'first context receives the same completed assistant answer').toHaveCount(1, { timeout: 60_000 })
+        await expect(page2.locator('body')).toContainText(nonce, { timeout: 60_000 })
+        await expect(page.locator('body')).toContainText(nonce, { timeout: 60_000 })
+
+        // page2 attached AFTER the turn started, so the only way it could see the
+        // assistant message is if live forwarding picked up where replay left off
+        // — that's what FR-I-009 demands and what we're verifying. We require at
+        // least 1.5s of wall-clock since send to confirm we observed a real
+        // mid-turn attach (the 800ms attach delay + page2 setup means anything
+        // above that floor proves page2 attached *after* the user message but
+        // *during* the turn). The previous 3s floor failed when GLM-5v-turbo
+        // streamed the 600-word reply in <3s, even though the mid-turn-attach
+        // contract was still satisfied (page2 attached at 800ms, well within
+        // the streaming window).
+        const wallClock = Date.now() - sendStart
+        expect(wallClock).toBeGreaterThanOrEqual(1_500)
+
+        // Final-state agreement: both browser contexts must show the same nonce.
+        // The body-text contains check above proved both saw it; belt-and-suspenders
+        // verifies the matched bubble text agrees character-for-character.
+        const text1 = await reply1.locator(`text=${nonce}`).first().innerText()
+        const text2 = await reply2.locator(`text=${nonce}`).first().innerText()
+        expect(text2.trim()).toBe(text1.trim())
+        const replyId = await reply1.getAttribute('data-message-id')
+        expect(replyId, 'the assistant answer has a stable entry identity').toEqual(expect.any(String))
+        expect(replyId).not.toBe('')
+        expect(await reply2.getAttribute('data-message-id'), 'both contexts render the SAME assistant entry').toBe(replyId)
+      } finally { targetReady.cancel() }
     } finally {
+      readiness2.dispose()
       await context2.close()
     }
   },
