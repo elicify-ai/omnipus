@@ -237,6 +237,34 @@ export function settleHistorySpans(sessionId: string, rows: ChatMessage[], retai
   return { rows: settled, index }
 }
 
+/**
+ * Saved ownership of tool calls wins (UAT RR-V-LIVE-READ). A live tool call
+ * carries no message ID, so it attaches to the open text bubble, while saved
+ * history may record it on its own tool-only entry. mergeHistoryEntry keeps a
+ * finished live call its saved row lacks; when another saved entry owns that
+ * call ID, drop it from every other row and point its live owner at the saved
+ * row, so the call is drawn exactly once.
+ */
+export function savedToolCallOwners(entries: readonly ChatMessage[], rows: readonly ChatMessage[]): Map<string, string> {
+  const owners = new Map<string, string>()
+  entries.forEach((entry, i) => { for (const call of entry.tool_calls ?? []) owners.set(call.id, rows[i].id) })
+  return owners
+}
+
+export function applySavedToolOwnership(rows: ChatMessage[], owners: ReadonlyMap<string, string>): ChatMessage[] {
+  if (!owners.size) return rows
+  return rows.map((row): ChatMessage => {
+    if (row.role !== 'assistant' || !row.tool_calls) return row
+    const calls = row.tool_calls.filter(call => (owners.get(call.id) ?? row.id) === row.id)
+    return calls.length !== row.tool_calls.length ? { ...row, tool_calls: calls } : row
+  })
+}
+
+export function savedToolOwnerPatch(ownerMap: Record<string, string> | undefined, owners: ReadonlyMap<string, string>): Record<string, string> | undefined {
+  if (!ownerMap || !owners.size) return ownerMap
+  return Object.fromEntries(Object.entries(ownerMap).map(([call, owner]) => [call, owners.get(call) ?? owner]))
+}
+
 export function currentHistoryEntries(bucket: SessionChatState): SessionHistoryEntry[] {
   const byPosition = new Map(Object.values(bucket.messagesById).filter(row => row.historyPosition).map(row => [row.historyPosition!, row as SessionHistoryEntry]))
   return bucket.history.readerPositions.flatMap(position => {
@@ -314,10 +342,12 @@ export function applyHistoryPageToBucket(bucket: SessionChatState, page: Session
       if (!current.historyPosition && !baseline[current.id] && !finalRows.some(row => row.id === current.id)) finalRows.push(current)
     }
   }
-  const hidden = hiddenIds.flatMap(id => bucket.messagesById[id] ? [bucket.messagesById[id]] : [])
+  const toolOwners = savedToolCallOwners(page.entries, incoming)
+  const hidden = applySavedToolOwnership(hiddenIds.flatMap(id => bucket.messagesById[id] ? [bucket.messagesById[id]] : []), toolOwners)
   rememberHistoryReadFacts(page.session_id, incoming, [page.page_info.context], readTick)
-  const spans = settleHistorySpans(page.session_id, finalRows, hidden, bucket.pendingSpanUpdatesBySpanId)
+  const spans = settleHistorySpans(page.session_id, applySavedToolOwnership(finalRows, toolOwners), hidden, bucket.pendingSpanUpdatesBySpanId)
   const patch = { ...historyRowsPatch(bucket, [...spans.rows, ...hidden], positions), messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: hiddenIds }
+  patch.toolCallOwnerMessageId = savedToolOwnerPatch(patch.toolCallOwnerMessageId, toolOwners)
   patch.spanBySpanId = { ...patch.spanBySpanId, ...spans.index }
   patch.historySourceAliases = Object.fromEntries(positions.flatMap(position => {
     const row = byPosition.get(position)

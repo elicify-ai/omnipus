@@ -7,7 +7,7 @@ import { useConnectionStore } from '@/store/connection'
 import { mergeRecordedSessionTokens } from './session-usage'
 import { isPendingTailMessage } from './cursor'
 import { emptyHistoryState, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
-import { applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, rememberHistoryReadFacts, settleHistorySpans, beginHistoryReadTick } from './history-merge'
+import { applySavedToolOwnership, savedToolCallOwners, savedToolOwnerPatch, applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, rememberHistoryReadFacts, settleHistorySpans, beginHistoryReadTick } from './history-merge'
 export { emptyHistoryState } from './history-state'
 export type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing, SessionHistoryState, SessionHistoryRange, HistoryRequestState } from './types'
 
@@ -124,12 +124,14 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
       const needed = retainedPending(b).filter(row => !rowIds.has(row.id) && !confirmed.has(row.clientMessageId ?? row.id))
       const pending = needed.filter(isPendingTailMessage)
       const liveOrder = [...new Set([...(b.historyLiveOrder ?? []), ...needed.map(row => row.id)])].filter(id => !rowIds.has(id) && !confirmed.has(b.messagesById[id]?.clientMessageId ?? id)).slice(-100)
-      const live = liveOrder.flatMap(id => b.messagesById[id] ? [b.messagesById[id]] : [])
+      const toolOwners = savedToolCallOwners(staged, rows)
+      const live = applySavedToolOwnership(liveOrder.flatMap(id => b.messagesById[id] ? [b.messagesById[id]] : []), toolOwners)
       // Refreshed saved rows re-settle their spans exactly as a page commit
       // does, or a reconstructed helper row would lose its span (I3).
       rememberHistoryReadFacts(sid, rows, contexts, owner.readTick)
-      const spans = settleHistorySpans(sid, [...rows, ...pending], live, b.pendingSpanUpdatesBySpanId)
+      const spans = settleHistorySpans(sid, applySavedToolOwnership([...rows, ...pending], toolOwners), live, b.pendingSpanUpdatesBySpanId)
       const patch = historyRowsPatch(b, [...spans.rows, ...live], ordered)
+      patch.toolCallOwnerMessageId = savedToolOwnerPatch(patch.toolCallOwnerMessageId, toolOwners)
       return { ...patch, messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: liveOrder,
         spanBySpanId: { ...patch.spanBySpanId, ...spans.index },
         sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, recordedTokens),
