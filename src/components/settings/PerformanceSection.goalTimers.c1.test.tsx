@@ -59,7 +59,7 @@ function timerControls() {
   expect(quiet[0]).toHaveAccessibleName(); expect(minutes[0]).toHaveAccessibleName()
   expect(quiet[0].step || '1').toBe('1'); expect(minutes[0].step || '1').toBe('1')
   const all = screen.getAllByRole('switch')
-  const oldSwitch = screen.getByRole('switch', { name: /on.?demand/i })
+  const oldSwitch = screen.getByRole('switch', { name: 'Tool loading' })
   const stalled = all.filter((control) => control !== oldSwitch)
   expect(stalled).toHaveLength(1)
   expect(all).toHaveLength(2) // Existing tool-loading switch + stalled switch; NO quiet-off switch.

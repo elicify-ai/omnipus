@@ -291,7 +291,23 @@ func c1PerformanceRefreshFailure(t *testing.T, patch map[string]any) {
 	}
 	sort.Strings(actual)
 	require.Equal(t, want, actual, "requested C1 keys cannot disappear from changed_fields")
-	require.Equal(t, before, mtiGetPerf(t, api))
+	expected := make(map[string]any, len(before)+1)
+	for key, value := range before {
+		expected[key] = value
+	}
+	// Q111: contract enum order, filtered by request keys only.
+	pendingFields := []any{}
+	for _, field := range []string{
+		"max_parallel_agents", "tools_on_demand", "goal_max_rounds",
+		"goal_reminder_quiet_seconds", "goal_stalled_checkin_enabled",
+		"goal_stalled_checkin_minutes", "max_tool_iterations",
+	} {
+		if _, present := patch[field]; present {
+			pendingFields = append(pendingFields, field)
+		}
+	}
+	expected["pending_apply"] = map[string]any{"stage": "refresh", "changed_fields": pendingFields}
+	require.Equal(t, expected, mtiGetPerf(t, api))
 	b, err := os.ReadFile(api.configPath())
 	require.NoError(t, err)
 	disk := mtiDecode(t, b)["planning"].(map[string]any)
