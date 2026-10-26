@@ -39,7 +39,11 @@ export function releaseHistoryProtection(sessionId: string): void { protection.d
 const SPAN_FACT_SPAN_CAP = 200
 type SpanFact = { frame: HistorySpanFrame; tick: number; rank: number } // not-wire-format: in-memory settlement bookkeeping
 type HistoryContext = SessionHistoryPage['page_info']['context'] | undefined // not-wire-format: alias of a generated type
-const spanFacts = new Map<string, Map<string, Map<string, SpanFact>>>()
+// `ran` holds the server's proof that the child left the queue (a page
+// context's has_run, F4-arch), which survives even when that running state
+// itself lies outside every page this reader loaded.
+type SpanRecord = { facts: Map<string, SpanFact>; ran: boolean } // not-wire-format: in-memory settlement bookkeeping
+const spanFacts = new Map<string, Map<string, SpanRecord>>()
 let factTick = 0
 export function releaseHistorySpanFacts(sessionId?: string): void {
   if (sessionId === undefined) spanFacts.clear()
@@ -49,14 +53,20 @@ export function releaseHistorySpanFacts(sessionId?: string): void {
 const laterFact = (a: SpanFact, b: SpanFact) => a.tick - b.tick || a.rank - b.rank
 const factKey = (frame: HistorySpanFrame) => frame.history_origin?.position ?? `${frame.type}:${JSON.stringify(frame)}`
 
-function rememberSpanFact(sessionId: string, fact: SpanFact, key: string): void {
-  const bySpan = spanFacts.get(sessionId) ?? new Map<string, Map<string, SpanFact>>()
+function spanRecord(sessionId: string, spanId: string): SpanRecord {
+  const bySpan = spanFacts.get(sessionId) ?? new Map<string, SpanRecord>()
   spanFacts.set(sessionId, bySpan)
-  const facts = bySpan.get(fact.frame.span_id) ?? new Map<string, SpanFact>()
-  if (!bySpan.has(fact.frame.span_id)) {
-    bySpan.set(fact.frame.span_id, facts)
+  let record = bySpan.get(spanId)
+  if (!record) {
+    record = { facts: new Map(), ran: false }
+    bySpan.set(spanId, record)
     if (bySpan.size > SPAN_FACT_SPAN_CAP) bySpan.delete(bySpan.keys().next().value!)
   }
+  return record
+}
+
+function rememberSpanFact(sessionId: string, fact: SpanFact, key: string): void {
+  const { facts } = spanRecord(sessionId, fact.frame.span_id)
   const prior = facts.get(key)
   if (!prior || laterFact(fact, prior) > 0) facts.set(key, fact)
 }
@@ -73,6 +83,7 @@ export function rememberHistoryReadFacts(sessionId: string, entries: ChatMessage
   })
   contexts.forEach((context, i) => {
     for (const span of context?.spans ?? []) {
+      if (span.has_run === true) spanRecord(sessionId, span.span_id).ran = true
       for (const frame of [span.start, span.state, span.message, span.end]) if (frame) rememberSpanFact(sessionId, { frame, tick, rank: entries.length + i }, factKey(frame))
     }
   })
@@ -107,7 +118,7 @@ export interface HistorySpanFactStats {
  */
 export function historySpanFactStats(sessionId: string): HistorySpanFactStats {
   const stats: HistorySpanFactStats = { spans: 0, factsBySpan: {}, payloadFactsBySpan: {} }
-  for (const [spanId, facts] of spanFacts.get(sessionId) ?? []) {
+  for (const [spanId, { facts }] of spanFacts.get(sessionId) ?? []) {
     stats.spans += 1
     stats.factsBySpan[spanId] = facts.size
     stats.payloadFactsBySpan[spanId] = [...facts.values()].filter(fact => carriesPayload(fact.frame)).length
@@ -134,8 +145,9 @@ function latestFact(facts: SpanFact[], match: (frame: HistorySpanFrame) => boole
  * It is rebuilt with the live path's own rules (applySpanFrame): the start,
  * then the latest not-delivered note, message and state by recorded
  * chronology, then the end, which is authoritative. hasRun stays sticky across
- * every recorded state. Rows carrying only state/message/end stay silent; a
- * span whose start is not on the reader draws nothing until that page loads.
+ * every recorded state and the server's has_run proof. Rows carrying only
+ * state/message/end stay silent; a span whose start is not on the reader
+ * draws nothing until that page loads.
  * A span a live row already holds is left to the live row. Every commit of
  * saved rows runs it, after remembering its read (rememberHistoryReadFacts):
  * page loads and the loaded-window refresh (history.ts::refresh, I3).
@@ -148,7 +160,8 @@ export function settleHistorySpans(sessionId: string, rows: ChatMessage[]): { ro
   const settled = rows.map(row => {
     const start = row.role === 'assistant' ? row.historySpanFrame : undefined
     if (start?.type !== 'subagent_start' || live.has(start.span_id)) return row
-    const facts = [...(bySpan.get(start.span_id)?.values() ?? [])]
+    const record = bySpan.get(start.span_id)
+    const facts = [...(record?.facts.values() ?? [])]
     const isMessage = (frame: HistorySpanFrame): frame is Extract<HistorySpanFrame, { type: 'subagent_message' }> => frame.type === 'subagent_message'
     const updates = [
       latestFact(facts, frame => isMessage(frame) && frame.kind === 'not_delivered'),
@@ -156,7 +169,7 @@ export function settleHistorySpans(sessionId: string, rows: ChatMessage[]): { ro
       latestFact(facts, frame => frame.type === 'subagent_state'),
     ].filter((fact): fact is SpanFact => !!fact).sort(laterFact)
     const end = latestFact(facts, frame => frame.type === 'subagent_end')
-    const ran = facts.some(fact => fact.frame.type === 'subagent_state' && RAN_STATES.has(fact.frame.state))
+    const ran = record?.ran === true || facts.some(fact => fact.frame.type === 'subagent_state' && RAN_STATES.has(fact.frame.state))
     let mini: SessionChatState = { ...emptySessionState(), messagesById: { [row.id]: { ...row, spans: undefined } }, messageOrder: [row.id] }
     mini = { ...mini, ...applySpanFrame(mini, start, sessionId) }
     for (const fact of [...updates, ...(end ? [end] : [])]) {
