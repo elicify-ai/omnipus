@@ -18,12 +18,14 @@ package gateway
 // bound exists only so a deadlock fails the test instead of hanging it.
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -64,6 +66,11 @@ func TestPairingAdmission_EligibleStaleReadyCloseSurvivesTheSyncHubTap(t *testin
 	// gate_r6_pairing_stale_test.go uses — so this fixture's stale-ready
 	// attempt is closed by an eligible admission and the detector below guards
 	// exactly that close against the self-deadlock and the lost notice.
+
+	// The event subscription captures the notice's own envelope — its
+	// generation and sequence are what AcceptsProgress validates on any later
+	// delivery attempt.
+	events := al.SubscribeEvents(64)
 
 	// An eligible stale-ready attempt: readied at a revision the served
 	// configuration has since replaced (the gate r6 shape — the next
@@ -114,4 +121,47 @@ func TestPairingAdmission_EligibleStaleReadyCloseSurvivesTheSyncHubTap(t *testin
 	require.NoError(t, json.Unmarshal(raw, &frame), "the cached notice is the pairing frame JSON")
 	require.Equal(t, "req-a", frame["request_id"], "the notice names the interrupted attempt's own chat")
 	require.Equal(t, string(channels.PairingStatusError), frame["status"], "the notice is the interruption")
+
+	// The notice envelope, as the event bus delivered it — its generation and
+	// sequence are what AcceptsProgress validates on any later delivery.
+	var noticeGeneration, noticeSequence uint64
+	deadline := time.After(10 * time.Second)
+	for noticeSequence == 0 {
+		select {
+		case evt, open := <-events.C:
+			require.True(t, open, "the event subscription closed before the notice was delivered")
+			if payload, isPairing := evt.Payload.(agent.WhatsAppPairingPayload); isPairing &&
+				payload.AttemptID == stale.AttemptID && payload.Status == channels.PairingStatusError {
+				noticeGeneration, noticeSequence = payload.Generation, payload.Seq
+			}
+		case <-deadline:
+			t.Fatal("the interruption notice never reached the event bus")
+		}
+	}
+
+	// ── Expiry (chief ruling C+D clause D): the admission-time notice is
+	// narrow and self-expiring — it expires on the next accepted progress.
+	// Stamp accepted progress for the reserved successor (ready it, take its
+	// token, activate it, then a waiting frame): the notice's cache entry goes
+	// with it and the notice's own envelope is no longer accepted for
+	// delivery. Expected values are the ruling's, not the implementation's.
+	require.True(t, store.MarkReady("whatsapp", attemptID, "a-successor-revision"),
+		"precondition: the reserved successor readies for its own start")
+	active, err := store.Activate("whatsapp", store.TakeReady("whatsapp", "a-successor-revision"),
+		func(string) func(context.Context) error {
+			return func(context.Context) error { return nil }
+		})
+	require.NoError(t, err)
+	require.Equal(t, attemptID, active.AttemptID, "precondition: the successor, not the notice, goes active")
+	al.EmitWhatsAppPairingAttempt("whatsapp", attemptID, channels.PairingStatusWaiting, "", "")
+
+	_, stillCached := handler.lastPairingState.Load("whatsapp")
+	require.False(t, stillCached,
+		"clause D: the accepted successor progress expires the notice — its reconnect-cache entry is gone")
+
+	order := store.LockChannel("whatsapp")
+	noticeAccepted := order.AcceptsProgress(noticeGeneration, noticeSequence, stale.AttemptID, channels.PairingStatusError)
+	order.Unlock()
+	require.False(t, noticeAccepted,
+		"clause D: the expired notice's envelope is no longer accepted for delivery after the successor's accepted progress")
 }

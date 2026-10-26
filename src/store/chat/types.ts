@@ -176,7 +176,8 @@ export interface PendingFirstSend {
   sessionId: string | null
   assistantPlaceholderId: string
   status: FirstSendStatus
-  /** Browser-local explicit draft choice; only this message's receipt may save it. */
+  /** Latest explicit choice in this pending chat, separate from the immutable payload.
+   *  Only a correlated receipt for this message may save it under a real session ID. */
   modelChoice?: SessionModelChoice
 }
 
