@@ -9,7 +9,7 @@ import { terminalLogRows } from './fixtures/terminal-outcome-acceptance';
 import { test, UNAVAILABLE, HistoryHarness } from './fixtures/chat-history-paging/harness';
 import { dropSocket } from './fixtures/chat-history-paging/actions';
 import { removeSessionHistoryIndex, corruptSessionHistoryIndex } from './fixtures/chat-history';
-import { activatePendingControl, controlProvider, reconnectWithPending, sendControlInstruction,
+import { activatePendingControl, controlProvider, readSecretState, reconnectWithPending, sendControlInstruction,
   stopPendingControl, stopRunningControlTurn, waitForPendingControl } from './fixtures/chat-history-paging/control-actions';
 
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
@@ -137,7 +137,10 @@ test('T35 B20: unauthorized read with an invalid paging limit refuses before rev
   await expect(page.getByRole('alert').filter({ hasText: UNAVAILABLE })).toBeVisible();
 });
 
-for (const kind of ['approval', 'question'] as const) {
+// T35/D-N2 + US-6 BDD-6.5: all three are genuine registry-backed
+// current decisions. request_secret was unavailable when RED began; WU-4/5
+// now supplies it, so its action and unsubmitted-Stop cases use the same real engine.
+for (const kind of ['approval', 'question', 'secret'] as const) {
   test.describe(`T35 genuine ${kind} under unavailable history`, () => {
     test.use({ historyControlKind: kind });
 
@@ -148,6 +151,7 @@ for (const kind of ['approval', 'question'] as const) {
       await expect(chatInput(page), 'US1.6: the composer remains usable after the history error and before the genuine decision opens').toBeEnabled();
       await sendControlInstruction(page);
       const pending = await waitForPendingControl(history);
+      expect(pending.kind, 'the selected scenario raised its genuine control kind').toBe(kind);
       const calls = controlProvider(history).calls();
       await reconnectWithPending(history, pending, true);
       expect(controlProvider(history).calls(), 'reconnect does not rerun the model/tool request').toBe(calls);
@@ -158,6 +162,14 @@ for (const kind of ['approval', 'question'] as const) {
       await expect.poll(() => history.traffic.frames.slice(before).filter((f) => f.type === 'catch_up_complete' && f.session_id === history.sessionId).length).toBe(1);
       expect(history.traffic.attaches.at(-1)?.since_seq).toBeUndefined();
       await stopRunningControlTurn(history);
+      if (pending.kind === 'secret') {
+        const state = await readSecretState(history, pending);
+        expect(state.state, 'BDD-6.5: Stop after submission preserves the stored card outcome').toBe('submitted');
+        expect(state.reference_names).toHaveLength(1);
+        expect(history.traffic.frames.filter(frame => frame.type === 'secret_request_resolved' &&
+          frame.request_id === pending.frame.request_id && frame.state === 'stopped'),
+        'a saved secret is never relabelled as unsubmitted by Stop').toEqual([]);
+      }
       await expect(page.getByRole('alert').filter({ hasText: UNAVAILABLE })).toBeVisible();
       expect(history.traffic.sends, 'control action/history Retry/reconnect never repost the saved instruction').toHaveLength(1);
       const response = await page.request.get(`${history.gateway.baseURL}/api/v1/sessions/${history.sessionId}/messages`);
@@ -173,13 +185,17 @@ for (const kind of ['approval', 'question'] as const) {
       await expect(chatInput(page), 'US1.6: the composer remains usable after the history error and before the genuine decision opens').toBeEnabled();
       await sendControlInstruction(page);
       const pending = await waitForPendingControl(history);
+      expect(pending.kind, 'the selected scenario raised its genuine control kind').toBe(kind);
       await reconnectWithPending(history, pending, true);
       await stopPendingControl(history, pending);
       await expect(page.getByRole('alert').filter({ hasText: UNAVAILABLE })).toBeVisible();
       if (pending.kind === 'approval') {
         expect(history.traffic.frames.filter((f) => f.type === 'tool_approval_resolved' && f.approval_id === pending.frame.approval_id && f.state === 'approved')).toEqual([]);
-      } else {
+      } else if (pending.kind === 'question') {
         expect(history.traffic.frames.filter((f) => f.type === 'ask_user_question' && f.card.card_id === pending.frame.card.card_id && f.card.status === 'answered')).toEqual([]);
+      } else {
+        expect(history.traffic.frames.filter(frame => frame.type === 'secret_request_resolved' &&
+          frame.request_id === pending.frame.request_id && frame.state === 'submitted'), 'Stop never submits the pending secret').toEqual([]);
       }
       expect(history.traffic.sends).toHaveLength(1);
       expect(controlProvider(history).failures()).toEqual([]);
@@ -187,9 +203,3 @@ for (const kind of ['approval', 'question'] as const) {
     });
   });
 }
-
-test('T35 B43 B49: genuine secret action and Stop require the external request_secret runtime', async () => {
-  // Explicit squad/chief decision: do not guess another work unit's tool
-  // arguments or fabricate a secret card. This dependency remains visible.
-  throw new Error('BLOCKED: request_secret not implemented (WU-4/5) — T35/B43/B49 genuine secret action and Stop require that external runtime');
-});

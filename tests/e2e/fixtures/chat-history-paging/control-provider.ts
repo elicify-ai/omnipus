@@ -3,11 +3,13 @@ import type { ServerResponse } from 'node:http';
 import { E2E_MODEL } from '../e2e-model';
 
 // Only this external model HTTP boundary is scripted. The engine, tool search,
-// actual approval/question registries and UI are never replaced.
-export type HistoryControlKind = 'approval' | 'question' | 'stream';
+// actual approval/question/secret registries and UI are never replaced.
+export type HistoryControlKind = 'approval' | 'question' | 'secret' | 'stream';
 export const CONTROL_RUNNING = 'HISTORY_CONTROL_RUNNING';
 export const CONTROL_QUESTION = 'Which saved output format should I use?';
 export const CONTROL_COMMAND = 'printf HISTORY_APPROVAL_ALLOWED';
+export const CONTROL_SECRET_PURPOSE = 'Access the history acceptance service';
+export const CONTROL_SECRET_VARIABLE = 'HISTORY_ACCEPTANCE_TOKEN';
 export type HistoryControlProvider = {
   kind: HistoryControlKind; url: string; calls(): number; failures(): string[];
   aborted(): number; heldCount(): number; finishToolRound(): void; close(): Promise<void>;
@@ -20,8 +22,9 @@ export async function startHistoryControlProvider(kind: HistoryControlKind): Pro
   let aborted = 0;
   const failures: string[] = [];
   const held = new Set<ServerResponse>();
-  const tool = kind === 'approval' ? 'bash' : 'AskUserQuestion';
-  const parameters = kind === 'approval' ? { command: CONTROL_COMMAND } : {
+  const tool = kind === 'approval' ? 'bash' : kind === 'secret' ? 'request_secret' : 'AskUserQuestion';
+  const parameters = kind === 'approval' ? { command: CONTROL_COMMAND }
+    : kind === 'secret' ? { purpose: CONTROL_SECRET_PURPOSE, variable: CONTROL_SECRET_VARIABLE } : {
     questions: [{ header: 'Format', question: CONTROL_QUESTION,
       options: [{ label: 'Plain text', description: 'Readable text' }, { label: 'JSON', description: 'Structured data' }] }],
   };

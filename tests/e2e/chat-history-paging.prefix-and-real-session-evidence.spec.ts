@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { expect } from '@playwright/test';
 import { test, fixtureId } from './fixtures/chat-history-paging/harness';
 import { prefixFixtureDays } from './fixtures/chat-history-paging/day-fixtures';
+import { seedChatHistoryDayPartitions } from './fixtures/chat-history';
 
 test.use({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 1000 } });
 test.describe.configure({ retries: 0 });
@@ -20,9 +21,16 @@ function historyDiagnostics(file: string) {
 test('T18 B21 B22:equal suffix after1000 and100000 prefixes has bounded physical I/O and stable restart positions', async ({ history, page }, info) => {
   const other = history.ids.otherSession.id;
   const setup = [];
+  // Both identities were created on the initial boot. Keep their historical
+  // seeds in ONE stopped window: restarting after only the first seed stamps
+  // today's day on the still-empty second session and correctly forbids its
+  // first historical append. Dates, writer and receipt assertions are unchanged.
+  await history.gateway.kill9();
+  history.gateway.assertStoppedForFixture();
   for (const [id, prefix] of [[history.sessionId, 1000], [other, 100000]] as const) {
-    setup.push(await history.seedDays(prefixFixtureDays(prefix, history.ids.agent.id), id));
+    setup.push(await seedChatHistoryDayPartitions(history.gateway, id, prefixFixtureDays(prefix, history.ids.agent.id)));
   }
+  await history.gateway.restart();
   await history.authenticate();
   const expected40 = Array.from({ length: 40 }, (_, n) => fixtureId('equal-suffix', 160 + n));
   const before = historyDiagnostics(history.logPath).length;

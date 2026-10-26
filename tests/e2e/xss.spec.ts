@@ -1,11 +1,12 @@
 import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
-import type { Message, SessionCreateRequest } from '../../src/lib/api/generated/openapi-types';
-import { Agent, Session } from '../../src/lib/api/generated/schemas';
+import type { AgentCreateRequestMain, Message, SessionCreateRequest, WorkspaceCreateRequest } from '../../src/lib/api/generated/openapi-types';
+import { Agent, Session, Workspace } from '../../src/lib/api/generated/schemas';
 import { test as canonicalTest } from './fixtures/canonical-history';
 import { seedCanonicalLegacyTranscript } from './fixtures/chat-history';
 import { observeTraffic } from './fixtures/chat-history-paging/harness';
 import { openSessionByDeepLink } from './fixtures/session-setup';
+import { newAdminApiContext } from './fixtures/admin-api';
 
 // XSS DOM-rendering coverage for the chat markdown render path.
 //
@@ -35,38 +36,57 @@ const xssPayloads = [
 ];
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/agents');
+  await page.goto('/#/workspaces');
 });
 
 for (const { name, payload } of xssPayloads) {
-  test(`XSS payload does not execute in agent description DOM: ${name}`, async ({ page, request }) => {
-    // Create an agent with the XSS payload as its description via REST API.
-    // The test uses the API directly (authenticated via storageState cookie/token)
-    // rather than the UI to avoid driving the modal for every payload.
-    const agentName = `xss-dom-test-${name}-${Date.now()}`;
-    const createResp = await request.post('/api/v1/agents', {
-      data: { name: agentName, description: payload, model: 'scripted-model' },
-    });
-
-    // A rejected or malformed setup is not evidence of safe DOM rendering.
-    // Both prerequisites must fail loudly before any escaping claim is made.
-    expect(createResp.ok(),
-      `PREREQUISITE: create description-XSS agent ${name}; HTTP ${createResp.status()}: ${await createResp.text()}`).toBe(true);
-    const created = Agent.parse(await createResp.json());
-    const agentId = created.id;
-    expect(agentId.trim().length, `PREREQUISITE: created description-XSS agent ${name} has a nonempty id`).toBeGreaterThan(0);
-
+  test(`XSS payload does not execute in agent description DOM: ${name}`, async ({ page }) => {
+    // Reuse the shared session and echo its CSRF cookie in the setup/cleanup
+    // header, exactly as other cookie-authenticated E2E API callers do.
+    const request = await newAdminApiContext();
+    let agentId: string | undefined;
+    let workspaceId: string | undefined;
     try {
-      // Navigate to the agent profile page where description is rendered.
-      await page.goto(`/agents/${agentId}`);
-      // Wait for the page to settle (network idle ensures JS has rendered content).
-      await page.waitForLoadState('networkidle');
+      // Create an agent with the XSS payload as its description via REST API.
+      // The test uses the API directly (authenticated via storageState cookie/token)
+      // rather than the UI to avoid driving the modal for every payload.
+      const agentName = `xss-dom-test-${name}-${Date.now()}`;
+      const createResp = await request.post('/api/v1/agents', {
+        data: { type: 'Main', name: agentName, soul: 'Assist with the requested task.',
+          description: payload, model: 'scripted-model' } satisfies AgentCreateRequestMain,
+      });
+
+      // A rejected or malformed setup is not evidence of safe DOM rendering.
+      // Both prerequisites must fail loudly before any escaping claim is made.
+      expect(createResp.ok(),
+        `PREREQUISITE: create description-XSS agent ${name}; HTTP ${createResp.status()}: ${await createResp.text()}`).toBe(true);
+      const created = Agent.parse(await createResp.json());
+      agentId = created.id;
+      expect(agentId.trim().length, `PREREQUISITE: created description-XSS agent ${name} has a nonempty id`).toBeGreaterThan(0);
+
+      const workspaceResp = await request.post('/api/v1/workspaces', {
+        data: { name: agentName, core_team: [agentId] } satisfies WorkspaceCreateRequest,
+      });
+      expect(workspaceResp.ok(), `PREREQUISITE: create description-XSS workspace; HTTP ${workspaceResp.status()}: ${await workspaceResp.text()}`).toBe(true);
+      workspaceId = Workspace.parse(await workspaceResp.json()).id;
+      // The old /agents/{id} screen is retired. Drive the real Team surface's
+      // Edit action to the shell's single AgentProfile sheet, which displays
+      // the stored description as literal text beside the agent's type.
+      await page.goto(`/#/workspaces/${workspaceId}/chat?panel=team`);
+      const team = page.getByTestId('workspace-team-tab');
+      await expect(team).toBeVisible();
+      await team.getByTestId(`team-card-actions-${agentId}`).click();
+      await page.getByRole('button', { name: `Edit ${agentName}`, exact: true }).click();
+      await expect(page.getByTestId('agent-profile-sheet')).toBeVisible();
 
       // --- Assert: no <script> elements in the agent description content area ---
       // Note: the page will have legitimate <script> elements from the SPA bundle.
       // We must NOT count those. Instead, assert that no <script> appears inside
       // the main content area where the agent description is rendered.
-      const descriptionArea = page.locator('main, [role="main"], .agent-profile, [data-testid="agent-description"]').first();
+      // The read-only description beside the type badge, not the editable
+      // textarea's value (which would not prove safe text-node rendering).
+      const descriptionArea = page.getByTestId('agent-profile-sheet').locator(':scope > div')
+        .filter({ has: page.locator('span').filter({ hasText: payload }) });
       await expect(descriptionArea.getByText(payload, { exact: true }),
         `POSITIVE CONTROL: description-XSS payload "${name}" itself renders visibly as exact escaped text before safety checks`).toBeVisible();
       const scriptInContent = await descriptionArea.locator('script').count();
@@ -78,7 +98,8 @@ for (const { name, payload } of xssPayloads) {
       // --- Assert: no on* event handlers in the description area ---
       // Evaluate in page context to detect any on* attributes on rendered elements.
       const hasOnHandlers = await page.evaluate(() => {
-        const content = document.querySelector('main') ?? document.body;
+        const content = document.querySelector('[data-testid="agent-profile-sheet"]');
+        if (!content) throw new Error('PREREQUISITE: actual agent description sheet is missing');
         const all = Array.from(content.querySelectorAll('*'));
         for (const el of all) {
           for (const attr of Array.from(el.attributes)) {
@@ -96,7 +117,8 @@ for (const { name, payload } of xssPayloads) {
 
       // --- Assert: no javascript: URIs in href or src attributes in content area ---
       const hasJavascriptURI = await page.evaluate(() => {
-        const content = document.querySelector('main') ?? document.body;
+        const content = document.querySelector('[data-testid="agent-profile-sheet"]');
+        if (!content) throw new Error('PREREQUISITE: actual agent description sheet is missing');
         const all = Array.from(content.querySelectorAll('[href],[src]'));
         for (const el of all) {
           const href = el.getAttribute('href') ?? '';
@@ -113,10 +135,12 @@ for (const { name, payload } of xssPayloads) {
       ).toBe(false);
 
     } finally {
-      // Clean up: delete the test agent regardless of pass/fail.
-      await request.delete(`/api/v1/agents/${agentId}`).catch(() => {
+      // Clean up the owned workspace, then its test agent, regardless of pass/fail.
+      if (workspaceId) await request.delete(`/api/v1/workspaces/${workspaceId}`);
+      if (agentId) await request.delete(`/api/v1/agents/${agentId}`).catch(() => {
         // Non-fatal — the agent may have already been cleaned up.
       });
+      await request.dispose();
     }
   });
 }
