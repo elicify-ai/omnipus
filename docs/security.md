@@ -503,7 +503,7 @@ The application's default-deny rule also covers new internal locations before th
 | Platform | What enforces it |
 |---|---|
 | Linux | With Landlock available and the Process Sandbox enforcing, shell and environment-setup children receive kernel protection for internal files, including the God Mode floor. File tools and the shell command-text check also apply. Basic Landlock file rights are available from Linux 5.13; later rights depend on the detected kernel interface. |
-| macOS | With Seatbelt available and the Process Sandbox enforcing, shell and environment-setup children receive a profile denying protected internal files, including in God Mode. File tools and the shell command-text check also apply. |
+| macOS | With Seatbelt available and the Process Sandbox enforcing, shell and environment-setup children receive a profile denying protected internal files, including in God Mode. File tools and the shell command-text check also apply. Programs that check website certificates through macOS itself, such as `gh` and other Go-built tools, can do so inside the profile: it reaches macOS's certificate-checking service, not your keychain. |
 | Windows | There is no kernel sandbox. File tools refuse protected paths, and the command-text check refuses a shell command whose protected path it identifies. A command that builds its path at runtime can evade that text check. |
 
 On Linux and macOS with the sandbox Off, Permissive or degraded/unavailable, the same no-kernel limitation applies: file-tool checks remain, but the command-text check alone does not contain arbitrary shell programs. Check the Security screen's actual enforcement and capabilities, not just the operating-system name or version.
