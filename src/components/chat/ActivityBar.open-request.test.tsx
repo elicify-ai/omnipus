@@ -1,8 +1,9 @@
 // Founder ruling 2026-10-25: Sessions/History Open goes straight to chat,
 // with no automatic panel. Q9/P3 explicitly retires the five unused
 // request/consume-API capability cases; manual Activity stays one click away.
-// The other five case bodies/oracles remain unchanged, including failed
-// attach and successful Open-without-panel. Production API removal is separate.
+// Q8b removes only the remaining retired request-field dependencies. All
+// five cases keep their other assertions; successful Open is verified through
+// the real UI (no Activity panel and no dialog). Production removal is separate.
 
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
@@ -58,7 +59,6 @@ describe('activity panel request', () => {
 
   beforeEach(() => {
     navigate.mockReset()
-    useUiStore.setState({ activityPanelRequest: null })
     useSessionStore.setState({ activeSessionId: null, attachToSession: originalAttach })
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
     useChatStore.setState({ messages: [] })
@@ -66,7 +66,6 @@ describe('activity panel request', () => {
 
   afterEach(() => {
     useSessionStore.setState({ attachToSession: originalAttach, activeSessionId: null })
-    useUiStore.setState({ activityPanelRequest: null })
   })
 
   it.each([false])('wires origin-row Open through real attach, request store and ActivityBar when transport send=%s', async (sent) => {
@@ -78,10 +77,6 @@ describe('activity panel request', () => {
     useUiStore.setState({ searchModalOpen: true, searchModalMode: 'sessions', searchModalWorkspaceFilter: null, toasts: [] })
     vi.mocked(fetchSessions).mockResolvedValue([session({ background_command_count: 2 })])
     vi.mocked(fetchWorkspaces).mockResolvedValue([workspace])
-    const requests: string[] = []
-    const unsubscribe = useUiStore.subscribe((current, previous) => {
-      if (current.activityPanelRequest !== previous.activityPanelRequest && current.activityPanelRequest) requests.push(current.activityPanelRequest)
-    })
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     try {
       render(<QueryClientProvider client={client}><SearchModal /><ActivityBar /></QueryClientProvider>)
@@ -90,14 +85,11 @@ describe('activity panel request', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Open Plan the release notes' }))
       expect(send).toHaveBeenCalledTimes(1)
       expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'attach_session', session_id: SESSION_ID }))
-      expect(requests).toEqual([])
       expect(useSessionStore.getState().activeSessionId).toBe(OTHER_ID)
-      expect(useUiStore.getState().activityPanelRequest).toBeNull()
       expect(screen.queryByText('No background activity yet.')).not.toBeInTheDocument()
       expect(useUiStore.getState().searchModalOpen).toBe(true)
       expect(useUiStore.getState().toasts.map((toast) => toast.message)).toContain("Connection lost — couldn't open that session. It will not be switched.")
     } finally {
-      unsubscribe()
       useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
     }
   })
@@ -110,10 +102,6 @@ describe('activity panel request', () => {
     useUiStore.setState({ searchModalOpen: true, searchModalMode: 'sessions', searchModalWorkspaceFilter: null, searchModalAgentFilter: null, toasts: [] })
     vi.mocked(fetchSessions).mockResolvedValue([session({ background_command_count: 2 })])
     vi.mocked(fetchWorkspaces).mockResolvedValue([workspace])
-    const requests: string[] = []
-    const unsubscribe = useUiStore.subscribe((current, previous) => {
-      if (current.activityPanelRequest !== previous.activityPanelRequest && current.activityPanelRequest) requests.push(current.activityPanelRequest)
-    })
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     try {
       render(<QueryClientProvider client={client}><SearchModal /><ActivityBar /></QueryClientProvider>)
@@ -124,12 +112,9 @@ describe('activity panel request', () => {
       expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'attach_session', session_id: SESSION_ID }))
       expect(useSessionStore.getState().activeSessionId, 'a no-panel check cannot pass because Open failed').toBe(SESSION_ID)
       expect(useUiStore.getState().searchModalOpen).toBe(false)
-      expect(requests, 'founder ruling: Open never requests the Activity panel, even if a consumer would immediately clear it').toStrictEqual([])
-      expect(useUiStore.getState().activityPanelRequest).toBeNull()
       expect(screen.queryByText('No background activity yet.'), 'Open must not open the Activity panel automatically').not.toBeInTheDocument()
       expect(screen.queryByRole('dialog'), 'no modal panel is left over the opened chat').toBeNull()
     } finally {
-      unsubscribe()
       client.clear()
       useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
     }
