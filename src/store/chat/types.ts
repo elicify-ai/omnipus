@@ -367,26 +367,8 @@ export type ChatMessage = Message & {
    * the de-dup key, there is no separate domain id to carry.
    */
   browserHandoverNoticeId?: string
-  /**
-   * provider-messages spec US-6/FB-1…FB-4 — set ONLY on the synthetic
-   * `role: 'system'` ChatMessage the provider-frames handler inserts for a
-   * `provider_fallback` frame (live) or a `replay_provider_fallback` note
-   * (persisted transcript carrier). Purely a render-time discriminator
-   * (mirrors `goalAckGoalId`/`browserHandoverNoticeId`'s identical role) so
-   * ChatScreen's two system-row renderers can draw the grey event line with
-   * the exact §6 copy. The message id is the transcript entry's own id on
-   * the replay path (stable dedup across replays); on the live path it is
-   * SPA-generated — a reconnect wipes history (session_snapshot) and the
-   * replay carrier re-inserts the persisted note, so no duplicate survives.
-   * Never serialized to the wire — this field is SPA bookkeeping; the note
-   * itself comes off the wire in both directions.
-   */
-  providerFallbackNote?: {
-    /** The exact §6 one-liner — SPA-assembled from the live frame's models, server-assembled on the replay carrier. */
-    message: string
-    /** D12 — true when `unavailable_code` is `model_retired`; adds the pick-a-new-model hint line. */
-    pickNewModelHint?: boolean
-  }
+  // providerFallbackNote is declared once on the API-normalized Message
+  // (src/lib/api/sessions.ts::ProviderFallbackNoteMarker); ChatMessage inherits it.
 }
 
 export interface QueuedOutboundMessage {
