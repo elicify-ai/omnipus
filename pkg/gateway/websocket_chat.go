@@ -449,17 +449,14 @@ func (hcm *wsHandlerHandleChatMessage) sendMessageStatus(state string) {
 	}, hcm.wc)
 }
 
-// publishUserMessage echoes a just-persisted user message to every tab
-// bound to the session as a numbered user_message frame (#823 founder
-// decision Q1, BE-DESIGN.md §4.7). The sender's SPA moves its pending
-// bubble (matched by client_message_id) into history at this frame's
-// position; every other tab inserts it there. Published strictly AFTER the
-// transcript append succeeded, so a snapshot read taken after a later
-// attach can never miss a message whose frame it already consumed.
-func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.TranscriptEntry) {
+// buildUserMessageFrame is the ONE place a persisted user entry becomes a
+// user_message frame: the interactive echo (publishUserMessage) and the
+// scheduled/heartbeat live-view tap (websocket_forward_hub.go's
+// hubUserMessagePersisted) both go through it, so the two can never drift.
+func buildUserMessageFrame(sessionID string, entry session.TranscriptEntry) generated.UserMessageFrame {
 	frame := generated.UserMessageFrame{
 		Type:      string(generated.WsFrameTypeUserMessage),
-		SessionId: hcm.sessionID,
+		SessionId: sessionID,
 		Id:        entry.ID,
 		Content:   entry.Content,
 		Timestamp: entry.Timestamp.UTC().Format(time.RFC3339Nano),
@@ -480,7 +477,18 @@ func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.Transcri
 			Type     string `json:"type"`
 		}{MimeType: a.MIMEType, Path: a.Path, Size: a.Size, Type: a.Type})
 	}
-	data, err := json.Marshal(frame)
+	return frame
+}
+
+// publishUserMessage echoes a just-persisted user message to every tab
+// bound to the session as a numbered user_message frame (#823 founder
+// decision Q1, BE-DESIGN.md §4.7). The sender's SPA moves its pending
+// bubble (matched by client_message_id) into history at this frame's
+// position; every other tab inserts it there. Published strictly AFTER the
+// transcript append succeeded, so a snapshot read taken after a later
+// attach can never miss a message whose frame it already consumed.
+func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.TranscriptEntry) {
+	data, err := json.Marshal(buildUserMessageFrame(hcm.sessionID, entry))
 	if err != nil {
 		logsafeError("ws: marshal user_message failed", "session_id", hcm.sessionID, "error", err)
 		return

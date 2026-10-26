@@ -144,7 +144,8 @@ func (h *WSHandler) eventForwarder(wc *wsConn, _ string, sub agent.EventSubscrip
 			agent.EventKindToolExecStart, agent.EventKindToolExecEnd,
 			agent.EventKindError, agent.EventKindGoalStatusChanged, agent.EventKindGoalOutcome, agent.EventKindHelperEvent,
 			agent.EventKindLLMRetry,
-			agent.EventKindJudgeVerdict, agent.EventKindLoopStatusChanged, agent.EventKindToolResultProjection:
+			agent.EventKindJudgeVerdict, agent.EventKindLoopStatusChanged, agent.EventKindToolResultProjection,
+			agent.EventKindUserMessagePersisted:
 			// #823 catch-up redesign (BE-DESIGN.md §1.2): these kinds are
 			// now translated and delivered EXACTLY ONCE per event by the
 			// EventBus sync tap (websocket_forward_hub.go's hubSyncTap

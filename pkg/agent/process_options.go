@@ -88,6 +88,17 @@ type processOptions struct {
 	// this; interactive paths leave it false so `ask` keeps prompting.
 	AutoDenyAsk bool
 
+	// WebchatLiveStream marks a turn whose live view is the webchat session
+	// hub even though no channel owns the turn (#1442): ProcessScheduled sets
+	// it for scheduled/heartbeat runs, whose sessions render in the web UI
+	// like any chat. Read ONLY through turnState.streamerChannel — the turn's
+	// streamer lookups — so the answer's token/done frames and the
+	// final-answer/notice streamers reach the session's viewers. It
+	// deliberately does NOT change Channel: goal routing, connector
+	// intake/egress, tool-media delivery and response sends must keep treating
+	// the run as channel-less, exactly as before #1442.
+	WebchatLiveStream bool
+
 	// askRefusalReason is the denial reason an unattended turn refuses an
 	// unsettled Ask-policy call with (#1263 R4). Set only by
 	// applyTurnAttendance when the turn is built; empty means the headless

@@ -895,6 +895,22 @@ func (ts *turnState) auditUser() string {
 	return ts.userID
 }
 
+// streamerChannel is the channel identity this turn's live-streamer lookups
+// use: loop_run_turn_attempt.go's bus.GetStreamer call, ensureFinalWebchatStreamer,
+// and the iteration-limit notice's terminal streamer. Normally the turn's own
+// channel; a WebchatLiveStream turn (#1442 — a scheduled/heartbeat run whose
+// session renders in the web UI) streams through the webchat session hub
+// although no channel owns it. Deliberately NOT ts.channel: channel-keyed
+// side effects (goal routing records, connector intake/egress, tool-media
+// delivery, response sends) must keep seeing the run as channel-less, exactly
+// as before #1442.
+func (ts *turnState) streamerChannel() string {
+	if ts != nil && ts.opts.WebchatLiveStream {
+		return "webchat"
+	}
+	return ts.opts.Channel
+}
+
 // manifestBucket derives this turn's ADR-071 D3 loaded-tool bucket key —
 // manifestBucketKey(agentID, transcriptID, sessionKey) — from the turn's own
 // fields, exactly as the writer (the markLoaded closure in loop.go, via

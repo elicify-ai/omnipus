@@ -76,6 +76,8 @@ func (h *WSHandler) hubSyncTap(evt agent.Event) {
 		h.hubProviderFallback(evt)
 	case agent.EventKindWhatsAppPairing:
 		h.hubWhatsAppPairing(evt)
+	case agent.EventKindUserMessagePersisted:
+		h.hubUserMessagePersisted(evt)
 	}
 }
 
@@ -495,6 +497,35 @@ func (h *WSHandler) hubProviderFallback(evt agent.Event) {
 		key:    "provider_fallback:" + turnID,
 		turnID: turnID,
 	}, data, nil)
+}
+
+// hubUserMessagePersisted forwards a scheduled/heartbeat run's persisted
+// prompt (#1442) as one user_message frame — the same frame shape, id and
+// echo semantics the interactive path's publishUserMessage produces (both
+// build through buildUserMessageFrame), published strictly after the
+// transcript append (the emit site's rule) and delivered only to the
+// viewers bound to the frame's session. No alsoTo connection exists: a
+// scheduled run has no originating tab. It deliberately does not call
+// rememberAcceptedMessage — that bookkeeping is interactive
+// client_message_id retry/dedupe state, and a scheduled prompt has none.
+func (h *WSHandler) hubUserMessagePersisted(evt agent.Event) {
+	p, ok := evt.Payload.(agent.UserMessagePersistedPayload)
+	if !ok {
+		return
+	}
+	sid := p.SessionID
+	if sid == "" {
+		sid = h.hubResolveSessionIDForChat(evt.Meta.SessionKey)
+	}
+	if sid == "" {
+		return
+	}
+	data, err := json.Marshal(buildUserMessageFrame(sid, p.Entry))
+	if err != nil {
+		logsafeError("ws: marshal user_message for hub failed", "session_id", sid, "error", err)
+		return
+	}
+	h.hubPublishAndDeliver(sid, string(generated.WsFrameTypeUserMessage), data)
 }
 
 // ---------------------------------------------------------------------
