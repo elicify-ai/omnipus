@@ -133,12 +133,22 @@ func orphanACTrimPrefix(t *testing.T) {
 	}
 	h.append(t, raw...)
 	before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
+	// DESIGN 5 + its 2026-10-26 addendum "Trim shares the projection".
+	// The recovered view of this archive is 10 entries: user0, the retained
+	// declaration (1), its durable sibling result, the engine observation for
+	// the missing occurrence, user3, the second turn's three entries, the third
+	// turn's three entries — the marker (2) is excluded and the observation is
+	// ephemeral. The cut evicts the whole first turn WITH the observation that
+	// completes it, so three entries leave the view and seven remain; the
+	// surviving second and third turns keep their original addresses.
 	result, changed := h.al.trimWindowChecked(context.Background(), h.agent, h.key, h.key, true)
 	require.NoError(t, result.Err, "R4a: restart cancellation is removed before trim's structural policy")
 	assert.True(t, changed, "R4a: the oldest canceled turn has a legal whole-turn cut")
 	assert.False(t, result.NothingToTrim, "a forced legal cut must be reported as relief")
-	assert.Equal(t, 1, result.DroppedMessages, "8 visible entries become 7: canceled entries do not count as budget eviction")
-	assert.Equal(t, 7, result.RemainingMessages, "the exact surviving second and third turns remain")
+	assert.Equal(t, 3, result.DroppedMessages,
+		"the projected first turn is user + retained declaration + its recovery observation; all three leave the view with the cut")
+	assert.Equal(t, 7, result.RemainingMessages,
+		"the surviving second and third turns remain; the observation does not outlive its declaration")
 	after := orphanACSnapshot(t, h)
 	wantState := before.State.Clone()
 	wantState.Skip = 3 // Original address of the second user, not compacted position 1.
@@ -167,12 +177,20 @@ func orphanACTrimSuffix(t *testing.T) {
 	}
 	h.append(t, raw...)
 	before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
+	// DESIGN 5 + its 2026-10-26 addendum "Trim shares the projection".
+	// The recovered view of this archive is 9 entries: the old completed turn
+	// (0, 1), the retained declaration (3) with its engine observation, the
+	// control (5) and the latest turn's three entries — the marker (4) is
+	// excluded and the observation is ephemeral. The cut evicts the old
+	// completed turn only, so two entries leave the view and seven remain: the
+	// retained declaration keeps its observation because its own turn survived.
 	result, changed := h.al.trimWindowChecked(context.Background(), h.agent, h.key, h.key, true)
 	require.NoError(t, result.Err)
 	assert.True(t, changed, "R4b: old completed whole turn is legally evictable")
 	assert.False(t, result.NothingToTrim)
 	assert.Equal(t, 2, result.DroppedMessages, "only the old user and answer count as eviction")
-	assert.Equal(t, 5, result.RemainingMessages, "retained suffix contains 5 recovery-visible entries, not the 7 raw entries")
+	assert.Equal(t, 7, result.RemainingMessages,
+		"retained suffix keeps 5 raw entries plus the retained declaration and its observation")
 	after := orphanACSnapshot(t, h)
 	wantState := before.State.Clone()
 	wantState.Skip = 2
@@ -181,6 +199,12 @@ func orphanACTrimSuffix(t *testing.T) {
 		"R4b: a trim shrinks the visible window to the surviving tail")
 	require.Equal(t, bytes, orphanACArchiveBytes(t, h))
 	orphanACReopen(t, h)
-	out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, 2, 5, 6, 7, 8))
-	require.Equal(t, []int{-1, 2, 5, 6, 7, 8}, mapWindowMessages(orphanACSnapshot(t, h), out, -1, 0), "R4b: retained raw canceled slots never poison subsequent alignment")
+	issuer := r2Issuer(t, before, 3)
+	want, addresses := orphanACDesign5View(t, h, raw, []int{2, 3, 5, 6, 7, 8}, "retained-orphan", 2)
+	out := orphanACAssertView(t, h, h.turn(""), want)
+	r2CheckedObservation(t, out[3], "retained-orphan", issuer)
+	require.Equal(t, []int{-1, 2, 3, -1, 5, 6, 7, 8}, append([]int{-1}, addresses...),
+		"the observation is ephemeral (-1); original addresses do not shift")
+	require.Equal(t, []int{-1, 2, 3, -1, 5, 6, 7, 8}, mapWindowMessages(orphanACSnapshot(t, h), out, -1, 0),
+		"R4b: the reloaded view keeps every original address and marks the inserted observation ephemeral")
 }
