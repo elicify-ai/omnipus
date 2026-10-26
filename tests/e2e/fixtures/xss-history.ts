@@ -53,21 +53,33 @@ export async function openXssSession(page: Page, gateway: GatewayProcess, sessio
   } finally { ready.cancel(); observer.dispose(); }
 }
 
-/** The positive render assertion ALWAYS precedes every DOM/execution safety check. */
-export async function expectEscapedPayload(page: Page, target: Locator, monitor: Awaited<ReturnType<typeof monitorXssExecution>>, info: TestInfo, stage: string) {
+/**
+ * The positive render assertion ALWAYS precedes every DOM/execution safety check.
+ *
+ * `target` is the uniquely addressable container (count + exact visible text).
+ * `domScope` is where the DOM-safety checks (script, img, on-handlers,
+ * href/src) look;
+ * it defaults to `target`. It exists because the live streaming bubble —
+ * observed in the first real browser run of this pack — renders the hostile
+ * text attribute-less (no data-message-id/role until the turn finalizes) and
+ * its surrounding message chrome legitimately carries avatar/copy icons, so
+ * the hostile-render surface (the exact-text element) is narrower than the
+ * unique container. Callers whose target IS the render surface omit it.
+ */
+export async function expectEscapedPayload(page: Page, target: Locator, monitor: Awaited<ReturnType<typeof monitorXssExecution>>, info: TestInfo, stage: string, visibleText = HISTORY_XSS_PAYLOAD, domScope: Locator = target) {
   await expect(target).toHaveCount(1);
-  await expect(target.getByText(HISTORY_XSS_PAYLOAD, { exact: true }),
+  await expect(target.getByText(visibleText, { exact: true }),
     `${stage}: POSITIVE CONTROL exact hostile source text is actually visible`).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as { __xss_fired: boolean }).__xss_fired),
     `${stage}: hostile payload never executes`).toBe(false);
   expect(monitor.dialogs, `${stage}: no payload alert/dialog fires`).toEqual([]);
   expect(monitor.popups, `${stage}: no payload popup opens`).toEqual([]);
-  await expect(target.locator('script'), `${stage}: escaped text creates no script node`).toHaveCount(0);
-  await expect(target.locator('img'), `${stage}: raw hostile image stays literal text`).toHaveCount(0);
-  const handlers = await target.evaluate(element => [element, ...element.querySelectorAll('*')].flatMap(node =>
+  await expect(domScope.locator('script'), `${stage}: escaped text creates no script node`).toHaveCount(0);
+  await expect(domScope.locator('img'), `${stage}: raw hostile image stays literal text`).toHaveCount(0);
+  const handlers = await domScope.evaluate(element => [element, ...element.querySelectorAll('*')].flatMap(node =>
     [...node.attributes].filter(attribute => /^on[a-z]/i.test(attribute.name)).map(attribute => attribute.name)));
   expect(handlers, `${stage}: no event-handler attributes survive`).toEqual([]);
-  const activeTargets = await target.evaluate(element => [...element.querySelectorAll('[href],[src]')].flatMap(node =>
+  const activeTargets = await domScope.evaluate(element => [...element.querySelectorAll('[href],[src]')].flatMap(node =>
     ['href', 'src'].flatMap(attribute => {
       const value = node.getAttribute(attribute);
       const compact = value ? [...value].filter(character => character.charCodeAt(0) > 32).join('') : '';
