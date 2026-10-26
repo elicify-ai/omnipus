@@ -46,6 +46,17 @@ function rememberSpanFact(sessionId: string, frame: HistorySpanFrame): void {
   facts.set(frame.history_origin?.position ?? `${frame.type}:${JSON.stringify(frame)}`, frame)
 }
 
+/**
+ * A live subagent_* frame is also a recorded span fact (final-gate I1/F2): the
+ * live reducer updates the span on its row at once, and recording the same
+ * frame here means a later history settlement (an unrelated older page, a
+ * refresh) rebuilds that row WITH the live end or state instead of restoring
+ * the older cached running state.
+ */
+export function rememberLiveSpanFact(sessionId: string, frame: HistorySpanFrame): void {
+  rememberSpanFact(sessionId, frame)
+}
+
 /** Counts of the span-fact memory for one session; see historySpanFactStats. */
 export interface HistorySpanFactStats {
   /** Spans the session's fact memory currently retains. */
