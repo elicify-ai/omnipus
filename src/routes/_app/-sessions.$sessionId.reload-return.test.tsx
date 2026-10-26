@@ -362,3 +362,66 @@ describe('#1437 round 2 — overlapping explicit targets own their loading gate'
     }
   })
 })
+
+const CHILD_SESSION = 'session-return-delegate-child'
+
+/** Contract (GET /sessions, ADR-057 FR-091/FR-104): the default listing pages
+ *  over ROOT sessions only; a delegate child is listed only under its parent's
+ *  parent_session_id filter or flat=true. The single-session detail still
+ *  resolves it. The HTTP boundary honours that shape so the entry flow sees
+ *  exactly what the gateway returns (train 3 hands-on row F4). */
+function serveContractSessionList(all: Session[]) {
+  const fixtureFetch = globalThis.fetch
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'http://localhost')
+    const method = init?.method ?? (input instanceof Request ? input.method : 'GET')
+    if (method !== 'GET' || url.pathname !== '/api/v1/sessions') return fixtureFetch(input, init)
+    const parent = url.searchParams.get('parent_session_id')
+    const flat = url.searchParams.get('flat') === 'true'
+    const listed = all.filter((item) => flat || (parent ? item.parent_session_id === parent : !item.parent_session_id))
+    return Response.json({ sessions: listed })
+  }))
+}
+
+function delegateChild(workspaceId: string = WORKSPACE_ID): Session {
+  return { ...session(CHILD_SESSION, 'delegate'), parent_session_id: MAIN_SESSION, title: 'Helper task', workspace_id: workspaceId }
+}
+
+describe('F4 — a delegated child chat link retains its identity on reload', () => {
+  it('reopens the same child chat after reloading the address its link produced', async () => {
+    const all = [...reviewScenario().sessions, delegateChild()]
+    unexpectedRequests = installSessionReturnNetwork({ ...reviewScenario(), sessions: all })
+    serveContractSessionList(all)
+    const firstPage = await mountAddress(`#/sessions/${CHILD_SESSION}`)
+    // Live control: opening the child from its link works before any reload.
+    await expectChatInWorkspace(WORKSPACE_ID, CHILD_SESSION)
+    await waitFor(() => expect(firstPage.router.state.location.search.open).toBe(CHILD_SESSION))
+    const addressAtReload = window.location.href
+    firstPage.unmount()
+    firstPage.history.destroy()
+    firstPage.client.clear()
+
+    vi.resetModules()
+    page = await loadPageModules()
+    const reloaded = await mountAddress(addressAtReload)
+    await waitFor(() => expect(reloaded.router.state.status).toBe('idle'))
+    expect(screen.queryByTestId('unavailable-chat-notice'), 'an existing child chat is not an unavailable link').toBeNull()
+    expect(page.useSessionStore.getState().workspaceEntry?.status).not.toBe('unavailable')
+    await expectChatInWorkspace(WORKSPACE_ID, CHILD_SESSION)
+    expect(reloaded.router.state.location.search.open).toBe(CHILD_SESSION)
+    expect(reloaded.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'attach_session', session_id: CHILD_SESSION }))
+    expect(reloaded.send.mock.calls.map(([frame]) => frame), 'the parent main is not a substitute for its child').not.toContainEqual(expect.objectContaining({ type: 'attach_session', session_id: MAIN_SESSION }))
+  })
+
+  it('still reports a child chat from another workspace as unavailable', async () => {
+    const all = [...reviewScenario().sessions, delegateChild(OTHER_WORKSPACE)]
+    unexpectedRequests = installSessionReturnNetwork({ ...reviewScenario(), sessions: all })
+    serveContractSessionList(all)
+    const mounted = await mountAddress(`#/workspaces/${WORKSPACE_ID}/chat?open=${CHILD_SESSION}`)
+    await waitFor(() => expect(page.useSessionStore.getState().workspaceEntry?.status).toBe('unavailable'))
+    expect(await screen.findByTestId('unavailable-chat-notice')).toHaveTextContent('This linked conversation is unavailable')
+    expect(page.useSessionStore.getState().activeSessionId).not.toBe(CHILD_SESSION)
+    expect(mounted.send.mock.calls.map(([frame]) => frame)).not.toContainEqual(expect.objectContaining({ type: 'attach_session', session_id: CHILD_SESSION }))
+    expect(mounted.send.mock.calls.map(([frame]) => frame)).not.toContainEqual(expect.objectContaining({ type: 'attach_session', session_id: MAIN_SESSION }))
+  })
+})
