@@ -158,7 +158,7 @@ describe('useCurrentTodo recovers the current turn checklist across history page
     expect(TURN_HISTORY_PAGE_CAP).toBe(10)
     // Every page within the cap is this turn's tool work; the only checklist
     // write sits one page past the cap and must never be shown.
-    read.mockImplementation(async (_sessionId, _options) => {
+    read.mockImplementation(async () => {
       const index = read.mock.calls.length
       return index > TURN_HISTORY_PAGE_CAP
         ? historyPage([assistant('beyond-cap', TURN, [setTodos('todo-beyond', 'Stale form')])], false)

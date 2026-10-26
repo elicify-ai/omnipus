@@ -152,7 +152,7 @@ function pendingLifecyclePatch(
   return { lifecycleState: state, lastUpdateAt: createdAt }
 }
 
-function applySubagentStart(b: SessionChatState, frame: SubagentStartFrame, _targetSid: string): Partial<SessionChatState> {
+function applySubagentStart(b: SessionChatState, frame: SubagentStartFrame): Partial<SessionChatState> {
   const sf = frame as SubagentStartFrame
   // Opus F4 — see bucketHasSpan's own doc comment.
   if (bucketHasSpan(b, sf.span_id)) return {}
@@ -402,7 +402,7 @@ export type SpanFrame = SubagentStartFrame | SubagentEndFrame | SubagentMessageF
 /** Apply one subagent_* frame to `bucket`; `targetSid` names its session in diagnostics. */
 export function applySpanFrame(bucket: SessionChatState, frame: SpanFrame, targetSid: string): Partial<SessionChatState> {
   switch (frame.type) {
-    case 'subagent_start': return applySubagentStart(bucket, frame, targetSid)
+    case 'subagent_start': return applySubagentStart(bucket, frame)
     case 'subagent_end': return applySubagentEnd(bucket, frame, targetSid)
     case 'subagent_message': return applySubagentMessage(bucket, frame, targetSid)
     case 'subagent_state': return applySubagentState(bucket, frame, targetSid)
