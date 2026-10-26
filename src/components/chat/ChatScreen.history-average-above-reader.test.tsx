@@ -53,10 +53,10 @@ async function observeLayout() {
 it('re-estimates unmeasured groups above a recent-end reader when only A changes to 40', async () => {
   // 50 groups, each narration + one tool = 2 drawn rows; every group is a
   // physical 80px in BOTH phases, so the physical total is 50*80 = 4000.
-  // Older groups (1-30) already split 40+40; recent groups (31-50) start as
-  // tool80 + empty narration and later become 40+40, so every retained
-  // sample - including those of older rows measured at open and since
-  // unmounted - ends at 40 and A becomes exactly 40.
+  // Groups1-49 already split40+40; ONLY the newest group50 starts as
+  // tool80 + zero narration. The positive mount control below proves this
+  // sole80px sample is re-observed when it becomes40+40. Thus no unmounted
+  // stale80px sample remains: D5 permits replacement only on re-observation.
   const sources = Array.from({ length: 50 }, (_, index) => entry(index + 1, {
     role: 'assistant', tool_calls: [{
       id: `above-reader-${index + 1}`, tool: 'bash', content_state: 'full', status: 'success',
@@ -65,7 +65,7 @@ it('re-estimates unmeasured groups above a recent-end reader when only A changes
   }))
   for (const source of sources) {
     layout.state.rowHeights.set(source.history_position!, 80)
-    layout.state.toolHeights.set(source.tool_calls![0].id, Number(source.id.split('-')[1]) <= 30 ? 40 : 80)
+    layout.state.toolHeights.set(source.tool_calls![0].id, source.id === 'history-50' ? 80 : 40)
   }
   const response = page(sources, { sessionId: MAIN_ID, earlier: true, rows: 100, info: { limit: 100, min_rows: 20 } })
   expectValidPage(response, Array.from({ length: 50 }, (_, index) => pos(index + 1)), 100)
