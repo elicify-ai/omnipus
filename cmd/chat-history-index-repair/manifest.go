@@ -90,6 +90,9 @@ func loadBackupManifest(a repairArgs) (backupManifest, error) {
 		if !validInventoryPath(e.Path) || e.Path <= previous {
 			return m, refusal("unsafe_path")
 		}
+		if !nativeInventoryPath(e.Path) {
+			return m, refusal("non_native_name")
+		}
 		folded := strings.ToLower(e.Path)
 		if _, exists := seen[folded]; exists {
 			return m, refusal("unsafe_path")

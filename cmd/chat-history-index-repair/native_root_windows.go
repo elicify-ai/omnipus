@@ -4,11 +4,27 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"golang.org/x/sys/windows"
 )
 
 func nativeCaseInsensitive() bool { return true }
+
+// nativeInventoryName rejects what Windows itself cannot name: control
+// characters, the reserved characters \ : * ? " < > | and a trailing space
+// or dot (Windows strips those, so the name would alias another).
+func nativeInventoryName(part string) bool {
+	if strings.TrimRight(part, " .") != part {
+		return false
+	}
+	for _, r := range part {
+		if r < 0x20 || strings.ContainsRune(`\:*?"<>|`, r) {
+			return false
+		}
+	}
+	return true
+}
 func rootObjectIdentity(path string) (string, error) {
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {

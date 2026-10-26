@@ -61,15 +61,37 @@ func classifyBuildError(err error) error {
 		return integrity("corrupt_archive", err)
 	}
 }
-func prepareAllSessions(ctx context.Context, a repairArgs, inventory []inventoryEntry) []sessionRepairPlan {
+
+// skippedSessionDir is a directory under sessions/ that the product's own
+// session list skips, so the repair neither plans nor refuses it. It stays in
+// the full inventory and backup equality, and is reported, never silent.
+type skippedSessionDir struct{ id, reason string }
+
+func prepareAllSessions(ctx context.Context, a repairArgs, inventory []inventoryEntry) ([]sessionRepairPlan, []skippedSessionDir) {
 	plans := make([]sessionRepairPlan, 0)
+	skipped := make([]skippedSessionDir, 0)
 	legacy := map[string]bool{}
 	candidates := map[string]bool{}
 	for _, e := range inventory {
 		parts := strings.Split(e.Path, "/")
-		if len(parts) == 3 && parts[0] == "sessions" && !strings.HasPrefix(parts[1], ".") && (parts[2] == "meta.json" || parts[2] == "context.jsonl" || strings.HasPrefix(parts[2], "transcript")) {
+		// meta.json is required for the product to list a session (its
+		// session list skips a directory whose meta.json cannot be read);
+		// context.jsonl marks unconverted data that must be refused, never
+		// skipped.
+		if len(parts) == 3 && parts[0] == "sessions" && !strings.HasPrefix(parts[1], ".") && (parts[2] == "meta.json" || parts[2] == "context.jsonl") {
 			candidates[parts[1]] = true
 		}
+	}
+	for _, e := range inventory {
+		parts := strings.Split(e.Path, "/")
+		if len(parts) != 2 || parts[0] != "sessions" || e.Kind != "directory" || parts[1] == ".context" || candidates[parts[1]] {
+			continue
+		}
+		reason := "meta_missing"
+		if strings.HasPrefix(parts[1], ".") {
+			reason = "hidden_dir"
+		}
+		skipped = append(skipped, skippedSessionDir{id: parts[1], reason: reason})
 	}
 	for _, e := range inventory {
 		parts := strings.Split(e.Path, "/")
@@ -104,7 +126,7 @@ func prepareAllSessions(ctx context.Context, a repairArgs, inventory []inventory
 			plans = append(plans, sessionRepairPlan{id: "legacy", err: refusal("unconverted")})
 		}
 	}
-	return plans
+	return plans, skipped
 }
 
 func checkSessionFormat(dir string) error {
@@ -125,8 +147,8 @@ func checkSessionFormat(dir string) error {
 }
 
 type repairTotals struct {
-	sessions, create, rebuild, unchanged, published, refused, code int
-	failureClasses                                                 map[string]bool
+	sessions, create, rebuild, unchanged, published, refused, skipped, code int
+	failureClasses                                                          map[string]bool
 }
 
 func (t *repairTotals) failure(out io.Writer, id string, err error) {
@@ -146,7 +168,7 @@ func (t *repairTotals) failure(out io.Writer, id string, err error) {
 	}
 }
 func (t repairTotals) summary(out io.Writer, mode string) {
-	fmt.Fprintf(out, "mode=%s sessions=%d create=%d unchanged=%d rebuild=%d published=%d refused=%d canonical_writes=0\n", mode, t.sessions, t.create, t.unchanged, t.rebuild, t.published, t.refused)
+	fmt.Fprintf(out, "mode=%s sessions=%d create=%d unchanged=%d rebuild=%d published=%d refused=%d skipped=%d canonical_writes=0\n", mode, t.sessions, t.create, t.unchanged, t.rebuild, t.published, t.refused, t.skipped)
 }
 func repairGuards(ctx context.Context, a repairArgs) error {
 	if err := verifyStoppedEvidence(a); err != nil {
@@ -166,8 +188,11 @@ func runRepairPlan(ctx context.Context, a repairArgs, out io.Writer) int {
 		totals.failure(&report, "", err)
 		return totals.code
 	}
-	plans := prepareAllSessions(ctx, a, inventory)
-	totals.sessions = len(plans)
+	plans, skipped := prepareAllSessions(ctx, a, inventory)
+	totals.sessions, totals.skipped = len(plans), len(skipped)
+	for _, d := range skipped {
+		fmt.Fprintf(&report, "session=%q action=skipped reason=%s\n", d.id, d.reason)
+	}
 	defer func() {
 		for _, p := range plans {
 			if p.build != nil {

@@ -38,15 +38,19 @@ wrapper only, not by the built repair executable.
 
 From the checked-out candidate, the explicit `history-index-repair` Make target
 builds the operator executable only. It is not a dependency of a product build,
-installer or release target. Example for this checkout:
+installer or release target. Replace `/path/to/candidate-checkout` with the
+checkout of the exact candidate being repaired:
 
 ```sh
-make -C /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2 history-index-repair
+make -C /path/to/candidate-checkout history-index-repair
 ```
 
 The native output is
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2/build/tools/chat-history-index-repair`
-(with `.exe` on Windows). The underlying recipe uses `CGO_ENABLED=0` and Go tags
+`/path/to/candidate-checkout/build/tools/chat-history-index-repair`
+(with `.exe` on Windows). Build the tool and read the schemas below from that
+same candidate checkout. A tool built from an older checkout refuses every
+symbolic link (`unsafe_kind`) and writes version 1 manifests, which this
+version refuses (`unsupported_manifest_version`). The underlying recipe uses `CGO_ENABLED=0` and Go tags
 `goolm,stdjson`. Build from a Git checkout: the command reads its real embedded
 Go VCS revision for `tool_commit`; it accepts no caller-supplied commit stamp.
 
@@ -68,12 +72,24 @@ There is no default home. The full backup must be separate from, and neither
 inside nor an alias of, the source. Put binding, receipt, manifest, optional plan
 and optional scratch outside **both** trees. Resolve paths before use.
 
+File and folder names are recorded exactly as the operating system stores
+them. On Linux and macOS any character except `/` and the NUL byte is a valid
+name character, so names with `:`, `\`, an em dash, or a trailing space or dot
+(for example a vault note called `Programme — AI Architect: Innovating
+Business Processes`) are inventoried and backed up, never refused. Still
+refused with `unsafe_path`: names that are not valid UTF-8 text (the manifest
+stores names as JSON text), a NUL byte, `.` or `..` parts, and two names that
+differ only in letter case. On Windows a manifest entry whose name Windows
+cannot hold (control characters, `\ : * ? " < > |`, or a trailing space or
+dot) is refused with `non_native_name` — for example a manifest written on
+macOS and read on Windows.
+
 Symbolic links and special files (sockets, named pipes, devices) are handled by
 where they sit in the data root:
 
 | Location | Handling |
 | --- | --- |
-| Under `sessions/` | Refused with `unsafe_kind` (exit 2). The command reads this subtree canonically and writes indexes into it. |
+| Under the data root's top-level `sessions/` folder (name matched ignoring letter case) | Refused with `unsafe_kind` (exit 2). The command reads this subtree canonically and writes indexes into it. |
 | Anywhere else (for example a workspace's link to the user's Desktop, browser-profile `Singleton*` links, toolchain `.bin` links) | Recorded, never followed and never opened. A link is inventoried as itself — its exact target text, permission mode and its own modification time — and nothing behind it is inventoried, even when it points outside the data root. A special file is inventoried by its type, mode and modification time. |
 
 The backup must therefore preserve links **as links** with the identical target
@@ -84,7 +100,8 @@ a regular file or folder in a link's place refuses the manifest
 `cp -a` was checked to preserve link targets, link modes and nanosecond link
 modification times, and to copy named pipes; it does **not** copy sockets (it
 prints `is a socket (not copied)` yet still exits 0), and the bundled
-`openrsync` drops sub-second times. If the stopped instance's data root still
+`openrsync` drops sub-second times, so a copy made with it is refused with
+`backup_incomplete` (the manifest compares nanosecond times). If the stopped instance's data root still
 contains a socket, a `cp -a` copy lacks it and the manifest step refuses with
 `backup_incomplete` until the copy holds a socket at the same path with the
 same mode and modification time.
@@ -97,7 +114,7 @@ macOS's `/var` to `/private/var` alias). Evidence binds the resulting canonical
 location; an alias resolving into the source or backup is still refused.
 
 ```sh
-TOOL=/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2/build/tools/chat-history-index-repair
+TOOL=/path/to/candidate-checkout/build/tools/chat-history-index-repair
 ROOT=/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squad-1266/fixtures/rehearsal/source
 BACKUP=/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squad-1266/fixtures/rehearsal/backup
 GATEWAY=/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squad-1266/fixtures/rehearsal/omnipus
@@ -162,9 +179,9 @@ The authoritative private JSON schemas ship alongside the command source:
 
 | Schema | Contents |
 | --- | --- |
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2/cmd/chat-history-index-repair/backup-manifest.schema.json` | Version 2; exact source/backup roots, UTC creation time, actual built-tool commit, sorted non-null complete entries and canonical fingerprint. Each normalized relative UTF-8 path has kind (`file`, `directory`, `symlink` or `special`), size, permission mode and nanosecond modification time as a lossless decimal string; files include their actual lowercase SHA-256, including the real empty digest for zero bytes. Directories have size 0 and no digest. A `symlink` has size 0, no digest and its exact `link_target` text (a target that is not valid UTF-8 is refused as `unsafe_path`). A `special` entry has size 0, no digest and a `special_type` (`named_pipe`, `socket`, `char_device`, `block_device` or `irregular`). Version 1 manifests (written before link support) are refused with `unsupported_manifest_version`; produce a new manifest. |
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2/cmd/chat-history-index-repair/instance-binding.schema.json` | Version/type, canonical root and PID-file path, native directory-object identity, actual positive captured PID, hash of exact PID-file bytes, native process-birth identity, native executable, UTC capture time, operator, actual tool commit and derived instance ID. |
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be2/cmd/chat-history-index-repair/stopped-receipt.schema.json` | Version/type, matching root/instance/PID, hash of the actual binding bytes, absent/same-stale PID-file state, UTC native inspection time, operator and actual tool commit. |
+| `/path/to/candidate-checkout/cmd/chat-history-index-repair/backup-manifest.schema.json` | Version 2; exact source/backup roots, UTC creation time, actual built-tool commit, sorted non-null complete entries and canonical fingerprint. Each normalized relative UTF-8 path has kind (`file`, `directory`, `symlink` or `special`), size, permission mode and nanosecond modification time as a lossless decimal string; files include their actual lowercase SHA-256, including the real empty digest for zero bytes. Directories have size 0 and no digest. A `symlink` has size 0, no digest and its exact `link_target` text (a target that is not valid UTF-8 is refused as `unsafe_path`). A `special` entry has size 0, no digest and a `special_type` (`named_pipe`, `socket`, `char_device`, `block_device` or `irregular`). Version 1 manifests (written before link support) are refused with `unsupported_manifest_version`; produce a new manifest. |
+| `/path/to/candidate-checkout/cmd/chat-history-index-repair/instance-binding.schema.json` | Version/type, canonical root and PID-file path, native directory-object identity, actual positive captured PID, hash of exact PID-file bytes, native process-birth identity, native executable, UTC capture time, operator, actual tool commit and derived instance ID. |
+| `/path/to/candidate-checkout/cmd/chat-history-index-repair/stopped-receipt.schema.json` | Version/type, matching root/instance/PID, hash of the actual binding bytes, absent/same-stale PID-file state, UTC native inspection time, operator and actual tool commit. |
 
 Strict decoders reject unknown fields, nulls, duplicates, extra JSON objects,
 unsupported versions and mismatching identities. Evidence files use checked
@@ -178,9 +195,14 @@ source/copy inventories, including counts. Backup verification always checks
 its saved full inventory, including any **old** index bytes. Current-source
 equality excludes only designated per-session derived history subtrees, so the
 same verified backup can support an idempotent index-only rerun. All canonical
-files, including the gateway PID file, remain covered. Directory modification
-times do not enter canonical equality because permitted index creation changes
-its parent directory's time. Directory names/kinds and modes still compare.
+files, including the gateway PID file, remain covered. The manifest step and
+backup verification compare **directory** modification times as well, so a copy
+that does not preserve folder times is refused at the manifest step with
+`backup_incomplete` (and a copy whose folder times change later is refused by
+verification with `backup_tampered`). Only
+the comparison of the current source against the manifest ignores directory
+modification times, because permitted index creation changes its parent
+directory's time; directory names/kinds and modes still compare there.
 The fingerprint's sorted length-prefixed tuple includes path, kind, canonical
 size, digest and file mtime; directory mtime is encoded as empty. A `symlink`
 tuple adds its link target and a `special` tuple adds its type, so a retargeted
@@ -190,8 +212,18 @@ user assertion that a backup succeeded.
 ## Outcomes and exit codes
 
 Per-session plans print session ID, action (`create`, `unchanged`, `rebuild`),
-source-group count and partition count. Summaries include mode, session/action
-counts, actual published/unchanged/refused counts and `canonical_writes=0`.
+source-group count and partition count. A folder directly under `sessions/`
+that the product's own session list skips is reported as
+`session="<name>" action=skipped reason=<reason>` and counted in `skipped=`:
+`meta_missing` when it has no `meta.json` (for example an out-of-band
+`agent:<agent>:task:<task>` folder), `hidden_dir` when its name starts with a
+dot (other than the legacy `.context` folder). A skipped folder is never
+indexed and never refuses the run, but it is canonical data: it stays in the
+full inventory, and a backup missing it is refused. A folder with
+`context.jsonl` is unconverted data and is refused, never skipped. Task
+sessions that do have `meta.json` (including `agent:…:task:…` names) are
+ordinary sessions and are planned and published. Summaries include mode, session/action
+counts, actual published/unchanged/refused/skipped counts and `canonical_writes=0`.
 That last field describes the command's scope; verify it with independent tree
 checks, not by trusting printed text. Output uses fixed refusal classes, never
 canonical bodies, credentials, raw cursor values or physical archive addresses.
@@ -199,8 +231,8 @@ canonical bodies, credentials, raw cursor values or physical archive addresses.
 | Exit | Meaning and response |
 | --- | --- |
 | 0 | This phase completed with no refusal. It proves neither exclusive access nor completed UI acceptance. |
-| 2 | A precondition refused: `arguments`, `unsupported_manifest_version`, `backup_missing`, `backup_incomplete`, `backup_tampered`, `backup_wrong_root`, `unsafe_path`, `unsafe_kind`, `stopped_evidence_missing`, `stopped_evidence_unknown`, `instance_running`, `source_changed` or per-session `unconverted`. Correct the cause and repeat the checked procedure, never bypass it. |
-| 1 | Integrity or I/O failure: `corrupt_archive`, `invalid_reference`, `index_verification`, `io_error`, interrupted publication or unavailable tool build identity. Preserve evidence and actual publication counts. |
+| 2 | A precondition refused: `arguments`, `unsupported_manifest_version`, `backup_missing`, `backup_incomplete`, `backup_tampered`, `backup_wrong_root`, `unsafe_path`, `non_native_name`, `unsafe_kind`, `stopped_evidence_missing`, `stopped_evidence_unknown`, `instance_running`, `source_changed` or per-session `unconverted`. Correct the cause and repeat the checked procedure, never bypass it. |
+| 1 | Integrity or I/O failure: `corrupt_archive`, `invalid_reference`, `index_verification`, `io_error`, `evidence_invalid` (an evidence file the command was about to write failed its own schema check), interrupted publication or unavailable tool build identity. Preserve evidence and actual publication counts. |
 
 A failed all-session preflight publishes no sessions. A detected late failure
 can follow real publications, which are reported rather than described as zero.

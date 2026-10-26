@@ -9,6 +9,11 @@ import (
 )
 
 func nativeCaseInsensitive() bool { return false }
+
+// nativeInventoryName: Linux and macOS accept every byte except '/' and NUL
+// in a name (both already excluded by validInventoryPath), so ':', '\\',
+// trailing spaces and trailing dots are ordinary names to record.
+func nativeInventoryName(string) bool { return true }
 func rootObjectIdentity(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {

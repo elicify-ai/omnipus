@@ -32,12 +32,28 @@ type inventoryEntry struct { // not-wire-format
 	Mode        uint32 `json:"mode"`
 }
 
+// validInventoryPath is the platform-independent path rule: '/'-separated
+// UTF-8 text (the manifest stores JSON text losslessly), no NUL, not absolute,
+// and no empty, "." or ".." part. Every other character is accepted here; what
+// the running OS cannot name is checked by nativeInventoryPath.
 func validInventoryPath(path string) bool {
-	if path == "" || !utf8.ValidString(path) || strings.ContainsAny(path, "\\:\x00") || strings.HasPrefix(path, "/") {
+	if path == "" || !utf8.ValidString(path) || strings.ContainsRune(path, 0) || strings.HasPrefix(path, "/") {
 		return false
 	}
 	for _, part := range strings.Split(path, "/") {
-		if part == "" || part == "." || part == ".." || strings.TrimRight(part, " .") != part {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// nativeInventoryPath reports whether every part is a name the running OS can
+// hold (nativeInventoryName). It fails, with its own refusal class, only for a
+// manifest written on another OS, such as a macOS name with ':' read on Windows.
+func nativeInventoryPath(path string) bool {
+	for _, part := range strings.Split(path, "/") {
+		if !nativeInventoryName(part) {
 			return false
 		}
 	}
@@ -128,6 +144,9 @@ func inventoryTree(ctx context.Context, root string, canonicalOnly bool) ([]inve
 		rel = filepath.ToSlash(rel)
 		if !validInventoryPath(rel) || seen[strings.ToLower(rel)] {
 			return refusal("unsafe_path")
+		}
+		if !nativeInventoryPath(rel) {
+			return refusal("non_native_name")
 		}
 		seen[strings.ToLower(rel)] = true
 		if !d.IsDir() && !d.Type().IsRegular() {
